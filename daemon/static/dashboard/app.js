@@ -3814,12 +3814,18 @@ async function refreshVidaPlena() {
         if (!pillarData) return '';
         let detail = '';
         try { detail = p.stat(pillarData); } catch {}
-        return `<div class="vida-plena-card">
+        return `<div class="vida-plena-card clickable" data-pillar="${p.key}" data-label="${p.label}" role="button" tabindex="0">
           <span class="pillar-name">${p.label}</span>
           <span class="pillar-detail">${detail || 'Sin datos'}</span>
         </div>`;
       }).filter(Boolean);
       summaryEl.innerHTML = cards.join('') || '<p class="task-empty">Sin datos de vida plena aun</p>';
+      summaryEl.querySelectorAll('.vida-plena-card.clickable').forEach(el => {
+        el.addEventListener('click', () => openVpPillarDetail(el.dataset.pillar, el.dataset.label));
+        el.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openVpPillarDetail(el.dataset.pillar, el.dataset.label); }
+        });
+      });
     } else {
       summaryEl.innerHTML = '<p class="task-empty">Sin datos de vida plena aun</p>';
     }
@@ -3854,6 +3860,277 @@ async function refreshVidaPlena() {
     } catch { moodEl.innerHTML = ''; }
   }
 }
+
+// --- Vida Plena: per-pillar detail view ---
+const VP_PILLAR_PATHS = {
+  health:        '/vida-plena/health/summary',
+  growth:        '/vida-plena/growth/summary',
+  exercise:      '/vida-plena/exercise/summary',
+  nutrition:     '/vida-plena/nutrition/summary',
+  social:        '/vida-plena/social/summary',
+  sleep:         '/vida-plena/sleep/summary',
+  spiritual:     '/vida-plena/spiritual/summary',
+  financial:     '/vida-plena/financial/summary',
+  relationships: '/vida-plena/relationships/summary',
+};
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function renderPillarDetail(label, summary) {
+  if (!summary || typeof summary !== 'object') {
+    return `<p class="task-empty">Sin datos para ${escapeHtml(label)}.</p>`;
+  }
+  const entries = Object.entries(summary);
+  if (entries.length === 0) {
+    return `<p class="task-empty">Sin datos para ${escapeHtml(label)}.</p>`;
+  }
+  const rows = entries.map(([k, v]) => {
+    let display;
+    if (Array.isArray(v)) {
+      display = `<em>${v.length} elementos</em>`;
+      if (v.length > 0 && v.length <= 25) {
+        display += `<pre>${escapeHtml(JSON.stringify(v, null, 2))}</pre>`;
+      }
+    } else if (v && typeof v === 'object') {
+      display = `<pre>${escapeHtml(JSON.stringify(v, null, 2))}</pre>`;
+    } else {
+      display = escapeHtml(v);
+    }
+    return `<div class="vp-detail-row"><strong>${escapeHtml(k)}:</strong> ${display}</div>`;
+  });
+  return `<div class="vp-detail-body">${rows.join('')}</div>`;
+}
+
+async function openVpPillarDetail(pillarKey, label) {
+  const panel = document.getElementById('vida-plena-pillar-detail');
+  const titleEl = document.getElementById('vp-detail-title');
+  const bodyEl = document.getElementById('vp-detail-body');
+  const path = VP_PILLAR_PATHS[pillarKey];
+  if (!panel || !titleEl || !bodyEl) return;
+  panel.hidden = false;
+  titleEl.textContent = label || pillarKey;
+  bodyEl.innerHTML = '<p class="task-empty">Cargando...</p>';
+  if (!path) {
+    bodyEl.innerHTML = '<p class="task-empty">Pilar sin endpoint asociado.</p>';
+    return;
+  }
+  try {
+    const data = await api('GET', path);
+    bodyEl.innerHTML = renderPillarDetail(label, data && data.summary);
+  } catch (e) {
+    bodyEl.innerHTML = `<p class="task-empty">Error: ${escapeHtml(e.message || 'desconocido')}</p>`;
+  }
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+(function wireVpPillarDetailClose() {
+  const btn = document.getElementById('vp-detail-close');
+  const panel = document.getElementById('vida-plena-pillar-detail');
+  if (btn && panel) {
+    btn.addEventListener('click', () => { panel.hidden = true; });
+  }
+})();
+
+// --- Vida Plena: Shopping lists ---
+let vpActiveShoppingList = null;
+
+function vpShoppingStatus(msg, kind) {
+  const el = document.getElementById('vp-shopping-status');
+  if (!el) return;
+  el.className = 'vp-status' + (kind ? ' ' + kind : '');
+  el.textContent = msg || '';
+}
+
+function renderShoppingList(list) {
+  const container = document.getElementById('vp-shopping-list');
+  if (!container) return;
+  if (!list) {
+    container.innerHTML = '<p class="task-empty">Sin lista activa.</p>';
+    return;
+  }
+  const items = Array.isArray(list.items) ? list.items : [];
+  const header = `<div class="vp-shopping-header"><strong>${escapeHtml(list.name || list.id || 'Lista')}</strong> <span class="pillar-detail">${items.length} items</span></div>`;
+  if (items.length === 0) {
+    container.innerHTML = header + '<p class="task-empty">Lista vacia.</p>';
+    return;
+  }
+  const rows = items.map((it, idx) => {
+    const checked = !!(it.checked || it.completed || it.done);
+    const name = it.name || it.label || it.product || 'item';
+    const qty = (it.quantity != null) ? `${it.quantity}${it.unit ? ' ' + it.unit : ''}` : '';
+    return `<div class="vp-shopping-item${checked ? ' done' : ''}">
+      <input type="checkbox" data-vp-shop-name="${escapeHtml(name)}" ${checked ? 'checked' : ''}>
+      <span class="vp-item-name">${escapeHtml(name)}</span>
+      <span class="pillar-detail">${escapeHtml(qty)}</span>
+      <button type="button" class="quick-action-btn" data-vp-shop-del="${idx}">x</button>
+    </div>`;
+  }).join('');
+  container.innerHTML = header + rows;
+  container.querySelectorAll('input[type="checkbox"][data-vp-shop-name]').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      if (!vpActiveShoppingList) return;
+      const needle = cb.getAttribute('data-vp-shop-name');
+      try {
+        await api('POST', `/vida-plena/shopping/lists/${encodeURIComponent(vpActiveShoppingList.id)}/check-by-name`, {
+          needle, checked: cb.checked,
+        });
+        vpShoppingStatus('Item actualizado', 'ok');
+        await refreshVpShopping();
+      } catch (e) {
+        vpShoppingStatus('Error: ' + (e.message || 'falla'), 'error');
+      }
+    });
+  });
+  container.querySelectorAll('button[data-vp-shop-del]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!vpActiveShoppingList) return;
+      const idx = btn.getAttribute('data-vp-shop-del');
+      try {
+        await api('DELETE', `/vida-plena/shopping/lists/${encodeURIComponent(vpActiveShoppingList.id)}/items/${idx}`);
+        vpShoppingStatus('Item eliminado', 'ok');
+        await refreshVpShopping();
+      } catch (e) {
+        vpShoppingStatus('Error: ' + (e.message || 'falla'), 'error');
+      }
+    });
+  });
+}
+
+async function refreshVpShopping() {
+  try {
+    const data = await api('GET', '/vida-plena/shopping/active');
+    vpActiveShoppingList = data && data.list ? data.list : null;
+    renderShoppingList(vpActiveShoppingList);
+  } catch (e) {
+    vpShoppingStatus('Error cargando lista activa: ' + (e.message || ''), 'error');
+    renderShoppingList(null);
+  }
+}
+
+(function wireVpShopping() {
+  const refreshBtn = document.getElementById('vp-shopping-refresh');
+  const genBtn = document.getElementById('vp-shopping-generate');
+  const clearBtn = document.getElementById('vp-shopping-clear');
+  const addBtn = document.getElementById('vp-shopping-add');
+  if (refreshBtn) refreshBtn.addEventListener('click', refreshVpShopping);
+  if (genBtn) genBtn.addEventListener('click', async () => {
+    const name = prompt('Nombre de la lista semanal:', 'Lista semanal');
+    if (!name) return;
+    try {
+      await api('POST', '/vida-plena/shopping/generate-weekly', { name });
+      vpShoppingStatus('Lista generada', 'ok');
+      await refreshVpShopping();
+    } catch (e) {
+      vpShoppingStatus('Error generando: ' + (e.message || ''), 'error');
+    }
+  });
+  if (clearBtn) clearBtn.addEventListener('click', async () => {
+    if (!vpActiveShoppingList) { vpShoppingStatus('Sin lista activa', 'error'); return; }
+    try {
+      const r = await api('POST', `/vida-plena/shopping/lists/${encodeURIComponent(vpActiveShoppingList.id)}/clear-completed`);
+      vpShoppingStatus(`Eliminados: ${r && r.removed != null ? r.removed : 0}`, 'ok');
+      await refreshVpShopping();
+    } catch (e) {
+      vpShoppingStatus('Error: ' + (e.message || ''), 'error');
+    }
+  });
+  if (addBtn) addBtn.addEventListener('click', async () => {
+    if (!vpActiveShoppingList) { vpShoppingStatus('Sin lista activa', 'error'); return; }
+    const nameEl = document.getElementById('vp-shopping-add-name');
+    const qtyEl = document.getElementById('vp-shopping-add-qty');
+    const unitEl = document.getElementById('vp-shopping-add-unit');
+    const name = nameEl && nameEl.value.trim();
+    if (!name) { vpShoppingStatus('Nombre requerido', 'error'); return; }
+    const item = { name };
+    if (qtyEl && qtyEl.value !== '') item.quantity = parseFloat(qtyEl.value);
+    if (unitEl && unitEl.value.trim()) item.unit = unitEl.value.trim();
+    try {
+      await api('POST', `/vida-plena/shopping/lists/${encodeURIComponent(vpActiveShoppingList.id)}/items`, { item });
+      vpShoppingStatus('Item agregado', 'ok');
+      if (nameEl) nameEl.value = '';
+      if (qtyEl) qtyEl.value = '';
+      if (unitEl) unitEl.value = '';
+      await refreshVpShopping();
+    } catch (e) {
+      vpShoppingStatus('Error: ' + (e.message || ''), 'error');
+    }
+  });
+})();
+
+// --- Vida Plena: Vault control ---
+function vpVaultMsg(msg, kind) {
+  const el = document.getElementById('vp-vault-msg');
+  if (!el) return;
+  el.className = 'vp-status' + (kind ? ' ' + kind : '');
+  el.textContent = msg || '';
+}
+
+function renderVaultStatus(v) {
+  const el = document.getElementById('vp-vault-status');
+  if (!el) return;
+  if (!v) { el.textContent = 'Estado desconocido'; return; }
+  const parts = [];
+  if (v.configured != null) parts.push(`configurado: ${v.configured}`);
+  if (v.unlocked != null) parts.push(`desbloqueado: ${v.unlocked}`);
+  if (v.idle_timeout_secs != null) parts.push(`idle: ${v.idle_timeout_secs}s`);
+  if (v.locked_at) parts.push(`locked_at: ${v.locked_at}`);
+  el.textContent = parts.length ? parts.join(' | ') : JSON.stringify(v);
+}
+
+async function refreshVpVault() {
+  try {
+    const data = await api('GET', '/vida-plena/vault/status');
+    renderVaultStatus(data && data.vault);
+  } catch (e) {
+    vpVaultMsg('Error cargando estado: ' + (e.message || ''), 'error');
+  }
+}
+
+(function wireVpVault() {
+  const statusBtn = document.getElementById('vp-vault-status-btn');
+  const lockBtn = document.getElementById('vp-vault-lock-btn');
+  const resetBtn = document.getElementById('vp-vault-reset-btn');
+  const setBtn = document.getElementById('vp-vault-set-btn');
+  const unlockBtn = document.getElementById('vp-vault-unlock-btn');
+  const passEl = document.getElementById('vp-vault-passphrase');
+  const idleEl = document.getElementById('vp-vault-idle');
+  if (statusBtn) statusBtn.addEventListener('click', refreshVpVault);
+  if (lockBtn) lockBtn.addEventListener('click', async () => {
+    try { await api('POST', '/vida-plena/vault/lock'); vpVaultMsg('Vault bloqueado', 'ok'); refreshVpVault(); }
+    catch (e) { vpVaultMsg('Error: ' + (e.message || ''), 'error'); }
+  });
+  if (resetBtn) resetBtn.addEventListener('click', async () => {
+    if (!confirm('Reset borra la passphrase del vault. Continuar?')) return;
+    try { await api('POST', '/vida-plena/vault/reset'); vpVaultMsg('Vault reseteado', 'ok'); refreshVpVault(); }
+    catch (e) { vpVaultMsg('Error: ' + (e.message || ''), 'error'); }
+  });
+  if (setBtn) setBtn.addEventListener('click', async () => {
+    const passphrase = passEl && passEl.value;
+    if (!passphrase) { vpVaultMsg('Passphrase requerida', 'error'); return; }
+    const body = { passphrase };
+    if (idleEl && idleEl.value !== '') body.idle_timeout_secs = parseInt(idleEl.value, 10);
+    try {
+      await api('POST', '/vida-plena/vault/set-passphrase', body);
+      vpVaultMsg('Passphrase configurada', 'ok');
+      if (passEl) passEl.value = '';
+      refreshVpVault();
+    } catch (e) { vpVaultMsg('Error: ' + (e.message || ''), 'error'); }
+  });
+  if (unlockBtn) unlockBtn.addEventListener('click', async () => {
+    const passphrase = passEl && passEl.value;
+    if (!passphrase) { vpVaultMsg('Passphrase requerida', 'error'); return; }
+    try {
+      await api('POST', '/vida-plena/vault/unlock', { passphrase });
+      vpVaultMsg('Vault desbloqueado', 'ok');
+      if (passEl) passEl.value = '';
+      refreshVpVault();
+    } catch (e) { vpVaultMsg('Error: ' + (e.message || ''), 'error'); }
+  });
+})();
 
 // --- TTS Voice Selector ---
 async function loadTtsVoiceSelector() {
@@ -3973,6 +4250,8 @@ async function loadTtsVoiceSelector() {
   refreshWorkers();
   refreshSystemHealth();
   refreshVidaPlena();
+  refreshVpShopping();
+  refreshVpVault();
   loadMeetings();
   loadCalendar();
   loadTtsVoiceSelector();
