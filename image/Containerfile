@@ -983,6 +983,15 @@ COPY image/files/etc/systemd/system/lifeos-thermal.service /usr/lib/systemd/syst
 COPY image/files/etc/tmpfiles.d/lifeos-thermal.conf /usr/lib/tmpfiles.d/lifeos-thermal.conf
 # Force 0600 on actions-runner/.env and llm-providers.env (token-bearing).
 COPY image/files/usr/lib/tmpfiles.d/lifeos-secrets.conf /usr/lib/tmpfiles.d/lifeos-secrets.conf
+# Enforce /etc/os-release as a symlink to /usr/lib/os-release on every boot.
+# Anaconda (and some OEM installers) copy /usr/lib/os-release into
+# /etc/os-release as a regular file at install time. bootc's 3-way merge
+# preserves /etc across upgrades → the authoritative VERSION updates in
+# /usr/lib/ but the frozen /etc/ copy silently stays at install-time values.
+# GNOME/KDE "About" dialogs and the boot-entry title generator read
+# /etc/os-release, so the user sees a stale version long after the image
+# has moved on. tmpfiles-setup.service re-enforces the symlink on every boot.
+COPY image/files/usr/lib/tmpfiles.d/lifeos-os-release.conf /usr/lib/tmpfiles.d/lifeos-os-release.conf
 COPY image/files/etc/udev/rules.d/90-lifeos-thermal.rules /usr/lib/udev/rules.d/90-lifeos-thermal.rules
 
 # --- I/O scheduler: NVMe=none, SSD=mq-deadline, HDD=bfq ---
