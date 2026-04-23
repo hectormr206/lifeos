@@ -100,20 +100,57 @@ fn load_or_create_hmac_key() -> Result<Vec<u8>> {
         if existing.len() >= 32 {
             return Ok(existing);
         }
-        warn!(
-            "self_improving: existing HMAC key at {} is too short ({} bytes), regenerating",
+        // SECURITY: refuse to silently regenerate a short-but-present key.
+        // Regeneration would invalidate every existing
+        // `workflow_actions.json.hmac` sidecar (load would warn and discard
+        // recorded actions — silent data loss). Force the operator to
+        // explicitly remove the broken key file before we create a new one.
+        anyhow::bail!(
+            "self_improving: HMAC key at {} is too short ({} bytes, need >=32). \
+             Refusing to regenerate to avoid invalidating existing signed \
+             workflow_actions.json sidecars. Delete {} manually after backing \
+             up any signed state, then restart the daemon to recreate the key.",
             key_path.display(),
-            existing.len()
+            existing.len(),
+            key_path.display(),
         );
     }
 
     let secrets_dir = Path::new(SECRETS_DIR);
     fs::create_dir_all(secrets_dir)
         .with_context(|| format!("creating secrets dir {}", secrets_dir.display()))?;
+    // SECURITY (SA2): the secrets dir MUST be 0700 — otherwise a different
+    // UID can read the HMAC key and forge signatures. We attempt to fix the
+    // mode if it is wrong; we refuse to proceed if it ends up world- or
+    // group-readable so the threat model promise holds.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(secrets_dir, fs::Permissions::from_mode(0o700));
+        let current_mode = fs::metadata(secrets_dir)
+            .with_context(|| format!("stat secrets dir {}", secrets_dir.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if current_mode != 0o700 {
+            fs::set_permissions(secrets_dir, fs::Permissions::from_mode(0o700)).with_context(
+                || {
+                    format!(
+                        "tightening secrets dir {} to 0700 (was 0o{:o})",
+                        secrets_dir.display(),
+                        current_mode
+                    )
+                },
+            )?;
+            let after = fs::metadata(secrets_dir)?.permissions().mode() & 0o777;
+            if after & 0o077 != 0 {
+                anyhow::bail!(
+                    "self_improving: secrets dir {} is still group/world-accessible \
+                     (mode 0o{:o}); refusing to write HMAC key to a leaky directory",
+                    secrets_dir.display(),
+                    after,
+                );
+            }
+        }
     }
 
     let mut key = vec![0u8; 32];
@@ -159,17 +196,44 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    // C6: lowercase-only to match `hex_encode` which produces lowercase.
+    // Accepting uppercase here would let two distinct hex strings verify the
+    // same payload (consistency hazard, even though HMAC verification is
+    // constant-time on the raw bytes). We reject uppercase explicitly.
     if s.len() % 2 != 0 {
         return None;
+    }
+    fn lower_hex_digit(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            _ => None,
+        }
     }
     let mut out = Vec::with_capacity(s.len() / 2);
     let bytes = s.as_bytes();
     for pair in bytes.chunks(2) {
-        let hi = (pair[0] as char).to_digit(16)?;
-        let lo = (pair[1] as char).to_digit(16)?;
-        out.push(((hi << 4) | lo) as u8);
+        let hi = lower_hex_digit(pair[0])?;
+        let lo = lower_hex_digit(pair[1])?;
+        out.push((hi << 4) | lo);
     }
     Some(out)
+}
+
+/// Build a sibling tempfile path for atomic rename. Same directory as the
+/// target so `rename(2)` is atomic on POSIX.
+fn tempfile_for(target: &Path) -> PathBuf {
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("workflow");
+    let pid = std::process::id();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    dir.join(format!(".{name}.tmp-{pid}-{nonce}"))
 }
 
 fn auto_trigger_enabled() -> bool {
@@ -503,10 +567,52 @@ impl WorkflowLearner {
             fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(actions)?;
-        fs::write(&self.actions_file, &json)?;
+
+        // C5: atomic-write pattern. Two non-atomic fs::write calls (JSON +
+        // HMAC sidecar) used to leave the system in an unrecoverable state
+        // on crash between writes — the next load would refuse the now-stale
+        // signature and discard everything.
+        //
+        // Order chosen: write BOTH tempfiles first, then rename the HMAC
+        // sidecar BEFORE the JSON. That way, on crash mid-rename, either:
+        //   (a) neither rename happened → loader uses the old pair, OK.
+        //   (b) the HMAC rename happened but the JSON did not → loader
+        //       compares the OLD JSON content against the NEW signature,
+        //       mismatches, refuses to load. The on-disk pair is
+        //       inconsistent but recoverable: a subsequent successful save
+        //       restores it. No silent data corruption either way.
+        // We deliberately accept (b) because the alternative — JSON first,
+        // then HMAC — would briefly leave a NEW JSON paired with an OLD
+        // signature, which is the same observable outcome (load refuses).
         if let Some(ref key) = self.hmac_key {
             let sig = sign_payload(key, json.as_bytes());
-            fs::write(&self.hmac_file, sig)?;
+            let json_tmp = tempfile_for(&self.actions_file);
+            let hmac_tmp = tempfile_for(&self.hmac_file);
+            fs::write(&json_tmp, &json)
+                .with_context(|| format!("writing actions tempfile {}", json_tmp.display()))?;
+            fs::write(&hmac_tmp, &sig)
+                .with_context(|| format!("writing HMAC tempfile {}", hmac_tmp.display()))?;
+            // Rename HMAC first (see comment above for crash analysis).
+            fs::rename(&hmac_tmp, &self.hmac_file).with_context(|| {
+                format!(
+                    "renaming {} -> {}",
+                    hmac_tmp.display(),
+                    self.hmac_file.display()
+                )
+            })?;
+            fs::rename(&json_tmp, &self.actions_file).with_context(|| {
+                format!(
+                    "renaming {} -> {}",
+                    json_tmp.display(),
+                    self.actions_file.display()
+                )
+            })?;
+        } else {
+            // No HMAC key configured (test-only path). Still atomic for the
+            // JSON file alone.
+            let json_tmp = tempfile_for(&self.actions_file);
+            fs::write(&json_tmp, &json)?;
+            fs::rename(&json_tmp, &self.actions_file)?;
         }
         Ok(())
     }

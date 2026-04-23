@@ -34,6 +34,8 @@ use anyhow::{Context, Result};
 use rand::RngCore;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 const SECRETS_DIR: &str = "/var/lib/lifeos/secrets";
 const SCREENSHOT_KEY_FILE: &str = "/var/lib/lifeos/secrets/screenshot.key";
@@ -42,6 +44,26 @@ const KEY_LEN: usize = 32;
 
 /// File extension appended to encrypted screenshots.
 pub const ENC_EXTENSION: &str = "enc";
+
+/// Process-wide cache for the screenshot key. Populated on the FIRST
+/// successful `load_or_create_screenshot_key()` call and reused for every
+/// subsequent encrypt. Without this cache a wake-word burst that captures
+/// many screenshots would re-read `/var/lib/lifeos/secrets/screenshot.key`
+/// from disk on every encrypt — a transient EIO on that read previously
+/// caused encryption to be skipped silently.
+static SCREENSHOT_KEY: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// Counter of screenshot encryption failures since daemon start.
+/// Bumped on every failure path so health endpoints / metrics can surface
+/// "your at-rest crypto is silently broken" instead of relying on grepping
+/// `warn!` lines from the journal.
+pub static SCREENSHOT_ENCRYPTION_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+/// Returns the current count of encryption failures recorded since the
+/// daemon started. Exposed for the health endpoint and tests.
+pub fn encryption_failure_count() -> u64 {
+    SCREENSHOT_ENCRYPTION_FAILURES.load(Ordering::Relaxed)
+}
 
 /// Load (or generate on first run) the AES-256-GCM-SIV key used to
 /// encrypt screenshots at rest.
@@ -52,10 +74,22 @@ pub const ENC_EXTENSION: &str = "enc";
 /// key, which is required so previously encrypted screenshots remain
 /// readable.
 ///
+/// SA8: the first successful load is cached process-wide via
+/// [`SCREENSHOT_KEY`]; subsequent calls return the cached bytes without
+/// touching disk. If the very first load fails the failure propagates so
+/// the caller sees it; we do NOT silently retry forever.
+///
 /// Returns the raw 32-byte key. Callers should treat the bytes as
 /// secret and avoid logging them.
 pub fn load_or_create_screenshot_key() -> Result<Vec<u8>> {
-    load_or_create_key_at(Path::new(SCREENSHOT_KEY_FILE), Path::new(SECRETS_DIR))
+    if let Some(key) = SCREENSHOT_KEY.get() {
+        return Ok(key.clone());
+    }
+    let key = load_or_create_key_at(Path::new(SCREENSHOT_KEY_FILE), Path::new(SECRETS_DIR))?;
+    // OnceLock::set fails only if another thread won the race — either way
+    // we have a cached key after this.
+    let _ = SCREENSHOT_KEY.set(key.clone());
+    Ok(SCREENSHOT_KEY.get().cloned().unwrap_or(key))
 }
 
 fn load_or_create_key_at(key_path: &Path, secrets_dir: &Path) -> Result<Vec<u8>> {

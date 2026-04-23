@@ -20,6 +20,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 pub fn conversations_routes() -> Router<ApiState> {
     Router::new()
@@ -74,32 +76,77 @@ pub struct ConversationDetail {
     pub messages: Vec<ConversationMessage>,
 }
 
+/// In-process cache of `conversation_history.json` parsed entries.
+///
+/// C9: every GET previously re-read and re-parsed the entire history file
+/// (potentially many MB) — trivial DoS via a tight polling loop. We now
+/// stat() the file, compare mtime against the cached snapshot, and reuse
+/// the parsed `Vec` if nothing changed.
+struct CachedEntries {
+    mtime: SystemTime,
+    entries: Vec<(i64, serde_json::Value)>,
+}
+
+static ENTRIES_CACHE: OnceLock<Mutex<Option<CachedEntries>>> = OnceLock::new();
+
+fn entries_cache() -> &'static Mutex<Option<CachedEntries>> {
+    ENTRIES_CACHE.get_or_init(|| Mutex::new(None))
+}
+
 /// Best-effort reader for the on-disk JSON. Returns parsed entries paired with
 /// the raw JSON value of each entry (so we can extract messages on demand).
 fn load_entries() -> Vec<(i64, serde_json::Value)> {
     let path = history_path();
     if !path.exists() {
+        // Invalidate the cache so a recreated file is picked up next call.
+        if let Ok(mut guard) = entries_cache().lock() {
+            *guard = None;
+        }
         return Vec::new();
     }
+
+    let current_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+
+    if let Ok(guard) = entries_cache().lock() {
+        if let (Some(cached), Some(mtime)) = (guard.as_ref(), current_mtime) {
+            if cached.mtime == mtime {
+                return cached.entries.clone();
+            }
+        }
+    }
+
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
     let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text) else {
         return Vec::new();
     };
-    map.into_iter()
+    let entries: Vec<(i64, serde_json::Value)> = map
+        .into_iter()
         .filter_map(|(k, v)| k.parse::<i64>().ok().map(|id| (id, v)))
-        .collect()
+        .collect();
+
+    if let (Ok(mut guard), Some(mtime)) = (entries_cache().lock(), current_mtime) {
+        *guard = Some(CachedEntries {
+            mtime,
+            entries: entries.clone(),
+        });
+    }
+
+    entries
 }
 
 fn classify_source(chat_id: i64) -> &'static str {
     // Heuristic: SimpleX uses synthetic negative ids derived from contact
-    // hashes; Telegram uses positive user ids. This matches the pattern in
-    // simplex_bridge::contact_to_chat_id().
+    // hashes (see simplex_bridge::contact_to_chat_id()). Positive ids used
+    // to mean Telegram, but Telegram was dropped 2026-04-22
+    // (decision_messaging_surface.md). Until the Dashboard chat owns the
+    // positive-id space explicitly, we report `unknown` instead of lying
+    // about the surface — callers must not assume one specific bridge.
     if chat_id < 0 {
         "simplex"
     } else {
-        "telegram"
+        "unknown"
     }
 }
 
@@ -249,7 +296,7 @@ mod tests {
 
     #[test]
     fn classify_source_heuristics() {
-        assert_eq!(classify_source(123_456), "telegram");
+        assert_eq!(classify_source(123_456), "unknown");
         assert_eq!(classify_source(-9_999), "simplex");
     }
 

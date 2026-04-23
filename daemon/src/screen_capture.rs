@@ -490,8 +490,20 @@ impl ScreenCapture {
         .await;
         match enc_result {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => log::warn!("screenshot at-rest encryption failed: {}", e),
-            Err(e) => log::warn!("screenshot encryption task panicked: {}", e),
+            Ok(Err(e)) => {
+                // C7: bump the daemon-wide failure counter so the health
+                // endpoint can flag "encryption is silently failing" instead
+                // of users believing the .enc sidecar exists when it does
+                // not. The plaintext file remains on disk regardless.
+                crate::screenshot_crypt::SCREENSHOT_ENCRYPTION_FAILURES
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                log::warn!("screenshot at-rest encryption failed: {}", e);
+            }
+            Err(e) => {
+                crate::screenshot_crypt::SCREENSHOT_ENCRYPTION_FAILURES
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                log::warn!("screenshot encryption task panicked: {}", e);
+            }
         }
 
         let _ = fs::remove_file(source).await;
@@ -874,6 +886,31 @@ impl ScreenCapture {
         false
     }
 
+    /// Remove the encrypted sidecar and/or plaintext sibling associated
+    /// with `path`, best-effort. Used by every cleanup path so we never
+    /// orphan one half of the (plaintext, .enc) pair.
+    async fn remove_sibling(&self, path: &Path) {
+        let is_enc = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == crate::screenshot_crypt::ENC_EXTENSION);
+        let sibling = if is_enc {
+            // Strip the trailing `.enc` to get the plaintext sibling.
+            let s = path.as_os_str().to_string_lossy();
+            s.strip_suffix(&format!(".{}", crate::screenshot_crypt::ENC_EXTENSION))
+                .map(PathBuf::from)
+        } else {
+            Some(crate::screenshot_crypt::encrypted_path_for(path))
+        };
+        if let Some(sib) = sibling {
+            if sib.exists() {
+                if let Err(e) = fs::remove_file(&sib).await {
+                    log::warn!("cleanup: failed to remove sibling {}: {}", sib.display(), e);
+                }
+            }
+        }
+    }
+
     /// Clean old screenshots
     pub async fn cleanup_old(&self, keep_days: u64) -> Result<u64> {
         let mut removed = 0u64;
@@ -891,6 +928,19 @@ impl ScreenCapture {
         {
             let path = entry.path();
 
+            // C8: skip `.enc` sidecars when computing the per-file budget.
+            // We delete encrypted siblings via `remove_sibling` whenever we
+            // delete their plaintext, so iterating them here would
+            // double-count and risk orphaning the plaintext if the .enc
+            // hits the age cutoff first.
+            if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e == crate::screenshot_crypt::ENC_EXTENSION)
+            {
+                continue;
+            }
+
             if path.is_file() {
                 if let Ok(metadata) = fs::metadata(&path).await {
                     if let Ok(modified) = metadata.modified() {
@@ -899,6 +949,7 @@ impl ScreenCapture {
                             fs::remove_file(&path)
                                 .await
                                 .context("Failed to remove old screenshot")?;
+                            self.remove_sibling(&path).await;
                             removed += 1;
                             log::info!("Removed old screenshot: {}", path.display());
                         }
@@ -927,6 +978,15 @@ impl ScreenCapture {
             if !path.is_file() {
                 continue;
             }
+            // C8: skip encrypted sidecars from the budget; siblings are
+            // removed alongside the plaintext below.
+            if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e == crate::screenshot_crypt::ENC_EXTENSION)
+            {
+                continue;
+            }
 
             let modified_epoch = match fs::metadata(&path).await {
                 Ok(metadata) => metadata
@@ -950,6 +1010,7 @@ impl ScreenCapture {
             fs::remove_file(&path)
                 .await
                 .with_context(|| format!("Failed to remove stale screenshot {}", path.display()))?;
+            self.remove_sibling(&path).await;
             removed += 1;
             log::debug!("Removed stale screenshot (path redacted)");
         }
@@ -973,6 +1034,15 @@ impl ScreenCapture {
         {
             let path = entry.path();
             if !path.is_file() {
+                continue;
+            }
+            // C8: skip encrypted sidecars; the size budget tracks
+            // plaintext only and siblings are removed alongside.
+            if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e == crate::screenshot_crypt::ENC_EXTENSION)
+            {
                 continue;
             }
             let metadata = match fs::metadata(&path).await {
@@ -1004,6 +1074,7 @@ impl ScreenCapture {
             fs::remove_file(path)
                 .await
                 .with_context(|| format!("Failed to remove screenshot {}", path.display()))?;
+            self.remove_sibling(path).await;
             total_size = total_size.saturating_sub(*size);
             removed += 1;
             log::info!("Size-based cleanup removed screenshot: {}", path.display());

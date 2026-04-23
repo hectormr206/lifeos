@@ -419,20 +419,36 @@ RUN NVIDIA_BUILT=0; \
         fi; \
         # akmods builds an RPM but does not install it. Find and install the
         # kmod-nvidia-<ver>-<kernel>.rpm it produced under /var/cache/akmods/.
-        BUILT_RPM="$(find /var/cache/akmods/nvidia -maxdepth 2 -type f \
-            -name "kmod-nvidia-*${kernel_ver}*.rpm" | head -1)"; \
-        if [ -z "${BUILT_RPM}" ]; then \
+        # Glob is anchored to "<kernel_ver>.x86_64.rpm" so a substring match
+        # against a future kernel variant cannot leak in.
+        BUILT_RPMS="$(find /var/cache/akmods/nvidia -maxdepth 2 -type f \
+            -name "kmod-nvidia-*-${kernel_ver}.x86_64.rpm")"; \
+        BUILT_COUNT="$(printf '%s\n' "${BUILT_RPMS}" | grep -c .)"; \
+        if [ -z "${BUILT_RPMS}" ] || [ "${BUILT_COUNT}" -eq 0 ]; then \
             echo "ERROR: akmods reported success but produced no RPM for ${kernel_ver}"; \
             find /var/cache/akmods -type f 2>&1 | head -20; \
             exit 1; \
         fi; \
+        if [ "${BUILT_COUNT}" -gt 1 ]; then \
+            echo "ERROR: expected exactly one kmod-nvidia RPM for ${kernel_ver}, got ${BUILT_COUNT}:"; \
+            printf '%s\n' "${BUILT_RPMS}"; \
+            exit 1; \
+        fi; \
+        BUILT_RPM="${BUILT_RPMS}"; \
         echo "INFO: installing ${BUILT_RPM}"; \
         dnf -y install "${BUILT_RPM}"; \
         # Modules ship as .ko.xz from the RPM (Fedora default). Decompress in
         # place so the secure-boot signing step (which globs *.ko) can sign
-        # them; sign-file does not handle xz wrappers.
-        find "${modules_dir}/extra/nvidia" -type f -name '*.ko.xz' \
-            -exec xz --decompress --force {} \; 2>/dev/null || true; \
+        # them; sign-file does not handle xz wrappers. Errors are NOT swallowed
+        # — if any .ko.xz exists, xz must succeed. If no .ko.xz files exist
+        # (e.g. RPM already shipped uncompressed .ko), skip the decompress
+        # step gracefully.
+        if find "${modules_dir}/extra/nvidia" -type f -name '*.ko.xz' | grep -q .; then \
+            find "${modules_dir}/extra/nvidia" -type f -name '*.ko.xz' \
+                -exec xz --decompress --force {} \; ; \
+        else \
+            echo "INFO: no .ko.xz files under ${modules_dir}/extra/nvidia (already decompressed)"; \
+        fi; \
         if [ -f "${modules_dir}/extra/nvidia/nvidia.ko" ]; then \
             NVIDIA_BUILT=$((NVIDIA_BUILT + 1)); \
             echo "INFO: nvidia.ko ready at ${modules_dir}/extra/nvidia/"; \
@@ -516,6 +532,15 @@ RUN for modules_dir in /usr/lib/modules/*; do \
 
 # Clean up kernel-devel headers (only needed for signing, not runtime)
 RUN rm -rf /usr/src/kernels/
+
+# Remove the akmod compile toolchain — only needed during the kmod build
+# step above. Mirrors the kernel-devel cleanup pattern: these packages are
+# ephemeral build dependencies, not runtime requirements. Keeping them in
+# the image bloats /usr and gives an attacker a working compiler if they
+# pop the daemon. Failure is non-fatal because not every variant ships every
+# package (e.g. CI mock builds may skip akmods).
+RUN dnf -y remove akmods gcc gcc-c++ kmodtool elfutils-libelf-devel || true && \
+    dnf clean all
 
 # --- Gaming support (controller udev rules only) ---
 # Steam and ProtonUp-Qt are available via Flatpak from COSMIC Store.

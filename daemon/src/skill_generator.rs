@@ -63,6 +63,19 @@ fn skills_autoexec_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether unsandboxed skill execution is allowed when `systemd-run` is
+/// unavailable. Defaults to TRUE — the safe choice. The operator MUST
+/// explicitly set `LIFEOS_SKILLS_REQUIRE_SANDBOX=0` (or false/no/off) to
+/// opt OUT of sandboxing, accepting that skills will run unconfined as
+/// the daemon UID. SA3: previous behaviour was a silent fallback to
+/// unsandboxed exec, hiding the missing-sandbox condition from operators.
+fn skills_require_sandbox() -> bool {
+    !matches!(
+        std::env::var("LIFEOS_SKILLS_REQUIRE_SANDBOX").as_deref(),
+        Ok("0") | Ok("false") | Ok("no") | Ok("off")
+    )
+}
+
 /// Hard cap for any skill source file (`SKILL.md`, `manifest.json`, `run.sh`)
 /// read into memory. 4 MiB is plenty for legitimate skill content and stops
 /// a hostile or accidentally-huge file from triggering an OOM in the daemon.
@@ -87,24 +100,43 @@ async fn read_skill_file_capped(path: &std::path::Path) -> std::io::Result<Strin
     fs::read_to_string(path).await
 }
 
+/// Directory holding daemon-managed approval markers for auto-generated
+/// skills. Lives under the secrets dir so only the daemon (mode 0700)
+/// can write here in normal flow — an attacker who plants a `manifest.json`
+/// in a watched skills directory CANNOT also create the matching marker
+/// file unless they already have daemon-UID write access (in which case
+/// they have already won regardless of this gate).
+const APPROVED_SKILLS_DIR: &str = "/var/lib/lifeos/secrets/approved-skills";
+
 /// A skill is APPROVED if either:
-///   1. its `manifest.requires_review` is false, OR
-///   2. a sibling file named `approved` exists in `skill_dir`, OR
-///   3. its `manifest.approved_at` is a non-empty string.
+///   1. its `manifest.requires_review` is false (legacy / SKILL.md plugin), OR
+///   2. its `manifest.approved_at` parses as a valid RFC3339 timestamp
+///      (SB6 — empty / arbitrary strings no longer count), OR
+///   3. an explicit marker file exists at
+///      `/var/lib/lifeos/secrets/approved-skills/<skill_name>`. The
+///      previous in-tree `<skill_dir>/approved` marker (SB5) is REMOVED
+///      because anyone who could plant `manifest.json` in a watched dir
+///      could also plant the marker, defeating the gate. The operator now
+///      grants approval with `sudo touch /var/lib/lifeos/secrets/approved-skills/<name>`.
 ///
 /// Approval does NOT bypass the autoexec gate — both must pass.
 fn skill_is_approved(skill_dir: &std::path::Path, manifest: &SkillManifest) -> bool {
     if !manifest.requires_review {
         return true;
     }
-    if manifest
-        .approved_at
-        .as_deref()
-        .is_some_and(|s| !s.trim().is_empty())
-    {
-        return true;
+    // SB6: only accept RFC3339-parseable timestamps. An attacker that
+    // tampered with manifest.json could write `approved_at: "yes"` and
+    // bypass the previous "non-empty string" check.
+    if let Some(raw) = manifest.approved_at.as_deref() {
+        if chrono::DateTime::parse_from_rfc3339(raw.trim()).is_ok() {
+            return true;
+        }
     }
-    skill_dir.join("approved").exists()
+    // SB5: marker file MUST live in the daemon-protected secrets dir,
+    // not in the (potentially attacker-writable) skill_dir.
+    let _ = skill_dir; // kept in signature for callers; intentionally unused now
+    let marker = std::path::Path::new(APPROVED_SKILLS_DIR).join(&manifest.name);
+    marker.exists()
 }
 
 /// Best-effort sandbox wrapper using `systemd-run --user --scope`. Returns
@@ -368,8 +400,23 @@ impl SkillGenerator {
                 (bin, wrapper, true)
             }
             None => {
+                if skills_require_sandbox() {
+                    log::warn!(
+                        "[skill_gen] systemd-run not available and \
+                         LIFEOS_SKILLS_REQUIRE_SANDBOX is on (default) — REFUSING to \
+                         exec unsandboxed: {}",
+                        script.display()
+                    );
+                    anyhow::bail!(
+                        "Refusing to execute skill unsandboxed: systemd-run not \
+                         available. Install systemd-user OR explicitly opt out by \
+                         setting LIFEOS_SKILLS_REQUIRE_SANDBOX=0 (accepts unconfined \
+                         exec as the daemon UID)."
+                    );
+                }
                 log::warn!(
-                    "[skill_gen] systemd-run not available, executing UNSANDBOXED: {}",
+                    "[skill_gen] systemd-run not available, executing UNSANDBOXED \
+                     (LIFEOS_SKILLS_REQUIRE_SANDBOX=0 opt-out): {}",
                     script.display()
                 );
                 (
@@ -643,7 +690,15 @@ impl SkillRegistry {
     async fn load_standalone_json(path: &std::path::Path) -> Option<SkillManifest> {
         let content = read_skill_file_capped(path).await.ok()?;
         match serde_json::from_str::<SkillManifest>(&content) {
-            Ok(m) => Some(m),
+            Ok(mut m) => {
+                // SB8: standalone files (not under generate_from_task's
+                // managed output) are NEVER trusted to set requires_review=false.
+                // An attacker who plants a JSON/TOML in a watched dir would
+                // otherwise bypass the approval gate. Approval must come from
+                // an explicit marker in the daemon-protected secrets dir.
+                m.requires_review = true;
+                Some(m)
+            }
             Err(e) => {
                 warn!(
                     "[skill_registry] {} failed to parse as JSON skill: {e}",
@@ -657,7 +712,11 @@ impl SkillRegistry {
     async fn load_standalone_toml(path: &std::path::Path) -> Option<SkillManifest> {
         let content = read_skill_file_capped(path).await.ok()?;
         match toml::from_str::<SkillManifest>(&content) {
-            Ok(m) => Some(m),
+            Ok(mut m) => {
+                // SB8: see load_standalone_json above.
+                m.requires_review = true;
+                Some(m)
+            }
             Err(e) => {
                 warn!(
                     "[skill_registry] {} failed to parse as TOML skill: {e}",
@@ -790,8 +849,22 @@ impl SkillRegistry {
                     (bin, wrapper, true)
                 }
                 None => {
+                    if skills_require_sandbox() {
+                        log::warn!(
+                            "[skill_registry] systemd-run not available and \
+                             LIFEOS_SKILLS_REQUIRE_SANDBOX is on (default) — REFUSING \
+                             to exec SKILL.md command unsandboxed: {}",
+                            skill_md.display()
+                        );
+                        anyhow::bail!(
+                            "Refusing to execute SKILL.md command unsandboxed: systemd-run \
+                             not available. Install systemd-user OR explicitly opt out by \
+                             setting LIFEOS_SKILLS_REQUIRE_SANDBOX=0."
+                        );
+                    }
                     log::warn!(
-                        "[skill_registry] systemd-run not available, executing UNSANDBOXED SKILL.md cmd: {}",
+                        "[skill_registry] systemd-run not available, executing UNSANDBOXED \
+                         SKILL.md cmd (LIFEOS_SKILLS_REQUIRE_SANDBOX=0 opt-out): {}",
                         skill_md.display()
                     );
                     (
@@ -1048,15 +1121,21 @@ mod tests {
     }
 
     #[test]
-    fn skill_approved_via_marker_file() {
-        let dir = tmpdir("approved-marker");
+    fn skill_in_tree_marker_no_longer_grants_approval() {
+        // SB5: the previous in-tree `<skill_dir>/approved` marker is
+        // explicitly NOT honoured anymore — anyone who can plant
+        // `manifest.json` in a watched dir could also plant the marker.
+        let dir = tmpdir("approved-marker-rejected");
         std::fs::write(dir.join("approved"), "").unwrap();
         let m = manifest_with_review("x", true);
-        assert!(skill_is_approved(&dir, &m));
+        assert!(
+            !skill_is_approved(&dir, &m),
+            "in-tree marker must not grant approval"
+        );
     }
 
     #[test]
-    fn skill_approved_via_manifest_field() {
+    fn skill_approved_via_manifest_rfc3339_field() {
         let dir = tmpdir("approved-manifest");
         let mut m = manifest_with_review("x", true);
         m.approved_at = Some("2026-04-22T11:00:00Z".to_string());
@@ -1068,6 +1147,17 @@ mod tests {
         let dir = tmpdir("approved-empty");
         let mut m = manifest_with_review("x", true);
         m.approved_at = Some("   ".to_string());
+        assert!(!skill_is_approved(&dir, &m));
+    }
+
+    #[test]
+    fn skill_not_approved_via_garbage_approved_at() {
+        // SB6: any non-RFC3339 string was previously accepted; now rejected.
+        let dir = tmpdir("approved-garbage");
+        let mut m = manifest_with_review("x", true);
+        m.approved_at = Some("yes".to_string());
+        assert!(!skill_is_approved(&dir, &m));
+        m.approved_at = Some("approved-by-attacker".to_string());
         assert!(!skill_is_approved(&dir, &m));
     }
 

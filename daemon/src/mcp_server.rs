@@ -1279,13 +1279,17 @@ pub async fn call_tool(
                 .ok_or("Missing 'path' parameter")?;
             match crate::atspi_layer::get_text(bus, path).await {
                 Ok(text) => {
+                    // Capture the original length BEFORE `truncate_output`
+                    // shadows `text`; otherwise `length` reports the
+                    // truncated size (mirrors the lifeos_browser_extract_text
+                    // pattern above).
+                    let original_len = text.len();
                     let (text, truncated) = truncate_output(&text);
-                    let total_len = text.len();
                     Ok(serde_json::json!({
                         "bus_name": bus,
                         "path": path,
                         "text": text,
-                        "length": total_len,
+                        "length": original_len,
                         "truncated": truncated,
                     }))
                 }
