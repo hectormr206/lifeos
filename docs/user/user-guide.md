@@ -401,3 +401,18 @@ The *Vida Plena* section of the dashboard now exposes three interactive surfaces
   - *Reset* (with confirmation) calls `POST .../vault/reset` to clear the configured passphrase.
 
 All Vida Plena endpoints require the same `x-bootstrap-token` header. Vault errors map to `403` (locked / wrong passphrase) and `400` (missing/invalid input) so the UI surfaces the actual reason on failure.
+
+## Nutrition pipeline (photo / voice → `nutrition_log`)
+
+Item BI.3 turns food photos and voice notes into structured entries in the existing `nutrition_log` table without a manual form.
+
+Two HTTP entry points (both behind the standard `x-bootstrap-token`):
+
+- `POST /api/v1/vida-plena/nutrition/log/from-image` — body `{ "image_path": "/abs/path.jpg", "photo_attachment_id": "<opt>", "notes": "<opt>" }`. The daemon reads the file from disk, hands it to the local multimodal model (Qwen 4B by default), parses the strict JSON schema, validates each entry, and writes one row per detected item. Returns `{ extraction, logged_ids, count }`.
+- `POST /api/v1/vida-plena/nutrition/log/from-voice` — body `{ "transcript": "comi tres tacos al pastor", "voice_attachment_id": "<opt>", "notes": "<opt>" }`. Caller is responsible for producing the transcript (Whisper STT in `sensory_pipeline.rs` already does this for the wake-word flow).
+
+Same pipeline is also exposed to Axi as the `nutrition_log_from_capture` tool with `kind: "image" | "voice"` so the assistant can log meals during a normal conversation.
+
+Validation is strict: empty names, non-positive quantities, negative kcal, or implausible kcal estimates (> 5,000 per item) are rejected before they touch storage. When the model cannot detect a meal in the input, the endpoint returns an empty `entries` list and writes nothing.
+
+Privacy: extraction stays local — the image is sent inline to `127.0.0.1:8082` (llama-server). Routing the request to a remote vision provider only happens if the user has explicitly configured one in the LLM router; this endpoint never opts in on its own.

@@ -38,6 +38,15 @@ pub fn vida_plena_routes() -> Router<ApiState> {
         .route("/growth/summary", get(get_growth_summary))
         .route("/exercise/summary", get(get_exercise_summary))
         .route("/nutrition/summary", get(get_nutrition_summary))
+        // -- BI.3: photo/voice → nutrition_log pipeline --------------
+        .route(
+            "/nutrition/log/from-image",
+            post(post_nutrition_log_from_image),
+        )
+        .route(
+            "/nutrition/log/from-voice",
+            post(post_nutrition_log_from_voice),
+        )
         .route("/social/summary", get(get_social_summary))
         .route("/sleep/summary", get(get_sleep_summary))
         .route("/spiritual/summary", get(get_spiritual_summary))
@@ -891,6 +900,118 @@ async fn get_stale_relationships(
         "relationships": stale,
         "count": stale.len(),
     })))
+}
+
+// ----------------------------------------------------------------------
+// BI.3 — photo/voice → nutrition_log pipeline
+// ----------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct NutritionLogFromImagePayload {
+    /// Absolute path on disk to the food photo. The daemon reads it
+    /// directly; the image is encoded inline for the local llama-server
+    /// multimodal slot, NEVER uploaded to a remote service from this
+    /// endpoint.
+    pub image_path: String,
+    #[serde(default)]
+    pub photo_attachment_id: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NutritionLogFromVoicePayload {
+    /// Free-form transcript already produced by Whisper STT (or pasted
+    /// by the user). The endpoint runs LLM extraction on it and writes
+    /// the resulting entries to `nutrition_log`.
+    pub transcript: String,
+    #[serde(default)]
+    pub voice_attachment_id: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct NutritionLogPipelineResponse {
+    extraction: crate::nutrition::NutritionExtraction,
+    logged_ids: Vec<String>,
+    /// Number of rows written to `nutrition_log`. Always equal to
+    /// `extraction.entries.len()` on success.
+    count: usize,
+}
+
+async fn post_nutrition_log_from_image(
+    State(state): State<ApiState>,
+    Json(payload): Json<NutritionLogFromImagePayload>,
+) -> Result<Json<NutritionLogPipelineResponse>, (StatusCode, Json<ApiError>)> {
+    if payload.image_path.trim().is_empty() {
+        return Err(err_to_http(anyhow::anyhow!("image_path is required")));
+    }
+    let ai = crate::ai::AiManager::new();
+    let extraction = crate::nutrition::extract_from_image(&ai, &payload.image_path)
+        .await
+        .map_err(err_to_http)?;
+    if extraction.entries.is_empty() {
+        return Ok(Json(NutritionLogPipelineResponse {
+            extraction,
+            logged_ids: Vec::new(),
+            count: 0,
+        }));
+    }
+    let mgr = state.memory_plane_manager.read().await;
+    let logged = crate::nutrition::persist_extraction(
+        &mgr,
+        &extraction,
+        payload.photo_attachment_id.as_deref(),
+        None,
+        payload.notes.as_deref().unwrap_or(""),
+    )
+    .await
+    .map_err(err_to_http)?;
+    let logged_ids: Vec<String> = logged.iter().map(|l| l.log_id.clone()).collect();
+    let count = logged_ids.len();
+    Ok(Json(NutritionLogPipelineResponse {
+        extraction,
+        logged_ids,
+        count,
+    }))
+}
+
+async fn post_nutrition_log_from_voice(
+    State(state): State<ApiState>,
+    Json(payload): Json<NutritionLogFromVoicePayload>,
+) -> Result<Json<NutritionLogPipelineResponse>, (StatusCode, Json<ApiError>)> {
+    if payload.transcript.trim().is_empty() {
+        return Err(err_to_http(anyhow::anyhow!("transcript is required")));
+    }
+    let ai = crate::ai::AiManager::new();
+    let extraction = crate::nutrition::extract_from_voice_transcript(&ai, &payload.transcript)
+        .await
+        .map_err(err_to_http)?;
+    if extraction.entries.is_empty() {
+        return Ok(Json(NutritionLogPipelineResponse {
+            extraction,
+            logged_ids: Vec::new(),
+            count: 0,
+        }));
+    }
+    let mgr = state.memory_plane_manager.read().await;
+    let logged = crate::nutrition::persist_extraction(
+        &mgr,
+        &extraction,
+        None,
+        payload.voice_attachment_id.as_deref(),
+        payload.notes.as_deref().unwrap_or(""),
+    )
+    .await
+    .map_err(err_to_http)?;
+    let logged_ids: Vec<String> = logged.iter().map(|l| l.log_id.clone()).collect();
+    let count = logged_ids.len();
+    Ok(Json(NutritionLogPipelineResponse {
+        extraction,
+        logged_ids,
+        count,
+    }))
 }
 
 #[cfg(test)]

@@ -68,6 +68,7 @@ mod message_dedupe;
 mod mini_widget;
 mod models;
 mod notifications;
+mod nutrition;
 mod overlay;
 #[cfg(feature = "dbus")]
 mod permissions;
