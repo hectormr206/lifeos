@@ -201,7 +201,7 @@ async fn get_privacy_mode(
 }
 
 async fn post_privacy_mode(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(payload): Json<SetPrivacyModeRequest>,
 ) -> Result<Json<PrivacyModeStatus>, (StatusCode, Json<ApiError>)> {
     if let Err(e) = set_privacy_mode(payload.enabled) {
@@ -220,6 +220,12 @@ async fn post_privacy_mode(
     }
     // Volver a resolver para reportar la fuente real (env var puede sobrescribir).
     let (enabled, source) = resolve();
+    // Emit a bus event so the tray, mini-widget and other dashboards stay in
+    // sync. We send the *resolved* `enabled`, not the requested payload, so
+    // an env-var override (which wins over the file) is reflected truthfully.
+    let _ = state
+        .event_bus
+        .send(crate::events::DaemonEvent::PrivacyModeChanged { enabled });
     Ok(Json(PrivacyModeStatus {
         enabled,
         source: source.as_str(),
@@ -334,6 +340,44 @@ mod tests {
         for h in handles {
             assert!(h.join().expect("thread join"));
         }
+    }
+
+    /// Smoke-test the event path used by `post_privacy_mode`. We can't
+    /// build a full `ApiState` in a unit test (it has ~30 managers), so we
+    /// exercise the exact snippet the handler runs: `set_privacy_mode` +
+    /// `event_bus.send(PrivacyModeChanged { enabled })`. A subscriber must
+    /// receive the event with the resolved enabled value.
+    #[tokio::test]
+    async fn post_emits_privacy_mode_changed_event() {
+        let _guard = test_lock().lock().await;
+        let _tmp = setup();
+
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<crate::events::DaemonEvent>(8);
+
+        // Subscribe BEFORE the send so we don't miss the broadcast.
+        set_privacy_mode(true).expect("persist on");
+        let (enabled, _source) = resolve();
+        assert!(enabled);
+        tx.send(crate::events::DaemonEvent::PrivacyModeChanged { enabled })
+            .expect("broadcast send");
+
+        match rx.recv().await.expect("recv event") {
+            crate::events::DaemonEvent::PrivacyModeChanged { enabled: got } => {
+                assert!(got, "event must carry enabled=true");
+            }
+            other => panic!("unexpected event variant: {:?}", other),
+        }
+    }
+
+    /// Guard the JSON wire format for external consumers (dashboard SSE,
+    /// future clients). If the tag/content names change, this test breaks
+    /// loudly instead of silently breaking the dashboard.
+    #[test]
+    fn privacy_mode_changed_serializes_to_snake_case() {
+        let ev = crate::events::DaemonEvent::PrivacyModeChanged { enabled: true };
+        let v = serde_json::to_value(&ev).expect("serialize");
+        assert_eq!(v["type"], "privacy_mode_changed");
+        assert_eq!(v["data"]["enabled"], true);
     }
 
     #[test]
