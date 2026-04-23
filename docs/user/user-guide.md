@@ -368,3 +368,15 @@ To check the last maintenance run or trigger it manually:
 life maintenance status
 life maintenance run
 ```
+
+---
+
+## Dashboard CRUD: Workers, Conversations, Providers
+
+The local dashboard at `http://127.0.0.1:8081/dashboard` now manages three resources end-to-end (no terminal needed):
+
+- **Workers** — the *Workers* card lists in-flight async LLM tasks and lets you cancel any of them with one click. The list reconciles itself with the backend on every poll, so even after a page reload you can still see what is running. Backed by `GET /api/v1/workers` and `POST /api/v1/workers/:id/cancel`.
+- **Conversations** — the *Historial* card shows a unified view of recent chats across SimpleX and Telegram. Click an entry to expand the full message thread; entries are sourced from `~/.local/share/lifeos/conversation_history.json`. Backed by `GET /api/v1/conversations`, `GET /api/v1/conversations/:chat_id`, and `DELETE /api/v1/conversations/:chat_id`.
+- **LLM Providers** — the *Proveedores* card lets you add a new provider (name + API base + model + env var holding the key), toggle existing user-defined providers on/off, and delete entries. Built-in providers shipped with the OS image are read-only because `/usr` is immutable on bootc. Edits are persisted to `~/.config/lifeos/llm-providers.toml` (active) and `~/.config/lifeos/llm-providers.disabled.toml` (stash for toggled-off entries). Backed by `POST /api/v1/llm/providers`, `POST /api/v1/llm/providers/:name/toggle`, and `DELETE /api/v1/llm/providers/:name`.
+
+All endpoints require the `x-bootstrap-token` header that the dashboard already injects automatically.
