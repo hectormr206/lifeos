@@ -2719,8 +2719,11 @@ details[open] .transcript-toggle::before { transform: rotate(90deg); }
   align-items: center;
   gap: 8px;
   width: 100%;
-  margin: 8px 0 0 0;
-  padding: 8px 12px;
+  /* Lives inside .sidebar-footer (gap:8px between children handles spacing).
+     No margin needed here — setting 0 keeps it pegadito entre Conectado/WS
+     arriba y la hora/tema abajo. */
+  margin: 0;
+  padding: 8px 10px;
   border: 1px solid var(--border, #2a2d3a);
   border-radius: 10px;
   background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
