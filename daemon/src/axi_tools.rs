@@ -1750,8 +1750,60 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
             if let Some(parent) = self.persist_path.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
-            if let Ok(json) = serde_json::to_string(chats) {
-                std::fs::write(&self.persist_path, json).ok();
+            // Atomic write: serialize -> tempfile -> fsync -> rename. The
+            // previous std::fs::write was a single non-atomic syscall: a
+            // crash mid-flight (power loss, OOM kill, signal during the
+            // write) leaves a half-written JSON file that fails to parse on
+            // next boot, silently dropping the user's entire conversation
+            // history. rename(2) is atomic for files within the same
+            // directory on Linux, so readers see either the old or the new
+            // contents, never a partial.
+            let json = match serde_json::to_vec(chats) {
+                Ok(j) => j,
+                Err(e) => {
+                    warn!("[history] failed to serialize chats: {}", e);
+                    return;
+                }
+            };
+            let tmp = self.persist_path.with_extension("json.tmp");
+            let write_result = (|| -> std::io::Result<()> {
+                use std::os::unix::fs::OpenOptionsExt;
+                // mode 0600: chat content is sensitive. Without explicit
+                // mode, OpenOptions inherits the umask default (0644) and
+                // rename(2) propagates the tempfile's mode to the target,
+                // silently downgrading the persisted file's perms.
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&tmp)?;
+                std::io::Write::write_all(&mut f, &json)?;
+                f.sync_all()?;
+                Ok(())
+            })();
+            if let Err(e) = write_result {
+                warn!("[history] failed to write tempfile {:?}: {}", tmp, e);
+                let _ = std::fs::remove_file(&tmp);
+                return;
+            }
+            if let Err(e) = std::fs::rename(&tmp, &self.persist_path) {
+                warn!(
+                    "[history] failed to rename {:?} -> {:?}: {}",
+                    tmp, self.persist_path, e
+                );
+                let _ = std::fs::remove_file(&tmp);
+                return;
+            }
+            // Parent-directory fsync: rename(2) is atomic, but the new
+            // dirent isn't durable until the parent dir's metadata is
+            // flushed. Without this, a power-loss between rename and the
+            // next implicit flush leaves the directory entry stale and
+            // both names (old+new) potentially gone.
+            if let Some(parent) = self.persist_path.parent() {
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
             }
         }
     }
