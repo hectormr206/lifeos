@@ -1374,8 +1374,7 @@ REGLAS FIRMES:
                 chats
                     .iter()
                     .filter(|(_, v)| {
-                        now.signed_duration_since(v.last_active).num_seconds()
-                            >= HISTORY_TTL_SECS
+                        now.signed_duration_since(v.last_active).num_seconds() >= HISTORY_TTL_SECS
                     })
                     .map(|(k, v)| {
                         let mut msgs = Vec::new();
@@ -3670,8 +3669,7 @@ REGLAS FIRMES:
         }
     }
 
-    static DESTRUCTIVE_RATE_LIMITER: DestructiveRateLimiter =
-        DestructiveRateLimiter::new(10);
+    static DESTRUCTIVE_RATE_LIMITER: DestructiveRateLimiter = DestructiveRateLimiter::new(10);
 
     /// Append a JSON line describing a destructive action. Best-effort: any
     /// I/O error is swallowed and a `warn!` emitted. Mode 0600 on first
@@ -3743,10 +3741,7 @@ REGLAS FIRMES:
         Ok(())
     }
 
-    async fn execute_memory_delete(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_memory_delete(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let entry_id = args["entry_id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'entry_id'"))?;
@@ -3791,10 +3786,7 @@ REGLAS FIRMES:
         Ok(response)
     }
 
-    async fn execute_memory_update(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_memory_update(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let entry_id = args["entry_id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'entry_id'"))?;
@@ -3820,12 +3812,7 @@ REGLAS FIRMES:
         let mem = memory.read().await;
 
         match mem
-            .update_entry(
-                entry_id,
-                new_content,
-                new_importance,
-                new_tags.as_deref(),
-            )
+            .update_entry(entry_id, new_content, new_importance, new_tags.as_deref())
             .await
         {
             Ok(true) => Ok(format!("Actualice la memoria {}.", entry_id)),
@@ -3834,10 +3821,7 @@ REGLAS FIRMES:
         }
     }
 
-    async fn execute_memory_relate(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_memory_relate(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let from = args["from_entry_id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'from_entry_id'"))?;
@@ -3881,10 +3865,7 @@ REGLAS FIRMES:
         }
 
         match mem.link_entries(from, to, relation).await {
-            Ok(()) => Ok(format!(
-                "Vincule {} -[{}]-> {}.",
-                from, relation, to
-            )),
+            Ok(()) => Ok(format!("Vincule {} -[{}]-> {}.", from, relation, to)),
             Err(e) => Ok(format!("Error creando vinculo: {}", e)),
         }
     }

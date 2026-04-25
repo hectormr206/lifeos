@@ -315,10 +315,7 @@ impl SessionStore {
         };
         drop(mp_slot);
 
-        let session_tag = format!(
-            "session:{}:{}:{}",
-            key.channel, key.scope, key.peer_id
-        );
+        let session_tag = format!("session:{}:{}:{}", key.channel, key.scope, key.peer_id);
         let tags = vec![
             "session_summary".to_string(),
             session_tag.clone(),

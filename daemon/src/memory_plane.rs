@@ -2343,8 +2343,7 @@ impl MemoryPlaneManager {
             }
             let (nonce_b64, ciphertext_b64, plaintext_sha256) = encrypt_content(content)?;
             let (embedding, embedding_source) = self.generate_embedding(content).await;
-            let embedding_bytes: Vec<u8> =
-                embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+            let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
             Some((
                 nonce_b64,
                 ciphertext_b64,
@@ -2374,8 +2373,7 @@ impl MemoryPlaneManager {
             // is used elsewhere). `updated_at` is always touched; `entry_id`
             // is always the WHERE clause; everything else is conditional.
             let mut sets: Vec<String> = vec!["updated_at = ?".to_string()];
-            let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
-                vec![Box::new(now.clone())];
+            let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now.clone())];
 
             if let Some((ref n, ref c, ref h, ref es, _)) = new_encrypted {
                 sets.push("nonce_b64 = ?".to_string());
@@ -2404,8 +2402,7 @@ impl MemoryPlaneManager {
                 sets.join(", ")
             );
 
-            let bound: Vec<&dyn rusqlite::ToSql> =
-                params_vec.iter().map(|p| p.as_ref()).collect();
+            let bound: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
             let rows = tx.execute(&sql, bound.as_slice())?;
 
             if let Some((_, _, _, _, embedding_bytes)) = new_encrypted {
@@ -16985,12 +16982,11 @@ mod tests {
         assert!(entries.is_empty());
 
         // But the row still exists physically — search_archived can find it.
-        let archived = mgr
-            .search_archived("delete me", 5, None)
-            .await
-            .unwrap();
+        let archived = mgr.search_archived("delete me", 5, None).await.unwrap();
         assert!(
-            archived.iter().any(|r| r.entry.entry_id == created.entry_id),
+            archived
+                .iter()
+                .any(|r| r.entry.entry_id == created.entry_id),
             "soft-deleted entry must remain recoverable via archived search"
         );
 
@@ -17086,12 +17082,7 @@ mod tests {
         .unwrap();
 
         let hits = mgr
-            .search_entries_with_mode(
-                "telegram",
-                10,
-                None,
-                MemorySearchMode::Lexical,
-            )
+            .search_entries_with_mode("telegram", 10, None, MemorySearchMode::Lexical)
             .await
             .unwrap();
         assert!(

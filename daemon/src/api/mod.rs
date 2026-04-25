@@ -12604,7 +12604,11 @@ async fn delete_user_forget(
     let mut deleted_count = 0u64;
     for entry in &entries {
         // Right-to-be-forgotten requires PHYSICAL erasure, not soft archive.
-        if mgr.hard_delete_entry(&entry.entry_id).await.unwrap_or(false) {
+        if mgr
+            .hard_delete_entry(&entry.entry_id)
+            .await
+            .unwrap_or(false)
+        {
             deleted_count += 1;
         }
     }
