@@ -134,3 +134,38 @@ que sabes de, que recuerdas
 │       └── transcript.jsonl     # Linea por turno (user/assistant/tool)
 └── memory.key                   # Clave de encriptacion (fallback)
 ```
+
+## Sprint 1 — Stop Axi from forgetting (2026-04-25)
+
+Sprint 1 del plan de remediacion del audit cierra los caminos por
+los que Axi olvidaba en silencio:
+
+- **ConversationHistory 48h TTL → memory_plane.** Antes del drop de
+  un chat caducado, `drain_stale_and_persist` resume con LLM y
+  persiste la sintesis a `memory_entries`. Si el persist falla, el
+  chat queda en RAM para reintentar en el proximo turno (no se pierde).
+- **SessionStore 72h TTL → memory_plane.** `compact_session` y
+  `prune_stale_sessions` (ahora agendado cada 6h en main.rs) escriben
+  el resumen a `memory_entries` antes de borrar la sesion del disco.
+- **Lexical search funcional.** El modo lexical antes hacia
+  `LIKE '%query%'` contra contenido AES-encrypted+base64 (correctness
+  bug, devolvia ~0 resultados). Ahora filtra por scope/tag/archived
+  en SQL, descifra hasta 1000 candidatos y matchea plaintext.
+- **5 herramientas nuevas para el LLM** que cubren el ciclo CRUD
+  completo: `memory_delete`, `memory_update`, `memory_relate`,
+  `memory_unarchive`, `knowledge_delete`. Axi puede editar, borrar
+  y restaurar memorias desde chat.
+- **Soft-delete por defecto + hard-delete con cleanup de huerfanos.**
+  `delete_entry` ahora marca `archived = 1` (recuperable via
+  `memory_unarchive`). `hard_delete_entry` (usado solo por
+  `right_to_be_forgotten` y por `memory_delete` con `hard=true`)
+  envuelve en una transaccion el borrado de `memory_entries`,
+  `memory_embeddings`, triples del `knowledge_graph` cuyo
+  `source_entry_id` apunta a la entrada, y `memory_links` en ambos
+  sentidos.
+
+**Defensa contra prompt injection** sobre las nuevas tools
+destructivas: requieren `confirm: true` por defecto (gate-able via
+`LIFEOS_AXI_REQUIRE_CONFIRM_DESTRUCTIVE`), rate-limit de 10 ops/hora,
+y audit log append-only en
+`~/.local/share/lifeos/destructive_actions.log` (mode 0600).
