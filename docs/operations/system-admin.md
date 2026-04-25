@@ -204,6 +204,25 @@ not the primary runtime model.
 
 When bumping these in `image/Containerfile`, also update this table and the canonical upgrade checklist.
 
+### Memory plane SQLite tuning
+
+Every connection opened by `MemoryPlaneManager::open_db` enables WAL +
+synchronous=NORMAL + busy_timeout=5000 + cache_size=64 MiB +
+mmap_size=256 MiB + temp_store=MEMORY. WAL gives 3–10× write throughput
+and lets readers proceed during writes; the small power-loss durability
+window is acceptable for a personal assistant. To verify on a running
+host:
+
+```bash
+sqlite3 ~/.local/share/lifeos/memory.db 'PRAGMA journal_mode; PRAGMA synchronous;'
+# expect: wal / 1
+```
+
+`conversation_history.json` is now persisted with a tempfile + fsync +
+rename + parent-dir fsync sequence, with mode 0600 on the resulting
+file. Crash mid-write no longer corrupts the file, and the file is no
+longer world-readable across the rename.
+
 ```bash
 # Manage default system service
 sudo systemctl start llama-server
