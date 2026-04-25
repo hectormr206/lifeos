@@ -1896,6 +1896,44 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
             assert!(simple_glob_match("file-??.txt", "file-01.txt"));
             assert!(!simple_glob_match("*.rs", "main.py"));
         }
+
+        #[tokio::test]
+        async fn history_persist_locked_writes_atomically_with_safe_perms() {
+            // Sprint 2 contract for persist_locked: tempfile + fsync +
+            // rename + parent fsync, with mode 0600 on the resulting file.
+            // We can't observe atomicity directly without crashing the test
+            // process mid-write, but we CAN observe the public surface:
+            //   - the file exists and parses
+            //   - mode is 0o600 (sensitive chat content not world-readable)
+            //   - no .json.tmp leak left behind on success
+            use std::os::unix::fs::PermissionsExt;
+            let history = history_for_tests("persist-perms");
+            let chat_id: i64 = 7;
+            history
+                .append(
+                    chat_id,
+                    &[ChatMessage {
+                        role: "user".into(),
+                        content: serde_json::Value::String("ping".into()),
+                    }],
+                )
+                .await;
+
+            let path = history.persist_path.clone();
+            let meta = std::fs::metadata(&path).expect("persist file should exist after append");
+            assert!(meta.is_file(), "persist path is a file");
+            assert_eq!(
+                meta.permissions().mode() & 0o777,
+                0o600,
+                "persisted history must be mode 0600"
+            );
+            let bytes = std::fs::read(&path).expect("persist file readable");
+            let parsed: HashMap<i64, ConversationEntry> =
+                serde_json::from_slice(&bytes).expect("persist file is valid JSON");
+            assert!(parsed.contains_key(&chat_id), "chat survived round-trip");
+            let tmp = path.with_extension("json.tmp");
+            assert!(!tmp.exists(), "tempfile should not leak on success path");
+        }
     }
 
     // -----------------------------------------------------------------------
