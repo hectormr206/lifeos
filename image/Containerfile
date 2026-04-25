@@ -120,7 +120,10 @@ RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel vulk
 
 # Pin llama.cpp to a stable tag. Upstream master sometimes ships broken Vulkan
 # shaders that fail to build. Update periodically after verifying tag builds.
-ARG LLAMA_CPP_TAG=b8701
+# b8925 (2026-04) covers ~224 commits since b8701 incl. Vulkan FA DP4A perf
+# improvements, CUDA memory leak fix, and llama-server security patches.
+# https://github.com/ggml-org/llama.cpp/releases/tag/b8925
+ARG LLAMA_CPP_TAG=b8925
 RUN set -eux && \
     echo ">>> Building llama-server from source (Vulkan-enabled, pinned ${LLAMA_CPP_TAG})..." && \
     git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
@@ -152,9 +155,11 @@ FROM fedora:${FEDORA_MAJOR} AS whisper-builder
 RUN dnf install -y cmake make gcc-c++ git openssl-devel curl SDL2-devel && \
     dnf clean all
 
+# Pin whisper.cpp to a release tag for reproducibility (was --depth=1 HEAD).
+ARG WHISPER_CPP_TAG=v1.8.4
 RUN set -eux && \
-    echo ">>> Building whisper.cpp STT tools from source..." && \
-    git clone --depth=1 https://github.com/ggml-org/whisper.cpp /tmp/whisper.cpp && \
+    echo ">>> Building whisper.cpp STT tools from source (pinned ${WHISPER_CPP_TAG})..." && \
+    git clone --branch "${WHISPER_CPP_TAG}" --depth=1 https://github.com/ggml-org/whisper.cpp /tmp/whisper.cpp && \
     cmake -S /tmp/whisper.cpp -B /tmp/whisper.cpp/build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
@@ -218,12 +223,11 @@ RUN python3 -m venv /opt/lifeos/kokoro-env
 # during the build — CI should always have the vendored wheel.
 COPY build-assets/wheels/ /build-assets/wheels/
 
-# Install Python dependencies with pip cache mount for layer efficiency
-# torch: CPU-only variant from vendored wheel or PyTorch whl index
-# kokoro: kokoro-82m (TTS model + inference engine)
-# aiohttp: async HTTP server
-# soundfile: optional fast OGG encoding (libsndfile Vorbis if available)
-# numpy: audio array processing
+# Install Python dependencies with pip cache mount for layer efficiency.
+# All versions pinned for reproducible builds (was floating, see audit 2026-04-24).
+# torch: CPU-only variant from vendored wheel or PyTorch whl index.
+# kokoro 0.9.4: latest as of 2026-04-24, no v2 announced.
+# numpy<2.0: pinned to 1.x because torch 2.4.1 was not built against numpy 2.x ABI.
 RUN --mount=type=cache,target=/root/.cache/pip \
     /opt/lifeos/kokoro-env/bin/pip install --upgrade pip && \
     /opt/lifeos/kokoro-env/bin/pip install \
@@ -232,10 +236,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         --index-url https://download.pytorch.org/whl/cpu && \
     /opt/lifeos/kokoro-env/bin/pip install \
         --find-links /build-assets/wheels/ \
-        kokoro \
-        aiohttp \
-        soundfile \
-        numpy
+        "kokoro==0.9.4" \
+        "aiohttp==3.13.5" \
+        "soundfile==0.13.1" \
+        "numpy==1.26.4"
 
 # Pre-warm the default voice (if_sara) to materialise .pt weights files
 # and verify kokoro can synthesise without network access.
@@ -589,11 +593,11 @@ RUN chmod +x /usr/local/bin/lifeos-flatpak-update.sh
 COPY image/files/etc/systemd/system/lifeos-flatpak-update.service /usr/lib/systemd/system/lifeos-flatpak-update.service
 COPY image/files/etc/systemd/system/lifeos-flatpak-update.timer /usr/lib/systemd/system/lifeos-flatpak-update.timer
 
-# --- Bun runtime (for Claude Code Channels plugins, incl. Telegram) ---
+# --- Bun runtime (for Claude Code Channels plugins) ---
 # Installed system-wide so every user has it available without per-user setup.
-# Pinned to v1.2.5 for reproducible image builds — bump deliberately when testing.
+# Pinned to v1.3.13 (2026-04-20) for reproducible image builds — bump deliberately when testing.
 RUN set -eux && \
-    BUN_VERSION="1.2.5" && \
+    BUN_VERSION="1.3.13" && \
     BUN_ZIP="/tmp/bun.zip" && \
     curl -fSL --retry 3 -o "${BUN_ZIP}" \
         "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" && \
