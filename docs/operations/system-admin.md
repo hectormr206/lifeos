@@ -192,6 +192,17 @@ See [`docs/operations/update-flow.md`](update-flow.md) for the full check → st
 host-specific overrides may also run it as a user unit, but that is fallback behavior,
 not the primary runtime model.
 
+**Pinned versions** (image build, see [`image/Containerfile`](../../image/Containerfile)):
+
+| Component | Pinned tag | Notes |
+|---|---|---|
+| llama.cpp | `b8925` (2026-04) | Vulkan FA DP4A, CUDA mem-leak fix, llama-server hardening |
+| whisper.cpp | `v1.8.4` (2026-03) | Reproducible build (was unpinned HEAD) |
+| Bun runtime | `1.3.13` (2026-04) | Used by Claude Code Channels plugins |
+| Kokoro TTS | `kokoro==0.9.4` + `numpy==1.26.4` | numpy stays on 1.x for torch 2.4.1 ABI |
+
+When bumping these in `image/Containerfile`, also update this table and the canonical upgrade checklist.
+
 ```bash
 # Manage default system service
 sudo systemctl start llama-server
