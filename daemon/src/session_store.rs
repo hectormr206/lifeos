@@ -289,12 +289,22 @@ impl SessionStore {
     /// Best-effort: logs and continues on failure so it never blocks
     /// the prune / compact flow.
     async fn persist_summary_to_memory(&self, key: &SessionKey, summary: &str) {
+        const PENDING_QUEUE_CAP: usize = 256;
         let mp_slot = self.memory_plane.read().await;
         let Some(mp) = mp_slot.as_ref().cloned() else {
             // Boot race: memory_plane not wired yet. Buffer for the
             // forthcoming `set_memory_plane` call to flush.
             drop(mp_slot);
             let mut pending = self.pending_summaries.write().await;
+            // Cap the buffer FIFO. If memory_plane never wires, we drop
+            // the oldest pending summary rather than grow unbounded.
+            while pending.len() >= PENDING_QUEUE_CAP {
+                let dropped = pending.remove(0);
+                warn!(
+                    "[session_store] pending_summaries cap reached ({}); dropping oldest summary for {}",
+                    PENDING_QUEUE_CAP, dropped.0
+                );
+            }
             pending.push((key.clone(), summary.to_string()));
             warn!(
                 "[session_store] memory_plane not ready; buffered summary for {} (queue={})",

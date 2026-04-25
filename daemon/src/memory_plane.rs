@@ -2304,14 +2304,6 @@ impl MemoryPlaneManager {
                 params![entry_id],
             )?;
 
-            // sqlite-vec virtual tables have no FK chain — we MUST delete
-            // the embedding row explicitly or it lingers and pollutes
-            // semantic search hits.
-            tx.execute(
-                "DELETE FROM memory_embeddings WHERE entry_id = ?",
-                params![entry_id],
-            )?;
-
             tx.commit()?;
             Ok::<_, anyhow::Error>(deleted > 0)
         })
