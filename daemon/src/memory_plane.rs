@@ -1396,6 +1396,28 @@ impl MemoryPlaneManager {
         }
         let db = Connection::open(db_path).context("Failed to open memory database")?;
         crate::sqlite_protection::ensure_sensitive_perms(db_path);
+
+        // Performance PRAGMAs.
+        //
+        // - journal_mode=WAL: 3-10x write throughput, readers no longer
+        //   blocked by writers. Set via query_row because it returns the
+        //   chosen mode as a result row (pragma_update may error on some
+        //   rusqlite versions). WAL persists at the file level.
+        // - synchronous=NORMAL: paired with WAL, durable enough for our
+        //   use case (tiny power-loss window vs huge perf gain).
+        // - busy_timeout=5000: avoids immediate SQLITE_BUSY when readers
+        //   and writers race; waits up to 5s instead.
+        // - cache_size=-64000: SQLite reads negative as KiB (so 64MB).
+        // - mmap_size=256MB: lets SQLite read pages via mmap once the DB
+        //   exceeds the page cache.
+        // - temp_store=MEMORY: keeps temp btrees in RAM.
+        let _: String = db.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+        db.pragma_update(None, "synchronous", "NORMAL")?;
+        db.pragma_update(None, "busy_timeout", 5000)?;
+        db.pragma_update(None, "cache_size", -64000)?;
+        db.pragma_update(None, "mmap_size", 268435456i64)?;
+        db.pragma_update(None, "temp_store", "MEMORY")?;
+
         Ok(db)
     }
 
