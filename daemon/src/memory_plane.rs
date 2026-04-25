@@ -2060,15 +2060,21 @@ impl MemoryPlaneManager {
                 }
 
                 MemorySearchMode::Lexical => {
+                    // The ciphertext is AES-encrypted then base64'd, so a
+                    // plaintext keyword can never appear in `ciphertext_b64`
+                    // (the previous LIKE filter on it returned ~0 rows). We
+                    // narrow with cheap structured filters first (scope, tag,
+                    // archived), cap the candidate window, then decrypt+score
+                    // post-fetch.
+                    const LEXICAL_CANDIDATE_CAP: usize = 1000;
+
                     let mut sql = "SELECT entry_id, created_at, updated_at, kind, scope, tags, source,
                                           importance, nonce_b64, ciphertext_b64, plaintext_sha256
                                    FROM memory_entries"
                         .to_string();
                     let archived_clause = archived_filter.sql_clause("");
-                    let mut conditions: Vec<String> =
-                        vec!["ciphertext_b64 LIKE ?".into(), archived_clause];
-                    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
-                        vec![Box::new(format!("%{}%", query_lc))];
+                    let mut conditions: Vec<String> = vec![archived_clause];
+                    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
                     if let Some(ref s) = scope {
                         conditions.push("scope = ?".into());
@@ -2081,7 +2087,8 @@ impl MemoryPlaneManager {
 
                     sql.push_str(" WHERE ");
                     sql.push_str(&conditions.join(" AND "));
-                    sql.push_str(" ORDER BY created_at DESC");
+                    sql.push_str(" ORDER BY created_at DESC LIMIT ?");
+                    params_vec.push(Box::new(LEXICAL_CANDIDATE_CAP as i32));
 
                     let params: Vec<&dyn rusqlite::ToSql> =
                         params_vec.iter().map(|p| p.as_ref()).collect();
@@ -2240,7 +2247,35 @@ impl MemoryPlaneManager {
         Ok(results)
     }
 
+    /// Soft-delete an entry: mark `archived = 1`. The row, its embedding,
+    /// linked KG triples, and memory_links remain so the user can still
+    /// recover via `search_archived` or undo. Use [`hard_delete_entry`]
+    /// to physically remove the row plus all its dependents.
     pub async fn delete_entry(&self, entry_id: &str) -> Result<bool> {
+        let entry_id = normalize_non_empty(entry_id).context("entry_id is required")?;
+
+        let db_path = self.db_path.clone();
+        let now = Utc::now().to_rfc3339();
+
+        let archived = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let updated = db.execute(
+                "UPDATE memory_entries SET archived = 1, updated_at = ?2 WHERE entry_id = ?1",
+                params![entry_id, now],
+            )?;
+            Ok::<_, anyhow::Error>(updated > 0)
+        })
+        .await??;
+
+        Ok(archived)
+    }
+
+    /// Physically remove an entry and ALL its dependents (embedding, KG
+    /// triples sourced from it, and memory_links pointing at it). There
+    /// is no FK chain in the schema so this method is the cleanup
+    /// boundary: callers (axi tool / API ?hard=true) are expected to
+    /// confirm with the user first.
+    pub async fn hard_delete_entry(&self, entry_id: &str) -> Result<bool> {
         let entry_id = normalize_non_empty(entry_id).context("entry_id is required")?;
 
         let db_path = self.db_path.clone();
@@ -2259,8 +2294,176 @@ impl MemoryPlaneManager {
                 params![entry_id],
             )?;
 
+            tx.execute(
+                "DELETE FROM knowledge_graph WHERE source_entry_id = ?",
+                params![entry_id],
+            )?;
+
+            tx.execute(
+                "DELETE FROM memory_links WHERE from_entry = ?1 OR to_entry = ?1",
+                params![entry_id],
+            )?;
+
+            // sqlite-vec virtual tables have no FK chain — we MUST delete
+            // the embedding row explicitly or it lingers and pollutes
+            // semantic search hits.
+            tx.execute(
+                "DELETE FROM memory_embeddings WHERE entry_id = ?",
+                params![entry_id],
+            )?;
+
             tx.commit()?;
             Ok::<_, anyhow::Error>(deleted > 0)
+        })
+        .await??;
+
+        Ok(deleted)
+    }
+
+    /// Update an existing entry's content, importance, and/or tags.
+    /// If `new_content` is provided the embedding is regenerated so semantic
+    /// search stays consistent with the visible text.
+    pub async fn update_entry(
+        &self,
+        entry_id: &str,
+        new_content: Option<&str>,
+        new_importance: Option<u8>,
+        new_tags: Option<&[String]>,
+    ) -> Result<bool> {
+        let entry_id = normalize_non_empty(entry_id).context("entry_id is required")?;
+        if new_content.is_none() && new_importance.is_none() && new_tags.is_none() {
+            anyhow::bail!("update_entry requires at least one field to change");
+        }
+
+        if let Some(imp) = new_importance {
+            if imp > 100 {
+                anyhow::bail!("importance must be in range 0..=100");
+            }
+        }
+
+        let new_encrypted = if let Some(content) = new_content {
+            let content = content.trim();
+            if content.is_empty() {
+                anyhow::bail!("content is required");
+            }
+            if content.len() > MAX_CONTENT_BYTES {
+                anyhow::bail!("content too large (max {} bytes)", MAX_CONTENT_BYTES);
+            }
+            let (nonce_b64, ciphertext_b64, plaintext_sha256) = encrypt_content(content)?;
+            let (embedding, embedding_source) = self.generate_embedding(content).await;
+            let embedding_bytes: Vec<u8> =
+                embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+            Some((
+                nonce_b64,
+                ciphertext_b64,
+                plaintext_sha256,
+                embedding_source,
+                embedding_bytes,
+            ))
+        } else {
+            None
+        };
+
+        let normalized_tags = new_tags.map(normalize_tags);
+        let tags_json = match &normalized_tags {
+            Some(t) => Some(serde_json::to_string(t)?),
+            None => None,
+        };
+
+        let db_path = self.db_path.clone();
+        let now = Utc::now().to_rfc3339();
+
+        let updated = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let tx = db.unchecked_transaction()?;
+
+            // Build the UPDATE dynamically with positional `?` placeholders to
+            // stay consistent with the rest of the file (no named-param helper
+            // is used elsewhere). `updated_at` is always touched; `entry_id`
+            // is always the WHERE clause; everything else is conditional.
+            let mut sets: Vec<String> = vec!["updated_at = ?".to_string()];
+            let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
+                vec![Box::new(now.clone())];
+
+            if let Some((ref n, ref c, ref h, ref es, _)) = new_encrypted {
+                sets.push("nonce_b64 = ?".to_string());
+                sets.push("ciphertext_b64 = ?".to_string());
+                sets.push("plaintext_sha256 = ?".to_string());
+                sets.push("embedding_source = ?".to_string());
+                params_vec.push(Box::new(n.clone()));
+                params_vec.push(Box::new(c.clone()));
+                params_vec.push(Box::new(h.clone()));
+                params_vec.push(Box::new(es.clone()));
+            }
+            if let Some(imp) = new_importance {
+                sets.push("importance = ?".to_string());
+                params_vec.push(Box::new(imp as i32));
+            }
+            if let Some(ref t) = tags_json {
+                sets.push("tags = ?".to_string());
+                params_vec.push(Box::new(t.clone()));
+            }
+
+            // Trailing WHERE param.
+            params_vec.push(Box::new(entry_id.clone()));
+
+            let sql = format!(
+                "UPDATE memory_entries SET {} WHERE entry_id = ?",
+                sets.join(", ")
+            );
+
+            let bound: Vec<&dyn rusqlite::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = tx.execute(&sql, bound.as_slice())?;
+
+            if let Some((_, _, _, _, embedding_bytes)) = new_encrypted {
+                tx.execute(
+                    "DELETE FROM memory_embeddings WHERE entry_id = ?",
+                    params![entry_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO memory_embeddings (entry_id, embedding) VALUES (?1, vec_f32(?2))",
+                    params![entry_id, embedding_bytes],
+                )?;
+            }
+
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(rows > 0)
+        })
+        .await??;
+
+        Ok(updated)
+    }
+
+    /// Delete a single knowledge-graph triple by exact `(subject, predicate, object)` match.
+    pub async fn delete_kg_triple(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+    ) -> Result<bool> {
+        // KG triples are stored lowercase by `add_triple`, so we match
+        // the same normalization here or the DELETE silently misses.
+        let subject = normalize_non_empty(subject)
+            .context("subject is required")?
+            .to_lowercase();
+        let predicate = normalize_non_empty(predicate)
+            .context("predicate is required")?
+            .to_lowercase();
+        let object = normalize_non_empty(object)
+            .context("object is required")?
+            .to_lowercase();
+
+        let db_path = self.db_path.clone();
+
+        let deleted = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let rows = db.execute(
+                "DELETE FROM knowledge_graph
+                 WHERE subject = ?1 AND predicate = ?2 AND object = ?3",
+                params![subject, predicate, object],
+            )?;
+            Ok::<_, anyhow::Error>(rows > 0)
         })
         .await??;
 
@@ -2929,6 +3132,45 @@ impl MemoryPlaneManager {
     // -----------------------------------------------------------------------
 
     /// Link two memory entries with a relationship.
+    /// Returns true if an entry with `entry_id` exists in `memory_entries`,
+    /// regardless of archived state. Used by `memory_relate` to fail fast
+    /// instead of silently linking phantom IDs.
+    pub async fn entry_exists(&self, entry_id: &str) -> Result<bool> {
+        let entry_id = normalize_non_empty(entry_id).context("entry_id is required")?;
+        let db_path = self.db_path.clone();
+        let exists = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let n: i64 = db.query_row(
+                "SELECT COUNT(*) FROM memory_entries WHERE entry_id = ?1",
+                params![entry_id],
+                |row| row.get(0),
+            )?;
+            Ok::<_, anyhow::Error>(n > 0)
+        })
+        .await??;
+        Ok(exists)
+    }
+
+    /// Restore a soft-deleted entry by clearing its `archived` flag.
+    /// Companion to [`delete_entry`]. Returns true if a row was actually
+    /// flipped (false if the entry is missing or already live).
+    pub async fn unarchive_entry(&self, entry_id: &str) -> Result<bool> {
+        let entry_id = normalize_non_empty(entry_id).context("entry_id is required")?;
+        let db_path = self.db_path.clone();
+        let now = Utc::now().to_rfc3339();
+        let updated = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let rows = db.execute(
+                "UPDATE memory_entries SET archived = 0, updated_at = ?2
+                 WHERE entry_id = ?1 AND archived = 1",
+                params![entry_id, now],
+            )?;
+            Ok::<_, anyhow::Error>(rows > 0)
+        })
+        .await??;
+        Ok(updated)
+    }
+
     pub async fn link_entries(&self, from_id: &str, to_id: &str, relation: &str) -> Result<()> {
         let db_path = self.db_path.clone();
         let from = from_id.to_string();
@@ -16743,10 +16985,188 @@ mod tests {
             .await
             .unwrap();
 
+        // Default delete is now soft (archive) — `list_entries` filters
+        // archived rows out, so the live view is empty.
         let deleted = mgr.delete_entry(&created.entry_id).await.unwrap();
         assert!(deleted);
         let entries = mgr.list_entries(10, None, None).await.unwrap();
         assert!(entries.is_empty());
+
+        // But the row still exists physically — search_archived can find it.
+        let archived = mgr
+            .search_archived("delete me", 5, None)
+            .await
+            .unwrap();
+        assert!(
+            archived.iter().any(|r| r.entry.entry_id == created.entry_id),
+            "soft-deleted entry must remain recoverable via archived search"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn hard_delete_entry_removes_links_and_kg() {
+        let dir = temp_dir("memory-plane-hard-delete");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let a = mgr
+            .add_entry("note", "user", &[], None, 10, "from-side")
+            .await
+            .unwrap();
+        let b = mgr
+            .add_entry("note", "user", &[], None, 10, "to-side")
+            .await
+            .unwrap();
+        mgr.link_entries(&a.entry_id, &b.entry_id, "refers_to")
+            .await
+            .unwrap();
+
+        // FIX 4 — exercise the KG cleanup branch the previous test missed.
+        // add_triple is the only call site that populates `source_entry_id`,
+        // so without this the `DELETE ... WHERE source_entry_id = ?` line
+        // had zero coverage.
+        mgr.add_triple("hector", "owns", "laptop", 1.0, Some(&a.entry_id))
+            .await
+            .unwrap();
+
+        let deleted = mgr.hard_delete_entry(&a.entry_id).await.unwrap();
+        assert!(deleted);
+
+        let linked = mgr.get_linked(&b.entry_id).await.unwrap();
+        assert!(
+            linked.is_empty(),
+            "hard delete must purge memory_links pointing at the deleted entry"
+        );
+
+        // FIX 4 + FIX 5 — verify via raw SQL because there's no public
+        // inspector for KG triples by source_entry_id, and the embedding
+        // virtual table needs explicit cleanup.
+        let db_path = dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let kg_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_graph WHERE source_entry_id = ?1",
+                params![&a.entry_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            kg_count, 0,
+            "hard delete must purge KG triples whose source_entry_id is the deleted entry"
+        );
+
+        let emb_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_embeddings WHERE entry_id = ?1",
+                params![&a.entry_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            emb_count, 0,
+            "hard delete must purge memory_embeddings row for the deleted entry"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn lexical_search_finds_decrypted_keyword() {
+        // Regression: the old lexical path filtered with `ciphertext_b64
+        // LIKE '%query%'`, which was always false because the ciphertext
+        // is AES-encrypted then base64'd. After the fix we narrow with
+        // structured filters then decrypt and score in memory.
+        let dir = temp_dir("memory-plane-lexical");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_entry(
+            "note",
+            "user",
+            &["telegram".to_string()],
+            None,
+            50,
+            "Configurar bot de telegram con TELEGRAM_BOT_TOKEN.",
+        )
+        .await
+        .unwrap();
+
+        let hits = mgr
+            .search_entries_with_mode(
+                "telegram",
+                10,
+                None,
+                MemorySearchMode::Lexical,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !hits.is_empty(),
+            "lexical search must return matches for decrypted plaintext"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn update_entry_changes_content_and_tags() {
+        let dir = temp_dir("memory-plane-update");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let created = mgr
+            .add_entry("note", "user", &["old".to_string()], None, 10, "v1")
+            .await
+            .unwrap();
+
+        let new_tags = vec!["new".to_string(), "edited".to_string()];
+        let updated = mgr
+            .update_entry(
+                &created.entry_id,
+                Some("v2-edited"),
+                Some(80),
+                Some(&new_tags),
+            )
+            .await
+            .unwrap();
+        assert!(updated);
+
+        let entries = mgr.list_entries(10, None, None).await.unwrap();
+        let row = entries
+            .iter()
+            .find(|e| e.entry_id == created.entry_id)
+            .expect("entry still exists");
+        assert_eq!(row.content, "v2-edited");
+        assert_eq!(row.importance, 80);
+        assert!(row.tags.contains(&"new".to_string()));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn delete_kg_triple_removes_match() {
+        let dir = temp_dir("memory-plane-kg-delete");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_triple("hector", "vive_en", "qro", 1.0, None)
+            .await
+            .unwrap();
+
+        let deleted = mgr
+            .delete_kg_triple("hector", "vive_en", "qro")
+            .await
+            .unwrap();
+        assert!(deleted);
+
+        // Second delete is a no-op.
+        let deleted2 = mgr
+            .delete_kg_triple("hector", "vive_en", "qro")
+            .await
+            .unwrap();
+        assert!(!deleted2);
 
         std::fs::remove_dir_all(dir).ok();
     }

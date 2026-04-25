@@ -9934,9 +9934,22 @@ async fn search_memory_entries(
 async fn delete_memory_entry(
     State(state): State<ApiState>,
     Path(entry_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // Default = soft (archive). `?hard=true` opts into the irreversible
+    // physical delete that also cleans up KG triples and memory_links.
+    let hard = params
+        .get("hard")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+
     let mgr = state.memory_plane_manager.read().await;
-    let deleted = mgr.delete_entry(&entry_id).await.map_err(|e| {
+    let result = if hard {
+        mgr.hard_delete_entry(&entry_id).await
+    } else {
+        mgr.delete_entry(&entry_id).await
+    };
+    let deleted = result.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -9950,6 +9963,7 @@ async fn delete_memory_entry(
     Ok(Json(serde_json::json!({
         "status": "ok",
         "deleted": deleted,
+        "hard": hard,
         "entry_id": entry_id,
     })))
 }
@@ -12589,7 +12603,8 @@ async fn delete_user_forget(
     let entries = mgr.list_entries(500, None, None).await.unwrap_or_default();
     let mut deleted_count = 0u64;
     for entry in &entries {
-        if mgr.delete_entry(&entry.entry_id).await.unwrap_or(false) {
+        // Right-to-be-forgotten requires PHYSICAL erasure, not soft archive.
+        if mgr.hard_delete_entry(&entry.entry_id).await.unwrap_or(false) {
             deleted_count += 1;
         }
     }

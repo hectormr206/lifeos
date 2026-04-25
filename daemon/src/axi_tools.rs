@@ -1025,6 +1025,21 @@ REGLAS FIRMES:
     args: {"question": "Es seguro hacer ayuno intermitente?", "topic": "health"}
     topic (opcional): health, mental_health, nutrition, exercise, finance, relationships, spiritual, general
 
+86. **memory_delete** — Borra una memoria por su entry_id. Por defecto archiva (recuperable con recall_archived o memory_unarchive). Para borrado permanente pasa hard=true junto con confirm=true; PRIMERO pregunta al usuario y solo entonces reenvia con confirm=true. Limite global: 10 ops destructivas/hora.
+    args: {"entry_id": "mem-...", "hard": false, "confirm": false}
+
+87. **memory_update** — Edita una memoria existente: cambia contenido, importancia (0-100) y/o tags. Si cambias contenido, el embedding se regenera automaticamente.
+    args: {"entry_id": "mem-...", "content": "texto nuevo", "importance": 80, "tags": ["tag1","tag2"]}
+
+88. **memory_relate** — Vincula dos memorias con una relacion semantica (ej: "causa", "supersedes", "refers_to"). Usalo cuando descubras que dos memorias estan conectadas.
+    args: {"from_entry_id": "mem-A", "to_entry_id": "mem-B", "relation": "causa"}
+
+89. **knowledge_delete** — Borra un triple del knowledge graph por (subject, predicate, object) exactos. Usalo cuando un hecho del KG sea incorrecto u obsoleto. Requiere confirm=true (operacion irreversible). Pregunta primero al usuario.
+    args: {"subject": "Hector", "predicate": "vive_en", "object": "CDMX", "confirm": false}
+
+90. **memory_unarchive** — Restaura una memoria archivada (deshace memory_delete soft). Sin confirm — es restaurativa, no destructiva.
+    args: {"entry_id": "mem-..."}
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -1089,7 +1104,13 @@ REGLAS FIRMES:
     pub struct ConversationHistory {
         chats: RwLock<HashMap<i64, ConversationEntry>>,
         persist_path: std::path::PathBuf,
+        /// Throttle for `drain_stale_and_persist`: at most one scan per
+        /// `DRAIN_STALE_THROTTLE_SECS` to avoid a write-lock storm on
+        /// every Axi turn.
+        last_drain_at: tokio::sync::Mutex<Option<std::time::Instant>>,
     }
+
+    const DRAIN_STALE_THROTTLE_SECS: u64 = 60;
 
     impl ConversationHistory {
         pub fn new() -> Self {
@@ -1123,6 +1144,7 @@ REGLAS FIRMES:
             Self {
                 chats: RwLock::new(chats),
                 persist_path,
+                last_drain_at: tokio::sync::Mutex::new(None),
             }
         }
 
@@ -1315,6 +1337,85 @@ REGLAS FIRMES:
                 if let Some(entry) = chats.get_mut(&chat_id) {
                     entry.compacted_summary = Some(resp.text);
                     info!("[history] LLM-compacted summary for chat {}", chat_id);
+                }
+                self.persist_locked(&chats);
+            }
+        }
+
+        /// PERSIST-FIRST, REMOVE-SECOND drain of stale chats.
+        ///
+        /// For every chat older than `HISTORY_TTL_SECS` we first call
+        /// `save_session_summary` (which writes to memory_plane). ONLY
+        /// after that returns do we remove the entry from the in-memory
+        /// map and rewrite the on-disk JSON. If persistence fails for a
+        /// given chat we keep it in RAM and try again next tick — this
+        /// is the SIGTERM-safety contract: data never disappears unless
+        /// it has already been saved.
+        ///
+        /// Throttled to once per `DRAIN_STALE_THROTTLE_SECS` to avoid a
+        /// write-lock storm on hot chats.
+        pub async fn drain_stale_and_persist(&self, ctx: &ToolContext) {
+            // Throttle: skip if we ran recently.
+            {
+                let mut last = self.last_drain_at.lock().await;
+                let now_inst = std::time::Instant::now();
+                if let Some(prev) = *last {
+                    if now_inst.duration_since(prev).as_secs() < DRAIN_STALE_THROTTLE_SECS {
+                        return;
+                    }
+                }
+                *last = Some(now_inst);
+            }
+
+            // Phase 1 — READ-only scan to identify candidates.
+            let candidates: Vec<(i64, Vec<ChatMessage>)> = {
+                let chats = self.chats.read().await;
+                let now = chrono::Utc::now();
+                chats
+                    .iter()
+                    .filter(|(_, v)| {
+                        now.signed_duration_since(v.last_active).num_seconds()
+                            >= HISTORY_TTL_SECS
+                    })
+                    .map(|(k, v)| {
+                        let mut msgs = Vec::new();
+                        if let Some(first) = v.first_message.clone() {
+                            msgs.push(first);
+                        }
+                        msgs.extend(v.messages.iter().cloned());
+                        (*k, msgs)
+                    })
+                    .collect()
+            };
+
+            if candidates.is_empty() {
+                return;
+            }
+
+            // Phase 2 — persist each candidate SYNCHRONOUSLY, await result.
+            // ONLY entries whose persist returns true are queued for
+            // removal. If memory_plane is down or the write failed, the
+            // chat stays in RAM and we'll retry next tick — no data loss.
+            let mut persisted: Vec<i64> = Vec::with_capacity(candidates.len());
+            for (cid, msgs) in &candidates {
+                if save_session_summary(ctx, *cid, msgs).await {
+                    persisted.push(*cid);
+                } else {
+                    warn!(
+                        "[history] drain_stale: persist failed for chat {} — keeping in RAM for retry",
+                        cid
+                    );
+                }
+            }
+            if persisted.is_empty() {
+                return;
+            }
+
+            // Phase 3 — remove ONLY the entries we successfully persisted.
+            {
+                let mut chats = self.chats.write().await;
+                for id in &persisted {
+                    chats.remove(id);
                 }
                 self.persist_locked(&chats);
             }
@@ -2043,6 +2144,11 @@ REGLAS FIRMES:
             "remember" => execute_remember(&call.args, ctx).await,
             "recall" => execute_recall(&call.args, ctx).await,
             "recall_archived" => execute_recall_archived(&call.args, ctx).await,
+            "memory_delete" => execute_memory_delete(&call.args, ctx).await,
+            "memory_update" => execute_memory_update(&call.args, ctx).await,
+            "memory_relate" => execute_memory_relate(&call.args, ctx).await,
+            "memory_unarchive" => execute_memory_unarchive(&call.args, ctx).await,
+            "knowledge_delete" => execute_knowledge_delete(&call.args, ctx).await,
             // BI.2 — Salud médica estructurada
             "health_fact_add" => execute_health_fact_add(&call.args, ctx).await,
             "health_fact_list" => execute_health_fact_list(&call.args, ctx).await,
@@ -2333,6 +2439,12 @@ REGLAS FIRMES:
         force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
         session_key_override: Option<SessionKey>,
     ) -> (String, Option<String>) {
+        // No-forget: persist-then-prune any chats that aged past the 48 h
+        // history TTL. PERSIST FIRST so a SIGTERM between drain and write
+        // never destroys user context. Throttled to once per minute inside
+        // `drain_stale_and_persist` so it doesn't write-lock on every turn.
+        ctx.history.drain_stale_and_persist(ctx).await;
+
         // AQ.3 — Detect implicit preference feedback and update user model
         if let Some(ref um_arc) = ctx.user_model {
             if let Some((key, value)) = crate::user_model::detect_preference_feedback(user_text) {
@@ -3490,6 +3602,357 @@ REGLAS FIRMES:
                 }
             }
             Err(e) => Ok(format!("Error buscando en el archivo: {}", e)),
+        }
+    }
+
+    // ========================================================================
+    // Memory CRUD tools — Axi can edit / delete / relate / forget on demand.
+    // Sprint 1 (feat/axi-memory-no-forget): user goal is "Axi never forgets,
+    // and can edit anything from chat". These four tools expose the
+    // memory_plane CRUD surface that previously only existed via REST.
+    //
+    // Destructive guard (FIX 3 of JD review):
+    //  - `LIFEOS_AXI_REQUIRE_CONFIRM_DESTRUCTIVE` (default true) requires
+    //    `confirm: true` on every destructive call.
+    //  - Every destructive call is logged to
+    //    `~/.local/share/lifeos/destructive_actions.log` (mode 0600,
+    //    append-only, best-effort).
+    //  - Rate-limited to 10 destructive ops per rolling hour across all
+    //    destructive tools, tracked in `DESTRUCTIVE_RATE_LIMITER`.
+    // ========================================================================
+
+    /// Returns true if confirm-mode is OFF via env (user opt-out).
+    fn destructive_confirm_disabled() -> bool {
+        match std::env::var("LIFEOS_AXI_REQUIRE_CONFIRM_DESTRUCTIVE") {
+            Ok(v) => matches!(v.as_str(), "0" | "false" | "no"),
+            Err(_) => false,
+        }
+    }
+
+    /// Rolling 1-hour window rate limiter for destructive tool calls.
+    /// Single global instance — every destructive tool consults it before
+    /// touching state. Limit applies ACROSS tools, not per tool.
+    struct DestructiveRateLimiter {
+        max_per_hour: usize,
+        events: std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>,
+    }
+
+    impl DestructiveRateLimiter {
+        const fn new(max_per_hour: usize) -> Self {
+            Self {
+                max_per_hour,
+                events: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            }
+        }
+
+        /// Try to record a new destructive event. Returns Ok on success,
+        /// Err with seconds-until-window-frees if exceeded.
+        fn try_record(&self) -> Result<(), u64> {
+            let now = std::time::Instant::now();
+            let one_hour = std::time::Duration::from_secs(3600);
+            let mut q = self.events.lock().expect("rate limiter mutex");
+            while let Some(front) = q.front() {
+                if now.duration_since(*front) > one_hour {
+                    q.pop_front();
+                } else {
+                    break;
+                }
+            }
+            if q.len() >= self.max_per_hour {
+                let oldest = *q.front().expect("non-empty");
+                let wait = one_hour
+                    .saturating_sub(now.duration_since(oldest))
+                    .as_secs();
+                return Err(wait.max(1));
+            }
+            q.push_back(now);
+            Ok(())
+        }
+    }
+
+    static DESTRUCTIVE_RATE_LIMITER: DestructiveRateLimiter =
+        DestructiveRateLimiter::new(10);
+
+    /// Append a JSON line describing a destructive action. Best-effort: any
+    /// I/O error is swallowed and a `warn!` emitted. Mode 0600 on first
+    /// create; subsequent appends inherit the existing permission.
+    fn audit_destructive(tool: &str, args: &serde_json::Value, result: &str) {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let dir = std::path::PathBuf::from(format!("{home}/.local/share/lifeos"));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!("[audit] cannot create audit dir: {}", e);
+            return;
+        }
+        let path = dir.join("destructive_actions.log");
+        let line = serde_json::json!({
+            "ts": chrono::Utc::now().to_rfc3339(),
+            "tool": tool,
+            "args": args,
+            "result": result,
+        });
+        let mut serialized = match serde_json::to_string(&line) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("[audit] serialize failed: {}", e);
+                return;
+            }
+        };
+        serialized.push('\n');
+
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).append(true).mode(0o600);
+        match opts.open(&path) {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(serialized.as_bytes()) {
+                    warn!("[audit] write failed: {}", e);
+                }
+            }
+            Err(e) => warn!("[audit] open {}: {}", path.display(), e),
+        }
+    }
+
+    /// Pre-flight check used by every destructive tool. On error returns a
+    /// `Result::Ok(message)` because tool functions surface the message back
+    /// to the LLM rather than aborting the agent loop.
+    fn destructive_preflight(
+        tool: &str,
+        args: &serde_json::Value,
+    ) -> std::result::Result<(), String> {
+        // Confirmation gate.
+        if !destructive_confirm_disabled() {
+            let confirmed = args
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !confirmed {
+                return Err(format!(
+                    "Operacion destructiva ({tool}) requiere confirmacion explicita del usuario. \
+                     Pregunta al usuario antes de continuar y luego reenviame la llamada con \"confirm\": true."
+                ));
+            }
+        }
+        // Rate-limit gate.
+        if let Err(wait_secs) = DESTRUCTIVE_RATE_LIMITER.try_record() {
+            return Err(format!(
+                "Limite de operaciones destructivas alcanzado (10/hora). \
+                 Espera {wait_secs} segundos o pide al usuario que reintente luego."
+            ));
+        }
+        Ok(())
+    }
+
+    async fn execute_memory_delete(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let entry_id = args["entry_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'entry_id'"))?;
+        let hard = args["hard"].as_bool().unwrap_or(false);
+
+        // Hard delete is irreversible: confirm + rate-limit + audit.
+        // Soft delete is recoverable via recall_archived, so we let it
+        // through unguarded (it's basically an archive, not destruction).
+        if hard {
+            if let Err(msg) = destructive_preflight("memory_delete", args) {
+                return Ok(msg);
+            }
+        }
+
+        let memory = match &ctx.memory {
+            Some(m) => m,
+            None => return Ok("La memoria persistente no esta disponible.".into()),
+        };
+        let mem = memory.read().await;
+
+        let result = if hard {
+            mem.hard_delete_entry(entry_id).await
+        } else {
+            mem.delete_entry(entry_id).await
+        };
+
+        let response = match result {
+            Ok(true) if hard => format!(
+                "Borre permanentemente la memoria {} (y sus links / KG triples).",
+                entry_id
+            ),
+            Ok(true) => format!(
+                "Archive la memoria {} (sigue recuperable con recall_archived).",
+                entry_id
+            ),
+            Ok(false) => format!("No encontre la memoria {}.", entry_id),
+            Err(e) => format!("Error borrando memoria: {}", e),
+        };
+        if hard {
+            audit_destructive("memory_delete", args, &response);
+        }
+        Ok(response)
+    }
+
+    async fn execute_memory_update(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let entry_id = args["entry_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'entry_id'"))?;
+        let new_content = args["content"].as_str();
+        let new_importance = args["importance"].as_i64().map(|v| v.clamp(0, 100) as u8);
+        let new_tags = args["tags"].as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<String>>()
+        });
+
+        if new_content.is_none() && new_importance.is_none() && new_tags.is_none() {
+            return Ok(
+                "Necesito al menos uno de: 'content', 'importance', o 'tags' para actualizar."
+                    .into(),
+            );
+        }
+
+        let memory = match &ctx.memory {
+            Some(m) => m,
+            None => return Ok("La memoria persistente no esta disponible.".into()),
+        };
+        let mem = memory.read().await;
+
+        match mem
+            .update_entry(
+                entry_id,
+                new_content,
+                new_importance,
+                new_tags.as_deref(),
+            )
+            .await
+        {
+            Ok(true) => Ok(format!("Actualice la memoria {}.", entry_id)),
+            Ok(false) => Ok(format!("No encontre la memoria {}.", entry_id)),
+            Err(e) => Ok(format!("Error actualizando memoria: {}", e)),
+        }
+    }
+
+    async fn execute_memory_relate(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let from = args["from_entry_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'from_entry_id'"))?;
+        let to = args["to_entry_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'to_entry_id'"))?;
+        let relation = args["relation"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'relation'"))?;
+
+        // Reject self-links: useless and pollutes get_linked output.
+        if from == to {
+            return Ok(format!(
+                "No puedo vincular {} consigo mismo. Indica dos entry_ids distintos.",
+                from
+            ));
+        }
+
+        let memory = match &ctx.memory {
+            Some(m) => m,
+            None => return Ok("La memoria persistente no esta disponible.".into()),
+        };
+        let mem = memory.read().await;
+
+        // Verify BOTH entries exist before linking — link_entries uses
+        // INSERT OR IGNORE on memory_links, which has no FK back to
+        // memory_entries, so phantom IDs would silently succeed.
+        match mem.entry_exists(from).await {
+            Ok(false) => {
+                return Ok(format!("No encontre la memoria origen {}.", from));
+            }
+            Err(e) => return Ok(format!("Error verificando memoria origen: {}", e)),
+            Ok(true) => {}
+        }
+        match mem.entry_exists(to).await {
+            Ok(false) => {
+                return Ok(format!("No encontre la memoria destino {}.", to));
+            }
+            Err(e) => return Ok(format!("Error verificando memoria destino: {}", e)),
+            Ok(true) => {}
+        }
+
+        match mem.link_entries(from, to, relation).await {
+            Ok(()) => Ok(format!(
+                "Vincule {} -[{}]-> {}.",
+                from, relation, to
+            )),
+            Err(e) => Ok(format!("Error creando vinculo: {}", e)),
+        }
+    }
+
+    async fn execute_knowledge_delete(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let subject = args["subject"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'subject'"))?;
+        let predicate = args["predicate"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'predicate'"))?;
+        let object = args["object"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'object'"))?;
+
+        if let Err(msg) = destructive_preflight("knowledge_delete", args) {
+            return Ok(msg);
+        }
+
+        let memory = match &ctx.memory {
+            Some(m) => m,
+            None => return Ok("La memoria persistente no esta disponible.".into()),
+        };
+        let mem = memory.read().await;
+
+        let response = match mem.delete_kg_triple(subject, predicate, object).await {
+            Ok(true) => format!(
+                "Borre el triple ({}, {}, {}) del knowledge graph.",
+                subject, predicate, object
+            ),
+            Ok(false) => format!(
+                "No encontre el triple ({}, {}, {}).",
+                subject, predicate, object
+            ),
+            Err(e) => format!("Error borrando triple: {}", e),
+        };
+        audit_destructive("knowledge_delete", args, &response);
+        Ok(response)
+    }
+
+    /// Restore a soft-deleted memory. Restorative (not destructive) so it
+    /// is intentionally NOT subject to the destructive confirm/audit/rate
+    /// limit gates — undoing a mistake should never require ceremony.
+    async fn execute_memory_unarchive(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let entry_id = args["entry_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'entry_id'"))?;
+        let memory = match &ctx.memory {
+            Some(m) => m,
+            None => return Ok("La memoria persistente no esta disponible.".into()),
+        };
+        let mem = memory.read().await;
+        match mem.unarchive_entry(entry_id).await {
+            Ok(true) => Ok(format!(
+                "Restaure la memoria {} (vuelve a aparecer en busquedas activas).",
+                entry_id
+            )),
+            Ok(false) => Ok(format!(
+                "No habia nada que restaurar para {} (no existe o ya estaba activa).",
+                entry_id
+            )),
+            Err(e) => Ok(format!("Error restaurando memoria: {}", e)),
         }
     }
 
@@ -9691,11 +10154,22 @@ REGLAS FIRMES:
     // Session summary — saves conversation context to persistent memory
     // -----------------------------------------------------------------------
 
-    // Auto-save a session summary when conversation is cleared or expires
-    #[allow(dead_code)]
-    pub async fn save_session_summary(ctx: &ToolContext, chat_id: i64, messages: &[ChatMessage]) {
+    // Auto-save a session summary when conversation is cleared or expires.
+    // Called by the TTL-prune path (drain_stale_and_persist) and by `/clear`
+    // so the 48 h ConversationHistory window never silently drops user
+    // context — everything goes to memory_plane first.
+    //
+    // Returns `true` if the summary was successfully written to memory_plane
+    // (or if there was nothing to save), `false` if memory_plane is missing
+    // or the write failed. The drain path uses this to decide whether the
+    // chat is safe to remove from RAM.
+    pub async fn save_session_summary(
+        ctx: &ToolContext,
+        chat_id: i64,
+        messages: &[ChatMessage],
+    ) -> bool {
         if messages.is_empty() {
-            return;
+            return true;
         }
 
         // Build a summary prompt from conversation messages
@@ -9743,18 +10217,36 @@ REGLAS FIRMES:
         };
         drop(router);
 
-        // Save to persistent memory
-        if let Some(memory) = &ctx.memory {
-            let mem = memory.read().await;
-            let tags = vec!["session_summary".to_string()];
-            let content = format!(
-                "[decision] Session summary (chat {})\ntopic: session:chat-{}\n{}",
-                chat_id, chat_id, summary_text
+        // Save to persistent memory. Return whether the write succeeded so
+        // the drain-stale path can decide whether the chat is safe to drop.
+        let Some(memory) = &ctx.memory else {
+            warn!(
+                "[session_summary] memory_plane unavailable; chat {} NOT persisted",
+                chat_id
             );
-            mem.add_entry("decision", "user", &tags, Some("session"), 60, &content)
-                .await
-                .ok();
-            info!("[engram] Session summary saved for chat {}", chat_id);
+            return false;
+        };
+        let mem = memory.read().await;
+        let tags = vec!["session_summary".to_string()];
+        let content = format!(
+            "[decision] Session summary (chat {})\ntopic: session:chat-{}\n{}",
+            chat_id, chat_id, summary_text
+        );
+        match mem
+            .add_entry("decision", "user", &tags, Some("session"), 60, &content)
+            .await
+        {
+            Ok(_) => {
+                info!("[engram] Session summary saved for chat {}", chat_id);
+                true
+            }
+            Err(e) => {
+                warn!(
+                    "[engram] Failed to persist session summary for chat {}: {}",
+                    chat_id, e
+                );
+                false
+            }
         }
     }
 

@@ -231,6 +231,17 @@ pub struct SessionMetadata {
 pub struct SessionStore {
     base_dir: PathBuf,
     sessions: RwLock<HashMap<String, SessionMetadata>>,
+    /// Optional memory_plane handle for "no forget" persistence. When set,
+    /// `compact_session` and `prune_stale_sessions` write the compaction
+    /// summary into memory_plane as a high-importance entry tagged with
+    /// the session_key — so 72 h TTL pruning never silently loses context.
+    /// Wired post-construction via [`SessionStore::set_memory_plane`].
+    memory_plane: RwLock<Option<Arc<RwLock<crate::memory_plane::MemoryPlaneManager>>>>,
+    /// Pending summaries that arrived BEFORE `set_memory_plane` was wired.
+    /// Flushed atomically inside `set_memory_plane`, so the boot race
+    /// (compact triggered between SessionStore::new and set_memory_plane)
+    /// no longer drops summaries on the floor.
+    pending_summaries: RwLock<Vec<(SessionKey, String)>>,
 }
 
 impl SessionStore {
@@ -239,6 +250,97 @@ impl SessionStore {
         Self {
             base_dir,
             sessions: RwLock::new(HashMap::new()),
+            memory_plane: RwLock::new(None),
+            pending_summaries: RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Attach a memory_plane handle so that compaction and pruning persist
+    /// summaries into long-term memory. Idempotent — a second call replaces
+    /// the previous handle. ALSO flushes any summaries that were buffered
+    /// before this call (boot-race safety: compactions that fired between
+    /// `SessionStore::new` and this setter are NOT lost).
+    pub async fn set_memory_plane(
+        &self,
+        memory: Arc<RwLock<crate::memory_plane::MemoryPlaneManager>>,
+    ) {
+        {
+            let mut slot = self.memory_plane.write().await;
+            *slot = Some(memory);
+        }
+        // Drain and flush any buffered summaries through the now-wired plane.
+        let drained = {
+            let mut q = self.pending_summaries.write().await;
+            std::mem::take(&mut *q)
+        };
+        if drained.is_empty() {
+            return;
+        }
+        info!(
+            "[session_store] Flushing {} buffered summaries to memory_plane after set",
+            drained.len()
+        );
+        for (key, summary) in drained {
+            self.persist_summary_to_memory(&key, &summary).await;
+        }
+    }
+
+    /// Persist a compaction summary to memory_plane (if attached).
+    /// Best-effort: logs and continues on failure so it never blocks
+    /// the prune / compact flow.
+    async fn persist_summary_to_memory(&self, key: &SessionKey, summary: &str) {
+        let mp_slot = self.memory_plane.read().await;
+        let Some(mp) = mp_slot.as_ref().cloned() else {
+            // Boot race: memory_plane not wired yet. Buffer for the
+            // forthcoming `set_memory_plane` call to flush.
+            drop(mp_slot);
+            let mut pending = self.pending_summaries.write().await;
+            pending.push((key.clone(), summary.to_string()));
+            warn!(
+                "[session_store] memory_plane not ready; buffered summary for {} (queue={})",
+                key,
+                pending.len()
+            );
+            return;
+        };
+        drop(mp_slot);
+
+        let session_tag = format!(
+            "session:{}:{}:{}",
+            key.channel, key.scope, key.peer_id
+        );
+        let tags = vec![
+            "session_summary".to_string(),
+            session_tag.clone(),
+            key.channel.clone(),
+        ];
+        let content = format!(
+            "[decision] Session summary ({})\ntopic: {}\n{}",
+            key.as_canonical(),
+            session_tag,
+            summary
+        );
+        let mp_guard = mp.read().await;
+        if let Err(e) = mp_guard
+            .add_entry(
+                "decision",
+                "user",
+                &tags,
+                Some(&format!("session-store://{}", key.channel)),
+                75,
+                &content,
+            )
+            .await
+        {
+            warn!(
+                "[session_store] Failed to persist summary for {} to memory_plane: {}",
+                key, e
+            );
+        } else {
+            info!(
+                "[session_store] Persisted compaction summary for {} to memory_plane",
+                key
+            );
         }
     }
 
@@ -506,21 +608,32 @@ impl SessionStore {
     /// the `storage_housekeeping` module handles disk cleanup.
     pub async fn prune_stale_sessions(&self) -> Result<usize> {
         let cutoff = Utc::now() - chrono::Duration::hours(SESSION_TTL_HOURS as i64);
-        let mut to_remove = Vec::new();
+        let mut to_remove: Vec<(String, Option<String>)> = Vec::new();
 
         {
             let sessions = self.sessions.read().await;
             for (key, meta) in sessions.iter() {
                 if meta.last_active_at < cutoff {
-                    to_remove.push(key.clone());
+                    to_remove.push((key.clone(), meta.compaction_summary.clone()));
                 }
             }
         }
 
         let count = to_remove.len();
         if count > 0 {
+            // Persist whatever compaction summary we have to memory_plane
+            // BEFORE we drop the in-memory metadata, so 72h TTL pruning
+            // never silently loses long-running session context.
+            for (canonical, summary_opt) in &to_remove {
+                if let Some(summary) = summary_opt {
+                    if let Some(parsed) = parse_canonical_session_key(canonical) {
+                        self.persist_summary_to_memory(&parsed, summary).await;
+                    }
+                }
+            }
+
             let mut sessions = self.sessions.write().await;
-            for key in &to_remove {
+            for (key, _) in &to_remove {
                 sessions.remove(key);
             }
             info!("[session_store] Pruned {} stale sessions", count);
@@ -593,8 +706,13 @@ impl SessionStore {
         let response = router_guard.chat(&request).await?;
         drop(router_guard);
 
-        // Save summary
+        // Save summary in metadata...
+        let summary_text = response.text.clone();
         self.set_compaction_summary(key, response.text).await?;
+        // ...and ALSO persist into memory_plane so it survives the 72 h TTL
+        // and is searchable by future Axi turns. Best-effort; does not fail
+        // the compaction if memory_plane is unavailable.
+        self.persist_summary_to_memory(key, &summary_text).await;
 
         // Rewrite transcript with only recent turns
         let recent_turns = &all_turns[all_turns.len().saturating_sub(KEEP_RECENT)..];
@@ -618,6 +736,23 @@ impl SessionStore {
 
         Ok(())
     }
+}
+
+/// Parse a canonical session key string `agent:axi:<channel>:<scope>:<peer_id>`
+/// back into a [`SessionKey`]. Tolerant: peer_id may itself contain `:`,
+/// so we split on the first 4 separators and treat the rest as peer_id.
+fn parse_canonical_session_key(canonical: &str) -> Option<SessionKey> {
+    // Expected: agent:axi:channel:scope:peer_id
+    let parts: Vec<&str> = canonical.splitn(5, ':').collect();
+    if parts.len() < 5 || parts[0] != "agent" {
+        return None;
+    }
+    Some(SessionKey {
+        agent: parts[1].to_string(),
+        channel: parts[2].to_string(),
+        scope: parts[3].to_string(),
+        peer_id: parts[4].to_string(),
+    })
 }
 
 #[cfg(test)]

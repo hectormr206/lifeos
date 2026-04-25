@@ -725,6 +725,11 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = shared_session_store.init().await {
         warn!("Failed to initialize SessionStore: {}", e);
     }
+    // Wire memory_plane into the session store so compaction summaries and
+    // pruning persist into long-term memory (no-forget contract).
+    shared_session_store
+        .set_memory_plane(shared_memory.clone())
+        .await;
 
     // Screenshot at-rest crypto: validate the key + round-trip on
     // every boot so a corrupt key file or an unwritable secrets dir is
@@ -1733,6 +1738,32 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     info!("Storage housekeeping started (every 6h, 120-file limit per dir, daily memory hygiene: garbage+decay+dedup, nightly LLM cluster summary 02-05h)");
+
+    // --- Session-store TTL prune (every 6h) ---
+    // Periodically calls `SessionStore::prune_stale_sessions`, which
+    // persists each session's compaction summary into memory_plane BEFORE
+    // dropping the in-memory metadata. Closes the loop opened by FIX 2 of
+    // the JD review: previously this method was dead code.
+    {
+        let prune_session_store = state.session_store.clone();
+        let _prune_handle = tokio::spawn(async move {
+            // Stagger after boot to avoid colliding with housekeeping.
+            tokio::time::sleep(Duration::from_secs(420)).await;
+            let mut interval = tokio::time::interval(Duration::from_secs(6 * 3600));
+            loop {
+                interval.tick().await;
+                match prune_session_store.prune_stale_sessions().await {
+                    Ok(0) => {}
+                    Ok(n) => info!(
+                        "[session_store] Periodic prune persisted+removed {} stale sessions",
+                        n
+                    ),
+                    Err(e) => warn!("[session_store] Periodic prune failed: {}", e),
+                }
+            }
+        });
+        info!("Session-store prune task started (every 6h, 72h TTL)");
+    }
 
     // --- Self-improvement loop (Fase U): tick every 6 hours ---
     {
