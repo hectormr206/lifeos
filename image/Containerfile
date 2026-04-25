@@ -115,7 +115,9 @@ RUN set -eux && \
 # ============================================================================
 FROM fedora:${FEDORA_MAJOR} AS llama-builder
 
-RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel vulkan-headers glslc glslang && \
+# spirv-headers needed since llama.cpp b8800+ (ggml-vulkan.cpp includes
+# spirv/unified1/spirv.hpp) — was implicit on older builds.
+RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel vulkan-headers spirv-headers glslc glslang && \
     dnf clean all
 
 # Pin llama.cpp to a stable tag. Upstream master sometimes ships broken Vulkan
