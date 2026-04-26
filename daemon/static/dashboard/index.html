@@ -513,8 +513,22 @@
               <div class="hero-stat" style="margin-top:12px"><span>GPU</span><strong id="ai-gpu-name">—</strong></div>
             </div>
             <div class="localai-config">
-              <h3>Configuracion</h3>
-              <div class="setting-item"><label for="ai-ctx-slider">Contexto (tokens)</label><input type="range" id="ai-ctx-slider" min="2048" max="32768" step="1024" value="16384"><span id="ai-ctx-value">16384</span></div>
+              <h3>Configuracion LLM</h3>
+              <div class="setting-item">
+                <label for="ai-ctx-slider">Contexto (tokens)</label>
+                <input type="range" id="ai-ctx-slider" min="1024" max="524288" step="1024" value="131072">
+                <span id="ai-ctx-value">131072</span>
+                <span id="ai-ctx-source-badge" class="badge" style="margin-left:8px;">—</span>
+              </div>
+              <div class="setting-item" style="grid-column: 1 / -1;">
+                <input type="number" id="ai-ctx-input" min="1024" max="524288" step="1024" value="131072" style="width:120px;">
+                <button id="ai-ctx-save" class="btn-small" style="background:#27ae60;">Guardar y reiniciar</button>
+                <button id="ai-ctx-reset" class="btn-small" style="background:#6b7280;">Restaurar default</button>
+                <span id="ai-ctx-status" style="font-size:0.85em; color:var(--text-muted); margin-left:8px;"></span>
+              </div>
+              <div class="setting-item" style="grid-column: 1 / -1;">
+                <p class="setting-hint" id="ai-ctx-vram-hint">Estimacion VRAM: —</p>
+              </div>
               <div class="setting-item"><label for="ai-gpu-layers">GPU Layers</label><input type="range" id="ai-gpu-layers" min="0" max="99" value="99"><span id="ai-gpu-layers-value">99 (todas)</span></div>
               <div class="setting-item"><label for="ai-threads">CPU Threads</label><input type="range" id="ai-threads" min="1" max="24" value="4"><span id="ai-threads-value">4</span></div>
             </div>

@@ -571,6 +571,14 @@ function handleEvent(event) {
       renderPrivacyMode(Boolean(event.data?.enabled));
       addFeedItem('&#128274;', `Modo Privacidad ${event.data?.enabled ? 'activado' : 'desactivado'}`);
       break;
+    case 'llm_config_changed':
+      // Origin can be the dashboard itself, the CLI, or the API. Re-pull
+      // the resolved status so the badge + slider reflect server truth
+      // (we don't trust the event payload to know about runtime profile
+      // fallback, only the resolver does).
+      refreshLlmCtxSize();
+      addFeedItem('&#9881;', `LLM ctx-size = ${event.data?.ctx_size ?? '?'} (${event.data?.source || 'desconocido'})`);
+      break;
     case 'feedback_update':
       dashboardState.lastSignal = `Feedback ${event.data.stage || 'actualizado'}`;
       dashboardState.lastSignalAt = new Date().toISOString();
@@ -1894,9 +1902,106 @@ const aiGpuLayersValue = $('#ai-gpu-layers-value');
 const aiThreads = $('#ai-threads');
 const aiThreadsValue = $('#ai-threads-value');
 
+const aiCtxInput = $('#ai-ctx-input');
+const aiCtxSourceBadge = $('#ai-ctx-source-badge');
+const aiCtxSaveBtn = $('#ai-ctx-save');
+const aiCtxResetBtn = $('#ai-ctx-reset');
+const aiCtxStatusEl = $('#ai-ctx-status');
+const aiCtxVramHint = $('#ai-ctx-vram-hint');
+
+function setCtxStatus(msg, isError) {
+  if (!aiCtxStatusEl) return;
+  aiCtxStatusEl.textContent = msg || '';
+  aiCtxStatusEl.style.color = isError ? 'var(--error, #e74c3c)' : 'var(--text-muted)';
+}
+
+function renderCtxSourceBadge(source) {
+  if (!aiCtxSourceBadge) return;
+  const labels = {
+    user_override: ['Override usuario', '#27ae60'],
+    runtime_profile: ['Perfil hardware', '#3498db'],
+    baseline: ['Default imagen', '#6b7280'],
+  };
+  const [label, color] = labels[source] || [source || '—', '#6b7280'];
+  aiCtxSourceBadge.textContent = label;
+  aiCtxSourceBadge.style.background = color;
+  aiCtxSourceBadge.style.color = '#fff';
+}
+
+async function refreshLlmCtxSize() {
+  try {
+    const res = await fetch(`${API}/llm/ctx-size`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const d = await res.json();
+    if (aiCtxSlider) aiCtxSlider.value = d.current_value;
+    if (aiCtxValue) aiCtxValue.textContent = d.current_value;
+    if (aiCtxInput) aiCtxInput.value = d.current_value;
+    renderCtxSourceBadge(d.source);
+    if (aiCtxVramHint) {
+      const total = d.vram_total_mb ? `${d.vram_total_mb} MB` : '—';
+      const free = d.vram_available_mb != null ? `${d.vram_available_mb} MB libres` : 'libre desconocido';
+      const est = d.max_supported_estimate ? `${d.max_supported_estimate} tokens estimado` : 'estimacion no disponible';
+      aiCtxVramHint.textContent = `VRAM total: ${total} · ${free} · max recomendado: ${est}`;
+    }
+  } catch (e) { /* silent */ }
+}
+
 if (aiCtxSlider) {
   aiCtxSlider.addEventListener('input', () => {
     if (aiCtxValue) aiCtxValue.textContent = aiCtxSlider.value;
+    if (aiCtxInput) aiCtxInput.value = aiCtxSlider.value;
+  });
+}
+if (aiCtxInput) {
+  aiCtxInput.addEventListener('input', () => {
+    if (aiCtxSlider) aiCtxSlider.value = aiCtxInput.value;
+    if (aiCtxValue) aiCtxValue.textContent = aiCtxInput.value;
+  });
+}
+if (aiCtxSaveBtn) {
+  aiCtxSaveBtn.addEventListener('click', async () => {
+    const value = parseInt(aiCtxInput?.value || aiCtxSlider?.value || '0', 10);
+    if (!Number.isFinite(value) || value < 1024 || value > 524288) {
+      setCtxStatus('Valor fuera de rango [1024, 524288]', true);
+      return;
+    }
+    setCtxStatus('Guardando y reiniciando llama-server...', false);
+    try {
+      const res = await fetch(`${API}/llm/ctx-size`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...apiHeaders() },
+        body: JSON.stringify({ value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCtxStatus(`Error: ${data.error || res.statusText}`, true);
+        return;
+      }
+      setCtxStatus(`OK: ${data.new_value} (${data.restart_status})`, false);
+      refreshLlmCtxSize();
+    } catch (e) {
+      setCtxStatus(`Error: ${e.message || e}`, true);
+    }
+  });
+}
+if (aiCtxResetBtn) {
+  aiCtxResetBtn.addEventListener('click', async () => {
+    setCtxStatus('Restaurando default y reiniciando...', false);
+    try {
+      const res = await fetch(`${API}/llm/ctx-size`, {
+        method: 'DELETE',
+        headers: apiHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCtxStatus(`Error: ${data.error || res.statusText}`, true);
+        return;
+      }
+      setCtxStatus(`Restaurado: ${data.new_value} (${data.restart_status})`, false);
+      refreshLlmCtxSize();
+    } catch (e) {
+      setCtxStatus(`Error: ${e.message || e}`, true);
+    }
   });
 }
 if (aiGpuLayers) {
@@ -1912,6 +2017,10 @@ if (aiThreads) {
 }
 
 async function refreshAiStatus() {
+  // Pull the user-facing ctx-size config alongside the runtime status so
+  // the source badge stays in sync when the benchmarker regenerates the
+  // profile or when LlmConfigChanged arrives via WS.
+  refreshLlmCtxSize();
   try {
     const res = await fetch(`${API}/ai/status`, { headers: apiHeaders() });
     if (!res.ok) return;

@@ -136,4 +136,12 @@ pub enum DaemonEvent {
     PrivacyModeChanged {
         enabled: bool,
     },
+    /// llama-server config (currently only ctx_size) was changed by the user
+    /// via dashboard / API. Subscribers (tray, dashboard SSE) refresh the
+    /// displayed value. Source is one of "baseline" | "runtime_profile" |
+    /// "user_override" so consumers can render the right badge.
+    LlmConfigChanged {
+        ctx_size: u32,
+        source: String,
+    },
 }
