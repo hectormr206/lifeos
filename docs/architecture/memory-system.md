@@ -169,3 +169,22 @@ destructivas: requieren `confirm: true` por defecto (gate-able via
 `LIFEOS_AXI_REQUIRE_CONFIRM_DESTRUCTIVE`), rate-limit de 10 ops/hora,
 y audit log append-only en
 `~/.local/share/lifeos/destructive_actions.log` (mode 0600).
+
+## Sprint 3 item 14 — meeting action items → memory_entries (2026-04-26 — PR #47)
+
+When a meeting completes (auto-detect or manual stop), action items
+extracted from the transcript are also stored as searchable
+`memory_entries` rows. Previously they lived only in the `meetings`
+table's JSON column and were invisible to `memory_search`.
+
+Each promoted item:
+- `kind`: `action_item`
+- `scope`: `meeting`
+- `source`: `meeting:<meeting_record_id>` (links back to the meeting row)
+- `importance`: `70` (high — action items typically need follow-up)
+- `tags`: `["meeting", "action_item", <lowercased meeting_key>]`
+- `content`: `[<who>] <what> (cuando: <when>)`
+
+Best-effort: per-item failure is logged via `warn!` but the meeting
+flow continues. Empty action_items, blank `what`, and an unwired
+memory_plane all return cleanly without panicking.
