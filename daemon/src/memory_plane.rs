@@ -2073,6 +2073,7 @@ impl MemoryPlaneManager {
     /// Inner implementation; the public wrappers fix the
     /// `archived_filter` so callers cannot accidentally surface
     /// archived entries from the live search path.
+    #[allow(clippy::too_many_arguments)]
     async fn search_entries_inner(
         &self,
         query: &str,
