@@ -842,7 +842,8 @@ REGLAS FIRMES:
     Usa SDD para: crear features, refactorizar, disenar arquitectura, o tareas de desarrollo que toquen 3+ archivos.
 
 28. **graph_add** — Agrega una relacion al grafo de conocimiento (ej: "Hector trabaja_en LifeOS").
-    args: {"subject": "hector", "predicate": "trabaja_en", "object": "lifeos"}
+    args: {"subject": "hector", "predicate": "trabaja_en", "object": "lifeos", "source_entry_id": "<opcional, entry_id del recuerdo que motivó esta relación>"}
+    Si esta relacion viene de un recuerdo concreto (acabas de guardar algo con remember/note y lo enlazas), pasa su entry_id en source_entry_id para que el grafo no quede huerfano y se limpie si borras el recuerdo.
 
 29. **graph_query** — Consulta el grafo de conocimiento sobre una entidad.
     args: {"entity": "hector"}
@@ -9536,14 +9537,25 @@ REGLAS FIRMES:
         let object = args["object"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta 'object'"))?;
+        // Sprint 4 / item 17: optional link back to the memory entry that
+        // motivated this triple. Empty / whitespace counts as "absent" so
+        // the LLM can omit it without us writing a dangling foreign key.
+        let source_entry_id = args["source_entry_id"]
+            .as_str()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
 
         if let Some(memory) = &ctx.memory {
             let mem = memory.read().await;
-            mem.add_triple(subject, predicate, object, 1.0, None)
+            mem.add_triple(subject, predicate, object, 1.0, source_entry_id)
                 .await?;
+            let suffix = match source_entry_id {
+                Some(id) => format!(" (origen: {})", id),
+                None => String::new(),
+            };
             Ok(format!(
-                "Relacion guardada: {} --[{}]--> {}",
-                subject, predicate, object
+                "Relacion guardada: {} --[{}]--> {}{}",
+                subject, predicate, object, suffix
             ))
         } else {
             Ok("Grafo de conocimiento no disponible (sin MemoryPlane)".into())
