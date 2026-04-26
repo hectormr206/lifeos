@@ -412,6 +412,62 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
 12s. **financial_summary** — Devuelve resumen completo: cuentas activas + gastos recientes + ingresos recientes + metas activas + totales rolling de 30 dias (gastos, ingresos, neto). Usalo cuando el usuario te pida revisar como va con sus finanzas o quiera reflexionar sobre su mes.
     args: {}
 
+12.viajes. **Viajes** — Vacaciones, escapadas, road trips, work trips. El usuario lleva sus viajes con un ciclo: planeado → en_curso → completado | cancelado. Notas, descripciones de actividades y alojamiento van cifrados (pueden contener detalles intimos de hotel, motivo emocional, planes con pareja). Las actividades pueden enlazar a un movimiento financiero opcional via movimiento_id.
+
+12.viajes.a. **viaje_add** — Crea un viaje en estado planeado.
+    args: {"nombre": "Japon 2026", "destino": "Tokio", "pais": "Japon", "motivo": "vacaciones", "fecha_inicio": "2026-05-01", "fecha_fin": "2026-05-15", "acompanantes": "pareja", "presupuesto_inicial": 80000, "notas": "primera vez en Asia"}
+
+12.viajes.b. **viaje_list** — Lista viajes opcionalmente filtrados por estado y/o año.
+    args: {"estado": "completado", "year": 2026}
+
+12.viajes.c. **viaje_get** — Obtiene un viaje por id.
+    args: {"viaje_id": "via-..."}
+
+12.viajes.d. **viaje_update** — Actualiza campos de un viaje (todos los campos opcionales). Solo se reemplazan los enviados.
+    args: {"viaje_id": "via-...", "nombre": "Japon (revisado)", "presupuesto_inicial": 95000}
+
+12.viajes.e. **viaje_iniciar** — Marca el viaje como en_curso (al despegar).
+    args: {"viaje_id": "via-..."}
+
+12.viajes.f. **viaje_completar** — Marca el viaje como completado (al regresar).
+    args: {"viaje_id": "via-..."}
+
+12.viajes.g. **viaje_cancelar** — Marca el viaje como cancelado.
+    args: {"viaje_id": "via-..."}
+
+12.viajes.h. **destino_add** — Agrega una parada/destino a un viaje. Util para itinerarios multi-ciudad.
+    args: {"viaje_id": "via-...", "ciudad": "Kyoto", "pais": "Japon", "fecha_llegada": "2026-05-05", "fecha_salida": "2026-05-08", "alojamiento": "Ryokan X", "notas": ""}
+
+12.viajes.i. **destino_list** — Lista destinos de un viaje, ordenados por fecha_llegada.
+    args: {"viaje_id": "via-..."}
+
+12.viajes.j. **destino_update** — Actualiza un destino existente.
+    args: {"destino_id": "des-...", "alojamiento": "Hotel Y"}
+
+12.viajes.k. **actividad_log** — Registra una actividad realizada. Si hay costo, idealmente se enlaza a un expense via movimiento_id (deberia llamarse a expense_log primero y pasar el expense_id como movimiento_id).
+    args: {"viaje_id": "via-...", "fecha": "2026-05-03", "titulo": "Cena en Sukiyabashi Jiro", "descripcion": "omakase 20 piezas", "tipo": "comida", "costo": 8000, "movimiento_id": "exp-...", "rating": 5, "recomendaria": true, "notas": ""}
+
+12.viajes.l. **actividades_list** — Lista actividades de un viaje, ordenadas por fecha.
+    args: {"viaje_id": "via-..."}
+
+12.viajes.m. **actividad_recomendar** — Marca rating (1-5) + recomendaria (bool) sobre una actividad ya logueada.
+    args: {"actividad_id": "act-...", "rating": 5, "recomendaria": true}
+
+12.viajes.n. **viajes_overview** — Vista global: total viajes, completados, planeados, en_curso, gasto agregado y destinos unicos. Filtra por año si se pasa.
+    args: {"year": 2026}
+
+12.viajes.o. **viaje_resumen** — Debrief completo de un viaje: header + destinos + actividades + gastos por tipo + top actividades rankeadas.
+    args: {"viaje_id": "via-..."}
+
+12.viajes.p. **comparar_viajes** — Pone dos viajes lado a lado: gastos totales, actividades, diff.
+    args: {"viaje_a": "via-...", "viaje_b": "via-..."}
+
+12.viajes.q. **viajes_a** — Histórico de visitas a un destino o pais (matching parcial por substring case-insensitive). Incluye gasto total y rating promedio.
+    args: {"destino_o_pais": "Tokio"}
+
+12.viajes.r. **cuanto_gaste_en** — Atajo de viajes_a que devuelve solo el numero. Util para preguntas tipo "cuanto gaste en Japon en total".
+    args: {"destino_o_pais": "Japon"}
+
 13. **Vida Plena — Coaching unificado (BI.8)**
 
 Estas herramientas sintetizan TODOS los pilares de bienestar (salud, nutricion, ejercicio, crecimiento, social, sueno, espiritualidad, finanzas) en una sola vista. Usalas cuando el usuario pida una reflexion amplia sobre como va su vida, o cuando vayas a preparar algo que cruce dimensiones.
@@ -2360,6 +2416,25 @@ LifeOS lleva clientes, sesiones y facturacion de freelance del usuario para resp
             "financial_summary" => execute_financial_summary(ctx).await,
             "life_summary" => execute_life_summary(&call.args, ctx).await,
             "cross_domain_patterns" => execute_cross_domain_patterns(&call.args, ctx).await,
+            // Viajes domain
+            "viaje_add" => execute_viaje_add(&call.args, ctx).await,
+            "viaje_list" => execute_viaje_list(&call.args, ctx).await,
+            "viaje_get" => execute_viaje_get(&call.args, ctx).await,
+            "viaje_update" => execute_viaje_update(&call.args, ctx).await,
+            "viaje_iniciar" => execute_viaje_iniciar(&call.args, ctx).await,
+            "viaje_completar" => execute_viaje_completar(&call.args, ctx).await,
+            "viaje_cancelar" => execute_viaje_cancelar(&call.args, ctx).await,
+            "destino_add" => execute_destino_add(&call.args, ctx).await,
+            "destino_list" => execute_destino_list(&call.args, ctx).await,
+            "destino_update" => execute_destino_update(&call.args, ctx).await,
+            "actividad_log" => execute_actividad_log(&call.args, ctx).await,
+            "actividades_list" => execute_actividades_list(&call.args, ctx).await,
+            "actividad_recomendar" => execute_actividad_recomendar(&call.args, ctx).await,
+            "viajes_overview" => execute_viajes_overview(&call.args, ctx).await,
+            "viaje_resumen" => execute_viaje_resumen(&call.args, ctx).await,
+            "comparar_viajes" => execute_comparar_viajes(&call.args, ctx).await,
+            "viajes_a" => execute_viajes_a(&call.args, ctx).await,
+            "cuanto_gaste_en" => execute_cuanto_gaste_en(&call.args, ctx).await,
             "medical_visit_prep" => execute_medical_visit_prep(&call.args, ctx).await,
             "forgetting_check" => execute_forgetting_check(&call.args, ctx).await,
             "relationship_add" => execute_relationship_add(&call.args, ctx).await,
@@ -6329,6 +6404,408 @@ LifeOS lleva clientes, sesiones y facturacion de freelance del usuario para resp
         Ok(out)
     }
 
+    // -- Viajes domain --------------------------------------------------------
+
+    async fn execute_viaje_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let nombre = args["nombre"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'nombre'"))?;
+        let destino = args["destino"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'destino'"))?;
+        let fecha_inicio = args["fecha_inicio"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'fecha_inicio'"))?;
+        let fecha_fin = args["fecha_fin"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'fecha_fin'"))?;
+        let pais = args["pais"].as_str();
+        let motivo = args["motivo"].as_str();
+        let acompanantes = args["acompanantes"].as_str();
+        let presupuesto = args["presupuesto_inicial"].as_f64();
+        let notas = args["notas"].as_str().unwrap_or("");
+        let fotos = args["fotos_path"].as_str();
+
+        let mem = require_memory(ctx).await?;
+        let v = mem
+            .viaje_add(
+                nombre,
+                destino,
+                pais,
+                motivo,
+                fecha_inicio,
+                fecha_fin,
+                acompanantes,
+                presupuesto,
+                notas,
+                fotos,
+            )
+            .await?;
+        Ok(format!(
+            "Viaje creado (id: {}): {} → {} ({} → {}). Estado: {}",
+            v.viaje_id, v.nombre, v.destino, v.fecha_inicio, v.fecha_fin, v.estado
+        ))
+    }
+
+    async fn execute_viaje_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let estado = args["estado"].as_str();
+        let year = args["year"].as_i64().map(|y| y as i32);
+        let mem = require_memory(ctx).await?;
+        let viajes = mem.viaje_list(estado, year).await?;
+        if viajes.is_empty() {
+            return Ok("Sin viajes registrados.".into());
+        }
+        let lines: Vec<String> = viajes
+            .iter()
+            .map(|v| {
+                format!(
+                    "- [{}] {} → {} ({} → {}) [{}]",
+                    v.viaje_id, v.nombre, v.destino, v.fecha_inicio, v.fecha_fin, v.estado
+                )
+            })
+            .collect();
+        Ok(format!("Viajes:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_viaje_get(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let mem = require_memory(ctx).await?;
+        match mem.viaje_get(id).await? {
+            Some(v) => Ok(serde_json::to_string_pretty(&v)?),
+            None => Ok(format!("No se encontro viaje con id {}", id)),
+        }
+    }
+
+    async fn execute_viaje_update(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem
+            .viaje_update(
+                id,
+                args["nombre"].as_str(),
+                args["destino"].as_str(),
+                args["pais"].as_str(),
+                args["motivo"].as_str(),
+                args["fecha_inicio"].as_str(),
+                args["fecha_fin"].as_str(),
+                args["acompanantes"].as_str(),
+                args["presupuesto_inicial"].as_f64(),
+                args["notas"].as_str(),
+                args["fotos_path"].as_str(),
+            )
+            .await?;
+        Ok(if ok {
+            format!("Viaje {} actualizado", id)
+        } else {
+            format!("No se encontro viaje con id {}", id)
+        })
+    }
+
+    async fn execute_viaje_iniciar(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.viaje_iniciar(id).await?;
+        Ok(if ok {
+            format!("Viaje {} marcado como en_curso", id)
+        } else {
+            format!("No se encontro viaje con id {}", id)
+        })
+    }
+
+    async fn execute_viaje_completar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.viaje_completar(id).await?;
+        Ok(if ok {
+            format!("Viaje {} marcado como completado", id)
+        } else {
+            format!("No se encontro viaje con id {}", id)
+        })
+    }
+
+    async fn execute_viaje_cancelar(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.viaje_cancelar(id).await?;
+        Ok(if ok {
+            format!("Viaje {} marcado como cancelado", id)
+        } else {
+            format!("No se encontro viaje con id {}", id)
+        })
+    }
+
+    async fn execute_destino_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let viaje_id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let ciudad = args["ciudad"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'ciudad'"))?;
+        let fecha_llegada = args["fecha_llegada"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'fecha_llegada'"))?;
+        let mem = require_memory(ctx).await?;
+        let d = mem
+            .destino_add(
+                viaje_id,
+                ciudad,
+                args["pais"].as_str(),
+                fecha_llegada,
+                args["fecha_salida"].as_str(),
+                args["alojamiento"].as_str().unwrap_or(""),
+                args["notas"].as_str().unwrap_or(""),
+            )
+            .await?;
+        Ok(format!(
+            "Destino agregado (id: {}): {} desde {}",
+            d.destino_id, d.ciudad, d.fecha_llegada
+        ))
+    }
+
+    async fn execute_destino_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let viaje_id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let dests = mem.destino_list(viaje_id).await?;
+        if dests.is_empty() {
+            return Ok("Sin destinos en este viaje.".into());
+        }
+        let lines: Vec<String> = dests
+            .iter()
+            .map(|d| {
+                let salida = d.fecha_salida.as_deref().unwrap_or("?");
+                format!(
+                    "- [{}] {} ({} → {})",
+                    d.destino_id, d.ciudad, d.fecha_llegada, salida
+                )
+            })
+            .collect();
+        Ok(format!("Destinos:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_destino_update(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let id = args["destino_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'destino_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem
+            .destino_update(
+                id,
+                args["ciudad"].as_str(),
+                args["pais"].as_str(),
+                args["fecha_llegada"].as_str(),
+                args["fecha_salida"].as_str(),
+                args["alojamiento"].as_str(),
+                args["notas"].as_str(),
+            )
+            .await?;
+        Ok(if ok {
+            format!("Destino {} actualizado", id)
+        } else {
+            format!("No se encontro destino con id {}", id)
+        })
+    }
+
+    async fn execute_actividad_log(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let viaje_id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let fecha = args["fecha"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'fecha'"))?;
+        let titulo = args["titulo"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'titulo'"))?;
+        let descripcion = args["descripcion"].as_str().unwrap_or("");
+        let tipo = args["tipo"].as_str();
+        let costo = args["costo"].as_f64();
+        let movimiento_id = args["movimiento_id"].as_str();
+        let rating = args["rating"].as_i64().map(|r| r as i32);
+        let recomendaria = args["recomendaria"].as_bool();
+        let notas = args["notas"].as_str().unwrap_or("");
+
+        let mem = require_memory(ctx).await?;
+        let a = mem
+            .actividad_log(
+                viaje_id,
+                fecha,
+                titulo,
+                descripcion,
+                tipo,
+                costo,
+                movimiento_id,
+                rating,
+                recomendaria,
+                notas,
+            )
+            .await?;
+        Ok(format!(
+            "Actividad registrada (id: {}): {} en {} (costo: {})",
+            a.actividad_id,
+            a.titulo,
+            a.fecha,
+            a.costo
+                .map(|c| format!("{:.2}", c))
+                .unwrap_or_else(|| "—".into())
+        ))
+    }
+
+    async fn execute_actividades_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let viaje_id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let acts = mem.actividades_list(viaje_id).await?;
+        if acts.is_empty() {
+            return Ok("Sin actividades en este viaje.".into());
+        }
+        let lines: Vec<String> = acts
+            .iter()
+            .map(|a| {
+                let costo = a.costo.map(|c| format!(" [{:.2}]", c)).unwrap_or_default();
+                let rat = a.rating.map(|r| format!(" ★{}", r)).unwrap_or_default();
+                format!(
+                    "- [{}] {} {}{}{}",
+                    a.fecha,
+                    a.titulo,
+                    a.tipo.as_deref().unwrap_or("—"),
+                    costo,
+                    rat
+                )
+            })
+            .collect();
+        Ok(format!("Actividades:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_actividad_recomendar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = args["actividad_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'actividad_id'"))?;
+        let rating = args["rating"]
+            .as_i64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'rating'"))?
+            as i32;
+        let recomendaria = args["recomendaria"].as_bool().unwrap_or(false);
+        let mem = require_memory(ctx).await?;
+        let ok = mem.actividad_recomendar(id, rating, recomendaria).await?;
+        Ok(if ok {
+            format!(
+                "Actividad {} actualizada con rating {} y recomendaria={}",
+                id, rating, recomendaria
+            )
+        } else {
+            format!("No se encontro actividad con id {}", id)
+        })
+    }
+
+    async fn execute_viajes_overview(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let year = args["year"].as_i64().map(|y| y as i32);
+        let mem = require_memory(ctx).await?;
+        let o = mem.viajes_overview(year).await?;
+        let mut out = String::from("# Resumen de viajes\n\n");
+        if let Some(y) = o.year_filter {
+            out.push_str(&format!("Año: {}\n", y));
+        }
+        out.push_str(&format!(
+            "- Total: {} (completados: {}, planeados: {}, en_curso: {})\n",
+            o.total_viajes, o.viajes_completados, o.viajes_planeados, o.viajes_en_curso
+        ));
+        out.push_str(&format!("- Gasto agregado: {:.2}\n", o.total_gastos));
+        if !o.destinos_unicos.is_empty() {
+            out.push_str(&format!(
+                "- Destinos visitados: {}\n",
+                o.destinos_unicos.join(", ")
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_viaje_resumen(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let id = args["viaje_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_id'"))?;
+        let mem = require_memory(ctx).await?;
+        match mem.viaje_resumen(id).await? {
+            Some(r) => Ok(serde_json::to_string_pretty(&r)?),
+            None => Ok(format!("No se encontro viaje con id {}", id)),
+        }
+    }
+
+    async fn execute_comparar_viajes(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let a = args["viaje_a"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_a'"))?;
+        let b = args["viaje_b"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'viaje_b'"))?;
+        let mem = require_memory(ctx).await?;
+        let cmp = mem.comparar_viajes(a, b).await?;
+        Ok(format!(
+            "# Comparacion\n- {} ({}): gasto {:.2}, {} actividades\n- {} ({}): gasto {:.2}, {} actividades\n- Diff gasto: {:.2}\n- Diff actividades: {}",
+            cmp.viaje_a.viaje.nombre, cmp.viaje_a.viaje.viaje_id, cmp.viaje_a.total_gastado, cmp.viaje_a.total_actividades,
+            cmp.viaje_b.viaje.nombre, cmp.viaje_b.viaje.viaje_id, cmp.viaje_b.total_gastado, cmp.viaje_b.total_actividades,
+            cmp.diff_total_gastado, cmp.diff_total_actividades
+        ))
+    }
+
+    async fn execute_viajes_a(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let dest = args["destino_o_pais"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'destino_o_pais'"))?;
+        let mem = require_memory(ctx).await?;
+        let agg = mem.viajes_a(dest).await?;
+        let mut out = format!("# Viajes a {}\n", agg.destino_o_pais);
+        out.push_str(&format!("- {} viaje(s)\n", agg.viajes.len()));
+        out.push_str(&format!("- Gasto total: {:.2}\n", agg.total_gastos));
+        if let Some(r) = agg.avg_rating {
+            out.push_str(&format!("- Rating promedio: {:.2}/5\n", r));
+        }
+        for v in &agg.viajes {
+            out.push_str(&format!(
+                "  - [{}] {} ({} → {}) [{}]\n",
+                v.viaje_id, v.nombre, v.fecha_inicio, v.fecha_fin, v.estado
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_cuanto_gaste_en(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let dest = args["destino_o_pais"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'destino_o_pais'"))?;
+        let mem = require_memory(ctx).await?;
+        let total = mem.cuanto_gaste_en(dest).await?;
+        Ok(format!("Gasto total en {}: {:.2}", dest, total))
+    }
     // -- BI.8: Coaching unificado (Vida Plena) -------------------------------
 
     fn today_local_arg(args: &serde_json::Value) -> String {
