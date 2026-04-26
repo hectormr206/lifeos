@@ -17125,6 +17125,13 @@ mod tests {
         .await
         .unwrap();
 
+        // Promote both rows to 'real' so the default fallback filter doesn't
+        // hide them (test env has no LLM, so add_entry stores 'fallback').
+        let conn = Connection::open(dir.join(DB_FILE)).unwrap();
+        conn.execute("UPDATE memory_entries SET embedding_source = 'real'", [])
+            .unwrap();
+        drop(conn);
+
         let hits = mgr
             .search_entries_with_mode(
                 "runtime approval automation",
@@ -17173,6 +17180,16 @@ mod tests {
             .add_entry("note", "user", &[], None, 10, "delete me")
             .await
             .unwrap();
+
+        // Promote to 'real' so search_archived (which excludes fallback by
+        // default) can surface the soft-deleted row below.
+        let conn = Connection::open(dir.join(DB_FILE)).unwrap();
+        conn.execute(
+            "UPDATE memory_entries SET embedding_source = 'real' WHERE entry_id = ?1",
+            params![created.entry_id.as_str()],
+        )
+        .unwrap();
+        drop(conn);
 
         // Default delete is now soft (archive) — `list_entries` filters
         // archived rows out, so the live view is empty.
@@ -17370,6 +17387,12 @@ mod tests {
         )
         .await
         .unwrap();
+
+        // Promote to 'real' so the default fallback filter doesn't hide it.
+        let conn = Connection::open(dir.join(DB_FILE)).unwrap();
+        conn.execute("UPDATE memory_entries SET embedding_source = 'real'", [])
+            .unwrap();
+        drop(conn);
 
         let hits = mgr
             .search_entries_with_mode(
@@ -18571,6 +18594,14 @@ mod tests {
             )
             .await
             .unwrap();
+
+        // Promote both rows to 'real' so the default fallback filter (used
+        // by search_entries / search_archived) doesn't hide them.
+        let conn = Connection::open(dir.join(DB_FILE)).unwrap();
+        conn.execute("UPDATE memory_entries SET embedding_source = 'real'", [])
+            .unwrap();
+        drop(conn);
+
         // Force the old one to be archived via decay.
         backdate(&dir, &old.entry_id, 100);
         let _ = mgr.apply_decay().await.unwrap();
