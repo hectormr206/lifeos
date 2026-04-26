@@ -627,3 +627,16 @@ dbus-send --system --print-reply \
 ---
 
 _LifeOS System Administration Guide v0.1.0_
+
+## Llama-server context size (PR #48)
+
+Default `LIFEOS_AI_CTX_SIZE` is now **131072** (128K) — verified to fit
+Qwen3.5-9B Q4_K_M with q8_0 KV cache in 12 GB VRAM with ~3 GB margin.
+
+The user can override via:
+- Dashboard → LLM Configuration panel
+- API: `POST /api/v1/llm/ctx-size {"value": <int>}`
+- Direct file: `/var/lib/lifeos/llama-server-user-override.env`
+
+The override survives benchmarker regeneration. Validation: 1024 ≤ value ≤ 524288.
+Restart of `llama-server.service` is automatic on change.
