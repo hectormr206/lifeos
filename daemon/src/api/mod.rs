@@ -1294,6 +1294,12 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/ai/models", get(get_ai_models))
         .route("/ai/chat", post(post_ai_chat))
         .route("/ai/reset", post(post_ai_reset))
+        .route(
+            "/llm/ctx-size",
+            get(get_llm_ctx_size)
+                .post(post_llm_ctx_size)
+                .delete(delete_llm_ctx_size),
+        )
         .route("/vision/ocr", post(post_vision_ocr))
         .route("/audio/stt/status", get(get_stt_status))
         .route("/audio/stt/start", post(start_stt_service))
@@ -5142,6 +5148,218 @@ async fn restart_llama_server() -> anyhow::Result<()> {
         .await
         .map_err(|error| anyhow::anyhow!("llama-server restart task failed: {error}"))??;
     Ok(())
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// /api/v1/llm/ctx-size — user-managed override for llama-server ctx-size
+// ──────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct LlmCtxSizeStatus {
+    /// Effective ctx-size that the llama-server process is currently using
+    /// (or will use on next start), resolved from the highest-priority source.
+    current_value: u32,
+    /// Where the value comes from: `baseline` (image default),
+    /// `runtime_profile` (lifeosd benchmarker), or `user_override` (the
+    /// user explicitly set this via dashboard/API).
+    source: String,
+    /// Best-effort estimate of the largest ctx-size that fits this machine,
+    /// derived from the hardware fingerprint. `None` when no GPU profile yet.
+    max_supported_estimate: Option<u32>,
+    /// Total VRAM reported by the hardware fingerprint, in MB.
+    vram_total_mb: Option<u64>,
+    /// Approximate VRAM headroom right now (live nvidia-smi probe). `None`
+    /// when the GPU isn't queryable (no nvidia-smi, no dGPU, etc).
+    vram_available_mb: Option<u64>,
+    /// Sane bounds the POST endpoint will accept.
+    min_value: u32,
+    max_value: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+struct LlmCtxSizeRequest {
+    value: u32,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct LlmCtxSizeWriteResponse {
+    ok: bool,
+    new_value: u32,
+    restart_status: String,
+}
+
+fn read_baseline_ctx_size() -> u32 {
+    let path = crate::ai_runtime_profile::llama_env_path();
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    content
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("LIFEOS_AI_CTX_SIZE=")
+                .and_then(|v| v.trim().parse::<u32>().ok())
+        })
+        .unwrap_or(131_072)
+}
+
+async fn build_ctx_size_status(state: &ApiState) -> LlmCtxSizeStatus {
+    use crate::ai_runtime_profile::{user_ctx_size_override, USER_CTX_SIZE_MAX, USER_CTX_SIZE_MIN};
+
+    let snapshot = load_runtime_profile_snapshot(&state.data_dir);
+    let baseline = read_baseline_ctx_size();
+    let user = user_ctx_size_override();
+
+    // Resolution priority: user override > runtime profile (active settings)
+    // > baseline. Mirrors the systemd EnvironmentFile= load order.
+    let (current_value, source) = if let Some(v) = user {
+        (v, "user_override".to_string())
+    } else if let Some(snap) = snapshot.as_ref() {
+        (
+            snap.active_settings().ctx_size,
+            "runtime_profile".to_string(),
+        )
+    } else {
+        (baseline, "baseline".to_string())
+    };
+
+    let vram_total_mb = snapshot
+        .as_ref()
+        .and_then(|s| s.fingerprint.accelerator_total_mem_mb);
+
+    // Heuristic estimate of the largest comfortable ctx-size:
+    // Qwen3.5-9B Q4_K_M with q8_0 KV cache fits 128K in 12GB VRAM with
+    // ~3GB headroom (verified empirically). Scale linearly with VRAM.
+    let max_supported_estimate = vram_total_mb.map(|mb| {
+        let scaled = (mb as u128 * 131_072u128 / 12_288u128) as u32;
+        scaled.clamp(USER_CTX_SIZE_MIN, USER_CTX_SIZE_MAX)
+    });
+
+    let vram_available_mb = query_llama_gpu_available_mb().await;
+
+    LlmCtxSizeStatus {
+        current_value,
+        source,
+        max_supported_estimate,
+        vram_total_mb,
+        vram_available_mb,
+        min_value: USER_CTX_SIZE_MIN,
+        max_value: USER_CTX_SIZE_MAX,
+    }
+}
+
+/// Free VRAM in MB on device 0 (best-effort; returns None on non-NVIDIA).
+async fn query_llama_gpu_available_mb() -> Option<u64> {
+    let output = tokio::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=memory.free",
+            "--format=csv,noheader,nounits",
+            "-i",
+            "0",
+        ])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout);
+    s.lines().next()?.trim().parse::<u64>().ok()
+}
+
+async fn get_llm_ctx_size(
+    State(state): State<ApiState>,
+) -> Result<Json<LlmCtxSizeStatus>, (StatusCode, Json<ApiError>)> {
+    Ok(Json(build_ctx_size_status(&state).await))
+}
+
+async fn post_llm_ctx_size(
+    State(state): State<ApiState>,
+    Json(payload): Json<LlmCtxSizeRequest>,
+) -> Result<Json<LlmCtxSizeWriteResponse>, (StatusCode, Json<ApiError>)> {
+    use crate::ai_runtime_profile::{
+        write_user_ctx_size_override, USER_CTX_SIZE_MAX, USER_CTX_SIZE_MIN,
+    };
+
+    if !(USER_CTX_SIZE_MIN..=USER_CTX_SIZE_MAX).contains(&payload.value) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: format!(
+                    "ctx_size {} out of range [{}, {}]",
+                    payload.value, USER_CTX_SIZE_MIN, USER_CTX_SIZE_MAX
+                ),
+            }),
+        ));
+    }
+
+    let value = payload.value;
+    tokio::task::spawn_blocking(move || write_user_ctx_size_override(value))
+        .await
+        .map_err(|e| internal_error(format!("write task failed: {e}")))?
+        .map_err(|e| internal_error(format!("failed to write user override: {e}")))?;
+
+    let restart_status = match restart_llama_server().await {
+        Ok(()) => "restarted".to_string(),
+        Err(e) => {
+            // The override file IS persisted even if restart fails — the
+            // next manual restart picks it up. Surface the error so the UI
+            // can show a banner.
+            log::warn!("[llm/ctx-size] override saved but restart failed: {e}");
+            format!("restart_failed: {e}")
+        }
+    };
+
+    let _ = state
+        .event_bus
+        .send(crate::events::DaemonEvent::LlmConfigChanged {
+            ctx_size: value,
+            source: "user_override".to_string(),
+        });
+
+    Ok(Json(LlmCtxSizeWriteResponse {
+        ok: true,
+        new_value: value,
+        restart_status,
+    }))
+}
+
+async fn delete_llm_ctx_size(
+    State(state): State<ApiState>,
+) -> Result<Json<LlmCtxSizeWriteResponse>, (StatusCode, Json<ApiError>)> {
+    tokio::task::spawn_blocking(crate::ai_runtime_profile::clear_user_ctx_size_override)
+        .await
+        .map_err(|e| internal_error(format!("clear task failed: {e}")))?
+        .map_err(|e| internal_error(format!("failed to clear user override: {e}")))?;
+
+    let restart_status = match restart_llama_server().await {
+        Ok(()) => "restarted".to_string(),
+        Err(e) => {
+            log::warn!("[llm/ctx-size] override cleared but restart failed: {e}");
+            format!("restart_failed: {e}")
+        }
+    };
+
+    // After clearing, the effective value is whatever the runtime profile
+    // (or baseline) provides. Re-resolve and emit so subscribers refresh.
+    let status = build_ctx_size_status(&state).await;
+    let _ = state
+        .event_bus
+        .send(crate::events::DaemonEvent::LlmConfigChanged {
+            ctx_size: status.current_value,
+            source: status.source.clone(),
+        });
+
+    Ok(Json(LlmCtxSizeWriteResponse {
+        ok: true,
+        new_value: status.current_value,
+        restart_status,
+    }))
+}
+
+fn internal_error(msg: String) -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiError { error: msg }),
+    )
 }
 
 fn sha256_file(path: &std::path::Path) -> anyhow::Result<String> {
@@ -13271,5 +13489,45 @@ mod tests {
         let result = validate_sensory_source_path(sample.to_str().unwrap());
         let _ = std::fs::remove_file(&sample);
         assert!(result.is_ok(), "expected Ok for camera-owned path");
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Tests for /api/v1/llm/ctx-size — user override of llama-server
+    // context size. We deliberately exercise the helpers (not the full
+    // axum router) to keep the tests fast and side-effect free.
+    // ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn llm_ctx_size_validates_payload_bounds() {
+        use crate::ai_runtime_profile::{USER_CTX_SIZE_MAX, USER_CTX_SIZE_MIN};
+        // The handler shares the same range as write_user_ctx_size_override
+        // — confirm the constants stay aligned with the contract documented
+        // in the task spec ([1024, 524288]).
+        assert_eq!(USER_CTX_SIZE_MIN, 1024);
+        assert_eq!(USER_CTX_SIZE_MAX, 524_288);
+    }
+
+    #[test]
+    fn read_baseline_ctx_size_falls_back_to_128k() {
+        // Point the env reader at a missing file — should return the 128K
+        // default, not 16K, so the API never reports a stale value when
+        // the image env file isn't deployed (e.g., dev machines).
+        std::env::set_var("LIFEOS_LLAMA_ENV", "/nonexistent/lifeos-test.env");
+        assert_eq!(read_baseline_ctx_size(), 131_072);
+        std::env::remove_var("LIFEOS_LLAMA_ENV");
+    }
+
+    #[test]
+    fn read_baseline_ctx_size_parses_existing_file() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let path = tmp.path().join("llama.env");
+        std::fs::write(
+            &path,
+            "# comment\nLIFEOS_AI_MODEL=foo.gguf\nLIFEOS_AI_CTX_SIZE=65536\n",
+        )
+        .unwrap();
+        std::env::set_var("LIFEOS_LLAMA_ENV", &path);
+        assert_eq!(read_baseline_ctx_size(), 65_536);
+        std::env::remove_var("LIFEOS_LLAMA_ENV");
     }
 }
