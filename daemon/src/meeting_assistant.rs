@@ -211,6 +211,79 @@ impl MeetingAssistant {
         info!("[meeting] Meeting archive enabled");
     }
 
+    /// Sprint 3 / Item 14 — Promote each action_item extracted from a meeting
+    /// into `memory_entries` so `memory_search` can surface them. Without this
+    /// hook action items live ONLY in the `meetings.action_items` JSON column
+    /// and are invisible to Axi recall.
+    ///
+    /// Best-effort: failures are logged but never propagated — meeting
+    /// completion must not be blocked by memory persistence problems.
+    pub async fn promote_action_items_to_memory(
+        &self,
+        meeting_id: &str,
+        meeting_key: &str,
+        action_items: &[crate::meeting_archive::ActionItem],
+    ) -> usize {
+        if action_items.is_empty() {
+            return 0;
+        }
+        let Some(memory) = self.memory_plane.as_ref() else {
+            debug!(
+                "[meeting] memory_plane unavailable; skipping action_item promotion for {}",
+                meeting_id
+            );
+            return 0;
+        };
+
+        let source = format!("meeting:{}", meeting_id);
+        let normalized_key = meeting_key.trim().to_lowercase();
+        let mut promoted = 0usize;
+        let guard = memory.read().await;
+        for item in action_items {
+            let what = item.what.trim();
+            if what.is_empty() {
+                continue;
+            }
+            let when_part = item
+                .when
+                .as_deref()
+                .map(|w| format!(" (cuando: {})", w.trim()))
+                .unwrap_or_default();
+            let content = format!("[{}] {}{}", item.who.trim(), what, when_part);
+
+            let mut tags: Vec<String> = vec!["meeting".to_string(), "action_item".to_string()];
+            if !normalized_key.is_empty() {
+                tags.push(normalized_key.clone());
+            }
+
+            match guard
+                .add_entry("action_item", "meeting", &tags, Some(&source), 70, &content)
+                .await
+            {
+                Ok(entry) => {
+                    promoted += 1;
+                    debug!(
+                        "[meeting] Promoted action_item to memory: {} (meeting={})",
+                        entry.entry_id, meeting_id
+                    );
+                }
+                Err(e) => warn!(
+                    "[meeting] Failed to promote action_item for meeting {}: {}",
+                    meeting_id, e
+                ),
+            }
+        }
+        if promoted > 0 {
+            info!(
+                "[meeting] Promoted {}/{} action_items to memory_entries (meeting={})",
+                promoted,
+                action_items.len(),
+                meeting_id
+            );
+        }
+        promoted
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -467,25 +540,27 @@ impl MeetingAssistant {
                         }
 
                         // 4b. Save to meeting archive (structured SQLite)
+                        let archived_action_items =
+                            extract_action_items(summary.as_deref().unwrap_or(""));
+                        let meeting_record_id = uuid::Uuid::new_v4().to_string();
+                        let app_for_key = self
+                            .state
+                            .app_name
+                            .clone()
+                            .unwrap_or_else(|| "unknown".into());
                         if let Some(ref archive) = self.archive {
                             let record = crate::meeting_archive::MeetingRecord {
-                                id: uuid::Uuid::new_v4().to_string(),
+                                id: meeting_record_id.clone(),
                                 started_at: self.state.started_at.clone().unwrap_or_default(),
                                 ended_at: Some(chrono::Utc::now().to_rfc3339()),
                                 duration_secs: duration,
-                                app_name: self
-                                    .state
-                                    .app_name
-                                    .clone()
-                                    .unwrap_or_else(|| "unknown".into()),
+                                app_name: app_for_key.clone(),
                                 meeting_type: "remote".to_string(),
                                 participants: participants.clone(),
                                 transcript: transcript.clone(),
                                 diarized_transcript: diarized.clone(),
                                 summary: summary.clone().unwrap_or_default(),
-                                action_items: extract_action_items(
-                                    summary.as_deref().unwrap_or(""),
-                                ),
+                                action_items: archived_action_items.clone(),
                                 screenshot_count: self.state.screenshot_paths.len(),
                                 screenshot_paths: self.state.screenshot_paths.clone(),
                                 audio_path: Some(path.clone()),
@@ -501,9 +576,18 @@ impl MeetingAssistant {
                             }
                         }
 
+                        // 4b-bis. Sprint 3 / Item 14 — promote action_items to
+                        // memory_entries so `memory_search` can surface them.
+                        // Best-effort; never blocks meeting completion.
+                        self.promote_action_items_to_memory(
+                            &meeting_record_id,
+                            &app_for_key,
+                            &archived_action_items,
+                        )
+                        .await;
+
                         // 4c. Export meeting files to structured folder (BB.12)
-                        let action_items_vec =
-                            extract_action_items(summary.as_deref().unwrap_or(""));
+                        let action_items_vec = archived_action_items;
                         {
                             let meeting_title = self
                                 .state
@@ -1403,23 +1487,27 @@ Usá EXACTAMENTE este formato para cada tarea:
                     }
 
                     // Save to meeting archive (structured SQLite)
+                    let manual_action_items =
+                        extract_action_items(summary.as_deref().unwrap_or(""));
+                    let manual_meeting_id = uuid::Uuid::new_v4().to_string();
+                    let manual_app_for_key = self
+                        .state
+                        .app_name
+                        .clone()
+                        .unwrap_or_else(|| "manual".into());
                     if let Some(ref archive) = self.archive {
                         let record = crate::meeting_archive::MeetingRecord {
-                            id: uuid::Uuid::new_v4().to_string(),
+                            id: manual_meeting_id.clone(),
                             started_at: self.state.started_at.clone().unwrap_or_default(),
                             ended_at: Some(chrono::Utc::now().to_rfc3339()),
                             duration_secs: duration,
-                            app_name: self
-                                .state
-                                .app_name
-                                .clone()
-                                .unwrap_or_else(|| "manual".into()),
+                            app_name: manual_app_for_key.clone(),
                             meeting_type: "manual".to_string(),
                             participants: participants.clone(),
                             transcript: transcript.clone(),
                             diarized_transcript: diarized.clone(),
                             summary: summary.clone().unwrap_or_default(),
-                            action_items: extract_action_items(summary.as_deref().unwrap_or("")),
+                            action_items: manual_action_items.clone(),
                             screenshot_count: self.state.screenshot_paths.len(),
                             screenshot_paths: self.state.screenshot_paths.clone(),
                             audio_path: Some(recording_path.clone()),
@@ -1435,8 +1523,17 @@ Usá EXACTAMENTE este formato para cada tarea:
                         }
                     }
 
+                    // Sprint 3 / Item 14 — promote action_items to memory_entries.
+                    // Best-effort; never blocks meeting completion.
+                    self.promote_action_items_to_memory(
+                        &manual_meeting_id,
+                        &manual_app_for_key,
+                        &manual_action_items,
+                    )
+                    .await;
+
                     // Export meeting files to structured folder (BB.12)
-                    let action_items_vec = extract_action_items(summary.as_deref().unwrap_or(""));
+                    let action_items_vec = manual_action_items;
                     {
                         let meeting_title = self
                             .state
@@ -2783,4 +2880,139 @@ async fn resolve_caption_model() -> Result<String> {
         }
     }
     anyhow::bail!("No whisper caption model found (need ggml-tiny.bin or ggml-base.bin)")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::meeting_archive::ActionItem;
+    use crate::memory_plane::MemoryPlaneManager;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lifeos-meeting-promote-{}-{}",
+            label,
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn build_assistant(memory: Option<Arc<RwLock<MemoryPlaneManager>>>) -> MeetingAssistant {
+        MeetingAssistant::new(temp_dir("data"), None, None, memory)
+    }
+
+    #[tokio::test]
+    async fn promote_action_items_creates_memory_entries() {
+        let mem_dir = temp_dir("mem");
+        let mgr = MemoryPlaneManager::new(mem_dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let memory = Arc::new(RwLock::new(mgr));
+        let assistant = build_assistant(Some(memory.clone()));
+
+        let items = vec![
+            ActionItem {
+                who: "Alice".into(),
+                what: "Send proposal to client".into(),
+                when: Some("Friday".into()),
+                completed: false,
+            },
+            ActionItem {
+                who: "Bob".into(),
+                what: "Review architecture diagram".into(),
+                when: None,
+                completed: false,
+            },
+            ActionItem {
+                who: "unknown".into(),
+                what: "Schedule follow-up".into(),
+                when: None,
+                completed: false,
+            },
+        ];
+
+        let promoted = assistant
+            .promote_action_items_to_memory("meet-123", "Google Meet", &items)
+            .await;
+        assert_eq!(promoted, 3);
+
+        let entries = memory
+            .read()
+            .await
+            .list_entries(50, Some("meeting"), Some("action_item"))
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 3);
+        for e in &entries {
+            assert_eq!(e.kind, "action_item");
+            assert_eq!(e.scope, "meeting");
+            assert_eq!(e.source, "meeting:meet-123");
+            assert_eq!(e.importance, 70);
+            assert!(e.tags.iter().any(|t| t == "meeting"));
+            assert!(e.tags.iter().any(|t| t == "action_item"));
+            assert!(e.tags.iter().any(|t| t == "google meet"));
+        }
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.content.contains("Send proposal to client")
+                    && e.content.contains("Friday"))
+        );
+
+        std::fs::remove_dir_all(mem_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn promote_skipped_when_memory_unavailable() {
+        let assistant = build_assistant(None);
+        let items = vec![ActionItem {
+            who: "Alice".into(),
+            what: "Do thing".into(),
+            when: None,
+            completed: false,
+        }];
+        let promoted = assistant
+            .promote_action_items_to_memory("meet-x", "Zoom", &items)
+            .await;
+        assert_eq!(promoted, 0);
+    }
+
+    #[tokio::test]
+    async fn promote_handles_empty_and_blank_items() {
+        let mem_dir = temp_dir("mem-blank");
+        let mgr = MemoryPlaneManager::new(mem_dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let memory = Arc::new(RwLock::new(mgr));
+        let assistant = build_assistant(Some(memory.clone()));
+
+        // Empty list short-circuits before touching memory_plane.
+        assert_eq!(
+            assistant
+                .promote_action_items_to_memory("meet-empty", "Zoom", &[])
+                .await,
+            0
+        );
+
+        // Blank `what` is skipped.
+        let items = vec![
+            ActionItem {
+                who: "Alice".into(),
+                what: "   ".into(),
+                when: None,
+                completed: false,
+            },
+            ActionItem {
+                who: "Bob".into(),
+                what: "Real task".into(),
+                when: None,
+                completed: false,
+            },
+        ];
+        let promoted = assistant
+            .promote_action_items_to_memory("meet-blank", "Zoom", &items)
+            .await;
+        assert_eq!(promoted, 1);
+
+        std::fs::remove_dir_all(mem_dir).ok();
+    }
 }

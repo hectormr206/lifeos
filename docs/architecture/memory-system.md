@@ -188,3 +188,22 @@ y audit log append-only en
   content / importance / tags without going through the LLM tool path. New
   `MemoryPlaneManager::get_entry()` single-row getter avoids the prior
   `list_entries(200, ...)` workaround.
+
+## Sprint 3 item 14 — meeting action items → memory_entries (2026-04-26 — PR #47)
+
+When a meeting completes (auto-detect or manual stop), action items
+extracted from the transcript are also stored as searchable
+`memory_entries` rows. Previously they lived only in the `meetings`
+table's JSON column and were invisible to `memory_search`.
+
+Each promoted item:
+- `kind`: `action_item`
+- `scope`: `meeting`
+- `source`: `meeting:<meeting_record_id>` (links back to the meeting row)
+- `importance`: `70` (high — action items typically need follow-up)
+- `tags`: `["meeting", "action_item", <lowercased meeting_key>]`
+- `content`: `[<who>] <what> (cuando: <when>)`
+
+Best-effort: per-item failure is logged via `warn!` but the meeting
+flow continues. Empty action_items, blank `what`, and an unwired
+memory_plane all return cleanly without panicking.
