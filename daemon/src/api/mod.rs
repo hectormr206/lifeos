@@ -7,6 +7,7 @@
 //! - System management
 
 mod conversations;
+mod finanzas;
 mod freelance;
 mod lab;
 pub mod privacy_mode;
@@ -1620,7 +1621,12 @@ pub fn create_router(state: ApiState) -> Router {
         .nest("/freelance", freelance::freelance_routes())
         // Viajes domain (BI.viajes) — vacaciones, escapadas, road trips.
         .nest("/viajes", viajes::viajes_routes())
+        // Vehiculos domain — autos, mantenimiento, seguros, registros.
         .nest("/vehiculos", vehiculos::vehiculos_routes())
+        // Finanzas Domain MVP (PRD §3): cuentas/categorias/movimientos/
+        // presupuestos/metas + analytics. Granular tracking layered on
+        // top of the simpler `financial_*` tables.
+        .nest("/finanzas", finanzas::finanzas_routes())
         // Workers CRUD (BB.dashboard) — list and cancel async LLM workers.
         .nest("/workers", workers::workers_routes())
         // Conversations CRUD — unified message-history view across bridges.
