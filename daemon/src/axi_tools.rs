@@ -1041,6 +1041,65 @@ REGLAS FIRMES:
 90. **memory_unarchive** — Restaura una memoria archivada (deshace memory_delete soft). Sin confirm — es restaurativa, no destructiva.
     args: {"entry_id": "mem-..."}
 
+91. **Proyectos Domain MVP (PRD Seccion 4)** — Tracking de proyectos del usuario (codigo, libros, viajes, hardware, casa, salud, etc) con milestones, dependencias entre proyectos, presupuesto y semaforo de progreso. tipo libre (codigo|libro|viaje|hardware|casa|salud|...). estado: planeado|activo|pausado|bloqueado|completado|cancelado. prioridad 1 (baja) - 10 (maxima). Descripcion y notas se cifran; nombre/tipo/fechas/presupuesto en claro. Usar siempre que el usuario quiera organizar trabajos no triviales con varios pasos o entregables.
+
+91a. **proyecto_add** — Crea un proyecto. fecha_inicio/fecha_objetivo en ISO (YYYY-MM-DD).
+    args: {"nombre":"Lanzar LifeOS v1","tipo":"codigo","descripcion":"...","prioridad":8,"fecha_inicio":"2026-04-01","fecha_objetivo":"2026-09-30","presupuesto_estimado":15000,"ruta_disco":"/home/hector/dev/lifeos","url_externo":"https://github.com/...","notas":"..."}
+
+91b. **proyecto_list** — Lista proyectos. Filtros opcionales.
+    args: {"estado":"activo","tipo":"codigo","prioridad_min":7}
+
+91c. **proyecto_get** — Detalle de un proyecto. Resuelve por id o por nombre (substring).
+    args: {"proyecto_id":"pro-..."} OR {"nombre":"LifeOS"}
+
+91d. **proyecto_update** — PATCH parcial.
+    args: {"proyecto_id":"pro-...","nombre":"...","descripcion":"...","prioridad":9,"presupuesto_gastado":1234.5,"notas":"..."}
+
+91e. **proyecto_pausar** — estado -> pausado.
+    args: {"proyecto_id":"pro-..."} OR {"nombre":"..."}
+
+91f. **proyecto_completar** — estado -> completado, fecha_real_fin = hoy.
+    args: {"proyecto_id":"pro-..."} OR {"nombre":"..."}
+
+91g. **proyecto_cancelar** — DESTRUCTIVO. estado -> cancelado. Pide confirm.
+    args: {"proyecto_id":"pro-...","confirm":true,"razon":"..."}
+
+91h. **proyecto_bloquear** — estado -> bloqueado, registra de quien depende (texto libre).
+    args: {"proyecto_id":"pro-...","bloqueado_por":"esperando aprobacion de ..."}
+
+91i. **milestone_add** — Hito interno del proyecto. orden ordena la lista.
+    args: {"proyecto_id":"pro-...","nombre":"Beta cerrada","descripcion":"...","fecha_objetivo":"2026-06-30","orden":1,"notas":"..."}
+
+91j. **milestone_list** — Lista milestones de un proyecto en orden.
+    args: {"proyecto_id":"pro-..."}
+
+91k. **milestone_completar** — Marca el milestone como completado hoy.
+    args: {"milestone_id":"mil-..."}
+
+91l. **milestone_update** — PATCH parcial.
+    args: {"milestone_id":"mil-...","nombre":"...","fecha_objetivo":"...","orden":2,"notas":"..."}
+
+91m. **proyecto_dependencia_add** — Crea arista A depende de B. Rechaza ciclos. tipo default 'bloqueante'.
+    args: {"proyecto_id":"pro-A","depende_de_id":"pro-B","tipo":"bloqueante","notas":"..."}
+
+91n. **proyecto_dependencias_list** — Devuelve depends_on + dependents del proyecto.
+    args: {"proyecto_id":"pro-..."} OR {"nombre":"..."}
+
+91o. **proyectos_overview** — Snapshot agregado: activos, planeados, bloqueados, presupuesto gastado en activos.
+    args: {}
+
+91p. **proyectos_priorizados** — Top N proyectos activos por prioridad.
+    args: {"top_n":5}
+
+91q. **proyectos_atrasados** — Proyectos con fecha_objetivo pasada y aun abiertos.
+    args: {}
+
+91r. **proyecto_progress** — Progreso de un proyecto: % milestones, % presupuesto, atrasado, semaforo (green|yellow|red).
+    args: {"proyecto_id":"pro-..."} OR {"nombre":"..."}
+
+91s. **milestones_proximos_dias** — Milestones pendientes con fecha_objetivo en los proximos N dias.
+    args: {"dias":14}
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -2373,6 +2432,28 @@ REGLAS FIRMES:
             "meeting_start" => execute_meeting_start(&call.args, ctx).await,
             "meeting_stop" => execute_meeting_stop(ctx).await,
             "agenda" => execute_agenda(&call.args, ctx).await,
+            // BI.12 — Proyectos (PRD Seccion 4)
+            "proyecto_add" => execute_proyecto_add(&call.args, ctx).await,
+            "proyecto_list" => execute_proyecto_list(&call.args, ctx).await,
+            "proyecto_get" => execute_proyecto_get(&call.args, ctx).await,
+            "proyecto_update" => execute_proyecto_update(&call.args, ctx).await,
+            "proyecto_pausar" => execute_proyecto_pausar(&call.args, ctx).await,
+            "proyecto_completar" => execute_proyecto_completar(&call.args, ctx).await,
+            "proyecto_cancelar" => execute_proyecto_cancelar(&call.args, ctx).await,
+            "proyecto_bloquear" => execute_proyecto_bloquear(&call.args, ctx).await,
+            "milestone_add" => execute_milestone_add(&call.args, ctx).await,
+            "milestone_list" => execute_milestone_list(&call.args, ctx).await,
+            "milestone_completar" => execute_milestone_completar(&call.args, ctx).await,
+            "milestone_update" => execute_milestone_update(&call.args, ctx).await,
+            "proyecto_dependencia_add" => execute_proyecto_dependencia_add(&call.args, ctx).await,
+            "proyecto_dependencias_list" => {
+                execute_proyecto_dependencias_list(&call.args, ctx).await
+            }
+            "proyectos_overview" => execute_proyectos_overview(ctx).await,
+            "proyectos_priorizados" => execute_proyectos_priorizados(&call.args, ctx).await,
+            "proyectos_atrasados" => execute_proyectos_atrasados(ctx).await,
+            "proyecto_progress" => execute_proyecto_progress(&call.args, ctx).await,
+            "milestones_proximos_dias" => execute_milestones_proximos_dias(&call.args, ctx).await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -11937,6 +12018,452 @@ max_context = 128000
         ma.stop_manual_meeting().await?;
 
         Ok("Reunion detenida. Procesando transcripcion y resumen...".to_string())
+    }
+
+    // -----------------------------------------------------------------
+    // BI.12 — Proyectos (PRD Seccion 4)
+    // -----------------------------------------------------------------
+
+    fn proyecto_short(p: &crate::memory_plane::Proyecto) -> String {
+        format!(
+            "[{}] {} (tipo={}, prio={}, estado={})",
+            p.proyecto_id, p.nombre, p.tipo, p.prioridad, p.estado
+        )
+    }
+
+    async fn resolve_proyecto_id(
+        args: &serde_json::Value,
+        mem: &MemoryPlaneManager,
+    ) -> Result<String> {
+        if let Some(id) = args["proyecto_id"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
+            return Ok(id.to_string());
+        }
+        if let Some(nombre) = args["nombre"].as_str().filter(|s| !s.trim().is_empty()) {
+            let list = mem
+                .proyecto_list(crate::memory_plane::ProyectoListFilter::default())
+                .await?;
+            let needle = nombre.to_lowercase();
+            let matches: Vec<_> = list
+                .into_iter()
+                .filter(|p| p.nombre.to_lowercase().contains(&needle))
+                .collect();
+            match matches.len() {
+                0 => anyhow::bail!("No encontre ningun proyecto que coincida con '{}'", nombre),
+                1 => return Ok(matches.into_iter().next().unwrap().proyecto_id),
+                n => anyhow::bail!(
+                    "{} proyectos coinciden con '{}', usa proyecto_id explicito",
+                    n,
+                    nombre
+                ),
+            }
+        }
+        anyhow::bail!("Falta 'proyecto_id' o 'nombre' para resolver el proyecto");
+    }
+
+    async fn execute_proyecto_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let nombre = args["nombre"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'nombre'"))?;
+        let tipo = args["tipo"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'tipo'"))?;
+        let descripcion = args["descripcion"].as_str().unwrap_or("");
+        let prioridad = args["prioridad"].as_i64().unwrap_or(5) as i32;
+        let fecha_inicio = args["fecha_inicio"].as_str();
+        let fecha_objetivo = args["fecha_objetivo"].as_str();
+        let presupuesto_estimado = args["presupuesto_estimado"].as_f64();
+        let ruta_disco = args["ruta_disco"].as_str();
+        let url_externo = args["url_externo"].as_str();
+        let notas = args["notas"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let p = mem
+            .proyecto_add(
+                nombre,
+                descripcion,
+                tipo,
+                prioridad,
+                fecha_inicio,
+                fecha_objetivo,
+                presupuesto_estimado,
+                ruta_disco,
+                url_externo,
+                notas,
+            )
+            .await?;
+        Ok(format!("Proyecto creado: {}", proyecto_short(&p)))
+    }
+
+    async fn execute_proyecto_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let filter = crate::memory_plane::ProyectoListFilter {
+            estado: args["estado"].as_str().map(|s| s.to_string()),
+            tipo: args["tipo"].as_str().map(|s| s.to_string()),
+            prioridad_min: args["prioridad_min"].as_i64().map(|v| v as i32),
+            prioridad_max: args["prioridad_max"].as_i64().map(|v| v as i32),
+        };
+        let mem = require_memory(ctx).await?;
+        let list = mem.proyecto_list(filter).await?;
+        if list.is_empty() {
+            return Ok("Sin proyectos que coincidan.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|p| format!("- {}", proyecto_short(p)))
+            .collect();
+        Ok(format!(
+            "Proyectos ({}):\n{}",
+            lines.len(),
+            lines.join("\n")
+        ))
+    }
+
+    async fn execute_proyecto_get(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = resolve_proyecto_id(args, &mem).await?;
+        match mem.proyecto_get(&id).await? {
+            Some(p) => Ok(format!(
+                "{}\n  descripcion: {}\n  fechas: inicio={:?} objetivo={:?} fin_real={:?}\n  presupuesto: estimado={:?} gastado={:.2}\n  bloqueado_por: {:?}\n  ruta_disco: {:?}\n  url: {:?}\n  notas: {}",
+                proyecto_short(&p),
+                p.descripcion,
+                p.fecha_inicio,
+                p.fecha_objetivo,
+                p.fecha_real_fin,
+                p.presupuesto_estimado,
+                p.presupuesto_gastado,
+                p.bloqueado_por,
+                p.ruta_disco,
+                p.url_externo,
+                p.notas,
+            )),
+            None => Ok(format!("Proyecto {} no encontrado.", id)),
+        }
+    }
+
+    async fn execute_proyecto_update(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = resolve_proyecto_id(args, &mem).await?;
+        let ok = mem
+            .proyecto_update(
+                &id,
+                args["nombre"].as_str(),
+                args["descripcion"].as_str(),
+                args["tipo"].as_str(),
+                args["prioridad"].as_i64().map(|v| v as i32),
+                args["fecha_inicio"].as_str(),
+                args["fecha_objetivo"].as_str(),
+                args["presupuesto_estimado"].as_f64(),
+                args["presupuesto_gastado"].as_f64(),
+                args["ruta_disco"].as_str(),
+                args["url_externo"].as_str(),
+                args["notas"].as_str(),
+            )
+            .await?;
+        Ok(if ok {
+            format!("Proyecto {} actualizado.", id)
+        } else {
+            format!("Proyecto {} no encontrado o sin cambios.", id)
+        })
+    }
+
+    async fn execute_proyecto_pausar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = resolve_proyecto_id(args, &mem).await?;
+        let ok = mem.proyecto_pausar(&id).await?;
+        Ok(if ok {
+            format!("Proyecto {} pausado.", id)
+        } else {
+            format!("Proyecto {} no encontrado.", id)
+        })
+    }
+
+    async fn execute_proyecto_completar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = resolve_proyecto_id(args, &mem).await?;
+        let ok = mem.proyecto_completar(&id).await?;
+        Ok(if ok {
+            format!("Proyecto {} completado.", id)
+        } else {
+            format!("Proyecto {} no encontrado.", id)
+        })
+    }
+
+    async fn execute_proyecto_cancelar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        if let Err(msg) = destructive_preflight("proyecto_cancelar", args) {
+            return Ok(msg);
+        }
+        let mem = require_memory(ctx).await?;
+        let id = resolve_proyecto_id(args, &mem).await?;
+        let ok = mem.proyecto_cancelar(&id).await?;
+        Ok(if ok {
+            format!("Proyecto {} cancelado.", id)
+        } else {
+            format!("Proyecto {} no encontrado.", id)
+        })
+    }
+
+    async fn execute_proyecto_bloquear(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let bloqueado_por = args["bloqueado_por"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'bloqueado_por'"))?;
+        let mem = require_memory(ctx).await?;
+        let id = resolve_proyecto_id(args, &mem).await?;
+        let ok = mem.proyecto_bloquear(&id, bloqueado_por).await?;
+        Ok(if ok {
+            format!("Proyecto {} bloqueado por '{}'.", id, bloqueado_por)
+        } else {
+            format!("Proyecto {} no encontrado.", id)
+        })
+    }
+
+    async fn execute_milestone_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let proyecto_id = args["proyecto_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'proyecto_id'"))?;
+        let nombre = args["nombre"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'nombre'"))?;
+        let descripcion = args["descripcion"].as_str().unwrap_or("");
+        let fecha_objetivo = args["fecha_objetivo"].as_str();
+        let orden = args["orden"].as_i64().unwrap_or(0) as i32;
+        let notas = args["notas"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let m = mem
+            .milestone_add(
+                proyecto_id,
+                nombre,
+                descripcion,
+                fecha_objetivo,
+                orden,
+                notas,
+            )
+            .await?;
+        Ok(format!(
+            "Milestone creado: [{}] {} (proyecto={}, orden={})",
+            m.milestone_id, m.nombre, m.proyecto_id, m.orden
+        ))
+    }
+
+    async fn execute_milestone_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let proyecto_id = args["proyecto_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'proyecto_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let list = mem.milestone_list(proyecto_id).await?;
+        if list.is_empty() {
+            return Ok("Sin milestones.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|m| {
+                let estado = if m.fecha_completado.is_some() {
+                    "completado"
+                } else {
+                    "pendiente"
+                };
+                format!(
+                    "- [{}] {} (orden={}, fecha={:?}, {})",
+                    m.milestone_id, m.nombre, m.orden, m.fecha_objetivo, estado
+                )
+            })
+            .collect();
+        Ok(format!("Milestones:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_milestone_completar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = args["milestone_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'milestone_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.milestone_completar(id).await?;
+        Ok(if ok {
+            format!("Milestone {} completado.", id)
+        } else {
+            format!("Milestone {} no encontrado.", id)
+        })
+    }
+
+    async fn execute_milestone_update(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = args["milestone_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'milestone_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem
+            .milestone_update(
+                id,
+                args["nombre"].as_str(),
+                args["descripcion"].as_str(),
+                args["fecha_objetivo"].as_str(),
+                args["orden"].as_i64().map(|v| v as i32),
+                args["notas"].as_str(),
+            )
+            .await?;
+        Ok(if ok {
+            format!("Milestone {} actualizado.", id)
+        } else {
+            format!("Milestone {} no encontrado o sin cambios.", id)
+        })
+    }
+
+    async fn execute_proyecto_dependencia_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let proyecto_id = args["proyecto_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'proyecto_id'"))?;
+        let depende_de_id = args["depende_de_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'depende_de_id'"))?;
+        let tipo = args["tipo"].as_str();
+        let notas = args["notas"].as_str();
+        let mem = require_memory(ctx).await?;
+        let d = mem
+            .proyecto_dependencia_add(proyecto_id, depende_de_id, tipo, notas)
+            .await?;
+        Ok(format!(
+            "Dependencia creada: {} -[{}]-> {}",
+            d.proyecto_id, d.tipo, d.depende_de_id
+        ))
+    }
+
+    async fn execute_proyecto_dependencias_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = resolve_proyecto_id(args, &mem).await?;
+        let set = mem.proyecto_dependencias_list(&id).await?;
+        let mut out = format!("Dependencias para {}:\n", id);
+        out.push_str(&format!("  depende_de ({}):\n", set.depends_on.len()));
+        for d in &set.depends_on {
+            out.push_str(&format!("    - {} ({})\n", d.depende_de_id, d.tipo));
+        }
+        out.push_str(&format!("  dependientes ({}):\n", set.dependents.len()));
+        for d in &set.dependents {
+            out.push_str(&format!("    - {} ({})\n", d.proyecto_id, d.tipo));
+        }
+        Ok(out)
+    }
+
+    async fn execute_proyectos_overview(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let o = mem.proyectos_overview().await?;
+        Ok(format!(
+            "Overview proyectos:\n  activos: {}\n  planeados: {}\n  bloqueados: {}\n  presupuesto gastado (activos): {:.2}",
+            o.total_activos, o.total_planeados, o.total_bloqueados, o.presupuesto_gastado_activos
+        ))
+    }
+
+    async fn execute_proyectos_priorizados(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let top_n = args["top_n"].as_i64().unwrap_or(5) as i32;
+        let mem = require_memory(ctx).await?;
+        let list = mem.proyectos_priorizados(top_n).await?;
+        if list.is_empty() {
+            return Ok("Sin proyectos activos.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|p| format!("- {}", proyecto_short(p)))
+            .collect();
+        Ok(format!(
+            "Top {} priorizados:\n{}",
+            lines.len(),
+            lines.join("\n")
+        ))
+    }
+
+    async fn execute_proyectos_atrasados(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list = mem.proyectos_atrasados().await?;
+        if list.is_empty() {
+            return Ok("Sin proyectos atrasados. Buenisimo.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|p| format!("- {} (objetivo={:?})", proyecto_short(p), p.fecha_objetivo))
+            .collect();
+        Ok(format!(
+            "Proyectos atrasados ({}):\n{}",
+            lines.len(),
+            lines.join("\n")
+        ))
+    }
+
+    async fn execute_proyecto_progress(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = resolve_proyecto_id(args, &mem).await?;
+        match mem.proyecto_progress(&id).await? {
+            Some(pr) => Ok(format!(
+                "Progreso de {} ({}):\n  estado: {}\n  milestones: {}/{} ({:.1}%)\n  presupuesto: {:.2} / {:?} ({:?}%)\n  atrasado: {}\n  semaforo: {}",
+                pr.nombre,
+                pr.proyecto_id,
+                pr.estado,
+                pr.milestones_completados,
+                pr.milestones_total,
+                pr.progress_pct,
+                pr.presupuesto_gastado,
+                pr.presupuesto_estimado,
+                pr.presupuesto_pct,
+                pr.atrasado,
+                pr.semaforo,
+            )),
+            None => Ok(format!("Proyecto {} no encontrado.", id)),
+        }
+    }
+
+    async fn execute_milestones_proximos_dias(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let dias = args["dias"].as_i64().unwrap_or(14) as i32;
+        let mem = require_memory(ctx).await?;
+        let list = mem.milestones_proximos_dias(dias).await?;
+        if list.is_empty() {
+            return Ok(format!("Sin milestones en los proximos {} dias.", dias));
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|m| {
+                format!(
+                    "- [{}] {} (proyecto={}, fecha={:?})",
+                    m.milestone_id, m.nombre, m.proyecto_id, m.fecha_objetivo
+                )
+            })
+            .collect();
+        Ok(format!(
+            "Milestones proximos ({} dias):\n{}",
+            dias,
+            lines.join("\n")
+        ))
     }
 }
 

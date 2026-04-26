@@ -10,6 +10,7 @@ mod conversations;
 mod lab;
 pub mod privacy_mode;
 mod providers;
+mod proyectos;
 mod vida_plena;
 mod workers;
 
@@ -1604,6 +1605,8 @@ pub fn create_router(state: ApiState) -> Router {
         // Lab endpoints
         .nest("/lab", lab::lab_routes())
         .nest("/vida-plena", vida_plena::vida_plena_routes())
+        // Proyectos Domain — gestion ligera de proyectos personales.
+        .nest("/proyectos", proyectos::proyectos_routes())
         // Workers CRUD (BB.dashboard) — list and cancel async LLM workers.
         .nest("/workers", workers::workers_routes())
         // Conversations CRUD — unified message-history view across bridges.

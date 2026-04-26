@@ -1137,6 +1137,69 @@ CREATE TABLE IF NOT EXISTS reinforced_vault_meta (
     configured_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- ----------------------------------------------------------------------
+-- Proyectos Domain — gestion ligera de proyectos personales
+--
+-- 3 side-tables. notas/descripcion cifradas. NO es un PM corporativo
+-- (Jira, Asana). Es un tracker minimal: nombre, prioridad, milestones,
+-- dependencias, presupuesto. Pensado para proyectos personales del
+-- usuario (refactor casa, escribir libro, lanzar producto, viaje).
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS proyectos_proyectos (
+    proyecto_id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    descripcion TEXT,                    -- cifrado: nonce/cipher pares (ver descripcion_*)
+    descripcion_nonce_b64 TEXT,
+    descripcion_ciphertext_b64 TEXT,
+    tipo TEXT NOT NULL,                  -- 'personal','trabajo','creativo','aprendizaje','salud','otro'
+    prioridad INTEGER NOT NULL DEFAULT 5,
+    fecha_inicio TEXT,
+    fecha_objetivo TEXT,
+    fecha_real_fin TEXT,
+    presupuesto_estimado REAL,
+    presupuesto_gastado REAL NOT NULL DEFAULT 0,
+    estado TEXT NOT NULL DEFAULT 'planeado',  -- planeado,activo,pausado,completado,cancelado,bloqueado
+    bloqueado_por TEXT,
+    ruta_disco TEXT,
+    url_externo TEXT,
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_proyectos_estado
+    ON proyectos_proyectos(estado);
+CREATE INDEX IF NOT EXISTS idx_proyectos_prioridad
+    ON proyectos_proyectos(prioridad);
+
+CREATE TABLE IF NOT EXISTS proyectos_milestones (
+    milestone_id TEXT PRIMARY KEY,
+    proyecto_id TEXT NOT NULL,
+    nombre TEXT NOT NULL,
+    descripcion TEXT,
+    descripcion_nonce_b64 TEXT,
+    descripcion_ciphertext_b64 TEXT,
+    fecha_objetivo TEXT,
+    fecha_completado TEXT,
+    orden INTEGER NOT NULL DEFAULT 0,
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_proyectos_milestones_proyecto
+    ON proyectos_milestones(proyecto_id, orden);
+CREATE INDEX IF NOT EXISTS idx_proyectos_milestones_objetivo
+    ON proyectos_milestones(fecha_objetivo) WHERE fecha_objetivo IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS proyectos_dependencias (
+    proyecto_id TEXT NOT NULL,
+    depende_de_id TEXT NOT NULL,
+    tipo TEXT NOT NULL DEFAULT 'bloqueante',  -- bloqueante|relacionada
+    notas TEXT,
+    PRIMARY KEY (proyecto_id, depende_de_id)
+);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17061,6 +17124,1149 @@ pub fn extract_entities_from_text(text: &str) -> Vec<(String, &'static str)> {
     found
 }
 
+// ============================================================================
+// Proyectos Domain — gestion ligera de proyectos personales
+// ============================================================================
+//
+// MVP intencionalmente delgado: 3 tablas, ~17 metodos. NO es Jira: es un
+// tracker para proyectos personales (refactor casa, escribir libro, viaje,
+// estudio). Cifrado simetrico para `notas` y `descripcion`.
+
+/// Un proyecto personal del usuario.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Proyecto {
+    pub proyecto_id: String,
+    pub nombre: String,
+    pub descripcion: String,
+    pub tipo: String,
+    pub prioridad: i32,
+    pub fecha_inicio: Option<String>,
+    pub fecha_objetivo: Option<String>,
+    pub fecha_real_fin: Option<String>,
+    pub presupuesto_estimado: Option<f64>,
+    pub presupuesto_gastado: f64,
+    pub estado: String,
+    pub bloqueado_por: Option<String>,
+    pub ruta_disco: Option<String>,
+    pub url_externo: Option<String>,
+    pub notas: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Filtros para listar proyectos.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProyectoListFilter {
+    pub estado: Option<String>,
+    pub tipo: Option<String>,
+    pub prioridad_min: Option<i32>,
+    pub prioridad_max: Option<i32>,
+}
+
+/// Un milestone dentro de un proyecto.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProyectoMilestone {
+    pub milestone_id: String,
+    pub proyecto_id: String,
+    pub nombre: String,
+    pub descripcion: String,
+    pub fecha_objetivo: Option<String>,
+    pub fecha_completado: Option<String>,
+    pub orden: i32,
+    pub notas: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Una arista de dependencia entre proyectos.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProyectoDependencia {
+    pub proyecto_id: String,
+    pub depende_de_id: String,
+    pub tipo: String,
+    pub notas: Option<String>,
+}
+
+/// Resultado de `proyecto_dependencias_list`: ambos lados del grafo.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProyectoDependenciaSet {
+    pub depends_on: Vec<ProyectoDependencia>,
+    pub dependents: Vec<ProyectoDependencia>,
+}
+
+/// Snapshot de progreso de un proyecto.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProyectoProgress {
+    pub proyecto_id: String,
+    pub nombre: String,
+    pub estado: String,
+    pub milestones_total: usize,
+    pub milestones_completados: usize,
+    pub progress_pct: f64,
+    pub presupuesto_estimado: Option<f64>,
+    pub presupuesto_gastado: f64,
+    pub presupuesto_pct: Option<f64>,
+    pub atrasado: bool,
+    /// Semaforo derivado: `green`, `yellow`, `red`.
+    pub semaforo: String,
+}
+
+/// Overview agregado de proyectos para el dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProyectosOverview {
+    pub activos: Vec<Proyecto>,
+    pub planeados: Vec<Proyecto>,
+    pub bloqueados: Vec<Proyecto>,
+    pub total_activos: usize,
+    pub total_planeados: usize,
+    pub total_bloqueados: usize,
+    pub presupuesto_gastado_activos: f64,
+    pub generated_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+struct ProyectoRaw {
+    proyecto_id: String,
+    nombre: String,
+    descripcion_nonce_b64: Option<String>,
+    descripcion_ciphertext_b64: Option<String>,
+    tipo: String,
+    prioridad: i32,
+    fecha_inicio: Option<String>,
+    fecha_objetivo: Option<String>,
+    fecha_real_fin: Option<String>,
+    presupuesto_estimado: Option<f64>,
+    presupuesto_gastado: f64,
+    estado: String,
+    bloqueado_por: Option<String>,
+    ruta_disco: Option<String>,
+    url_externo: Option<String>,
+    notas_nonce_b64: Option<String>,
+    notas_ciphertext_b64: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug)]
+struct ProyectoMilestoneRaw {
+    milestone_id: String,
+    proyecto_id: String,
+    nombre: String,
+    descripcion_nonce_b64: Option<String>,
+    descripcion_ciphertext_b64: Option<String>,
+    fecha_objetivo: Option<String>,
+    fecha_completado: Option<String>,
+    orden: i32,
+    notas_nonce_b64: Option<String>,
+    notas_ciphertext_b64: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+const PROYECTO_SELECT_COLS: &str =
+    "proyecto_id, nombre, descripcion_nonce_b64, descripcion_ciphertext_b64, tipo, \
+     prioridad, fecha_inicio, fecha_objetivo, fecha_real_fin, presupuesto_estimado, \
+     presupuesto_gastado, estado, bloqueado_por, ruta_disco, url_externo, \
+     notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at";
+
+const MILESTONE_SELECT_COLS: &str =
+    "milestone_id, proyecto_id, nombre, descripcion_nonce_b64, descripcion_ciphertext_b64, \
+     fecha_objetivo, fecha_completado, orden, notas_nonce_b64, notas_ciphertext_b64, \
+     created_at, updated_at";
+
+fn map_proyecto_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProyectoRaw> {
+    Ok(ProyectoRaw {
+        proyecto_id: row.get(0)?,
+        nombre: row.get(1)?,
+        descripcion_nonce_b64: row.get(2)?,
+        descripcion_ciphertext_b64: row.get(3)?,
+        tipo: row.get(4)?,
+        prioridad: row.get(5)?,
+        fecha_inicio: row.get(6)?,
+        fecha_objetivo: row.get(7)?,
+        fecha_real_fin: row.get(8)?,
+        presupuesto_estimado: row.get(9)?,
+        presupuesto_gastado: row.get(10)?,
+        estado: row.get(11)?,
+        bloqueado_por: row.get(12)?,
+        ruta_disco: row.get(13)?,
+        url_externo: row.get(14)?,
+        notas_nonce_b64: row.get(15)?,
+        notas_ciphertext_b64: row.get(16)?,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
+    })
+}
+
+fn proyecto_from_raw(r: ProyectoRaw) -> Proyecto {
+    let descripcion = match (r.descripcion_nonce_b64, r.descripcion_ciphertext_b64) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    };
+    let notas = match (r.notas_nonce_b64, r.notas_ciphertext_b64) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    };
+    Proyecto {
+        proyecto_id: r.proyecto_id,
+        nombre: r.nombre,
+        descripcion,
+        tipo: r.tipo,
+        prioridad: r.prioridad,
+        fecha_inicio: r.fecha_inicio,
+        fecha_objetivo: r.fecha_objetivo,
+        fecha_real_fin: r.fecha_real_fin,
+        presupuesto_estimado: r.presupuesto_estimado,
+        presupuesto_gastado: r.presupuesto_gastado,
+        estado: r.estado,
+        bloqueado_por: r.bloqueado_por,
+        ruta_disco: r.ruta_disco,
+        url_externo: r.url_externo,
+        notas,
+        created_at: parse_utc(&r.created_at),
+        updated_at: parse_utc(&r.updated_at),
+    }
+}
+
+fn map_milestone_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProyectoMilestoneRaw> {
+    Ok(ProyectoMilestoneRaw {
+        milestone_id: row.get(0)?,
+        proyecto_id: row.get(1)?,
+        nombre: row.get(2)?,
+        descripcion_nonce_b64: row.get(3)?,
+        descripcion_ciphertext_b64: row.get(4)?,
+        fecha_objetivo: row.get(5)?,
+        fecha_completado: row.get(6)?,
+        orden: row.get(7)?,
+        notas_nonce_b64: row.get(8)?,
+        notas_ciphertext_b64: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
+fn milestone_from_raw(r: ProyectoMilestoneRaw) -> ProyectoMilestone {
+    let descripcion = match (r.descripcion_nonce_b64, r.descripcion_ciphertext_b64) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    };
+    let notas = match (r.notas_nonce_b64, r.notas_ciphertext_b64) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    };
+    ProyectoMilestone {
+        milestone_id: r.milestone_id,
+        proyecto_id: r.proyecto_id,
+        nombre: r.nombre,
+        descripcion,
+        fecha_objetivo: r.fecha_objetivo,
+        fecha_completado: r.fecha_completado,
+        orden: r.orden,
+        notas,
+        created_at: parse_utc(&r.created_at),
+        updated_at: parse_utc(&r.updated_at),
+    }
+}
+
+fn encrypt_optional(text: &str) -> Result<(Option<String>, Option<String>)> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok((None, None));
+    }
+    let (n, c, _) = encrypt_content(trimmed)?;
+    Ok((Some(n), Some(c)))
+}
+
+fn today_iso_local() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+const PROYECTO_ESTADOS: &[&str] = &[
+    "planeado",
+    "activo",
+    "pausado",
+    "completado",
+    "cancelado",
+    "bloqueado",
+];
+
+fn validate_estado(estado: &str) -> Result<()> {
+    if PROYECTO_ESTADOS.contains(&estado) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "estado invalido '{}': debe ser uno de {:?}",
+            estado,
+            PROYECTO_ESTADOS
+        );
+    }
+}
+
+impl MemoryPlaneManager {
+    // -------------------------------------------------------------------
+    // Proyectos — CRUD
+    // -------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn proyecto_add(
+        &self,
+        nombre: &str,
+        descripcion: &str,
+        tipo: &str,
+        prioridad: i32,
+        fecha_inicio: Option<&str>,
+        fecha_objetivo: Option<&str>,
+        presupuesto_estimado: Option<f64>,
+        ruta_disco: Option<&str>,
+        url_externo: Option<&str>,
+        notas: &str,
+    ) -> Result<Proyecto> {
+        let nombre = normalize_non_empty(nombre).context("nombre requerido")?;
+        let tipo = normalize_non_empty(tipo).context("tipo requerido")?;
+        if !(1..=10).contains(&prioridad) {
+            anyhow::bail!("prioridad debe estar entre 1 y 10");
+        }
+        if let Some(p) = presupuesto_estimado {
+            if !p.is_finite() || p < 0.0 {
+                anyhow::bail!("presupuesto_estimado debe ser positivo y finito");
+            }
+        }
+        let (desc_n, desc_c) = encrypt_optional(descripcion)?;
+        let (notas_n, notas_c) = encrypt_optional(notas)?;
+        let descripcion_owned = descripcion.trim().to_string();
+        let notas_owned = notas.trim().to_string();
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let proyecto_id = format!("pro-{}", Uuid::new_v4());
+        let id_clone = proyecto_id.clone();
+        let nombre_clone = nombre.clone();
+        let tipo_clone = tipo.clone();
+        let fecha_inicio_owned = fecha_inicio.map(|s| s.to_string());
+        let fecha_objetivo_owned = fecha_objetivo.map(|s| s.to_string());
+        let ruta_owned = ruta_disco.map(|s| s.to_string());
+        let url_owned = url_externo.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO proyectos_proyectos
+                 (proyecto_id, nombre, descripcion_nonce_b64, descripcion_ciphertext_b64,
+                  tipo, prioridad, fecha_inicio, fecha_objetivo, fecha_real_fin,
+                  presupuesto_estimado, presupuesto_gastado, estado, bloqueado_por,
+                  ruta_disco, url_externo, notas_nonce_b64, notas_ciphertext_b64,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, 0, 'planeado', NULL,
+                         ?10, ?11, ?12, ?13, ?14, ?14)",
+                params![
+                    id_clone,
+                    nombre_clone,
+                    desc_n,
+                    desc_c,
+                    tipo_clone,
+                    prioridad,
+                    fecha_inicio_owned,
+                    fecha_objetivo_owned,
+                    presupuesto_estimado,
+                    ruta_owned,
+                    url_owned,
+                    notas_n,
+                    notas_c,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Proyecto {
+            proyecto_id,
+            nombre,
+            descripcion: descripcion_owned,
+            tipo,
+            prioridad,
+            fecha_inicio: fecha_inicio.map(|s| s.to_string()),
+            fecha_objetivo: fecha_objetivo.map(|s| s.to_string()),
+            fecha_real_fin: None,
+            presupuesto_estimado,
+            presupuesto_gastado: 0.0,
+            estado: "planeado".into(),
+            bloqueado_por: None,
+            ruta_disco: ruta_disco.map(|s| s.to_string()),
+            url_externo: url_externo.map(|s| s.to_string()),
+            notas: notas_owned,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn proyecto_list(&self, filter: ProyectoListFilter) -> Result<Vec<Proyecto>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut where_clauses: Vec<String> = Vec::new();
+            let mut bind: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(e) = &filter.estado {
+                where_clauses.push(format!("estado = ?{}", bind.len() + 1));
+                bind.push(Box::new(e.clone()));
+            }
+            if let Some(t) = &filter.tipo {
+                where_clauses.push(format!("tipo = ?{}", bind.len() + 1));
+                bind.push(Box::new(t.clone()));
+            }
+            if let Some(min) = filter.prioridad_min {
+                where_clauses.push(format!("prioridad >= ?{}", bind.len() + 1));
+                bind.push(Box::new(min));
+            }
+            if let Some(max) = filter.prioridad_max {
+                where_clauses.push(format!("prioridad <= ?{}", bind.len() + 1));
+                bind.push(Box::new(max));
+            }
+            let where_sql = if where_clauses.is_empty() {
+                String::new()
+            } else {
+                format!(" WHERE {}", where_clauses.join(" AND "))
+            };
+            let sql = format!(
+                "SELECT {} FROM proyectos_proyectos{} ORDER BY prioridad DESC, created_at DESC",
+                PROYECTO_SELECT_COLS, where_sql
+            );
+            let mut stmt = db.prepare(&sql)?;
+            let bind_refs: Vec<&dyn rusqlite::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
+            let raws: Vec<ProyectoRaw> = stmt
+                .query_map(
+                    rusqlite::params_from_iter(bind_refs.iter()),
+                    map_proyecto_row,
+                )?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws.into_iter().map(proyecto_from_raw).collect())
+    }
+
+    pub async fn proyecto_get(&self, proyecto_id: &str) -> Result<Option<Proyecto>> {
+        let db_path = self.db_path.clone();
+        let id = proyecto_id.to_string();
+        let raw = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = format!(
+                "SELECT {} FROM proyectos_proyectos WHERE proyecto_id = ?1",
+                PROYECTO_SELECT_COLS
+            );
+            let result: Option<ProyectoRaw> = db
+                .query_row(&sql, params![id], map_proyecto_row)
+                .optional()?;
+            Ok::<_, anyhow::Error>(result)
+        })
+        .await??;
+        Ok(raw.map(proyecto_from_raw))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn proyecto_update(
+        &self,
+        proyecto_id: &str,
+        nombre: Option<&str>,
+        descripcion: Option<&str>,
+        tipo: Option<&str>,
+        prioridad: Option<i32>,
+        fecha_inicio: Option<&str>,
+        fecha_objetivo: Option<&str>,
+        presupuesto_estimado: Option<f64>,
+        presupuesto_gastado: Option<f64>,
+        ruta_disco: Option<&str>,
+        url_externo: Option<&str>,
+        notas: Option<&str>,
+    ) -> Result<bool> {
+        if let Some(p) = prioridad {
+            if !(1..=10).contains(&p) {
+                anyhow::bail!("prioridad debe estar entre 1 y 10");
+            }
+        }
+        if let Some(p) = presupuesto_estimado {
+            if !p.is_finite() || p < 0.0 {
+                anyhow::bail!("presupuesto_estimado invalido");
+            }
+        }
+        if let Some(p) = presupuesto_gastado {
+            if !p.is_finite() || p < 0.0 {
+                anyhow::bail!("presupuesto_gastado invalido");
+            }
+        }
+        let nombre_owned = nombre.and_then(normalize_non_empty);
+        let tipo_owned = tipo.and_then(normalize_non_empty);
+        let (desc_n, desc_c) = match descripcion {
+            Some(d) => {
+                let (n, c) = encrypt_optional(d)?;
+                (Some(n), Some(c))
+            }
+            None => (None, None),
+        };
+        let (notas_n, notas_c) = match notas {
+            Some(d) => {
+                let (n, c) = encrypt_optional(d)?;
+                (Some(n), Some(c))
+            }
+            None => (None, None),
+        };
+        let fecha_inicio_owned = fecha_inicio.map(|s| s.to_string());
+        let fecha_objetivo_owned = fecha_objetivo.map(|s| s.to_string());
+        let ruta_owned = ruta_disco.map(|s| s.to_string());
+        let url_owned = url_externo.map(|s| s.to_string());
+        let now_rfc = Utc::now().to_rfc3339();
+
+        let db_path = self.db_path.clone();
+        let id = proyecto_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let mut sets: Vec<String> = Vec::new();
+            let mut bind: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            macro_rules! add_set {
+                ($col:expr, $val:expr) => {
+                    sets.push(format!("{} = ?{}", $col, bind.len() + 1));
+                    bind.push(Box::new($val));
+                };
+            }
+            if let Some(v) = nombre_owned {
+                add_set!("nombre", v);
+            }
+            if let Some((n_opt, c_opt)) = desc_n.zip(desc_c) {
+                add_set!("descripcion_nonce_b64", n_opt);
+                add_set!("descripcion_ciphertext_b64", c_opt);
+            }
+            if let Some(v) = tipo_owned {
+                add_set!("tipo", v);
+            }
+            if let Some(v) = prioridad {
+                add_set!("prioridad", v);
+            }
+            if let Some(v) = fecha_inicio_owned {
+                add_set!("fecha_inicio", v);
+            }
+            if let Some(v) = fecha_objetivo_owned {
+                add_set!("fecha_objetivo", v);
+            }
+            if let Some(v) = presupuesto_estimado {
+                add_set!("presupuesto_estimado", v);
+            }
+            if let Some(v) = presupuesto_gastado {
+                add_set!("presupuesto_gastado", v);
+            }
+            if let Some(v) = ruta_owned {
+                add_set!("ruta_disco", v);
+            }
+            if let Some(v) = url_owned {
+                add_set!("url_externo", v);
+            }
+            if let Some((n_opt, c_opt)) = notas_n.zip(notas_c) {
+                add_set!("notas_nonce_b64", n_opt);
+                add_set!("notas_ciphertext_b64", c_opt);
+            }
+            if sets.is_empty() {
+                return Ok(0);
+            }
+            sets.push(format!("updated_at = ?{}", bind.len() + 1));
+            bind.push(Box::new(now_rfc));
+            let id_idx = bind.len() + 1;
+            bind.push(Box::new(id));
+            let sql = format!(
+                "UPDATE proyectos_proyectos SET {} WHERE proyecto_id = ?{}",
+                sets.join(", "),
+                id_idx
+            );
+            let bind_refs: Vec<&dyn rusqlite::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
+            Ok(db.execute(&sql, rusqlite::params_from_iter(bind_refs.iter()))?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    async fn set_estado(&self, proyecto_id: &str, estado: &str) -> Result<bool> {
+        validate_estado(estado)?;
+        let db_path = self.db_path.clone();
+        let id = proyecto_id.to_string();
+        let estado_owned = estado.to_string();
+        let now_rfc = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE proyectos_proyectos SET estado = ?1, updated_at = ?2 \
+                 WHERE proyecto_id = ?3",
+                params![estado_owned, now_rfc, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn proyecto_pausar(&self, proyecto_id: &str) -> Result<bool> {
+        self.set_estado(proyecto_id, "pausado").await
+    }
+
+    pub async fn proyecto_completar(&self, proyecto_id: &str) -> Result<bool> {
+        let now_rfc = Utc::now().to_rfc3339();
+        let today = today_iso_local();
+        let db_path = self.db_path.clone();
+        let id = proyecto_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE proyectos_proyectos
+                 SET estado = 'completado', fecha_real_fin = ?1, updated_at = ?2
+                 WHERE proyecto_id = ?3",
+                params![today, now_rfc, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn proyecto_cancelar(&self, proyecto_id: &str) -> Result<bool> {
+        self.set_estado(proyecto_id, "cancelado").await
+    }
+
+    pub async fn proyecto_bloquear(&self, proyecto_id: &str, bloqueado_por: &str) -> Result<bool> {
+        let bloqueado_por =
+            normalize_non_empty(bloqueado_por).context("bloqueado_por requerido")?;
+        let now_rfc = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = proyecto_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE proyectos_proyectos
+                 SET estado = 'bloqueado', bloqueado_por = ?1, updated_at = ?2
+                 WHERE proyecto_id = ?3",
+                params![bloqueado_por, now_rfc, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -------------------------------------------------------------------
+    // Milestones
+    // -------------------------------------------------------------------
+
+    pub async fn milestone_add(
+        &self,
+        proyecto_id: &str,
+        nombre: &str,
+        descripcion: &str,
+        fecha_objetivo: Option<&str>,
+        orden: i32,
+        notas: &str,
+    ) -> Result<ProyectoMilestone> {
+        let nombre = normalize_non_empty(nombre).context("nombre requerido")?;
+        let proyecto_id = normalize_non_empty(proyecto_id).context("proyecto_id requerido")?;
+        let (desc_n, desc_c) = encrypt_optional(descripcion)?;
+        let (notas_n, notas_c) = encrypt_optional(notas)?;
+        let descripcion_owned = descripcion.trim().to_string();
+        let notas_owned = notas.trim().to_string();
+
+        // Validate parent exists.
+        let parent_id = proyecto_id.clone();
+        let db_path = self.db_path.clone();
+        let exists = tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path)?;
+            let n: i64 = db.query_row(
+                "SELECT COUNT(*) FROM proyectos_proyectos WHERE proyecto_id = ?1",
+                params![parent_id],
+                |r| r.get(0),
+            )?;
+            Ok(n > 0)
+        })
+        .await??;
+        if !exists {
+            anyhow::bail!("proyecto_id '{}' no existe", proyecto_id);
+        }
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let milestone_id = format!("mil-{}", Uuid::new_v4());
+        let id_clone = milestone_id.clone();
+        let nombre_clone = nombre.clone();
+        let proyecto_clone = proyecto_id.clone();
+        let fecha_owned = fecha_objetivo.map(|s| s.to_string());
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO proyectos_milestones
+                 (milestone_id, proyecto_id, nombre, descripcion_nonce_b64,
+                  descripcion_ciphertext_b64, fecha_objetivo, fecha_completado, orden,
+                  notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?10)",
+                params![
+                    id_clone,
+                    proyecto_clone,
+                    nombre_clone,
+                    desc_n,
+                    desc_c,
+                    fecha_owned,
+                    orden,
+                    notas_n,
+                    notas_c,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ProyectoMilestone {
+            milestone_id,
+            proyecto_id,
+            nombre,
+            descripcion: descripcion_owned,
+            fecha_objetivo: fecha_objetivo.map(|s| s.to_string()),
+            fecha_completado: None,
+            orden,
+            notas: notas_owned,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn milestone_list(&self, proyecto_id: &str) -> Result<Vec<ProyectoMilestone>> {
+        let db_path = self.db_path.clone();
+        let id = proyecto_id.to_string();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = format!(
+                "SELECT {} FROM proyectos_milestones WHERE proyecto_id = ?1 \
+                 ORDER BY orden ASC, created_at ASC",
+                MILESTONE_SELECT_COLS
+            );
+            let mut stmt = db.prepare(&sql)?;
+            let raws: Vec<ProyectoMilestoneRaw> = stmt
+                .query_map(params![id], map_milestone_row)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws.into_iter().map(milestone_from_raw).collect())
+    }
+
+    pub async fn milestone_completar(&self, milestone_id: &str) -> Result<bool> {
+        let now_rfc = Utc::now().to_rfc3339();
+        let today = today_iso_local();
+        let db_path = self.db_path.clone();
+        let id = milestone_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE proyectos_milestones
+                 SET fecha_completado = ?1, updated_at = ?2
+                 WHERE milestone_id = ?3",
+                params![today, now_rfc, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn milestone_update(
+        &self,
+        milestone_id: &str,
+        nombre: Option<&str>,
+        descripcion: Option<&str>,
+        fecha_objetivo: Option<&str>,
+        orden: Option<i32>,
+        notas: Option<&str>,
+    ) -> Result<bool> {
+        let nombre_owned = nombre.and_then(normalize_non_empty);
+        let (desc_n, desc_c) = match descripcion {
+            Some(d) => {
+                let (n, c) = encrypt_optional(d)?;
+                (Some(n), Some(c))
+            }
+            None => (None, None),
+        };
+        let (notas_n, notas_c) = match notas {
+            Some(d) => {
+                let (n, c) = encrypt_optional(d)?;
+                (Some(n), Some(c))
+            }
+            None => (None, None),
+        };
+        let fecha_owned = fecha_objetivo.map(|s| s.to_string());
+        let now_rfc = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = milestone_id.to_string();
+
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let mut sets: Vec<String> = Vec::new();
+            let mut bind: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            macro_rules! add_set {
+                ($col:expr, $val:expr) => {
+                    sets.push(format!("{} = ?{}", $col, bind.len() + 1));
+                    bind.push(Box::new($val));
+                };
+            }
+            if let Some(v) = nombre_owned {
+                add_set!("nombre", v);
+            }
+            if let Some((n_opt, c_opt)) = desc_n.zip(desc_c) {
+                add_set!("descripcion_nonce_b64", n_opt);
+                add_set!("descripcion_ciphertext_b64", c_opt);
+            }
+            if let Some(v) = fecha_owned {
+                add_set!("fecha_objetivo", v);
+            }
+            if let Some(v) = orden {
+                add_set!("orden", v);
+            }
+            if let Some((n_opt, c_opt)) = notas_n.zip(notas_c) {
+                add_set!("notas_nonce_b64", n_opt);
+                add_set!("notas_ciphertext_b64", c_opt);
+            }
+            if sets.is_empty() {
+                return Ok(0);
+            }
+            sets.push(format!("updated_at = ?{}", bind.len() + 1));
+            bind.push(Box::new(now_rfc));
+            let id_idx = bind.len() + 1;
+            bind.push(Box::new(id));
+            let sql = format!(
+                "UPDATE proyectos_milestones SET {} WHERE milestone_id = ?{}",
+                sets.join(", "),
+                id_idx
+            );
+            let bind_refs: Vec<&dyn rusqlite::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
+            Ok(db.execute(&sql, rusqlite::params_from_iter(bind_refs.iter()))?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -------------------------------------------------------------------
+    // Dependencias (con deteccion de ciclos)
+    // -------------------------------------------------------------------
+
+    /// Detect whether adding (proyecto_id -> depende_de_id) introduces a
+    /// cycle. Performed in-process on the existing edges + the proposed
+    /// edge. O(V + E) BFS.
+    fn dependency_introduces_cycle(
+        existing: &[(String, String)],
+        new_from: &str,
+        new_to: &str,
+    ) -> bool {
+        if new_from == new_to {
+            return true;
+        }
+        // After insertion, walk DEPENDENCIES from new_to. If we ever
+        // reach new_from, there is a cycle (because new_from -> new_to
+        // closes the loop back).
+        use std::collections::{HashMap, VecDeque};
+        let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (f, t) in existing.iter() {
+            adj.entry(f.as_str()).or_default().push(t.as_str());
+        }
+        adj.entry(new_from).or_default().push(new_to);
+        let mut visited: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut q: VecDeque<&str> = VecDeque::new();
+        q.push_back(new_to);
+        while let Some(node) = q.pop_front() {
+            if node == new_from {
+                return true;
+            }
+            if !visited.insert(node) {
+                continue;
+            }
+            if let Some(next) = adj.get(node) {
+                for n in next {
+                    q.push_back(n);
+                }
+            }
+        }
+        false
+    }
+
+    pub async fn proyecto_dependencia_add(
+        &self,
+        proyecto_id: &str,
+        depende_de_id: &str,
+        tipo: Option<&str>,
+        notas: Option<&str>,
+    ) -> Result<ProyectoDependencia> {
+        let proyecto_id = normalize_non_empty(proyecto_id).context("proyecto_id requerido")?;
+        let depende_de_id =
+            normalize_non_empty(depende_de_id).context("depende_de_id requerido")?;
+        if proyecto_id == depende_de_id {
+            anyhow::bail!("un proyecto no puede depender de si mismo");
+        }
+        let tipo = tipo
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| "bloqueante".to_string());
+        let notas_owned = notas.map(|s| s.to_string());
+
+        let from = proyecto_id.clone();
+        let to = depende_de_id.clone();
+        let from_for_db = from.clone();
+        let to_for_db = to.clone();
+        let tipo_for_db = tipo.clone();
+        let notas_for_db = notas_owned.clone();
+        let db_path = self.db_path.clone();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            // Validate both proyectos exist.
+            for id in [&from_for_db, &to_for_db] {
+                let n: i64 = db.query_row(
+                    "SELECT COUNT(*) FROM proyectos_proyectos WHERE proyecto_id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )?;
+                if n == 0 {
+                    anyhow::bail!("proyecto_id '{}' no existe", id);
+                }
+            }
+            // Pull all existing edges for cycle detection.
+            let mut stmt =
+                db.prepare("SELECT proyecto_id, depende_de_id FROM proyectos_dependencias")?;
+            let existing: Vec<(String, String)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .flatten()
+                .collect();
+            if Self::dependency_introduces_cycle(&existing, &from_for_db, &to_for_db) {
+                anyhow::bail!(
+                    "dependencia rechazada: introduce un ciclo entre {} y {}",
+                    from_for_db,
+                    to_for_db
+                );
+            }
+            db.execute(
+                "INSERT INTO proyectos_dependencias
+                 (proyecto_id, depende_de_id, tipo, notas)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(proyecto_id, depende_de_id) DO UPDATE SET
+                   tipo = excluded.tipo,
+                   notas = excluded.notas",
+                params![from_for_db, to_for_db, tipo_for_db, notas_for_db],
+            )?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(ProyectoDependencia {
+            proyecto_id: from,
+            depende_de_id: to,
+            tipo,
+            notas: notas_owned,
+        })
+    }
+
+    pub async fn proyecto_dependencias_list(
+        &self,
+        proyecto_id: &str,
+    ) -> Result<ProyectoDependenciaSet> {
+        let db_path = self.db_path.clone();
+        let id = proyecto_id.to_string();
+        let (depends_on, dependents) = tokio::task::spawn_blocking(move || -> Result<_> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt_a = db.prepare(
+                "SELECT proyecto_id, depende_de_id, tipo, notas
+                 FROM proyectos_dependencias WHERE proyecto_id = ?1",
+            )?;
+            let depends_on: Vec<ProyectoDependencia> = stmt_a
+                .query_map(params![id], |r| {
+                    Ok(ProyectoDependencia {
+                        proyecto_id: r.get(0)?,
+                        depende_de_id: r.get(1)?,
+                        tipo: r.get(2)?,
+                        notas: r.get(3)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            let mut stmt_b = db.prepare(
+                "SELECT proyecto_id, depende_de_id, tipo, notas
+                 FROM proyectos_dependencias WHERE depende_de_id = ?1",
+            )?;
+            let dependents: Vec<ProyectoDependencia> = stmt_b
+                .query_map(params![id], |r| {
+                    Ok(ProyectoDependencia {
+                        proyecto_id: r.get(0)?,
+                        depende_de_id: r.get(1)?,
+                        tipo: r.get(2)?,
+                        notas: r.get(3)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok((depends_on, dependents))
+        })
+        .await??;
+        Ok(ProyectoDependenciaSet {
+            depends_on,
+            dependents,
+        })
+    }
+
+    // -------------------------------------------------------------------
+    // Analytics
+    // -------------------------------------------------------------------
+
+    pub async fn proyectos_overview(&self) -> Result<ProyectosOverview> {
+        let activos = self
+            .proyecto_list(ProyectoListFilter {
+                estado: Some("activo".into()),
+                ..Default::default()
+            })
+            .await?;
+        let planeados = self
+            .proyecto_list(ProyectoListFilter {
+                estado: Some("planeado".into()),
+                ..Default::default()
+            })
+            .await?;
+        let bloqueados = self
+            .proyecto_list(ProyectoListFilter {
+                estado: Some("bloqueado".into()),
+                ..Default::default()
+            })
+            .await?;
+        let presupuesto_gastado_activos: f64 = activos.iter().map(|p| p.presupuesto_gastado).sum();
+        let total_activos = activos.len();
+        let total_planeados = planeados.len();
+        let total_bloqueados = bloqueados.len();
+        Ok(ProyectosOverview {
+            activos,
+            planeados,
+            bloqueados,
+            total_activos,
+            total_planeados,
+            total_bloqueados,
+            presupuesto_gastado_activos,
+            generated_at: Utc::now(),
+        })
+    }
+
+    pub async fn proyectos_priorizados(&self, top_n: i32) -> Result<Vec<Proyecto>> {
+        let n = top_n.clamp(1, 50) as usize;
+        let activos = self
+            .proyecto_list(ProyectoListFilter {
+                estado: Some("activo".into()),
+                ..Default::default()
+            })
+            .await?;
+        Ok(activos.into_iter().take(n).collect())
+    }
+
+    pub async fn proyectos_atrasados(&self) -> Result<Vec<Proyecto>> {
+        let today = today_iso_local();
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = format!(
+                "SELECT {} FROM proyectos_proyectos
+                 WHERE fecha_objetivo IS NOT NULL
+                   AND fecha_objetivo < ?1
+                   AND estado IN ('planeado','activo','bloqueado')
+                 ORDER BY fecha_objetivo ASC, prioridad DESC",
+                PROYECTO_SELECT_COLS
+            );
+            let mut stmt = db.prepare(&sql)?;
+            let raws: Vec<ProyectoRaw> = stmt
+                .query_map(params![today], map_proyecto_row)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws.into_iter().map(proyecto_from_raw).collect())
+    }
+
+    pub async fn proyecto_progress(&self, proyecto_id: &str) -> Result<Option<ProyectoProgress>> {
+        let proyecto = match self.proyecto_get(proyecto_id).await? {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let milestones = self.milestone_list(proyecto_id).await?;
+        let total = milestones.len();
+        let done = milestones
+            .iter()
+            .filter(|m| m.fecha_completado.is_some())
+            .count();
+        let progress_pct = if total == 0 {
+            0.0
+        } else {
+            (done as f64 / total as f64) * 100.0
+        };
+        let presupuesto_pct = proyecto
+            .presupuesto_estimado
+            .filter(|p| *p > 0.0)
+            .map(|p| (proyecto.presupuesto_gastado / p) * 100.0);
+        let today = today_iso_local();
+        let atrasado = matches!(
+            proyecto.estado.as_str(),
+            "planeado" | "activo" | "bloqueado"
+        ) && proyecto
+            .fecha_objetivo
+            .as_deref()
+            .map(|f| f < today.as_str())
+            .unwrap_or(false);
+        let semaforo = if atrasado || presupuesto_pct.unwrap_or(0.0) > 100.0 {
+            "red"
+        } else if presupuesto_pct.unwrap_or(0.0) > 80.0 || (total > 0 && progress_pct < 25.0) {
+            "yellow"
+        } else {
+            "green"
+        }
+        .to_string();
+        Ok(Some(ProyectoProgress {
+            proyecto_id: proyecto.proyecto_id,
+            nombre: proyecto.nombre,
+            estado: proyecto.estado,
+            milestones_total: total,
+            milestones_completados: done,
+            progress_pct,
+            presupuesto_estimado: proyecto.presupuesto_estimado,
+            presupuesto_gastado: proyecto.presupuesto_gastado,
+            presupuesto_pct,
+            atrasado,
+            semaforo,
+        }))
+    }
+
+    pub async fn milestones_proximos_dias(&self, dias: i32) -> Result<Vec<ProyectoMilestone>> {
+        if dias < 0 {
+            anyhow::bail!("dias debe ser >= 0");
+        }
+        let today = chrono::Local::now().date_naive();
+        let cutoff = today + chrono::Duration::days(dias as i64);
+        let today_s = today.format("%Y-%m-%d").to_string();
+        let cutoff_s = cutoff.format("%Y-%m-%d").to_string();
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = format!(
+                "SELECT {} FROM proyectos_milestones
+                 WHERE fecha_completado IS NULL
+                   AND fecha_objetivo IS NOT NULL
+                   AND fecha_objetivo >= ?1
+                   AND fecha_objetivo <= ?2
+                 ORDER BY fecha_objetivo ASC",
+                MILESTONE_SELECT_COLS
+            );
+            let mut stmt = db.prepare(&sql)?;
+            let raws: Vec<ProyectoMilestoneRaw> = stmt
+                .query_map(params![today_s, cutoff_s], map_milestone_row)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws.into_iter().map(milestone_from_raw).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24366,6 +25572,344 @@ mod tests {
             after_archive.is_none(),
             "archived rows must not surface via get_entry"
         );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // =====================================================================
+    // Proyectos Domain — tests
+    // =====================================================================
+
+    #[tokio::test]
+    async fn proyectos_proyecto_add_and_progress() {
+        let dir = temp_dir("memory-plane-proyectos-progress");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let p = mgr
+            .proyecto_add(
+                "Lanzar libro",
+                "Libro tecnico sobre Rust",
+                "creativo",
+                8,
+                Some("2026-01-01"),
+                Some("2026-12-31"),
+                Some(5000.0),
+                None,
+                None,
+                "notas privadas",
+            )
+            .await
+            .unwrap();
+        assert_eq!(p.estado, "planeado");
+        assert_eq!(p.notas, "notas privadas");
+        assert_eq!(p.descripcion, "Libro tecnico sobre Rust");
+
+        // Encryption: the SQL row must NOT contain the plaintext.
+        let db_path = dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let stored: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT notas_ciphertext_b64, descripcion_ciphertext_b64
+                 FROM proyectos_proyectos WHERE proyecto_id = ?1",
+                params![&p.proyecto_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let (notas_c, desc_c) = stored;
+        assert!(notas_c.is_some());
+        assert!(!notas_c.as_ref().unwrap().contains("notas privadas"));
+        assert!(!desc_c.as_ref().unwrap().contains("Libro tecnico"));
+        drop(conn);
+
+        // Activate the project so progress isn't trivially "atrasado".
+        mgr.proyecto_update(
+            &p.proyecto_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(1000.0),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // 4 milestones, 1 completed.
+        let m1 = mgr
+            .milestone_add(&p.proyecto_id, "Indice", "", None, 1, "")
+            .await
+            .unwrap();
+        let _m2 = mgr
+            .milestone_add(&p.proyecto_id, "Cap 1", "", None, 2, "")
+            .await
+            .unwrap();
+        let _m3 = mgr
+            .milestone_add(&p.proyecto_id, "Cap 2", "", None, 3, "")
+            .await
+            .unwrap();
+        let _m4 = mgr
+            .milestone_add(&p.proyecto_id, "Cap 3", "", None, 4, "")
+            .await
+            .unwrap();
+        mgr.milestone_completar(&m1.milestone_id).await.unwrap();
+
+        let progress = mgr
+            .proyecto_progress(&p.proyecto_id)
+            .await
+            .unwrap()
+            .expect("progress must exist");
+        assert_eq!(progress.milestones_total, 4);
+        assert_eq!(progress.milestones_completados, 1);
+        assert!((progress.progress_pct - 25.0).abs() < 0.01);
+        assert!(progress.presupuesto_pct.unwrap() < 25.0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn proyectos_milestones_orden_y_completacion() {
+        let dir = temp_dir("memory-plane-proyectos-milestones");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let p = mgr
+            .proyecto_add(
+                "Refactor casa",
+                "",
+                "personal",
+                5,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+
+        // Insert in non-sequential order — list must come back ordered by `orden`.
+        mgr.milestone_add(&p.proyecto_id, "Entrega final", "", None, 3, "")
+            .await
+            .unwrap();
+        let primer = mgr
+            .milestone_add(&p.proyecto_id, "Demolicion", "", None, 1, "")
+            .await
+            .unwrap();
+        mgr.milestone_add(&p.proyecto_id, "Pintura", "", None, 2, "")
+            .await
+            .unwrap();
+
+        let listed = mgr.milestone_list(&p.proyecto_id).await.unwrap();
+        assert_eq!(listed.len(), 3);
+        assert_eq!(listed[0].orden, 1);
+        assert_eq!(listed[0].nombre, "Demolicion");
+        assert_eq!(listed[2].orden, 3);
+
+        // Completar marca fecha_completado, persiste tras releer.
+        let ok = mgr.milestone_completar(&primer.milestone_id).await.unwrap();
+        assert!(ok);
+        let after = mgr.milestone_list(&p.proyecto_id).await.unwrap();
+        let demo = after
+            .iter()
+            .find(|m| m.milestone_id == primer.milestone_id)
+            .unwrap();
+        assert!(demo.fecha_completado.is_some());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn proyectos_dependencia_circular_rechazada() {
+        let dir = temp_dir("memory-plane-proyectos-cycle");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let a = mgr
+            .proyecto_add("A", "", "personal", 5, None, None, None, None, None, "")
+            .await
+            .unwrap();
+        let b = mgr
+            .proyecto_add("B", "", "personal", 5, None, None, None, None, None, "")
+            .await
+            .unwrap();
+        let c = mgr
+            .proyecto_add("C", "", "personal", 5, None, None, None, None, None, "")
+            .await
+            .unwrap();
+
+        // A -> B (A depende de B).
+        mgr.proyecto_dependencia_add(&a.proyecto_id, &b.proyecto_id, None, None)
+            .await
+            .unwrap();
+        // B -> C — todavia no hay ciclo.
+        mgr.proyecto_dependencia_add(&b.proyecto_id, &c.proyecto_id, None, None)
+            .await
+            .unwrap();
+        // C -> A — cierra el triangulo, debe ser rechazado.
+        let res = mgr
+            .proyecto_dependencia_add(&c.proyecto_id, &a.proyecto_id, None, None)
+            .await;
+        assert!(res.is_err(), "ciclo C->A->B->C debe ser rechazado");
+
+        // Self-loop tambien.
+        let res2 = mgr
+            .proyecto_dependencia_add(&a.proyecto_id, &a.proyecto_id, None, None)
+            .await;
+        assert!(res2.is_err());
+
+        let deps_a = mgr
+            .proyecto_dependencias_list(&a.proyecto_id)
+            .await
+            .unwrap();
+        assert_eq!(deps_a.depends_on.len(), 1);
+        assert_eq!(deps_a.depends_on[0].depende_de_id, b.proyecto_id);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn proyectos_atrasados_filtra_completados() {
+        let dir = temp_dir("memory-plane-proyectos-atrasados");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // p1: fecha objetivo en el pasado, planeado → atrasado
+        let p1 = mgr
+            .proyecto_add(
+                "Atrasado",
+                "",
+                "personal",
+                5,
+                None,
+                Some("2000-01-01"),
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        // p2: misma fecha pero ya completado → no aparece
+        let p2 = mgr
+            .proyecto_add(
+                "Completado pasado",
+                "",
+                "personal",
+                5,
+                None,
+                Some("2000-01-01"),
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        mgr.proyecto_completar(&p2.proyecto_id).await.unwrap();
+        // p3: sin fecha → no aparece
+        let _p3 = mgr
+            .proyecto_add(
+                "Sin fecha",
+                "",
+                "personal",
+                5,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+
+        let atrasados = mgr.proyectos_atrasados().await.unwrap();
+        assert_eq!(atrasados.len(), 1);
+        assert_eq!(atrasados[0].proyecto_id, p1.proyecto_id);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn proyectos_overview_clasifica_por_estado() {
+        let dir = temp_dir("memory-plane-proyectos-overview");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let p_act = mgr
+            .proyecto_add(
+                "Activo 1",
+                "",
+                "personal",
+                5,
+                None,
+                None,
+                Some(100.0),
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        // Promote to activo via update + set_estado helper through pausar->activo path:
+        // there is no explicit `proyecto_activar`, so use a direct estado update via UPDATE.
+        // Instead we use proyecto_pausar+complete pathways. For the test we use a raw UPDATE.
+        let db_path = dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE proyectos_proyectos SET estado = 'activo', presupuesto_gastado = 50.0 \
+             WHERE proyecto_id = ?1",
+            params![&p_act.proyecto_id],
+        )
+        .unwrap();
+        drop(conn);
+
+        let _planeado = mgr
+            .proyecto_add(
+                "Planeado 1",
+                "",
+                "personal",
+                5,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        let p_block = mgr
+            .proyecto_add(
+                "Bloqueado 1",
+                "",
+                "personal",
+                5,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        mgr.proyecto_bloquear(&p_block.proyecto_id, "esperando dinero")
+            .await
+            .unwrap();
+
+        let ov = mgr.proyectos_overview().await.unwrap();
+        assert_eq!(ov.total_activos, 1);
+        assert_eq!(ov.total_planeados, 1);
+        assert_eq!(ov.total_bloqueados, 1);
+        assert!((ov.presupuesto_gastado_activos - 50.0).abs() < 0.01);
 
         std::fs::remove_dir_all(dir).ok();
     }
