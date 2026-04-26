@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use rand::RngCore;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -1200,6 +1200,91 @@ CREATE TABLE IF NOT EXISTS proyectos_dependencias (
     notas TEXT,
     PRIMARY KEY (proyecto_id, depende_de_id)
 );
+
+-- ============================================================================
+-- Freelance domain (Life Areas v1)
+-- ============================================================================
+-- Structured client / session / invoice tracking so Axi can answer
+-- capacity, revenue and collections questions. Free-text notes are
+-- encrypted under the same key as the rest of memory.db; numeric money
+-- fields stay plaintext so analytics queries can SUM/AVG without
+-- decrypting every row (same trade-off as financial_expenses).
+CREATE TABLE IF NOT EXISTS freelance_clientes (
+    cliente_id              TEXT PRIMARY KEY,            -- "cli-<uuid>"
+    nombre                  TEXT NOT NULL,
+    contacto_principal      TEXT,
+    contacto_email          TEXT,
+    contacto_telefono       TEXT,
+    rfc                     TEXT,
+    tarifa_hora             REAL,
+    modalidad               TEXT NOT NULL DEFAULT 'horas', -- 'horas' | 'retainer' | 'proyecto'
+    retainer_mensual        REAL,
+    horas_comprometidas_mes INTEGER,
+    fecha_inicio            TEXT NOT NULL,
+    fecha_fin               TEXT,
+    estado                  TEXT NOT NULL DEFAULT 'activo', -- 'activo' | 'pausado' | 'terminado'
+    notas_nonce_b64         TEXT,
+    notas_ciphertext_b64    TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_freelance_clientes_estado ON freelance_clientes(estado);
+CREATE INDEX IF NOT EXISTS idx_freelance_clientes_nombre ON freelance_clientes(nombre);
+
+CREATE TABLE IF NOT EXISTS freelance_sesiones (
+    sesion_id                  TEXT PRIMARY KEY,         -- "ses-<uuid>"
+    cliente_id                 TEXT NOT NULL,
+    fecha                      TEXT NOT NULL,            -- ISO date
+    hora_inicio                TEXT,                     -- HH:MM
+    hora_fin                   TEXT,                     -- HH:MM
+    horas                      REAL NOT NULL,
+    descripcion_nonce_b64      TEXT,
+    descripcion_ciphertext_b64 TEXT,
+    facturable                 INTEGER NOT NULL DEFAULT 1,
+    factura_id                 TEXT,
+    deleted                    INTEGER NOT NULL DEFAULT 0,
+    deleted_at                 TEXT,
+    created_at                 TEXT NOT NULL,
+    updated_at                 TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_freelance_sesiones_cliente ON freelance_sesiones(cliente_id, fecha);
+CREATE INDEX IF NOT EXISTS idx_freelance_sesiones_fecha ON freelance_sesiones(fecha);
+CREATE INDEX IF NOT EXISTS idx_freelance_sesiones_factura ON freelance_sesiones(factura_id);
+CREATE INDEX IF NOT EXISTS idx_freelance_sesiones_deleted ON freelance_sesiones(deleted);
+
+CREATE TABLE IF NOT EXISTS freelance_facturas (
+    factura_id              TEXT PRIMARY KEY,            -- "fac-<uuid>"
+    cliente_id              TEXT NOT NULL,
+    numero_externo          TEXT,
+    fecha_emision           TEXT NOT NULL,
+    fecha_vencimiento       TEXT,
+    fecha_pago              TEXT,
+    monto_subtotal          REAL NOT NULL,
+    monto_iva               REAL NOT NULL DEFAULT 0,
+    monto_total             REAL NOT NULL,
+    moneda                  TEXT NOT NULL DEFAULT 'MXN',
+    concepto_nonce_b64      TEXT,
+    concepto_ciphertext_b64 TEXT,
+    estado                  TEXT NOT NULL DEFAULT 'emitida', -- 'emitida' | 'pagada' | 'vencida' | 'cancelada'
+    notas_nonce_b64         TEXT,
+    notas_ciphertext_b64    TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_freelance_facturas_cliente ON freelance_facturas(cliente_id, fecha_emision);
+CREATE INDEX IF NOT EXISTS idx_freelance_facturas_estado ON freelance_facturas(estado);
+CREATE INDEX IF NOT EXISTS idx_freelance_facturas_vencimiento ON freelance_facturas(fecha_vencimiento);
+
+CREATE TABLE IF NOT EXISTS freelance_tarifas_history (
+    cliente_id          TEXT NOT NULL,
+    tarifa_anterior     REAL,
+    tarifa_nueva        REAL NOT NULL,
+    fecha_cambio        TEXT NOT NULL,
+    razon_nonce_b64     TEXT,
+    razon_ciphertext_b64 TEXT,
+    PRIMARY KEY (cliente_id, fecha_cambio)
+);
+CREATE INDEX IF NOT EXISTS idx_freelance_tarifas_cliente ON freelance_tarifas_history(cliente_id);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18267,6 +18352,1529 @@ impl MemoryPlaneManager {
     }
 }
 
+// ============================================================================
+// Freelance domain — public types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreelanceCliente {
+    pub cliente_id: String,
+    pub nombre: String,
+    pub contacto_principal: Option<String>,
+    pub contacto_email: Option<String>,
+    pub contacto_telefono: Option<String>,
+    pub rfc: Option<String>,
+    pub tarifa_hora: Option<f64>,
+    pub modalidad: String,
+    pub retainer_mensual: Option<f64>,
+    pub horas_comprometidas_mes: Option<i64>,
+    pub fecha_inicio: String,
+    pub fecha_fin: Option<String>,
+    pub estado: String,
+    pub notas: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FreelanceClienteUpdate {
+    pub nombre: Option<String>,
+    pub contacto_principal: Option<String>,
+    pub contacto_email: Option<String>,
+    pub contacto_telefono: Option<String>,
+    pub rfc: Option<String>,
+    pub tarifa_hora: Option<f64>,
+    pub modalidad: Option<String>,
+    pub retainer_mensual: Option<f64>,
+    pub horas_comprometidas_mes: Option<i64>,
+    pub fecha_inicio: Option<String>,
+    pub fecha_fin: Option<String>,
+    pub estado: Option<String>,
+    pub notas: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreelanceSesion {
+    pub sesion_id: String,
+    pub cliente_id: String,
+    pub fecha: String,
+    pub hora_inicio: Option<String>,
+    pub hora_fin: Option<String>,
+    pub horas: f64,
+    pub descripcion: String,
+    pub facturable: bool,
+    pub factura_id: Option<String>,
+    pub deleted: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FreelanceSesionUpdate {
+    pub fecha: Option<String>,
+    pub hora_inicio: Option<String>,
+    pub hora_fin: Option<String>,
+    pub horas: Option<f64>,
+    pub descripcion: Option<String>,
+    pub facturable: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreelanceFactura {
+    pub factura_id: String,
+    pub cliente_id: String,
+    pub numero_externo: Option<String>,
+    pub fecha_emision: String,
+    pub fecha_vencimiento: Option<String>,
+    pub fecha_pago: Option<String>,
+    pub monto_subtotal: f64,
+    pub monto_iva: f64,
+    pub monto_total: f64,
+    pub moneda: String,
+    pub concepto: String,
+    pub estado: String,
+    pub notas: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreelanceTarifaHistoryEntry {
+    pub cliente_id: String,
+    pub tarifa_anterior: Option<f64>,
+    pub tarifa_nueva: f64,
+    pub fecha_cambio: String,
+    pub razon: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FreelanceOverview {
+    pub mes: String, // YYYY-MM
+    pub clientes_activos: i64,
+    pub horas_trabajadas: f64,
+    pub horas_comprometidas: i64,
+    pub facturacion_emitida: f64,
+    pub facturacion_pagada: f64,
+    pub cuentas_por_cobrar: f64,
+    pub alertas: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FreelanceHorasLibres {
+    pub ventana: String, // 'semana' | 'mes'
+    pub horas_comprometidas: f64,
+    pub horas_trabajadas: f64,
+    pub horas_disponibles: f64,
+    pub capacidad_pct: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FreelanceClienteEstado {
+    pub cliente_id: String,
+    pub nombre: String,
+    pub horas_mes_actual: f64,
+    pub horas_comprometidas_mes: Option<i64>,
+    pub vs_compromiso_pct: Option<f64>,
+    pub ultima_sesion: Option<String>,
+    pub ultima_factura: Option<String>,
+    pub monto_pendiente: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreelanceIngresoBucket {
+    pub bucket: String, // cliente name OR YYYY-MM
+    pub total_emitido: f64,
+    pub total_pagado: f64,
+    pub facturas: i64,
+}
+
+// ----------------------------------------------------------------------------
+// Internal raw row helpers
+// ----------------------------------------------------------------------------
+
+struct ClienteRaw {
+    cliente_id: String,
+    nombre: String,
+    contacto_principal: Option<String>,
+    contacto_email: Option<String>,
+    contacto_telefono: Option<String>,
+    rfc: Option<String>,
+    tarifa_hora: Option<f64>,
+    modalidad: String,
+    retainer_mensual: Option<f64>,
+    horas_comprometidas_mes: Option<i64>,
+    fecha_inicio: String,
+    fecha_fin: Option<String>,
+    estado: String,
+    notas_nonce_b64: Option<String>,
+    notas_ciphertext_b64: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+fn cliente_from_raw(r: ClienteRaw) -> FreelanceCliente {
+    let notas = match (r.notas_nonce_b64, r.notas_ciphertext_b64) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    };
+    FreelanceCliente {
+        cliente_id: r.cliente_id,
+        nombre: r.nombre,
+        contacto_principal: r.contacto_principal,
+        contacto_email: r.contacto_email,
+        contacto_telefono: r.contacto_telefono,
+        rfc: r.rfc,
+        tarifa_hora: r.tarifa_hora,
+        modalidad: r.modalidad,
+        retainer_mensual: r.retainer_mensual,
+        horas_comprometidas_mes: r.horas_comprometidas_mes,
+        fecha_inicio: r.fecha_inicio,
+        fecha_fin: r.fecha_fin,
+        estado: r.estado,
+        notas,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+    }
+}
+
+const CLIENTE_COLUMNS: &str = "cliente_id, nombre, contacto_principal, contacto_email, contacto_telefono, rfc, tarifa_hora, modalidad, retainer_mensual, horas_comprometidas_mes, fecha_inicio, fecha_fin, estado, notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at";
+
+fn map_cliente_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClienteRaw> {
+    Ok(ClienteRaw {
+        cliente_id: row.get(0)?,
+        nombre: row.get(1)?,
+        contacto_principal: row.get(2)?,
+        contacto_email: row.get(3)?,
+        contacto_telefono: row.get(4)?,
+        rfc: row.get(5)?,
+        tarifa_hora: row.get(6)?,
+        modalidad: row.get(7)?,
+        retainer_mensual: row.get(8)?,
+        horas_comprometidas_mes: row.get(9)?,
+        fecha_inicio: row.get(10)?,
+        fecha_fin: row.get(11)?,
+        estado: row.get(12)?,
+        notas_nonce_b64: row.get(13)?,
+        notas_ciphertext_b64: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+    })
+}
+
+struct SesionRaw {
+    sesion_id: String,
+    cliente_id: String,
+    fecha: String,
+    hora_inicio: Option<String>,
+    hora_fin: Option<String>,
+    horas: f64,
+    descripcion_nonce_b64: Option<String>,
+    descripcion_ciphertext_b64: Option<String>,
+    facturable: i64,
+    factura_id: Option<String>,
+    deleted: i64,
+    created_at: String,
+    updated_at: String,
+}
+
+fn sesion_from_raw(r: SesionRaw) -> FreelanceSesion {
+    let descripcion = match (r.descripcion_nonce_b64, r.descripcion_ciphertext_b64) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    };
+    FreelanceSesion {
+        sesion_id: r.sesion_id,
+        cliente_id: r.cliente_id,
+        fecha: r.fecha,
+        hora_inicio: r.hora_inicio,
+        hora_fin: r.hora_fin,
+        horas: r.horas,
+        descripcion,
+        facturable: r.facturable != 0,
+        factura_id: r.factura_id,
+        deleted: r.deleted != 0,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+    }
+}
+
+const SESION_COLUMNS: &str = "sesion_id, cliente_id, fecha, hora_inicio, hora_fin, horas, descripcion_nonce_b64, descripcion_ciphertext_b64, facturable, factura_id, deleted, created_at, updated_at";
+
+fn map_sesion_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SesionRaw> {
+    Ok(SesionRaw {
+        sesion_id: row.get(0)?,
+        cliente_id: row.get(1)?,
+        fecha: row.get(2)?,
+        hora_inicio: row.get(3)?,
+        hora_fin: row.get(4)?,
+        horas: row.get(5)?,
+        descripcion_nonce_b64: row.get(6)?,
+        descripcion_ciphertext_b64: row.get(7)?,
+        facturable: row.get(8)?,
+        factura_id: row.get(9)?,
+        deleted: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
+struct FacturaRaw {
+    factura_id: String,
+    cliente_id: String,
+    numero_externo: Option<String>,
+    fecha_emision: String,
+    fecha_vencimiento: Option<String>,
+    fecha_pago: Option<String>,
+    monto_subtotal: f64,
+    monto_iva: f64,
+    monto_total: f64,
+    moneda: String,
+    concepto_nonce_b64: Option<String>,
+    concepto_ciphertext_b64: Option<String>,
+    estado: String,
+    notas_nonce_b64: Option<String>,
+    notas_ciphertext_b64: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+fn factura_from_raw(r: FacturaRaw) -> FreelanceFactura {
+    let concepto = match (r.concepto_nonce_b64, r.concepto_ciphertext_b64) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    };
+    let notas = match (r.notas_nonce_b64, r.notas_ciphertext_b64) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    };
+    FreelanceFactura {
+        factura_id: r.factura_id,
+        cliente_id: r.cliente_id,
+        numero_externo: r.numero_externo,
+        fecha_emision: r.fecha_emision,
+        fecha_vencimiento: r.fecha_vencimiento,
+        fecha_pago: r.fecha_pago,
+        monto_subtotal: r.monto_subtotal,
+        monto_iva: r.monto_iva,
+        monto_total: r.monto_total,
+        moneda: r.moneda,
+        concepto,
+        estado: r.estado,
+        notas,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+    }
+}
+
+const FACTURA_COLUMNS: &str = "factura_id, cliente_id, numero_externo, fecha_emision, fecha_vencimiento, fecha_pago, monto_subtotal, monto_iva, monto_total, moneda, concepto_nonce_b64, concepto_ciphertext_b64, estado, notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at";
+
+fn map_factura_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FacturaRaw> {
+    Ok(FacturaRaw {
+        factura_id: row.get(0)?,
+        cliente_id: row.get(1)?,
+        numero_externo: row.get(2)?,
+        fecha_emision: row.get(3)?,
+        fecha_vencimiento: row.get(4)?,
+        fecha_pago: row.get(5)?,
+        monto_subtotal: row.get(6)?,
+        monto_iva: row.get(7)?,
+        monto_total: row.get(8)?,
+        moneda: row.get(9)?,
+        concepto_nonce_b64: row.get(10)?,
+        concepto_ciphertext_b64: row.get(11)?,
+        estado: row.get(12)?,
+        notas_nonce_b64: row.get(13)?,
+        notas_ciphertext_b64: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+    })
+}
+
+fn maybe_encrypt(text: &str) -> Result<(Option<String>, Option<String>)> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        Ok((None, None))
+    } else {
+        let (n, c, _) = encrypt_content(trimmed)?;
+        Ok((Some(n), Some(c)))
+    }
+}
+
+fn current_month_yyyymm() -> String {
+    chrono::Local::now().format("%Y-%m").to_string()
+}
+
+fn parse_iso_date(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()
+}
+
+// ============================================================================
+// Freelance domain — MemoryPlaneManager methods
+// ============================================================================
+
+impl MemoryPlaneManager {
+    // -- Cliente CRUD ---------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn cliente_add(
+        &self,
+        nombre: &str,
+        tarifa_hora: Option<f64>,
+        modalidad: Option<&str>,
+        retainer_mensual: Option<f64>,
+        horas_comprometidas_mes: Option<i64>,
+        fecha_inicio: Option<&str>,
+        contacto_principal: Option<&str>,
+        contacto_email: Option<&str>,
+        contacto_telefono: Option<&str>,
+        rfc: Option<&str>,
+        notas: Option<&str>,
+    ) -> Result<String> {
+        let nombre = normalize_non_empty(nombre).context("nombre is required")?;
+        let modalidad = modalidad
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| "horas".to_string());
+        if !["horas", "retainer", "proyecto"].contains(&modalidad.as_str()) {
+            anyhow::bail!("modalidad must be one of: horas | retainer | proyecto");
+        }
+        if let Some(h) = tarifa_hora {
+            if h < 0.0 {
+                anyhow::bail!("tarifa_hora must be >= 0");
+            }
+        }
+        if let Some(r) = retainer_mensual {
+            if r < 0.0 {
+                anyhow::bail!("retainer_mensual must be >= 0");
+            }
+        }
+        let fecha_inicio = fecha_inicio
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+
+        let (notas_nonce, notas_cipher) = maybe_encrypt(notas.unwrap_or(""))?;
+        let cliente_id = format!("cli-{}", Uuid::new_v4());
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id_clone = cliente_id.clone();
+
+        let contacto_principal = contacto_principal.map(|s| s.trim().to_string());
+        let contacto_email = contacto_email.map(|s| s.trim().to_string());
+        let contacto_telefono = contacto_telefono.map(|s| s.trim().to_string());
+        let rfc = rfc.map(|s| s.trim().to_string());
+
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO freelance_clientes
+                 (cliente_id, nombre, contacto_principal, contacto_email, contacto_telefono,
+                  rfc, tarifa_hora, modalidad, retainer_mensual, horas_comprometidas_mes,
+                  fecha_inicio, fecha_fin, estado, notas_nonce_b64, notas_ciphertext_b64,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, 'activo',
+                         ?12, ?13, ?14, ?14)",
+                params![
+                    id_clone,
+                    nombre,
+                    contacto_principal,
+                    contacto_email,
+                    contacto_telefono,
+                    rfc,
+                    tarifa_hora,
+                    modalidad,
+                    retainer_mensual,
+                    horas_comprometidas_mes,
+                    fecha_inicio,
+                    notas_nonce,
+                    notas_cipher,
+                    now,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(cliente_id)
+    }
+
+    pub async fn cliente_list(&self, estado: Option<&str>) -> Result<Vec<FreelanceCliente>> {
+        let db_path = self.db_path.clone();
+        let estado = estado.and_then(normalize_non_empty);
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = format!("SELECT {} FROM freelance_clientes", CLIENTE_COLUMNS);
+            if estado.is_some() {
+                sql.push_str(" WHERE estado = ?1");
+            }
+            sql.push_str(" ORDER BY nombre ASC");
+            let mut stmt = db.prepare(&sql)?;
+            let raws: Vec<ClienteRaw> = if let Some(e) = estado {
+                stmt.query_map(params![e], map_cliente_row)?
+                    .flatten()
+                    .collect()
+            } else {
+                stmt.query_map([], map_cliente_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws.into_iter().map(cliente_from_raw).collect())
+    }
+
+    /// Lookup by `cli-*` id OR exact (case-insensitive) nombre match.
+    pub async fn cliente_get(&self, id_or_name: &str) -> Result<Option<FreelanceCliente>> {
+        let key = normalize_non_empty(id_or_name).context("id_or_name required")?;
+        let db_path = self.db_path.clone();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<ClienteRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let by_id_sql = format!(
+                "SELECT {} FROM freelance_clientes WHERE cliente_id = ?1 LIMIT 1",
+                CLIENTE_COLUMNS
+            );
+            let r: Option<ClienteRaw> = db
+                .query_row(&by_id_sql, params![key], map_cliente_row)
+                .optional()?;
+            if r.is_some() {
+                return Ok(r);
+            }
+            let by_name_sql = format!(
+                "SELECT {} FROM freelance_clientes WHERE LOWER(nombre) = LOWER(?1) LIMIT 1",
+                CLIENTE_COLUMNS
+            );
+            let r: Option<ClienteRaw> = db
+                .query_row(&by_name_sql, params![key], map_cliente_row)
+                .optional()?;
+            Ok(r)
+        })
+        .await??;
+        Ok(raw.map(cliente_from_raw))
+    }
+
+    pub async fn cliente_update(
+        &self,
+        cliente_id: &str,
+        update: FreelanceClienteUpdate,
+    ) -> Result<bool> {
+        let id = normalize_non_empty(cliente_id).context("cliente_id required")?;
+        let db_path = self.db_path.clone();
+        let now = Utc::now().to_rfc3339();
+
+        // Pre-compute encrypted notas if provided.
+        let notas_pair = match &update.notas {
+            Some(s) => Some(maybe_encrypt(s)?),
+            None => None,
+        };
+
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let mut sets: Vec<&str> = Vec::new();
+            let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            macro_rules! push_opt {
+                ($field:expr, $col:literal) => {
+                    if let Some(v) = $field {
+                        sets.push(concat!($col, " = ?"));
+                        vals.push(Box::new(v));
+                    }
+                };
+            }
+            push_opt!(update.nombre, "nombre");
+            push_opt!(update.contacto_principal, "contacto_principal");
+            push_opt!(update.contacto_email, "contacto_email");
+            push_opt!(update.contacto_telefono, "contacto_telefono");
+            push_opt!(update.rfc, "rfc");
+            push_opt!(update.tarifa_hora, "tarifa_hora");
+            push_opt!(update.modalidad, "modalidad");
+            push_opt!(update.retainer_mensual, "retainer_mensual");
+            push_opt!(update.horas_comprometidas_mes, "horas_comprometidas_mes");
+            push_opt!(update.fecha_inicio, "fecha_inicio");
+            push_opt!(update.fecha_fin, "fecha_fin");
+            push_opt!(update.estado, "estado");
+            if let Some((n, c)) = notas_pair {
+                sets.push("notas_nonce_b64 = ?");
+                vals.push(Box::new(n));
+                sets.push("notas_ciphertext_b64 = ?");
+                vals.push(Box::new(c));
+            }
+            if sets.is_empty() {
+                return Ok(0);
+            }
+            sets.push("updated_at = ?");
+            vals.push(Box::new(now));
+            vals.push(Box::new(id));
+            // Replace each "= ?" with positional ?N for rusqlite.
+            let mut sql = String::from("UPDATE freelance_clientes SET ");
+            for (i, s) in sets.iter().enumerate() {
+                if i > 0 {
+                    sql.push_str(", ");
+                }
+                let col = s.trim_end_matches(" = ?");
+                sql.push_str(&format!("{} = ?{}", col, i + 1));
+            }
+            sql.push_str(&format!(" WHERE cliente_id = ?{}", sets.len() + 1));
+            let params_refs: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();
+            let n = db.execute(&sql, rusqlite::params_from_iter(params_refs))?;
+            Ok(n)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn cliente_pause(&self, cliente_id: &str, _razon: Option<&str>) -> Result<bool> {
+        let update = FreelanceClienteUpdate {
+            estado: Some("pausado".to_string()),
+            ..Default::default()
+        };
+        self.cliente_update(cliente_id, update).await
+    }
+
+    pub async fn cliente_resume(&self, cliente_id: &str) -> Result<bool> {
+        let update = FreelanceClienteUpdate {
+            estado: Some("activo".to_string()),
+            ..Default::default()
+        };
+        self.cliente_update(cliente_id, update).await
+    }
+
+    pub async fn cliente_terminar(
+        &self,
+        cliente_id: &str,
+        fecha_fin: Option<&str>,
+        _razon: Option<&str>,
+    ) -> Result<bool> {
+        let fecha = fecha_fin
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+        let update = FreelanceClienteUpdate {
+            estado: Some("terminado".to_string()),
+            fecha_fin: Some(fecha),
+            ..Default::default()
+        };
+        self.cliente_update(cliente_id, update).await
+    }
+
+    /// Hard delete. Also cascades to sesiones / facturas / tarifas_history.
+    pub async fn cliente_delete(&self, cliente_id: &str) -> Result<bool> {
+        let id = normalize_non_empty(cliente_id).context("cliente_id required")?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let mut db = Self::open_db(&db_path)?;
+            let tx = db.transaction()?;
+            tx.execute(
+                "DELETE FROM freelance_sesiones WHERE cliente_id = ?1",
+                params![id],
+            )?;
+            tx.execute(
+                "DELETE FROM freelance_facturas WHERE cliente_id = ?1",
+                params![id],
+            )?;
+            tx.execute(
+                "DELETE FROM freelance_tarifas_history WHERE cliente_id = ?1",
+                params![id],
+            )?;
+            let n = tx.execute(
+                "DELETE FROM freelance_clientes WHERE cliente_id = ?1",
+                params![id],
+            )?;
+            tx.commit()?;
+            Ok(n)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn tarifa_actualizar(
+        &self,
+        cliente_id: &str,
+        tarifa_nueva: f64,
+        razon: Option<&str>,
+    ) -> Result<bool> {
+        if tarifa_nueva < 0.0 {
+            anyhow::bail!("tarifa_nueva must be >= 0");
+        }
+        let cliente = self
+            .cliente_get(cliente_id)
+            .await?
+            .with_context(|| format!("cliente {} not found", cliente_id))?;
+        let tarifa_anterior = cliente.tarifa_hora;
+        let id = cliente.cliente_id.clone();
+        let now = Utc::now().to_rfc3339();
+        let (razon_n, razon_c) = maybe_encrypt(razon.unwrap_or(""))?;
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut db = Self::open_db(&db_path)?;
+            let tx = db.transaction()?;
+            tx.execute(
+                "INSERT INTO freelance_tarifas_history
+                 (cliente_id, tarifa_anterior, tarifa_nueva, fecha_cambio, razon_nonce_b64, razon_ciphertext_b64)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id_clone, tarifa_anterior, tarifa_nueva, now, razon_n, razon_c],
+            )?;
+            tx.execute(
+                "UPDATE freelance_clientes SET tarifa_hora = ?1, updated_at = ?2 WHERE cliente_id = ?3",
+                params![tarifa_nueva, now, id_clone],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await??;
+        Ok(true)
+    }
+
+    pub async fn tarifa_history(
+        &self,
+        cliente_id: &str,
+    ) -> Result<Vec<FreelanceTarifaHistoryEntry>> {
+        let id = normalize_non_empty(cliente_id).context("cliente_id required")?;
+        let db_path = self.db_path.clone();
+        let rows =
+            tokio::task::spawn_blocking(move || -> Result<Vec<FreelanceTarifaHistoryEntry>> {
+                let db = Self::open_db(&db_path)?;
+                let mut stmt = db.prepare(
+                    "SELECT cliente_id, tarifa_anterior, tarifa_nueva, fecha_cambio,
+                        razon_nonce_b64, razon_ciphertext_b64
+                 FROM freelance_tarifas_history WHERE cliente_id = ?1
+                 ORDER BY fecha_cambio DESC",
+                )?;
+                let rows = stmt
+                    .query_map(params![id], |row| {
+                        let n: Option<String> = row.get(4)?;
+                        let c: Option<String> = row.get(5)?;
+                        let razon = match (n, c) {
+                            (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                            _ => String::new(),
+                        };
+                        Ok(FreelanceTarifaHistoryEntry {
+                            cliente_id: row.get(0)?,
+                            tarifa_anterior: row.get(1)?,
+                            tarifa_nueva: row.get(2)?,
+                            fecha_cambio: row.get(3)?,
+                            razon,
+                        })
+                    })?
+                    .flatten()
+                    .collect();
+                Ok(rows)
+            })
+            .await??;
+        Ok(rows)
+    }
+
+    // -- Sesion CRUD ---------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn sesion_log(
+        &self,
+        cliente_id_or_name: &str,
+        horas: f64,
+        fecha: Option<&str>,
+        descripcion: Option<&str>,
+        hora_inicio: Option<&str>,
+        hora_fin: Option<&str>,
+        facturable: Option<bool>,
+    ) -> Result<String> {
+        if horas <= 0.0 {
+            anyhow::bail!("horas must be > 0");
+        }
+        let cliente = self
+            .cliente_get(cliente_id_or_name)
+            .await?
+            .with_context(|| format!("cliente '{}' not found", cliente_id_or_name))?;
+        let cid = cliente.cliente_id;
+        let fecha = fecha
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+        let (desc_n, desc_c) = maybe_encrypt(descripcion.unwrap_or(""))?;
+        let sesion_id = format!("ses-{}", Uuid::new_v4());
+        let now = Utc::now().to_rfc3339();
+        let id_clone = sesion_id.clone();
+        let db_path = self.db_path.clone();
+        let hora_inicio = hora_inicio.map(|s| s.trim().to_string());
+        let hora_fin = hora_fin.map(|s| s.trim().to_string());
+        let facturable_i: i64 = if facturable.unwrap_or(true) { 1 } else { 0 };
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO freelance_sesiones
+                 (sesion_id, cliente_id, fecha, hora_inicio, hora_fin, horas,
+                  descripcion_nonce_b64, descripcion_ciphertext_b64, facturable,
+                  factura_id, deleted, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, 0, ?10, ?10)",
+                params![
+                    id_clone,
+                    cid,
+                    fecha,
+                    hora_inicio,
+                    hora_fin,
+                    horas,
+                    desc_n,
+                    desc_c,
+                    facturable_i,
+                    now,
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+        Ok(sesion_id)
+    }
+
+    pub async fn sesion_list(
+        &self,
+        cliente_id: Option<&str>,
+        desde: Option<&str>,
+        hasta: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<FreelanceSesion>> {
+        let limit = limit.unwrap_or(100).clamp(1, 1000) as i64;
+        let db_path = self.db_path.clone();
+        let cliente_id = cliente_id.and_then(normalize_non_empty);
+        let desde = desde.and_then(normalize_non_empty);
+        let hasta = hasta.and_then(normalize_non_empty);
+        let raws = tokio::task::spawn_blocking(move || -> Result<Vec<SesionRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = format!(
+                "SELECT {} FROM freelance_sesiones WHERE deleted = 0",
+                SESION_COLUMNS
+            );
+            let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(c) = cliente_id {
+                sql.push_str(&format!(" AND cliente_id = ?{}", binds.len() + 1));
+                binds.push(Box::new(c));
+            }
+            if let Some(d) = desde {
+                sql.push_str(&format!(" AND fecha >= ?{}", binds.len() + 1));
+                binds.push(Box::new(d));
+            }
+            if let Some(h) = hasta {
+                sql.push_str(&format!(" AND fecha <= ?{}", binds.len() + 1));
+                binds.push(Box::new(h));
+            }
+            sql.push_str(&format!(
+                " ORDER BY fecha DESC, created_at DESC LIMIT ?{}",
+                binds.len() + 1
+            ));
+            binds.push(Box::new(limit));
+            let mut stmt = db.prepare(&sql)?;
+            let refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+            let rows: Vec<SesionRaw> = stmt
+                .query_map(rusqlite::params_from_iter(refs), map_sesion_row)?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(sesion_from_raw).collect())
+    }
+
+    pub async fn sesion_get(&self, sesion_id: &str) -> Result<Option<FreelanceSesion>> {
+        let id = normalize_non_empty(sesion_id).context("sesion_id required")?;
+        let db_path = self.db_path.clone();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<SesionRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let sql = format!(
+                "SELECT {} FROM freelance_sesiones WHERE sesion_id = ?1",
+                SESION_COLUMNS
+            );
+            Ok(db.query_row(&sql, params![id], map_sesion_row).optional()?)
+        })
+        .await??;
+        Ok(raw.map(sesion_from_raw))
+    }
+
+    pub async fn sesion_update(
+        &self,
+        sesion_id: &str,
+        update: FreelanceSesionUpdate,
+    ) -> Result<bool> {
+        let id = normalize_non_empty(sesion_id).context("sesion_id required")?;
+        let now = Utc::now().to_rfc3339();
+        let desc_pair = match &update.descripcion {
+            Some(s) => Some(maybe_encrypt(s)?),
+            None => None,
+        };
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let mut sets: Vec<String> = Vec::new();
+            let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(v) = update.fecha {
+                sets.push(format!("fecha = ?{}", sets.len() + 1));
+                vals.push(Box::new(v));
+            }
+            if let Some(v) = update.hora_inicio {
+                sets.push(format!("hora_inicio = ?{}", sets.len() + 1));
+                vals.push(Box::new(v));
+            }
+            if let Some(v) = update.hora_fin {
+                sets.push(format!("hora_fin = ?{}", sets.len() + 1));
+                vals.push(Box::new(v));
+            }
+            if let Some(v) = update.horas {
+                if v <= 0.0 {
+                    anyhow::bail!("horas must be > 0");
+                }
+                sets.push(format!("horas = ?{}", sets.len() + 1));
+                vals.push(Box::new(v));
+            }
+            if let Some((n, c)) = desc_pair {
+                sets.push(format!("descripcion_nonce_b64 = ?{}", sets.len() + 1));
+                vals.push(Box::new(n));
+                sets.push(format!("descripcion_ciphertext_b64 = ?{}", sets.len() + 1));
+                vals.push(Box::new(c));
+            }
+            if let Some(v) = update.facturable {
+                sets.push(format!("facturable = ?{}", sets.len() + 1));
+                vals.push(Box::new(if v { 1i64 } else { 0i64 }));
+            }
+            if sets.is_empty() {
+                return Ok(0);
+            }
+            sets.push(format!("updated_at = ?{}", sets.len() + 1));
+            vals.push(Box::new(now));
+            let where_pos = sets.len() + 1;
+            vals.push(Box::new(id));
+            let sql = format!(
+                "UPDATE freelance_sesiones SET {} WHERE sesion_id = ?{}",
+                sets.join(", "),
+                where_pos
+            );
+            let refs: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();
+            let n = db.execute(&sql, rusqlite::params_from_iter(refs))?;
+            Ok(n)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// Soft delete — keep the row for audit.
+    pub async fn sesion_delete(&self, sesion_id: &str) -> Result<bool> {
+        let id = normalize_non_empty(sesion_id).context("sesion_id required")?;
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE freelance_sesiones SET deleted = 1, deleted_at = ?1, updated_at = ?1
+                 WHERE sesion_id = ?2 AND deleted = 0",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -- Factura CRUD --------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn factura_emit(
+        &self,
+        cliente_id_or_name: &str,
+        monto_subtotal: f64,
+        monto_iva: Option<f64>,
+        fecha_emision: Option<&str>,
+        fecha_vencimiento: Option<&str>,
+        concepto: Option<&str>,
+        numero_externo: Option<&str>,
+        sesion_ids: Option<Vec<String>>,
+    ) -> Result<String> {
+        if monto_subtotal <= 0.0 {
+            anyhow::bail!("monto_subtotal must be > 0");
+        }
+        let iva = monto_iva.unwrap_or(0.0);
+        if iva < 0.0 {
+            anyhow::bail!("monto_iva must be >= 0");
+        }
+        let monto_total = monto_subtotal + iva;
+        let cliente = self
+            .cliente_get(cliente_id_or_name)
+            .await?
+            .with_context(|| format!("cliente '{}' not found", cliente_id_or_name))?;
+        let cid = cliente.cliente_id;
+        let fecha_emision = fecha_emision
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+        let fecha_vencimiento = fecha_vencimiento.and_then(normalize_non_empty);
+        let (concepto_n, concepto_c) = maybe_encrypt(concepto.unwrap_or(""))?;
+        let numero_externo = numero_externo.map(|s| s.trim().to_string());
+        let factura_id = format!("fac-{}", Uuid::new_v4());
+        let now = Utc::now().to_rfc3339();
+        let id_clone = factura_id.clone();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut db = Self::open_db(&db_path)?;
+            let tx = db.transaction()?;
+            tx.execute(
+                "INSERT INTO freelance_facturas
+                 (factura_id, cliente_id, numero_externo, fecha_emision, fecha_vencimiento,
+                  fecha_pago, monto_subtotal, monto_iva, monto_total, moneda,
+                  concepto_nonce_b64, concepto_ciphertext_b64, estado,
+                  notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, 'MXN',
+                         ?9, ?10, 'emitida', NULL, NULL, ?11, ?11)",
+                params![
+                    id_clone,
+                    cid,
+                    numero_externo,
+                    fecha_emision,
+                    fecha_vencimiento,
+                    monto_subtotal,
+                    iva,
+                    monto_total,
+                    concepto_n,
+                    concepto_c,
+                    now,
+                ],
+            )?;
+            if let Some(sids) = sesion_ids {
+                for sid in sids {
+                    tx.execute(
+                        "UPDATE freelance_sesiones SET factura_id = ?1, updated_at = ?2
+                         WHERE sesion_id = ?3 AND deleted = 0",
+                        params![id_clone, now, sid],
+                    )?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await??;
+        Ok(factura_id)
+    }
+
+    pub async fn factura_pagar(&self, factura_id: &str, fecha_pago: Option<&str>) -> Result<bool> {
+        let id = normalize_non_empty(factura_id).context("factura_id required")?;
+        let fecha = fecha_pago
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE freelance_facturas SET fecha_pago = ?1, estado = 'pagada', updated_at = ?2
+                 WHERE factura_id = ?3 AND estado != 'cancelada'",
+                params![fecha, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn factura_cancelar(&self, factura_id: &str, razon: Option<&str>) -> Result<bool> {
+        let id = normalize_non_empty(factura_id).context("factura_id required")?;
+        let now = Utc::now().to_rfc3339();
+        let (notas_n, notas_c) = maybe_encrypt(razon.unwrap_or(""))?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            // Only attach razon if provided; otherwise leave existing notas alone.
+            if notas_n.is_some() {
+                Ok(db.execute(
+                    "UPDATE freelance_facturas SET estado = 'cancelada',
+                     notas_nonce_b64 = ?1, notas_ciphertext_b64 = ?2, updated_at = ?3
+                     WHERE factura_id = ?4",
+                    params![notas_n, notas_c, now, id],
+                )?)
+            } else {
+                Ok(db.execute(
+                    "UPDATE freelance_facturas SET estado = 'cancelada', updated_at = ?1
+                     WHERE factura_id = ?2",
+                    params![now, id],
+                )?)
+            }
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn factura_get(&self, factura_id: &str) -> Result<Option<FreelanceFactura>> {
+        let id = normalize_non_empty(factura_id).context("factura_id required")?;
+        let db_path = self.db_path.clone();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<FacturaRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let sql = format!(
+                "SELECT {} FROM freelance_facturas WHERE factura_id = ?1",
+                FACTURA_COLUMNS
+            );
+            Ok(db
+                .query_row(&sql, params![id], map_factura_row)
+                .optional()?)
+        })
+        .await??;
+        Ok(raw.map(factura_from_raw))
+    }
+
+    pub async fn factura_list(
+        &self,
+        cliente_id: Option<&str>,
+        estado: Option<&str>,
+        desde: Option<&str>,
+        hasta: Option<&str>,
+    ) -> Result<Vec<FreelanceFactura>> {
+        let db_path = self.db_path.clone();
+        let cliente_id = cliente_id.and_then(normalize_non_empty);
+        let estado = estado.and_then(normalize_non_empty);
+        let desde = desde.and_then(normalize_non_empty);
+        let hasta = hasta.and_then(normalize_non_empty);
+        let raws = tokio::task::spawn_blocking(move || -> Result<Vec<FacturaRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = format!(
+                "SELECT {} FROM freelance_facturas WHERE 1=1",
+                FACTURA_COLUMNS
+            );
+            let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(v) = cliente_id {
+                sql.push_str(&format!(" AND cliente_id = ?{}", binds.len() + 1));
+                binds.push(Box::new(v));
+            }
+            if let Some(v) = estado {
+                sql.push_str(&format!(" AND estado = ?{}", binds.len() + 1));
+                binds.push(Box::new(v));
+            }
+            if let Some(v) = desde {
+                sql.push_str(&format!(" AND fecha_emision >= ?{}", binds.len() + 1));
+                binds.push(Box::new(v));
+            }
+            if let Some(v) = hasta {
+                sql.push_str(&format!(" AND fecha_emision <= ?{}", binds.len() + 1));
+                binds.push(Box::new(v));
+            }
+            sql.push_str(" ORDER BY fecha_emision DESC, created_at DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+            let rows: Vec<FacturaRaw> = stmt
+                .query_map(rusqlite::params_from_iter(refs), map_factura_row)?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(factura_from_raw).collect())
+    }
+
+    pub async fn facturas_pendientes(
+        &self,
+        cliente_id: Option<&str>,
+    ) -> Result<Vec<FreelanceFactura>> {
+        let db_path = self.db_path.clone();
+        let cliente_id = cliente_id.and_then(normalize_non_empty);
+        let raws = tokio::task::spawn_blocking(move || -> Result<Vec<FacturaRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = format!(
+                "SELECT {} FROM freelance_facturas WHERE estado IN ('emitida','vencida')",
+                FACTURA_COLUMNS
+            );
+            let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(v) = cliente_id {
+                sql.push_str(&format!(" AND cliente_id = ?{}", binds.len() + 1));
+                binds.push(Box::new(v));
+            }
+            sql.push_str(" ORDER BY fecha_vencimiento ASC NULLS LAST, fecha_emision ASC");
+            let mut stmt = db.prepare(&sql)?;
+            let refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+            let rows: Vec<FacturaRaw> = stmt
+                .query_map(rusqlite::params_from_iter(refs), map_factura_row)?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(factura_from_raw).collect())
+    }
+
+    /// Auto-promotes any `estado='emitida'` factura whose `fecha_vencimiento <
+    /// today` to `estado='vencida'`, then returns the list of vencidas.
+    pub async fn facturas_vencidas(&self) -> Result<Vec<FreelanceFactura>> {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || -> Result<Vec<FacturaRaw>> {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "UPDATE freelance_facturas SET estado = 'vencida', updated_at = ?1
+                 WHERE estado = 'emitida' AND fecha_vencimiento IS NOT NULL
+                   AND fecha_vencimiento < ?2",
+                params![now, today],
+            )?;
+            let sql = format!(
+                "SELECT {} FROM freelance_facturas WHERE estado = 'vencida' ORDER BY fecha_vencimiento ASC",
+                FACTURA_COLUMNS
+            );
+            let mut stmt = db.prepare(&sql)?;
+            let rows: Vec<FacturaRaw> = stmt.query_map([], map_factura_row)?.flatten().collect();
+            Ok(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(factura_from_raw).collect())
+    }
+
+    // -- Analytics -----------------------------------------------------------
+
+    pub async fn freelance_overview(&self, mes: Option<&str>) -> Result<FreelanceOverview> {
+        let mes = mes
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(current_month_yyyymm);
+        // Validate format YYYY-MM
+        if mes.len() != 7 || !mes.contains('-') {
+            anyhow::bail!("mes must be in YYYY-MM format");
+        }
+        // Auto-promote vencidas first so alertas reflect reality.
+        let _ = self.facturas_vencidas().await?;
+        let prefix_pattern = format!("{}-%", mes);
+        let db_path = self.db_path.clone();
+        let pat = prefix_pattern.clone();
+        let mes_clone = mes.clone();
+
+        let row: (i64, f64, i64, f64, f64, f64) =
+            tokio::task::spawn_blocking(move || -> Result<(i64, f64, i64, f64, f64, f64)> {
+                let db = Self::open_db(&db_path)?;
+                let clientes_activos: i64 = db.query_row(
+                    "SELECT COUNT(*) FROM freelance_clientes WHERE estado = 'activo'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let horas_trabajadas: f64 = db.query_row(
+                    "SELECT COALESCE(SUM(horas), 0) FROM freelance_sesiones
+                 WHERE deleted = 0 AND fecha LIKE ?1",
+                    params![pat],
+                    |r| r.get(0),
+                )?;
+                let horas_comprometidas: i64 = db.query_row(
+                    "SELECT COALESCE(SUM(horas_comprometidas_mes), 0) FROM freelance_clientes
+                 WHERE estado = 'activo'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let facturacion_emitida: f64 = db.query_row(
+                    "SELECT COALESCE(SUM(monto_total), 0) FROM freelance_facturas
+                 WHERE estado != 'cancelada' AND fecha_emision LIKE ?1",
+                    params![pat],
+                    |r| r.get(0),
+                )?;
+                let facturacion_pagada: f64 = db.query_row(
+                    "SELECT COALESCE(SUM(monto_total), 0) FROM freelance_facturas
+                 WHERE estado = 'pagada' AND fecha_emision LIKE ?1",
+                    params![pat],
+                    |r| r.get(0),
+                )?;
+                let cuentas_por_cobrar: f64 = db.query_row(
+                    "SELECT COALESCE(SUM(monto_total), 0) FROM freelance_facturas
+                 WHERE estado IN ('emitida','vencida')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok((
+                    clientes_activos,
+                    horas_trabajadas,
+                    horas_comprometidas,
+                    facturacion_emitida,
+                    facturacion_pagada,
+                    cuentas_por_cobrar,
+                ))
+            })
+            .await??;
+
+        let mut alertas: Vec<String> = Vec::new();
+        // Vencidas
+        let vencidas = self.facturas_vencidas().await?;
+        if !vencidas.is_empty() {
+            alertas.push(format!(
+                "{} factura(s) vencida(s) por un total de ${:.2}",
+                vencidas.len(),
+                vencidas.iter().map(|f| f.monto_total).sum::<f64>()
+            ));
+        }
+        // Capacity check: trabajadas vs comprometidas
+        if row.2 > 0 && row.1 > row.2 as f64 {
+            alertas.push(format!(
+                "Sobrecapacidad: trabajaste {:.1}h este mes vs {} comprometidas",
+                row.1, row.2
+            ));
+        } else if row.2 > 0 && row.1 < (row.2 as f64) * 0.30 {
+            alertas.push(format!(
+                "Bandwidth disponible: solo {:.1}h trabajadas de {} comprometidas (<30%)",
+                row.1, row.2
+            ));
+        }
+        // Trend: compare to average of previous 3 months
+        let last3_avg = self
+            .facturacion_promedio_ultimos_meses(&mes, 3)
+            .await
+            .unwrap_or(0.0);
+        if last3_avg > 0.0 && row.3 < last3_avg * 0.70 {
+            alertas.push(format!(
+                "Facturacion del mes (${:.2}) esta 30%+ por debajo del promedio de los ultimos 3 meses (${:.2})",
+                row.3, last3_avg
+            ));
+        }
+
+        Ok(FreelanceOverview {
+            mes: mes_clone,
+            clientes_activos: row.0,
+            horas_trabajadas: row.1,
+            horas_comprometidas: row.2,
+            facturacion_emitida: row.3,
+            facturacion_pagada: row.4,
+            cuentas_por_cobrar: row.5,
+            alertas,
+        })
+    }
+
+    async fn facturacion_promedio_ultimos_meses(&self, mes_actual: &str, n: usize) -> Result<f64> {
+        // mes_actual is YYYY-MM. Compute previous N months totals.
+        let parts: Vec<&str> = mes_actual.split('-').collect();
+        if parts.len() != 2 {
+            return Ok(0.0);
+        }
+        let mut year: i32 = parts[0].parse().unwrap_or(0);
+        let mut month: i32 = parts[1].parse().unwrap_or(0);
+        if year == 0 || !(1..=12).contains(&month) {
+            return Ok(0.0);
+        }
+        let mut totals: Vec<f64> = Vec::new();
+        for _ in 0..n {
+            month -= 1;
+            if month == 0 {
+                month = 12;
+                year -= 1;
+            }
+            let pat = format!("{:04}-{:02}-%", year, month);
+            let db_path = self.db_path.clone();
+            let p = pat.clone();
+            let total: f64 = tokio::task::spawn_blocking(move || -> Result<f64> {
+                let db = Self::open_db(&db_path)?;
+                Ok(db.query_row(
+                    "SELECT COALESCE(SUM(monto_total), 0) FROM freelance_facturas
+                     WHERE estado != 'cancelada' AND fecha_emision LIKE ?1",
+                    params![p],
+                    |r| r.get(0),
+                )?)
+            })
+            .await??;
+            totals.push(total);
+        }
+        if totals.is_empty() {
+            return Ok(0.0);
+        }
+        Ok(totals.iter().sum::<f64>() / totals.len() as f64)
+    }
+
+    pub async fn horas_libres(&self, ventana: &str) -> Result<FreelanceHorasLibres> {
+        let v = ventana.trim().to_lowercase();
+        if v != "semana" && v != "mes" {
+            anyhow::bail!("ventana must be 'semana' or 'mes'");
+        }
+        let today = chrono::Local::now().date_naive();
+        let (desde, hasta, divisor): (String, String, f64) = if v == "semana" {
+            // ISO week: Monday-Sunday
+            let weekday = today.weekday().num_days_from_monday() as i64;
+            let monday = today - chrono::Duration::days(weekday);
+            let sunday = monday + chrono::Duration::days(6);
+            (
+                monday.format("%Y-%m-%d").to_string(),
+                sunday.format("%Y-%m-%d").to_string(),
+                7.0 / 30.0, // approx weekly fraction of monthly commitment
+            )
+        } else {
+            let first = today.with_day(1).unwrap();
+            let last = if today.month() == 12 {
+                chrono::NaiveDate::from_ymd_opt(today.year() + 1, 1, 1).unwrap()
+                    - chrono::Duration::days(1)
+            } else {
+                chrono::NaiveDate::from_ymd_opt(today.year(), today.month() + 1, 1).unwrap()
+                    - chrono::Duration::days(1)
+            };
+            (
+                first.format("%Y-%m-%d").to_string(),
+                last.format("%Y-%m-%d").to_string(),
+                1.0,
+            )
+        };
+        let db_path = self.db_path.clone();
+        let (trabajadas, comprometidas_mes): (f64, i64) = {
+            let desde_c = desde.clone();
+            let hasta_c = hasta.clone();
+            tokio::task::spawn_blocking(move || -> Result<(f64, i64)> {
+                let db = Self::open_db(&db_path)?;
+                let trab: f64 = db.query_row(
+                    "SELECT COALESCE(SUM(horas), 0) FROM freelance_sesiones
+                     WHERE deleted = 0 AND fecha BETWEEN ?1 AND ?2",
+                    params![desde_c, hasta_c],
+                    |r| r.get(0),
+                )?;
+                let comp: i64 = db.query_row(
+                    "SELECT COALESCE(SUM(horas_comprometidas_mes), 0) FROM freelance_clientes
+                     WHERE estado = 'activo'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok((trab, comp))
+            })
+            .await??
+        };
+        let comprometidas = (comprometidas_mes as f64) * divisor;
+        let disponibles = (comprometidas - trabajadas).max(0.0);
+        let pct = if comprometidas > 0.0 {
+            (trabajadas / comprometidas) * 100.0
+        } else {
+            0.0
+        };
+        Ok(FreelanceHorasLibres {
+            ventana: v,
+            horas_comprometidas: comprometidas,
+            horas_trabajadas: trabajadas,
+            horas_disponibles: disponibles,
+            capacidad_pct: pct,
+        })
+    }
+
+    pub async fn cliente_estado(&self, cliente_id_or_name: &str) -> Result<FreelanceClienteEstado> {
+        let cliente = self
+            .cliente_get(cliente_id_or_name)
+            .await?
+            .with_context(|| format!("cliente '{}' not found", cliente_id_or_name))?;
+        let cid = cliente.cliente_id.clone();
+        let mes = current_month_yyyymm();
+        let pat = format!("{}-%", mes);
+        let db_path = self.db_path.clone();
+        let cid_q = cid.clone();
+        let pat_q = pat.clone();
+        let (horas_mes, ultima_sesion, ultima_factura, monto_pendiente): (
+            f64,
+            Option<String>,
+            Option<String>,
+            f64,
+        ) = tokio::task::spawn_blocking(
+            move || -> Result<(f64, Option<String>, Option<String>, f64)> {
+                let db = Self::open_db(&db_path)?;
+                let h: f64 = db.query_row(
+                    "SELECT COALESCE(SUM(horas), 0) FROM freelance_sesiones
+                 WHERE deleted = 0 AND cliente_id = ?1 AND fecha LIKE ?2",
+                    params![cid_q, pat_q],
+                    |r| r.get(0),
+                )?;
+                let ult_s: Option<String> = db
+                    .query_row(
+                        "SELECT fecha FROM freelance_sesiones WHERE deleted = 0 AND cliente_id = ?1
+                     ORDER BY fecha DESC LIMIT 1",
+                        params![cid_q],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let ult_f: Option<String> = db
+                    .query_row(
+                        "SELECT fecha_emision FROM freelance_facturas WHERE cliente_id = ?1
+                     AND estado != 'cancelada' ORDER BY fecha_emision DESC LIMIT 1",
+                        params![cid_q],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let pend: f64 = db.query_row(
+                    "SELECT COALESCE(SUM(monto_total), 0) FROM freelance_facturas
+                 WHERE cliente_id = ?1 AND estado IN ('emitida','vencida')",
+                    params![cid_q],
+                    |r| r.get(0),
+                )?;
+                Ok((h, ult_s, ult_f, pend))
+            },
+        )
+        .await??;
+        let pct = cliente
+            .horas_comprometidas_mes
+            .filter(|c| *c > 0)
+            .map(|c| (horas_mes / c as f64) * 100.0);
+        Ok(FreelanceClienteEstado {
+            cliente_id: cid,
+            nombre: cliente.nombre,
+            horas_mes_actual: horas_mes,
+            horas_comprometidas_mes: cliente.horas_comprometidas_mes,
+            vs_compromiso_pct: pct,
+            ultima_sesion,
+            ultima_factura,
+            monto_pendiente,
+        })
+    }
+
+    /// Aggregated revenue between [desde, hasta] grouped by 'cliente' or 'mes'.
+    pub async fn ingresos_periodo(
+        &self,
+        desde: &str,
+        hasta: &str,
+        agrupado_por: &str,
+    ) -> Result<Vec<FreelanceIngresoBucket>> {
+        let agrup = agrupado_por.trim().to_lowercase();
+        if agrup != "cliente" && agrup != "mes" {
+            anyhow::bail!("agrupado_por must be 'cliente' or 'mes'");
+        }
+        if parse_iso_date(desde).is_none() || parse_iso_date(hasta).is_none() {
+            anyhow::bail!("desde / hasta must be YYYY-MM-DD");
+        }
+        let desde = desde.to_string();
+        let hasta = hasta.to_string();
+        let db_path = self.db_path.clone();
+        let agrup_clone = agrup.clone();
+        let buckets = tokio::task::spawn_blocking(move || -> Result<Vec<FreelanceIngresoBucket>> {
+            let db = Self::open_db(&db_path)?;
+            let group_expr = if agrup_clone == "cliente" {
+                // Join with clientes to get nombre
+                "c.nombre"
+            } else {
+                "substr(f.fecha_emision, 1, 7)"
+            };
+            let sql = format!(
+                "SELECT {grp} AS bucket,
+                        COALESCE(SUM(CASE WHEN f.estado != 'cancelada' THEN f.monto_total ELSE 0 END), 0) AS emitido,
+                        COALESCE(SUM(CASE WHEN f.estado = 'pagada' THEN f.monto_total ELSE 0 END), 0) AS pagado,
+                        COUNT(*) AS facturas
+                 FROM freelance_facturas f
+                 LEFT JOIN freelance_clientes c ON c.cliente_id = f.cliente_id
+                 WHERE f.fecha_emision BETWEEN ?1 AND ?2
+                 GROUP BY bucket
+                 ORDER BY bucket ASC",
+                grp = group_expr
+            );
+            let mut stmt = db.prepare(&sql)?;
+            let rows: Vec<FreelanceIngresoBucket> = stmt
+                .query_map(params![desde, hasta], |r| {
+                    Ok(FreelanceIngresoBucket {
+                        bucket: r.get::<_, Option<String>>(0)?.unwrap_or_else(|| "(sin cliente)".into()),
+                        total_emitido: r.get(1)?,
+                        total_pagado: r.get(2)?,
+                        facturas: r.get(3)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+        Ok(buckets)
+    }
+
+    pub async fn clientes_por_facturacion(
+        &self,
+        desde: Option<&str>,
+        hasta: Option<&str>,
+    ) -> Result<Vec<FreelanceIngresoBucket>> {
+        let desde = desde
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| "1900-01-01".to_string());
+        let hasta = hasta
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| "9999-12-31".to_string());
+        self.ingresos_periodo(&desde, &hasta, "cliente")
+            .await
+            .map(|mut v| {
+                v.sort_by(|a, b| {
+                    b.total_emitido
+                        .partial_cmp(&a.total_emitido)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                v
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25911,6 +27519,329 @@ mod tests {
         assert_eq!(ov.total_bloqueados, 1);
         assert!((ov.presupuesto_gastado_activos - 50.0).abs() < 0.01);
 
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -------------------------------------------------------------------
+    // Freelance domain — tests
+    // -------------------------------------------------------------------
+
+    async fn freelance_mgr() -> (PathBuf, MemoryPlaneManager) {
+        let dir = temp_dir("memory-plane-freelance");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        (dir, mgr)
+    }
+
+    #[tokio::test]
+    async fn freelance_cliente_add_and_get() {
+        let (dir, mgr) = freelance_mgr().await;
+        let id = mgr
+            .cliente_add(
+                "Acme Corp",
+                Some(500.0),
+                Some("horas"),
+                None,
+                Some(20),
+                Some("2026-05-01"),
+                None,
+                Some("juan@acme.com"),
+                None,
+                None,
+                Some("cliente largo"),
+            )
+            .await
+            .unwrap();
+        assert!(id.starts_with("cli-"));
+        let by_id = mgr.cliente_get(&id).await.unwrap().unwrap();
+        assert_eq!(by_id.nombre, "Acme Corp");
+        assert_eq!(by_id.tarifa_hora, Some(500.0));
+        assert_eq!(by_id.notas, "cliente largo");
+        // case-insensitive name lookup
+        let by_name = mgr.cliente_get("acme corp").await.unwrap().unwrap();
+        assert_eq!(by_name.cliente_id, id);
+        // list filter by estado
+        let activos = mgr.cliente_list(Some("activo")).await.unwrap();
+        assert_eq!(activos.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn freelance_cliente_terminar_preserves_sesiones() {
+        let (dir, mgr) = freelance_mgr().await;
+        let cid = mgr
+            .cliente_add(
+                "Beta",
+                None,
+                Some("retainer"),
+                Some(10000.0),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let _sid = mgr
+            .sesion_log(
+                &cid,
+                2.0,
+                Some("2026-04-10"),
+                Some("trabajo"),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        mgr.cliente_terminar(&cid, Some("2026-04-30"), Some("fin"))
+            .await
+            .unwrap();
+        let c = mgr.cliente_get(&cid).await.unwrap().unwrap();
+        assert_eq!(c.estado, "terminado");
+        assert_eq!(c.fecha_fin.as_deref(), Some("2026-04-30"));
+        // Sesion remains
+        let sesiones = mgr.sesion_list(Some(&cid), None, None, None).await.unwrap();
+        assert_eq!(sesiones.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn freelance_sesion_log_with_cliente_name_resolution() {
+        let (dir, mgr) = freelance_mgr().await;
+        let cid = mgr
+            .cliente_add(
+                "Gamma",
+                Some(800.0),
+                Some("horas"),
+                None,
+                Some(40),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // Log via name (case-insensitive)
+        let sid = mgr
+            .sesion_log(
+                "GAMMA",
+                3.5,
+                Some("2026-04-12"),
+                Some("desc"),
+                None,
+                None,
+                Some(true),
+            )
+            .await
+            .unwrap();
+        let s = mgr.sesion_get(&sid).await.unwrap().unwrap();
+        assert_eq!(s.cliente_id, cid);
+        assert_eq!(s.horas, 3.5);
+        assert!(s.facturable);
+        assert_eq!(s.descripcion, "desc");
+        // Soft delete keeps row
+        let ok = mgr.sesion_delete(&sid).await.unwrap();
+        assert!(ok);
+        let visible = mgr.sesion_list(None, None, None, None).await.unwrap();
+        assert!(visible.iter().all(|x| x.sesion_id != sid));
+        let after = mgr.sesion_get(&sid).await.unwrap().unwrap();
+        assert!(after.deleted, "soft-deleted sesion still exists physically");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn freelance_factura_links_sesiones() {
+        let (dir, mgr) = freelance_mgr().await;
+        let cid = mgr
+            .cliente_add(
+                "Delta",
+                Some(600.0),
+                Some("horas"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let s1 = mgr
+            .sesion_log(&cid, 2.0, Some("2026-04-01"), None, None, None, None)
+            .await
+            .unwrap();
+        let s2 = mgr
+            .sesion_log(&cid, 3.0, Some("2026-04-02"), None, None, None, None)
+            .await
+            .unwrap();
+        let fid = mgr
+            .factura_emit(
+                &cid,
+                3000.0,
+                Some(480.0),
+                Some("2026-04-03"),
+                Some("2026-04-20"),
+                Some("Trabajo abril"),
+                None,
+                Some(vec![s1.clone(), s2.clone()]),
+            )
+            .await
+            .unwrap();
+        let f = mgr.factura_get(&fid).await.unwrap().unwrap();
+        assert_eq!(f.monto_total, 3480.0);
+        assert_eq!(f.estado, "emitida");
+        assert_eq!(f.concepto, "Trabajo abril");
+        let sesiones = mgr.sesion_list(Some(&cid), None, None, None).await.unwrap();
+        assert!(sesiones
+            .iter()
+            .all(|s| s.factura_id.as_deref() == Some(&fid)));
+        // factura_pagar
+        mgr.factura_pagar(&fid, Some("2026-04-25")).await.unwrap();
+        let f = mgr.factura_get(&fid).await.unwrap().unwrap();
+        assert_eq!(f.estado, "pagada");
+        assert_eq!(f.fecha_pago.as_deref(), Some("2026-04-25"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn freelance_overview_aggregates_correctly() {
+        let (dir, mgr) = freelance_mgr().await;
+        let cid = mgr
+            .cliente_add(
+                "Eps",
+                Some(500.0),
+                Some("horas"),
+                None,
+                Some(20),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let mes = chrono::Local::now().format("%Y-%m").to_string();
+        let fecha_hoy = chrono::Local::now().format("%Y-%m-%d").to_string();
+        mgr.sesion_log(&cid, 5.0, Some(&fecha_hoy), Some("dev"), None, None, None)
+            .await
+            .unwrap();
+        let _fid = mgr
+            .factura_emit(
+                &cid,
+                2500.0,
+                Some(400.0),
+                Some(&fecha_hoy),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let ov = mgr.freelance_overview(Some(&mes)).await.unwrap();
+        assert_eq!(ov.mes, mes);
+        assert_eq!(ov.clientes_activos, 1);
+        assert!((ov.horas_trabajadas - 5.0).abs() < 0.001);
+        assert_eq!(ov.horas_comprometidas, 20);
+        assert!((ov.facturacion_emitida - 2900.0).abs() < 0.001);
+        assert!((ov.facturacion_pagada - 0.0).abs() < 0.001);
+        assert!((ov.cuentas_por_cobrar - 2900.0).abs() < 0.001);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn freelance_horas_libres_excludes_terminados() {
+        let (dir, mgr) = freelance_mgr().await;
+        let cid_act = mgr
+            .cliente_add(
+                "Act",
+                Some(500.0),
+                Some("horas"),
+                None,
+                Some(40),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let cid_term = mgr
+            .cliente_add(
+                "Old",
+                Some(500.0),
+                Some("horas"),
+                None,
+                Some(80),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        mgr.cliente_terminar(&cid_term, None, None).await.unwrap();
+        let h = mgr.horas_libres("mes").await.unwrap();
+        // Solo el cliente activo cuenta — comprometidas debe ser 40 (mes completo).
+        assert!((h.horas_comprometidas - 40.0).abs() < 0.001);
+        assert_eq!(h.horas_trabajadas, 0.0);
+        let _ = cid_act;
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn freelance_facturas_vencidas_auto_promotes_status() {
+        let (dir, mgr) = freelance_mgr().await;
+        let cid = mgr
+            .cliente_add(
+                "Late",
+                Some(500.0),
+                Some("horas"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let fid = mgr
+            .factura_emit(
+                &cid,
+                1000.0,
+                None,
+                Some("2025-01-01"),
+                Some("2025-01-15"), // way in the past
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let before = mgr.factura_get(&fid).await.unwrap().unwrap();
+        assert_eq!(before.estado, "emitida");
+        let vencidas = mgr.facturas_vencidas().await.unwrap();
+        assert!(vencidas.iter().any(|f| f.factura_id == fid));
+        let after = mgr.factura_get(&fid).await.unwrap().unwrap();
+        assert_eq!(after.estado, "vencida");
         std::fs::remove_dir_all(dir).ok();
     }
 }

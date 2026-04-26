@@ -7,6 +7,7 @@
 //! - System management
 
 mod conversations;
+mod freelance;
 mod lab;
 pub mod privacy_mode;
 mod providers;
@@ -1613,6 +1614,8 @@ pub fn create_router(state: ApiState) -> Router {
         .nest("/vida-plena", vida_plena::vida_plena_routes())
         // Proyectos Domain — gestion ligera de proyectos personales.
         .nest("/proyectos", proyectos::proyectos_routes())
+        // Freelance Domain — clientes, proyectos freelance, time tracking, facturacion.
+        .nest("/freelance", freelance::freelance_routes())
         // Workers CRUD (BB.dashboard) — list and cancel async LLM workers.
         .nest("/workers", workers::workers_routes())
         // Conversations CRUD — unified message-history view across bridges.

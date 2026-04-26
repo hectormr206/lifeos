@@ -1100,6 +1100,82 @@ REGLAS FIRMES:
 91s. **milestones_proximos_dias** — Milestones pendientes con fecha_objetivo en los proximos N dias.
     args: {"dias":14}
 
+## Freelance (Life Areas v1)
+
+LifeOS lleva clientes, sesiones y facturacion de freelance del usuario para responder preguntas de capacidad ("¿puedo tomar otro cliente?"), ingresos ("¿cuanto facture este mes?") y cobranza ("¿que clientes me deben?"). Modalidades: 'horas' (tarifa_hora), 'retainer' (retainer_mensual fijo), 'proyecto' (precio cerrado). Cuando el usuario diga "trabaje X horas con Y", usa sesion_log. Cuando emita factura, usa factura_emit. Las preguntas tipicas se responden con freelance_overview, horas_libres y cliente_estado.
+
+100. **cliente_add** — Crea cliente. modalidad: horas | retainer | proyecto.
+    args: {"nombre": "Acme Corp", "tarifa_hora": 500, "modalidad": "horas", "horas_comprometidas_mes": 20, "fecha_inicio": "2026-05-01", "contacto_email": "juan@acme.com"}
+
+101. **cliente_list** — Lista clientes. estado opcional (default activo).
+    args: {"estado": "activo"}
+
+102. **cliente_get** — Recupera cliente por id O por nombre exacto.
+    args: {"cliente_id": "cli-..."}  o  {"nombre": "Acme Corp"}
+
+103. **cliente_update** — Actualiza campos parciales del cliente.
+    args: {"cliente_id": "cli-...", "tarifa_hora": 600, "horas_comprometidas_mes": 30}
+
+104. **cliente_pause** — Marca el cliente como pausado (no cuenta para capacidad).
+    args: {"cliente_id": "cli-...", "razon": "vacaciones"}
+
+105. **cliente_resume** — Reactiva un cliente pausado.
+    args: {"cliente_id": "cli-..."}
+
+106. **cliente_terminar** — Marca el cliente como terminado. Conserva sesiones y facturas (audit trail).
+    args: {"cliente_id": "cli-...", "fecha_fin": "2026-04-30", "razon": "fin de proyecto"}
+
+107. **cliente_delete** — Borrado permanente (hard delete). Tambien borra sus sesiones, facturas y tarifas. Requiere confirm=true; PRIMERO pregunta al usuario y luego reenvia con confirm=true.
+    args: {"cliente_id": "cli-...", "confirm": false}
+
+108. **tarifa_actualizar** — Cambia tarifa_hora del cliente Y registra el cambio en historial (audit). Usalo cuando el usuario diga "subi la tarifa a X" o "cambie la tarifa a Y".
+    args: {"cliente_id": "cli-...", "tarifa_nueva": 700, "razon": "actualizacion anual"}
+
+109. **sesion_log** — Registra una sesion de trabajo. fecha default = hoy. facturable default = true.
+    args: {"cliente_nombre": "Acme Corp", "horas": 3, "descripcion": "revision backend", "fecha": "2026-04-24"}
+
+110. **sesion_list** — Lista sesiones (excluye soft-deleted). Filtros opcionales.
+    args: {"cliente_id": "cli-...", "desde": "2026-04-01", "hasta": "2026-04-30", "limit": 50}
+
+111. **sesion_update** — Edita sesion existente.
+    args: {"sesion_id": "ses-...", "horas": 4, "descripcion": "..."}
+
+112. **sesion_delete** — Soft-delete (la sesion queda archivada para audit, deja de contar en capacidad).
+    args: {"sesion_id": "ses-..."}
+
+113. **factura_emit** — Emite factura. monto_total se calcula como subtotal+iva. Si pasas sesion_ids, esas sesiones quedan vinculadas a la factura.
+    args: {"cliente_nombre": "Acme Corp", "monto_subtotal": 5000, "monto_iva": 800, "fecha_emision": "2026-04-30", "fecha_vencimiento": "2026-05-15", "concepto": "Trabajo abril 2026", "sesion_ids": ["ses-..."]}
+
+114. **factura_pagar** — Marca factura como pagada. fecha_pago default = hoy.
+    args: {"factura_id": "fac-...", "fecha_pago": "2026-05-12"}
+
+115. **factura_cancelar** — Cancela una factura.
+    args: {"factura_id": "fac-...", "razon": "error en concepto"}
+
+116. **factura_list** — Lista facturas con filtros opcionales.
+    args: {"cliente_id": "cli-...", "estado": "emitida", "desde": "2026-01-01", "hasta": "2026-12-31"}
+
+117. **facturas_pendientes** — Solo emitida + vencida.
+    args: {"cliente_id": "cli-..."}  o  {}
+
+118. **facturas_vencidas** — Facturas cuyo fecha_vencimiento < hoy. Auto-promueve estado 'emitida' → 'vencida'.
+    args: {}
+
+119. **freelance_overview** — Snapshot del mes: clientes activos, horas trabajadas vs comprometidas, facturacion emitida/pagada, cuentas por cobrar, alertas (vencidas, sobrecapacidad, bandwidth, drift de facturacion). Usalo para "como va el mes" / "resumen freelance".
+    args: {"mes": "2026-04"}
+
+120. **horas_libres** — Capacidad disponible. ventana: semana | mes (default semana).
+    args: {"ventana": "semana"}
+
+121. **cliente_estado** — Estado del cliente: horas mes actual vs compromiso, ultima sesion, ultima factura, monto pendiente. Usalo para "como vamos con X cliente".
+    args: {"cliente_id": "cli-..."}  o  {"nombre": "Acme Corp"}
+
+122. **ingresos_periodo** — Ingresos agregados entre fechas. agrupado_por: cliente | mes.
+    args: {"desde": "2026-01-01", "hasta": "2026-04-30", "agrupado_por": "mes"}
+
+123. **clientes_por_facturacion** — Top clientes por facturacion (descendente).
+    args: {"desde": "2026-01-01", "hasta": "2026-12-31"}
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -2454,6 +2530,31 @@ REGLAS FIRMES:
             "proyectos_atrasados" => execute_proyectos_atrasados(ctx).await,
             "proyecto_progress" => execute_proyecto_progress(&call.args, ctx).await,
             "milestones_proximos_dias" => execute_milestones_proximos_dias(&call.args, ctx).await,
+            // Freelance domain (Life Areas v1)
+            "cliente_add" => execute_cliente_add(&call.args, ctx).await,
+            "cliente_list" => execute_cliente_list(&call.args, ctx).await,
+            "cliente_get" => execute_cliente_get(&call.args, ctx).await,
+            "cliente_update" => execute_cliente_update(&call.args, ctx).await,
+            "cliente_pause" => execute_cliente_pause(&call.args, ctx).await,
+            "cliente_resume" => execute_cliente_resume(&call.args, ctx).await,
+            "cliente_terminar" => execute_cliente_terminar(&call.args, ctx).await,
+            "cliente_delete" => execute_cliente_delete(&call.args, ctx).await,
+            "tarifa_actualizar" => execute_tarifa_actualizar(&call.args, ctx).await,
+            "sesion_log" => execute_sesion_log(&call.args, ctx).await,
+            "sesion_list" => execute_sesion_list(&call.args, ctx).await,
+            "sesion_update" => execute_sesion_update(&call.args, ctx).await,
+            "sesion_delete" => execute_sesion_delete(&call.args, ctx).await,
+            "factura_emit" => execute_factura_emit(&call.args, ctx).await,
+            "factura_pagar" => execute_factura_pagar(&call.args, ctx).await,
+            "factura_cancelar" => execute_factura_cancelar(&call.args, ctx).await,
+            "factura_list" => execute_factura_list(&call.args, ctx).await,
+            "facturas_pendientes" => execute_facturas_pendientes(&call.args, ctx).await,
+            "facturas_vencidas" => execute_facturas_vencidas(ctx).await,
+            "freelance_overview" => execute_freelance_overview(&call.args, ctx).await,
+            "horas_libres" => execute_horas_libres(&call.args, ctx).await,
+            "cliente_estado" => execute_cliente_estado(&call.args, ctx).await,
+            "ingresos_periodo" => execute_ingresos_periodo(&call.args, ctx).await,
+            "clientes_por_facturacion" => execute_clientes_por_facturacion(&call.args, ctx).await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -12464,6 +12565,556 @@ max_context = 128000
             dias,
             lines.join("\n")
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // Freelance domain (Life Areas v1)
+    // -----------------------------------------------------------------------
+
+    fn freelance_str_arg<'a>(args: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+        args.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    async fn execute_cliente_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let nombre = freelance_str_arg(args, "nombre")
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'nombre'"))?;
+        let tarifa_hora = args.get("tarifa_hora").and_then(|v| v.as_f64());
+        let modalidad = freelance_str_arg(args, "modalidad");
+        let retainer_mensual = args.get("retainer_mensual").and_then(|v| v.as_f64());
+        let horas_comprometidas = args.get("horas_comprometidas_mes").and_then(|v| v.as_i64());
+        let fecha_inicio = freelance_str_arg(args, "fecha_inicio");
+        let contacto_principal = freelance_str_arg(args, "contacto_principal");
+        let email = freelance_str_arg(args, "contacto_email");
+        let tel = freelance_str_arg(args, "contacto_telefono");
+        let rfc = freelance_str_arg(args, "rfc");
+        let notas = freelance_str_arg(args, "notas");
+        let mem = require_memory(ctx).await?;
+        let id = mem
+            .cliente_add(
+                nombre,
+                tarifa_hora,
+                modalidad,
+                retainer_mensual,
+                horas_comprometidas,
+                fecha_inicio,
+                contacto_principal,
+                email,
+                tel,
+                rfc,
+                notas,
+            )
+            .await?;
+        Ok(format!("Cliente '{}' creado (id: {}).", nombre, id))
+    }
+
+    async fn execute_cliente_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let estado = freelance_str_arg(args, "estado");
+        let mem = require_memory(ctx).await?;
+        let clientes = mem.cliente_list(estado).await?;
+        if clientes.is_empty() {
+            return Ok("No hay clientes que coincidan.".into());
+        }
+        let lines: Vec<String> = clientes
+            .iter()
+            .map(|c| {
+                let tarifa = c
+                    .tarifa_hora
+                    .map(|t| format!(" tarifa=${:.2}/h", t))
+                    .unwrap_or_default();
+                let h = c
+                    .horas_comprometidas_mes
+                    .map(|h| format!(" {}h/mes", h))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] {} ({}, {}){}{}",
+                    c.cliente_id, c.nombre, c.estado, c.modalidad, tarifa, h
+                )
+            })
+            .collect();
+        Ok(format!("Clientes:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_cliente_get(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let key = freelance_str_arg(args, "cliente_id")
+            .or_else(|| freelance_str_arg(args, "nombre"))
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id' o 'nombre'"))?;
+        let mem = require_memory(ctx).await?;
+        match mem.cliente_get(key).await? {
+            None => Ok(format!("No encontre cliente '{}'.", key)),
+            Some(c) => Ok(serde_json::to_string_pretty(&c)
+                .unwrap_or_else(|_| format!("Cliente {}: {}", c.cliente_id, c.nombre))),
+        }
+    }
+
+    async fn execute_cliente_update(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let cliente_id = freelance_str_arg(args, "cliente_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id'"))?;
+        let mut update = crate::memory_plane::FreelanceClienteUpdate::default();
+        if let Some(s) = freelance_str_arg(args, "nombre") {
+            update.nombre = Some(s.to_string());
+        }
+        if let Some(s) = freelance_str_arg(args, "contacto_principal") {
+            update.contacto_principal = Some(s.to_string());
+        }
+        if let Some(s) = freelance_str_arg(args, "contacto_email") {
+            update.contacto_email = Some(s.to_string());
+        }
+        if let Some(s) = freelance_str_arg(args, "contacto_telefono") {
+            update.contacto_telefono = Some(s.to_string());
+        }
+        if let Some(s) = freelance_str_arg(args, "rfc") {
+            update.rfc = Some(s.to_string());
+        }
+        if let Some(v) = args.get("tarifa_hora").and_then(|v| v.as_f64()) {
+            update.tarifa_hora = Some(v);
+        }
+        if let Some(s) = freelance_str_arg(args, "modalidad") {
+            update.modalidad = Some(s.to_string());
+        }
+        if let Some(v) = args.get("retainer_mensual").and_then(|v| v.as_f64()) {
+            update.retainer_mensual = Some(v);
+        }
+        if let Some(v) = args.get("horas_comprometidas_mes").and_then(|v| v.as_i64()) {
+            update.horas_comprometidas_mes = Some(v);
+        }
+        if let Some(s) = freelance_str_arg(args, "fecha_inicio") {
+            update.fecha_inicio = Some(s.to_string());
+        }
+        if let Some(s) = freelance_str_arg(args, "fecha_fin") {
+            update.fecha_fin = Some(s.to_string());
+        }
+        if let Some(s) = freelance_str_arg(args, "estado") {
+            update.estado = Some(s.to_string());
+        }
+        if let Some(s) = freelance_str_arg(args, "notas") {
+            update.notas = Some(s.to_string());
+        }
+        let mem = require_memory(ctx).await?;
+        let updated = mem.cliente_update(cliente_id, update).await?;
+        if updated {
+            Ok(format!("Cliente {} actualizado.", cliente_id))
+        } else {
+            Ok(format!(
+                "No encontre cliente {} (o no se actualizo nada).",
+                cliente_id
+            ))
+        }
+    }
+
+    async fn execute_cliente_pause(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let cliente_id = freelance_str_arg(args, "cliente_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id'"))?;
+        let razon = freelance_str_arg(args, "razon");
+        let mem = require_memory(ctx).await?;
+        let ok = mem.cliente_pause(cliente_id, razon).await?;
+        Ok(if ok {
+            format!("Cliente {} pausado.", cliente_id)
+        } else {
+            format!("No encontre cliente {}.", cliente_id)
+        })
+    }
+
+    async fn execute_cliente_resume(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let cliente_id = freelance_str_arg(args, "cliente_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.cliente_resume(cliente_id).await?;
+        Ok(if ok {
+            format!("Cliente {} reactivado.", cliente_id)
+        } else {
+            format!("No encontre cliente {}.", cliente_id)
+        })
+    }
+
+    async fn execute_cliente_terminar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let cliente_id = freelance_str_arg(args, "cliente_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id'"))?;
+        let fecha_fin = freelance_str_arg(args, "fecha_fin");
+        let razon = freelance_str_arg(args, "razon");
+        let mem = require_memory(ctx).await?;
+        let ok = mem.cliente_terminar(cliente_id, fecha_fin, razon).await?;
+        Ok(if ok {
+            format!("Cliente {} terminado.", cliente_id)
+        } else {
+            format!("No encontre cliente {}.", cliente_id)
+        })
+    }
+
+    async fn execute_cliente_delete(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let cliente_id = freelance_str_arg(args, "cliente_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id'"))?;
+        // Hard delete is destructive — confirm + rate-limit gate.
+        if let Err(msg) = destructive_preflight("cliente_delete", args) {
+            return Ok(msg);
+        }
+        let mem = require_memory(ctx).await?;
+        let ok = mem.cliente_delete(cliente_id).await?;
+        let response = if ok {
+            format!(
+                "Borre permanentemente cliente {} y todas sus sesiones, facturas y tarifas.",
+                cliente_id
+            )
+        } else {
+            format!("No encontre cliente {}.", cliente_id)
+        };
+        audit_destructive("cliente_delete", args, &response);
+        Ok(response)
+    }
+
+    async fn execute_tarifa_actualizar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let cliente_id = freelance_str_arg(args, "cliente_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id'"))?;
+        let tarifa_nueva = args
+            .get("tarifa_nueva")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| anyhow::anyhow!("Falta 'tarifa_nueva' (numero)"))?;
+        let razon = freelance_str_arg(args, "razon");
+        let mem = require_memory(ctx).await?;
+        mem.tarifa_actualizar(cliente_id, tarifa_nueva, razon)
+            .await?;
+        Ok(format!(
+            "Tarifa de cliente {} actualizada a ${:.2}/h (cambio registrado en historial).",
+            cliente_id, tarifa_nueva
+        ))
+    }
+
+    async fn execute_sesion_log(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let key = freelance_str_arg(args, "cliente_id")
+            .or_else(|| freelance_str_arg(args, "cliente_nombre"))
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id' o 'cliente_nombre'"))?;
+        let horas = args
+            .get("horas")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| anyhow::anyhow!("Falta 'horas' (numero)"))?;
+        let fecha = freelance_str_arg(args, "fecha");
+        let descripcion = freelance_str_arg(args, "descripcion");
+        let hora_inicio = freelance_str_arg(args, "hora_inicio");
+        let hora_fin = freelance_str_arg(args, "hora_fin");
+        let facturable = args.get("facturable").and_then(|v| v.as_bool());
+        let mem = require_memory(ctx).await?;
+        let id = mem
+            .sesion_log(
+                key,
+                horas,
+                fecha,
+                descripcion,
+                hora_inicio,
+                hora_fin,
+                facturable,
+            )
+            .await?;
+        Ok(format!(
+            "Sesion registrada: {:.2}h con cliente '{}' (id: {}).",
+            horas, key, id
+        ))
+    }
+
+    async fn execute_sesion_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let cliente_id = freelance_str_arg(args, "cliente_id");
+        let desde = freelance_str_arg(args, "desde");
+        let hasta = freelance_str_arg(args, "hasta");
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+        let mem = require_memory(ctx).await?;
+        let sesiones = mem.sesion_list(cliente_id, desde, hasta, limit).await?;
+        if sesiones.is_empty() {
+            return Ok("No hay sesiones para esos filtros.".into());
+        }
+        let lines: Vec<String> = sesiones
+            .iter()
+            .map(|s| {
+                format!(
+                    "- {} | {} | {:.2}h{}{}",
+                    s.fecha,
+                    s.cliente_id,
+                    s.horas,
+                    if s.facturable {
+                        " [facturable]"
+                    } else {
+                        " [no facturable]"
+                    },
+                    if !s.descripcion.is_empty() {
+                        format!(" — {}", s.descripcion)
+                    } else {
+                        String::new()
+                    }
+                )
+            })
+            .collect();
+        Ok(format!("Sesiones:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_sesion_update(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let sesion_id = freelance_str_arg(args, "sesion_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'sesion_id'"))?;
+        let mut update = crate::memory_plane::FreelanceSesionUpdate::default();
+        if let Some(s) = freelance_str_arg(args, "fecha") {
+            update.fecha = Some(s.to_string());
+        }
+        if let Some(s) = freelance_str_arg(args, "hora_inicio") {
+            update.hora_inicio = Some(s.to_string());
+        }
+        if let Some(s) = freelance_str_arg(args, "hora_fin") {
+            update.hora_fin = Some(s.to_string());
+        }
+        if let Some(v) = args.get("horas").and_then(|v| v.as_f64()) {
+            update.horas = Some(v);
+        }
+        if let Some(s) = freelance_str_arg(args, "descripcion") {
+            update.descripcion = Some(s.to_string());
+        }
+        if let Some(v) = args.get("facturable").and_then(|v| v.as_bool()) {
+            update.facturable = Some(v);
+        }
+        let mem = require_memory(ctx).await?;
+        let ok = mem.sesion_update(sesion_id, update).await?;
+        Ok(if ok {
+            format!("Sesion {} actualizada.", sesion_id)
+        } else {
+            format!("No encontre sesion {} (o no habia cambios).", sesion_id)
+        })
+    }
+
+    async fn execute_sesion_delete(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let sesion_id = freelance_str_arg(args, "sesion_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'sesion_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.sesion_delete(sesion_id).await?;
+        Ok(if ok {
+            format!("Sesion {} archivada (soft delete).", sesion_id)
+        } else {
+            format!("No encontre sesion {}.", sesion_id)
+        })
+    }
+
+    async fn execute_factura_emit(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let cliente = freelance_str_arg(args, "cliente_id")
+            .or_else(|| freelance_str_arg(args, "cliente_nombre"))
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id' o 'cliente_nombre'"))?;
+        let monto_subtotal = args
+            .get("monto_subtotal")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| anyhow::anyhow!("Falta 'monto_subtotal' (numero)"))?;
+        let monto_iva = args.get("monto_iva").and_then(|v| v.as_f64());
+        let fecha_emision = freelance_str_arg(args, "fecha_emision");
+        let fecha_vencimiento = freelance_str_arg(args, "fecha_vencimiento");
+        let concepto = freelance_str_arg(args, "concepto");
+        let numero_externo = freelance_str_arg(args, "numero_externo");
+        let sesion_ids = args
+            .get("sesion_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            });
+        let mem = require_memory(ctx).await?;
+        let id = mem
+            .factura_emit(
+                cliente,
+                monto_subtotal,
+                monto_iva,
+                fecha_emision,
+                fecha_vencimiento,
+                concepto,
+                numero_externo,
+                sesion_ids,
+            )
+            .await?;
+        Ok(format!(
+            "Factura emitida por ${:.2} subtotal a '{}' (id: {}).",
+            monto_subtotal, cliente, id
+        ))
+    }
+
+    async fn execute_factura_pagar(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let factura_id = freelance_str_arg(args, "factura_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'factura_id'"))?;
+        let fecha_pago = freelance_str_arg(args, "fecha_pago");
+        let mem = require_memory(ctx).await?;
+        let ok = mem.factura_pagar(factura_id, fecha_pago).await?;
+        Ok(if ok {
+            format!("Factura {} marcada como pagada.", factura_id)
+        } else {
+            format!("No encontre factura {} (o esta cancelada).", factura_id)
+        })
+    }
+
+    async fn execute_factura_cancelar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let factura_id = freelance_str_arg(args, "factura_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'factura_id'"))?;
+        let razon = freelance_str_arg(args, "razon");
+        let mem = require_memory(ctx).await?;
+        let ok = mem.factura_cancelar(factura_id, razon).await?;
+        Ok(if ok {
+            format!("Factura {} cancelada.", factura_id)
+        } else {
+            format!("No encontre factura {}.", factura_id)
+        })
+    }
+
+    async fn execute_factura_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let cliente_id = freelance_str_arg(args, "cliente_id");
+        let estado = freelance_str_arg(args, "estado");
+        let desde = freelance_str_arg(args, "desde");
+        let hasta = freelance_str_arg(args, "hasta");
+        let mem = require_memory(ctx).await?;
+        let facturas = mem.factura_list(cliente_id, estado, desde, hasta).await?;
+        if facturas.is_empty() {
+            return Ok("No hay facturas para esos filtros.".into());
+        }
+        let lines: Vec<String> = facturas
+            .iter()
+            .map(|f| {
+                format!(
+                    "- {} | {} | ${:.2} {} | {} → vto {}",
+                    f.factura_id,
+                    f.cliente_id,
+                    f.monto_total,
+                    f.moneda,
+                    f.estado,
+                    f.fecha_vencimiento.as_deref().unwrap_or("-")
+                )
+            })
+            .collect();
+        Ok(format!("Facturas:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_facturas_pendientes(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let cliente_id = freelance_str_arg(args, "cliente_id");
+        let mem = require_memory(ctx).await?;
+        let facturas = mem.facturas_pendientes(cliente_id).await?;
+        if facturas.is_empty() {
+            return Ok("No hay facturas pendientes.".into());
+        }
+        let total: f64 = facturas.iter().map(|f| f.monto_total).sum();
+        let lines: Vec<String> = facturas
+            .iter()
+            .map(|f| {
+                format!(
+                    "- {} | ${:.2} | {} | vto {}",
+                    f.cliente_id,
+                    f.monto_total,
+                    f.estado,
+                    f.fecha_vencimiento.as_deref().unwrap_or("-")
+                )
+            })
+            .collect();
+        Ok(format!(
+            "Facturas pendientes (total ${:.2}):\n{}",
+            total,
+            lines.join("\n")
+        ))
+    }
+
+    async fn execute_facturas_vencidas(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let facturas = mem.facturas_vencidas().await?;
+        if facturas.is_empty() {
+            return Ok("Ninguna factura vencida.".into());
+        }
+        let total: f64 = facturas.iter().map(|f| f.monto_total).sum();
+        let lines: Vec<String> = facturas
+            .iter()
+            .map(|f| {
+                format!(
+                    "- {} | ${:.2} | vto {}",
+                    f.cliente_id,
+                    f.monto_total,
+                    f.fecha_vencimiento.as_deref().unwrap_or("-")
+                )
+            })
+            .collect();
+        Ok(format!(
+            "Facturas vencidas (total ${:.2}):\n{}",
+            total,
+            lines.join("\n")
+        ))
+    }
+
+    async fn execute_freelance_overview(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mes = freelance_str_arg(args, "mes");
+        let mem = require_memory(ctx).await?;
+        let ov = mem.freelance_overview(mes).await?;
+        Ok(serde_json::to_string_pretty(&ov).unwrap_or_else(|_| {
+            format!(
+                "Overview {}: {} clientes, {:.2}h, ${:.2} emitida",
+                ov.mes, ov.clientes_activos, ov.horas_trabajadas, ov.facturacion_emitida
+            )
+        }))
+    }
+
+    async fn execute_horas_libres(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let ventana = freelance_str_arg(args, "ventana").unwrap_or("semana");
+        let mem = require_memory(ctx).await?;
+        let h = mem.horas_libres(ventana).await?;
+        Ok(format!(
+            "Capacidad ({}): {:.1}h trabajadas / {:.1}h comprometidas → {:.1}h disponibles ({:.0}% capacidad).",
+            h.ventana,
+            h.horas_trabajadas,
+            h.horas_comprometidas,
+            h.horas_disponibles,
+            h.capacidad_pct
+        ))
+    }
+
+    async fn execute_cliente_estado(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let key = freelance_str_arg(args, "cliente_id")
+            .or_else(|| freelance_str_arg(args, "nombre"))
+            .ok_or_else(|| anyhow::anyhow!("Falta 'cliente_id' o 'nombre'"))?;
+        let mem = require_memory(ctx).await?;
+        let s = mem.cliente_estado(key).await?;
+        Ok(serde_json::to_string_pretty(&s).unwrap_or_else(|_| {
+            format!(
+                "Estado de {}: {:.2}h este mes, ${:.2} pendiente",
+                s.nombre, s.horas_mes_actual, s.monto_pendiente
+            )
+        }))
+    }
+
+    async fn execute_ingresos_periodo(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let desde = freelance_str_arg(args, "desde")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'desde' (YYYY-MM-DD)"))?;
+        let hasta = freelance_str_arg(args, "hasta")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'hasta' (YYYY-MM-DD)"))?;
+        let agrupado_por = freelance_str_arg(args, "agrupado_por").unwrap_or("mes");
+        let mem = require_memory(ctx).await?;
+        let buckets = mem.ingresos_periodo(desde, hasta, agrupado_por).await?;
+        Ok(serde_json::to_string_pretty(&buckets).unwrap_or_else(|_| String::from("[]")))
+    }
+
+    async fn execute_clientes_por_facturacion(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let desde = freelance_str_arg(args, "desde");
+        let hasta = freelance_str_arg(args, "hasta");
+        let mem = require_memory(ctx).await?;
+        let buckets = mem.clientes_por_facturacion(desde, hasta).await?;
+        Ok(serde_json::to_string_pretty(&buckets).unwrap_or_else(|_| String::from("[]")))
     }
 }
 

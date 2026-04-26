@@ -207,3 +207,11 @@ Each promoted item:
 Best-effort: per-item failure is logged via `warn!` but the meeting
 flow continues. Empty action_items, blank `what`, and an unwired
 memory_plane all return cleanly without panicking.
+
+## Freelance Domain (PR #49) — first Life Areas dominio
+
+PRD: `docs/strategy/prd-freelance-domain.md`. Tables: `freelance_clientes`,
+`freelance_sesiones`, `freelance_facturas`, `freelance_tarifas_history`.
+~24 LLM tools registered (cliente CRUD, sesión log, factura emit, analytics).
+REST under `/api/v1/freelance/`. Encrypts notas/descripcion/concepto;
+money REAL plaintext for analytics.
