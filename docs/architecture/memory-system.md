@@ -170,6 +170,25 @@ destructivas: requieren `confirm: true` por defecto (gate-able via
 y audit log append-only en
 `~/.local/share/lifeos/destructive_actions.log` (mode 0600).
 
+## Sprint 3+4 quick wins (2026-04-26 — PR #46)
+
+- **Filter `embedding_source != 'fallback'` in semantic search defaults**: when
+  the embedding server is down, hash-fallback embeddings produce noise in
+  cosine search. Excluded by default; opt-in via
+  `search_entries_include_fallback()` for diagnostics.
+- **Batched `apply_decay`**: replaces single 30-90s lock at 500k rows with
+  chunked transactions (`DECAY_CHUNK_SIZE = 100`). Lost-update guard via
+  `WHERE importance = ?old` so concurrent writers win.
+- **`source_entry_id` from LLM in KG triples**: the `graph_add` tool now
+  accepts an optional `source_entry_id` arg so the LLM can link a fact back
+  to the memory entry that motivated it. `add_triple` validates existence;
+  hallucinated IDs drop to `NULL` with a `warn!` log (triple still stored,
+  just unlinked).
+- **`PATCH /api/v1/memory/entries/:id`**: dashboard can now edit an entry's
+  content / importance / tags without going through the LLM tool path. New
+  `MemoryPlaneManager::get_entry()` single-row getter avoids the prior
+  `list_entries(200, ...)` workaround.
+
 ## Sprint 3 item 14 — meeting action items → memory_entries (2026-04-26 — PR #47)
 
 When a meeting completes (auto-detect or manual stop), action items

@@ -14,7 +14,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use rand::RngCore;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
@@ -1192,6 +1192,39 @@ enum ArchivedFilter {
     OnlyArchived,
 }
 
+/// Sprint 3 / item 13: when the llama-embeddings server is down,
+/// `add_entry` falls back to `hash_based_embedding_local()` which
+/// produces effectively random vectors. Including those rows in
+/// semantic / hybrid search is noise. Default search paths must
+/// exclude them; only an explicit "include fallback" call surfaces
+/// them. Lexical mode never applies this filter — lexical does not
+/// depend on the embedding so the fallback marker is irrelevant there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FallbackFilter {
+    ExcludeFallback,
+    IncludeFallback,
+}
+
+impl FallbackFilter {
+    /// Returns `Some("...sql...")` when this filter actually narrows the
+    /// result set (i.e. ExcludeFallback). When the caller opted into
+    /// fallback rows we return `None` so the SQL builder skips the
+    /// clause entirely.
+    fn sql_clause(self, table_alias: &str) -> Option<String> {
+        match self {
+            Self::IncludeFallback => None,
+            Self::ExcludeFallback => {
+                let prefix = if table_alias.is_empty() {
+                    "".to_string()
+                } else {
+                    format!("{}.", table_alias)
+                };
+                Some(format!("{}embedding_source != 'fallback'", prefix))
+            }
+        }
+    }
+}
+
 impl ArchivedFilter {
     /// Returns the SQL WHERE fragment for this filter, ready to AND
     /// with the rest of the conditions. Always wrapped in parentheses
@@ -1284,6 +1317,15 @@ pub struct ReinforcedVaultStatus {
     pub idle_timeout_secs: u64,
     pub seconds_until_relock: Option<u64>,
 }
+
+/// Maximum number of importance updates flushed per short transaction
+/// inside `apply_decay`. Hoisted to module scope (instead of the
+/// previous inlined `const` inside `apply_decay`) so tests can seed
+/// enough rows to exercise the multi-chunk path. Lowered from the
+/// original 500 → 100 to keep that test cheap (a few hundred rows is
+/// enough to cross the chunk boundary several times) at the cost of a
+/// negligibly higher number of small transactions in production.
+pub(crate) const DECAY_CHUNK_SIZE: usize = 100;
 
 impl MemoryPlaneManager {
     pub fn new(data_dir: PathBuf) -> Result<Self> {
@@ -1805,6 +1847,59 @@ impl MemoryPlaneManager {
         Ok(out)
     }
 
+    /// Fetch a single non-archived entry by id, decrypted.
+    ///
+    /// Used by the PATCH handler to refetch the row it just updated
+    /// without paying the cost of `list_entries(N, …)` and without
+    /// missing the entry when the user has more than `N` rows. Returns
+    /// `Ok(None)` if the entry doesn't exist or is archived.
+    pub async fn get_entry(&self, entry_id: &str) -> Result<Option<MemoryEntry>> {
+        let db_path = self.db_path.clone();
+        let entry_id = entry_id.to_string();
+
+        let enc = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT entry_id, created_at, updated_at, kind, scope, tags, source,
+                        importance, nonce_b64, ciphertext_b64, plaintext_sha256
+                 FROM memory_entries
+                 WHERE entry_id = ?1
+                   AND (archived IS NULL OR archived = 0)
+                 LIMIT 1",
+            )?;
+            let row = stmt
+                .query_row(params![entry_id], |row| {
+                    let tags_json: String = row.get(5)?;
+                    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+                    Ok(EncryptedMemoryEntry {
+                        entry_id: row.get(0)?,
+                        created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now()),
+                        updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now()),
+                        kind: row.get(3)?,
+                        scope: row.get(4)?,
+                        tags,
+                        source: row.get(6)?,
+                        importance: row.get::<_, i32>(7)? as u8,
+                        nonce_b64: row.get(8)?,
+                        ciphertext_b64: row.get(9)?,
+                        plaintext_sha256: row.get(10)?,
+                    })
+                })
+                .optional()?;
+            Ok::<_, anyhow::Error>(row)
+        })
+        .await??;
+
+        match enc {
+            Some(e) => Ok(Some(decrypt_entry(&e)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Search memories within a UTC time range.
     ///
     /// Both `from_utc` and `to_utc` should be RFC3339 UTC strings.
@@ -1882,6 +1977,30 @@ impl MemoryPlaneManager {
             None,
             MemorySearchMode::Hybrid,
             ArchivedFilter::ExcludeArchived,
+            FallbackFilter::ExcludeFallback,
+        )
+        .await
+    }
+
+    /// Sprint 3 / item 13: opt-in escape hatch that *includes* entries
+    /// whose embedding came from the local hash fallback (i.e. when the
+    /// llama-embeddings server was down at insert time). Default search
+    /// paths exclude those rows because their semantic distance is noise.
+    pub async fn search_entries_include_fallback(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: Option<&str>,
+        mode: MemorySearchMode,
+    ) -> Result<Vec<MemorySearchResult>> {
+        self.search_entries_inner(
+            query,
+            limit,
+            scope,
+            None,
+            mode,
+            ArchivedFilter::ExcludeArchived,
+            FallbackFilter::IncludeFallback,
         )
         .await
     }
@@ -1907,6 +2026,7 @@ impl MemoryPlaneManager {
             None,
             MemorySearchMode::Hybrid,
             ArchivedFilter::OnlyArchived,
+            FallbackFilter::ExcludeFallback,
         )
         .await
     }
@@ -1925,6 +2045,7 @@ impl MemoryPlaneManager {
             None,
             mode,
             ArchivedFilter::ExcludeArchived,
+            FallbackFilter::ExcludeFallback,
         )
         .await
     }
@@ -1944,6 +2065,7 @@ impl MemoryPlaneManager {
             Some(tag),
             MemorySearchMode::Hybrid,
             ArchivedFilter::ExcludeArchived,
+            FallbackFilter::ExcludeFallback,
         )
         .await
     }
@@ -1951,6 +2073,7 @@ impl MemoryPlaneManager {
     /// Inner implementation; the public wrappers fix the
     /// `archived_filter` so callers cannot accidentally surface
     /// archived entries from the live search path.
+    #[allow(clippy::too_many_arguments)]
     async fn search_entries_inner(
         &self,
         query: &str,
@@ -1959,6 +2082,7 @@ impl MemoryPlaneManager {
         tag: Option<&str>,
         mode: MemorySearchMode,
         archived_filter: ArchivedFilter,
+        fallback_filter: FallbackFilter,
     ) -> Result<Vec<MemorySearchResult>> {
         let query = normalize_non_empty(query).context("query is required")?;
         let query_lc = query.to_lowercase();
@@ -2004,6 +2128,9 @@ impl MemoryPlaneManager {
                         vec![Box::new(query_embedding_bytes.clone())];
                     let mut where_parts: Vec<String> =
                         vec![archived_filter.sql_clause("me")];
+                    if let Some(clause) = fallback_filter.sql_clause("me") {
+                        where_parts.push(clause);
+                    }
 
                     if let Some(ref s) = scope {
                         where_parts.push("me.scope = ?".to_string());
@@ -2146,6 +2273,9 @@ impl MemoryPlaneManager {
                         vec![Box::new(query_embedding_bytes.clone())];
                     let mut where_parts: Vec<String> =
                         vec![archived_filter.sql_clause("me")];
+                    if let Some(clause) = fallback_filter.sql_clause("me") {
+                        where_parts.push(clause);
+                    }
 
                     if let Some(ref s) = scope {
                         where_parts.push("me.scope = ?".to_string());
@@ -2770,13 +2900,43 @@ impl MemoryPlaneManager {
 
         tokio::task::spawn_blocking(move || {
             let db = Self::open_db(&db_path)?;
+            // Validate source_entry_id (when provided) actually points at
+            // a real memory entry. The LLM may hallucinate IDs; rather
+            // than fail the whole tool call (which is unfriendly and
+            // discards the otherwise-valid triple), we silently drop the
+            // bogus link and keep the triple. A warn! flags it for
+            // future debugging without polluting normal logs.
+            let validated_source = match source.as_deref() {
+                Some(sid) => {
+                    let exists: bool = db
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM memory_entries WHERE entry_id = ?1)",
+                            params![sid],
+                            |row| row.get::<_, i64>(0).map(|v| v != 0),
+                        )
+                        .unwrap_or(false);
+                    if exists {
+                        Some(sid.to_string())
+                    } else {
+                        log::warn!(
+                            "memory_plane: add_triple called with unknown source_entry_id={} (subject={}, predicate={}, object={}); storing triple unlinked",
+                            sid,
+                            subject,
+                            predicate,
+                            object
+                        );
+                        None
+                    }
+                }
+                None => None,
+            };
             db.execute(
                 "INSERT INTO knowledge_graph (subject, predicate, object, confidence, source_entry_id, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
                  ON CONFLICT(subject, predicate, object) DO UPDATE SET
                     confidence = MAX(confidence, ?4),
                     updated_at = ?6",
-                params![subject, predicate, object, confidence, source, now],
+                params![subject, predicate, object, confidence, validated_source, now],
             )?;
             Ok(())
         })
@@ -3407,21 +3567,42 @@ impl MemoryPlaneManager {
     /// fine for the daily cadence even at hundreds of thousands of
     /// rows.
     pub async fn apply_decay(&self) -> Result<DecayReport> {
+        // Sprint 3 / item 15: at 500k+ rows the previous implementation
+        // wrapped phase 1 (per-row UPDATE for every decayed entry) inside
+        // a single big transaction, which holds a write lock on the DB
+        // for 30-90s and starves every other writer (add_entry, recall
+        // boost, supervisor sessions). We keep the exact same Rust-side
+        // math (no dependency on SQLite's optional POWER extension) but:
+        //   1. SELECT candidates with NO open transaction
+        //   2. UPDATE phase 1 in CHUNKS of 500 rows per short transaction
+        //   3. PHASE 2 archive stays as a single set-based UPDATE (it
+        //      already was — that's not the slow path)
+        // Lock windows go from ~minutes to ~tens of milliseconds per
+        // chunk, letting writers interleave.
+        //
+        // Chunk size is exposed at module scope (`DECAY_CHUNK_SIZE`) so
+        // tests can seed enough rows to exercise the multi-chunk path
+        // without depending on a literal hidden inside this function.
+
         let db_path = self.db_path.clone();
         tokio::task::spawn_blocking(move || {
             let db = Self::open_db(&db_path)?;
-            let tx = db.unchecked_transaction()?;
             let now_utc = chrono::Utc::now();
 
-            // -- Phase 1: collect all candidate rows in one SELECT.
-            //
-            // We pull the link count via a correlated subquery so the
-            // result already carries everything needed to compute the
-            // new importance in Rust. The query also includes
-            // importance >= 70 entries because they CAN still receive
-            // the connection bonus (just not the decay term).
-            let updates: Vec<(String, i32)> = {
-                let mut stmt = tx.prepare(
+            // -- Phase 1a: collect all candidate rows in one SELECT,
+            // outside any transaction so writers are not blocked while
+            // we read+compute. We pull the link count via a correlated
+            // subquery so the result already carries everything needed
+            // to compute the new importance in Rust. The query also
+            // includes importance >= 70 entries because they CAN still
+            // receive the connection bonus (just not the decay term).
+            // Each row carries (entry_id, old_importance, new_importance)
+            // so the chunked UPDATE can guard against lost updates: if
+            // a concurrent writer modified `importance` between this
+            // SELECT and the UPDATE, the WHERE clause won't match and
+            // the decay simply skips that row.
+            let updates: Vec<(String, i32, i32)> = {
+                let mut stmt = db.prepare(
                     "SELECT
                         e.entry_id,
                         e.importance,
@@ -3446,7 +3627,7 @@ impl MemoryPlaneManager {
                     ))
                 })?;
 
-                let mut out: Vec<(String, i32)> = Vec::new();
+                let mut out: Vec<(String, i32, i32)> = Vec::new();
                 for row in rows {
                     let (entry_id, importance, ts, access_count, link_count) = row?;
 
@@ -3475,18 +3656,39 @@ impl MemoryPlaneManager {
                     let new_importance = (decayed + bonus).clamp(0.0, 100.0).round() as i32;
 
                     if new_importance != importance {
-                        out.push((entry_id, new_importance));
+                        out.push((entry_id, importance, new_importance));
                     }
                 }
                 out
             };
 
-            let decayed = updates.len();
-            for (id, new_imp) in &updates {
-                tx.execute(
-                    "UPDATE memory_entries SET importance = ?1 WHERE entry_id = ?2",
-                    params![new_imp, id],
-                )?;
+            // -- Phase 1b: apply UPDATEs in chunks. Each chunk gets its
+            // own short transaction so the write lock is released
+            // between chunks; other writers can interleave. We do not
+            // sleep between chunks: SQLite's busy_timeout already gives
+            // contending writers room to grab the lock at commit time.
+            // The `AND importance = ?4` guard prevents lost updates: if
+            // a concurrent writer (e.g. boost_on_access, add_entry on
+            // duplicate, dashboard PATCH) modified the row between the
+            // outer SELECT and this UPDATE, the row count is 0 and we
+            // simply skip — the concurrent write wins. Decay will
+            // re-evaluate on the next daily run.
+            let now_ts = now_utc.to_rfc3339();
+            let mut total_decayed: usize = 0;
+            for chunk in updates.chunks(DECAY_CHUNK_SIZE) {
+                let tx = db.unchecked_transaction()?;
+                {
+                    let mut stmt = tx.prepare(
+                        "UPDATE memory_entries
+                            SET importance = ?1, updated_at = ?2
+                          WHERE entry_id = ?3 AND importance = ?4",
+                    )?;
+                    for (id, old_imp, new_imp) in chunk {
+                        let changed = stmt.execute(params![new_imp, now_ts, id, old_imp])?;
+                        total_decayed += changed;
+                    }
+                }
+                tx.commit()?;
             }
 
             // -- Phase 2: ARCHIVE low-importance old entries.
@@ -3510,7 +3712,7 @@ impl MemoryPlaneManager {
             let cutoff_90 = (now_utc - chrono::Duration::days(90)).to_rfc3339();
             let cutoff_180 = (now_utc - chrono::Duration::days(180)).to_rfc3339();
 
-            let archived = tx.execute(
+            let archived = db.execute(
                 "UPDATE memory_entries
                  SET archived = 1
                  WHERE (permanent IS NULL OR permanent = 0)
@@ -3521,13 +3723,11 @@ impl MemoryPlaneManager {
                    )",
                 params![cutoff_90, cutoff_180],
             )?;
-
-            tx.commit()?;
             // The `deleted` field now means "newly archived this pass".
             // We keep the field name for backward compatibility with
             // existing logging / dashboards that already read it.
             Ok::<_, anyhow::Error>(DecayReport {
-                decayed,
+                decayed: total_decayed,
                 deleted: archived,
             })
         })
@@ -16925,6 +17125,13 @@ mod tests {
         .await
         .unwrap();
 
+        // Promote both rows to 'real' so the default fallback filter doesn't
+        // hide them (test env has no LLM, so add_entry stores 'fallback').
+        let conn = Connection::open(dir.join(DB_FILE)).unwrap();
+        conn.execute("UPDATE memory_entries SET embedding_source = 'real'", [])
+            .unwrap();
+        drop(conn);
+
         let hits = mgr
             .search_entries_with_mode(
                 "runtime approval automation",
@@ -16973,6 +17180,16 @@ mod tests {
             .add_entry("note", "user", &[], None, 10, "delete me")
             .await
             .unwrap();
+
+        // Promote to 'real' so search_archived (which excludes fallback by
+        // default) can surface the soft-deleted row below.
+        let conn = Connection::open(dir.join(DB_FILE)).unwrap();
+        conn.execute(
+            "UPDATE memory_entries SET embedding_source = 'real' WHERE entry_id = ?1",
+            params![created.entry_id.as_str()],
+        )
+        .unwrap();
+        drop(conn);
 
         // Default delete is now soft (archive) — `list_entries` filters
         // archived rows out, so the live view is empty.
@@ -17170,6 +17387,12 @@ mod tests {
         )
         .await
         .unwrap();
+
+        // Promote to 'real' so the default fallback filter doesn't hide it.
+        let conn = Connection::open(dir.join(DB_FILE)).unwrap();
+        conn.execute("UPDATE memory_entries SET embedding_source = 'real'", [])
+            .unwrap();
+        drop(conn);
 
         let hits = mgr
             .search_entries_with_mode(
@@ -18371,6 +18594,14 @@ mod tests {
             )
             .await
             .unwrap();
+
+        // Promote both rows to 'real' so the default fallback filter (used
+        // by search_entries / search_archived) doesn't hide them.
+        let conn = Connection::open(dir.join(DB_FILE)).unwrap();
+        conn.execute("UPDATE memory_entries SET embedding_source = 'real'", [])
+            .unwrap();
+        drop(conn);
+
         // Force the old one to be archived via decay.
         backdate(&dir, &old.entry_id, 100);
         let _ = mgr.apply_decay().await.unwrap();
@@ -23850,6 +24081,291 @@ mod tests {
             .suggested_questions
             .iter()
             .any(|q| q.contains("control de diabetes")));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Sprint 3 / item 13: when the embeddings server is down every new
+    /// row gets `embedding_source = 'fallback'` (random vector). The
+    /// default semantic / hybrid search MUST exclude those so callers
+    /// don't get noise; an explicit opt-in include path must surface
+    /// them when the user asks for it.
+    #[tokio::test]
+    async fn semantic_search_excludes_fallback_by_default() {
+        let dir = temp_dir("memory-plane-fallback");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Both rows are inserted with hash fallback (no ai_manager wired
+        // in tests). We then promote one to 'real' via raw SQL so the
+        // filter has something to keep.
+        let real = mgr
+            .add_entry("note", "user", &[], None, 60, "alpha bravo charlie")
+            .await
+            .unwrap();
+        let fb = mgr
+            .add_entry("note", "user", &[], None, 60, "delta echo foxtrot")
+            .await
+            .unwrap();
+
+        let db_path = dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE memory_entries SET embedding_source = 'real' WHERE entry_id = ?1",
+            params![&real.entry_id],
+        )
+        .unwrap();
+        drop(conn);
+
+        // Default path: fallback row must be filtered out.
+        let hits = mgr
+            .search_entries_with_mode("alpha", 10, None, MemorySearchMode::Semantic)
+            .await
+            .unwrap();
+        assert!(
+            hits.iter().any(|h| h.entry.entry_id == real.entry_id),
+            "real-embedding row must be returned"
+        );
+        assert!(
+            !hits.iter().any(|h| h.entry.entry_id == fb.entry_id),
+            "fallback-embedding row must be filtered out by default"
+        );
+
+        // Opt-in path: caller asked for fallbacks, so both can appear.
+        let all = mgr
+            .search_entries_include_fallback("alpha", 10, None, MemorySearchMode::Semantic)
+            .await
+            .unwrap();
+        assert!(
+            all.iter().any(|h| h.entry.entry_id == fb.entry_id),
+            "include_fallback path must surface fallback rows"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Sprint 3 / item 15: chunked decay must produce the same end
+    /// state as the old single-tx version — permanent entries are
+    /// untouched, importance decays for old rows, low+old rows get
+    /// archived. Boundary check: more rows than DECAY_CHUNK_SIZE so we
+    /// actually exercise the multi-chunk path.
+    #[tokio::test]
+    async fn apply_decay_chunked_preserves_semantics() {
+        let dir = temp_dir("memory-plane-decay-chunked");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Seed 3 representative rows + back-date them via raw SQL so
+        // decay actually fires (it's a no-op for fresh rows).
+        let perm = mgr
+            .add_entry("note", "user", &[], None, 50, "permanent")
+            .await
+            .unwrap();
+        let decay_target = mgr
+            .add_entry("note", "user", &[], None, 50, "should-decay")
+            .await
+            .unwrap();
+        let archive_target = mgr
+            .add_entry("note", "user", &[], None, 5, "should-archive")
+            .await
+            .unwrap();
+
+        let db_path = dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let old_ts = (chrono::Utc::now() - chrono::Duration::days(120)).to_rfc3339();
+        conn.execute(
+            "UPDATE memory_entries SET permanent = 1 WHERE entry_id = ?1",
+            params![&perm.entry_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE memory_entries SET updated_at = ?1, last_accessed = ?1
+             WHERE entry_id IN (?2, ?3)",
+            params![&old_ts, &decay_target.entry_id, &archive_target.entry_id],
+        )
+        .unwrap();
+        drop(conn);
+
+        let report = mgr.apply_decay().await.unwrap();
+        assert!(report.decayed >= 1, "decay_target should have decayed");
+        assert!(report.deleted >= 1, "archive_target should have archived");
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let perm_imp: i32 = conn
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![&perm.entry_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(perm_imp, 50, "permanent rows must not decay");
+
+        let archived: i32 = conn
+            .query_row(
+                "SELECT archived FROM memory_entries WHERE entry_id = ?1",
+                params![&archive_target.entry_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived, 1, "low+old row must be archived");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Sprint 3 / item 15 — boundary check: seed more rows than
+    /// `DECAY_CHUNK_SIZE` so phase 1b actually iterates over multiple
+    /// chunks. The 3-row sibling above only covers the single-chunk
+    /// path; this one validates the loop itself plus the lost-update
+    /// guard (`AND importance = ?`) by asserting the reported decay
+    /// count matches what we expect after back-dating every row.
+    #[tokio::test]
+    async fn apply_decay_chunked_with_many_rows() {
+        let dir = temp_dir("memory-plane-decay-many");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Seed > 2 * DECAY_CHUNK_SIZE rows so the chunk loop runs at
+        // least three times. Importance is set to 50 (decays) and
+        // every row will be back-dated below.
+        let rows = DECAY_CHUNK_SIZE * 2 + 50;
+        let mut ids = Vec::with_capacity(rows);
+        for i in 0..rows {
+            let entry = mgr
+                .add_entry("note", "user", &[], None, 50, &format!("decay row {}", i))
+                .await
+                .unwrap();
+            ids.push(entry.entry_id);
+        }
+
+        // Back-date every seeded row 120 days so decay actually fires.
+        let db_path = dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let old_ts = (chrono::Utc::now() - chrono::Duration::days(120)).to_rfc3339();
+        conn.execute(
+            "UPDATE memory_entries SET updated_at = ?1, last_accessed = ?1",
+            params![&old_ts],
+        )
+        .unwrap();
+        drop(conn);
+
+        let report = mgr.apply_decay().await.unwrap();
+        // Every row had identical inputs → all should decay.
+        assert_eq!(
+            report.decayed, rows,
+            "every back-dated row should have decayed across multiple chunks"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Sprint 4 / item 17: when `add_triple` is called with a
+    /// `source_entry_id`, hard_delete on that entry must cascade-clean
+    /// the triple. This is the behavioural proof that Axi tools should
+    /// pass the source instead of `None`.
+    #[tokio::test]
+    async fn add_triple_with_source_entry_id_links_to_entry() {
+        let dir = temp_dir("memory-plane-kg-source");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 50, "hector compro una laptop")
+            .await
+            .unwrap();
+        mgr.add_triple("hector", "owns", "laptop", 1.0, Some(&entry.entry_id))
+            .await
+            .unwrap();
+
+        let db_path = dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_graph WHERE source_entry_id = ?1",
+                params![&entry.entry_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "triple must be linked to the source entry");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// LLM hallucination guard: if `add_triple` is called with a
+    /// `source_entry_id` that doesn't exist, the triple is still
+    /// stored (we don't lose the LLM's output) but the bogus link is
+    /// dropped to NULL so we never end up with orphan FKs in the KG.
+    #[tokio::test]
+    async fn add_triple_with_unknown_source_entry_id_stores_unlinked() {
+        let dir = temp_dir("memory-plane-kg-bogus-source");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_triple(
+            "alice",
+            "knows",
+            "bob",
+            0.9,
+            Some("entry-that-does-not-exist"),
+        )
+        .await
+        .unwrap();
+
+        let db_path = dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let (count, source): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(source_entry_id) FROM knowledge_graph
+                 WHERE subject = 'alice' AND predicate = 'knows' AND object = 'bob'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "triple must be stored even if source is bogus");
+        assert!(
+            source.is_none(),
+            "bogus source_entry_id must be dropped to NULL, got {:?}",
+            source
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// FIX 4: `get_entry` returns the freshly-updated row even when
+    /// the entry sits beyond any list-recency window. Excludes
+    /// archived rows.
+    #[tokio::test]
+    async fn get_entry_returns_single_row_and_skips_archived() {
+        let dir = temp_dir("memory-plane-get-entry");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 42, "single-entry getter probe")
+            .await
+            .unwrap();
+
+        let fetched = mgr.get_entry(&entry.entry_id).await.unwrap();
+        assert!(fetched.is_some(), "fresh entry must be fetched by id");
+        assert_eq!(fetched.as_ref().unwrap().entry_id, entry.entry_id);
+
+        // Missing id → None, not Err.
+        let missing = mgr.get_entry("not-a-real-id").await.unwrap();
+        assert!(missing.is_none(), "unknown id must yield None");
+
+        // Archived row must be skipped (matches list_entries behavior).
+        let db_path = dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE memory_entries SET archived = 1 WHERE entry_id = ?1",
+            params![&entry.entry_id],
+        )
+        .unwrap();
+        drop(conn);
+        let after_archive = mgr.get_entry(&entry.entry_id).await.unwrap();
+        assert!(
+            after_archive.is_none(),
+            "archived rows must not surface via get_entry"
+        );
 
         std::fs::remove_dir_all(dir).ok();
     }

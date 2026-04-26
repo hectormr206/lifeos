@@ -1479,7 +1479,10 @@ pub fn create_router(state: ApiState) -> Router {
             "/memory/entries",
             get(list_memory_entries).post(add_memory_entry),
         )
-        .route("/memory/entries/:entry_id", delete(delete_memory_entry))
+        .route(
+            "/memory/entries/:entry_id",
+            delete(delete_memory_entry).patch(patch_memory_entry),
+        )
         .route("/memory/search", get(search_memory_entries))
         .route("/memory/stats", get(get_memory_stats))
         .route("/memory/graph", get(get_memory_graph))
@@ -8188,6 +8191,18 @@ struct AddMemoryEntryPayload {
     content: String,
 }
 
+/// Sprint 4 / item 18: dashboard PATCH body. Every field is optional;
+/// at least one must be present or the handler returns 400. Validation
+/// (importance range, content size, tag count) is enforced both here
+/// and again inside `MemoryPlaneManager::update_entry` — defence in
+/// depth so a future direct caller can't bypass us.
+#[derive(Debug, Deserialize)]
+struct PatchMemoryEntryPayload {
+    content: Option<String>,
+    importance: Option<u8>,
+    tags: Option<Vec<String>>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ListMemoryEntriesQuery {
     limit: Option<usize>,
@@ -9965,6 +9980,99 @@ async fn delete_memory_entry(
         "deleted": deleted,
         "hard": hard,
         "entry_id": entry_id,
+    })))
+}
+
+/// Sprint 4 / item 18: PATCH /memory/entries/:entry_id — partial update
+/// from the dashboard. Maps cleanly onto `MemoryPlaneManager::update_entry`
+/// which already exists from Sprint 1. Returns the freshly-read row so
+/// the dashboard can render the new content/importance/tags without a
+/// follow-up GET.
+async fn patch_memory_entry(
+    State(state): State<ApiState>,
+    Path(entry_id): Path<String>,
+    Json(payload): Json<PatchMemoryEntryPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    fn bad_request(msg: impl Into<String>) -> (StatusCode, Json<ApiError>) {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: msg.into(),
+                code: 400,
+            }),
+        )
+    }
+
+    if payload.content.is_none() && payload.importance.is_none() && payload.tags.is_none() {
+        return Err(bad_request(
+            "at least one of content/importance/tags is required",
+        ));
+    }
+    if let Some(imp) = payload.importance {
+        if imp > 100 {
+            return Err(bad_request("importance must be in range 0..=100"));
+        }
+    }
+    // Cap tag list to 20 — the dashboard UI never offers more, and
+    // unbounded tags blow up the JSON-array LIKE filter at search time.
+    if let Some(ref t) = payload.tags {
+        if t.len() > 20 {
+            return Err(bad_request("tags max 20 items"));
+        }
+    }
+
+    let mgr = state.memory_plane_manager.read().await;
+    let updated = mgr
+        .update_entry(
+            &entry_id,
+            payload.content.as_deref(),
+            payload.importance,
+            payload.tags.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            // `update_entry` enforces content-length and importance range
+            // again at the storage layer; surface those as 400 not 500.
+            let status =
+                if msg.contains("required") || msg.contains("range") || msg.contains("too large") {
+                    StatusCode::BAD_REQUEST
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+            (
+                status,
+                Json(ApiError {
+                    error: status.canonical_reason().unwrap_or("Error").to_string(),
+                    message: msg,
+                    code: status.as_u16(),
+                }),
+            )
+        })?;
+
+    if !updated {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("memory entry {} not found", entry_id),
+                code: 404,
+            }),
+        ));
+    }
+
+    // Use the single-entry getter so the response carries the freshly
+    // updated row even when the user has more than the previous
+    // 200-row cap of `list_entries(200, ...)` (which silently dropped
+    // any patched row outside the recency window and returned
+    // `entry: null`).
+    let entry = mgr.get_entry(&entry_id).await.ok().flatten();
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "entry_id": entry_id,
+        "entry": entry,
     })))
 }
 
