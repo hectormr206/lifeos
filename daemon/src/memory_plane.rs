@@ -1360,6 +1360,107 @@ CREATE INDEX IF NOT EXISTS idx_viajes_actividades_tipo
     ON viajes_actividades(tipo);
 CREATE INDEX IF NOT EXISTS idx_viajes_actividades_rating
     ON viajes_actividades(rating);
+
+-- ============================================================================
+-- Vehículos Domain MVP — vehiculos_*
+-- ============================================================================
+-- Notas, descripciones de mantenimiento, taller y agente se cifran
+-- (memoria sensible). Montos (precio_compra, precio_venta, prima,
+-- costo, monto, deducible_dh, cobertura_rc, precio_litro) viajan en
+-- REAL plaintext para analytics.
+CREATE TABLE IF NOT EXISTS vehiculos_vehiculos (
+    vehiculo_id TEXT PRIMARY KEY,
+    alias TEXT NOT NULL,
+    marca TEXT NOT NULL,
+    modelo TEXT NOT NULL,
+    anio INTEGER,
+    placas TEXT,
+    vin TEXT,
+    color TEXT,
+    kilometraje_actual INTEGER,
+    kilometraje_actualizado_at TEXT,
+    fecha_compra TEXT,
+    precio_compra REAL,
+    titular TEXT NOT NULL DEFAULT 'hector',
+    estado TEXT NOT NULL DEFAULT 'activo',
+    fecha_baja TEXT,
+    precio_venta REAL,
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vehiculos_vehiculos_estado
+    ON vehiculos_vehiculos(estado);
+CREATE INDEX IF NOT EXISTS idx_vehiculos_vehiculos_alias
+    ON vehiculos_vehiculos(alias);
+
+CREATE TABLE IF NOT EXISTS vehiculos_mantenimientos (
+    mantenimiento_id TEXT PRIMARY KEY,
+    vehiculo_id TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    descripcion_nonce_b64 TEXT,
+    descripcion_ciphertext_b64 TEXT,
+    fecha_realizado TEXT,
+    fecha_programada TEXT,
+    kilometraje_realizado INTEGER,
+    km_proximo INTEGER,
+    taller_nonce_b64 TEXT,
+    taller_ciphertext_b64 TEXT,
+    costo REAL,
+    movimiento_id TEXT,
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vehiculos_mantenimientos_vehiculo
+    ON vehiculos_mantenimientos(vehiculo_id);
+CREATE INDEX IF NOT EXISTS idx_vehiculos_mantenimientos_programada
+    ON vehiculos_mantenimientos(fecha_programada)
+    WHERE fecha_programada IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS vehiculos_seguros (
+    seguro_id TEXT PRIMARY KEY,
+    vehiculo_id TEXT NOT NULL,
+    aseguradora TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    numero_poliza TEXT,
+    fecha_inicio TEXT NOT NULL,
+    fecha_vencimiento TEXT NOT NULL,
+    prima_total REAL,
+    cobertura_rc REAL,
+    deducible_dh REAL,
+    agente_nonce_b64 TEXT,
+    agente_ciphertext_b64 TEXT,
+    movimiento_id TEXT,
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    estado TEXT NOT NULL DEFAULT 'vigente',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vehiculos_seguros_vencimiento
+    ON vehiculos_seguros(fecha_vencimiento);
+CREATE INDEX IF NOT EXISTS idx_vehiculos_seguros_vehiculo
+    ON vehiculos_seguros(vehiculo_id);
+
+CREATE TABLE IF NOT EXISTS vehiculos_combustible (
+    carga_id TEXT PRIMARY KEY,
+    vehiculo_id TEXT NOT NULL,
+    fecha TEXT NOT NULL,
+    litros REAL,
+    monto REAL NOT NULL,
+    precio_litro REAL,
+    kilometraje INTEGER,
+    estacion TEXT,
+    movimiento_id TEXT,
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vehiculos_combustible_vehiculo
+    ON vehiculos_combustible(vehiculo_id, fecha);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16277,6 +16378,1355 @@ impl MemoryPlaneManager {
     }
 }
 
+// ============================================================================
+// Vehículos Domain MVP — types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vehiculo {
+    pub vehiculo_id: String,
+    pub alias: String,
+    pub marca: String,
+    pub modelo: String,
+    pub anio: Option<i64>,
+    pub placas: Option<String>,
+    pub vin: Option<String>,
+    pub color: Option<String>,
+    pub kilometraje_actual: Option<i64>,
+    pub kilometraje_actualizado_at: Option<DateTime<Utc>>,
+    pub fecha_compra: Option<String>,
+    pub precio_compra: Option<f64>,
+    pub titular: String,
+    pub estado: String,
+    pub fecha_baja: Option<String>,
+    pub precio_venta: Option<f64>,
+    pub notas: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VehiculoUpdate {
+    pub alias: Option<String>,
+    pub marca: Option<String>,
+    pub modelo: Option<String>,
+    pub anio: Option<i64>,
+    pub placas: Option<String>,
+    pub vin: Option<String>,
+    pub color: Option<String>,
+    pub fecha_compra: Option<String>,
+    pub precio_compra: Option<f64>,
+    pub titular: Option<String>,
+    pub notas: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mantenimiento {
+    pub mantenimiento_id: String,
+    pub vehiculo_id: String,
+    pub tipo: String,
+    pub descripcion: String,
+    pub fecha_realizado: Option<String>,
+    pub fecha_programada: Option<String>,
+    pub kilometraje_realizado: Option<i64>,
+    pub km_proximo: Option<i64>,
+    pub taller: String,
+    pub costo: Option<f64>,
+    pub movimiento_id: Option<String>,
+    pub notas: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Seguro {
+    pub seguro_id: String,
+    pub vehiculo_id: String,
+    pub aseguradora: String,
+    pub tipo: String,
+    pub numero_poliza: Option<String>,
+    pub fecha_inicio: String,
+    pub fecha_vencimiento: String,
+    pub prima_total: Option<f64>,
+    pub cobertura_rc: Option<f64>,
+    pub deducible_dh: Option<f64>,
+    pub agente: String,
+    pub movimiento_id: Option<String>,
+    pub notas: String,
+    pub estado: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CargaCombustible {
+    pub carga_id: String,
+    pub vehiculo_id: String,
+    pub fecha: String,
+    pub litros: Option<f64>,
+    pub monto: f64,
+    pub precio_litro: Option<f64>,
+    pub kilometraje: Option<i64>,
+    pub estacion: Option<String>,
+    pub movimiento_id: Option<String>,
+    pub notas: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CombustibleStats {
+    pub vehiculo_id: String,
+    pub muestras: usize,
+    pub km_por_litro_promedio: Option<f64>,
+    pub tendencia: String, // "mejorando" | "estable" | "empeorando" | "sin_datos"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VehiculoAlerta {
+    pub vehiculo_id: String,
+    pub alias: String,
+    pub tipo: String, // "mantenimiento_vencido" | "seguro_por_vencer" | "kilometraje_stale"
+    pub detalle: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VehiculosOverview {
+    pub vehiculos: Vec<Vehiculo>,
+    pub alertas: Vec<VehiculoAlerta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VehiculoCostoTotal {
+    pub vehiculo_id: String,
+    pub periodo: String,
+    pub combustible: f64,
+    pub mantenimientos: f64,
+    pub seguros: f64,
+    pub total: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RendimientoCombustible {
+    pub vehiculo_id: String,
+    pub muestras: usize,
+    pub km_por_litro_promedio: Option<f64>,
+    pub outliers: Vec<String>, // carga_ids
+}
+
+// ============================================================================
+// Vehículos Domain MVP — impl
+// ============================================================================
+
+#[derive(Debug, Clone)]
+struct EncryptedTextField {
+    nonce_b64: Option<String>,
+    cipher_b64: Option<String>,
+    plain: String,
+}
+
+fn encrypt_optional_text(text: &str) -> Result<EncryptedTextField> {
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        return Ok(EncryptedTextField {
+            nonce_b64: None,
+            cipher_b64: None,
+            plain: String::new(),
+        });
+    }
+    let (n, c, _) = encrypt_content(&trimmed)?;
+    Ok(EncryptedTextField {
+        nonce_b64: Some(n),
+        cipher_b64: Some(c),
+        plain: trimmed,
+    })
+}
+
+fn decrypt_optional_pair(nonce: Option<String>, cipher: Option<String>) -> String {
+    match (nonce, cipher) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn date_only_today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn parse_date_yyyy_mm_dd(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Vehículos — vehiculos
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn vehiculo_add(
+        &self,
+        alias: &str,
+        marca: &str,
+        modelo: &str,
+        anio: Option<i64>,
+        placas: Option<&str>,
+        vin: Option<&str>,
+        color: Option<&str>,
+        kilometraje_actual: Option<i64>,
+        fecha_compra: Option<&str>,
+        precio_compra: Option<f64>,
+        titular: Option<&str>,
+        notas: &str,
+    ) -> Result<Vehiculo> {
+        let alias = normalize_non_empty(alias).context("alias required")?;
+        let marca = normalize_non_empty(marca).context("marca required")?;
+        let modelo = normalize_non_empty(modelo).context("modelo required")?;
+        let titular = titular
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| "hector".to_string());
+        let placas = placas.and_then(normalize_non_empty);
+        let vin = vin.and_then(normalize_non_empty);
+        let color = color.and_then(normalize_non_empty);
+        let fecha_compra = fecha_compra.and_then(normalize_non_empty);
+        if let Some(p) = precio_compra {
+            if !p.is_finite() {
+                anyhow::bail!("precio_compra must be finite");
+            }
+        }
+        let notes = encrypt_optional_text(notas)?;
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let vehiculo_id = format!("veh-{}", Uuid::new_v4());
+        let km_updated_at = if kilometraje_actual.is_some() {
+            Some(now_rfc.clone())
+        } else {
+            None
+        };
+
+        let db_path = self.db_path.clone();
+        let id_clone = vehiculo_id.clone();
+        let alias_clone = alias.clone();
+        let marca_clone = marca.clone();
+        let modelo_clone = modelo.clone();
+        let titular_clone = titular.clone();
+        let placas_clone = placas.clone();
+        let vin_clone = vin.clone();
+        let color_clone = color.clone();
+        let fecha_compra_clone = fecha_compra.clone();
+        let notes_nonce = notes.nonce_b64.clone();
+        let notes_cipher = notes.cipher_b64.clone();
+        let now_rfc_clone = now_rfc.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO vehiculos_vehiculos
+                 (vehiculo_id, alias, marca, modelo, anio, placas, vin, color,
+                  kilometraje_actual, kilometraje_actualizado_at,
+                  fecha_compra, precio_compra, titular, estado,
+                  fecha_baja, precio_venta, notas_nonce_b64,
+                  notas_ciphertext_b64, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                         ?13, 'activo', NULL, NULL, ?14, ?15, ?16, ?16)",
+                params![
+                    id_clone,
+                    alias_clone,
+                    marca_clone,
+                    modelo_clone,
+                    anio,
+                    placas_clone,
+                    vin_clone,
+                    color_clone,
+                    kilometraje_actual,
+                    km_updated_at,
+                    fecha_compra_clone,
+                    precio_compra,
+                    titular_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    now_rfc_clone,
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(Vehiculo {
+            vehiculo_id,
+            alias,
+            marca,
+            modelo,
+            anio,
+            placas,
+            vin,
+            color,
+            kilometraje_actual,
+            kilometraje_actualizado_at: if kilometraje_actual.is_some() {
+                Some(now)
+            } else {
+                None
+            },
+            fecha_compra,
+            precio_compra,
+            titular,
+            estado: "activo".into(),
+            fecha_baja: None,
+            precio_venta: None,
+            notas: notes.plain,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn vehiculo_list(&self, include_inactive: bool) -> Result<Vec<Vehiculo>> {
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<Vehiculo>> {
+            let db = Self::open_db(&db_path)?;
+            let sql = if include_inactive {
+                "SELECT vehiculo_id, alias, marca, modelo, anio, placas, vin, color,
+                        kilometraje_actual, kilometraje_actualizado_at, fecha_compra,
+                        precio_compra, titular, estado, fecha_baja, precio_venta,
+                        notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at
+                 FROM vehiculos_vehiculos ORDER BY alias"
+            } else {
+                "SELECT vehiculo_id, alias, marca, modelo, anio, placas, vin, color,
+                        kilometraje_actual, kilometraje_actualizado_at, fecha_compra,
+                        precio_compra, titular, estado, fecha_baja, precio_venta,
+                        notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at
+                 FROM vehiculos_vehiculos WHERE estado = 'activo' ORDER BY alias"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let rows: Vec<Vehiculo> = stmt
+                .query_map([], |row| {
+                    let n: Option<String> = row.get(16)?;
+                    let c: Option<String> = row.get(17)?;
+                    let km_at: Option<String> = row.get(9)?;
+                    let created: String = row.get(18)?;
+                    let updated: String = row.get(19)?;
+                    Ok(Vehiculo {
+                        vehiculo_id: row.get(0)?,
+                        alias: row.get(1)?,
+                        marca: row.get(2)?,
+                        modelo: row.get(3)?,
+                        anio: row.get(4)?,
+                        placas: row.get(5)?,
+                        vin: row.get(6)?,
+                        color: row.get(7)?,
+                        kilometraje_actual: row.get(8)?,
+                        kilometraje_actualizado_at: km_at.as_deref().map(parse_utc),
+                        fecha_compra: row.get(10)?,
+                        precio_compra: row.get(11)?,
+                        titular: row.get(12)?,
+                        estado: row.get(13)?,
+                        fecha_baja: row.get(14)?,
+                        precio_venta: row.get(15)?,
+                        notas: decrypt_optional_pair(n, c),
+                        created_at: parse_utc(&created),
+                        updated_at: parse_utc(&updated),
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    /// Get by id or alias (case-insensitive).
+    pub async fn vehiculo_get(&self, id_or_alias: &str) -> Result<Option<Vehiculo>> {
+        let needle = id_or_alias.trim().to_string();
+        if needle.is_empty() {
+            return Ok(None);
+        }
+        let all = self.vehiculo_list(true).await?;
+        let lower = needle.to_lowercase();
+        Ok(all
+            .into_iter()
+            .find(|v| v.vehiculo_id == needle || v.alias.to_lowercase() == lower))
+    }
+
+    pub async fn vehiculo_update(&self, vehiculo_id: &str, update: VehiculoUpdate) -> Result<bool> {
+        let id = vehiculo_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let notes_pair = if let Some(n) = update.notas.as_ref() {
+            Some(encrypt_optional_text(n)?)
+        } else {
+            None
+        };
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let mut count = 0usize;
+            macro_rules! set {
+                ($col:expr, $val:expr) => {
+                    if let Some(v) = $val {
+                        count += db.execute(
+                            &format!(
+                                "UPDATE vehiculos_vehiculos SET {} = ?1, updated_at = ?2 WHERE vehiculo_id = ?3",
+                                $col
+                            ),
+                            params![v, now, id],
+                        )?;
+                    }
+                };
+            }
+            set!("alias", update.alias);
+            set!("marca", update.marca);
+            set!("modelo", update.modelo);
+            set!("anio", update.anio);
+            set!("placas", update.placas);
+            set!("vin", update.vin);
+            set!("color", update.color);
+            set!("fecha_compra", update.fecha_compra);
+            set!("precio_compra", update.precio_compra);
+            set!("titular", update.titular);
+            if let Some(np) = notes_pair {
+                count += db.execute(
+                    "UPDATE vehiculos_vehiculos
+                     SET notas_nonce_b64 = ?1, notas_ciphertext_b64 = ?2, updated_at = ?3
+                     WHERE vehiculo_id = ?4",
+                    params![np.nonce_b64, np.cipher_b64, now, id],
+                )?;
+            }
+            Ok(count)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn vehiculo_kilometraje_actualizar(
+        &self,
+        vehiculo_id: &str,
+        nuevo_km: i64,
+    ) -> Result<bool> {
+        if nuevo_km < 0 {
+            anyhow::bail!("kilometraje must be >= 0");
+        }
+        let id = vehiculo_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE vehiculos_vehiculos
+                 SET kilometraje_actual = ?1,
+                     kilometraje_actualizado_at = ?2,
+                     updated_at = ?2
+                 WHERE vehiculo_id = ?3",
+                params![nuevo_km, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn vehiculo_vender(
+        &self,
+        vehiculo_id: &str,
+        fecha_baja: &str,
+        precio_venta: f64,
+    ) -> Result<bool> {
+        if !precio_venta.is_finite() || precio_venta < 0.0 {
+            anyhow::bail!("precio_venta must be non-negative finite");
+        }
+        let fecha = normalize_non_empty(fecha_baja).context("fecha_baja required")?;
+        let id = vehiculo_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE vehiculos_vehiculos
+                 SET estado = 'vendido',
+                     fecha_baja = ?1,
+                     precio_venta = ?2,
+                     updated_at = ?3
+                 WHERE vehiculo_id = ?4",
+                params![fecha, precio_venta, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Vehículos — mantenimientos
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn mantenimiento_log(
+        &self,
+        vehiculo_id: &str,
+        tipo: &str,
+        descripcion: &str,
+        fecha_realizado: Option<&str>,
+        kilometraje_realizado: Option<i64>,
+        km_proximo: Option<i64>,
+        taller: &str,
+        costo: Option<f64>,
+        movimiento_id: Option<&str>,
+        notas: &str,
+    ) -> Result<Mantenimiento> {
+        let vehiculo_id = normalize_non_empty(vehiculo_id).context("vehiculo_id required")?;
+        let tipo = normalize_non_empty(tipo).context("tipo required")?;
+        let fecha_realizado = fecha_realizado
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(date_only_today);
+        let desc = encrypt_optional_text(descripcion)?;
+        let taller_enc = encrypt_optional_text(taller)?;
+        let notes = encrypt_optional_text(notas)?;
+        if let Some(c) = costo {
+            if !c.is_finite() {
+                anyhow::bail!("costo must be finite");
+            }
+        }
+        self.mantenimiento_insert(
+            vehiculo_id,
+            tipo,
+            desc,
+            Some(fecha_realizado),
+            None,
+            kilometraje_realizado,
+            km_proximo,
+            taller_enc,
+            costo,
+            movimiento_id.map(|s| s.to_string()),
+            notes,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn mantenimiento_programar(
+        &self,
+        vehiculo_id: &str,
+        tipo: &str,
+        descripcion: &str,
+        fecha_programada: &str,
+        km_proximo: Option<i64>,
+        taller: &str,
+        notas: &str,
+    ) -> Result<Mantenimiento> {
+        let vehiculo_id = normalize_non_empty(vehiculo_id).context("vehiculo_id required")?;
+        let tipo = normalize_non_empty(tipo).context("tipo required")?;
+        let fecha_programada =
+            normalize_non_empty(fecha_programada).context("fecha_programada required")?;
+        let desc = encrypt_optional_text(descripcion)?;
+        let taller_enc = encrypt_optional_text(taller)?;
+        let notes = encrypt_optional_text(notas)?;
+        self.mantenimiento_insert(
+            vehiculo_id,
+            tipo,
+            desc,
+            None,
+            Some(fecha_programada),
+            None,
+            km_proximo,
+            taller_enc,
+            None,
+            None,
+            notes,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn mantenimiento_insert(
+        &self,
+        vehiculo_id: String,
+        tipo: String,
+        descripcion: EncryptedTextField,
+        fecha_realizado: Option<String>,
+        fecha_programada: Option<String>,
+        kilometraje_realizado: Option<i64>,
+        km_proximo: Option<i64>,
+        taller: EncryptedTextField,
+        costo: Option<f64>,
+        movimiento_id: Option<String>,
+        notas: EncryptedTextField,
+    ) -> Result<Mantenimiento> {
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let mantenimiento_id = format!("man-{}", Uuid::new_v4());
+        let db_path = self.db_path.clone();
+        let id_clone = mantenimiento_id.clone();
+        let veh_clone = vehiculo_id.clone();
+        let tipo_clone = tipo.clone();
+        let desc_n = descripcion.nonce_b64.clone();
+        let desc_c = descripcion.cipher_b64.clone();
+        let fr_clone = fecha_realizado.clone();
+        let fp_clone = fecha_programada.clone();
+        let taller_n = taller.nonce_b64.clone();
+        let taller_c = taller.cipher_b64.clone();
+        let mov_clone = movimiento_id.clone();
+        let notes_n = notas.nonce_b64.clone();
+        let notes_c = notas.cipher_b64.clone();
+        let now_rfc_clone = now_rfc.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO vehiculos_mantenimientos
+                 (mantenimiento_id, vehiculo_id, tipo, descripcion_nonce_b64,
+                  descripcion_ciphertext_b64, fecha_realizado, fecha_programada,
+                  kilometraje_realizado, km_proximo, taller_nonce_b64,
+                  taller_ciphertext_b64, costo, movimiento_id, notas_nonce_b64,
+                  notas_ciphertext_b64, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                         ?14, ?15, ?16, ?16)",
+                params![
+                    id_clone,
+                    veh_clone,
+                    tipo_clone,
+                    desc_n,
+                    desc_c,
+                    fr_clone,
+                    fp_clone,
+                    kilometraje_realizado,
+                    km_proximo,
+                    taller_n,
+                    taller_c,
+                    costo,
+                    mov_clone,
+                    notes_n,
+                    notes_c,
+                    now_rfc_clone,
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(Mantenimiento {
+            mantenimiento_id,
+            vehiculo_id,
+            tipo,
+            descripcion: descripcion.plain,
+            fecha_realizado,
+            fecha_programada,
+            kilometraje_realizado,
+            km_proximo,
+            taller: taller.plain,
+            costo,
+            movimiento_id,
+            notas: notas.plain,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn mantenimiento_completar(
+        &self,
+        mantenimiento_id: &str,
+        fecha_realizado: Option<&str>,
+        kilometraje_realizado: Option<i64>,
+        costo: Option<f64>,
+    ) -> Result<bool> {
+        let id = mantenimiento_id.to_string();
+        let fecha = fecha_realizado
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(date_only_today);
+        if let Some(c) = costo {
+            if !c.is_finite() {
+                anyhow::bail!("costo must be finite");
+            }
+        }
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE vehiculos_mantenimientos
+                 SET fecha_realizado = ?1,
+                     fecha_programada = NULL,
+                     kilometraje_realizado = COALESCE(?2, kilometraje_realizado),
+                     costo = COALESCE(?3, costo),
+                     updated_at = ?4
+                 WHERE mantenimiento_id = ?5",
+                params![fecha, kilometraje_realizado, costo, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// estado_filter: None -> all, Some("programados") -> only fecha_programada NOT NULL,
+    /// Some("realizados") -> only fecha_realizado NOT NULL.
+    pub async fn mantenimiento_list(
+        &self,
+        vehiculo_id: Option<&str>,
+        estado_filter: Option<&str>,
+    ) -> Result<Vec<Mantenimiento>> {
+        let veh = vehiculo_id.map(|s| s.to_string());
+        let estado = estado_filter.map(|s| s.to_string());
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<Mantenimiento>> {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT mantenimiento_id, vehiculo_id, tipo, descripcion_nonce_b64,
+                        descripcion_ciphertext_b64, fecha_realizado, fecha_programada,
+                        kilometraje_realizado, km_proximo, taller_nonce_b64,
+                        taller_ciphertext_b64, costo, movimiento_id,
+                        notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at
+                 FROM vehiculos_mantenimientos WHERE 1=1",
+            );
+            if veh.is_some() {
+                sql.push_str(" AND vehiculo_id = ?1");
+            }
+            match estado.as_deref() {
+                Some("programados") => sql.push_str(" AND fecha_programada IS NOT NULL"),
+                Some("realizados") => sql.push_str(" AND fecha_realizado IS NOT NULL"),
+                _ => {}
+            }
+            sql.push_str(" ORDER BY COALESCE(fecha_realizado, fecha_programada, created_at) DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map = |row: &rusqlite::Row<'_>| -> rusqlite::Result<Mantenimiento> {
+                let dn: Option<String> = row.get(3)?;
+                let dc: Option<String> = row.get(4)?;
+                let tn: Option<String> = row.get(9)?;
+                let tc: Option<String> = row.get(10)?;
+                let nn: Option<String> = row.get(13)?;
+                let nc: Option<String> = row.get(14)?;
+                let created: String = row.get(15)?;
+                let updated: String = row.get(16)?;
+                Ok(Mantenimiento {
+                    mantenimiento_id: row.get(0)?,
+                    vehiculo_id: row.get(1)?,
+                    tipo: row.get(2)?,
+                    descripcion: decrypt_optional_pair(dn, dc),
+                    fecha_realizado: row.get(5)?,
+                    fecha_programada: row.get(6)?,
+                    kilometraje_realizado: row.get(7)?,
+                    km_proximo: row.get(8)?,
+                    taller: decrypt_optional_pair(tn, tc),
+                    costo: row.get(11)?,
+                    movimiento_id: row.get(12)?,
+                    notas: decrypt_optional_pair(nn, nc),
+                    created_at: parse_utc(&created),
+                    updated_at: parse_utc(&updated),
+                })
+            };
+            let rows: Vec<Mantenimiento> = if let Some(v) = veh {
+                stmt.query_map(params![v], map)?.flatten().collect()
+            } else {
+                stmt.query_map([], map)?.flatten().collect()
+            };
+            Ok(rows)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    /// Próximos mantenimientos (programados dentro de N días + km basis si aplica).
+    pub async fn mantenimientos_proximos(&self, dias: i64) -> Result<Vec<Mantenimiento>> {
+        let dias = dias.max(1);
+        let today = chrono::Local::now().date_naive();
+        let limit = today + chrono::Duration::days(dias);
+        let all = self.mantenimiento_list(None, Some("programados")).await?;
+        let vehiculos = self.vehiculo_list(true).await?;
+        let mut result: Vec<Mantenimiento> = Vec::new();
+        for m in all {
+            // by date
+            let by_date = m
+                .fecha_programada
+                .as_deref()
+                .and_then(parse_date_yyyy_mm_dd)
+                .map(|d| d <= limit)
+                .unwrap_or(false);
+            // by km
+            let by_km = if let Some(km_p) = m.km_proximo {
+                vehiculos
+                    .iter()
+                    .find(|v| v.vehiculo_id == m.vehiculo_id)
+                    .and_then(|v| v.kilometraje_actual)
+                    .map(|km| (km_p - km).abs() <= 1000 || km >= km_p)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if by_date || by_km {
+                result.push(m);
+            }
+        }
+        Ok(result)
+    }
+
+    // -----------------------------------------------------------------------
+    // Vehículos — seguros
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn seguro_add(
+        &self,
+        vehiculo_id: &str,
+        aseguradora: &str,
+        tipo: &str,
+        numero_poliza: Option<&str>,
+        fecha_inicio: &str,
+        fecha_vencimiento: &str,
+        prima_total: Option<f64>,
+        cobertura_rc: Option<f64>,
+        deducible_dh: Option<f64>,
+        agente: &str,
+        movimiento_id: Option<&str>,
+        notas: &str,
+    ) -> Result<Seguro> {
+        let vehiculo_id = normalize_non_empty(vehiculo_id).context("vehiculo_id required")?;
+        let aseguradora = normalize_non_empty(aseguradora).context("aseguradora required")?;
+        let tipo = normalize_non_empty(tipo).context("tipo required")?;
+        let fecha_inicio = normalize_non_empty(fecha_inicio).context("fecha_inicio required")?;
+        let fecha_vencimiento =
+            normalize_non_empty(fecha_vencimiento).context("fecha_vencimiento required")?;
+        let numero_poliza = numero_poliza.and_then(normalize_non_empty);
+        let agente_enc = encrypt_optional_text(agente)?;
+        let notes = encrypt_optional_text(notas)?;
+        for v in [prima_total, cobertura_rc, deducible_dh].iter().flatten() {
+            if !v.is_finite() {
+                anyhow::bail!("monetary fields must be finite");
+            }
+        }
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let seguro_id = format!("seg-{}", Uuid::new_v4());
+        let mov = movimiento_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = seguro_id.clone();
+        let veh_clone = vehiculo_id.clone();
+        let aseg_clone = aseguradora.clone();
+        let tipo_clone = tipo.clone();
+        let np_clone = numero_poliza.clone();
+        let fi_clone = fecha_inicio.clone();
+        let fv_clone = fecha_vencimiento.clone();
+        let agente_n = agente_enc.nonce_b64.clone();
+        let agente_c = agente_enc.cipher_b64.clone();
+        let mov_clone = mov.clone();
+        let notes_n = notes.nonce_b64.clone();
+        let notes_c = notes.cipher_b64.clone();
+        let now_rfc_clone = now_rfc.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO vehiculos_seguros
+                 (seguro_id, vehiculo_id, aseguradora, tipo, numero_poliza,
+                  fecha_inicio, fecha_vencimiento, prima_total, cobertura_rc,
+                  deducible_dh, agente_nonce_b64, agente_ciphertext_b64,
+                  movimiento_id, notas_nonce_b64, notas_ciphertext_b64,
+                  estado, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                         ?13, ?14, ?15, 'vigente', ?16, ?16)",
+                params![
+                    id_clone,
+                    veh_clone,
+                    aseg_clone,
+                    tipo_clone,
+                    np_clone,
+                    fi_clone,
+                    fv_clone,
+                    prima_total,
+                    cobertura_rc,
+                    deducible_dh,
+                    agente_n,
+                    agente_c,
+                    mov_clone,
+                    notes_n,
+                    notes_c,
+                    now_rfc_clone,
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(Seguro {
+            seguro_id,
+            vehiculo_id,
+            aseguradora,
+            tipo,
+            numero_poliza,
+            fecha_inicio,
+            fecha_vencimiento,
+            prima_total,
+            cobertura_rc,
+            deducible_dh,
+            agente: agente_enc.plain,
+            movimiento_id: mov,
+            notas: notes.plain,
+            estado: "vigente".into(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Cierra el seguro vigente (estado=vencido) y crea uno nuevo.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn seguro_renovar(
+        &self,
+        seguro_vigente_id: &str,
+        aseguradora: &str,
+        tipo: &str,
+        numero_poliza: Option<&str>,
+        fecha_inicio: &str,
+        fecha_vencimiento: &str,
+        prima_total: Option<f64>,
+        cobertura_rc: Option<f64>,
+        deducible_dh: Option<f64>,
+        agente: &str,
+        movimiento_id: Option<&str>,
+        notas: &str,
+    ) -> Result<Seguro> {
+        // Fetch vehiculo_id of the vigente seguro then close it.
+        let id_old = seguro_vigente_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let veh_id = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+            let db = Self::open_db(&db_path)?;
+            let veh: Option<String> = db
+                .query_row(
+                    "SELECT vehiculo_id FROM vehiculos_seguros WHERE seguro_id = ?1",
+                    params![id_old.clone()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            db.execute(
+                "UPDATE vehiculos_seguros SET estado = 'vencido', updated_at = ?1
+                 WHERE seguro_id = ?2 AND estado = 'vigente'",
+                params![now, id_old],
+            )?;
+            Ok(veh)
+        })
+        .await??;
+        let veh_id = veh_id.context("seguro_vigente_id not found")?;
+        self.seguro_add(
+            &veh_id,
+            aseguradora,
+            tipo,
+            numero_poliza,
+            fecha_inicio,
+            fecha_vencimiento,
+            prima_total,
+            cobertura_rc,
+            deducible_dh,
+            agente,
+            movimiento_id,
+            notas,
+        )
+        .await
+    }
+
+    pub async fn seguro_list(&self, vehiculo_id: Option<&str>) -> Result<Vec<Seguro>> {
+        let veh = vehiculo_id.map(|s| s.to_string());
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<Seguro>> {
+            let db = Self::open_db(&db_path)?;
+            let sql = if veh.is_some() {
+                "SELECT seguro_id, vehiculo_id, aseguradora, tipo, numero_poliza,
+                        fecha_inicio, fecha_vencimiento, prima_total, cobertura_rc,
+                        deducible_dh, agente_nonce_b64, agente_ciphertext_b64,
+                        movimiento_id, notas_nonce_b64, notas_ciphertext_b64,
+                        estado, created_at, updated_at
+                 FROM vehiculos_seguros WHERE vehiculo_id = ?1
+                 ORDER BY fecha_vencimiento DESC"
+            } else {
+                "SELECT seguro_id, vehiculo_id, aseguradora, tipo, numero_poliza,
+                        fecha_inicio, fecha_vencimiento, prima_total, cobertura_rc,
+                        deducible_dh, agente_nonce_b64, agente_ciphertext_b64,
+                        movimiento_id, notas_nonce_b64, notas_ciphertext_b64,
+                        estado, created_at, updated_at
+                 FROM vehiculos_seguros ORDER BY fecha_vencimiento DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let map = |row: &rusqlite::Row<'_>| -> rusqlite::Result<Seguro> {
+                let an: Option<String> = row.get(10)?;
+                let ac: Option<String> = row.get(11)?;
+                let nn: Option<String> = row.get(13)?;
+                let nc: Option<String> = row.get(14)?;
+                let created: String = row.get(16)?;
+                let updated: String = row.get(17)?;
+                Ok(Seguro {
+                    seguro_id: row.get(0)?,
+                    vehiculo_id: row.get(1)?,
+                    aseguradora: row.get(2)?,
+                    tipo: row.get(3)?,
+                    numero_poliza: row.get(4)?,
+                    fecha_inicio: row.get(5)?,
+                    fecha_vencimiento: row.get(6)?,
+                    prima_total: row.get(7)?,
+                    cobertura_rc: row.get(8)?,
+                    deducible_dh: row.get(9)?,
+                    agente: decrypt_optional_pair(an, ac),
+                    movimiento_id: row.get(12)?,
+                    notas: decrypt_optional_pair(nn, nc),
+                    estado: row.get(15)?,
+                    created_at: parse_utc(&created),
+                    updated_at: parse_utc(&updated),
+                })
+            };
+            let rows: Vec<Seguro> = if let Some(v) = veh {
+                stmt.query_map(params![v], map)?.flatten().collect()
+            } else {
+                stmt.query_map([], map)?.flatten().collect()
+            };
+            Ok(rows)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    pub async fn seguros_por_vencer(&self, dias: i64) -> Result<Vec<Seguro>> {
+        let dias = dias.max(1);
+        let today = chrono::Local::now().date_naive();
+        let limit = today + chrono::Duration::days(dias);
+        let all = self.seguro_list(None).await?;
+        Ok(all
+            .into_iter()
+            .filter(|s| {
+                if s.estado != "vigente" {
+                    return false;
+                }
+                parse_date_yyyy_mm_dd(&s.fecha_vencimiento)
+                    .map(|d| d <= limit && d >= today)
+                    .unwrap_or(false)
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Vehículos — combustible
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn combustible_log(
+        &self,
+        vehiculo_id: &str,
+        fecha: Option<&str>,
+        litros: Option<f64>,
+        monto: f64,
+        precio_litro: Option<f64>,
+        kilometraje: Option<i64>,
+        estacion: Option<&str>,
+        movimiento_id: Option<&str>,
+        notas: &str,
+    ) -> Result<CargaCombustible> {
+        let vehiculo_id = normalize_non_empty(vehiculo_id).context("vehiculo_id required")?;
+        if !monto.is_finite() || monto < 0.0 {
+            anyhow::bail!("monto must be non-negative finite");
+        }
+        for v in [litros, precio_litro].iter().flatten() {
+            if !v.is_finite() {
+                anyhow::bail!("numeric fields must be finite");
+            }
+        }
+        let fecha = fecha
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(date_only_today);
+        let estacion = estacion.and_then(normalize_non_empty);
+        let mov = movimiento_id.map(|s| s.to_string());
+        let notes = encrypt_optional_text(notas)?;
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let carga_id = format!("fuel-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id_clone = carga_id.clone();
+        let veh_clone = vehiculo_id.clone();
+        let fecha_clone = fecha.clone();
+        let est_clone = estacion.clone();
+        let mov_clone = mov.clone();
+        let notes_n = notes.nonce_b64.clone();
+        let notes_c = notes.cipher_b64.clone();
+        let now_rfc_clone = now_rfc.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO vehiculos_combustible
+                 (carga_id, vehiculo_id, fecha, litros, monto, precio_litro,
+                  kilometraje, estacion, movimiento_id, notas_nonce_b64,
+                  notas_ciphertext_b64, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    id_clone,
+                    veh_clone,
+                    fecha_clone,
+                    litros,
+                    monto,
+                    precio_litro,
+                    kilometraje,
+                    est_clone,
+                    mov_clone,
+                    notes_n,
+                    notes_c,
+                    now_rfc_clone,
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(CargaCombustible {
+            carga_id,
+            vehiculo_id,
+            fecha,
+            litros,
+            monto,
+            precio_litro,
+            kilometraje,
+            estacion,
+            movimiento_id: mov,
+            notas: notes.plain,
+            created_at: now,
+        })
+    }
+
+    async fn combustible_list_internal(&self, vehiculo_id: &str) -> Result<Vec<CargaCombustible>> {
+        let veh = vehiculo_id.to_string();
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<CargaCombustible>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT carga_id, vehiculo_id, fecha, litros, monto, precio_litro,
+                        kilometraje, estacion, movimiento_id, notas_nonce_b64,
+                        notas_ciphertext_b64, created_at
+                 FROM vehiculos_combustible WHERE vehiculo_id = ?1
+                 ORDER BY fecha DESC, created_at DESC",
+            )?;
+            let rows: Vec<CargaCombustible> = stmt
+                .query_map(params![veh], |row| {
+                    let nn: Option<String> = row.get(9)?;
+                    let nc: Option<String> = row.get(10)?;
+                    let created: String = row.get(11)?;
+                    Ok(CargaCombustible {
+                        carga_id: row.get(0)?,
+                        vehiculo_id: row.get(1)?,
+                        fecha: row.get(2)?,
+                        litros: row.get(3)?,
+                        monto: row.get(4)?,
+                        precio_litro: row.get(5)?,
+                        kilometraje: row.get(6)?,
+                        estacion: row.get(7)?,
+                        movimiento_id: row.get(8)?,
+                        notas: decrypt_optional_pair(nn, nc),
+                        created_at: parse_utc(&created),
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    pub async fn combustible_stats(
+        &self,
+        vehiculo_id: &str,
+        ultimas_n: usize,
+    ) -> Result<CombustibleStats> {
+        let cargas = self.combustible_list_internal(vehiculo_id).await?;
+        let n = ultimas_n.max(2);
+        let recent: Vec<&CargaCombustible> = cargas.iter().take(n).collect();
+        // Compute km/litro between consecutive cargas (need kilometraje + litros).
+        let mut samples: Vec<(String, f64)> = Vec::new();
+        // recent is newest-first; iterate from newest to older with previous (older) entry.
+        for w in recent.windows(2) {
+            let newer = w[0];
+            let older = w[1];
+            if let (Some(km_n), Some(km_o), Some(lit)) =
+                (newer.kilometraje, older.kilometraje, newer.litros)
+            {
+                if lit > 0.0 && km_n > km_o {
+                    let km_l = (km_n - km_o) as f64 / lit;
+                    samples.push((newer.carga_id.clone(), km_l));
+                }
+            }
+        }
+        if samples.is_empty() {
+            return Ok(CombustibleStats {
+                vehiculo_id: vehiculo_id.to_string(),
+                muestras: 0,
+                km_por_litro_promedio: None,
+                tendencia: "sin_datos".into(),
+            });
+        }
+        let avg = samples.iter().map(|(_, v)| *v).sum::<f64>() / samples.len() as f64;
+        // Tendencia: compare first half (newer) with second half (older).
+        let tendencia = if samples.len() >= 4 {
+            let half = samples.len() / 2;
+            let recent_avg: f64 =
+                samples[..half].iter().map(|(_, v)| *v).sum::<f64>() / half as f64;
+            let older_avg: f64 = samples[half..].iter().map(|(_, v)| *v).sum::<f64>()
+                / (samples.len() - half) as f64;
+            let delta = recent_avg - older_avg;
+            if delta > 0.5 {
+                "mejorando"
+            } else if delta < -0.5 {
+                "empeorando"
+            } else {
+                "estable"
+            }
+        } else {
+            "estable"
+        };
+        Ok(CombustibleStats {
+            vehiculo_id: vehiculo_id.to_string(),
+            muestras: samples.len(),
+            km_por_litro_promedio: Some(avg),
+            tendencia: tendencia.into(),
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // Vehículos — analytics
+    // -----------------------------------------------------------------------
+
+    pub async fn vehiculos_overview(&self) -> Result<VehiculosOverview> {
+        let vehiculos = self.vehiculo_list(false).await?;
+        let mut alertas: Vec<VehiculoAlerta> = Vec::new();
+        let today = chrono::Local::now().date_naive();
+
+        // Mantenimientos vencidos (programados con fecha <= today).
+        let proximos = self.mantenimiento_list(None, Some("programados")).await?;
+        for m in &proximos {
+            if let Some(fp) = m
+                .fecha_programada
+                .as_deref()
+                .and_then(parse_date_yyyy_mm_dd)
+            {
+                if fp < today {
+                    if let Some(v) = vehiculos.iter().find(|v| v.vehiculo_id == m.vehiculo_id) {
+                        alertas.push(VehiculoAlerta {
+                            vehiculo_id: v.vehiculo_id.clone(),
+                            alias: v.alias.clone(),
+                            tipo: "mantenimiento_vencido".into(),
+                            detalle: format!("{} programado para {}", m.tipo, fp),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Seguros por vencer (próximos 30 días).
+        for s in self.seguros_por_vencer(30).await? {
+            if let Some(v) = vehiculos.iter().find(|v| v.vehiculo_id == s.vehiculo_id) {
+                alertas.push(VehiculoAlerta {
+                    vehiculo_id: v.vehiculo_id.clone(),
+                    alias: v.alias.clone(),
+                    tipo: "seguro_por_vencer".into(),
+                    detalle: format!(
+                        "{} ({}) vence {}",
+                        s.aseguradora, s.tipo, s.fecha_vencimiento
+                    ),
+                });
+            }
+        }
+
+        // Kilometraje sin actualizar > 30 días.
+        let now = Utc::now();
+        for v in &vehiculos {
+            let stale = match v.kilometraje_actualizado_at {
+                Some(t) => (now - t).num_days() > 30,
+                None => true,
+            };
+            if stale {
+                alertas.push(VehiculoAlerta {
+                    vehiculo_id: v.vehiculo_id.clone(),
+                    alias: v.alias.clone(),
+                    tipo: "kilometraje_stale".into(),
+                    detalle: "kilometraje no actualizado en >30 dias".into(),
+                });
+            }
+        }
+
+        Ok(VehiculosOverview { vehiculos, alertas })
+    }
+
+    /// periodo: "mes" (30d), "año" (365d), "total".
+    pub async fn vehiculo_costo_total(
+        &self,
+        vehiculo_id: &str,
+        periodo: &str,
+    ) -> Result<VehiculoCostoTotal> {
+        let cutoff = match periodo {
+            "mes" => Some(chrono::Local::now().date_naive() - chrono::Duration::days(30)),
+            "año" | "ano" | "anio" | "year" => {
+                Some(chrono::Local::now().date_naive() - chrono::Duration::days(365))
+            }
+            _ => None,
+        };
+        let in_range = |d: Option<chrono::NaiveDate>| match (cutoff, d) {
+            (Some(c), Some(d)) => d >= c,
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
+
+        let cargas = self.combustible_list_internal(vehiculo_id).await?;
+        let combustible: f64 = cargas
+            .iter()
+            .filter(|c| in_range(parse_date_yyyy_mm_dd(&c.fecha)))
+            .map(|c| c.monto)
+            .sum();
+
+        let mantens = self
+            .mantenimiento_list(Some(vehiculo_id), Some("realizados"))
+            .await?;
+        let mantenimientos: f64 = mantens
+            .iter()
+            .filter(|m| in_range(m.fecha_realizado.as_deref().and_then(parse_date_yyyy_mm_dd)))
+            .map(|m| m.costo.unwrap_or(0.0))
+            .sum();
+
+        let segs = self.seguro_list(Some(vehiculo_id)).await?;
+        let seguros: f64 = segs
+            .iter()
+            .filter(|s| in_range(parse_date_yyyy_mm_dd(&s.fecha_inicio)))
+            .map(|s| s.prima_total.unwrap_or(0.0))
+            .sum();
+
+        Ok(VehiculoCostoTotal {
+            vehiculo_id: vehiculo_id.to_string(),
+            periodo: periodo.to_string(),
+            combustible,
+            mantenimientos,
+            seguros,
+            total: combustible + mantenimientos + seguros,
+        })
+    }
+
+    pub async fn rendimiento_combustible(
+        &self,
+        vehiculo_id: &str,
+    ) -> Result<RendimientoCombustible> {
+        let stats = self.combustible_stats(vehiculo_id, 100).await?;
+        // Re-walk to surface outliers (>20% off avg).
+        let cargas = self.combustible_list_internal(vehiculo_id).await?;
+        let mut samples: Vec<(String, f64)> = Vec::new();
+        for w in cargas.windows(2) {
+            let newer = &w[0];
+            let older = &w[1];
+            if let (Some(km_n), Some(km_o), Some(lit)) =
+                (newer.kilometraje, older.kilometraje, newer.litros)
+            {
+                if lit > 0.0 && km_n > km_o {
+                    samples.push((newer.carga_id.clone(), (km_n - km_o) as f64 / lit));
+                }
+            }
+        }
+        let outliers: Vec<String> = if let Some(avg) = stats.km_por_litro_promedio {
+            samples
+                .iter()
+                .filter(|(_, v)| (v - avg).abs() > avg * 0.2)
+                .map(|(id, _)| id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(RendimientoCombustible {
+            vehiculo_id: vehiculo_id.to_string(),
+            muestras: stats.muestras,
+            km_por_litro_promedio: stats.km_por_litro_promedio,
+            outliers,
+        })
+    }
+}
+
 fn build_relationship_advice_static(
     relationship: &Relationship,
     summary: &RelationshipsSummary,
@@ -29228,6 +30678,348 @@ mod tests {
         // helper alias
         let g = mgr.cuanto_gaste_en("Tokio").await.unwrap();
         assert_eq!(g, 1200.0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ====================================================================
+    // Vehículos Domain MVP tests
+    // ====================================================================
+
+    #[tokio::test]
+    async fn vehiculos_vehiculo_add_and_get_by_alias() {
+        let dir = temp_dir("vehiculos-add-get");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let v = mgr
+            .vehiculo_add(
+                "Civic",
+                "Honda",
+                "Civic EX",
+                Some(2020),
+                Some("ABC-123"),
+                None,
+                Some("rojo"),
+                Some(45_000),
+                Some("2020-06-15"),
+                Some(320_000.0),
+                None,
+                "comprado seminuevo",
+            )
+            .await
+            .unwrap();
+        assert!(v.vehiculo_id.starts_with("veh-"));
+
+        // Get by alias (case-insensitive).
+        let by_alias = mgr.vehiculo_get("civic").await.unwrap();
+        assert!(by_alias.is_some());
+        assert_eq!(by_alias.unwrap().vehiculo_id, v.vehiculo_id);
+
+        // Get by id.
+        let by_id = mgr.vehiculo_get(&v.vehiculo_id).await.unwrap();
+        assert!(by_id.is_some());
+
+        // Notes round-trip decrypted.
+        let again = mgr.vehiculo_list(false).await.unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].notas, "comprado seminuevo");
+
+        // Notas en disco no es plaintext.
+        let db = Connection::open(dir.join("memory.db")).unwrap();
+        let cipher: Option<String> = db
+            .query_row(
+                "SELECT notas_ciphertext_b64 FROM vehiculos_vehiculos LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(cipher.is_some());
+        assert!(!cipher.unwrap().contains("seminuevo"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vehiculos_mantenimiento_programar_y_completar() {
+        let dir = temp_dir("vehiculos-mant");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let v = mgr
+            .vehiculo_add(
+                "Tsuru",
+                "Nissan",
+                "Tsuru",
+                Some(2010),
+                None,
+                None,
+                None,
+                Some(120_000),
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+
+        let m = mgr
+            .mantenimiento_programar(
+                &v.vehiculo_id,
+                "afinacion",
+                "cambio bujias y filtros",
+                "2099-01-15",
+                Some(125_000),
+                "Taller Don Pepe",
+                "",
+            )
+            .await
+            .unwrap();
+        assert!(m.fecha_realizado.is_none());
+        assert!(m.fecha_programada.is_some());
+
+        let programados = mgr
+            .mantenimiento_list(Some(&v.vehiculo_id), Some("programados"))
+            .await
+            .unwrap();
+        assert_eq!(programados.len(), 1);
+
+        let ok = mgr
+            .mantenimiento_completar(
+                &m.mantenimiento_id,
+                Some("2099-02-01"),
+                Some(125_300),
+                Some(1500.0),
+            )
+            .await
+            .unwrap();
+        assert!(ok);
+
+        let realizados = mgr
+            .mantenimiento_list(Some(&v.vehiculo_id), Some("realizados"))
+            .await
+            .unwrap();
+        assert_eq!(realizados.len(), 1);
+        assert_eq!(realizados[0].fecha_realizado.as_deref(), Some("2099-02-01"));
+        assert_eq!(realizados[0].costo, Some(1500.0));
+
+        // Después de completar ya no debe estar en programados.
+        let programados_after = mgr
+            .mantenimiento_list(Some(&v.vehiculo_id), Some("programados"))
+            .await
+            .unwrap();
+        assert!(programados_after.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vehiculos_seguro_renovar_cierra_vigente() {
+        let dir = temp_dir("vehiculos-seguro");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let v = mgr
+            .vehiculo_add(
+                "Mazda3",
+                "Mazda",
+                "Mazda 3",
+                Some(2018),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+
+        let s1 = mgr
+            .seguro_add(
+                &v.vehiculo_id,
+                "Qualitas",
+                "amplia",
+                Some("POL-1"),
+                "2025-01-01",
+                "2026-01-01",
+                Some(8_000.0),
+                Some(3_000_000.0),
+                Some(5.0),
+                "Maria",
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        assert_eq!(s1.estado, "vigente");
+
+        let s2 = mgr
+            .seguro_renovar(
+                &s1.seguro_id,
+                "Qualitas",
+                "amplia",
+                Some("POL-2"),
+                "2026-01-01",
+                "2027-01-01",
+                Some(8_500.0),
+                Some(3_000_000.0),
+                Some(5.0),
+                "Maria",
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        assert_eq!(s2.estado, "vigente");
+
+        let all = mgr.seguro_list(Some(&v.vehiculo_id)).await.unwrap();
+        assert_eq!(all.len(), 2);
+        let old = all.iter().find(|s| s.seguro_id == s1.seguro_id).unwrap();
+        assert_eq!(old.estado, "vencido");
+        let new = all.iter().find(|s| s.seguro_id == s2.seguro_id).unwrap();
+        assert_eq!(new.estado, "vigente");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vehiculos_combustible_stats_calcula_rendimiento() {
+        let dir = temp_dir("vehiculos-fuel");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let v = mgr
+            .vehiculo_add(
+                "Jetta",
+                "VW",
+                "Jetta",
+                Some(2015),
+                None,
+                None,
+                None,
+                Some(80_000),
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+
+        // Three cargas: km 80000 -> 80400 -> 80800, 30L cada vez.
+        // Diff = 400 km / 30 L ≈ 13.33 km/l.
+        mgr.combustible_log(
+            &v.vehiculo_id,
+            Some("2025-01-01"),
+            Some(30.0),
+            750.0,
+            None,
+            Some(80_000),
+            None,
+            None,
+            "",
+        )
+        .await
+        .unwrap();
+        mgr.combustible_log(
+            &v.vehiculo_id,
+            Some("2025-01-10"),
+            Some(30.0),
+            750.0,
+            None,
+            Some(80_400),
+            None,
+            None,
+            "",
+        )
+        .await
+        .unwrap();
+        mgr.combustible_log(
+            &v.vehiculo_id,
+            Some("2025-01-20"),
+            Some(30.0),
+            750.0,
+            None,
+            Some(80_800),
+            None,
+            None,
+            "",
+        )
+        .await
+        .unwrap();
+
+        let stats = mgr.combustible_stats(&v.vehiculo_id, 5).await.unwrap();
+        assert!(stats.muestras >= 1);
+        let avg = stats.km_por_litro_promedio.unwrap();
+        assert!((avg - 13.33).abs() < 0.5, "esperado ~13.33, got {}", avg);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vehiculos_overview_alerta_seguros_proximos() {
+        let dir = temp_dir("vehiculos-overview");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let v = mgr
+            .vehiculo_add(
+                "Sentra",
+                "Nissan",
+                "Sentra",
+                Some(2019),
+                None,
+                None,
+                None,
+                Some(60_000),
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+
+        // Seguro que vence en 10 días.
+        let venc = (chrono::Local::now().date_naive() + chrono::Duration::days(10))
+            .format("%Y-%m-%d")
+            .to_string();
+        let inicio = (chrono::Local::now().date_naive() - chrono::Duration::days(355))
+            .format("%Y-%m-%d")
+            .to_string();
+        mgr.seguro_add(
+            &v.vehiculo_id,
+            "GNP",
+            "amplia",
+            None,
+            &inicio,
+            &venc,
+            Some(7_000.0),
+            None,
+            None,
+            "",
+            None,
+            "",
+        )
+        .await
+        .unwrap();
+
+        let overview = mgr.vehiculos_overview().await.unwrap();
+        assert_eq!(overview.vehiculos.len(), 1);
+        let seguros_alert: Vec<_> = overview
+            .alertas
+            .iter()
+            .filter(|a| a.tipo == "seguro_por_vencer")
+            .collect();
+        assert!(
+            !seguros_alert.is_empty(),
+            "expected seguro_por_vencer alert"
+        );
+        assert_eq!(seguros_alert[0].alias, "Sentra");
 
         std::fs::remove_dir_all(dir).ok();
     }

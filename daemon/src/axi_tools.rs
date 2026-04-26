@@ -28,7 +28,7 @@ pub mod inner {
     use crate::memory_plane::{
         crisis_resources_mx, detect_crisis_in_text, extract_entities_from_text, BookStatus,
         ExercisePlanItem, GoalStatus, LifeSummaryWindow, MemoryPlaneManager, RecipeIngredient,
-        ShoppingListItem, PANIC_WIPE_CONFIRMATION,
+        ShoppingListItem, VehiculoUpdate, PANIC_WIPE_CONFIRMATION,
     };
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
@@ -1231,6 +1231,51 @@ LifeOS lleva clientes, sesiones y facturacion de freelance del usuario para resp
 
 123. **clientes_por_facturacion** — Top clientes por facturacion (descendente).
     args: {"desde": "2026-01-01", "hasta": "2026-12-31"}
+
+## Vehiculos (dominio Vehiculos MVP)
+
+LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de combustible. Notas, descripciones, taller y agente se cifran (privacidad). Los montos viajan en plaintext para analytics. Estado por defecto de un vehiculo: 'activo'. Cuando lo vendes, se marca 'vendido'.
+
+100. **vehiculo_add** — Registra un vehiculo nuevo en el inventario.
+    args: {"alias": "Civic", "marca": "Honda", "modelo": "Civic EX", "anio": 2020, "placas": "ABC-123", "vin": "...", "color": "rojo", "kilometraje_actual": 45000, "fecha_compra": "2020-06-15", "precio_compra": 320000.0, "titular": "hector", "notas": "..."}
+
+101. **vehiculo_list** — Lista vehiculos. args: {"include_inactive": false} (default activos).
+
+102. **vehiculo_get** — Obtiene un vehiculo por id o por alias (case-insensitive). args: {"id_or_alias": "Civic"}.
+
+103. **vehiculo_update** — Actualiza campos generales. args: {"vehiculo_id": "veh-...", "alias": "...", "marca": "...", "notas": "...", ...}.
+
+104. **vehiculo_kilometraje_actualizar** — Actualiza kilometraje actual. args: {"vehiculo_id": "veh-...", "kilometraje": 47500}.
+
+105. **vehiculo_vender** — Marca como vendido (estado=vendido + fecha_baja + precio_venta). args: {"vehiculo_id": "veh-...", "fecha_baja": "2026-01-15", "precio_venta": 280000.0}.
+
+106. **mantenimiento_log** — Registra un mantenimiento ya realizado. args: {"vehiculo_id": "veh-...", "tipo": "afinacion", "descripcion": "...", "fecha_realizado": "2026-01-10", "kilometraje_realizado": 47500, "km_proximo": 52500, "taller": "Don Pepe", "costo": 1500.0, "movimiento_id": "mov-...", "notas": "..."}.
+
+107. **mantenimiento_programar** — Agenda un mantenimiento futuro. args: {"vehiculo_id": "veh-...", "tipo": "verificacion", "descripcion": "...", "fecha_programada": "2026-04-01", "km_proximo": 50000, "taller": "...", "notas": "..."}.
+
+108. **mantenimiento_completar** — Cierra un programado moviendolo a realizado. args: {"mantenimiento_id": "man-...", "fecha_realizado": "2026-04-02", "kilometraje_realizado": 49800, "costo": 800.0}.
+
+109. **mantenimiento_list** — Lista mantenimientos. args: {"vehiculo_id": "veh-..." (opcional), "estado": "programados" | "realizados" | omit}.
+
+110. **mantenimientos_proximos** — Lista programados dentro de N dias (incluye km_proximo cercano al kilometraje actual). args: {"dias": 30}.
+
+111. **seguro_add** — Crea poliza nueva (estado=vigente). args: {"vehiculo_id": "veh-...", "aseguradora": "Qualitas", "tipo": "amplia" | "limitada" | "rc", "numero_poliza": "POL-...", "fecha_inicio": "2026-01-01", "fecha_vencimiento": "2027-01-01", "prima_total": 8000.0, "cobertura_rc": 3000000.0, "deducible_dh": 5.0, "agente": "Maria", "movimiento_id": "...", "notas": "..."}.
+
+112. **seguro_renovar** — Cierra el seguro vigente (estado=vencido) y crea uno nuevo. args: {"seguro_vigente_id": "seg-...", "aseguradora": "...", "tipo": "...", "numero_poliza": "...", "fecha_inicio": "...", "fecha_vencimiento": "...", ...}.
+
+113. **seguro_list** — Lista seguros. args: {"vehiculo_id": "veh-..."} opcional.
+
+114. **seguros_por_vencer** — Seguros vigentes que vencen en N dias. args: {"dias": 30}.
+
+115. **combustible_log** — Registra una carga de gasolina. args: {"vehiculo_id": "veh-...", "fecha": "2026-01-10", "litros": 30.5, "monto": 760.0, "precio_litro": 24.92, "kilometraje": 47800, "estacion": "Pemex Centro", "movimiento_id": "...", "notas": "..."}.
+
+116. **combustible_stats** — Calcula rendimiento km/litro promedio + tendencia (mejorando | estable | empeorando | sin_datos). args: {"vehiculo_id": "veh-...", "ultimas_n": 5}.
+
+117. **vehiculos_overview** — Snapshot global: vehiculos activos + alertas (mantenimientos vencidos, seguros por vencer, kilometraje sin actualizar > 30 dias). args: {} (sin parametros).
+
+118. **vehiculo_costo_total** — Suma combustible + mantenimientos + seguros para un vehiculo. args: {"vehiculo_id": "veh-...", "periodo": "mes" | "ano" | "total"}.
+
+119. **rendimiento_combustible** — km/litro promedio + outliers (cargas que se desvian >20% del promedio). args: {"vehiculo_id": "veh-..."}.
 
 ## Reglas
 
@@ -2630,6 +2675,29 @@ LifeOS lleva clientes, sesiones y facturacion de freelance del usuario para resp
             "cliente_estado" => execute_cliente_estado(&call.args, ctx).await,
             "ingresos_periodo" => execute_ingresos_periodo(&call.args, ctx).await,
             "clientes_por_facturacion" => execute_clientes_por_facturacion(&call.args, ctx).await,
+            // Vehículos Domain MVP
+            "vehiculo_add" => execute_vehiculo_add(&call.args, ctx).await,
+            "vehiculo_list" => execute_vehiculo_list(&call.args, ctx).await,
+            "vehiculo_get" => execute_vehiculo_get(&call.args, ctx).await,
+            "vehiculo_update" => execute_vehiculo_update(&call.args, ctx).await,
+            "vehiculo_kilometraje_actualizar" => {
+                execute_vehiculo_kilometraje_actualizar(&call.args, ctx).await
+            }
+            "vehiculo_vender" => execute_vehiculo_vender(&call.args, ctx).await,
+            "mantenimiento_log" => execute_mantenimiento_log(&call.args, ctx).await,
+            "mantenimiento_programar" => execute_mantenimiento_programar(&call.args, ctx).await,
+            "mantenimiento_completar" => execute_mantenimiento_completar(&call.args, ctx).await,
+            "mantenimiento_list" => execute_mantenimiento_list(&call.args, ctx).await,
+            "mantenimientos_proximos" => execute_mantenimientos_proximos(&call.args, ctx).await,
+            "seguro_add" => execute_seguro_add(&call.args, ctx).await,
+            "seguro_renovar" => execute_seguro_renovar(&call.args, ctx).await,
+            "seguro_list" => execute_seguro_list(&call.args, ctx).await,
+            "seguros_por_vencer" => execute_seguros_por_vencer(&call.args, ctx).await,
+            "combustible_log" => execute_combustible_log(&call.args, ctx).await,
+            "combustible_stats" => execute_combustible_stats(&call.args, ctx).await,
+            "vehiculos_overview" => execute_vehiculos_overview(ctx).await,
+            "vehiculo_costo_total" => execute_vehiculo_costo_total(&call.args, ctx).await,
+            "rendimiento_combustible" => execute_rendimiento_combustible(&call.args, ctx).await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -13592,6 +13660,536 @@ max_context = 128000
         let mem = require_memory(ctx).await?;
         let buckets = mem.clientes_por_facturacion(desde, hasta).await?;
         Ok(serde_json::to_string_pretty(&buckets).unwrap_or_else(|_| String::from("[]")))
+    }
+
+    // ========================================================================
+    // Vehículos Domain MVP
+    // ========================================================================
+
+    async fn execute_vehiculo_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let alias = args["alias"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'alias'"))?;
+        let marca = args["marca"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'marca'"))?;
+        let modelo = args["modelo"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'modelo'"))?;
+        let anio = args["anio"].as_i64();
+        let placas = args["placas"].as_str();
+        let vin = args["vin"].as_str();
+        let color = args["color"].as_str();
+        let kilometraje_actual = args["kilometraje_actual"].as_i64();
+        let fecha_compra = args["fecha_compra"].as_str();
+        let precio_compra = args["precio_compra"].as_f64();
+        let titular = args["titular"].as_str();
+        let notas = args["notas"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let v = mem
+            .vehiculo_add(
+                alias,
+                marca,
+                modelo,
+                anio,
+                placas,
+                vin,
+                color,
+                kilometraje_actual,
+                fecha_compra,
+                precio_compra,
+                titular,
+                notas,
+            )
+            .await?;
+        Ok(format!(
+            "Vehiculo agregado (id: {}): {} {} {}",
+            v.vehiculo_id, v.alias, v.marca, v.modelo
+        ))
+    }
+
+    async fn execute_vehiculo_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let include_inactive = args["include_inactive"].as_bool().unwrap_or(false);
+        let mem = require_memory(ctx).await?;
+        let vs = mem.vehiculo_list(include_inactive).await?;
+        if vs.is_empty() {
+            return Ok("Sin vehiculos registrados.".into());
+        }
+        let lines: Vec<String> = vs
+            .iter()
+            .map(|v| {
+                let km = v
+                    .kilometraje_actual
+                    .map(|k| format!(" — {} km", k))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] {} {} {} ({}){}",
+                    v.vehiculo_id, v.alias, v.marca, v.modelo, v.estado, km
+                )
+            })
+            .collect();
+        Ok(format!("Vehiculos:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_vehiculo_get(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let key = args["id_or_alias"]
+            .as_str()
+            .or_else(|| args["alias"].as_str())
+            .or_else(|| args["vehiculo_id"].as_str())
+            .ok_or_else(|| anyhow::anyhow!("Falta 'id_or_alias' / 'alias' / 'vehiculo_id'"))?;
+        let mem = require_memory(ctx).await?;
+        match mem.vehiculo_get(key).await? {
+            None => Ok(format!("No encontre vehiculo con '{}'.", key)),
+            Some(v) => Ok(format!(
+                "[{}] {} {} {} (anio {:?}) — estado {} — km {:?}",
+                v.vehiculo_id, v.alias, v.marca, v.modelo, v.anio, v.estado, v.kilometraje_actual
+            )),
+        }
+    }
+
+    async fn execute_vehiculo_update(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'vehiculo_id'"))?;
+        let upd = VehiculoUpdate {
+            alias: args["alias"].as_str().map(|s| s.to_string()),
+            marca: args["marca"].as_str().map(|s| s.to_string()),
+            modelo: args["modelo"].as_str().map(|s| s.to_string()),
+            anio: args["anio"].as_i64(),
+            placas: args["placas"].as_str().map(|s| s.to_string()),
+            vin: args["vin"].as_str().map(|s| s.to_string()),
+            color: args["color"].as_str().map(|s| s.to_string()),
+            fecha_compra: args["fecha_compra"].as_str().map(|s| s.to_string()),
+            precio_compra: args["precio_compra"].as_f64(),
+            titular: args["titular"].as_str().map(|s| s.to_string()),
+            notas: args["notas"].as_str().map(|s| s.to_string()),
+        };
+        let mem = require_memory(ctx).await?;
+        let ok = mem.vehiculo_update(id, upd).await?;
+        Ok(if ok {
+            format!("Vehiculo {} actualizado.", id)
+        } else {
+            format!("No se actualizo nada para {}.", id)
+        })
+    }
+
+    async fn execute_vehiculo_kilometraje_actualizar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'vehiculo_id'"))?;
+        let km = args["kilometraje"]
+            .as_i64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'kilometraje'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.vehiculo_kilometraje_actualizar(id, km).await?;
+        Ok(if ok {
+            format!("Kilometraje actualizado a {} para {}.", km, id)
+        } else {
+            format!("No encontre vehiculo {}.", id)
+        })
+    }
+
+    async fn execute_vehiculo_vender(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'vehiculo_id'"))?;
+        let fecha = args["fecha_baja"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'fecha_baja'"))?;
+        let precio = args["precio_venta"]
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'precio_venta'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.vehiculo_vender(id, fecha, precio).await?;
+        Ok(if ok {
+            format!(
+                "Vehiculo {} marcado como vendido en {} por {:.2}.",
+                id, fecha, precio
+            )
+        } else {
+            format!("No encontre vehiculo {}.", id)
+        })
+    }
+
+    async fn execute_mantenimiento_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let veh = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'vehiculo_id'"))?;
+        let tipo = args["tipo"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'tipo'"))?;
+        let descripcion = args["descripcion"].as_str().unwrap_or("");
+        let fecha = args["fecha_realizado"].as_str();
+        let km_real = args["kilometraje_realizado"].as_i64();
+        let km_prox = args["km_proximo"].as_i64();
+        let taller = args["taller"].as_str().unwrap_or("");
+        let costo = args["costo"].as_f64();
+        let mov = args["movimiento_id"].as_str();
+        let notas = args["notas"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let m = mem
+            .mantenimiento_log(
+                veh,
+                tipo,
+                descripcion,
+                fecha,
+                km_real,
+                km_prox,
+                taller,
+                costo,
+                mov,
+                notas,
+            )
+            .await?;
+        Ok(format!(
+            "Mantenimiento registrado (id: {}): {}",
+            m.mantenimiento_id, m.tipo
+        ))
+    }
+
+    async fn execute_mantenimiento_programar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let veh = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'vehiculo_id'"))?;
+        let tipo = args["tipo"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'tipo'"))?;
+        let descripcion = args["descripcion"].as_str().unwrap_or("");
+        let fecha_prog = args["fecha_programada"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'fecha_programada'"))?;
+        let km_prox = args["km_proximo"].as_i64();
+        let taller = args["taller"].as_str().unwrap_or("");
+        let notas = args["notas"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let m = mem
+            .mantenimiento_programar(veh, tipo, descripcion, fecha_prog, km_prox, taller, notas)
+            .await?;
+        Ok(format!(
+            "Mantenimiento programado (id: {}): {} para {}",
+            m.mantenimiento_id, m.tipo, fecha_prog
+        ))
+    }
+
+    async fn execute_mantenimiento_completar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = args["mantenimiento_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'mantenimiento_id'"))?;
+        let fecha = args["fecha_realizado"].as_str();
+        let km = args["kilometraje_realizado"].as_i64();
+        let costo = args["costo"].as_f64();
+        let mem = require_memory(ctx).await?;
+        let ok = mem.mantenimiento_completar(id, fecha, km, costo).await?;
+        Ok(if ok {
+            format!("Mantenimiento {} completado.", id)
+        } else {
+            format!("No encontre mantenimiento {}.", id)
+        })
+    }
+
+    async fn execute_mantenimiento_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let veh = args["vehiculo_id"].as_str();
+        let estado = args["estado"].as_str();
+        let mem = require_memory(ctx).await?;
+        let ms = mem.mantenimiento_list(veh, estado).await?;
+        if ms.is_empty() {
+            return Ok("Sin mantenimientos.".into());
+        }
+        let lines: Vec<String> = ms
+            .iter()
+            .map(|m| {
+                let when = m
+                    .fecha_realizado
+                    .clone()
+                    .or_else(|| m.fecha_programada.clone())
+                    .unwrap_or_else(|| "-".into());
+                let costo = m.costo.map(|c| format!(" — {:.2}", c)).unwrap_or_default();
+                format!(
+                    "- [{}] {} {} ({}){}",
+                    m.mantenimiento_id, when, m.tipo, m.vehiculo_id, costo
+                )
+            })
+            .collect();
+        Ok(format!("Mantenimientos:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_mantenimientos_proximos(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let dias = args["dias"].as_i64().unwrap_or(30);
+        let mem = require_memory(ctx).await?;
+        let ms = mem.mantenimientos_proximos(dias).await?;
+        if ms.is_empty() {
+            return Ok(format!("Sin mantenimientos proximos en {} dias.", dias));
+        }
+        let lines: Vec<String> = ms
+            .iter()
+            .map(|m| {
+                format!(
+                    "- {} [{}] {} (programado {:?}, km_prox {:?})",
+                    m.tipo, m.vehiculo_id, m.mantenimiento_id, m.fecha_programada, m.km_proximo
+                )
+            })
+            .collect();
+        Ok(format!("Proximos {} dias:\n{}", dias, lines.join("\n")))
+    }
+
+    async fn execute_seguro_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let veh = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'vehiculo_id'"))?;
+        let aseguradora = args["aseguradora"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'aseguradora'"))?;
+        let tipo = args["tipo"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'tipo'"))?;
+        let np = args["numero_poliza"].as_str();
+        let fi = args["fecha_inicio"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'fecha_inicio'"))?;
+        let fv = args["fecha_vencimiento"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'fecha_vencimiento'"))?;
+        let prima = args["prima_total"].as_f64();
+        let rc = args["cobertura_rc"].as_f64();
+        let dh = args["deducible_dh"].as_f64();
+        let agente = args["agente"].as_str().unwrap_or("");
+        let mov = args["movimiento_id"].as_str();
+        let notas = args["notas"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let s = mem
+            .seguro_add(
+                veh,
+                aseguradora,
+                tipo,
+                np,
+                fi,
+                fv,
+                prima,
+                rc,
+                dh,
+                agente,
+                mov,
+                notas,
+            )
+            .await?;
+        Ok(format!(
+            "Seguro agregado (id: {}): {} ({}) hasta {}",
+            s.seguro_id, s.aseguradora, s.tipo, s.fecha_vencimiento
+        ))
+    }
+
+    async fn execute_seguro_renovar(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let id = args["seguro_vigente_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'seguro_vigente_id'"))?;
+        let aseguradora = args["aseguradora"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'aseguradora'"))?;
+        let tipo = args["tipo"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'tipo'"))?;
+        let np = args["numero_poliza"].as_str();
+        let fi = args["fecha_inicio"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'fecha_inicio'"))?;
+        let fv = args["fecha_vencimiento"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'fecha_vencimiento'"))?;
+        let prima = args["prima_total"].as_f64();
+        let rc = args["cobertura_rc"].as_f64();
+        let dh = args["deducible_dh"].as_f64();
+        let agente = args["agente"].as_str().unwrap_or("");
+        let mov = args["movimiento_id"].as_str();
+        let notas = args["notas"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let s = mem
+            .seguro_renovar(
+                id,
+                aseguradora,
+                tipo,
+                np,
+                fi,
+                fv,
+                prima,
+                rc,
+                dh,
+                agente,
+                mov,
+                notas,
+            )
+            .await?;
+        Ok(format!(
+            "Seguro renovado. Nuevo id: {} ({}) hasta {}.",
+            s.seguro_id, s.aseguradora, s.fecha_vencimiento
+        ))
+    }
+
+    async fn execute_seguro_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let veh = args["vehiculo_id"].as_str();
+        let mem = require_memory(ctx).await?;
+        let ss = mem.seguro_list(veh).await?;
+        if ss.is_empty() {
+            return Ok("Sin seguros registrados.".into());
+        }
+        let lines: Vec<String> = ss
+            .iter()
+            .map(|s| {
+                format!(
+                    "- [{}] {} ({}) {} — {} hasta {}",
+                    s.seguro_id,
+                    s.aseguradora,
+                    s.tipo,
+                    s.estado,
+                    s.fecha_inicio,
+                    s.fecha_vencimiento
+                )
+            })
+            .collect();
+        Ok(format!("Seguros:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_seguros_por_vencer(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let dias = args["dias"].as_i64().unwrap_or(30);
+        let mem = require_memory(ctx).await?;
+        let ss = mem.seguros_por_vencer(dias).await?;
+        if ss.is_empty() {
+            return Ok(format!("Sin seguros por vencer en {} dias.", dias));
+        }
+        let lines: Vec<String> = ss
+            .iter()
+            .map(|s| {
+                format!(
+                    "- {} [{}] vence {}",
+                    s.aseguradora, s.vehiculo_id, s.fecha_vencimiento
+                )
+            })
+            .collect();
+        Ok(format!("Por vencer ({} dias):\n{}", dias, lines.join("\n")))
+    }
+
+    async fn execute_combustible_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let veh = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'vehiculo_id'"))?;
+        let fecha = args["fecha"].as_str();
+        let litros = args["litros"].as_f64();
+        let monto = args["monto"]
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'monto'"))?;
+        let pl = args["precio_litro"].as_f64();
+        let km = args["kilometraje"].as_i64();
+        let estacion = args["estacion"].as_str();
+        let mov = args["movimiento_id"].as_str();
+        let notas = args["notas"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let c = mem
+            .combustible_log(veh, fecha, litros, monto, pl, km, estacion, mov, notas)
+            .await?;
+        Ok(format!(
+            "Carga registrada (id: {}): {:.2} MXN en {}",
+            c.carga_id, c.monto, c.fecha
+        ))
+    }
+
+    async fn execute_combustible_stats(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let veh = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'vehiculo_id'"))?;
+        let n = args["ultimas_n"].as_u64().unwrap_or(5) as usize;
+        let mem = require_memory(ctx).await?;
+        let s = mem.combustible_stats(veh, n).await?;
+        Ok(format!(
+            "Combustible {} — muestras {}, promedio {:?} km/l, tendencia {}",
+            s.vehiculo_id, s.muestras, s.km_por_litro_promedio, s.tendencia
+        ))
+    }
+
+    async fn execute_vehiculos_overview(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let o = mem.vehiculos_overview().await?;
+        let mut out = format!("# Vehiculos ({} activos)\n", o.vehiculos.len());
+        for v in &o.vehiculos {
+            out.push_str(&format!(
+                "- {} {} {} — {} km\n",
+                v.alias,
+                v.marca,
+                v.modelo,
+                v.kilometraje_actual
+                    .map(|k| k.to_string())
+                    .unwrap_or_else(|| "?".into())
+            ));
+        }
+        if !o.alertas.is_empty() {
+            out.push_str("\n## Alertas\n");
+            for a in &o.alertas {
+                out.push_str(&format!("- [{}] {}: {}\n", a.tipo, a.alias, a.detalle));
+            }
+        }
+        Ok(out)
+    }
+
+    async fn execute_vehiculo_costo_total(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let veh = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'vehiculo_id'"))?;
+        let periodo = args["periodo"].as_str().unwrap_or("mes");
+        let mem = require_memory(ctx).await?;
+        let c = mem.vehiculo_costo_total(veh, periodo).await?;
+        Ok(format!(
+            "Costo {} ({}): combustible {:.2} + mantenimientos {:.2} + seguros {:.2} = {:.2}",
+            c.vehiculo_id, c.periodo, c.combustible, c.mantenimientos, c.seguros, c.total
+        ))
+    }
+
+    async fn execute_rendimiento_combustible(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let veh = args["vehiculo_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'vehiculo_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let r = mem.rendimiento_combustible(veh).await?;
+        Ok(format!(
+            "Rendimiento {}: muestras {}, promedio {:?} km/l, outliers {:?}",
+            r.vehiculo_id, r.muestras, r.km_por_litro_promedio, r.outliers
+        ))
     }
 }
 

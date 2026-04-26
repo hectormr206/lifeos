@@ -12,6 +12,7 @@ mod lab;
 pub mod privacy_mode;
 mod providers;
 mod proyectos;
+mod vehiculos;
 mod viajes;
 mod vida_plena;
 mod workers;
@@ -1619,6 +1620,7 @@ pub fn create_router(state: ApiState) -> Router {
         .nest("/freelance", freelance::freelance_routes())
         // Viajes domain (BI.viajes) — vacaciones, escapadas, road trips.
         .nest("/viajes", viajes::viajes_routes())
+        .nest("/vehiculos", vehiculos::vehiculos_routes())
         // Workers CRUD (BB.dashboard) — list and cancel async LLM workers.
         .nest("/workers", workers::workers_routes())
         // Conversations CRUD — unified message-history view across bridges.
