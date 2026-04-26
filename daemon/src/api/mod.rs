@@ -5283,10 +5283,12 @@ async fn post_llm_ctx_size(
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ApiError {
-                error: format!(
+                error: "invalid_request".to_string(),
+                message: format!(
                     "ctx_size {} out of range [{}, {}]",
                     payload.value, USER_CTX_SIZE_MIN, USER_CTX_SIZE_MAX
                 ),
+                code: 400,
             }),
         ));
     }
