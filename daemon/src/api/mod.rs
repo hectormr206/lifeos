@@ -5358,7 +5358,11 @@ async fn delete_llm_ctx_size(
 fn internal_error(msg: String) -> (StatusCode, Json<ApiError>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ApiError { error: msg }),
+        Json(ApiError {
+            error: "internal_error".to_string(),
+            message: msg,
+            code: 500,
+        }),
     )
 }
 
