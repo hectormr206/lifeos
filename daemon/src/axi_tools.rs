@@ -468,6 +468,86 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
 12.viajes.r. **cuanto_gaste_en** — Atajo de viajes_a que devuelve solo el numero. Util para preguntas tipo "cuanto gaste en Japon en total".
     args: {"destino_o_pais": "Japon"}
 
+12.5 **Finanzas Domain MVP** (PRD Seccion 3) — Tracking GRANULAR: cuentas (debito/credito/efectivo/inversion) con saldos, categorias jerarquicas, movimientos atomicos (gasto/ingreso/transferencia/ajuste) que actualizan saldo, presupuestos por categoria/mes con alertas, y metas de ahorro con aportes atomicos. Usar en preferencia a 12a-12s cuando el usuario quiere control fino. Money fields PLAINTEXT, narrativa cifrada.
+
+12.5a **finanzas_cuenta_add** — Crea cuenta. tipo: debito|credito|efectivo|inversion|prestamo.
+    args: {"nombre":"BBVA debito","tipo":"debito","banco":"BBVA","ultimos_4":"1234","saldo_actual":1500,"limite_credito":50000,"fecha_corte":15,"fecha_pago":5,"notas":"..."}
+
+12.5b **finanzas_cuenta_list** — Lista cuentas activas (incluye_cerradas opcional).
+    args: {"include_cerradas": false}
+
+12.5c **finanzas_cuenta_update** — PATCH parcial.
+    args: {"cuenta_id":"cta-...","nombre":"...","banco":"...","limite_credito":60000,"fecha_corte":20,"notas":"..."}
+
+12.5d **finanzas_cuenta_saldo_update** — Solo el saldo. updated_at se actualiza.
+    args: {"cuenta_id":"cta-...","nuevo_saldo":1850.5}
+
+12.5e **finanzas_cuenta_cerrar** — DESTRUCTIVO. Marca estado=cerrada. Pide confirm.
+    args: {"cuenta_id":"cta-...","confirm":true}
+
+12.5f **finanzas_categoria_add** — Crea categoria. tipo: gasto|ingreso. nombre UNIQUE.
+    args: {"nombre":"Comida","tipo":"gasto","emoji":"pizza","color":"ff0000","presupuesto_mensual":5000}
+
+12.5g **finanzas_categoria_list** — Lista todas.
+    args: {}
+
+12.5h **finanzas_categoria_update** — PATCH parcial.
+    args: {"categoria_id":"cat-...","nombre":"...","emoji":"...","presupuesto_mensual":3000}
+
+12.5i **finanzas_categoria_delete** — DESTRUCTIVO. Movimientos quedan con categoria_id NULL (no se borran). Pide confirm.
+    args: {"categoria_id":"cat-...","confirm":true}
+
+12.5j **finanzas_movimiento_log** — Registra movimiento atomico. Auto-actualiza saldo de la cuenta (gasto resta, ingreso suma, transferencia ambas). Resuelve cuenta y categoria por nombre si los IDs vienen vacios.
+    args: {"cuenta_nombre":"BBVA","categoria_nombre":"Comida","tipo":"gasto","fecha":"2026-04-24T12:00:00Z","monto":350,"moneda":"MXN","descripcion":"...","comercio":"...","metodo":"...","cuenta_destino_id":"...","recurrente":false,"notas":"...","viaje_id":null,"vehiculo_id":null,"proyecto_id":null}
+
+12.5k **finanzas_movimiento_list** — Filtros opcionales. Soft-deleted excluidos.
+    args: {"cuenta_id":"...","categoria_id":"...","desde":"YYYY-MM","hasta":"YYYY-MM-DDTHH:MM:SSZ","tipo":"gasto","recurrente":true,"limit":100}
+
+12.5l **finanzas_movimiento_update** — PATCH (NO toca monto/cuenta/tipo — para eso elimina y vuelve a registrar).
+    args: {"movimiento_id":"mov-...","categoria_id":"...","descripcion":"...","comercio":"...","notas":"...","recurrente":true}
+
+12.5m **finanzas_movimiento_delete** — DESTRUCTIVO (soft-delete). Revierte el saldo. Pide confirm.
+    args: {"movimiento_id":"mov-...","confirm":true}
+
+12.5n **finanzas_presupuesto_set** — UPSERT por (categoria, mes).
+    args: {"categoria_id":"cat-...","mes":"2026-04","monto_objetivo":5000,"alerta_pct":80}
+
+12.5o **finanzas_presupuesto_status** — Recalcula gastado del mes y devuelve objetivo/gastado/restante/alertando/excedido.
+    args: {"categoria_id":"cat-...","mes":"2026-04"}
+
+12.5p **finanzas_presupuestos_list_mes** — Status de TODOS los presupuestos del mes.
+    args: {"mes":"2026-04"}
+
+12.5q **finanzas_meta_ahorro_add** — Crea meta. prioridad 1-10 (1 = max).
+    args: {"nombre":"Fondo emergencia","monto_objetivo":90000,"fecha_objetivo":"2026-12-31","cuenta_id":"cta-...","prioridad":1,"notas":"..."}
+
+12.5r **finanzas_meta_ahorro_aporte** — Suma atomicamente al monto_actual. Auto-flips estado a 'lograda'.
+    args: {"meta_id":"met-...","monto":2000}
+
+12.5s **finanzas_meta_ahorro_list** — Lista metas activas (orden prioridad).
+    args: {}
+
+12.5t **finanzas_meta_ahorro_progress** — % completion + ETA en dias.
+    args: {"meta_id":"met-..."}
+
+12.5u **finanzas_overview** — Snapshot del mes: gastos top 10 por categoria, ingresos, balance, alertas (presupuestos ≥80%/100%, metas atrasadas).
+    args: {"mes":"2026-04"}
+
+12.5v **finanzas_gastos_por_categoria** — Agregado en rango de fechas.
+    args: {"desde":"2026-01-01","hasta":"2026-04-30"}
+
+12.5w **finanzas_ingresos_vs_gastos** — Tendencia mensual.
+    args: {"meses_atras":6}
+
+12.5x **finanzas_cuentas_balance** — Saldo total + por banco + por tipo.
+    args: {}
+
+12.5y **finanzas_gastos_recurrentes_list** — Movimientos marcados recurrente=true.
+    args: {}
+
+12.5z **finanzas_cuanto_puedo_gastar** — Presupuesto restante mes actual (categoria opcional, si no agrega todos).
+    args: {"categoria_id":"cat-..."}
+
 13. **Vida Plena — Coaching unificado (BI.8)**
 
 Estas herramientas sintetizan TODOS los pilares de bienestar (salud, nutricion, ejercicio, crecimiento, social, sueno, espiritualidad, finanzas) en una sola vista. Usalas cuando el usuario pida una reflexion amplia sobre como va su vida, o cuando vayas a preparar algo que cruce dimensiones.
@@ -2459,6 +2539,55 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
             "financial_goal_progress" => execute_financial_goal_progress(&call.args, ctx).await,
             "financial_goal_list" => execute_financial_goal_list(ctx).await,
             "financial_summary" => execute_financial_summary(ctx).await,
+            // Finanzas Domain MVP (PRD §3) — granular tracking
+            "finanzas_cuenta_add" => execute_finanzas_cuenta_add(&call.args, ctx).await,
+            "finanzas_cuenta_list" => execute_finanzas_cuenta_list(&call.args, ctx).await,
+            "finanzas_cuenta_update" => execute_finanzas_cuenta_update(&call.args, ctx).await,
+            "finanzas_cuenta_saldo_update" => {
+                execute_finanzas_cuenta_saldo_update(&call.args, ctx).await
+            }
+            "finanzas_cuenta_cerrar" => execute_finanzas_cuenta_cerrar(&call.args, ctx).await,
+            "finanzas_categoria_add" => execute_finanzas_categoria_add(&call.args, ctx).await,
+            "finanzas_categoria_list" => execute_finanzas_categoria_list(ctx).await,
+            "finanzas_categoria_update" => execute_finanzas_categoria_update(&call.args, ctx).await,
+            "finanzas_categoria_delete" => execute_finanzas_categoria_delete(&call.args, ctx).await,
+            "finanzas_movimiento_log" => execute_finanzas_movimiento_log(&call.args, ctx).await,
+            "finanzas_movimiento_list" => execute_finanzas_movimiento_list(&call.args, ctx).await,
+            "finanzas_movimiento_update" => {
+                execute_finanzas_movimiento_update(&call.args, ctx).await
+            }
+            "finanzas_movimiento_delete" => {
+                execute_finanzas_movimiento_delete(&call.args, ctx).await
+            }
+            "finanzas_presupuesto_set" => execute_finanzas_presupuesto_set(&call.args, ctx).await,
+            "finanzas_presupuesto_status" => {
+                execute_finanzas_presupuesto_status(&call.args, ctx).await
+            }
+            "finanzas_presupuestos_list_mes" => {
+                execute_finanzas_presupuestos_list_mes(&call.args, ctx).await
+            }
+            "finanzas_meta_ahorro_add" => execute_finanzas_meta_ahorro_add(&call.args, ctx).await,
+            "finanzas_meta_ahorro_aporte" => {
+                execute_finanzas_meta_ahorro_aporte(&call.args, ctx).await
+            }
+            "finanzas_meta_ahorro_list" => execute_finanzas_meta_ahorro_list(ctx).await,
+            "finanzas_meta_ahorro_progress" => {
+                execute_finanzas_meta_ahorro_progress(&call.args, ctx).await
+            }
+            "finanzas_overview" => execute_finanzas_overview(&call.args, ctx).await,
+            "finanzas_gastos_por_categoria" => {
+                execute_finanzas_gastos_por_categoria(&call.args, ctx).await
+            }
+            "finanzas_ingresos_vs_gastos" => {
+                execute_finanzas_ingresos_vs_gastos(&call.args, ctx).await
+            }
+            "finanzas_cuentas_balance" => execute_finanzas_cuentas_balance(ctx).await,
+            "finanzas_gastos_recurrentes_list" => {
+                execute_finanzas_gastos_recurrentes_list(ctx).await
+            }
+            "finanzas_cuanto_puedo_gastar" => {
+                execute_finanzas_cuanto_puedo_gastar(&call.args, ctx).await
+            }
             "life_summary" => execute_life_summary(&call.args, ctx).await,
             "cross_domain_patterns" => execute_cross_domain_patterns(&call.args, ctx).await,
             // Viajes domain
@@ -14190,6 +14319,619 @@ max_context = 128000
             "Rendimiento {}: muestras {}, promedio {:?} km/l, outliers {:?}",
             r.vehiculo_id, r.muestras, r.km_por_litro_promedio, r.outliers
         ))
+    }
+
+    // ======================================================================
+    // Finanzas Domain MVP (PRD §3) — LLM tool executors.
+    // ======================================================================
+
+    fn arg_str<'a>(args: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+        args.get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+    }
+    fn arg_f64(args: &serde_json::Value, key: &str) -> Option<f64> {
+        args.get(key).and_then(|v| v.as_f64())
+    }
+    fn arg_i64(args: &serde_json::Value, key: &str) -> Option<i64> {
+        args.get(key).and_then(|v| v.as_i64())
+    }
+    fn arg_bool(args: &serde_json::Value, key: &str) -> Option<bool> {
+        args.get(key).and_then(|v| v.as_bool())
+    }
+
+    async fn execute_finanzas_cuenta_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let nombre = arg_str(args, "nombre").ok_or_else(|| anyhow::anyhow!("Falta 'nombre'"))?;
+        let tipo = arg_str(args, "tipo").ok_or_else(|| anyhow::anyhow!("Falta 'tipo'"))?;
+        let mem = require_memory(ctx).await?;
+        let c = mem
+            .finanzas_cuenta_add(
+                nombre,
+                tipo,
+                arg_str(args, "banco"),
+                arg_str(args, "ultimos_4"),
+                arg_str(args, "moneda"),
+                arg_f64(args, "saldo_actual"),
+                arg_f64(args, "limite_credito"),
+                arg_i64(args, "fecha_corte"),
+                arg_i64(args, "fecha_pago"),
+                arg_str(args, "titular"),
+                arg_str(args, "notas").unwrap_or(""),
+            )
+            .await?;
+        Ok(format!(
+            "Cuenta creada (id: {}): {} ({}) saldo {:?} {}",
+            c.cuenta_id, c.nombre, c.tipo, c.saldo_actual, c.moneda
+        ))
+    }
+
+    async fn execute_finanzas_cuenta_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let include = arg_bool(args, "include_cerradas").unwrap_or(false);
+        let mem = require_memory(ctx).await?;
+        let list = mem.finanzas_cuenta_list(include).await?;
+        if list.is_empty() {
+            return Ok("Sin cuentas registradas.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|c| {
+                format!(
+                    "- [{}] {} ({}) — saldo {:?} {} {}",
+                    c.cuenta_id, c.nombre, c.tipo, c.saldo_actual, c.moneda, c.estado
+                )
+            })
+            .collect();
+        Ok(format!("Cuentas:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_finanzas_cuenta_update(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = arg_str(args, "cuenta_id").ok_or_else(|| anyhow::anyhow!("Falta 'cuenta_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem
+            .finanzas_cuenta_update(
+                id,
+                arg_str(args, "nombre"),
+                arg_str(args, "banco"),
+                arg_str(args, "ultimos_4"),
+                arg_f64(args, "limite_credito"),
+                arg_i64(args, "fecha_corte"),
+                arg_i64(args, "fecha_pago"),
+                args.get("notas").and_then(|v| v.as_str()),
+            )
+            .await?;
+        Ok(if ok {
+            format!("Cuenta {id} actualizada.")
+        } else {
+            format!("Cuenta {id} no encontrada.")
+        })
+    }
+
+    async fn execute_finanzas_cuenta_saldo_update(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = arg_str(args, "cuenta_id").ok_or_else(|| anyhow::anyhow!("Falta 'cuenta_id'"))?;
+        let saldo =
+            arg_f64(args, "nuevo_saldo").ok_or_else(|| anyhow::anyhow!("Falta 'nuevo_saldo'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.finanzas_cuenta_saldo_update(id, saldo).await?;
+        Ok(if ok {
+            format!("Saldo de {id} actualizado a {saldo:.2}.")
+        } else {
+            format!("Cuenta {id} no encontrada.")
+        })
+    }
+
+    async fn execute_finanzas_cuenta_cerrar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        if let Err(msg) = destructive_preflight("finanzas_cuenta_cerrar", args) {
+            return Ok(msg);
+        }
+        let id = arg_str(args, "cuenta_id").ok_or_else(|| anyhow::anyhow!("Falta 'cuenta_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.finanzas_cuenta_cerrar(id).await?;
+        Ok(if ok {
+            format!("Cuenta {id} cerrada.")
+        } else {
+            format!("Cuenta {id} no encontrada.")
+        })
+    }
+
+    async fn execute_finanzas_categoria_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let nombre = arg_str(args, "nombre").ok_or_else(|| anyhow::anyhow!("Falta 'nombre'"))?;
+        let tipo = arg_str(args, "tipo").ok_or_else(|| anyhow::anyhow!("Falta 'tipo'"))?;
+        let mem = require_memory(ctx).await?;
+        let c = mem
+            .finanzas_categoria_add(
+                nombre,
+                tipo,
+                arg_str(args, "parent_id"),
+                arg_str(args, "emoji"),
+                arg_str(args, "color"),
+                arg_f64(args, "presupuesto_mensual"),
+            )
+            .await?;
+        Ok(format!(
+            "Categoria creada (id: {}): {} ({})",
+            c.categoria_id, c.nombre, c.tipo
+        ))
+    }
+
+    async fn execute_finanzas_categoria_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list = mem.finanzas_categoria_list().await?;
+        if list.is_empty() {
+            return Ok("Sin categorias.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|c| {
+                format!(
+                    "- [{}] {} ({}) {}",
+                    c.categoria_id,
+                    c.nombre,
+                    c.tipo,
+                    c.emoji.as_deref().unwrap_or("")
+                )
+            })
+            .collect();
+        Ok(format!("Categorias:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_finanzas_categoria_update(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id =
+            arg_str(args, "categoria_id").ok_or_else(|| anyhow::anyhow!("Falta 'categoria_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem
+            .finanzas_categoria_update(
+                id,
+                arg_str(args, "nombre"),
+                arg_str(args, "emoji"),
+                arg_str(args, "color"),
+                arg_f64(args, "presupuesto_mensual"),
+            )
+            .await?;
+        Ok(if ok {
+            format!("Categoria {id} actualizada.")
+        } else {
+            format!("Categoria {id} no encontrada.")
+        })
+    }
+
+    async fn execute_finanzas_categoria_delete(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        if let Err(msg) = destructive_preflight("finanzas_categoria_delete", args) {
+            return Ok(msg);
+        }
+        let id =
+            arg_str(args, "categoria_id").ok_or_else(|| anyhow::anyhow!("Falta 'categoria_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.finanzas_categoria_delete(id).await?;
+        Ok(if ok {
+            format!("Categoria {id} eliminada (movimientos preservados, categoria_id NULL).")
+        } else {
+            format!("Categoria {id} no encontrada.")
+        })
+    }
+
+    async fn execute_finanzas_movimiento_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let tipo = arg_str(args, "tipo").ok_or_else(|| anyhow::anyhow!("Falta 'tipo'"))?;
+        let monto = arg_f64(args, "monto").ok_or_else(|| anyhow::anyhow!("Falta 'monto'"))?;
+        let mem = require_memory(ctx).await?;
+        let m = mem
+            .finanzas_movimiento_log(
+                arg_str(args, "cuenta_id"),
+                arg_str(args, "cuenta_nombre"),
+                arg_str(args, "categoria_id"),
+                arg_str(args, "categoria_nombre"),
+                tipo,
+                arg_str(args, "fecha"),
+                monto,
+                arg_str(args, "moneda"),
+                arg_str(args, "descripcion"),
+                arg_str(args, "comercio"),
+                arg_str(args, "metodo"),
+                arg_str(args, "cuenta_destino_id"),
+                arg_bool(args, "recurrente").unwrap_or(false),
+                arg_str(args, "notas").unwrap_or(""),
+                arg_str(args, "viaje_id"),
+                arg_str(args, "vehiculo_id"),
+                arg_str(args, "proyecto_id"),
+            )
+            .await?;
+        Ok(format!(
+            "Movimiento registrado (id: {}): {} {:.2} {} ({}) cuenta={}",
+            m.movimiento_id, m.tipo, m.monto, m.moneda, m.fecha, m.cuenta_id
+        ))
+    }
+
+    async fn execute_finanzas_movimiento_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+        let mem = require_memory(ctx).await?;
+        let list = mem
+            .finanzas_movimiento_list(
+                arg_str(args, "cuenta_id"),
+                arg_str(args, "categoria_id"),
+                arg_str(args, "desde"),
+                arg_str(args, "hasta"),
+                arg_str(args, "tipo"),
+                arg_bool(args, "recurrente"),
+                limit,
+            )
+            .await?;
+        if list.is_empty() {
+            return Ok("Sin movimientos.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .take(50)
+            .map(|m| {
+                format!(
+                    "- [{}] {} {:.2} {} cat={:?} {}",
+                    m.fecha,
+                    m.tipo,
+                    m.monto,
+                    m.moneda,
+                    m.categoria_id,
+                    m.descripcion.as_deref().unwrap_or("")
+                )
+            })
+            .collect();
+        Ok(format!("Movimientos:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_finanzas_movimiento_update(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = arg_str(args, "movimiento_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'movimiento_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem
+            .finanzas_movimiento_update(
+                id,
+                arg_str(args, "categoria_id"),
+                args.get("descripcion").and_then(|v| v.as_str()),
+                args.get("comercio").and_then(|v| v.as_str()),
+                args.get("notas").and_then(|v| v.as_str()),
+                arg_bool(args, "recurrente"),
+            )
+            .await?;
+        Ok(if ok {
+            format!("Movimiento {id} actualizado.")
+        } else {
+            format!("Movimiento {id} no encontrado.")
+        })
+    }
+
+    async fn execute_finanzas_movimiento_delete(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        if let Err(msg) = destructive_preflight("finanzas_movimiento_delete", args) {
+            return Ok(msg);
+        }
+        let id = arg_str(args, "movimiento_id")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'movimiento_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let ok = mem.finanzas_movimiento_delete(id).await?;
+        Ok(if ok {
+            format!("Movimiento {id} eliminado (saldo revertido).")
+        } else {
+            format!("Movimiento {id} no encontrado o ya eliminado.")
+        })
+    }
+
+    async fn execute_finanzas_presupuesto_set(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let cat =
+            arg_str(args, "categoria_id").ok_or_else(|| anyhow::anyhow!("Falta 'categoria_id'"))?;
+        let mes = arg_str(args, "mes").ok_or_else(|| anyhow::anyhow!("Falta 'mes' (YYYY-MM)"))?;
+        let monto = arg_f64(args, "monto_objetivo")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'monto_objetivo'"))?;
+        let mem = require_memory(ctx).await?;
+        let p = mem
+            .finanzas_presupuesto_set(cat, mes, monto, arg_f64(args, "alerta_pct"))
+            .await?;
+        Ok(format!(
+            "Presupuesto seteado (id: {}): {} {} = {:.2}",
+            p.presupuesto_id, p.categoria_id, p.mes, p.monto_objetivo
+        ))
+    }
+
+    async fn execute_finanzas_presupuesto_status(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let cat =
+            arg_str(args, "categoria_id").ok_or_else(|| anyhow::anyhow!("Falta 'categoria_id'"))?;
+        let mes = arg_str(args, "mes")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m").to_string());
+        let mem = require_memory(ctx).await?;
+        match mem.finanzas_presupuesto_status(cat, &mes).await? {
+            Some(s) => Ok(format!(
+                "Presupuesto {} {} — gastado {:.2}/{:.2} ({:.0}%) restante {:.2} alerta={} excedido={}",
+                cat, mes, s.gastado, s.objetivo, s.porcentaje, s.restante, s.alertando, s.excedido
+            )),
+            None => Ok(format!("Sin presupuesto para {} en {}.", cat, mes)),
+        }
+    }
+
+    async fn execute_finanzas_presupuestos_list_mes(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mes = arg_str(args, "mes")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m").to_string());
+        let mem = require_memory(ctx).await?;
+        let list = mem.finanzas_presupuestos_list_mes(&mes).await?;
+        if list.is_empty() {
+            return Ok(format!("Sin presupuestos para {mes}."));
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|s| {
+                format!(
+                    "- {} — {:.2}/{:.2} ({:.0}%){}",
+                    s.presupuesto.categoria_id,
+                    s.gastado,
+                    s.objetivo,
+                    s.porcentaje,
+                    if s.excedido {
+                        " EXCEDIDO"
+                    } else if s.alertando {
+                        " ALERTA"
+                    } else {
+                        ""
+                    }
+                )
+            })
+            .collect();
+        Ok(format!("Presupuestos {mes}:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_finanzas_meta_ahorro_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let nombre = arg_str(args, "nombre").ok_or_else(|| anyhow::anyhow!("Falta 'nombre'"))?;
+        let monto = arg_f64(args, "monto_objetivo")
+            .ok_or_else(|| anyhow::anyhow!("Falta 'monto_objetivo'"))?;
+        let mem = require_memory(ctx).await?;
+        let m = mem
+            .finanzas_meta_ahorro_add(
+                nombre,
+                monto,
+                arg_str(args, "fecha_objetivo"),
+                arg_str(args, "cuenta_id"),
+                arg_i64(args, "prioridad"),
+                arg_str(args, "notas").unwrap_or(""),
+            )
+            .await?;
+        Ok(format!(
+            "Meta creada (id: {}): {} → {:.2}",
+            m.meta_id, m.nombre, m.monto_objetivo
+        ))
+    }
+
+    async fn execute_finanzas_meta_ahorro_aporte(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = arg_str(args, "meta_id").ok_or_else(|| anyhow::anyhow!("Falta 'meta_id'"))?;
+        let monto = arg_f64(args, "monto").ok_or_else(|| anyhow::anyhow!("Falta 'monto'"))?;
+        let mem = require_memory(ctx).await?;
+        let m = mem.finanzas_meta_ahorro_aporte(id, monto).await?;
+        Ok(format!(
+            "Aporte {:.2} aplicado a {} — actual {:.2}/{:.2} ({})",
+            monto, m.meta_id, m.monto_actual, m.monto_objetivo, m.estado
+        ))
+    }
+
+    async fn execute_finanzas_meta_ahorro_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list = mem.finanzas_meta_ahorro_list(true).await?;
+        if list.is_empty() {
+            return Ok("Sin metas activas.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|m| {
+                let pct = if m.monto_objetivo > 0.0 {
+                    (m.monto_actual / m.monto_objetivo) * 100.0
+                } else {
+                    0.0
+                };
+                format!(
+                    "- [{}] {} — {:.2}/{:.2} ({:.0}%) prio {}",
+                    m.meta_id, m.nombre, m.monto_actual, m.monto_objetivo, pct, m.prioridad
+                )
+            })
+            .collect();
+        Ok(format!("Metas activas:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_finanzas_meta_ahorro_progress(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let id = arg_str(args, "meta_id").ok_or_else(|| anyhow::anyhow!("Falta 'meta_id'"))?;
+        let mem = require_memory(ctx).await?;
+        match mem.finanzas_meta_ahorro_progress(id).await? {
+            Some(p) => Ok(format!(
+                "Meta {} ({}) — {:.2}/{:.2} ({:.0}%) restante {:.2} ETA {:?} dias",
+                p.meta.meta_id,
+                p.meta.nombre,
+                p.meta.monto_actual,
+                p.meta.monto_objetivo,
+                p.porcentaje,
+                p.restante,
+                p.eta_dias
+            )),
+            None => Ok(format!("Meta {id} no encontrada.")),
+        }
+    }
+
+    async fn execute_finanzas_overview(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let ov = mem.finanzas_overview(arg_str(args, "mes")).await?;
+        let mut out = format!(
+            "Overview {} — ingresos {:.2} | gastos {:.2} | balance {:.2}\nTop gastos:",
+            ov.mes, ov.ingresos_total, ov.gastos_total, ov.balance
+        );
+        for g in &ov.gastos_top {
+            out.push_str(&format!(
+                "\n  - {} ({:?}): {:.2}",
+                g.categoria_nombre.as_deref().unwrap_or("(sin)"),
+                g.categoria_id,
+                g.total
+            ));
+        }
+        if !ov.alertas.is_empty() {
+            out.push_str("\nAlertas:");
+            for a in &ov.alertas {
+                out.push_str(&format!("\n  - [{}] {}", a.kind, a.message));
+            }
+        }
+        Ok(out)
+    }
+
+    async fn execute_finanzas_gastos_por_categoria(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list = mem
+            .finanzas_gastos_por_categoria(arg_str(args, "desde"), arg_str(args, "hasta"))
+            .await?;
+        if list.is_empty() {
+            return Ok("Sin gastos en el rango.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|g| {
+                format!(
+                    "- {} ({:?}): {:.2} ({} mov)",
+                    g.categoria_nombre.as_deref().unwrap_or("(sin)"),
+                    g.categoria_id,
+                    g.total,
+                    g.conteo
+                )
+            })
+            .collect();
+        Ok(format!("Gastos por categoria:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_finanzas_ingresos_vs_gastos(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let n = args
+            .get("meses_atras")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(6) as i32;
+        let mem = require_memory(ctx).await?;
+        let list = mem.finanzas_ingresos_vs_gastos(n).await?;
+        if list.is_empty() {
+            return Ok("Sin datos.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|m| {
+                format!(
+                    "- {}: ingresos {:.2} | gastos {:.2} | neto {:.2}",
+                    m.mes, m.ingresos, m.gastos, m.neto
+                )
+            })
+            .collect();
+        Ok(format!("Tendencia mensual:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_finanzas_cuentas_balance(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let b = mem.finanzas_cuentas_balance().await?;
+        let mut out = format!("Saldo total: {:.2}\nPor banco:", b.total);
+        for (k, v) in &b.por_banco {
+            out.push_str(&format!("\n  - {}: {:.2}", k, v));
+        }
+        out.push_str("\nPor tipo:");
+        for (k, v) in &b.por_tipo {
+            out.push_str(&format!("\n  - {}: {:.2}", k, v));
+        }
+        Ok(out)
+    }
+
+    async fn execute_finanzas_gastos_recurrentes_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list = mem.finanzas_gastos_recurrentes_list().await?;
+        if list.is_empty() {
+            return Ok("Sin gastos recurrentes.".into());
+        }
+        let lines: Vec<String> = list
+            .iter()
+            .map(|m| {
+                format!(
+                    "- [{}] {:.2} {} {}",
+                    m.fecha,
+                    m.monto,
+                    m.moneda,
+                    m.descripcion.as_deref().unwrap_or("")
+                )
+            })
+            .collect();
+        Ok(format!("Gastos recurrentes:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_finanzas_cuanto_puedo_gastar(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let cat = arg_str(args, "categoria_id");
+        let restante = mem.finanzas_cuanto_puedo_gastar(cat).await?;
+        Ok(match cat {
+            Some(c) => format!(
+                "Te quedan {:.2} de presupuesto en {} este mes.",
+                restante, c
+            ),
+            None => format!(
+                "Te quedan {:.2} en total considerando todos los presupuestos del mes.",
+                restante
+            ),
+        })
     }
 }
 

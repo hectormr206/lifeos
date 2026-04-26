@@ -1461,6 +1461,108 @@ CREATE TABLE IF NOT EXISTS vehiculos_combustible (
 );
 CREATE INDEX IF NOT EXISTS idx_vehiculos_combustible_vehiculo
     ON vehiculos_combustible(vehiculo_id, fecha);
+
+-- ----------------------------------------------------------------------
+-- Finanzas Domain MVP (PRD Section 3) — granular tracking on top of the
+-- pre-existing simpler `financial_*` tables. Money fields are PLAINTEXT
+-- to keep analytics cheap; only narrative fields (notas/descripcion/
+-- comercio) are encrypted via the standard nonce/ciphertext pair.
+-- ----------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS finanzas_cuentas (
+    cuenta_id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    banco TEXT,
+    ultimos_4 TEXT,
+    moneda TEXT NOT NULL DEFAULT 'MXN',
+    saldo_actual REAL,
+    limite_credito REAL,
+    fecha_corte INTEGER,
+    fecha_pago INTEGER,
+    titular TEXT NOT NULL DEFAULT 'hector',
+    estado TEXT NOT NULL DEFAULT 'activo',
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS finanzas_categorias (
+    categoria_id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL UNIQUE,
+    tipo TEXT NOT NULL,
+    parent_id TEXT,
+    emoji TEXT,
+    color TEXT,
+    presupuesto_mensual REAL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS finanzas_movimientos (
+    movimiento_id TEXT PRIMARY KEY,
+    cuenta_id TEXT NOT NULL,
+    categoria_id TEXT,
+    tipo TEXT NOT NULL,
+    fecha TEXT NOT NULL,
+    monto REAL NOT NULL,
+    moneda TEXT NOT NULL DEFAULT 'MXN',
+    descripcion_nonce_b64 TEXT,
+    descripcion_ciphertext_b64 TEXT,
+    comercio_nonce_b64 TEXT,
+    comercio_ciphertext_b64 TEXT,
+    metodo TEXT,
+    cuenta_destino_id TEXT,
+    recurrente INTEGER NOT NULL DEFAULT 0,
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    viaje_id TEXT,
+    vehiculo_id TEXT,
+    proyecto_id TEXT,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS finanzas_presupuestos (
+    presupuesto_id TEXT PRIMARY KEY,
+    categoria_id TEXT NOT NULL,
+    mes TEXT NOT NULL,
+    monto_objetivo REAL NOT NULL,
+    monto_gastado REAL NOT NULL DEFAULT 0,
+    alerta_pct REAL NOT NULL DEFAULT 80.0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (categoria_id, mes)
+);
+
+CREATE TABLE IF NOT EXISTS finanzas_metas_ahorro (
+    meta_id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    monto_objetivo REAL NOT NULL,
+    monto_actual REAL NOT NULL DEFAULT 0,
+    fecha_objetivo TEXT,
+    cuenta_id TEXT,
+    prioridad INTEGER NOT NULL DEFAULT 5,
+    estado TEXT NOT NULL DEFAULT 'activa',
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_finanzas_movimientos_cuenta
+    ON finanzas_movimientos(cuenta_id, fecha);
+CREATE INDEX IF NOT EXISTS idx_finanzas_movimientos_categoria
+    ON finanzas_movimientos(categoria_id, fecha);
+CREATE INDEX IF NOT EXISTS idx_finanzas_movimientos_fecha
+    ON finanzas_movimientos(fecha);
+CREATE INDEX IF NOT EXISTS idx_finanzas_movimientos_viaje
+    ON finanzas_movimientos(viaje_id) WHERE viaje_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_finanzas_movimientos_vehiculo
+    ON finanzas_movimientos(vehiculo_id) WHERE vehiculo_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_finanzas_presupuestos_mes
+    ON finanzas_presupuestos(mes);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22440,6 +22542,1894 @@ impl MemoryPlaneManager {
     }
 }
 
+// ============================================================================
+// Finanzas Domain MVP (PRD Section 3)
+//
+// Granular cuentas/categorias/movimientos/presupuestos/metas layered on top
+// of the existing simpler `financial_*` tables. Money fields are PLAINTEXT to
+// keep aggregations cheap; only narrative fields (notas, descripcion, comercio)
+// are encrypted with the standard nonce/ciphertext envelope.
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasCuenta {
+    pub cuenta_id: String,
+    pub nombre: String,
+    pub tipo: String,
+    pub banco: Option<String>,
+    pub ultimos_4: Option<String>,
+    pub moneda: String,
+    pub saldo_actual: Option<f64>,
+    pub limite_credito: Option<f64>,
+    pub fecha_corte: Option<i64>,
+    pub fecha_pago: Option<i64>,
+    pub titular: String,
+    pub estado: String,
+    pub notas: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasCategoria {
+    pub categoria_id: String,
+    pub nombre: String,
+    pub tipo: String,
+    pub parent_id: Option<String>,
+    pub emoji: Option<String>,
+    pub color: Option<String>,
+    pub presupuesto_mensual: Option<f64>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasMovimiento {
+    pub movimiento_id: String,
+    pub cuenta_id: String,
+    pub categoria_id: Option<String>,
+    pub tipo: String,
+    pub fecha: String,
+    pub monto: f64,
+    pub moneda: String,
+    pub descripcion: Option<String>,
+    pub comercio: Option<String>,
+    pub metodo: Option<String>,
+    pub cuenta_destino_id: Option<String>,
+    pub recurrente: bool,
+    pub notas: String,
+    pub viaje_id: Option<String>,
+    pub vehiculo_id: Option<String>,
+    pub proyecto_id: Option<String>,
+    pub deleted: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasPresupuesto {
+    pub presupuesto_id: String,
+    pub categoria_id: String,
+    pub mes: String,
+    pub monto_objetivo: f64,
+    pub monto_gastado: f64,
+    pub alerta_pct: f64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasPresupuestoStatus {
+    pub presupuesto: FinanzasPresupuesto,
+    pub objetivo: f64,
+    pub gastado: f64,
+    pub restante: f64,
+    pub porcentaje: f64,
+    pub alertando: bool,
+    pub excedido: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasMetaAhorro {
+    pub meta_id: String,
+    pub nombre: String,
+    pub monto_objetivo: f64,
+    pub monto_actual: f64,
+    pub fecha_objetivo: Option<String>,
+    pub cuenta_id: Option<String>,
+    pub prioridad: i64,
+    pub estado: String,
+    pub notas: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasMetaProgress {
+    pub meta: FinanzasMetaAhorro,
+    pub porcentaje: f64,
+    pub restante: f64,
+    pub eta_dias: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasGastoCategoria {
+    pub categoria_id: Option<String>,
+    pub categoria_nombre: Option<String>,
+    pub total: f64,
+    pub conteo: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasMesNeto {
+    pub mes: String,
+    pub ingresos: f64,
+    pub gastos: f64,
+    pub neto: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasCuentasBalance {
+    pub total: f64,
+    pub por_banco: BTreeMap<String, f64>,
+    pub por_tipo: BTreeMap<String, f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasAlerta {
+    pub kind: String,
+    pub message: String,
+    pub categoria_id: Option<String>,
+    pub meta_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinanzasOverview {
+    pub mes: String,
+    pub gastos_top: Vec<FinanzasGastoCategoria>,
+    pub ingresos_total: f64,
+    pub gastos_total: f64,
+    pub balance: f64,
+    pub alertas: Vec<FinanzasAlerta>,
+    pub generated_at: DateTime<Utc>,
+}
+
+fn finanzas_now_rfc() -> (DateTime<Utc>, String) {
+    let now = Utc::now();
+    let s = now.to_rfc3339();
+    (now, s)
+}
+
+fn current_month_str() -> String {
+    chrono::Local::now().format("%Y-%m").to_string()
+}
+
+fn opt_encrypt(text: &str) -> Result<(Option<String>, Option<String>)> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        Ok((None, None))
+    } else {
+        let (n, c, _) = encrypt_content(trimmed)?;
+        Ok((Some(n), Some(c)))
+    }
+}
+
+fn opt_decrypt(nonce: Option<String>, cipher: Option<String>) -> String {
+    match (nonce, cipher) {
+        (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Cuentas
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finanzas_cuenta_add(
+        &self,
+        nombre: &str,
+        tipo: &str,
+        banco: Option<&str>,
+        ultimos_4: Option<&str>,
+        moneda: Option<&str>,
+        saldo_actual: Option<f64>,
+        limite_credito: Option<f64>,
+        fecha_corte: Option<i64>,
+        fecha_pago: Option<i64>,
+        titular: Option<&str>,
+        notas: &str,
+    ) -> Result<FinanzasCuenta> {
+        let nombre = normalize_non_empty(nombre).context("nombre required")?;
+        let tipo = normalize_non_empty(tipo).context("tipo required")?;
+        let banco = banco.and_then(normalize_non_empty);
+        let ultimos_4 = ultimos_4.and_then(normalize_non_empty);
+        let moneda = moneda
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| "MXN".to_string());
+        let titular = titular
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| "hector".to_string());
+        if let Some(s) = saldo_actual {
+            if !s.is_finite() {
+                anyhow::bail!("saldo_actual must be finite");
+            }
+        }
+        if let Some(l) = limite_credito {
+            if !l.is_finite() || l < 0.0 {
+                anyhow::bail!("limite_credito must be a non-negative finite number");
+            }
+        }
+        let (notas_n, notas_c) = opt_encrypt(notas)?;
+        let (now, now_rfc) = finanzas_now_rfc();
+        let cuenta_id = format!("cta-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id = cuenta_id.clone();
+        let nombre_c = nombre.clone();
+        let tipo_c = tipo.clone();
+        let banco_c = banco.clone();
+        let ult_c = ultimos_4.clone();
+        let moneda_c = moneda.clone();
+        let titular_c = titular.clone();
+        let now_c = now_rfc.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO finanzas_cuentas
+                 (cuenta_id, nombre, tipo, banco, ultimos_4, moneda, saldo_actual,
+                  limite_credito, fecha_corte, fecha_pago, titular, estado,
+                  notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'activo',
+                         ?12, ?13, ?14, ?14)",
+                params![
+                    id,
+                    nombre_c,
+                    tipo_c,
+                    banco_c,
+                    ult_c,
+                    moneda_c,
+                    saldo_actual,
+                    limite_credito,
+                    fecha_corte,
+                    fecha_pago,
+                    titular_c,
+                    notas_n,
+                    notas_c,
+                    now_c
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(FinanzasCuenta {
+            cuenta_id,
+            nombre,
+            tipo,
+            banco,
+            ultimos_4,
+            moneda,
+            saldo_actual,
+            limite_credito,
+            fecha_corte,
+            fecha_pago,
+            titular,
+            estado: "activo".into(),
+            notas: notas.trim().to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn finanzas_cuenta_list(
+        &self,
+        include_cerradas: bool,
+    ) -> Result<Vec<FinanzasCuenta>> {
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<FinanzasCuenta>> {
+            let db = Self::open_db(&db_path)?;
+            let sql = if include_cerradas {
+                "SELECT cuenta_id, nombre, tipo, banco, ultimos_4, moneda, saldo_actual,
+                        limite_credito, fecha_corte, fecha_pago, titular, estado,
+                        notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at
+                 FROM finanzas_cuentas ORDER BY nombre"
+            } else {
+                "SELECT cuenta_id, nombre, tipo, banco, ultimos_4, moneda, saldo_actual,
+                        limite_credito, fecha_corte, fecha_pago, titular, estado,
+                        notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at
+                 FROM finanzas_cuentas WHERE estado = 'activo' ORDER BY nombre"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let out = stmt
+                .query_map([], |row| {
+                    Ok(FinanzasCuenta {
+                        cuenta_id: row.get(0)?,
+                        nombre: row.get(1)?,
+                        tipo: row.get(2)?,
+                        banco: row.get(3)?,
+                        ultimos_4: row.get(4)?,
+                        moneda: row.get(5)?,
+                        saldo_actual: row.get(6)?,
+                        limite_credito: row.get(7)?,
+                        fecha_corte: row.get(8)?,
+                        fecha_pago: row.get(9)?,
+                        titular: row.get(10)?,
+                        estado: row.get(11)?,
+                        notas: opt_decrypt(row.get(12)?, row.get(13)?),
+                        created_at: parse_utc(&row.get::<_, String>(14)?),
+                        updated_at: parse_utc(&row.get::<_, String>(15)?),
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok(out)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    pub async fn finanzas_cuenta_get(&self, cuenta_id: &str) -> Result<Option<FinanzasCuenta>> {
+        let db_path = self.db_path.clone();
+        let id = cuenta_id.to_string();
+        let row = tokio::task::spawn_blocking(move || -> Result<Option<FinanzasCuenta>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT cuenta_id, nombre, tipo, banco, ultimos_4, moneda, saldo_actual,
+                        limite_credito, fecha_corte, fecha_pago, titular, estado,
+                        notas_nonce_b64, notas_ciphertext_b64, created_at, updated_at
+                 FROM finanzas_cuentas WHERE cuenta_id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(FinanzasCuenta {
+                    cuenta_id: row.get(0)?,
+                    nombre: row.get(1)?,
+                    tipo: row.get(2)?,
+                    banco: row.get(3)?,
+                    ultimos_4: row.get(4)?,
+                    moneda: row.get(5)?,
+                    saldo_actual: row.get(6)?,
+                    limite_credito: row.get(7)?,
+                    fecha_corte: row.get(8)?,
+                    fecha_pago: row.get(9)?,
+                    titular: row.get(10)?,
+                    estado: row.get(11)?,
+                    notas: opt_decrypt(row.get(12)?, row.get(13)?),
+                    created_at: parse_utc(&row.get::<_, String>(14)?),
+                    updated_at: parse_utc(&row.get::<_, String>(15)?),
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(row)
+    }
+
+    /// Patch-style update: only non-`None` fields are written. Returns true if a row was updated.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finanzas_cuenta_update(
+        &self,
+        cuenta_id: &str,
+        nombre: Option<&str>,
+        banco: Option<&str>,
+        ultimos_4: Option<&str>,
+        limite_credito: Option<f64>,
+        fecha_corte: Option<i64>,
+        fecha_pago: Option<i64>,
+        notas: Option<&str>,
+    ) -> Result<bool> {
+        let id = cuenta_id.to_string();
+        let nombre_o = nombre.and_then(normalize_non_empty);
+        let banco_o = banco.map(|s| s.trim().to_string());
+        let ult_o = ultimos_4.map(|s| s.trim().to_string());
+        let (notas_n, notas_c) = match notas {
+            Some(text) => {
+                let (n, c) = opt_encrypt(text)?;
+                (Some(n), Some(c))
+            }
+            None => (None, None),
+        };
+        let (_, now_rfc) = finanzas_now_rfc();
+        let db_path = self.db_path.clone();
+        let updated = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let mut sets: Vec<&'static str> = Vec::new();
+            let mut p: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(v) = nombre_o.as_ref() {
+                sets.push("nombre = ?");
+                p.push(Box::new(v.clone()));
+            }
+            if let Some(v) = banco_o.as_ref() {
+                sets.push("banco = ?");
+                p.push(Box::new(v.clone()));
+            }
+            if let Some(v) = ult_o.as_ref() {
+                sets.push("ultimos_4 = ?");
+                p.push(Box::new(v.clone()));
+            }
+            if let Some(v) = limite_credito {
+                sets.push("limite_credito = ?");
+                p.push(Box::new(v));
+            }
+            if let Some(v) = fecha_corte {
+                sets.push("fecha_corte = ?");
+                p.push(Box::new(v));
+            }
+            if let Some(v) = fecha_pago {
+                sets.push("fecha_pago = ?");
+                p.push(Box::new(v));
+            }
+            if let Some((n_opt, c_opt)) = notas_n.zip(notas_c).into_iter().next() {
+                sets.push("notas_nonce_b64 = ?");
+                p.push(Box::new(n_opt));
+                sets.push("notas_ciphertext_b64 = ?");
+                p.push(Box::new(c_opt));
+            }
+            if sets.is_empty() {
+                return Ok(0);
+            }
+            sets.push("updated_at = ?");
+            p.push(Box::new(now_rfc));
+            p.push(Box::new(id));
+            let sql = format!(
+                "UPDATE finanzas_cuentas SET {} WHERE cuenta_id = ?",
+                sets.join(", ")
+            );
+            let n = db.execute(
+                &sql,
+                rusqlite::params_from_iter(p.iter().map(|b| b.as_ref())),
+            )?;
+            Ok(n)
+        })
+        .await??;
+        Ok(updated > 0)
+    }
+
+    pub async fn finanzas_cuenta_saldo_update(
+        &self,
+        cuenta_id: &str,
+        nuevo_saldo: f64,
+    ) -> Result<bool> {
+        if !nuevo_saldo.is_finite() {
+            anyhow::bail!("saldo must be finite");
+        }
+        let (_, now_rfc) = finanzas_now_rfc();
+        let id = cuenta_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE finanzas_cuentas SET saldo_actual = ?1, updated_at = ?2
+                 WHERE cuenta_id = ?3",
+                params![nuevo_saldo, now_rfc, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn finanzas_cuenta_cerrar(&self, cuenta_id: &str) -> Result<bool> {
+        let (_, now_rfc) = finanzas_now_rfc();
+        let id = cuenta_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE finanzas_cuentas SET estado = 'cerrada', updated_at = ?1
+                 WHERE cuenta_id = ?2",
+                params![now_rfc, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Categorias
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finanzas_categoria_add(
+        &self,
+        nombre: &str,
+        tipo: &str,
+        parent_id: Option<&str>,
+        emoji: Option<&str>,
+        color: Option<&str>,
+        presupuesto_mensual: Option<f64>,
+    ) -> Result<FinanzasCategoria> {
+        let nombre = normalize_non_empty(nombre).context("nombre required")?;
+        let tipo = normalize_non_empty(tipo).context("tipo required")?;
+        let parent_id = parent_id.and_then(normalize_non_empty);
+        let emoji = emoji.and_then(normalize_non_empty);
+        let color = color.and_then(normalize_non_empty);
+        if let Some(p) = presupuesto_mensual {
+            if !p.is_finite() || p < 0.0 {
+                anyhow::bail!("presupuesto_mensual must be a non-negative finite number");
+            }
+        }
+        let (now, now_rfc) = finanzas_now_rfc();
+        let categoria_id = format!("cat-{}", Uuid::new_v4());
+        let db_path = self.db_path.clone();
+        let id = categoria_id.clone();
+        let nombre_c = nombre.clone();
+        let tipo_c = tipo.clone();
+        let parent_c = parent_id.clone();
+        let emoji_c = emoji.clone();
+        let color_c = color.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO finanzas_categorias
+                 (categoria_id, nombre, tipo, parent_id, emoji, color,
+                  presupuesto_mensual, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    id,
+                    nombre_c,
+                    tipo_c,
+                    parent_c,
+                    emoji_c,
+                    color_c,
+                    presupuesto_mensual,
+                    now_rfc
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+        Ok(FinanzasCategoria {
+            categoria_id,
+            nombre,
+            tipo,
+            parent_id,
+            emoji,
+            color,
+            presupuesto_mensual,
+            created_at: now,
+        })
+    }
+
+    pub async fn finanzas_categoria_list(&self) -> Result<Vec<FinanzasCategoria>> {
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<FinanzasCategoria>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT categoria_id, nombre, tipo, parent_id, emoji, color,
+                        presupuesto_mensual, created_at
+                 FROM finanzas_categorias ORDER BY tipo, nombre",
+            )?;
+            let out = stmt
+                .query_map([], |row| {
+                    Ok(FinanzasCategoria {
+                        categoria_id: row.get(0)?,
+                        nombre: row.get(1)?,
+                        tipo: row.get(2)?,
+                        parent_id: row.get(3)?,
+                        emoji: row.get(4)?,
+                        color: row.get(5)?,
+                        presupuesto_mensual: row.get(6)?,
+                        created_at: parse_utc(&row.get::<_, String>(7)?),
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok(out)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    pub async fn finanzas_categoria_get(
+        &self,
+        categoria_id: &str,
+    ) -> Result<Option<FinanzasCategoria>> {
+        let db_path = self.db_path.clone();
+        let id = categoria_id.to_string();
+        let row = tokio::task::spawn_blocking(move || -> Result<Option<FinanzasCategoria>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT categoria_id, nombre, tipo, parent_id, emoji, color,
+                        presupuesto_mensual, created_at
+                 FROM finanzas_categorias WHERE categoria_id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(FinanzasCategoria {
+                    categoria_id: row.get(0)?,
+                    nombre: row.get(1)?,
+                    tipo: row.get(2)?,
+                    parent_id: row.get(3)?,
+                    emoji: row.get(4)?,
+                    color: row.get(5)?,
+                    presupuesto_mensual: row.get(6)?,
+                    created_at: parse_utc(&row.get::<_, String>(7)?),
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(row)
+    }
+
+    pub async fn finanzas_categoria_get_by_name(
+        &self,
+        nombre: &str,
+    ) -> Result<Option<FinanzasCategoria>> {
+        let db_path = self.db_path.clone();
+        let n = nombre.to_string();
+        let row = tokio::task::spawn_blocking(move || -> Result<Option<FinanzasCategoria>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT categoria_id, nombre, tipo, parent_id, emoji, color,
+                        presupuesto_mensual, created_at
+                 FROM finanzas_categorias WHERE nombre = ?1",
+            )?;
+            let mut rows = stmt.query(params![n])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(FinanzasCategoria {
+                    categoria_id: row.get(0)?,
+                    nombre: row.get(1)?,
+                    tipo: row.get(2)?,
+                    parent_id: row.get(3)?,
+                    emoji: row.get(4)?,
+                    color: row.get(5)?,
+                    presupuesto_mensual: row.get(6)?,
+                    created_at: parse_utc(&row.get::<_, String>(7)?),
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(row)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finanzas_categoria_update(
+        &self,
+        categoria_id: &str,
+        nombre: Option<&str>,
+        emoji: Option<&str>,
+        color: Option<&str>,
+        presupuesto_mensual: Option<f64>,
+    ) -> Result<bool> {
+        let id = categoria_id.to_string();
+        let nombre_o = nombre.and_then(normalize_non_empty);
+        let emoji_o = emoji.map(|s| s.trim().to_string());
+        let color_o = color.map(|s| s.trim().to_string());
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let mut sets: Vec<&'static str> = Vec::new();
+            let mut p: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(v) = nombre_o {
+                sets.push("nombre = ?");
+                p.push(Box::new(v));
+            }
+            if let Some(v) = emoji_o {
+                sets.push("emoji = ?");
+                p.push(Box::new(v));
+            }
+            if let Some(v) = color_o {
+                sets.push("color = ?");
+                p.push(Box::new(v));
+            }
+            if let Some(v) = presupuesto_mensual {
+                sets.push("presupuesto_mensual = ?");
+                p.push(Box::new(v));
+            }
+            if sets.is_empty() {
+                return Ok(0);
+            }
+            p.push(Box::new(id));
+            let sql = format!(
+                "UPDATE finanzas_categorias SET {} WHERE categoria_id = ?",
+                sets.join(", ")
+            );
+            Ok(db.execute(
+                &sql,
+                rusqlite::params_from_iter(p.iter().map(|b| b.as_ref())),
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// Cascade-detach: movimientos that referenced this categoria get
+    /// `categoria_id = NULL` so their amounts remain visible in totals.
+    pub async fn finanzas_categoria_delete(&self, categoria_id: &str) -> Result<bool> {
+        let id = categoria_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let mut db = Self::open_db(&db_path)?;
+            let tx = db.transaction()?;
+            tx.execute(
+                "UPDATE finanzas_movimientos SET categoria_id = NULL WHERE categoria_id = ?1",
+                params![id],
+            )?;
+            tx.execute(
+                "DELETE FROM finanzas_presupuestos WHERE categoria_id = ?1",
+                params![id],
+            )?;
+            let n = tx.execute(
+                "DELETE FROM finanzas_categorias WHERE categoria_id = ?1",
+                params![id],
+            )?;
+            tx.commit()?;
+            Ok(n)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Movimientos
+    // -----------------------------------------------------------------------
+
+    /// Log a movimiento. If `categoria_nombre` is provided and `categoria_id`
+    /// is `None`, the categoria is resolved by name. Cuentas may also be
+    /// resolved by `cuenta_nombre` when `cuenta_id` is empty. Updates the
+    /// account's `saldo_actual` automatically for tipo `gasto` (-) or
+    /// `ingreso` (+). Transferencias adjust both source and destination.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finanzas_movimiento_log(
+        &self,
+        cuenta_id: Option<&str>,
+        cuenta_nombre: Option<&str>,
+        categoria_id: Option<&str>,
+        categoria_nombre: Option<&str>,
+        tipo: &str,
+        fecha: Option<&str>,
+        monto: f64,
+        moneda: Option<&str>,
+        descripcion: Option<&str>,
+        comercio: Option<&str>,
+        metodo: Option<&str>,
+        cuenta_destino_id: Option<&str>,
+        recurrente: bool,
+        notas: &str,
+        viaje_id: Option<&str>,
+        vehiculo_id: Option<&str>,
+        proyecto_id: Option<&str>,
+    ) -> Result<FinanzasMovimiento> {
+        if !monto.is_finite() || monto < 0.0 {
+            anyhow::bail!("monto must be a non-negative finite number");
+        }
+        let tipo = normalize_non_empty(tipo).context("tipo required")?;
+        if !matches!(
+            tipo.as_str(),
+            "gasto" | "ingreso" | "transferencia" | "ajuste"
+        ) {
+            anyhow::bail!("tipo must be one of: gasto, ingreso, transferencia, ajuste");
+        }
+        // Resolve cuenta
+        let cuenta_id = if let Some(id) = cuenta_id.and_then(normalize_non_empty) {
+            id
+        } else if let Some(name) = cuenta_nombre.and_then(normalize_non_empty) {
+            let list = self.finanzas_cuenta_list(true).await?;
+            list.into_iter()
+                .find(|c| c.nombre.eq_ignore_ascii_case(&name))
+                .map(|c| c.cuenta_id)
+                .ok_or_else(|| anyhow::anyhow!("no cuenta matches name '{name}'"))?
+        } else {
+            anyhow::bail!("either cuenta_id or cuenta_nombre is required");
+        };
+        // Optional categoria resolution
+        let categoria_id = if let Some(id) = categoria_id.and_then(normalize_non_empty) {
+            Some(id)
+        } else if let Some(name) = categoria_nombre.and_then(normalize_non_empty) {
+            self.finanzas_categoria_get_by_name(&name)
+                .await?
+                .map(|c| c.categoria_id)
+        } else {
+            None
+        };
+        // Transferencias require destino
+        let cuenta_destino_id = cuenta_destino_id.and_then(normalize_non_empty);
+        if tipo == "transferencia" && cuenta_destino_id.is_none() {
+            anyhow::bail!("transferencia requires cuenta_destino_id");
+        }
+        let moneda = moneda
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| "MXN".to_string());
+        let metodo = metodo.and_then(normalize_non_empty);
+        let viaje_id = viaje_id.and_then(normalize_non_empty);
+        let vehiculo_id = vehiculo_id.and_then(normalize_non_empty);
+        let proyecto_id = proyecto_id.and_then(normalize_non_empty);
+        let fecha = fecha
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+        let (desc_n, desc_c) = match descripcion.and_then(normalize_non_empty) {
+            Some(s) => opt_encrypt(&s)?,
+            None => (None, None),
+        };
+        let (com_n, com_c) = match comercio.and_then(normalize_non_empty) {
+            Some(s) => opt_encrypt(&s)?,
+            None => (None, None),
+        };
+        let (notas_n, notas_c) = opt_encrypt(notas)?;
+
+        let (now, now_rfc) = finanzas_now_rfc();
+        let movimiento_id = format!("mov-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id = movimiento_id.clone();
+        let cuenta_c = cuenta_id.clone();
+        let cat_c = categoria_id.clone();
+        let tipo_c = tipo.clone();
+        let fecha_c = fecha.clone();
+        let moneda_c = moneda.clone();
+        let metodo_c = metodo.clone();
+        let dest_c = cuenta_destino_id.clone();
+        let viaje_c = viaje_id.clone();
+        let veh_c = vehiculo_id.clone();
+        let proy_c = proyecto_id.clone();
+        let now_c = now_rfc.clone();
+        let descripcion_owned = descripcion.map(|s| s.to_string());
+        let comercio_owned = comercio.map(|s| s.to_string());
+        let notas_owned = notas.trim().to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut db = Self::open_db(&db_path)?;
+            let tx = db.transaction()?;
+            tx.execute(
+                "INSERT INTO finanzas_movimientos
+                 (movimiento_id, cuenta_id, categoria_id, tipo, fecha, monto, moneda,
+                  descripcion_nonce_b64, descripcion_ciphertext_b64,
+                  comercio_nonce_b64, comercio_ciphertext_b64, metodo,
+                  cuenta_destino_id, recurrente, notas_nonce_b64,
+                  notas_ciphertext_b64, viaje_id, vehiculo_id, proyecto_id,
+                  deleted, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                         ?14, ?15, ?16, ?17, ?18, ?19, 0, ?20, ?20)",
+                params![
+                    id,
+                    cuenta_c,
+                    cat_c,
+                    tipo_c,
+                    fecha_c,
+                    monto,
+                    moneda_c,
+                    desc_n,
+                    desc_c,
+                    com_n,
+                    com_c,
+                    metodo_c,
+                    dest_c,
+                    if recurrente { 1 } else { 0 },
+                    notas_n,
+                    notas_c,
+                    viaje_c,
+                    veh_c,
+                    proy_c,
+                    now_c
+                ],
+            )?;
+            // Update saldo on origin
+            match tipo_c.as_str() {
+                "gasto" => {
+                    tx.execute(
+                        "UPDATE finanzas_cuentas
+                         SET saldo_actual = COALESCE(saldo_actual, 0) - ?1,
+                             updated_at = ?2
+                         WHERE cuenta_id = ?3",
+                        params![monto, now_c, cuenta_c],
+                    )?;
+                }
+                "ingreso" => {
+                    tx.execute(
+                        "UPDATE finanzas_cuentas
+                         SET saldo_actual = COALESCE(saldo_actual, 0) + ?1,
+                             updated_at = ?2
+                         WHERE cuenta_id = ?3",
+                        params![monto, now_c, cuenta_c],
+                    )?;
+                }
+                "transferencia" => {
+                    tx.execute(
+                        "UPDATE finanzas_cuentas
+                         SET saldo_actual = COALESCE(saldo_actual, 0) - ?1,
+                             updated_at = ?2
+                         WHERE cuenta_id = ?3",
+                        params![monto, now_c, cuenta_c],
+                    )?;
+                    if let Some(dest) = dest_c.as_ref() {
+                        tx.execute(
+                            "UPDATE finanzas_cuentas
+                             SET saldo_actual = COALESCE(saldo_actual, 0) + ?1,
+                                 updated_at = ?2
+                             WHERE cuenta_id = ?3",
+                            params![monto, now_c, dest],
+                        )?;
+                    }
+                }
+                _ => {}
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(FinanzasMovimiento {
+            movimiento_id,
+            cuenta_id,
+            categoria_id,
+            tipo,
+            fecha,
+            monto,
+            moneda,
+            descripcion: descripcion_owned,
+            comercio: comercio_owned,
+            metodo,
+            cuenta_destino_id,
+            recurrente,
+            notas: notas_owned,
+            viaje_id,
+            vehiculo_id,
+            proyecto_id,
+            deleted: false,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finanzas_movimiento_list(
+        &self,
+        cuenta_id: Option<&str>,
+        categoria_id: Option<&str>,
+        desde: Option<&str>,
+        hasta: Option<&str>,
+        tipo: Option<&str>,
+        recurrente: Option<bool>,
+        limit: usize,
+    ) -> Result<Vec<FinanzasMovimiento>> {
+        let cuenta = cuenta_id.map(|s| s.to_string());
+        let cat = categoria_id.map(|s| s.to_string());
+        let desde = desde.map(|s| s.to_string());
+        let hasta = hasta.map(|s| s.to_string());
+        let tipo = tipo.map(|s| s.to_string());
+        let limit = limit.clamp(1, 1000) as i64;
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<FinanzasMovimiento>> {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT movimiento_id, cuenta_id, categoria_id, tipo, fecha, monto, moneda,
+                        descripcion_nonce_b64, descripcion_ciphertext_b64,
+                        comercio_nonce_b64, comercio_ciphertext_b64, metodo,
+                        cuenta_destino_id, recurrente, notas_nonce_b64,
+                        notas_ciphertext_b64, viaje_id, vehiculo_id, proyecto_id,
+                        deleted, created_at, updated_at
+                 FROM finanzas_movimientos WHERE deleted = 0",
+            );
+            let mut p: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(v) = cuenta.as_ref() {
+                sql.push_str(" AND cuenta_id = ?");
+                p.push(Box::new(v.clone()));
+            }
+            if let Some(v) = cat.as_ref() {
+                sql.push_str(" AND categoria_id = ?");
+                p.push(Box::new(v.clone()));
+            }
+            if let Some(v) = desde.as_ref() {
+                sql.push_str(" AND fecha >= ?");
+                p.push(Box::new(v.clone()));
+            }
+            if let Some(v) = hasta.as_ref() {
+                sql.push_str(" AND fecha <= ?");
+                p.push(Box::new(v.clone()));
+            }
+            if let Some(v) = tipo.as_ref() {
+                sql.push_str(" AND tipo = ?");
+                p.push(Box::new(v.clone()));
+            }
+            if let Some(v) = recurrente {
+                sql.push_str(" AND recurrente = ?");
+                p.push(Box::new(if v { 1_i64 } else { 0_i64 }));
+            }
+            sql.push_str(" ORDER BY fecha DESC LIMIT ?");
+            p.push(Box::new(limit));
+
+            let mut stmt = db.prepare(&sql)?;
+            let out = stmt
+                .query_map(
+                    rusqlite::params_from_iter(p.iter().map(|b| b.as_ref())),
+                    |row| {
+                        Ok(FinanzasMovimiento {
+                            movimiento_id: row.get(0)?,
+                            cuenta_id: row.get(1)?,
+                            categoria_id: row.get(2)?,
+                            tipo: row.get(3)?,
+                            fecha: row.get(4)?,
+                            monto: row.get(5)?,
+                            moneda: row.get(6)?,
+                            descripcion: {
+                                let n: Option<String> = row.get(7)?;
+                                let c: Option<String> = row.get(8)?;
+                                let s = opt_decrypt(n, c);
+                                if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(s)
+                                }
+                            },
+                            comercio: {
+                                let n: Option<String> = row.get(9)?;
+                                let c: Option<String> = row.get(10)?;
+                                let s = opt_decrypt(n, c);
+                                if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(s)
+                                }
+                            },
+                            metodo: row.get(11)?,
+                            cuenta_destino_id: row.get(12)?,
+                            recurrente: row.get::<_, i32>(13)? != 0,
+                            notas: opt_decrypt(row.get(14)?, row.get(15)?),
+                            viaje_id: row.get(16)?,
+                            vehiculo_id: row.get(17)?,
+                            proyecto_id: row.get(18)?,
+                            deleted: row.get::<_, i32>(19)? != 0,
+                            created_at: parse_utc(&row.get::<_, String>(20)?),
+                            updated_at: parse_utc(&row.get::<_, String>(21)?),
+                        })
+                    },
+                )?
+                .flatten()
+                .collect();
+            Ok(out)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    pub async fn finanzas_movimiento_get(
+        &self,
+        movimiento_id: &str,
+    ) -> Result<Option<FinanzasMovimiento>> {
+        let movimiento_id = movimiento_id.to_string();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<Option<FinanzasMovimiento>> {
+            let db = Self::open_db(&db_path)?;
+            let row = db
+                .query_row(
+                    "SELECT movimiento_id, cuenta_id, categoria_id, tipo, fecha, monto, moneda,
+                            descripcion_nonce_b64, descripcion_ciphertext_b64,
+                            comercio_nonce_b64, comercio_ciphertext_b64, metodo,
+                            cuenta_destino_id, recurrente, notas_nonce_b64,
+                            notas_ciphertext_b64, viaje_id, vehiculo_id, proyecto_id,
+                            deleted, created_at, updated_at
+                     FROM finanzas_movimientos
+                     WHERE movimiento_id = ?1 AND deleted = 0",
+                    params![movimiento_id],
+                    |row| {
+                        Ok(FinanzasMovimiento {
+                            movimiento_id: row.get(0)?,
+                            cuenta_id: row.get(1)?,
+                            categoria_id: row.get(2)?,
+                            tipo: row.get(3)?,
+                            fecha: row.get(4)?,
+                            monto: row.get(5)?,
+                            moneda: row.get(6)?,
+                            descripcion: {
+                                let n: Option<String> = row.get(7)?;
+                                let c: Option<String> = row.get(8)?;
+                                let s = opt_decrypt(n, c);
+                                if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(s)
+                                }
+                            },
+                            comercio: {
+                                let n: Option<String> = row.get(9)?;
+                                let c: Option<String> = row.get(10)?;
+                                let s = opt_decrypt(n, c);
+                                if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(s)
+                                }
+                            },
+                            metodo: row.get(11)?,
+                            cuenta_destino_id: row.get(12)?,
+                            recurrente: row.get::<_, i32>(13)? != 0,
+                            notas: opt_decrypt(row.get(14)?, row.get(15)?),
+                            viaje_id: row.get(16)?,
+                            vehiculo_id: row.get(17)?,
+                            proyecto_id: row.get(18)?,
+                            deleted: row.get::<_, i32>(19)? != 0,
+                            created_at: parse_utc(&row.get::<_, String>(20)?),
+                            updated_at: parse_utc(&row.get::<_, String>(21)?),
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(row)
+        })
+        .await?
+    }
+
+    /// Patch update — supports monto/categoria/descripcion/notas. Money-affecting
+    /// changes (monto, tipo, cuenta) require movimiento_delete + new log instead.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finanzas_movimiento_update(
+        &self,
+        movimiento_id: &str,
+        categoria_id: Option<&str>,
+        descripcion: Option<&str>,
+        comercio: Option<&str>,
+        notas: Option<&str>,
+        recurrente: Option<bool>,
+    ) -> Result<bool> {
+        let id = movimiento_id.to_string();
+        let cat_o = categoria_id.map(|s| s.to_string());
+        let desc_pair = match descripcion {
+            Some(s) => Some(opt_encrypt(s)?),
+            None => None,
+        };
+        let com_pair = match comercio {
+            Some(s) => Some(opt_encrypt(s)?),
+            None => None,
+        };
+        let notas_pair = match notas {
+            Some(s) => Some(opt_encrypt(s)?),
+            None => None,
+        };
+        let (_, now_rfc) = finanzas_now_rfc();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let mut sets: Vec<&'static str> = Vec::new();
+            let mut p: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(v) = cat_o {
+                sets.push("categoria_id = ?");
+                p.push(Box::new(v));
+            }
+            if let Some((n_v, c_v)) = desc_pair {
+                sets.push("descripcion_nonce_b64 = ?");
+                p.push(Box::new(n_v));
+                sets.push("descripcion_ciphertext_b64 = ?");
+                p.push(Box::new(c_v));
+            }
+            if let Some((n_v, c_v)) = com_pair {
+                sets.push("comercio_nonce_b64 = ?");
+                p.push(Box::new(n_v));
+                sets.push("comercio_ciphertext_b64 = ?");
+                p.push(Box::new(c_v));
+            }
+            if let Some((n_v, c_v)) = notas_pair {
+                sets.push("notas_nonce_b64 = ?");
+                p.push(Box::new(n_v));
+                sets.push("notas_ciphertext_b64 = ?");
+                p.push(Box::new(c_v));
+            }
+            if let Some(v) = recurrente {
+                sets.push("recurrente = ?");
+                p.push(Box::new(if v { 1_i64 } else { 0_i64 }));
+            }
+            if sets.is_empty() {
+                return Ok(0);
+            }
+            sets.push("updated_at = ?");
+            p.push(Box::new(now_rfc));
+            p.push(Box::new(id));
+            let sql = format!(
+                "UPDATE finanzas_movimientos SET {} WHERE movimiento_id = ?",
+                sets.join(", ")
+            );
+            Ok(db.execute(
+                &sql,
+                rusqlite::params_from_iter(p.iter().map(|b| b.as_ref())),
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// Soft-delete: marks `deleted = 1`. Reverses the saldo update applied at log time.
+    pub async fn finanzas_movimiento_delete(&self, movimiento_id: &str) -> Result<bool> {
+        let id = movimiento_id.to_string();
+        let (_, now_rfc) = finanzas_now_rfc();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let mut db = Self::open_db(&db_path)?;
+            let tx = db.transaction()?;
+            // Read current row to know how to reverse.
+            let row: Option<(String, String, f64, Option<String>, i32)> = tx
+                .query_row(
+                    "SELECT cuenta_id, tipo, monto, cuenta_destino_id, deleted
+                     FROM finanzas_movimientos WHERE movimiento_id = ?1",
+                    params![id],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, f64>(2)?,
+                            r.get::<_, Option<String>>(3)?,
+                            r.get::<_, i32>(4)?,
+                        ))
+                    },
+                )
+                .ok();
+            let Some((cuenta, tipo, monto, dest, already)) = row else {
+                return Ok(0);
+            };
+            if already != 0 {
+                return Ok(0);
+            }
+            // Reverse saldo
+            match tipo.as_str() {
+                "gasto" => {
+                    tx.execute(
+                        "UPDATE finanzas_cuentas
+                         SET saldo_actual = COALESCE(saldo_actual, 0) + ?1, updated_at = ?2
+                         WHERE cuenta_id = ?3",
+                        params![monto, now_rfc, cuenta],
+                    )?;
+                }
+                "ingreso" => {
+                    tx.execute(
+                        "UPDATE finanzas_cuentas
+                         SET saldo_actual = COALESCE(saldo_actual, 0) - ?1, updated_at = ?2
+                         WHERE cuenta_id = ?3",
+                        params![monto, now_rfc, cuenta],
+                    )?;
+                }
+                "transferencia" => {
+                    tx.execute(
+                        "UPDATE finanzas_cuentas
+                         SET saldo_actual = COALESCE(saldo_actual, 0) + ?1, updated_at = ?2
+                         WHERE cuenta_id = ?3",
+                        params![monto, now_rfc, cuenta],
+                    )?;
+                    if let Some(d) = dest {
+                        tx.execute(
+                            "UPDATE finanzas_cuentas
+                             SET saldo_actual = COALESCE(saldo_actual, 0) - ?1, updated_at = ?2
+                             WHERE cuenta_id = ?3",
+                            params![monto, now_rfc, d],
+                        )?;
+                    }
+                }
+                _ => {}
+            }
+            let n = tx.execute(
+                "UPDATE finanzas_movimientos SET deleted = 1, updated_at = ?1
+                 WHERE movimiento_id = ?2",
+                params![now_rfc, id],
+            )?;
+            tx.commit()?;
+            Ok(n)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Presupuestos
+    // -----------------------------------------------------------------------
+
+    pub async fn finanzas_presupuesto_set(
+        &self,
+        categoria_id: &str,
+        mes: &str,
+        monto_objetivo: f64,
+        alerta_pct: Option<f64>,
+    ) -> Result<FinanzasPresupuesto> {
+        let categoria_id = normalize_non_empty(categoria_id).context("categoria_id required")?;
+        let mes = normalize_non_empty(mes).context("mes required")?;
+        if !monto_objetivo.is_finite() || monto_objetivo < 0.0 {
+            anyhow::bail!("monto_objetivo must be non-negative finite");
+        }
+        let alerta = alerta_pct.unwrap_or(80.0).clamp(0.0, 200.0);
+        let (now, now_rfc) = finanzas_now_rfc();
+        let presupuesto_id = format!("pre-{}", Uuid::new_v4());
+        let db_path = self.db_path.clone();
+        let id = presupuesto_id.clone();
+        let cat_c = categoria_id.clone();
+        let mes_c = mes.clone();
+        let now_c = now_rfc.clone();
+        let final_id = tokio::task::spawn_blocking(move || -> Result<String> {
+            let db = Self::open_db(&db_path)?;
+            // Try insert; on conflict update existing.
+            let inserted = db.execute(
+                "INSERT INTO finanzas_presupuestos
+                 (presupuesto_id, categoria_id, mes, monto_objetivo, monto_gastado,
+                  alerta_pct, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?6)
+                 ON CONFLICT(categoria_id, mes) DO UPDATE SET
+                    monto_objetivo = excluded.monto_objetivo,
+                    alerta_pct = excluded.alerta_pct,
+                    updated_at = excluded.updated_at",
+                params![id, cat_c, mes_c, monto_objetivo, alerta, now_c],
+            )?;
+            let _ = inserted;
+            // Fetch the (possibly preexisting) row id for the canonical return.
+            let real_id: String = db.query_row(
+                "SELECT presupuesto_id FROM finanzas_presupuestos
+                 WHERE categoria_id = ?1 AND mes = ?2",
+                params![cat_c, mes_c],
+                |r| r.get(0),
+            )?;
+            Ok(real_id)
+        })
+        .await??;
+        Ok(FinanzasPresupuesto {
+            presupuesto_id: final_id,
+            categoria_id,
+            mes,
+            monto_objetivo,
+            monto_gastado: 0.0,
+            alerta_pct: alerta,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn finanzas_presupuesto_status(
+        &self,
+        categoria_id: &str,
+        mes: &str,
+    ) -> Result<Option<FinanzasPresupuestoStatus>> {
+        let cat = categoria_id.to_string();
+        let mes_s = mes.to_string();
+        let db_path = self.db_path.clone();
+        let result =
+            tokio::task::spawn_blocking(move || -> Result<Option<FinanzasPresupuestoStatus>> {
+                let db = Self::open_db(&db_path)?;
+                let row: Option<(String, f64, f64, String, String)> = db
+                    .query_row(
+                        "SELECT presupuesto_id, monto_objetivo, alerta_pct, created_at, updated_at
+                         FROM finanzas_presupuestos WHERE categoria_id = ?1 AND mes = ?2",
+                        params![cat, mes_s],
+                        |r| {
+                            Ok((
+                                r.get::<_, String>(0)?,
+                                r.get::<_, f64>(1)?,
+                                r.get::<_, f64>(2)?,
+                                r.get::<_, String>(3)?,
+                                r.get::<_, String>(4)?,
+                            ))
+                        },
+                    )
+                    .ok();
+                let Some((pid, objetivo, alerta_pct, created, updated)) = row else {
+                    return Ok(None);
+                };
+                let prefix = format!("{}-", mes_s);
+                let gastado: f64 = db
+                    .query_row(
+                        "SELECT COALESCE(SUM(monto), 0) FROM finanzas_movimientos
+                         WHERE categoria_id = ?1 AND tipo = 'gasto' AND deleted = 0
+                           AND substr(fecha, 1, 7) = ?2",
+                        params![cat, mes_s.clone()],
+                        |r| r.get::<_, f64>(0),
+                    )
+                    .unwrap_or(0.0);
+                let _ = prefix;
+                // Persist recalculated gastado.
+                db.execute(
+                    "UPDATE finanzas_presupuestos SET monto_gastado = ?1
+                     WHERE presupuesto_id = ?2",
+                    params![gastado, pid],
+                )?;
+                let porcentaje = if objetivo > 0.0 {
+                    (gastado / objetivo) * 100.0
+                } else {
+                    0.0
+                };
+                let restante = objetivo - gastado;
+                let alertando = porcentaje >= alerta_pct;
+                let excedido = porcentaje >= 100.0;
+                let presupuesto = FinanzasPresupuesto {
+                    presupuesto_id: pid,
+                    categoria_id: cat,
+                    mes: mes_s,
+                    monto_objetivo: objetivo,
+                    monto_gastado: gastado,
+                    alerta_pct,
+                    created_at: parse_utc(&created),
+                    updated_at: parse_utc(&updated),
+                };
+                Ok(Some(FinanzasPresupuestoStatus {
+                    presupuesto,
+                    objetivo,
+                    gastado,
+                    restante,
+                    porcentaje,
+                    alertando,
+                    excedido,
+                }))
+            })
+            .await??;
+        Ok(result)
+    }
+
+    pub async fn finanzas_presupuestos_list_mes(
+        &self,
+        mes: &str,
+    ) -> Result<Vec<FinanzasPresupuestoStatus>> {
+        let mes_s = mes.to_string();
+        let cats = {
+            let db_path = self.db_path.clone();
+            let m = mes_s.clone();
+            tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+                let db = Self::open_db(&db_path)?;
+                let mut stmt =
+                    db.prepare("SELECT categoria_id FROM finanzas_presupuestos WHERE mes = ?1")?;
+                let out = stmt
+                    .query_map(params![m], |r| r.get::<_, String>(0))?
+                    .flatten()
+                    .collect();
+                Ok(out)
+            })
+            .await??
+        };
+        let mut out = Vec::with_capacity(cats.len());
+        for cat in cats {
+            if let Some(s) = self.finanzas_presupuesto_status(&cat, &mes_s).await? {
+                out.push(s);
+            }
+        }
+        Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
+    // Metas de ahorro
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finanzas_meta_ahorro_add(
+        &self,
+        nombre: &str,
+        monto_objetivo: f64,
+        fecha_objetivo: Option<&str>,
+        cuenta_id: Option<&str>,
+        prioridad: Option<i64>,
+        notas: &str,
+    ) -> Result<FinanzasMetaAhorro> {
+        let nombre = normalize_non_empty(nombre).context("nombre required")?;
+        if !monto_objetivo.is_finite() || monto_objetivo <= 0.0 {
+            anyhow::bail!("monto_objetivo must be a positive finite number");
+        }
+        let fecha_objetivo = fecha_objetivo.and_then(normalize_non_empty);
+        let cuenta_id = cuenta_id.and_then(normalize_non_empty);
+        let prioridad = prioridad.unwrap_or(5).clamp(1, 10);
+        let (notas_n, notas_c) = opt_encrypt(notas)?;
+        let (now, now_rfc) = finanzas_now_rfc();
+        let meta_id = format!("met-{}", Uuid::new_v4());
+        let db_path = self.db_path.clone();
+        let id = meta_id.clone();
+        let nombre_c = nombre.clone();
+        let fo_c = fecha_objetivo.clone();
+        let cc = cuenta_id.clone();
+        let now_c = now_rfc.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO finanzas_metas_ahorro
+                 (meta_id, nombre, monto_objetivo, monto_actual, fecha_objetivo, cuenta_id,
+                  prioridad, estado, notas_nonce_b64, notas_ciphertext_b64,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, 'activa', ?7, ?8, ?9, ?9)",
+                params![
+                    id,
+                    nombre_c,
+                    monto_objetivo,
+                    fo_c,
+                    cc,
+                    prioridad,
+                    notas_n,
+                    notas_c,
+                    now_c
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+        Ok(FinanzasMetaAhorro {
+            meta_id,
+            nombre,
+            monto_objetivo,
+            monto_actual: 0.0,
+            fecha_objetivo,
+            cuenta_id,
+            prioridad,
+            estado: "activa".into(),
+            notas: notas.trim().to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Atomic: SUM aporte to monto_actual; flips to 'lograda' when reached.
+    pub async fn finanzas_meta_ahorro_aporte(
+        &self,
+        meta_id: &str,
+        monto: f64,
+    ) -> Result<FinanzasMetaAhorro> {
+        if !monto.is_finite() || monto <= 0.0 {
+            anyhow::bail!("aporte must be a positive finite number");
+        }
+        let id = meta_id.to_string();
+        let (_, now_rfc) = finanzas_now_rfc();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut db = Self::open_db(&db_path)?;
+            let tx = db.transaction()?;
+            tx.execute(
+                "UPDATE finanzas_metas_ahorro
+                 SET monto_actual = monto_actual + ?1, updated_at = ?2
+                 WHERE meta_id = ?3",
+                params![monto, now_rfc, id],
+            )?;
+            tx.execute(
+                "UPDATE finanzas_metas_ahorro
+                 SET estado = 'lograda'
+                 WHERE meta_id = ?1 AND monto_actual >= monto_objetivo
+                   AND estado = 'activa'",
+                params![id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await??;
+        self.finanzas_meta_ahorro_get(meta_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("meta_id not found after aporte"))
+    }
+
+    pub async fn finanzas_meta_ahorro_get(
+        &self,
+        meta_id: &str,
+    ) -> Result<Option<FinanzasMetaAhorro>> {
+        let id = meta_id.to_string();
+        let db_path = self.db_path.clone();
+        let row = tokio::task::spawn_blocking(move || -> Result<Option<FinanzasMetaAhorro>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT meta_id, nombre, monto_objetivo, monto_actual, fecha_objetivo,
+                        cuenta_id, prioridad, estado, notas_nonce_b64, notas_ciphertext_b64,
+                        created_at, updated_at
+                 FROM finanzas_metas_ahorro WHERE meta_id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(FinanzasMetaAhorro {
+                    meta_id: row.get(0)?,
+                    nombre: row.get(1)?,
+                    monto_objetivo: row.get(2)?,
+                    monto_actual: row.get(3)?,
+                    fecha_objetivo: row.get(4)?,
+                    cuenta_id: row.get(5)?,
+                    prioridad: row.get(6)?,
+                    estado: row.get(7)?,
+                    notas: opt_decrypt(row.get(8)?, row.get(9)?),
+                    created_at: parse_utc(&row.get::<_, String>(10)?),
+                    updated_at: parse_utc(&row.get::<_, String>(11)?),
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(row)
+    }
+
+    pub async fn finanzas_meta_ahorro_list(
+        &self,
+        only_activas: bool,
+    ) -> Result<Vec<FinanzasMetaAhorro>> {
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<FinanzasMetaAhorro>> {
+            let db = Self::open_db(&db_path)?;
+            let sql = if only_activas {
+                "SELECT meta_id, nombre, monto_objetivo, monto_actual, fecha_objetivo,
+                        cuenta_id, prioridad, estado, notas_nonce_b64, notas_ciphertext_b64,
+                        created_at, updated_at
+                 FROM finanzas_metas_ahorro WHERE estado = 'activa'
+                 ORDER BY prioridad ASC, created_at DESC"
+            } else {
+                "SELECT meta_id, nombre, monto_objetivo, monto_actual, fecha_objetivo,
+                        cuenta_id, prioridad, estado, notas_nonce_b64, notas_ciphertext_b64,
+                        created_at, updated_at
+                 FROM finanzas_metas_ahorro
+                 ORDER BY prioridad ASC, created_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let out = stmt
+                .query_map([], |row| {
+                    Ok(FinanzasMetaAhorro {
+                        meta_id: row.get(0)?,
+                        nombre: row.get(1)?,
+                        monto_objetivo: row.get(2)?,
+                        monto_actual: row.get(3)?,
+                        fecha_objetivo: row.get(4)?,
+                        cuenta_id: row.get(5)?,
+                        prioridad: row.get(6)?,
+                        estado: row.get(7)?,
+                        notas: opt_decrypt(row.get(8)?, row.get(9)?),
+                        created_at: parse_utc(&row.get::<_, String>(10)?),
+                        updated_at: parse_utc(&row.get::<_, String>(11)?),
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok(out)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    pub async fn finanzas_meta_ahorro_progress(
+        &self,
+        meta_id: &str,
+    ) -> Result<Option<FinanzasMetaProgress>> {
+        let Some(meta) = self.finanzas_meta_ahorro_get(meta_id).await? else {
+            return Ok(None);
+        };
+        let porcentaje = if meta.monto_objetivo > 0.0 {
+            (meta.monto_actual / meta.monto_objetivo) * 100.0
+        } else {
+            0.0
+        };
+        let restante = (meta.monto_objetivo - meta.monto_actual).max(0.0);
+        // Estimate ETA from average monthly contribution rate.
+        let eta_dias = if meta.monto_actual > 0.0 && restante > 0.0 {
+            let elapsed_days = (Utc::now() - meta.created_at).num_days().max(1);
+            let daily_rate = meta.monto_actual / elapsed_days as f64;
+            if daily_rate > 0.0 {
+                Some((restante / daily_rate).ceil() as i64)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(Some(FinanzasMetaProgress {
+            meta,
+            porcentaje,
+            restante,
+            eta_dias,
+        }))
+    }
+
+    // -----------------------------------------------------------------------
+    // Analytics
+    // -----------------------------------------------------------------------
+
+    pub async fn finanzas_gastos_por_categoria(
+        &self,
+        desde: Option<&str>,
+        hasta: Option<&str>,
+    ) -> Result<Vec<FinanzasGastoCategoria>> {
+        let desde = desde.map(|s| s.to_string());
+        let hasta = hasta.map(|s| s.to_string());
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<FinanzasGastoCategoria>> {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT m.categoria_id, c.nombre, COALESCE(SUM(m.monto), 0), COUNT(*)
+                 FROM finanzas_movimientos m
+                 LEFT JOIN finanzas_categorias c ON c.categoria_id = m.categoria_id
+                 WHERE m.tipo = 'gasto' AND m.deleted = 0",
+            );
+            let mut p: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(v) = desde.as_ref() {
+                sql.push_str(" AND m.fecha >= ?");
+                p.push(Box::new(v.clone()));
+            }
+            if let Some(v) = hasta.as_ref() {
+                sql.push_str(" AND m.fecha <= ?");
+                p.push(Box::new(v.clone()));
+            }
+            sql.push_str(" GROUP BY m.categoria_id, c.nombre ORDER BY 3 DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let out = stmt
+                .query_map(
+                    rusqlite::params_from_iter(p.iter().map(|b| b.as_ref())),
+                    |row| {
+                        Ok(FinanzasGastoCategoria {
+                            categoria_id: row.get(0)?,
+                            categoria_nombre: row.get(1)?,
+                            total: row.get(2)?,
+                            conteo: row.get(3)?,
+                        })
+                    },
+                )?
+                .flatten()
+                .collect();
+            Ok(out)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    pub async fn finanzas_ingresos_vs_gastos(
+        &self,
+        meses_atras: i32,
+    ) -> Result<Vec<FinanzasMesNeto>> {
+        let n = meses_atras.clamp(1, 36);
+        let db_path = self.db_path.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<FinanzasMesNeto>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT substr(fecha, 1, 7) AS mes,
+                        SUM(CASE WHEN tipo='ingreso' THEN monto ELSE 0 END),
+                        SUM(CASE WHEN tipo='gasto'   THEN monto ELSE 0 END)
+                 FROM finanzas_movimientos
+                 WHERE deleted = 0
+                 GROUP BY mes
+                 ORDER BY mes DESC
+                 LIMIT ?1",
+            )?;
+            let out: Vec<FinanzasMesNeto> = stmt
+                .query_map(params![n as i64], |row| {
+                    let mes: String = row.get(0)?;
+                    let ingresos: f64 = row.get(1)?;
+                    let gastos: f64 = row.get(2)?;
+                    Ok(FinanzasMesNeto {
+                        mes,
+                        ingresos,
+                        gastos,
+                        neto: ingresos - gastos,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok(out)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    pub async fn finanzas_cuentas_balance(&self) -> Result<FinanzasCuentasBalance> {
+        let cuentas = self.finanzas_cuenta_list(false).await?;
+        let mut total = 0.0;
+        let mut por_banco: BTreeMap<String, f64> = BTreeMap::new();
+        let mut por_tipo: BTreeMap<String, f64> = BTreeMap::new();
+        for c in cuentas {
+            let s = c.saldo_actual.unwrap_or(0.0);
+            total += s;
+            *por_banco
+                .entry(c.banco.clone().unwrap_or_else(|| "sin_banco".into()))
+                .or_insert(0.0) += s;
+            *por_tipo.entry(c.tipo.clone()).or_insert(0.0) += s;
+        }
+        Ok(FinanzasCuentasBalance {
+            total,
+            por_banco,
+            por_tipo,
+        })
+    }
+
+    pub async fn finanzas_gastos_recurrentes_list(&self) -> Result<Vec<FinanzasMovimiento>> {
+        self.finanzas_movimiento_list(None, None, None, None, Some("gasto"), Some(true), 200)
+            .await
+    }
+
+    /// Returns presupuesto restante for the current month — either for the
+    /// given category, or the sum across all categorias with budget set.
+    pub async fn finanzas_cuanto_puedo_gastar(&self, categoria_id: Option<&str>) -> Result<f64> {
+        let mes = current_month_str();
+        match categoria_id.and_then(normalize_non_empty) {
+            Some(cat) => {
+                if let Some(s) = self.finanzas_presupuesto_status(&cat, &mes).await? {
+                    Ok(s.restante)
+                } else {
+                    Ok(0.0)
+                }
+            }
+            None => {
+                let all = self.finanzas_presupuestos_list_mes(&mes).await?;
+                Ok(all.into_iter().map(|s| s.restante).sum())
+            }
+        }
+    }
+
+    pub async fn finanzas_overview(&self, mes: Option<&str>) -> Result<FinanzasOverview> {
+        let mes = mes
+            .and_then(normalize_non_empty)
+            .unwrap_or_else(current_month_str);
+        let desde = format!("{}-01", mes);
+        // simple "next month" upper-bound: month string lexically + "-99" works for fecha >= prefix
+        let hasta = format!("{}-31T23:59:59Z", mes);
+        let mut gastos_por_cat = self
+            .finanzas_gastos_por_categoria(Some(&desde), Some(&hasta))
+            .await?;
+        gastos_por_cat.sort_by(|a, b| {
+            b.total
+                .partial_cmp(&a.total)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let gastos_top: Vec<_> = gastos_por_cat.iter().take(10).cloned().collect();
+        let gastos_total: f64 = gastos_por_cat.iter().map(|g| g.total).sum();
+
+        // Ingresos del mes
+        let ingresos_total = {
+            let db_path = self.db_path.clone();
+            let mes_c = mes.clone();
+            tokio::task::spawn_blocking(move || -> Result<f64> {
+                let db = Self::open_db(&db_path)?;
+                let v: f64 = db
+                    .query_row(
+                        "SELECT COALESCE(SUM(monto), 0) FROM finanzas_movimientos
+                         WHERE tipo = 'ingreso' AND deleted = 0
+                           AND substr(fecha, 1, 7) = ?1",
+                        params![mes_c],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0.0);
+                Ok(v)
+            })
+            .await??
+        };
+
+        let balance = ingresos_total - gastos_total;
+
+        // Alertas
+        let mut alertas = Vec::new();
+        let presupuestos = self.finanzas_presupuestos_list_mes(&mes).await?;
+        for p in &presupuestos {
+            if p.excedido {
+                alertas.push(FinanzasAlerta {
+                    kind: "presupuesto_excedido".into(),
+                    message: format!(
+                        "Presupuesto {} excedido: {:.2}/{:.2} ({:.0}%)",
+                        p.presupuesto.categoria_id, p.gastado, p.objetivo, p.porcentaje
+                    ),
+                    categoria_id: Some(p.presupuesto.categoria_id.clone()),
+                    meta_id: None,
+                });
+            } else if p.alertando {
+                alertas.push(FinanzasAlerta {
+                    kind: "presupuesto_alerta".into(),
+                    message: format!(
+                        "Presupuesto {} al {:.0}% ({:.2}/{:.2})",
+                        p.presupuesto.categoria_id, p.porcentaje, p.gastado, p.objetivo
+                    ),
+                    categoria_id: Some(p.presupuesto.categoria_id.clone()),
+                    meta_id: None,
+                });
+            }
+        }
+        // Metas atrasadas: fecha_objetivo < hoy y monto_actual < objetivo
+        let metas = self.finanzas_meta_ahorro_list(true).await?;
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        for m in metas {
+            if let Some(fo) = m.fecha_objetivo.as_ref() {
+                if fo.as_str() < today.as_str() && m.monto_actual < m.monto_objetivo {
+                    alertas.push(FinanzasAlerta {
+                        kind: "meta_atrasada".into(),
+                        message: format!(
+                            "Meta '{}' atrasada (objetivo {}; actual {:.2}/{:.2})",
+                            m.nombre, fo, m.monto_actual, m.monto_objetivo
+                        ),
+                        categoria_id: None,
+                        meta_id: Some(m.meta_id.clone()),
+                    });
+                }
+            }
+        }
+
+        Ok(FinanzasOverview {
+            mes,
+            gastos_top,
+            ingresos_total,
+            gastos_total,
+            balance,
+            alertas,
+            generated_at: Utc::now(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -31021,6 +33011,384 @@ mod tests {
         );
         assert_eq!(seguros_alert[0].alias, "Sentra");
 
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ----------------------------------------------------------------------
+    // Finanzas Domain MVP tests
+    // ----------------------------------------------------------------------
+
+    async fn fresh_finanzas() -> (PathBuf, MemoryPlaneManager) {
+        let dir = temp_dir("memory-plane-finanzas");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        (dir, mgr)
+    }
+
+    #[tokio::test]
+    async fn finanzas_cuenta_add_and_saldo_update() {
+        let (dir, mgr) = fresh_finanzas().await;
+
+        let c = mgr
+            .finanzas_cuenta_add(
+                "BBVA débito",
+                "debito",
+                Some("BBVA"),
+                Some("1234"),
+                Some("MXN"),
+                Some(1000.0),
+                None,
+                None,
+                None,
+                Some("hector"),
+                "cuenta principal",
+            )
+            .await
+            .unwrap();
+        assert!(c.cuenta_id.starts_with("cta-"));
+        assert_eq!(c.saldo_actual, Some(1000.0));
+        assert_eq!(c.estado, "activo");
+
+        // Update saldo
+        let ok = mgr
+            .finanzas_cuenta_saldo_update(&c.cuenta_id, 1500.50)
+            .await
+            .unwrap();
+        assert!(ok);
+        let fetched = mgr
+            .finanzas_cuenta_get(&c.cuenta_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((fetched.saldo_actual.unwrap() - 1500.50).abs() < 1e-9);
+        assert_eq!(fetched.notas, "cuenta principal");
+
+        // Cerrar
+        assert!(mgr.finanzas_cuenta_cerrar(&c.cuenta_id).await.unwrap());
+        let activas = mgr.finanzas_cuenta_list(false).await.unwrap();
+        assert!(activas.is_empty());
+        let todas = mgr.finanzas_cuenta_list(true).await.unwrap();
+        assert_eq!(todas.len(), 1);
+        assert_eq!(todas[0].estado, "cerrada");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn finanzas_categoria_unique_name() {
+        let (dir, mgr) = fresh_finanzas().await;
+        let _ = mgr
+            .finanzas_categoria_add("Comida", "gasto", None, Some("🍕"), None, Some(5000.0))
+            .await
+            .unwrap();
+        // duplicate name must fail (UNIQUE)
+        let dup = mgr
+            .finanzas_categoria_add("Comida", "gasto", None, None, None, None)
+            .await;
+        assert!(dup.is_err(), "expected unique constraint violation");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn finanzas_movimiento_log_updates_saldo() {
+        let (dir, mgr) = fresh_finanzas().await;
+        let cta = mgr
+            .finanzas_cuenta_add(
+                "Efectivo",
+                "efectivo",
+                None,
+                None,
+                Some("MXN"),
+                Some(2000.0),
+                None,
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        // gasto
+        mgr.finanzas_movimiento_log(
+            Some(&cta.cuenta_id),
+            None,
+            None,
+            None,
+            "gasto",
+            None,
+            350.0,
+            None,
+            Some("café"),
+            None,
+            None,
+            None,
+            false,
+            "",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let after = mgr
+            .finanzas_cuenta_get(&cta.cuenta_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((after.saldo_actual.unwrap() - 1650.0).abs() < 1e-9);
+        // ingreso
+        mgr.finanzas_movimiento_log(
+            Some(&cta.cuenta_id),
+            None,
+            None,
+            None,
+            "ingreso",
+            None,
+            100.0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let after2 = mgr
+            .finanzas_cuenta_get(&cta.cuenta_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((after2.saldo_actual.unwrap() - 1750.0).abs() < 1e-9);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn finanzas_movimiento_log_with_categoria_resolution() {
+        let (dir, mgr) = fresh_finanzas().await;
+        let cta = mgr
+            .finanzas_cuenta_add(
+                "BBVA",
+                "debito",
+                None,
+                None,
+                Some("MXN"),
+                Some(5000.0),
+                None,
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        let cat = mgr
+            .finanzas_categoria_add("Transporte", "gasto", None, None, None, None)
+            .await
+            .unwrap();
+        // Resolve categoria by name
+        let m = mgr
+            .finanzas_movimiento_log(
+                Some(&cta.cuenta_id),
+                None,
+                None,
+                Some("Transporte"),
+                "gasto",
+                None,
+                120.0,
+                None,
+                Some("uber"),
+                None,
+                None,
+                None,
+                false,
+                "",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(m.categoria_id.as_deref(), Some(cat.categoria_id.as_str()));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn finanzas_presupuesto_status_aggregates_correctly() {
+        let (dir, mgr) = fresh_finanzas().await;
+        let cta = mgr
+            .finanzas_cuenta_add(
+                "X",
+                "debito",
+                None,
+                None,
+                None,
+                Some(10_000.0),
+                None,
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        let cat = mgr
+            .finanzas_categoria_add("Alimentos", "gasto", None, None, None, None)
+            .await
+            .unwrap();
+        let mes = chrono::Local::now().format("%Y-%m").to_string();
+        let _ = mgr
+            .finanzas_presupuesto_set(&cat.categoria_id, &mes, 1000.0, Some(80.0))
+            .await
+            .unwrap();
+        // Two gastos in current month
+        let fecha = format!("{}-15T10:00:00Z", mes);
+        for amount in [300.0, 500.0] {
+            mgr.finanzas_movimiento_log(
+                Some(&cta.cuenta_id),
+                None,
+                Some(&cat.categoria_id),
+                None,
+                "gasto",
+                Some(&fecha),
+                amount,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                "",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        let s = mgr
+            .finanzas_presupuesto_status(&cat.categoria_id, &mes)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((s.gastado - 800.0).abs() < 1e-9);
+        assert!((s.restante - 200.0).abs() < 1e-9);
+        assert!(s.alertando, "80% threshold should fire at 80%");
+        assert!(!s.excedido);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn finanzas_overview_includes_alertas_excedidas() {
+        let (dir, mgr) = fresh_finanzas().await;
+        let cta = mgr
+            .finanzas_cuenta_add(
+                "X",
+                "debito",
+                None,
+                None,
+                None,
+                Some(10_000.0),
+                None,
+                None,
+                None,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        let cat = mgr
+            .finanzas_categoria_add("Ocio", "gasto", None, None, None, None)
+            .await
+            .unwrap();
+        let mes = chrono::Local::now().format("%Y-%m").to_string();
+        let _ = mgr
+            .finanzas_presupuesto_set(&cat.categoria_id, &mes, 200.0, Some(80.0))
+            .await
+            .unwrap();
+        let fecha = format!("{}-10T12:00:00Z", mes);
+        mgr.finanzas_movimiento_log(
+            Some(&cta.cuenta_id),
+            None,
+            Some(&cat.categoria_id),
+            None,
+            "gasto",
+            Some(&fecha),
+            300.0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let ov = mgr.finanzas_overview(Some(&mes)).await.unwrap();
+        assert!(ov.alertas.iter().any(|a| a.kind == "presupuesto_excedido"));
+        assert!(ov.gastos_total >= 300.0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn finanzas_meta_aporte_atomic() {
+        let (dir, mgr) = fresh_finanzas().await;
+        let m = mgr
+            .finanzas_meta_ahorro_add(
+                "Fondo emergencia",
+                10_000.0,
+                Some("2027-12-31"),
+                None,
+                Some(1),
+                "",
+            )
+            .await
+            .unwrap();
+        assert!(m.meta_id.starts_with("met-"));
+
+        // Concurrent aportes
+        let mgr_arc = std::sync::Arc::new(mgr);
+        let id = m.meta_id.clone();
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let m2 = mgr_arc.clone();
+            let id2 = id.clone();
+            handles.push(tokio::spawn(async move {
+                m2.finanzas_meta_ahorro_aporte(&id2, 1000.0).await.unwrap()
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+        let final_meta = mgr_arc
+            .finanzas_meta_ahorro_get(&id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            (final_meta.monto_actual - 5000.0).abs() < 1e-6,
+            "expected exactly 5x aporte sum, got {}",
+            final_meta.monto_actual
+        );
+        // Push past objective
+        mgr_arc
+            .finanzas_meta_ahorro_aporte(&id, 6000.0)
+            .await
+            .unwrap();
+        let lograda = mgr_arc
+            .finanzas_meta_ahorro_get(&id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lograda.estado, "lograda");
         std::fs::remove_dir_all(dir).ok();
     }
 }
