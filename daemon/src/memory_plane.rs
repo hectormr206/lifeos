@@ -1285,6 +1285,81 @@ CREATE TABLE IF NOT EXISTS freelance_tarifas_history (
     PRIMARY KEY (cliente_id, fecha_cambio)
 );
 CREATE INDEX IF NOT EXISTS idx_freelance_tarifas_cliente ON freelance_tarifas_history(cliente_id);
+
+-- ----------------------------------------------------------------------
+-- Viajes domain (BI.viajes) — vacaciones, escapadas, road trips, work trips.
+--
+-- Tres tablas: viajes (header), destinos (paradas/segments), actividades
+-- (lo que se hizo). Notas + descripciones + alojamiento van CIFRADAS porque
+-- pueden contener detalles intimos (ubicacion exacta de hotel, motivo
+-- emocional del viaje, planes con pareja, etc.).
+--
+-- Estado del viaje: planeado → en_curso → completado | cancelado.
+-- Las actividades pueden enlazar opcionalmente a un movement/expense via
+-- movimiento_id; el join se hace explicito con financial_expenses.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS viajes_viajes (
+    viaje_id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    destino TEXT NOT NULL,
+    pais TEXT,
+    motivo TEXT,
+    fecha_inicio TEXT NOT NULL,
+    fecha_fin TEXT NOT NULL,
+    acompanantes TEXT,
+    presupuesto_inicial REAL,
+    estado TEXT NOT NULL DEFAULT 'planeado',
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    fotos_path TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_viajes_viajes_estado
+    ON viajes_viajes(estado);
+CREATE INDEX IF NOT EXISTS idx_viajes_viajes_destino
+    ON viajes_viajes(destino);
+CREATE INDEX IF NOT EXISTS idx_viajes_viajes_fechas
+    ON viajes_viajes(fecha_inicio, fecha_fin);
+
+CREATE TABLE IF NOT EXISTS viajes_destinos (
+    destino_id TEXT PRIMARY KEY,
+    viaje_id TEXT NOT NULL,
+    ciudad TEXT NOT NULL,
+    pais TEXT,
+    fecha_llegada TEXT NOT NULL,
+    fecha_salida TEXT,
+    alojamiento_nonce_b64 TEXT,
+    alojamiento_ciphertext_b64 TEXT,
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_viajes_destinos_viaje
+    ON viajes_destinos(viaje_id);
+
+CREATE TABLE IF NOT EXISTS viajes_actividades (
+    actividad_id TEXT PRIMARY KEY,
+    viaje_id TEXT NOT NULL,
+    fecha TEXT NOT NULL,
+    titulo TEXT NOT NULL,
+    descripcion_nonce_b64 TEXT,
+    descripcion_ciphertext_b64 TEXT,
+    tipo TEXT,
+    costo REAL,
+    movimiento_id TEXT,
+    rating INTEGER,
+    recomendaria INTEGER,
+    notas_nonce_b64 TEXT,
+    notas_ciphertext_b64 TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_viajes_actividades_viaje
+    ON viajes_actividades(viaje_id);
+CREATE INDEX IF NOT EXISTS idx_viajes_actividades_tipo
+    ON viajes_actividades(tipo);
+CREATE INDEX IF NOT EXISTS idx_viajes_actividades_rating
+    ON viajes_actividades(rating);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19875,6 +19950,1046 @@ impl MemoryPlaneManager {
     }
 }
 
+// ============================================================================
+// Viajes domain (BI.viajes) — vacaciones, escapadas, road trips, work trips.
+// ============================================================================
+
+/// One trip header.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Viaje {
+    pub viaje_id: String,
+    pub nombre: String,
+    pub destino: String,
+    pub pais: Option<String>,
+    pub motivo: Option<String>,
+    pub fecha_inicio: String,
+    pub fecha_fin: String,
+    pub acompanantes: Option<String>,
+    pub presupuesto_inicial: Option<f64>,
+    /// `planeado`, `en_curso`, `completado`, `cancelado`.
+    pub estado: String,
+    pub notas: String,
+    pub fotos_path: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One destination/segment of a trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViajeDestino {
+    pub destino_id: String,
+    pub viaje_id: String,
+    pub ciudad: String,
+    pub pais: Option<String>,
+    pub fecha_llegada: String,
+    pub fecha_salida: Option<String>,
+    pub alojamiento: String,
+    pub notas: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One activity logged inside a trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViajeActividad {
+    pub actividad_id: String,
+    pub viaje_id: String,
+    pub fecha: String,
+    pub titulo: String,
+    pub descripcion: String,
+    pub tipo: Option<String>,
+    pub costo: Option<f64>,
+    pub movimiento_id: Option<String>,
+    pub rating: Option<i32>,
+    pub recomendaria: Option<bool>,
+    pub notas: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate per-tipo bucket for trip debriefs.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ViajeTipoBucket {
+    pub tipo: String,
+    pub count: usize,
+    pub total_costo: f64,
+}
+
+/// Full debrief for one trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViajeResumen {
+    pub viaje: Viaje,
+    pub destinos: Vec<ViajeDestino>,
+    pub actividades: Vec<ViajeActividad>,
+    pub total_actividades: usize,
+    pub total_gastado: f64,
+    pub gastos_por_tipo: Vec<ViajeTipoBucket>,
+    pub top_actividades: Vec<ViajeActividad>,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// Overview snapshot across all trips (optionally filtered by year).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ViajesOverview {
+    pub total_viajes: usize,
+    pub viajes_completados: usize,
+    pub viajes_planeados: usize,
+    pub viajes_en_curso: usize,
+    pub total_gastos: f64,
+    pub destinos_unicos: Vec<String>,
+    pub year_filter: Option<i32>,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// Side-by-side comparison of two trips.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViajeComparison {
+    pub viaje_a: ViajeResumen,
+    pub viaje_b: ViajeResumen,
+    pub diff_total_gastado: f64,
+    pub diff_total_actividades: i64,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// Aggregate for "all trips to <destino_o_pais>".
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ViajesADestino {
+    pub destino_o_pais: String,
+    pub viajes: Vec<Viaje>,
+    pub total_gastos: f64,
+    pub avg_rating: Option<f64>,
+    pub generated_at: DateTime<Utc>,
+}
+
+struct ViajeRaw {
+    viaje_id: String,
+    nombre: String,
+    destino: String,
+    pais: Option<String>,
+    motivo: Option<String>,
+    fecha_inicio: String,
+    fecha_fin: String,
+    acompanantes: Option<String>,
+    presupuesto_inicial: Option<f64>,
+    estado: String,
+    notas_nonce_b64: Option<String>,
+    notas_ciphertext_b64: Option<String>,
+    fotos_path: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct ViajeDestinoRaw {
+    destino_id: String,
+    viaje_id: String,
+    ciudad: String,
+    pais: Option<String>,
+    fecha_llegada: String,
+    fecha_salida: Option<String>,
+    alojamiento_nonce_b64: Option<String>,
+    alojamiento_ciphertext_b64: Option<String>,
+    notas_nonce_b64: Option<String>,
+    notas_ciphertext_b64: Option<String>,
+    created_at: String,
+}
+
+struct ViajeActividadRaw {
+    actividad_id: String,
+    viaje_id: String,
+    fecha: String,
+    titulo: String,
+    descripcion_nonce_b64: Option<String>,
+    descripcion_ciphertext_b64: Option<String>,
+    tipo: Option<String>,
+    costo: Option<f64>,
+    movimiento_id: Option<String>,
+    rating: Option<i32>,
+    recomendaria: Option<i32>,
+    notas_nonce_b64: Option<String>,
+    notas_ciphertext_b64: Option<String>,
+    created_at: String,
+}
+
+fn map_viaje_raw(r: ViajeRaw) -> Viaje {
+    Viaje {
+        viaje_id: r.viaje_id,
+        nombre: r.nombre,
+        destino: r.destino,
+        pais: r.pais,
+        motivo: r.motivo,
+        fecha_inicio: r.fecha_inicio,
+        fecha_fin: r.fecha_fin,
+        acompanantes: r.acompanantes,
+        presupuesto_inicial: r.presupuesto_inicial,
+        estado: r.estado,
+        notas: match (r.notas_nonce_b64, r.notas_ciphertext_b64) {
+            (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+            _ => String::new(),
+        },
+        fotos_path: r.fotos_path,
+        created_at: parse_utc(&r.created_at),
+        updated_at: parse_utc(&r.updated_at),
+    }
+}
+
+fn map_viaje_destino_raw(r: ViajeDestinoRaw) -> ViajeDestino {
+    ViajeDestino {
+        destino_id: r.destino_id,
+        viaje_id: r.viaje_id,
+        ciudad: r.ciudad,
+        pais: r.pais,
+        fecha_llegada: r.fecha_llegada,
+        fecha_salida: r.fecha_salida,
+        alojamiento: match (r.alojamiento_nonce_b64, r.alojamiento_ciphertext_b64) {
+            (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+            _ => String::new(),
+        },
+        notas: match (r.notas_nonce_b64, r.notas_ciphertext_b64) {
+            (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+            _ => String::new(),
+        },
+        created_at: parse_utc(&r.created_at),
+    }
+}
+
+fn map_viaje_actividad_raw(r: ViajeActividadRaw) -> ViajeActividad {
+    ViajeActividad {
+        actividad_id: r.actividad_id,
+        viaje_id: r.viaje_id,
+        fecha: r.fecha,
+        titulo: r.titulo,
+        descripcion: match (r.descripcion_nonce_b64, r.descripcion_ciphertext_b64) {
+            (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+            _ => String::new(),
+        },
+        tipo: r.tipo,
+        costo: r.costo,
+        movimiento_id: r.movimiento_id,
+        rating: r.rating,
+        recomendaria: r.recomendaria.map(|v| v != 0),
+        notas: match (r.notas_nonce_b64, r.notas_ciphertext_b64) {
+            (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+            _ => String::new(),
+        },
+        created_at: parse_utc(&r.created_at),
+    }
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Viajes — viajes (header)
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn viaje_add(
+        &self,
+        nombre: &str,
+        destino: &str,
+        pais: Option<&str>,
+        motivo: Option<&str>,
+        fecha_inicio: &str,
+        fecha_fin: &str,
+        acompanantes: Option<&str>,
+        presupuesto_inicial: Option<f64>,
+        notas: &str,
+        fotos_path: Option<&str>,
+    ) -> Result<Viaje> {
+        let nombre = normalize_non_empty(nombre).context("nombre required")?;
+        let destino = normalize_non_empty(destino).context("destino required")?;
+        let fecha_inicio = normalize_non_empty(fecha_inicio).context("fecha_inicio required")?;
+        let fecha_fin = normalize_non_empty(fecha_fin).context("fecha_fin required")?;
+        let pais = pais.and_then(normalize_non_empty);
+        let motivo = motivo.and_then(normalize_non_empty);
+        let acompanantes = acompanantes.and_then(normalize_non_empty);
+        let fotos_path = fotos_path.and_then(normalize_non_empty);
+        if let Some(p) = presupuesto_inicial {
+            if !p.is_finite() || p < 0.0 {
+                anyhow::bail!("presupuesto_inicial must be a non-negative finite number");
+            }
+        }
+        let notas_owned = notas.trim().to_string();
+        let (notas_nonce, notas_cipher) = maybe_encrypt(&notas_owned)?;
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let viaje_id = format!("via-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id_clone = viaje_id.clone();
+        let nombre_clone = nombre.clone();
+        let destino_clone = destino.clone();
+        let pais_clone = pais.clone();
+        let motivo_clone = motivo.clone();
+        let fi_clone = fecha_inicio.clone();
+        let ff_clone = fecha_fin.clone();
+        let acomp_clone = acompanantes.clone();
+        let fotos_clone = fotos_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO viajes_viajes
+                 (viaje_id, nombre, destino, pais, motivo, fecha_inicio, fecha_fin,
+                  acompanantes, presupuesto_inicial, estado, notas_nonce_b64,
+                  notas_ciphertext_b64, fotos_path, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'planeado', ?10, ?11, ?12, ?13, ?13)",
+                params![
+                    id_clone,
+                    nombre_clone,
+                    destino_clone,
+                    pais_clone,
+                    motivo_clone,
+                    fi_clone,
+                    ff_clone,
+                    acomp_clone,
+                    presupuesto_inicial,
+                    notas_nonce,
+                    notas_cipher,
+                    fotos_clone,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Viaje {
+            viaje_id,
+            nombre,
+            destino,
+            pais,
+            motivo,
+            fecha_inicio,
+            fecha_fin,
+            acompanantes,
+            presupuesto_inicial,
+            estado: "planeado".to_string(),
+            notas: notas_owned,
+            fotos_path,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn viaje_list(&self, estado: Option<&str>, year: Option<i32>) -> Result<Vec<Viaje>> {
+        let db_path = self.db_path.clone();
+        let estado_filter = estado.and_then(normalize_non_empty);
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT viaje_id, nombre, destino, pais, motivo, fecha_inicio, fecha_fin,
+                        acompanantes, presupuesto_inicial, estado, notas_nonce_b64,
+                        notas_ciphertext_b64, fotos_path, created_at, updated_at
+                 FROM viajes_viajes WHERE 1=1",
+            );
+            let mut conds: Vec<rusqlite::types::Value> = Vec::new();
+            if let Some(e) = &estado_filter {
+                sql.push_str(&format!(" AND estado = ?{}", conds.len() + 1));
+                conds.push(rusqlite::types::Value::Text(e.clone()));
+            }
+            if let Some(y) = year {
+                sql.push_str(&format!(
+                    " AND substr(fecha_inicio,1,4) = ?{}",
+                    conds.len() + 1
+                ));
+                conds.push(rusqlite::types::Value::Text(format!("{:04}", y)));
+            }
+            sql.push_str(" ORDER BY fecha_inicio DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<ViajeRaw> {
+                Ok(ViajeRaw {
+                    viaje_id: row.get(0)?,
+                    nombre: row.get(1)?,
+                    destino: row.get(2)?,
+                    pais: row.get(3)?,
+                    motivo: row.get(4)?,
+                    fecha_inicio: row.get(5)?,
+                    fecha_fin: row.get(6)?,
+                    acompanantes: row.get(7)?,
+                    presupuesto_inicial: row.get(8)?,
+                    estado: row.get(9)?,
+                    notas_nonce_b64: row.get(10)?,
+                    notas_ciphertext_b64: row.get(11)?,
+                    fotos_path: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                })
+            };
+            let raws: Vec<ViajeRaw> = stmt
+                .query_map(rusqlite::params_from_iter(conds.iter()), map_row)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws.into_iter().map(map_viaje_raw).collect())
+    }
+
+    pub async fn viaje_get(&self, viaje_id: &str) -> Result<Option<Viaje>> {
+        let db_path = self.db_path.clone();
+        let id = viaje_id.to_string();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<ViajeRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let res = db
+                .query_row(
+                    "SELECT viaje_id, nombre, destino, pais, motivo, fecha_inicio, fecha_fin,
+                            acompanantes, presupuesto_inicial, estado, notas_nonce_b64,
+                            notas_ciphertext_b64, fotos_path, created_at, updated_at
+                     FROM viajes_viajes WHERE viaje_id = ?1",
+                    params![id],
+                    |row| {
+                        Ok(ViajeRaw {
+                            viaje_id: row.get(0)?,
+                            nombre: row.get(1)?,
+                            destino: row.get(2)?,
+                            pais: row.get(3)?,
+                            motivo: row.get(4)?,
+                            fecha_inicio: row.get(5)?,
+                            fecha_fin: row.get(6)?,
+                            acompanantes: row.get(7)?,
+                            presupuesto_inicial: row.get(8)?,
+                            estado: row.get(9)?,
+                            notas_nonce_b64: row.get(10)?,
+                            notas_ciphertext_b64: row.get(11)?,
+                            fotos_path: row.get(12)?,
+                            created_at: row.get(13)?,
+                            updated_at: row.get(14)?,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(res)
+        })
+        .await??;
+        Ok(raw.map(map_viaje_raw))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn viaje_update(
+        &self,
+        viaje_id: &str,
+        nombre: Option<&str>,
+        destino: Option<&str>,
+        pais: Option<&str>,
+        motivo: Option<&str>,
+        fecha_inicio: Option<&str>,
+        fecha_fin: Option<&str>,
+        acompanantes: Option<&str>,
+        presupuesto_inicial: Option<f64>,
+        notas: Option<&str>,
+        fotos_path: Option<&str>,
+    ) -> Result<bool> {
+        let existing = match self.viaje_get(viaje_id).await? {
+            Some(v) => v,
+            None => return Ok(false),
+        };
+        let nombre = nombre
+            .and_then(normalize_non_empty)
+            .unwrap_or(existing.nombre);
+        let destino = destino
+            .and_then(normalize_non_empty)
+            .unwrap_or(existing.destino);
+        let pais = pais.and_then(normalize_non_empty).or(existing.pais);
+        let motivo = motivo.and_then(normalize_non_empty).or(existing.motivo);
+        let fecha_inicio = fecha_inicio
+            .and_then(normalize_non_empty)
+            .unwrap_or(existing.fecha_inicio);
+        let fecha_fin = fecha_fin
+            .and_then(normalize_non_empty)
+            .unwrap_or(existing.fecha_fin);
+        let acompanantes = acompanantes
+            .and_then(normalize_non_empty)
+            .or(existing.acompanantes);
+        let presupuesto_inicial = presupuesto_inicial.or(existing.presupuesto_inicial);
+        let notas_value = notas.map(|s| s.to_string()).unwrap_or(existing.notas);
+        let (notas_nonce, notas_cipher) = maybe_encrypt(&notas_value)?;
+        let fotos_path = fotos_path
+            .and_then(normalize_non_empty)
+            .or(existing.fotos_path);
+
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = viaje_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE viajes_viajes SET
+                    nombre = ?1, destino = ?2, pais = ?3, motivo = ?4,
+                    fecha_inicio = ?5, fecha_fin = ?6, acompanantes = ?7,
+                    presupuesto_inicial = ?8, notas_nonce_b64 = ?9,
+                    notas_ciphertext_b64 = ?10, fotos_path = ?11, updated_at = ?12
+                 WHERE viaje_id = ?13",
+                params![
+                    nombre,
+                    destino,
+                    pais,
+                    motivo,
+                    fecha_inicio,
+                    fecha_fin,
+                    acompanantes,
+                    presupuesto_inicial,
+                    notas_nonce,
+                    notas_cipher,
+                    fotos_path,
+                    now,
+                    id,
+                ],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    async fn viaje_set_estado(&self, viaje_id: &str, estado: &str) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = viaje_id.to_string();
+        let estado = estado.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE viajes_viajes SET estado = ?1, updated_at = ?2 WHERE viaje_id = ?3",
+                params![estado, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn viaje_iniciar(&self, viaje_id: &str) -> Result<bool> {
+        self.viaje_set_estado(viaje_id, "en_curso").await
+    }
+
+    pub async fn viaje_completar(&self, viaje_id: &str) -> Result<bool> {
+        self.viaje_set_estado(viaje_id, "completado").await
+    }
+
+    pub async fn viaje_cancelar(&self, viaje_id: &str) -> Result<bool> {
+        self.viaje_set_estado(viaje_id, "cancelado").await
+    }
+
+    // -----------------------------------------------------------------------
+    // Viajes — destinos
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn destino_add(
+        &self,
+        viaje_id: &str,
+        ciudad: &str,
+        pais: Option<&str>,
+        fecha_llegada: &str,
+        fecha_salida: Option<&str>,
+        alojamiento: &str,
+        notas: &str,
+    ) -> Result<ViajeDestino> {
+        let viaje_id = normalize_non_empty(viaje_id).context("viaje_id required")?;
+        let ciudad = normalize_non_empty(ciudad).context("ciudad required")?;
+        let fecha_llegada = normalize_non_empty(fecha_llegada).context("fecha_llegada required")?;
+        let fecha_salida = fecha_salida.and_then(normalize_non_empty);
+        let pais = pais.and_then(normalize_non_empty);
+        let aloj_owned = alojamiento.trim().to_string();
+        let notas_owned = notas.trim().to_string();
+        let (aloj_nonce, aloj_cipher) = maybe_encrypt(&aloj_owned)?;
+        let (notas_nonce, notas_cipher) = maybe_encrypt(&notas_owned)?;
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let destino_id = format!("des-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id_clone = destino_id.clone();
+        let viaje_id_clone = viaje_id.clone();
+        let ciudad_clone = ciudad.clone();
+        let pais_clone = pais.clone();
+        let fl_clone = fecha_llegada.clone();
+        let fs_clone = fecha_salida.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO viajes_destinos
+                 (destino_id, viaje_id, ciudad, pais, fecha_llegada, fecha_salida,
+                  alojamiento_nonce_b64, alojamiento_ciphertext_b64,
+                  notas_nonce_b64, notas_ciphertext_b64, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id_clone,
+                    viaje_id_clone,
+                    ciudad_clone,
+                    pais_clone,
+                    fl_clone,
+                    fs_clone,
+                    aloj_nonce,
+                    aloj_cipher,
+                    notas_nonce,
+                    notas_cipher,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ViajeDestino {
+            destino_id,
+            viaje_id,
+            ciudad,
+            pais,
+            fecha_llegada,
+            fecha_salida,
+            alojamiento: aloj_owned,
+            notas: notas_owned,
+            created_at: now,
+        })
+    }
+
+    pub async fn destino_list(&self, viaje_id: &str) -> Result<Vec<ViajeDestino>> {
+        let db_path = self.db_path.clone();
+        let id = viaje_id.to_string();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT destino_id, viaje_id, ciudad, pais, fecha_llegada, fecha_salida,
+                        alojamiento_nonce_b64, alojamiento_ciphertext_b64,
+                        notas_nonce_b64, notas_ciphertext_b64, created_at
+                 FROM viajes_destinos WHERE viaje_id = ?1
+                 ORDER BY fecha_llegada ASC",
+            )?;
+            let raws: Vec<ViajeDestinoRaw> = stmt
+                .query_map(params![id], |row| {
+                    Ok(ViajeDestinoRaw {
+                        destino_id: row.get(0)?,
+                        viaje_id: row.get(1)?,
+                        ciudad: row.get(2)?,
+                        pais: row.get(3)?,
+                        fecha_llegada: row.get(4)?,
+                        fecha_salida: row.get(5)?,
+                        alojamiento_nonce_b64: row.get(6)?,
+                        alojamiento_ciphertext_b64: row.get(7)?,
+                        notas_nonce_b64: row.get(8)?,
+                        notas_ciphertext_b64: row.get(9)?,
+                        created_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws.into_iter().map(map_viaje_destino_raw).collect())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn destino_update(
+        &self,
+        destino_id: &str,
+        ciudad: Option<&str>,
+        pais: Option<&str>,
+        fecha_llegada: Option<&str>,
+        fecha_salida: Option<&str>,
+        alojamiento: Option<&str>,
+        notas: Option<&str>,
+    ) -> Result<bool> {
+        // Read existing first so we preserve unchanged encrypted fields.
+        let db_path = self.db_path.clone();
+        let id = destino_id.to_string();
+        let existing = tokio::task::spawn_blocking(move || -> Result<Option<ViajeDestinoRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let res = db
+                .query_row(
+                    "SELECT destino_id, viaje_id, ciudad, pais, fecha_llegada, fecha_salida,
+                                alojamiento_nonce_b64, alojamiento_ciphertext_b64,
+                                notas_nonce_b64, notas_ciphertext_b64, created_at
+                         FROM viajes_destinos WHERE destino_id = ?1",
+                    params![id],
+                    |row| {
+                        Ok(ViajeDestinoRaw {
+                            destino_id: row.get(0)?,
+                            viaje_id: row.get(1)?,
+                            ciudad: row.get(2)?,
+                            pais: row.get(3)?,
+                            fecha_llegada: row.get(4)?,
+                            fecha_salida: row.get(5)?,
+                            alojamiento_nonce_b64: row.get(6)?,
+                            alojamiento_ciphertext_b64: row.get(7)?,
+                            notas_nonce_b64: row.get(8)?,
+                            notas_ciphertext_b64: row.get(9)?,
+                            created_at: row.get(10)?,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(res)
+        })
+        .await??;
+        let existing = match existing {
+            Some(e) => map_viaje_destino_raw(e),
+            None => return Ok(false),
+        };
+        let ciudad = ciudad
+            .and_then(normalize_non_empty)
+            .unwrap_or(existing.ciudad);
+        let pais = pais.and_then(normalize_non_empty).or(existing.pais);
+        let fecha_llegada = fecha_llegada
+            .and_then(normalize_non_empty)
+            .unwrap_or(existing.fecha_llegada);
+        let fecha_salida = fecha_salida
+            .and_then(normalize_non_empty)
+            .or(existing.fecha_salida);
+        let aloj_value = alojamiento
+            .map(|s| s.to_string())
+            .unwrap_or(existing.alojamiento);
+        let notas_value = notas.map(|s| s.to_string()).unwrap_or(existing.notas);
+        let (aloj_nonce, aloj_cipher) = maybe_encrypt(&aloj_value)?;
+        let (notas_nonce, notas_cipher) = maybe_encrypt(&notas_value)?;
+
+        let db_path = self.db_path.clone();
+        let id = destino_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE viajes_destinos SET
+                    ciudad = ?1, pais = ?2, fecha_llegada = ?3, fecha_salida = ?4,
+                    alojamiento_nonce_b64 = ?5, alojamiento_ciphertext_b64 = ?6,
+                    notas_nonce_b64 = ?7, notas_ciphertext_b64 = ?8
+                 WHERE destino_id = ?9",
+                params![
+                    ciudad,
+                    pais,
+                    fecha_llegada,
+                    fecha_salida,
+                    aloj_nonce,
+                    aloj_cipher,
+                    notas_nonce,
+                    notas_cipher,
+                    id,
+                ],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Viajes — actividades
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn actividad_log(
+        &self,
+        viaje_id: &str,
+        fecha: &str,
+        titulo: &str,
+        descripcion: &str,
+        tipo: Option<&str>,
+        costo: Option<f64>,
+        movimiento_id: Option<&str>,
+        rating: Option<i32>,
+        recomendaria: Option<bool>,
+        notas: &str,
+    ) -> Result<ViajeActividad> {
+        let viaje_id = normalize_non_empty(viaje_id).context("viaje_id required")?;
+        let fecha = normalize_non_empty(fecha).context("fecha required")?;
+        let titulo = normalize_non_empty(titulo).context("titulo required")?;
+        let tipo = tipo.and_then(normalize_non_empty);
+        let movimiento_id = movimiento_id.and_then(normalize_non_empty);
+        if let Some(c) = costo {
+            if !c.is_finite() || c < 0.0 {
+                anyhow::bail!("costo must be a non-negative finite number");
+            }
+        }
+        if let Some(r) = rating {
+            if !(1..=5).contains(&r) {
+                anyhow::bail!("rating must be between 1 and 5");
+            }
+        }
+        let descripcion_owned = descripcion.trim().to_string();
+        let notas_owned = notas.trim().to_string();
+        let (desc_nonce, desc_cipher) = maybe_encrypt(&descripcion_owned)?;
+        let (notas_nonce, notas_cipher) = maybe_encrypt(&notas_owned)?;
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let actividad_id = format!("act-{}", Uuid::new_v4());
+        let recomendaria_int = recomendaria.map(|b| b as i32);
+
+        let db_path = self.db_path.clone();
+        let id_clone = actividad_id.clone();
+        let viaje_clone = viaje_id.clone();
+        let fecha_clone = fecha.clone();
+        let titulo_clone = titulo.clone();
+        let tipo_clone = tipo.clone();
+        let mov_clone = movimiento_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO viajes_actividades
+                 (actividad_id, viaje_id, fecha, titulo,
+                  descripcion_nonce_b64, descripcion_ciphertext_b64,
+                  tipo, costo, movimiento_id, rating, recomendaria,
+                  notas_nonce_b64, notas_ciphertext_b64, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    id_clone,
+                    viaje_clone,
+                    fecha_clone,
+                    titulo_clone,
+                    desc_nonce,
+                    desc_cipher,
+                    tipo_clone,
+                    costo,
+                    mov_clone,
+                    rating,
+                    recomendaria_int,
+                    notas_nonce,
+                    notas_cipher,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ViajeActividad {
+            actividad_id,
+            viaje_id,
+            fecha,
+            titulo,
+            descripcion: descripcion_owned,
+            tipo,
+            costo,
+            movimiento_id,
+            rating,
+            recomendaria,
+            notas: notas_owned,
+            created_at: now,
+        })
+    }
+
+    pub async fn actividades_list(&self, viaje_id: &str) -> Result<Vec<ViajeActividad>> {
+        let db_path = self.db_path.clone();
+        let id = viaje_id.to_string();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT actividad_id, viaje_id, fecha, titulo,
+                        descripcion_nonce_b64, descripcion_ciphertext_b64,
+                        tipo, costo, movimiento_id, rating, recomendaria,
+                        notas_nonce_b64, notas_ciphertext_b64, created_at
+                 FROM viajes_actividades WHERE viaje_id = ?1
+                 ORDER BY fecha ASC, created_at ASC",
+            )?;
+            let raws: Vec<ViajeActividadRaw> = stmt
+                .query_map(params![id], |row| {
+                    Ok(ViajeActividadRaw {
+                        actividad_id: row.get(0)?,
+                        viaje_id: row.get(1)?,
+                        fecha: row.get(2)?,
+                        titulo: row.get(3)?,
+                        descripcion_nonce_b64: row.get(4)?,
+                        descripcion_ciphertext_b64: row.get(5)?,
+                        tipo: row.get(6)?,
+                        costo: row.get(7)?,
+                        movimiento_id: row.get(8)?,
+                        rating: row.get(9)?,
+                        recomendaria: row.get(10)?,
+                        notas_nonce_b64: row.get(11)?,
+                        notas_ciphertext_b64: row.get(12)?,
+                        created_at: row.get(13)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws.into_iter().map(map_viaje_actividad_raw).collect())
+    }
+
+    pub async fn actividad_recomendar(
+        &self,
+        actividad_id: &str,
+        rating: i32,
+        recomendaria: bool,
+    ) -> Result<bool> {
+        if !(1..=5).contains(&rating) {
+            anyhow::bail!("rating must be between 1 and 5");
+        }
+        let db_path = self.db_path.clone();
+        let id = actividad_id.to_string();
+        let recomendaria_int = recomendaria as i32;
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE viajes_actividades SET rating = ?1, recomendaria = ?2
+                 WHERE actividad_id = ?3",
+                params![rating, recomendaria_int, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Viajes — analytics
+    // -----------------------------------------------------------------------
+
+    pub async fn viajes_overview(&self, year: Option<i32>) -> Result<ViajesOverview> {
+        let viajes = self.viaje_list(None, year).await?;
+        let total_viajes = viajes.len();
+        let viajes_completados = viajes.iter().filter(|v| v.estado == "completado").count();
+        let viajes_planeados = viajes.iter().filter(|v| v.estado == "planeado").count();
+        let viajes_en_curso = viajes.iter().filter(|v| v.estado == "en_curso").count();
+
+        let mut destinos_unicos: Vec<String> = viajes.iter().map(|v| v.destino.clone()).collect();
+        destinos_unicos.sort();
+        destinos_unicos.dedup();
+
+        let mut total_gastos = 0.0_f64;
+        for v in &viajes {
+            let acts = self.actividades_list(&v.viaje_id).await?;
+            for a in acts {
+                if let Some(c) = a.costo {
+                    total_gastos += c;
+                }
+            }
+        }
+
+        Ok(ViajesOverview {
+            total_viajes,
+            viajes_completados,
+            viajes_planeados,
+            viajes_en_curso,
+            total_gastos,
+            destinos_unicos,
+            year_filter: year,
+            generated_at: Utc::now(),
+        })
+    }
+
+    pub async fn viaje_resumen(&self, viaje_id: &str) -> Result<Option<ViajeResumen>> {
+        let viaje = match self.viaje_get(viaje_id).await? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let destinos = self.destino_list(viaje_id).await?;
+        let actividades = self.actividades_list(viaje_id).await?;
+
+        let total_actividades = actividades.len();
+        let total_gastado: f64 = actividades.iter().filter_map(|a| a.costo).sum();
+
+        // Group by tipo
+        let mut buckets: std::collections::BTreeMap<String, ViajeTipoBucket> =
+            std::collections::BTreeMap::new();
+        for a in &actividades {
+            let tipo = a.tipo.clone().unwrap_or_else(|| "sin_tipo".to_string());
+            let entry = buckets.entry(tipo.clone()).or_insert(ViajeTipoBucket {
+                tipo,
+                count: 0,
+                total_costo: 0.0,
+            });
+            entry.count += 1;
+            if let Some(c) = a.costo {
+                entry.total_costo += c;
+            }
+        }
+        let mut gastos_por_tipo: Vec<ViajeTipoBucket> = buckets.into_values().collect();
+        gastos_por_tipo.sort_by(|a, b| {
+            b.total_costo
+                .partial_cmp(&a.total_costo)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Top rated activities (rating desc, then recomendaria true first)
+        let mut top_actividades: Vec<ViajeActividad> = actividades
+            .iter()
+            .filter(|a| a.rating.is_some())
+            .cloned()
+            .collect();
+        top_actividades.sort_by(|a, b| {
+            let ra = a.rating.unwrap_or(0);
+            let rb = b.rating.unwrap_or(0);
+            rb.cmp(&ra)
+        });
+        top_actividades.truncate(5);
+
+        Ok(Some(ViajeResumen {
+            viaje,
+            destinos,
+            actividades,
+            total_actividades,
+            total_gastado,
+            gastos_por_tipo,
+            top_actividades,
+            generated_at: Utc::now(),
+        }))
+    }
+
+    pub async fn comparar_viajes(&self, viaje_a: &str, viaje_b: &str) -> Result<ViajeComparison> {
+        let a = self
+            .viaje_resumen(viaje_a)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("viaje_a not found"))?;
+        let b = self
+            .viaje_resumen(viaje_b)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("viaje_b not found"))?;
+        let diff_total_gastado = a.total_gastado - b.total_gastado;
+        let diff_total_actividades = a.total_actividades as i64 - b.total_actividades as i64;
+        Ok(ViajeComparison {
+            viaje_a: a,
+            viaje_b: b,
+            diff_total_gastado,
+            diff_total_actividades,
+            generated_at: Utc::now(),
+        })
+    }
+
+    pub async fn viajes_a(&self, destino_o_pais: &str) -> Result<ViajesADestino> {
+        let needle = normalize_non_empty(destino_o_pais).context("destino_o_pais required")?;
+        let needle_lower = needle.to_lowercase();
+        let all = self.viaje_list(None, None).await?;
+        let viajes: Vec<Viaje> = all
+            .into_iter()
+            .filter(|v| {
+                v.destino.to_lowercase().contains(&needle_lower)
+                    || v.pais
+                        .as_deref()
+                        .map(|p| p.to_lowercase().contains(&needle_lower))
+                        .unwrap_or(false)
+            })
+            .collect();
+
+        let mut total_gastos = 0.0_f64;
+        let mut ratings: Vec<i32> = Vec::new();
+        for v in &viajes {
+            let acts = self.actividades_list(&v.viaje_id).await?;
+            for a in acts {
+                if let Some(c) = a.costo {
+                    total_gastos += c;
+                }
+                if let Some(r) = a.rating {
+                    ratings.push(r);
+                }
+            }
+        }
+        let avg_rating = if ratings.is_empty() {
+            None
+        } else {
+            Some(ratings.iter().sum::<i32>() as f64 / ratings.len() as f64)
+        };
+
+        Ok(ViajesADestino {
+            destino_o_pais: needle,
+            viajes,
+            total_gastos,
+            avg_rating,
+            generated_at: Utc::now(),
+        })
+    }
+
+    pub async fn cuanto_gaste_en(&self, destino_o_pais: &str) -> Result<f64> {
+        Ok(self.viajes_a(destino_o_pais).await?.total_gastos)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27842,6 +28957,278 @@ mod tests {
         assert!(vencidas.iter().any(|f| f.factura_id == fid));
         let after = mgr.factura_get(&fid).await.unwrap().unwrap();
         assert_eq!(after.estado, "vencida");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -- Viajes domain ----------------------------------------------------
+
+    #[tokio::test]
+    async fn viajes_viaje_add_and_lifecycle() {
+        let dir = temp_dir("memory-plane-viajes-lifecycle");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let v = mgr
+            .viaje_add(
+                "Japon 2026",
+                "Tokio",
+                Some("Japon"),
+                Some("Vacaciones"),
+                "2026-05-01",
+                "2026-05-15",
+                Some("Pareja"),
+                Some(80000.0),
+                "notas privadas",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(v.estado, "planeado");
+        assert_eq!(v.notas, "notas privadas");
+
+        // estado: planeado -> en_curso -> completado
+        assert!(mgr.viaje_iniciar(&v.viaje_id).await.unwrap());
+        let v2 = mgr.viaje_get(&v.viaje_id).await.unwrap().unwrap();
+        assert_eq!(v2.estado, "en_curso");
+
+        assert!(mgr.viaje_completar(&v.viaje_id).await.unwrap());
+        let v3 = mgr.viaje_get(&v.viaje_id).await.unwrap().unwrap();
+        assert_eq!(v3.estado, "completado");
+
+        // notas persisted via encryption (trip retrieved with same plaintext)
+        assert_eq!(v3.notas, "notas privadas");
+
+        // viaje_list filters by estado
+        let completados = mgr.viaje_list(Some("completado"), None).await.unwrap();
+        assert_eq!(completados.len(), 1);
+        let planeados = mgr.viaje_list(Some("planeado"), None).await.unwrap();
+        assert_eq!(planeados.len(), 0);
+
+        // Year filter
+        let in_2026 = mgr.viaje_list(None, Some(2026)).await.unwrap();
+        assert_eq!(in_2026.len(), 1);
+        let in_2025 = mgr.viaje_list(None, Some(2025)).await.unwrap();
+        assert_eq!(in_2025.len(), 0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn viajes_actividad_log_with_costo_creates_implicit_link() {
+        let dir = temp_dir("memory-plane-viajes-actividad-costo");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let v = mgr
+            .viaje_add(
+                "Escapada",
+                "Oaxaca",
+                Some("Mexico"),
+                None,
+                "2026-03-10",
+                "2026-03-12",
+                None,
+                Some(5000.0),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let act = mgr
+            .actividad_log(
+                &v.viaje_id,
+                "2026-03-11",
+                "Comida en mercado",
+                "tacos y mezcal",
+                Some("comida"),
+                Some(450.0),
+                Some("exp-test-123"),
+                Some(5),
+                Some(true),
+                "muy bueno",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(act.costo, Some(450.0));
+        assert_eq!(act.movimiento_id.as_deref(), Some("exp-test-123"));
+        assert_eq!(act.descripcion, "tacos y mezcal");
+        assert_eq!(act.rating, Some(5));
+        assert_eq!(act.recomendaria, Some(true));
+
+        // Verify it's listed and linkable
+        let listed = mgr.actividades_list(&v.viaje_id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].movimiento_id.as_deref(), Some("exp-test-123"));
+        assert_eq!(listed[0].descripcion, "tacos y mezcal");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn viajes_resumen_aggregates_actividades_by_tipo() {
+        let dir = temp_dir("memory-plane-viajes-resumen-tipo");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let v = mgr
+            .viaje_add(
+                "CDMX",
+                "Ciudad de Mexico",
+                Some("Mexico"),
+                None,
+                "2026-02-01",
+                "2026-02-05",
+                None,
+                None,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 2 comida + 1 transporte
+        for (titulo, tipo, costo, rating) in [
+            ("Cena", "comida", 800.0, 5),
+            ("Lonche", "comida", 300.0, 4),
+            ("Uber", "transporte", 200.0, 3),
+        ] {
+            mgr.actividad_log(
+                &v.viaje_id,
+                "2026-02-02",
+                titulo,
+                "",
+                Some(tipo),
+                Some(costo),
+                None,
+                Some(rating),
+                Some(rating >= 4),
+                "",
+            )
+            .await
+            .unwrap();
+        }
+
+        let res = mgr.viaje_resumen(&v.viaje_id).await.unwrap().unwrap();
+        assert_eq!(res.total_actividades, 3);
+        assert_eq!(res.total_gastado, 1300.0);
+        assert_eq!(res.gastos_por_tipo.len(), 2);
+        // comida should be first (highest total)
+        assert_eq!(res.gastos_por_tipo[0].tipo, "comida");
+        assert_eq!(res.gastos_por_tipo[0].count, 2);
+        assert_eq!(res.gastos_por_tipo[0].total_costo, 1100.0);
+        assert_eq!(res.gastos_por_tipo[1].tipo, "transporte");
+        // top_actividades has all (3) since all rated; truncates at 5
+        assert!(!res.top_actividades.is_empty());
+        assert_eq!(res.top_actividades[0].rating, Some(5));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn viajes_a_destino_returns_historical_visits() {
+        let dir = temp_dir("memory-plane-viajes-a-destino");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Two trips to Tokyo (different years), one to Lisbon
+        let t1 = mgr
+            .viaje_add(
+                "Japon 2024",
+                "Tokio",
+                Some("Japon"),
+                None,
+                "2024-04-01",
+                "2024-04-10",
+                None,
+                None,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        let t2 = mgr
+            .viaje_add(
+                "Japon 2026",
+                "Tokio",
+                Some("Japon"),
+                None,
+                "2026-04-01",
+                "2026-04-10",
+                None,
+                None,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        let _l = mgr
+            .viaje_add(
+                "Lisboa",
+                "Lisboa",
+                Some("Portugal"),
+                None,
+                "2025-06-01",
+                "2025-06-10",
+                None,
+                None,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // log gastos and ratings on Tokyo trips
+        mgr.actividad_log(
+            &t1.viaje_id,
+            "2024-04-02",
+            "Sushi",
+            "",
+            Some("comida"),
+            Some(500.0),
+            None,
+            Some(5),
+            Some(true),
+            "",
+        )
+        .await
+        .unwrap();
+        mgr.actividad_log(
+            &t2.viaje_id,
+            "2026-04-02",
+            "Ramen",
+            "",
+            Some("comida"),
+            Some(700.0),
+            None,
+            Some(4),
+            Some(true),
+            "",
+        )
+        .await
+        .unwrap();
+
+        let agg = mgr.viajes_a("Tokio").await.unwrap();
+        assert_eq!(agg.viajes.len(), 2);
+        assert_eq!(agg.total_gastos, 1200.0);
+        assert!(agg.avg_rating.is_some());
+        assert_eq!(agg.avg_rating.unwrap(), 4.5);
+
+        // by country
+        let by_pais = mgr.viajes_a("Japon").await.unwrap();
+        assert_eq!(by_pais.viajes.len(), 2);
+        assert_eq!(by_pais.total_gastos, 1200.0);
+
+        // unknown destination → empty
+        let empty = mgr.viajes_a("Marte").await.unwrap();
+        assert_eq!(empty.viajes.len(), 0);
+        assert_eq!(empty.total_gastos, 0.0);
+
+        // helper alias
+        let g = mgr.cuanto_gaste_en("Tokio").await.unwrap();
+        assert_eq!(g, 1200.0);
+
         std::fs::remove_dir_all(dir).ok();
     }
 }
