@@ -23592,11 +23592,67 @@ impl MemoryPlaneManager {
         &self,
         movimiento_id: &str,
     ) -> Result<Option<FinanzasMovimiento>> {
-        let mut all = self
-            .finanzas_movimiento_list(None, None, None, None, None, None, 1000)
-            .await?;
-        let found = all.drain(..).find(|m| m.movimiento_id == movimiento_id);
-        Ok(found)
+        let movimiento_id = movimiento_id.to_string();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<Option<FinanzasMovimiento>> {
+            let db = Self::open_db(&db_path)?;
+            let row = db
+                .query_row(
+                    "SELECT movimiento_id, cuenta_id, categoria_id, tipo, fecha, monto, moneda,
+                            descripcion_nonce_b64, descripcion_ciphertext_b64,
+                            comercio_nonce_b64, comercio_ciphertext_b64, metodo,
+                            cuenta_destino_id, recurrente, notas_nonce_b64,
+                            notas_ciphertext_b64, viaje_id, vehiculo_id, proyecto_id,
+                            deleted, created_at, updated_at
+                     FROM finanzas_movimientos
+                     WHERE movimiento_id = ?1 AND deleted = 0",
+                    params![movimiento_id],
+                    |row| {
+                        Ok(FinanzasMovimiento {
+                            movimiento_id: row.get(0)?,
+                            cuenta_id: row.get(1)?,
+                            categoria_id: row.get(2)?,
+                            tipo: row.get(3)?,
+                            fecha: row.get(4)?,
+                            monto: row.get(5)?,
+                            moneda: row.get(6)?,
+                            descripcion: {
+                                let n: Option<String> = row.get(7)?;
+                                let c: Option<String> = row.get(8)?;
+                                let s = opt_decrypt(n, c);
+                                if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(s)
+                                }
+                            },
+                            comercio: {
+                                let n: Option<String> = row.get(9)?;
+                                let c: Option<String> = row.get(10)?;
+                                let s = opt_decrypt(n, c);
+                                if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(s)
+                                }
+                            },
+                            metodo: row.get(11)?,
+                            cuenta_destino_id: row.get(12)?,
+                            recurrente: row.get::<_, i32>(13)? != 0,
+                            notas: opt_decrypt(row.get(14)?, row.get(15)?),
+                            viaje_id: row.get(16)?,
+                            vehiculo_id: row.get(17)?,
+                            proyecto_id: row.get(18)?,
+                            deleted: row.get::<_, i32>(19)? != 0,
+                            created_at: parse_utc(&row.get::<_, String>(20)?),
+                            updated_at: parse_utc(&row.get::<_, String>(21)?),
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(row)
+        })
+        .await?
     }
 
     /// Patch update — supports monto/categoria/descripcion/notas. Money-affecting
