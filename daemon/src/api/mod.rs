@@ -13137,6 +13137,8 @@ mod tests {
                     ubatch_size: 64,
                 }),
             },
+            probe_completed: false,
+            probed_ctx_size: None,
         }
     }
 
