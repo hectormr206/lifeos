@@ -35,7 +35,8 @@ LifeOS System Services
 │   ├── lifeos-flatpak-nvidia-sync.service system  GPU driver ↔ Flatpak GL sync
 │   ├── lifeos-security-baseline.service   system  CIS hardening baseline
 │   ├── lifeos-sentinel.service            system  System monitoring
-│   └── lifeos-cosmic-greeter-branding.service system Login screen branding
+│   ├── lifeos-cosmic-greeter-branding.service system Login screen branding
+│   └── lifeos-refresh-bls-titles.service   system  Refresh GRUB titles after bootc upgrade
 │
 ├── Hardware Management
 │   ├── lifeos-thermal.service             system  Thermal throttling
