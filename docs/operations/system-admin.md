@@ -640,3 +640,23 @@ The user can override via:
 
 The override survives benchmarker regeneration. Validation: 1024 ≤ value ≤ 524288.
 Restart of `llama-server.service` is automatic on change.
+
+### Benchmarker ctx-size probe
+
+On machines with a dedicated GPU, `lifeosd` actively probes a descending
+ladder of ctx-sizes during the first-boot benchmark and pins the LARGEST
+value that successfully boots `llama-server` with GPU layers > 0:
+
+```
+[131072, 65536, 32768, 16384, 8192]
+```
+
+The first rung tried is always `LIFEOS_AI_CTX_SIZE` from
+`/etc/lifeos/llama-server.env` (or the user override). If that fails,
+the benchmarker steps DOWN until one rung boots, and writes the chosen
+value to `/var/lib/lifeos/llama-server-runtime-profile.env`.
+
+CPU-only machines stay on the heuristic ceiling (16K / 12K / 8K based on
+total RAM) — there is no probe step because each rung costs a full
+llama-server restart and CPU-only boxes are RAM-fragile. To force a
+larger ctx on a CPU-only machine, use the user override.

@@ -19,6 +19,12 @@ const DEFAULT_CTX_SIZE: u32 = 131_072;
 /// Sane bounds for any user-supplied ctx-size override.
 pub const USER_CTX_SIZE_MIN: u32 = 1024;
 pub const USER_CTX_SIZE_MAX: u32 = 524_288;
+/// Descending ladder of ctx-sizes the GPU benchmarker probes. The largest
+/// value that successfully boots `llama-server` (with GPU layers > 0) is
+/// kept as the runtime ctx-size. Tweak with care: each rung that fails
+/// costs roughly one llama-server restart cycle. Capped at the user-facing
+/// default so we never silently exceed what `LIFEOS_AI_CTX_SIZE` advertises.
+const CTX_SIZE_PROBE_LADDER: &[u32] = &[131_072, 65_536, 32_768, 16_384, 8_192];
 const DEFAULT_GPU_LAYERS: i32 = 99;
 const DEFAULT_GAME_GUARD_VRAM_THRESHOLD_MB: u64 = 500;
 const RUNTIME_ENV_DROPIN_NAME: &str = "99-lifeos-runtime-envs.conf";
@@ -117,6 +123,14 @@ pub struct RuntimeProfile {
     pub updated_at: DateTime<Utc>,
     pub measurements: Vec<BenchmarkMeasurement>,
     pub profiles: RuntimeProfiles,
+    /// Probe cache. Survives `daemon_version` bumps so we don't burn 5×
+    /// llama-server restarts on every release. Invalidated only by
+    /// hardware fingerprint or runtime-input change (see
+    /// [`runtime_profile_is_stale`] vs the dedicated probe-cache helper).
+    #[serde(default)]
+    pub probe_completed: bool,
+    #[serde(default)]
+    pub probed_ctx_size: Option<u32>,
 }
 
 impl RuntimeProfile {
@@ -494,6 +508,8 @@ fn build_heuristic_profile(current: &(HardwareFingerprint, RuntimeInputs)) -> Ru
             normal_gpu: gpu_profile,
             game_guard_cpu_fallback: game_guard_profile,
         },
+        probe_completed: false,
+        probed_ctx_size: None,
     }
 }
 
@@ -511,12 +527,20 @@ fn heuristic_cpu_profile(
         256
     };
     let ubatch_size = if batch_size >= 512 { 256 } else { 128 };
+    // CPU-only ceiling. Conservative by design: the GPU path can probe with
+    // direct child spawns (see probe_run_llama_server) to find the largest
+    // viable ctx, but the CPU path has no equivalent because OOMing the
+    // host RAM is far more disruptive than VRAM (kernel oom-killer can
+    // reap unrelated processes). The user can always raise this via the
+    // dashboard / API user override, and it will be respected by
+    // apply_runtime_env. If you raise these defaults, attach a measurement
+    // — Hector trusts numbers over assumptions.
     let ctx_size = if fingerprint.total_ram_mb >= 32 * 1024 {
-        inputs.requested_ctx_size.min(8192)
+        inputs.requested_ctx_size.min(8_192)
     } else if fingerprint.total_ram_mb >= 16 * 1024 {
-        inputs.requested_ctx_size.min(6144)
+        inputs.requested_ctx_size.min(6_144)
     } else {
-        inputs.requested_ctx_size.min(4096)
+        inputs.requested_ctx_size.min(4_096)
     };
 
     RuntimeSettings {
@@ -797,13 +821,34 @@ fn detect_llama_server_version() -> Option<String> {
 }
 
 fn apply_runtime_env(settings: &RuntimeSettings) -> Result<bool> {
+    apply_runtime_env_inner(settings, false)
+}
+
+/// Variant of [`apply_runtime_env`] that ignores the user override.
+///
+/// Used by the ctx-size probe: when probing, we MUST honor the candidate's
+/// ctx_size verbatim, otherwise the user override would silently rewrite
+/// every probe back to the pinned value and the probe would be a no-op.
+/// The probe path now spawns llama-server directly (not via systemd) so
+/// the only caller today is the regression test in this module — kept
+/// behind `cfg(test)` to avoid dead code in release builds.
+#[cfg(test)]
+fn apply_runtime_env_bypass_user_override(settings: &RuntimeSettings) -> Result<bool> {
+    apply_runtime_env_inner(settings, true)
+}
+
+fn apply_runtime_env_inner(settings: &RuntimeSettings, bypass_user_override: bool) -> Result<bool> {
     // If the user has pinned a ctx_size via the dashboard / API, honor it
     // ALWAYS — even when the benchmarker regenerates the runtime profile.
     // We still emit the rest of the hardware-tuned settings (threads, gpu
-    // layers, batch sizes) so a hardware change is picked up.
+    // layers, batch sizes) so a hardware change is picked up. The
+    // `bypass_user_override` escape hatch exists for probe code that needs
+    // to write a candidate ctx_size verbatim.
     let mut effective = settings.clone();
-    if let Some(user_ctx) = user_ctx_size_override() {
-        effective.ctx_size = user_ctx;
+    if !bypass_user_override {
+        if let Some(user_ctx) = user_ctx_size_override() {
+            effective.ctx_size = user_ctx;
+        }
     }
     write_override_env(
         &runtime_override_env_path(),
@@ -1130,6 +1175,51 @@ async fn benchmark_runtime_profile(profile: &mut RuntimeProfile) -> Result<bool>
 
     let benchmark_result = async {
         if profile.fingerprint.dedicated_gpu {
+            // Probe descending ctx-sizes against the heuristic GPU base
+            // until one boots successfully. The largest viable rung becomes
+            // the ctx-size used by every subsequent perf candidate. If
+            // every rung fails (and gpu_layers stays > 0 in our base),
+            // fall through with the heuristic value — perf benchmarking
+            // will then either succeed or fail downstream.
+            //
+            // Skip rules:
+            //   1. User pinned a value via dashboard / API → respect it.
+            //   2. Probe already completed for this hardware/inputs combo
+            //      → reuse cached result; survives daemon version bumps.
+            //   3. /usr/sbin/llama-server missing → can't probe; skip.
+            let skip_probe_reason: Option<String> = if let Some(user_ctx) = user_ctx_size_override()
+            {
+                Some(format!("user override active ({user_ctx})"))
+            } else if profile.probe_completed {
+                if let Some(cached) = profile.probed_ctx_size {
+                    if let Some(base) = profile.profiles.normal_gpu.as_mut() {
+                        base.ctx_size = cached;
+                    }
+                }
+                Some("probe cache hit".into())
+            } else if !Path::new(LLAMA_SERVER_BIN).exists() {
+                Some(format!("{LLAMA_SERVER_BIN} missing"))
+            } else {
+                None
+            };
+
+            if let Some(reason) = skip_probe_reason {
+                info!("[ai_runtime] ctx probe skipped: {reason}");
+            } else if let Some(probed_ctx) =
+                probe_largest_viable_gpu_ctx(profile, &mut measurements).await?
+            {
+                if let Some(base) = profile.profiles.normal_gpu.as_mut() {
+                    base.ctx_size = probed_ctx;
+                }
+                profile.probe_completed = true;
+                profile.probed_ctx_size = Some(probed_ctx);
+            } else {
+                // Probe ran but all rungs failed — record the attempt so we
+                // don't loop forever on every reconcile tick.
+                profile.probe_completed = true;
+                profile.probed_ctx_size = None;
+            }
+
             if let Some(best_gpu) = benchmark_target(
                 "normal_gpu",
                 &build_gpu_candidates(profile),
@@ -1233,6 +1323,376 @@ async fn benchmark_target(
     }
 
     Ok(best.map(|(_, settings)| settings))
+}
+
+/// Build the descending ctx-size ladder we will probe on a GPU machine.
+///
+/// Cap is EXACTLY `requested_ctx_size` — never higher, even if the request
+/// sits below [`USER_CTX_SIZE_MIN`]. If the request is below the safety
+/// floor the ladder is empty (caller should treat this as "no probe
+/// needed, honor the request as-is"). Otherwise the ladder is descending,
+/// deduped, and includes the request as the first rung.
+fn build_ctx_probe_ladder(requested_ctx_size: u32) -> Vec<u32> {
+    if requested_ctx_size < USER_CTX_SIZE_MIN {
+        // Requests below the floor get no ladder — the caller must decide
+        // whether to honor or reject. We never silently inflate above the
+        // requested value.
+        return Vec::new();
+    }
+    let cap = requested_ctx_size;
+    let mut ladder: Vec<u32> = CTX_SIZE_PROBE_LADDER
+        .iter()
+        .copied()
+        .filter(|&v| v <= cap && v >= USER_CTX_SIZE_MIN)
+        .collect();
+    // Always include the requested value as the very first probe so we try
+    // exactly what the user asked for before stepping down.
+    if !ladder.iter().any(|&v| v == cap) {
+        ladder.insert(0, cap);
+    }
+    ladder.sort_unstable_by(|a, b| b.cmp(a));
+    ladder.dedup();
+    ladder
+}
+
+/// Path to the `llama-server` binary used by the probe. Hardcoded to the
+/// canonical absolute path because the probe runs out-of-band from systemd
+/// (and from the unit's resolved PATH).
+const LLAMA_SERVER_BIN: &str = "/usr/sbin/llama-server";
+
+/// stderr substrings that signal the probe MUST fail this rung.
+///
+/// llama.cpp emits these on out-of-VRAM / out-of-host-RAM allocation
+/// failure. Match is case-insensitive (we lowercase the haystack first).
+const OOM_SIGNATURES: &[&str] = &[
+    "oom",
+    "cuda out of memory",
+    "out of device memory",
+    "errorоutofdevicememory", // safety net for unicode-mangled logs
+    "vk::result::erroroutofdevicememory",
+    "failed to allocate",
+    "cudamalloc failed",
+    "ggml_cuda_host_malloc",
+    "vkallocatememory failed",
+    "unable to allocate",
+];
+
+/// Outcome reported by a single probe run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProbeOutcome {
+    /// Server became ready within the timeout — this rung is viable.
+    Ready,
+    /// Hit an OOM-style stderr signature → not viable, step down.
+    OutOfMemory(String),
+    /// Process exited before becoming ready (and not via OOM signature).
+    ProcessExitedEarly(String),
+    /// Timed out waiting for readiness.
+    Timeout,
+    /// Setup failure (binary missing, spawn error, env write failure, etc.)
+    SetupError(String),
+}
+
+impl ProbeOutcome {
+    fn is_viable(&self) -> bool {
+        matches!(self, ProbeOutcome::Ready)
+    }
+}
+
+/// Async closure type used to inject a fake probe in tests. Real impl is
+/// [`probe_run_llama_server`].
+type ProbeFn = Box<
+    dyn for<'a> Fn(
+            &'a RuntimeSettings,
+            &'a RuntimeInputs,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = ProbeOutcome> + Send + 'a>>
+        + Send
+        + Sync,
+>;
+
+/// Probe a descending ctx-size ladder against the heuristic GPU base.
+/// Returns the FIRST ctx-size that boots `llama-server` successfully (i.e.
+/// the largest viable). Returns Ok(None) when there is no GPU base or
+/// every rung fails — the caller can then either fall back to the
+/// heuristic ctx or downgrade to CPU-only.
+async fn probe_largest_viable_gpu_ctx(
+    profile: &RuntimeProfile,
+    measurements: &mut Vec<BenchmarkMeasurement>,
+) -> Result<Option<u32>> {
+    let probe: ProbeFn = Box::new(|settings, inputs| {
+        Box::pin(probe_run_llama_server(
+            settings.clone(),
+            inputs.clone(),
+            Duration::from_secs(60),
+        ))
+    });
+    probe_largest_viable_gpu_ctx_with(profile, measurements, &probe).await
+}
+
+/// Test-friendly inner loop: takes an injected probe closure so tests can
+/// drive deterministic outcomes per rung without touching llama-server.
+async fn probe_largest_viable_gpu_ctx_with(
+    profile: &RuntimeProfile,
+    measurements: &mut Vec<BenchmarkMeasurement>,
+    probe: &ProbeFn,
+) -> Result<Option<u32>> {
+    let Some(base) = profile.profiles.normal_gpu.clone() else {
+        return Ok(None);
+    };
+    if base.gpu_layers <= 0 {
+        return Ok(None);
+    }
+
+    let ladder = build_ctx_probe_ladder(profile.inputs.requested_ctx_size);
+    if ladder.is_empty() {
+        return Ok(None);
+    }
+
+    for ctx in ladder {
+        let candidate_settings = RuntimeSettings {
+            ctx_size: ctx,
+            ..base.clone()
+        };
+        let outcome = probe(&candidate_settings, &profile.inputs).await;
+        let label = format!("ctx-probe-{ctx}");
+        measurements.push(BenchmarkMeasurement {
+            target: "ctx_probe".into(),
+            candidate: format!("{label} -> {outcome:?}"),
+            average_latency_ms: 0,
+            sample_count: 1,
+        });
+        if outcome.is_viable() {
+            info!(
+                "[ai_runtime] ctx probe accepted ctx_size={} (largest viable)",
+                ctx
+            );
+            return Ok(Some(ctx));
+        }
+        warn!(
+            "[ai_runtime] ctx probe ctx_size={} rejected ({:?}), stepping down",
+            ctx, outcome
+        );
+    }
+    warn!(
+        "[ai_runtime] ctx probe found NO viable rung, keeping heuristic ctx={}; may OOM at runtime",
+        base.ctx_size
+    );
+    Ok(None)
+}
+
+/// RAII guard that always tries to kill its child on Drop.
+///
+/// Spawned llama-server probes MUST NOT survive the probe function — even
+/// on panic or timeout — because a leaked child would compete with the
+/// systemd-managed instance for VRAM (and the GPU port).
+struct ChildGuard {
+    child: Option<tokio::process::Child>,
+}
+
+impl ChildGuard {
+    fn new(child: tokio::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    /// Best-effort terminate. Sends SIGKILL via `Child::start_kill` then
+    /// drops the handle. We do NOT await `.wait()` here because `Drop`
+    /// can't be async; the kernel will reap.
+    fn terminate(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+        }
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+/// Spawn `llama-server` directly (NOT through systemd) with the given
+/// settings, watch stderr for OOM signatures, poll `/v1/chat/completions`
+/// for readiness, and report a [`ProbeOutcome`].
+///
+/// This intentionally bypasses the systemd unit because that unit has
+/// `Restart=always`: an OOM-killed process would silently respawn and the
+/// poll would eventually catch a brief "ready" window between crashes,
+/// greenlighting a broken ctx_size. Direct spawn = direct truth.
+async fn probe_run_llama_server(
+    settings: RuntimeSettings,
+    inputs: RuntimeInputs,
+    timeout: Duration,
+) -> ProbeOutcome {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::process::Command as TokioCommand;
+
+    if !Path::new(LLAMA_SERVER_BIN).exists() {
+        return ProbeOutcome::SetupError(format!("{LLAMA_SERVER_BIN} not found"));
+    }
+
+    // Read the optional MMPROJ from the env file; absent is fine — we just
+    // omit the flag.
+    let env_content = fs::read_to_string(llama_env_path()).unwrap_or_default();
+    let mmproj = read_env_var(&env_content, "LIFEOS_AI_MMPROJ");
+    let host = read_env_var(&env_content, "LIFEOS_AI_HOST").unwrap_or_else(|| "127.0.0.1".into());
+
+    let model_path = format!("/var/lib/lifeos/models/{}", inputs.model);
+    let mut cmd = TokioCommand::new(LLAMA_SERVER_BIN);
+    cmd.arg("--model").arg(&model_path);
+    if let Some(mmproj) = mmproj {
+        let mmproj_path = format!("/var/lib/lifeos/models/{mmproj}");
+        if Path::new(&mmproj_path).exists() {
+            cmd.arg("--mmproj").arg(&mmproj_path);
+        }
+    }
+    cmd.arg("--alias")
+        .arg(&inputs.alias)
+        .arg("--host")
+        .arg(&host)
+        .arg("--port")
+        .arg(inputs.port.to_string())
+        .arg("--ctx-size")
+        .arg(settings.ctx_size.to_string())
+        .arg("--threads")
+        .arg(settings.threads.to_string())
+        .arg("--n-gpu-layers")
+        .arg(settings.gpu_layers.to_string())
+        .arg("--parallel")
+        .arg(settings.parallel.to_string())
+        .arg("--batch-size")
+        .arg(settings.batch_size.to_string())
+        .arg("--ubatch-size")
+        .arg(settings.ubatch_size.to_string())
+        .arg("--n-predict")
+        .arg("16")
+        .arg("--flash-attn")
+        .arg("auto")
+        .arg("--cache-type-k")
+        .arg("q8_0")
+        .arg("--cache-type-v")
+        .arg("q8_0")
+        .arg("-sm")
+        .arg("none")
+        .arg("-mg")
+        .arg("0")
+        .arg("--jinja")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    let child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => return ProbeOutcome::SetupError(format!("spawn failed: {error}")),
+    };
+    let mut guard = ChildGuard::new(child);
+    let stderr = guard
+        .child
+        .as_mut()
+        .and_then(|c| c.stderr.take())
+        .map(BufReader::new);
+
+    let oom_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let oom_msg = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let stderr_task = if let Some(mut reader) = stderr {
+        let oom_flag = oom_flag.clone();
+        let oom_msg = oom_msg.clone();
+        Some(tokio::spawn(async move {
+            let mut buf = String::new();
+            loop {
+                buf.clear();
+                match reader.read_line(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let lower = buf.to_ascii_lowercase();
+                        if OOM_SIGNATURES.iter().any(|sig| lower.contains(sig)) {
+                            *oom_msg.lock().unwrap() = buf.trim().to_string();
+                            oom_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(error) => return ProbeOutcome::SetupError(format!("client build failed: {error}")),
+    };
+
+    let outcome = tokio::select! {
+        biased;
+        // Hard timeout for the whole probe.
+        _ = tokio::time::sleep(timeout) => ProbeOutcome::Timeout,
+        // Watch for OOM marker.
+        _ = wait_for_oom(&oom_flag) => {
+            let msg = oom_msg.lock().unwrap().clone();
+            ProbeOutcome::OutOfMemory(msg)
+        }
+        // Watch for early child exit.
+        exit = wait_child_exit(&mut guard) => exit,
+        // Watch for server readiness.
+        ready = poll_until_ready(&client, &inputs, timeout) => ready,
+    };
+
+    // Always kill the child before returning. Drop also covers this but be
+    // explicit for clarity.
+    guard.terminate();
+    if let Some(handle) = stderr_task {
+        handle.abort();
+    }
+
+    outcome
+}
+
+async fn wait_for_oom(flag: &std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    loop {
+        if flag.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_child_exit(guard: &mut ChildGuard) -> ProbeOutcome {
+    let Some(child) = guard.child.as_mut() else {
+        return ProbeOutcome::ProcessExitedEarly("no child handle".into());
+    };
+    match child.wait().await {
+        Ok(status) => ProbeOutcome::ProcessExitedEarly(format!("exit status: {status}")),
+        Err(error) => ProbeOutcome::ProcessExitedEarly(format!("wait failed: {error}")),
+    }
+}
+
+async fn poll_until_ready(
+    client: &reqwest::Client,
+    inputs: &RuntimeInputs,
+    timeout: Duration,
+) -> ProbeOutcome {
+    let deadline = std::time::Instant::now() + timeout;
+    let endpoint = format!("http://127.0.0.1:{}/v1/chat/completions", inputs.port);
+    let payload = serde_json::json!({
+        "model": inputs.alias,
+        "messages": [{"role": "user", "content": "ok"}],
+        "max_tokens": 1,
+        "temperature": 0.0,
+        "stream": false
+    });
+    while std::time::Instant::now() < deadline {
+        match client.post(&endpoint).json(&payload).send().await {
+            Ok(resp) if resp.status().is_success() => return ProbeOutcome::Ready,
+            _ => {}
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    ProbeOutcome::Timeout
 }
 
 async fn benchmark_candidate(candidate: &RuntimeCandidate, inputs: &RuntimeInputs) -> Result<u64> {
@@ -1526,6 +1986,8 @@ Available devices:
                 normal_gpu: None,
                 game_guard_cpu_fallback: None,
             },
+            probe_completed: false,
+            probed_ctx_size: None,
         };
         assert!(!runtime_profile_is_stale(
             &profile,
@@ -1663,6 +2125,232 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
     fn user_ctx_size_override_rejects_out_of_range() {
         assert!(write_user_ctx_size_override(USER_CTX_SIZE_MIN - 1).is_err());
         assert!(write_user_ctx_size_override(USER_CTX_SIZE_MAX + 1).is_err());
+    }
+
+    #[test]
+    fn ctx_probe_ladder_descending_capped_by_request() {
+        let ladder = build_ctx_probe_ladder(131_072);
+        assert!(
+            ladder.windows(2).all(|w| w[0] > w[1]),
+            "must be strictly descending: {:?}",
+            ladder
+        );
+        assert_eq!(ladder.first().copied(), Some(131_072));
+        // No rung exceeds the request.
+        assert!(ladder.iter().all(|&v| v <= 131_072));
+        // Stays above the safety floor.
+        assert!(ladder.iter().all(|&v| v >= USER_CTX_SIZE_MIN));
+    }
+
+    #[test]
+    fn ctx_probe_ladder_caps_below_default_rung() {
+        let ladder = build_ctx_probe_ladder(20_000);
+        // Requested value should be the FIRST rung; no rung larger.
+        assert_eq!(ladder.first().copied(), Some(20_000));
+        assert!(ladder.iter().all(|&v| v <= 20_000));
+        // The next rung from CTX_SIZE_PROBE_LADDER below 20_000 is 16_384.
+        assert!(ladder.contains(&16_384));
+    }
+
+    #[test]
+    fn ctx_probe_ladder_includes_request_when_off_ladder() {
+        let ladder = build_ctx_probe_ladder(48_000);
+        assert!(ladder.contains(&48_000));
+        assert!(ladder.windows(2).all(|w| w[0] > w[1]));
+    }
+
+    #[test]
+    fn cpu_heuristic_ceiling_stays_conservative_without_probe() {
+        // CPU mode can't safely probe (host-RAM OOM is destructive), so
+        // ceilings stay conservative: 8K / 6K / 4K. Users can raise via
+        // dashboard / API override.
+        let fp_32gb = HardwareFingerprint {
+            cpu_model: "cpu".into(),
+            logical_cpus: 16,
+            physical_cpus: 8,
+            total_ram_mb: 32 * 1024,
+            accelerator_backend: None,
+            accelerator_name: None,
+            accelerator_total_mem_mb: None,
+            dedicated_gpu: false,
+            driver_version: None,
+            llama_server_version: None,
+        };
+        let inputs = RuntimeInputs {
+            model: DEFAULT_MODEL.into(),
+            alias: DEFAULT_ALIAS.into(),
+            port: DEFAULT_PORT,
+            requested_ctx_size: DEFAULT_CTX_SIZE,
+        };
+        assert_eq!(heuristic_cpu_profile(&fp_32gb, &inputs).ctx_size, 8_192);
+
+        let mut fp_16gb = fp_32gb.clone();
+        fp_16gb.total_ram_mb = 16 * 1024;
+        assert_eq!(heuristic_cpu_profile(&fp_16gb, &inputs).ctx_size, 6_144);
+
+        let mut fp_low = fp_32gb;
+        fp_low.total_ram_mb = 8 * 1024;
+        assert_eq!(heuristic_cpu_profile(&fp_low, &inputs).ctx_size, 4_096);
+    }
+
+    #[test]
+    fn default_ctx_size_matches_user_facing_baseline() {
+        // The benchmarker default MUST track the user-facing baseline in
+        // image/files/etc/lifeos/llama-server.env (PR #48 = 131072).
+        // If you change one, change the other.
+        assert_eq!(DEFAULT_CTX_SIZE, 131_072);
+    }
+
+    #[test]
+    fn ctx_probe_ladder_is_empty_when_request_below_floor() {
+        // C3 fix: cap is EXACTLY requested_ctx_size, never inflated to the
+        // floor. Below-floor requests get an empty ladder.
+        let ladder = build_ctx_probe_ladder(USER_CTX_SIZE_MIN - 1);
+        assert!(
+            ladder.is_empty(),
+            "below-floor request must NOT inflate cap above the request: got {ladder:?}"
+        );
+    }
+
+    #[test]
+    fn ctx_probe_ladder_cap_never_exceeds_request() {
+        for &request in &[USER_CTX_SIZE_MIN, 2_000u32, 16_384, 50_000, 131_072] {
+            let ladder = build_ctx_probe_ladder(request);
+            assert!(
+                ladder.iter().all(|&v| v <= request),
+                "ladder for request={request} must not exceed request: {ladder:?}"
+            );
+        }
+    }
+
+    fn dummy_gpu_profile(requested: u32) -> RuntimeProfile {
+        let fp = HardwareFingerprint {
+            cpu_model: "cpu".into(),
+            logical_cpus: 16,
+            physical_cpus: 8,
+            total_ram_mb: 32 * 1024,
+            accelerator_backend: Some("vulkan".into()),
+            accelerator_name: Some("NVIDIA Test GPU".into()),
+            accelerator_total_mem_mb: Some(8192),
+            dedicated_gpu: true,
+            driver_version: None,
+            llama_server_version: None,
+        };
+        let inputs = RuntimeInputs {
+            model: DEFAULT_MODEL.into(),
+            alias: DEFAULT_ALIAS.into(),
+            port: DEFAULT_PORT,
+            requested_ctx_size: requested,
+        };
+        let mut profile = build_heuristic_profile(&(fp, inputs));
+        // build_heuristic_profile may not set normal_gpu when dedicated_gpu
+        // is true but vram is below threshold; force it on for the test.
+        if profile.profiles.normal_gpu.is_none() {
+            profile.profiles.normal_gpu = Some(RuntimeSettings {
+                ctx_size: requested,
+                threads: 4,
+                gpu_layers: 99,
+                parallel: 1,
+                batch_size: 512,
+                ubatch_size: 256,
+            });
+        }
+        profile
+    }
+
+    fn make_probe(outcomes: Vec<ProbeOutcome>) -> ProbeFn {
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(outcomes.into_iter()));
+        Box::new(move |_settings, _inputs| {
+            let cell = cell.clone();
+            Box::pin(async move {
+                cell.lock()
+                    .unwrap()
+                    .next()
+                    .unwrap_or(ProbeOutcome::SetupError("exhausted".into()))
+            })
+        })
+    }
+
+    #[tokio::test]
+    async fn probe_returns_first_rung_when_largest_succeeds() {
+        let profile = dummy_gpu_profile(131_072);
+        let mut measurements = Vec::new();
+        let probe = make_probe(vec![ProbeOutcome::Ready]);
+        let result = probe_largest_viable_gpu_ctx_with(&profile, &mut measurements, &probe)
+            .await
+            .expect("probe ok");
+        assert_eq!(result, Some(131_072));
+        assert_eq!(measurements.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn probe_descends_to_smaller_when_largest_fails() {
+        let profile = dummy_gpu_profile(131_072);
+        let mut measurements = Vec::new();
+        // 131072 OOM, 65536 OOM, 32768 OK.
+        let probe = make_probe(vec![
+            ProbeOutcome::OutOfMemory("cuda out of memory".into()),
+            ProbeOutcome::OutOfMemory("cuda out of memory".into()),
+            ProbeOutcome::Ready,
+        ]);
+        let result = probe_largest_viable_gpu_ctx_with(&profile, &mut measurements, &probe)
+            .await
+            .expect("probe ok");
+        assert_eq!(result, Some(32_768));
+        assert_eq!(measurements.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn probe_returns_none_when_all_rungs_fail() {
+        let profile = dummy_gpu_profile(16_384);
+        let mut measurements = Vec::new();
+        // Every rung fails — 16384, 8192 (and the request itself if it
+        // wasn't already in the ladder).
+        let probe = make_probe(vec![
+            ProbeOutcome::OutOfMemory("oom".into()),
+            ProbeOutcome::OutOfMemory("oom".into()),
+            ProbeOutcome::OutOfMemory("oom".into()),
+            ProbeOutcome::OutOfMemory("oom".into()),
+        ]);
+        let result = probe_largest_viable_gpu_ctx_with(&profile, &mut measurements, &probe)
+            .await
+            .expect("probe ok");
+        assert_eq!(result, None);
+        assert!(!measurements.is_empty());
+    }
+
+    #[test]
+    fn apply_runtime_env_bypass_skips_user_override() {
+        // Regression test for C2: probe path MUST NOT silently rewrite the
+        // candidate ctx_size with the user override.
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let user_path = tmp.path().join("user.env");
+        let runtime_path = tmp.path().join("runtime.env");
+        std::env::set_var("LIFEOS_AI_USER_OVERRIDE_ENV_PATH", &user_path);
+        std::env::set_var("LIFEOS_AI_RUNTIME_ENV_PATH", &runtime_path);
+        write_user_ctx_size_override(65536).expect("write user override");
+
+        let candidate = RuntimeSettings {
+            ctx_size: 16_384,
+            threads: 4,
+            gpu_layers: 99,
+            parallel: 1,
+            batch_size: 512,
+            ubatch_size: 256,
+        };
+        // Default path applies the user override (overwriting candidate).
+        apply_runtime_env(&candidate).expect("apply");
+        let normal = fs::read_to_string(&runtime_path).expect("read");
+        assert!(normal.contains("LIFEOS_AI_CTX_SIZE=65536"), "{normal}");
+
+        // Bypass path keeps the candidate verbatim.
+        apply_runtime_env_bypass_user_override(&candidate).expect("apply bypass");
+        let bypass = fs::read_to_string(&runtime_path).expect("read");
+        assert!(bypass.contains("LIFEOS_AI_CTX_SIZE=16384"), "{bypass}");
+
+        clear_user_ctx_size_override().expect("clear");
+        std::env::remove_var("LIFEOS_AI_USER_OVERRIDE_ENV_PATH");
+        std::env::remove_var("LIFEOS_AI_RUNTIME_ENV_PATH");
     }
 
     #[test]
