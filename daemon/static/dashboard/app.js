@@ -4393,10 +4393,13 @@ async function togglePrivacyMode() {
 })();
 
 // ==================== Freelance Module ====================
+const FL_SESIONES_PAGE = 100;
 const freelanceState = {
   clientes: [],
   sesiones: [],
   facturas: [],
+  sesionesOffset: 0,
+  sesionesHasMore: false,
   loaded: { clientes: false, sesiones: false, facturas: false, overview: false, tarifas: false },
 };
 
@@ -4421,6 +4424,74 @@ function flClienteNombre(id) {
   return c ? c.nombre : id;
 }
 
+// Safe numeric parser: preserves 0 as legitimate value, returns null only for non-finite input.
+function flParseNum(input) {
+  if (input === null || input === undefined || input === '') return null;
+  const v = parseFloat(input);
+  return Number.isFinite(v) ? v : null;
+}
+function flParseInt(input) {
+  if (input === null || input === undefined || input === '') return null;
+  const v = parseInt(input, 10);
+  return Number.isFinite(v) ? v : null;
+}
+// Local-time YYYY-MM-DD (avoids UTC offset bug from toISOString().slice(0,10)).
+function flLocalDateToday() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+// In-flight guard: prevents double-click races on async action buttons.
+const flInFlight = new WeakSet();
+async function flGuardClick(btn, fn) {
+  if (flInFlight.has(btn)) return;
+  flInFlight.add(btn);
+  const wasDisabled = btn.disabled;
+  btn.disabled = true;
+  try {
+    await fn();
+  } finally {
+    flInFlight.delete(btn);
+    btn.disabled = wasDisabled;
+  }
+}
+// Replacement for prompt() — uses a transient <dialog> with proper input.
+// Returns Promise<string|null> (null = cancelled, '' allowed for empty input).
+function flPromptDialog({ title, label, value = '', type = 'text', placeholder = '', allowEmpty = true }) {
+  return new Promise(resolve => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'freelance-dialog';
+    dlg.innerHTML = `
+      <form method="dialog" style="display:flex;flex-direction:column;gap:10px;min-width:280px;">
+        <h3 style="margin:0;">${flEsc(title || 'Confirmar')}</h3>
+        <label style="display:flex;flex-direction:column;gap:4px;">
+          <span>${flEsc(label || '')}</span>
+          <input type="${flEsc(type)}" data-fl-prompt-input placeholder="${flEsc(placeholder)}">
+        </label>
+        <div class="freelance-dialog-actions">
+          <button type="button" class="quick-action-btn quick-action-secondary" data-fl-prompt-cancel>Cancelar</button>
+          <button type="submit" class="quick-action-btn" data-fl-prompt-ok>Confirmar</button>
+        </div>
+      </form>`;
+    document.body.appendChild(dlg);
+    const input = dlg.querySelector('[data-fl-prompt-input]');
+    input.value = value;
+    const cleanup = (result) => { dlg.close(); dlg.remove(); resolve(result); };
+    dlg.querySelector('[data-fl-prompt-cancel]').addEventListener('click', () => cleanup(null));
+    dlg.querySelector('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = input.value;
+      if (!allowEmpty && !v) { input.focus(); return; }
+      cleanup(v);
+    });
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); cleanup(null); });
+    dlg.showModal();
+    setTimeout(() => input.focus(), 0);
+  });
+}
+
 // --- API wrappers ---
 async function freelanceListClientes(estado) {
   const q = estado ? `?estado=${encodeURIComponent(estado)}` : '';
@@ -4441,6 +4512,8 @@ async function freelanceListSesiones(filters) {
   if (filters?.cliente_id) params.set('cliente_id', filters.cliente_id);
   if (filters?.desde) params.set('desde', filters.desde);
   if (filters?.hasta) params.set('hasta', filters.hasta);
+  if (filters?.limit) params.set('limit', String(filters.limit));
+  if (filters?.offset) params.set('offset', String(filters.offset));
   const qs = params.toString();
   const data = await api('GET', `/freelance/sesiones${qs ? '?' + qs : ''}`);
   return data.sesiones || [];
@@ -4538,7 +4611,7 @@ function renderFreelanceClientes() {
       <td><span class="fl-badge fl-badge-${flEsc(c.estado)}">${flEsc(c.estado)}</span></td>
       <td class="fl-actions">
         <button type="button" class="quick-action-btn fl-btn-sm" data-fl-edit-cliente="${flEsc(c.cliente_id)}">Editar</button>
-        <button type="button" class="quick-action-btn quick-action-secondary fl-btn-sm" data-fl-del-cliente="${flEsc(c.cliente_id)}">Terminar</button>
+        ${c.estado !== 'terminado' ? `<button type="button" class="quick-action-btn quick-action-secondary fl-btn-sm" data-fl-del-cliente="${flEsc(c.cliente_id)}">Terminar</button>` : ''}
       </td>
     </tr>
   `).join('');
@@ -4551,14 +4624,14 @@ function renderFreelanceClientes() {
     btn.addEventListener('click', () => openClienteDialog(btn.dataset.flEditCliente));
   });
   container.querySelectorAll('[data-fl-del-cliente]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('Marcar cliente como terminado?')) return;
+    btn.addEventListener('click', () => flGuardClick(btn, async () => {
+      if (!confirm('¿Marcar cliente como terminado?')) return;
       try {
         await freelanceDeleteCliente(btn.dataset.flDelCliente);
         await ensureClientesLoaded(true);
         renderFreelanceClientes();
       } catch (e) { alert('Error: ' + e.message); }
-    });
+    }));
   });
 }
 
@@ -4602,9 +4675,9 @@ async function submitClienteForm(ev) {
   const body = {
     nombre: document.getElementById('fl-cliente-nombre').value.trim(),
     modalidad: document.getElementById('fl-cliente-modalidad').value || null,
-    tarifa_hora: parseFloat(document.getElementById('fl-cliente-tarifa').value) || null,
-    retainer_mensual: parseFloat(document.getElementById('fl-cliente-retainer').value) || null,
-    horas_comprometidas_mes: parseInt(document.getElementById('fl-cliente-horas-comp').value) || null,
+    tarifa_hora: flParseNum(document.getElementById('fl-cliente-tarifa').value),
+    retainer_mensual: flParseNum(document.getElementById('fl-cliente-retainer').value),
+    horas_comprometidas_mes: flParseInt(document.getElementById('fl-cliente-horas-comp').value),
     fecha_inicio: document.getElementById('fl-cliente-fecha-inicio').value || null,
     contacto_principal: document.getElementById('fl-cliente-contacto').value || null,
     contacto_email: document.getElementById('fl-cliente-email').value || null,
@@ -4638,26 +4711,36 @@ function renderFreelanceSesiones() {
       <td>${flFmtDate(s.fecha)}</td>
       <td>${flEsc(flClienteNombre(s.cliente_id))}</td>
       <td>${flFmtHours(s.horas)}</td>
-      <td>${flEsc(s.descripcion || '')}</td>
-      <td>${s.facturable ? '<span class="val-ok">Si</span>' : '<span class="val-error">No</span>'}</td>
+      <td class="fl-truncate" title="${flEsc(s.descripcion || '')}">${flEsc(s.descripcion || '')}</td>
+      <td>${s.facturable ? '<span class="val-ok">Sí</span>' : '<span class="val-error">No</span>'}</td>
       <td>${s.factura_id ? '<span class="fl-badge fl-badge-pagada">Facturada</span>' : '<span class="fl-badge">Pendiente</span>'}</td>
       <td class="fl-actions">
         <button type="button" class="quick-action-btn quick-action-secondary fl-btn-sm" data-fl-del-sesion="${flEsc(s.sesion_id)}">Borrar</button>
       </td>
     </tr>`).join('');
+  const loadMoreBtn = freelanceState.sesionesHasMore
+    ? `<div style="margin-top:10px;text-align:center;"><button type="button" class="quick-action-btn" data-fl-load-more-sesiones>Cargar más</button></div>`
+    : '';
   container.innerHTML = `
     <table class="freelance-table">
-      <thead><tr><th>Fecha</th><th>Cliente</th><th>Horas</th><th>Descripcion</th><th>Facturable</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Fecha</th><th>Cliente</th><th>Horas</th><th>Descripción</th><th>Facturable</th><th>Estado</th><th>Acciones</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>${loadMoreBtn}`;
+  const moreBtn = container.querySelector('[data-fl-load-more-sesiones]');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => flGuardClick(moreBtn, async () => {
+      try { await loadMoreSesiones(); }
+      catch (e) { alert('Error: ' + e.message); }
+    }));
+  }
   container.querySelectorAll('[data-fl-del-sesion]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('Borrar sesion?')) return;
+    btn.addEventListener('click', () => flGuardClick(btn, async () => {
+      if (!confirm('¿Borrar sesión?')) return;
       try {
         await freelanceDeleteSesion(btn.dataset.flDelSesion);
         await refreshSesiones();
       } catch (e) { alert('Error: ' + e.message); }
-    });
+    }));
   });
 }
 
@@ -4666,8 +4749,29 @@ async function refreshSesiones() {
     cliente_id: document.getElementById('fl-sesion-filter-cliente')?.value || null,
     desde: document.getElementById('fl-sesion-filter-desde')?.value || null,
     hasta: document.getElementById('fl-sesion-filter-hasta')?.value || null,
+    limit: FL_SESIONES_PAGE,
+    offset: 0,
   };
-  freelanceState.sesiones = await freelanceListSesiones(filters);
+  const page = await freelanceListSesiones(filters);
+  freelanceState.sesiones = page;
+  freelanceState.sesionesOffset = page.length;
+  freelanceState.sesionesHasMore = page.length === FL_SESIONES_PAGE;
+  renderFreelanceSesiones();
+}
+
+async function loadMoreSesiones() {
+  if (!freelanceState.sesionesHasMore) return;
+  const filters = {
+    cliente_id: document.getElementById('fl-sesion-filter-cliente')?.value || null,
+    desde: document.getElementById('fl-sesion-filter-desde')?.value || null,
+    hasta: document.getElementById('fl-sesion-filter-hasta')?.value || null,
+    limit: FL_SESIONES_PAGE,
+    offset: freelanceState.sesionesOffset,
+  };
+  const page = await freelanceListSesiones(filters);
+  freelanceState.sesiones = freelanceState.sesiones.concat(page);
+  freelanceState.sesionesOffset += page.length;
+  freelanceState.sesionesHasMore = page.length === FL_SESIONES_PAGE;
   renderFreelanceSesiones();
 }
 
@@ -4677,7 +4781,7 @@ function openSesionDialog() {
   document.getElementById('fl-sesion-form-error').textContent = '';
   document.getElementById('fl-sesion-form').reset();
   document.getElementById('fl-sesion-facturable').checked = true;
-  document.getElementById('fl-sesion-fecha').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('fl-sesion-fecha').value = flLocalDateToday();
   populateClienteSelectors();
   dlg.showModal();
 }
@@ -4687,9 +4791,9 @@ async function submitSesionForm(ev) {
   const errEl = document.getElementById('fl-sesion-form-error');
   errEl.textContent = '';
   const cliente_id = document.getElementById('fl-sesion-cliente').value;
-  const horas = parseFloat(document.getElementById('fl-sesion-horas').value);
+  const horas = flParseNum(document.getElementById('fl-sesion-horas').value);
   if (!cliente_id) { errEl.textContent = 'Cliente requerido'; return; }
-  if (!horas || horas <= 0) { errEl.textContent = 'Horas debe ser > 0'; return; }
+  if (horas === null || horas <= 0) { errEl.textContent = 'Horas debe ser > 0'; return; }
   const body = {
     cliente_id,
     horas,
@@ -4717,7 +4821,7 @@ function renderFreelanceFacturas() {
   }
   const rows = list.map(f => `
     <tr>
-      <td>${flEsc(f.numero_externo || f.factura_id.slice(0, 10))}</td>
+      <td>${f.numero_externo ? flEsc(f.numero_externo) : '<span class="fl-muted">(sin número)</span>'}</td>
       <td>${flEsc(flClienteNombre(f.cliente_id))}</td>
       <td>${flFmtDate(f.fecha_emision)}</td>
       <td>${flFmtDate(f.fecha_vencimiento)}</td>
@@ -4730,28 +4834,40 @@ function renderFreelanceFacturas() {
     </tr>`).join('');
   container.innerHTML = `
     <table class="freelance-table">
-      <thead><tr><th>Numero</th><th>Cliente</th><th>Emision</th><th>Vencimiento</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Número</th><th>Cliente</th><th>Emisión</th><th>Vencimiento</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   container.querySelectorAll('[data-fl-pay]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const fecha = prompt('Fecha de pago (YYYY-MM-DD):', new Date().toISOString().slice(0, 10));
+    btn.addEventListener('click', () => flGuardClick(btn, async () => {
+      const fecha = await flPromptDialog({
+        title: 'Marcar factura como pagada',
+        label: 'Fecha de pago',
+        value: flLocalDateToday(),
+        type: 'date',
+        allowEmpty: false,
+      });
       if (!fecha) return;
       try {
         await freelancePagarFactura(btn.dataset.flPay, fecha);
         await refreshFacturas();
       } catch (e) { alert('Error: ' + e.message); }
-    });
+    }));
   });
   container.querySelectorAll('[data-fl-cancel]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const razon = prompt('Razon de cancelacion (opcional):', '');
+    btn.addEventListener('click', () => flGuardClick(btn, async () => {
+      const razon = await flPromptDialog({
+        title: 'Cancelar factura',
+        label: 'Razón de cancelación (opcional)',
+        value: '',
+        type: 'text',
+        allowEmpty: true,
+      });
       if (razon === null) return;
       try {
         await freelanceCancelarFactura(btn.dataset.flCancel, razon);
         await refreshFacturas();
       } catch (e) { alert('Error: ' + e.message); }
-    });
+    }));
   });
 }
 
@@ -4769,7 +4885,7 @@ function openFacturaDialog() {
   if (!dlg) return;
   document.getElementById('fl-factura-form-error').textContent = '';
   document.getElementById('fl-factura-form').reset();
-  document.getElementById('fl-factura-fecha-emision').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('fl-factura-fecha-emision').value = flLocalDateToday();
   populateClienteSelectors();
   dlg.showModal();
 }
@@ -4779,13 +4895,13 @@ async function submitFacturaForm(ev) {
   const errEl = document.getElementById('fl-factura-form-error');
   errEl.textContent = '';
   const cliente_id = document.getElementById('fl-factura-cliente').value;
-  const monto_subtotal = parseFloat(document.getElementById('fl-factura-subtotal').value);
+  const monto_subtotal = flParseNum(document.getElementById('fl-factura-subtotal').value);
   if (!cliente_id) { errEl.textContent = 'Cliente requerido'; return; }
-  if (!monto_subtotal || monto_subtotal <= 0) { errEl.textContent = 'Subtotal debe ser > 0'; return; }
+  if (monto_subtotal === null || monto_subtotal <= 0) { errEl.textContent = 'Subtotal debe ser > 0'; return; }
   const body = {
     cliente_id,
     monto_subtotal,
-    monto_iva: parseFloat(document.getElementById('fl-factura-iva').value) || null,
+    monto_iva: flParseNum(document.getElementById('fl-factura-iva').value),
     fecha_emision: document.getElementById('fl-factura-fecha-emision').value || null,
     fecha_vencimiento: document.getElementById('fl-factura-fecha-vencimiento').value || null,
     numero_externo: document.getElementById('fl-factura-numero').value || null,
@@ -4827,7 +4943,7 @@ async function refreshFreelanceOverview() {
     if (topList) {
       try {
         const top = await freelanceTopClientes();
-        if (!top.length) topList.innerHTML = '<p class="task-empty">Sin facturacion en el periodo</p>';
+        if (!top.length) topList.innerHTML = '<p class="task-empty">Sin facturación en el período</p>';
         else {
           const rows = top.slice(0, 10).map((c, i) => `
             <tr><td>${i + 1}</td><td>${flEsc(c.nombre || c.cliente_nombre || c.cliente_id)}</td><td>${flFmtMoney(c.total ?? c.facturado ?? c.monto)}</td></tr>`).join('');
@@ -4867,21 +4983,32 @@ function renderFreelanceTarifas() {
       <tbody>${rows}</tbody>
     </table>`;
   container.querySelectorAll('[data-fl-tarifa]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', () => flGuardClick(btn, async () => {
       const id = btn.dataset.flTarifa;
       const c = freelanceState.clientes.find(x => x.cliente_id === id);
       const current = c?.tarifa_hora ?? '';
-      const next = prompt(`Nueva tarifa por hora (MXN) para ${c?.nombre}:`, String(current));
+      const next = await flPromptDialog({
+        title: `Cambiar tarifa de ${c?.nombre || ''}`,
+        label: 'Nueva tarifa por hora (MXN)',
+        value: String(current),
+        type: 'number',
+        allowEmpty: false,
+      });
       if (next === null) return;
-      const val = parseFloat(next);
-      if (!val || val <= 0) { alert('Tarifa invalida'); return; }
+      const val = flParseNum(next);
+      if (val === null || val <= 0) { alert('Tarifa inválida'); return; }
+      const horasComp = c?.horas_comprometidas_mes;
+      const proyeccion = (horasComp && horasComp > 0)
+        ? `\n\nProyección mensual estimada: ${flFmtMoney(val * horasComp)} (${horasComp}h × ${flFmtMoney(val)})`
+        : '';
+      if (!confirm(`Confirmar cambio de tarifa a ${flFmtMoney(val)} por hora.${proyeccion}`)) return;
       try {
         await freelanceUpdateCliente(id, { tarifa_hora: val });
         await ensureClientesLoaded(true);
         renderFreelanceTarifas();
         renderFreelanceClientes();
       } catch (e) { alert('Error: ' + e.message); }
-    });
+    }));
   });
 }
 

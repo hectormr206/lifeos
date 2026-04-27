@@ -2807,6 +2807,10 @@ details[open] .transcript-toggle::before { transform: rotate(90deg); }
 .fl-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .fl-btn-sm { font-size: 0.75rem; padding: 4px 10px; }
 .fl-muted { color: var(--text-muted); font-size: 0.78rem; }
+.freelance-table td.fl-truncate,
+.freelance-table td .fl-truncate {
+  max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .fl-badge {
   display: inline-block; padding: 2px 8px; border-radius: 10px;
   font-size: 0.72rem; font-weight: 600;
