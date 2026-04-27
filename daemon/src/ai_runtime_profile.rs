@@ -19,6 +19,12 @@ const DEFAULT_CTX_SIZE: u32 = 131_072;
 /// Sane bounds for any user-supplied ctx-size override.
 pub const USER_CTX_SIZE_MIN: u32 = 1024;
 pub const USER_CTX_SIZE_MAX: u32 = 524_288;
+/// Descending ladder of ctx-sizes the GPU benchmarker probes. The largest
+/// value that successfully boots `llama-server` (with GPU layers > 0) is
+/// kept as the runtime ctx-size. Tweak with care: each rung that fails
+/// costs roughly one llama-server restart cycle. Capped at the user-facing
+/// default so we never silently exceed what `LIFEOS_AI_CTX_SIZE` advertises.
+const CTX_SIZE_PROBE_LADDER: &[u32] = &[131_072, 65_536, 32_768, 16_384, 8_192];
 const DEFAULT_GPU_LAYERS: i32 = 99;
 const DEFAULT_GAME_GUARD_VRAM_THRESHOLD_MB: u64 = 500;
 const RUNTIME_ENV_DROPIN_NAME: &str = "99-lifeos-runtime-envs.conf";
@@ -511,12 +517,16 @@ fn heuristic_cpu_profile(
         256
     };
     let ubatch_size = if batch_size >= 512 { 256 } else { 128 };
+    // CPU-only ceiling. We can't safely probe with llama-server restarts on
+    // RAM-constrained machines, so this stays heuristic. Ceilings raised
+    // (post PR #48) so a 32GB box doesn't silently downgrade to 8K when the
+    // user-facing baseline advertises 128K.
     let ctx_size = if fingerprint.total_ram_mb >= 32 * 1024 {
-        inputs.requested_ctx_size.min(8192)
+        inputs.requested_ctx_size.min(16_384)
     } else if fingerprint.total_ram_mb >= 16 * 1024 {
-        inputs.requested_ctx_size.min(6144)
+        inputs.requested_ctx_size.min(12_288)
     } else {
-        inputs.requested_ctx_size.min(4096)
+        inputs.requested_ctx_size.min(8_192)
     };
 
     RuntimeSettings {
@@ -1130,6 +1140,20 @@ async fn benchmark_runtime_profile(profile: &mut RuntimeProfile) -> Result<bool>
 
     let benchmark_result = async {
         if profile.fingerprint.dedicated_gpu {
+            // Probe descending ctx-sizes against the heuristic GPU base
+            // until one boots successfully. The largest viable rung becomes
+            // the ctx-size used by every subsequent perf candidate. If
+            // every rung fails (and gpu_layers stays > 0 in our base),
+            // fall through with the heuristic value — perf benchmarking
+            // will then either succeed or fail downstream.
+            if let Some(probed_ctx) =
+                probe_largest_viable_gpu_ctx(profile, &mut measurements).await?
+            {
+                if let Some(base) = profile.profiles.normal_gpu.as_mut() {
+                    base.ctx_size = probed_ctx;
+                }
+            }
+
             if let Some(best_gpu) = benchmark_target(
                 "normal_gpu",
                 &build_gpu_candidates(profile),
@@ -1233,6 +1257,80 @@ async fn benchmark_target(
     }
 
     Ok(best.map(|(_, settings)| settings))
+}
+
+/// Build the descending ctx-size ladder we will probe on a GPU machine.
+///
+/// Filters out values above `requested_ctx_size` (no point trying larger
+/// than what the user / baseline asked for), values below 1024, and
+/// duplicates. The ladder is always returned descending so the FIRST
+/// successful probe is the largest viable.
+fn build_ctx_probe_ladder(requested_ctx_size: u32) -> Vec<u32> {
+    let cap = requested_ctx_size.max(USER_CTX_SIZE_MIN);
+    let mut ladder: Vec<u32> = CTX_SIZE_PROBE_LADDER
+        .iter()
+        .copied()
+        .filter(|&v| v <= cap && v >= USER_CTX_SIZE_MIN)
+        .collect();
+    // Always include the requested value as the very first probe so we try
+    // exactly what the user asked for before stepping down.
+    if !ladder.iter().any(|&v| v == cap) {
+        ladder.insert(0, cap);
+    }
+    ladder.sort_unstable_by(|a, b| b.cmp(a));
+    ladder.dedup();
+    ladder
+}
+
+/// Probe a descending ctx-size ladder against the heuristic GPU base.
+/// Returns the FIRST ctx-size that boots `llama-server` successfully (i.e.
+/// the largest viable). Returns Ok(None) when there is no GPU base or
+/// every rung fails — the caller can then either fall back to the
+/// heuristic ctx or downgrade to CPU-only.
+async fn probe_largest_viable_gpu_ctx(
+    profile: &RuntimeProfile,
+    measurements: &mut Vec<BenchmarkMeasurement>,
+) -> Result<Option<u32>> {
+    let Some(base) = profile.profiles.normal_gpu.clone() else {
+        return Ok(None);
+    };
+    if base.gpu_layers <= 0 {
+        return Ok(None);
+    }
+
+    let ladder = build_ctx_probe_ladder(profile.inputs.requested_ctx_size);
+    for ctx in ladder {
+        let candidate = RuntimeCandidate {
+            name: format!("ctx-probe-{ctx}"),
+            settings: RuntimeSettings {
+                ctx_size: ctx,
+                ..base.clone()
+            },
+        };
+        match benchmark_candidate(&candidate, &profile.inputs).await {
+            Ok(latency) => {
+                measurements.push(BenchmarkMeasurement {
+                    target: "ctx_probe".into(),
+                    candidate: candidate.name.clone(),
+                    average_latency_ms: latency,
+                    sample_count: 2,
+                });
+                info!(
+                    "[ai_runtime] ctx probe accepted ctx_size={} (largest viable)",
+                    ctx
+                );
+                return Ok(Some(ctx));
+            }
+            Err(error) => {
+                warn!(
+                    "[ai_runtime] ctx probe ctx_size={} failed, stepping down: {}",
+                    ctx, error
+                );
+                continue;
+            }
+        }
+    }
+    Ok(None)
 }
 
 async fn benchmark_candidate(candidate: &RuntimeCandidate, inputs: &RuntimeInputs) -> Result<u64> {
@@ -1663,6 +1761,81 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
     fn user_ctx_size_override_rejects_out_of_range() {
         assert!(write_user_ctx_size_override(USER_CTX_SIZE_MIN - 1).is_err());
         assert!(write_user_ctx_size_override(USER_CTX_SIZE_MAX + 1).is_err());
+    }
+
+    #[test]
+    fn ctx_probe_ladder_descending_capped_by_request() {
+        let ladder = build_ctx_probe_ladder(131_072);
+        assert!(
+            ladder.windows(2).all(|w| w[0] > w[1]),
+            "must be strictly descending: {:?}",
+            ladder
+        );
+        assert_eq!(ladder.first().copied(), Some(131_072));
+        // No rung exceeds the request.
+        assert!(ladder.iter().all(|&v| v <= 131_072));
+        // Stays above the safety floor.
+        assert!(ladder.iter().all(|&v| v >= USER_CTX_SIZE_MIN));
+    }
+
+    #[test]
+    fn ctx_probe_ladder_caps_below_default_rung() {
+        let ladder = build_ctx_probe_ladder(20_000);
+        // Requested value should be the FIRST rung; no rung larger.
+        assert_eq!(ladder.first().copied(), Some(20_000));
+        assert!(ladder.iter().all(|&v| v <= 20_000));
+        // The next rung from CTX_SIZE_PROBE_LADDER below 20_000 is 16_384.
+        assert!(ladder.contains(&16_384));
+    }
+
+    #[test]
+    fn ctx_probe_ladder_includes_request_when_off_ladder() {
+        let ladder = build_ctx_probe_ladder(48_000);
+        assert!(ladder.contains(&48_000));
+        assert!(ladder.windows(2).all(|w| w[0] > w[1]));
+    }
+
+    #[test]
+    fn cpu_heuristic_ceiling_uses_raised_post_pr48_values() {
+        // 32GB tier should ceil at 16K, not the legacy 8K.
+        let fp_32gb = HardwareFingerprint {
+            cpu_model: "cpu".into(),
+            logical_cpus: 16,
+            physical_cpus: 8,
+            total_ram_mb: 32 * 1024,
+            accelerator_backend: None,
+            accelerator_name: None,
+            accelerator_total_mem_mb: None,
+            dedicated_gpu: false,
+            driver_version: None,
+            llama_server_version: None,
+        };
+        let inputs = RuntimeInputs {
+            model: DEFAULT_MODEL.into(),
+            alias: DEFAULT_ALIAS.into(),
+            port: DEFAULT_PORT,
+            requested_ctx_size: DEFAULT_CTX_SIZE,
+        };
+        let cpu = heuristic_cpu_profile(&fp_32gb, &inputs);
+        assert_eq!(cpu.ctx_size, 16_384);
+
+        // 16GB tier: 12K (was 6K).
+        let mut fp_16gb = fp_32gb.clone();
+        fp_16gb.total_ram_mb = 16 * 1024;
+        assert_eq!(heuristic_cpu_profile(&fp_16gb, &inputs).ctx_size, 12_288);
+
+        // <16GB tier: 8K (was 4K).
+        let mut fp_low = fp_32gb;
+        fp_low.total_ram_mb = 8 * 1024;
+        assert_eq!(heuristic_cpu_profile(&fp_low, &inputs).ctx_size, 8_192);
+    }
+
+    #[test]
+    fn default_ctx_size_matches_user_facing_baseline() {
+        // The benchmarker default MUST track the user-facing baseline in
+        // image/files/etc/lifeos/llama-server.env (PR #48 = 131072).
+        // If you change one, change the other.
+        assert_eq!(DEFAULT_CTX_SIZE, 131_072);
     }
 
     #[test]
