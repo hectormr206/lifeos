@@ -66,6 +66,21 @@
       </div>
 
       <div class="sidebar-nav-group">
+        <button class="sidebar-nav-item has-submenu" data-section="freelance">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 5h12v9.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 013 14.5V5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M6 5V3.5A1.5 1.5 0 017.5 2h3A1.5 1.5 0 0112 3.5V5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 9h12" stroke="currentColor" stroke-width="1.5"/></svg>
+          <span>Freelance</span>
+          <span class="submenu-chevron"></span>
+        </button>
+        <div class="sidebar-submenu">
+          <button class="sidebar-submenu-item" data-parent="freelance" data-subsection-target="fl-resumen">Resumen</button>
+          <button class="sidebar-submenu-item" data-parent="freelance" data-subsection-target="fl-clientes">Clientes</button>
+          <button class="sidebar-submenu-item" data-parent="freelance" data-subsection-target="fl-sesiones">Sesiones</button>
+          <button class="sidebar-submenu-item" data-parent="freelance" data-subsection-target="fl-facturas">Facturas</button>
+          <button class="sidebar-submenu-item" data-parent="freelance" data-subsection-target="fl-tarifas">Tarifas</button>
+        </div>
+      </div>
+
+      <div class="sidebar-nav-group">
         <button class="sidebar-nav-item has-submenu" data-section="config">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M14.7 11.2a1.2 1.2 0 00.24 1.32l.04.04a1.45 1.45 0 11-2.05 2.05l-.04-.04a1.2 1.2 0 00-1.32-.24 1.2 1.2 0 00-.73 1.1v.12a1.45 1.45 0 11-2.9 0v-.06a1.2 1.2 0 00-.78-1.1 1.2 1.2 0 00-1.32.24l-.04.04a1.45 1.45 0 11-2.05-2.05l.04-.04a1.2 1.2 0 00.24-1.32 1.2 1.2 0 00-1.1-.73H3.5a1.45 1.45 0 010-2.9h.06a1.2 1.2 0 001.1-.78 1.2 1.2 0 00-.24-1.32l-.04-.04a1.45 1.45 0 112.05-2.05l.04.04a1.2 1.2 0 001.32.24h.06a1.2 1.2 0 00.73-1.1V3.5a1.45 1.45 0 012.9 0v.06a1.2 1.2 0 00.73 1.1 1.2 1.2 0 001.32-.24l.04-.04a1.45 1.45 0 112.05 2.05l-.04.04a1.2 1.2 0 00-.24 1.32v.06a1.2 1.2 0 001.1.73h.12a1.45 1.45 0 010 2.9h-.06a1.2 1.2 0 00-1.1.73z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span>Configuracion</span>
@@ -748,6 +763,169 @@
             <div id="vp-vault-msg" class="vp-status"></div>
           </div>
         </section>
+      </div>
+
+      <!-- ==================== SECTION: Freelance ==================== -->
+      <div class="content-section" id="section-freelance">
+
+        <section class="freelance-section" data-subsection="fl-resumen">
+          <h2>Resumen Freelance</h2>
+          <div class="freelance-toolbar">
+            <label>Mes:
+              <input type="month" id="fl-overview-mes">
+            </label>
+            <button type="button" class="quick-action-btn" id="fl-overview-refresh">Refrescar</button>
+          </div>
+          <div class="hero-stats" id="fl-overview-stats">
+            <div class="hero-stat"><span>Horas trabajadas</span><strong id="fl-stat-horas">—</strong></div>
+            <div class="hero-stat"><span>Horas comprometidas</span><strong id="fl-stat-horas-comp">—</strong></div>
+            <div class="hero-stat"><span>Clientes activos</span><strong id="fl-stat-clientes">—</strong></div>
+            <div class="hero-stat"><span>Cuentas por cobrar</span><strong id="fl-stat-cxc">—</strong></div>
+            <div class="hero-stat"><span>Facturado emitido</span><strong id="fl-stat-emitido">—</strong></div>
+            <div class="hero-stat"><span>Facturado pagado</span><strong id="fl-stat-pagado">—</strong></div>
+          </div>
+          <div id="fl-overview-alertas" style="margin-top:12px;"></div>
+          <h3 style="margin-top:18px;">Top clientes (facturado)</h3>
+          <div id="fl-top-clientes-list"><p class="task-empty">Sin datos</p></div>
+        </section>
+
+        <section class="freelance-section" data-subsection="fl-clientes">
+          <h2>Clientes</h2>
+          <div class="freelance-toolbar">
+            <label>Estado:
+              <select id="fl-clientes-filter-estado">
+                <option value="">Todos</option>
+                <option value="activo" selected>Activo</option>
+                <option value="pausado">Pausado</option>
+                <option value="terminado">Terminado</option>
+              </select>
+            </label>
+            <button type="button" class="quick-action-btn" id="fl-clientes-refresh">Refrescar</button>
+            <button type="button" class="quick-action-btn" id="fl-cliente-new-btn">+ Nuevo cliente</button>
+          </div>
+          <div id="fl-clientes-list" class="freelance-table-wrap"><p class="task-empty">Cargando clientes...</p></div>
+        </section>
+
+        <section class="freelance-section" data-subsection="fl-sesiones">
+          <h2>Sesiones</h2>
+          <div class="freelance-toolbar">
+            <label>Cliente:
+              <select id="fl-sesion-filter-cliente"><option value="">Todos</option></select>
+            </label>
+            <label>Desde: <input type="date" id="fl-sesion-filter-desde"></label>
+            <label>Hasta: <input type="date" id="fl-sesion-filter-hasta"></label>
+            <button type="button" class="quick-action-btn" id="fl-sesiones-refresh">Buscar</button>
+            <button type="button" class="quick-action-btn" id="fl-sesion-new-btn">+ Registrar sesión</button>
+          </div>
+          <div id="fl-sesiones-list" class="freelance-table-wrap"><p class="task-empty">Cargando sesiones...</p></div>
+        </section>
+
+        <section class="freelance-section" data-subsection="fl-facturas">
+          <h2>Facturas</h2>
+          <div class="freelance-toolbar">
+            <label>Cliente:
+              <select id="fl-factura-filter-cliente"><option value="">Todos</option></select>
+            </label>
+            <label>Estado:
+              <select id="fl-factura-filter-estado">
+                <option value="">Todos</option>
+                <option value="emitida">Emitida</option>
+                <option value="pagada">Pagada</option>
+                <option value="vencida">Vencida</option>
+                <option value="cancelada">Cancelada</option>
+              </select>
+            </label>
+            <button type="button" class="quick-action-btn" id="fl-facturas-refresh">Buscar</button>
+            <button type="button" class="quick-action-btn" id="fl-factura-new-btn">+ Nueva factura</button>
+          </div>
+          <div id="fl-facturas-list" class="freelance-table-wrap"><p class="task-empty">Cargando facturas...</p></div>
+        </section>
+
+        <section class="freelance-section" data-subsection="fl-tarifas">
+          <h2>Tarifas por cliente</h2>
+          <p class="setting-hint">Editar la tarifa por hora desde la ficha de cada cliente. Cada cambio queda archivado en el historial.</p>
+          <div id="fl-tarifas-list" class="freelance-table-wrap"><p class="task-empty">Cargando tarifas...</p></div>
+        </section>
+
+        <!-- Cliente form dialog -->
+        <dialog id="fl-cliente-dialog" class="freelance-dialog">
+          <form method="dialog" id="fl-cliente-form">
+            <h3 id="fl-cliente-form-title">Nuevo cliente</h3>
+            <input type="hidden" id="fl-cliente-id">
+            <label>Nombre *<input type="text" id="fl-cliente-nombre" required></label>
+            <label>Modalidad
+              <select id="fl-cliente-modalidad">
+                <option value="horas">Por horas</option>
+                <option value="retainer">Retainer</option>
+                <option value="proyecto">Proyecto</option>
+              </select>
+            </label>
+            <label>Tarifa por hora (MXN)<input type="number" step="0.01" id="fl-cliente-tarifa"></label>
+            <label>Retainer mensual (MXN)<input type="number" step="0.01" id="fl-cliente-retainer"></label>
+            <label>Horas comprometidas/mes<input type="number" id="fl-cliente-horas-comp"></label>
+            <label>Fecha inicio<input type="date" id="fl-cliente-fecha-inicio"></label>
+            <label>Contacto<input type="text" id="fl-cliente-contacto"></label>
+            <label>Email<input type="email" id="fl-cliente-email"></label>
+            <label>Teléfono<input type="text" id="fl-cliente-telefono"></label>
+            <label>RFC<input type="text" id="fl-cliente-rfc"></label>
+            <label>Notas<textarea id="fl-cliente-notas" rows="2"></textarea></label>
+            <label class="fl-row-only-edit" id="fl-cliente-estado-row" style="display:none;">Estado
+              <select id="fl-cliente-estado">
+                <option value="activo">Activo</option>
+                <option value="pausado">Pausado</option>
+                <option value="terminado">Terminado</option>
+              </select>
+            </label>
+            <p id="fl-cliente-form-error" class="fl-form-error"></p>
+            <div class="freelance-dialog-actions">
+              <button type="button" class="quick-action-btn quick-action-secondary" id="fl-cliente-cancel">Cancelar</button>
+              <button type="submit" class="quick-action-btn" id="fl-cliente-save">Guardar</button>
+            </div>
+          </form>
+        </dialog>
+
+        <!-- Sesion form dialog -->
+        <dialog id="fl-sesion-dialog" class="freelance-dialog">
+          <form method="dialog" id="fl-sesion-form">
+            <h3 id="fl-sesion-form-title">Registrar sesión</h3>
+            <input type="hidden" id="fl-sesion-id">
+            <label>Cliente *
+              <select id="fl-sesion-cliente" required></select>
+            </label>
+            <label>Fecha<input type="date" id="fl-sesion-fecha"></label>
+            <label>Hora inicio<input type="time" id="fl-sesion-hora-inicio"></label>
+            <label>Hora fin<input type="time" id="fl-sesion-hora-fin"></label>
+            <label>Horas *<input type="number" step="0.25" id="fl-sesion-horas" required></label>
+            <label>Descripción<textarea id="fl-sesion-descripcion" rows="2"></textarea></label>
+            <label><input type="checkbox" id="fl-sesion-facturable" checked> Facturable</label>
+            <p id="fl-sesion-form-error" class="fl-form-error"></p>
+            <div class="freelance-dialog-actions">
+              <button type="button" class="quick-action-btn quick-action-secondary" id="fl-sesion-cancel">Cancelar</button>
+              <button type="submit" class="quick-action-btn" id="fl-sesion-save">Guardar</button>
+            </div>
+          </form>
+        </dialog>
+
+        <!-- Factura form dialog -->
+        <dialog id="fl-factura-dialog" class="freelance-dialog">
+          <form method="dialog" id="fl-factura-form">
+            <h3>Nueva factura</h3>
+            <label>Cliente *
+              <select id="fl-factura-cliente" required></select>
+            </label>
+            <label>Subtotal (MXN) *<input type="number" step="0.01" id="fl-factura-subtotal" required></label>
+            <label>IVA (MXN)<input type="number" step="0.01" id="fl-factura-iva"></label>
+            <label>Fecha emisión<input type="date" id="fl-factura-fecha-emision"></label>
+            <label>Fecha vencimiento<input type="date" id="fl-factura-fecha-vencimiento"></label>
+            <label>Número externo<input type="text" id="fl-factura-numero"></label>
+            <label>Concepto<textarea id="fl-factura-concepto" rows="2"></textarea></label>
+            <p id="fl-factura-form-error" class="fl-form-error"></p>
+            <div class="freelance-dialog-actions">
+              <button type="button" class="quick-action-btn quick-action-secondary" id="fl-factura-cancel">Cancelar</button>
+              <button type="submit" class="quick-action-btn" id="fl-factura-save">Emitir</button>
+            </div>
+          </form>
+        </dialog>
       </div>
     </main>
   </div>

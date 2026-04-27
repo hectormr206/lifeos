@@ -402,6 +402,18 @@ The *Vida Plena* section of the dashboard now exposes three interactive surfaces
 
 All Vida Plena endpoints require the same `x-bootstrap-token` header. Vault errors map to `403` (locked / wrong passphrase) and `400` (missing/invalid input) so the UI surfaces the actual reason on failure.
 
+## Freelance Dashboard (Clientes, Sesiones, Facturas, Tarifas, Resumen)
+
+The dashboard at `http://127.0.0.1:8081/dashboard` includes a *Freelance* group in the sidebar with five tabs that consume the `/api/v1/freelance/*` endpoints:
+
+- **Resumen** — month picker (defaults to current month) shows horas trabajadas, horas comprometidas, clientes activos, cuentas por cobrar, facturado emitido, facturado pagado, plus a top-clientes table and any active `alertas`. Backed by `GET /api/v1/freelance/overview` and `GET /api/v1/freelance/top-clientes`.
+- **Clientes** — list with filter by estado (activo/pausado/terminado/todos), inline edit and "terminar" actions, plus a *+ Nuevo cliente* dialog covering nombre, modalidad (horas/retainer/proyecto), tarifa por hora, retainer mensual, horas comprometidas/mes, fecha inicio, contacto, email, telefono, RFC, notas. Edit also lets you change estado. Backed by `GET/POST/PATCH/DELETE /api/v1/freelance/clientes(/:id)`.
+- **Sesiones** — filter by cliente, fecha desde/hasta. *+ Registrar sesion* dialog logs cliente + fecha + hora_inicio/fin + horas + descripcion + facturable flag. Each row has delete. Backed by `GET/POST/PATCH/DELETE /api/v1/freelance/sesiones(/:id)`.
+- **Facturas** — filter by cliente y estado. *+ Nueva factura* dialog (cliente, subtotal, IVA, fechas emision/vencimiento, numero externo, concepto). Per-row actions: *Marcar pagada* (prompts fecha de pago) y *Cancelar* (prompts razon). Backed by `GET/POST/PATCH /api/v1/freelance/facturas(/:id)`.
+- **Tarifas** — tabla de clientes con su tarifa por hora actual. El boton *Cambiar tarifa* hace `PATCH /clientes/:id` con la nueva `tarifa_hora`; el backend archiva automaticamente el cambio en `freelance_tarifas_history`.
+
+Todos los dialogos usan `<dialog>` nativo. Los montos se muestran en MXN (`Intl.NumberFormat`).
+
 ## Nutrition pipeline (photo / voice → `nutrition_log`)
 
 Item BI.3 turns food photos and voice notes into structured entries in the existing `nutrition_log` table without a manual form.

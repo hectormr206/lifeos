@@ -2772,3 +2772,79 @@ details[open] .transcript-toggle::before { transform: rotate(90deg); }
 .privacy-toggle.privacy-on .privacy-switch-thumb {
   transform: translateX(14px);
 }
+
+/* ==================== Freelance ==================== */
+.freelance-section { margin-bottom: 24px; }
+.freelance-toolbar {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  margin: 12px 0 16px;
+}
+.freelance-toolbar label {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text-muted); font-size: 0.85rem;
+}
+.freelance-toolbar input,
+.freelance-toolbar select {
+  background: var(--bg-card); color: var(--text);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
+  padding: 6px 10px; font-size: 0.85rem;
+}
+.freelance-table-wrap { overflow-x: auto; background: var(--bg-card); border-radius: 8px; }
+.freelance-table {
+  width: 100%; border-collapse: collapse; font-size: 0.88rem;
+}
+.freelance-table th,
+.freelance-table td {
+  padding: 10px 12px; text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.freelance-table th {
+  color: var(--text-muted); font-weight: 600; text-transform: uppercase;
+  font-size: 0.72rem; letter-spacing: 0.04em;
+  background: rgba(255,255,255,0.02);
+}
+.freelance-table tbody tr:hover { background: var(--bg-card-hover); }
+.fl-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.fl-btn-sm { font-size: 0.75rem; padding: 4px 10px; }
+.fl-muted { color: var(--text-muted); font-size: 0.78rem; }
+.freelance-table td.fl-truncate,
+.freelance-table td .fl-truncate {
+  max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fl-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 0.72rem; font-weight: 600;
+  background: rgba(255,255,255,0.08); color: var(--text);
+}
+.fl-badge-activo,
+.fl-badge-pagada { background: rgba(0,212,170,0.15); color: var(--accent); }
+.fl-badge-pausado,
+.fl-badge-emitida { background: rgba(255,193,7,0.15); color: #ffc107; }
+.fl-badge-vencida { background: rgba(244,67,54,0.18); color: #ff6b6b; }
+.fl-badge-cancelada,
+.fl-badge-terminado { background: rgba(255,255,255,0.08); color: var(--text-muted); }
+
+.freelance-dialog {
+  background: var(--bg-card); color: var(--text);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px; padding: 20px; max-width: 480px; width: 90vw;
+}
+.freelance-dialog::backdrop { background: rgba(0,0,0,0.55); }
+.freelance-dialog h3 { margin: 0 0 14px; color: var(--accent); }
+.freelance-dialog form { display: flex; flex-direction: column; gap: 10px; }
+.freelance-dialog label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 0.82rem; color: var(--text-muted);
+}
+.freelance-dialog input,
+.freelance-dialog select,
+.freelance-dialog textarea {
+  background: var(--bg); color: var(--text);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
+  padding: 7px 10px; font-size: 0.9rem; font-family: inherit;
+}
+.freelance-dialog input[type="checkbox"] { width: auto; }
+.freelance-dialog-actions {
+  display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;
+}
+.fl-form-error { color: #ff6b6b; font-size: 0.82rem; min-height: 1em; margin: 0; }
