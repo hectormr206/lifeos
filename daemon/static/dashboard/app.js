@@ -4392,6 +4392,557 @@ async function togglePrivacyMode() {
   if (btn) btn.addEventListener('click', togglePrivacyMode);
 })();
 
+// ==================== Freelance Module ====================
+const freelanceState = {
+  clientes: [],
+  sesiones: [],
+  facturas: [],
+  loaded: { clientes: false, sesiones: false, facturas: false, overview: false, tarifas: false },
+};
+
+function flFmtMoney(n) {
+  if (n === null || n === undefined || Number.isNaN(Number(n))) return '—';
+  return Number(n).toLocaleString('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 2 });
+}
+function flFmtHours(n) {
+  if (n === null || n === undefined) return '—';
+  return `${Number(n).toFixed(2)}h`;
+}
+function flFmtDate(s) {
+  if (!s) return '—';
+  return s.length > 10 ? s.slice(0, 10) : s;
+}
+function flEsc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function flClienteNombre(id) {
+  const c = freelanceState.clientes.find(x => x.cliente_id === id);
+  return c ? c.nombre : id;
+}
+
+// --- API wrappers ---
+async function freelanceListClientes(estado) {
+  const q = estado ? `?estado=${encodeURIComponent(estado)}` : '';
+  const data = await api('GET', `/freelance/clientes${q}`);
+  return data.clientes || [];
+}
+async function freelanceCreateCliente(body) {
+  return api('POST', '/freelance/clientes', body);
+}
+async function freelanceUpdateCliente(id, body) {
+  return api('PATCH', `/freelance/clientes/${encodeURIComponent(id)}`, body);
+}
+async function freelanceDeleteCliente(id) {
+  return api('DELETE', `/freelance/clientes/${encodeURIComponent(id)}`);
+}
+async function freelanceListSesiones(filters) {
+  const params = new URLSearchParams();
+  if (filters?.cliente_id) params.set('cliente_id', filters.cliente_id);
+  if (filters?.desde) params.set('desde', filters.desde);
+  if (filters?.hasta) params.set('hasta', filters.hasta);
+  const qs = params.toString();
+  const data = await api('GET', `/freelance/sesiones${qs ? '?' + qs : ''}`);
+  return data.sesiones || [];
+}
+async function freelanceCreateSesion(body) {
+  return api('POST', '/freelance/sesiones', body);
+}
+async function freelanceUpdateSesion(id, body) {
+  return api('PATCH', `/freelance/sesiones/${encodeURIComponent(id)}`, body);
+}
+async function freelanceDeleteSesion(id) {
+  return api('DELETE', `/freelance/sesiones/${encodeURIComponent(id)}`);
+}
+async function freelanceListFacturas(filters) {
+  const params = new URLSearchParams();
+  if (filters?.cliente_id) params.set('cliente_id', filters.cliente_id);
+  if (filters?.estado) params.set('estado', filters.estado);
+  const qs = params.toString();
+  const data = await api('GET', `/freelance/facturas${qs ? '?' + qs : ''}`);
+  return data.facturas || [];
+}
+async function freelanceCreateFactura(body) {
+  return api('POST', '/freelance/facturas', body);
+}
+async function freelancePagarFactura(id, fecha) {
+  return api('PATCH', `/freelance/facturas/${encodeURIComponent(id)}`, { fecha_pago: fecha });
+}
+async function freelanceCancelarFactura(id, razon) {
+  return api('PATCH', `/freelance/facturas/${encodeURIComponent(id)}`, { cancelar: true, razon_cancelacion: razon || null });
+}
+async function freelanceOverview(mes) {
+  const q = mes ? `?mes=${encodeURIComponent(mes)}` : '';
+  const data = await api('GET', `/freelance/overview${q}`);
+  return data.overview || {};
+}
+async function freelanceTopClientes() {
+  const data = await api('GET', '/freelance/top-clientes');
+  return data.clientes || [];
+}
+
+// --- Cliente helpers ---
+async function ensureClientesLoaded(force) {
+  if (!force && freelanceState.loaded.clientes) return freelanceState.clientes;
+  const estado = document.getElementById('fl-clientes-filter-estado')?.value || '';
+  freelanceState.clientes = await freelanceListClientes(estado || null);
+  freelanceState.loaded.clientes = true;
+  populateClienteSelectors();
+  return freelanceState.clientes;
+}
+
+function populateClienteSelectors() {
+  const selectors = ['fl-sesion-filter-cliente', 'fl-factura-filter-cliente', 'fl-sesion-cliente', 'fl-factura-cliente'];
+  selectors.forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const includeAll = id.includes('filter');
+    const current = sel.value;
+    sel.innerHTML = '';
+    if (includeAll) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Todos';
+      sel.appendChild(opt);
+    } else {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Selecciona cliente...';
+      sel.appendChild(opt);
+    }
+    freelanceState.clientes.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.cliente_id;
+      opt.textContent = c.nombre;
+      sel.appendChild(opt);
+    });
+    if (current) sel.value = current;
+  });
+}
+
+// --- Render: Clientes ---
+function renderFreelanceClientes() {
+  const container = document.getElementById('fl-clientes-list');
+  if (!container) return;
+  const list = freelanceState.clientes;
+  if (!list.length) {
+    container.innerHTML = '<p class="task-empty">Sin clientes. Crea el primero con "+ Nuevo cliente".</p>';
+    return;
+  }
+  const rows = list.map(c => `
+    <tr>
+      <td><strong>${flEsc(c.nombre)}</strong>${c.contacto_principal ? `<br><small class="fl-muted">${flEsc(c.contacto_principal)}</small>` : ''}</td>
+      <td>${flEsc(c.modalidad || 'horas')}</td>
+      <td>${c.tarifa_hora != null ? flFmtMoney(c.tarifa_hora) : '—'}</td>
+      <td>${c.retainer_mensual != null ? flFmtMoney(c.retainer_mensual) : '—'}</td>
+      <td><span class="fl-badge fl-badge-${flEsc(c.estado)}">${flEsc(c.estado)}</span></td>
+      <td class="fl-actions">
+        <button type="button" class="quick-action-btn fl-btn-sm" data-fl-edit-cliente="${flEsc(c.cliente_id)}">Editar</button>
+        <button type="button" class="quick-action-btn quick-action-secondary fl-btn-sm" data-fl-del-cliente="${flEsc(c.cliente_id)}">Terminar</button>
+      </td>
+    </tr>
+  `).join('');
+  container.innerHTML = `
+    <table class="freelance-table">
+      <thead><tr><th>Nombre</th><th>Modalidad</th><th>Tarifa/h</th><th>Retainer</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  container.querySelectorAll('[data-fl-edit-cliente]').forEach(btn => {
+    btn.addEventListener('click', () => openClienteDialog(btn.dataset.flEditCliente));
+  });
+  container.querySelectorAll('[data-fl-del-cliente]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Marcar cliente como terminado?')) return;
+      try {
+        await freelanceDeleteCliente(btn.dataset.flDelCliente);
+        await ensureClientesLoaded(true);
+        renderFreelanceClientes();
+      } catch (e) { alert('Error: ' + e.message); }
+    });
+  });
+}
+
+function openClienteDialog(id) {
+  const dlg = document.getElementById('fl-cliente-dialog');
+  if (!dlg) return;
+  document.getElementById('fl-cliente-form-error').textContent = '';
+  const editRow = document.getElementById('fl-cliente-estado-row');
+  if (id) {
+    const c = freelanceState.clientes.find(x => x.cliente_id === id);
+    if (!c) return;
+    document.getElementById('fl-cliente-form-title').textContent = 'Editar cliente';
+    document.getElementById('fl-cliente-id').value = c.cliente_id;
+    document.getElementById('fl-cliente-nombre').value = c.nombre || '';
+    document.getElementById('fl-cliente-modalidad').value = c.modalidad || 'horas';
+    document.getElementById('fl-cliente-tarifa').value = c.tarifa_hora ?? '';
+    document.getElementById('fl-cliente-retainer').value = c.retainer_mensual ?? '';
+    document.getElementById('fl-cliente-horas-comp').value = c.horas_comprometidas_mes ?? '';
+    document.getElementById('fl-cliente-fecha-inicio').value = flFmtDate(c.fecha_inicio);
+    document.getElementById('fl-cliente-contacto').value = c.contacto_principal || '';
+    document.getElementById('fl-cliente-email').value = c.contacto_email || '';
+    document.getElementById('fl-cliente-telefono').value = c.contacto_telefono || '';
+    document.getElementById('fl-cliente-rfc').value = c.rfc || '';
+    document.getElementById('fl-cliente-notas').value = c.notas || '';
+    document.getElementById('fl-cliente-estado').value = c.estado || 'activo';
+    if (editRow) editRow.style.display = '';
+  } else {
+    document.getElementById('fl-cliente-form-title').textContent = 'Nuevo cliente';
+    document.getElementById('fl-cliente-id').value = '';
+    document.getElementById('fl-cliente-form').reset();
+    if (editRow) editRow.style.display = 'none';
+  }
+  dlg.showModal();
+}
+
+async function submitClienteForm(ev) {
+  ev.preventDefault();
+  const id = document.getElementById('fl-cliente-id').value;
+  const errEl = document.getElementById('fl-cliente-form-error');
+  errEl.textContent = '';
+  const body = {
+    nombre: document.getElementById('fl-cliente-nombre').value.trim(),
+    modalidad: document.getElementById('fl-cliente-modalidad').value || null,
+    tarifa_hora: parseFloat(document.getElementById('fl-cliente-tarifa').value) || null,
+    retainer_mensual: parseFloat(document.getElementById('fl-cliente-retainer').value) || null,
+    horas_comprometidas_mes: parseInt(document.getElementById('fl-cliente-horas-comp').value) || null,
+    fecha_inicio: document.getElementById('fl-cliente-fecha-inicio').value || null,
+    contacto_principal: document.getElementById('fl-cliente-contacto').value || null,
+    contacto_email: document.getElementById('fl-cliente-email').value || null,
+    contacto_telefono: document.getElementById('fl-cliente-telefono').value || null,
+    rfc: document.getElementById('fl-cliente-rfc').value || null,
+    notas: document.getElementById('fl-cliente-notas').value || null,
+  };
+  if (id) body.estado = document.getElementById('fl-cliente-estado').value;
+  if (!body.nombre) { errEl.textContent = 'Nombre requerido'; return; }
+  try {
+    if (id) await freelanceUpdateCliente(id, body);
+    else await freelanceCreateCliente(body);
+    document.getElementById('fl-cliente-dialog').close();
+    await ensureClientesLoaded(true);
+    renderFreelanceClientes();
+    renderFreelanceTarifas();
+  } catch (e) { errEl.textContent = e.message; }
+}
+
+// --- Render: Sesiones ---
+function renderFreelanceSesiones() {
+  const container = document.getElementById('fl-sesiones-list');
+  if (!container) return;
+  const list = freelanceState.sesiones;
+  if (!list.length) {
+    container.innerHTML = '<p class="task-empty">Sin sesiones registradas.</p>';
+    return;
+  }
+  const rows = list.map(s => `
+    <tr>
+      <td>${flFmtDate(s.fecha)}</td>
+      <td>${flEsc(flClienteNombre(s.cliente_id))}</td>
+      <td>${flFmtHours(s.horas)}</td>
+      <td>${flEsc(s.descripcion || '')}</td>
+      <td>${s.facturable ? '<span class="val-ok">Si</span>' : '<span class="val-error">No</span>'}</td>
+      <td>${s.factura_id ? '<span class="fl-badge fl-badge-pagada">Facturada</span>' : '<span class="fl-badge">Pendiente</span>'}</td>
+      <td class="fl-actions">
+        <button type="button" class="quick-action-btn quick-action-secondary fl-btn-sm" data-fl-del-sesion="${flEsc(s.sesion_id)}">Borrar</button>
+      </td>
+    </tr>`).join('');
+  container.innerHTML = `
+    <table class="freelance-table">
+      <thead><tr><th>Fecha</th><th>Cliente</th><th>Horas</th><th>Descripcion</th><th>Facturable</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  container.querySelectorAll('[data-fl-del-sesion]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Borrar sesion?')) return;
+      try {
+        await freelanceDeleteSesion(btn.dataset.flDelSesion);
+        await refreshSesiones();
+      } catch (e) { alert('Error: ' + e.message); }
+    });
+  });
+}
+
+async function refreshSesiones() {
+  const filters = {
+    cliente_id: document.getElementById('fl-sesion-filter-cliente')?.value || null,
+    desde: document.getElementById('fl-sesion-filter-desde')?.value || null,
+    hasta: document.getElementById('fl-sesion-filter-hasta')?.value || null,
+  };
+  freelanceState.sesiones = await freelanceListSesiones(filters);
+  renderFreelanceSesiones();
+}
+
+function openSesionDialog() {
+  const dlg = document.getElementById('fl-sesion-dialog');
+  if (!dlg) return;
+  document.getElementById('fl-sesion-form-error').textContent = '';
+  document.getElementById('fl-sesion-form').reset();
+  document.getElementById('fl-sesion-facturable').checked = true;
+  document.getElementById('fl-sesion-fecha').value = new Date().toISOString().slice(0, 10);
+  populateClienteSelectors();
+  dlg.showModal();
+}
+
+async function submitSesionForm(ev) {
+  ev.preventDefault();
+  const errEl = document.getElementById('fl-sesion-form-error');
+  errEl.textContent = '';
+  const cliente_id = document.getElementById('fl-sesion-cliente').value;
+  const horas = parseFloat(document.getElementById('fl-sesion-horas').value);
+  if (!cliente_id) { errEl.textContent = 'Cliente requerido'; return; }
+  if (!horas || horas <= 0) { errEl.textContent = 'Horas debe ser > 0'; return; }
+  const body = {
+    cliente_id,
+    horas,
+    fecha: document.getElementById('fl-sesion-fecha').value || null,
+    hora_inicio: document.getElementById('fl-sesion-hora-inicio').value || null,
+    hora_fin: document.getElementById('fl-sesion-hora-fin').value || null,
+    descripcion: document.getElementById('fl-sesion-descripcion').value || null,
+    facturable: document.getElementById('fl-sesion-facturable').checked,
+  };
+  try {
+    await freelanceCreateSesion(body);
+    document.getElementById('fl-sesion-dialog').close();
+    await refreshSesiones();
+  } catch (e) { errEl.textContent = e.message; }
+}
+
+// --- Render: Facturas ---
+function renderFreelanceFacturas() {
+  const container = document.getElementById('fl-facturas-list');
+  if (!container) return;
+  const list = freelanceState.facturas;
+  if (!list.length) {
+    container.innerHTML = '<p class="task-empty">Sin facturas.</p>';
+    return;
+  }
+  const rows = list.map(f => `
+    <tr>
+      <td>${flEsc(f.numero_externo || f.factura_id.slice(0, 10))}</td>
+      <td>${flEsc(flClienteNombre(f.cliente_id))}</td>
+      <td>${flFmtDate(f.fecha_emision)}</td>
+      <td>${flFmtDate(f.fecha_vencimiento)}</td>
+      <td>${flFmtMoney(f.monto_total)}</td>
+      <td><span class="fl-badge fl-badge-${flEsc(f.estado)}">${flEsc(f.estado)}</span></td>
+      <td class="fl-actions">
+        ${f.estado === 'emitida' || f.estado === 'vencida' ? `<button type="button" class="quick-action-btn fl-btn-sm" data-fl-pay="${flEsc(f.factura_id)}">Marcar pagada</button>` : ''}
+        ${f.estado !== 'cancelada' && f.estado !== 'pagada' ? `<button type="button" class="quick-action-btn quick-action-secondary fl-btn-sm" data-fl-cancel="${flEsc(f.factura_id)}">Cancelar</button>` : ''}
+      </td>
+    </tr>`).join('');
+  container.innerHTML = `
+    <table class="freelance-table">
+      <thead><tr><th>Numero</th><th>Cliente</th><th>Emision</th><th>Vencimiento</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  container.querySelectorAll('[data-fl-pay]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const fecha = prompt('Fecha de pago (YYYY-MM-DD):', new Date().toISOString().slice(0, 10));
+      if (!fecha) return;
+      try {
+        await freelancePagarFactura(btn.dataset.flPay, fecha);
+        await refreshFacturas();
+      } catch (e) { alert('Error: ' + e.message); }
+    });
+  });
+  container.querySelectorAll('[data-fl-cancel]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const razon = prompt('Razon de cancelacion (opcional):', '');
+      if (razon === null) return;
+      try {
+        await freelanceCancelarFactura(btn.dataset.flCancel, razon);
+        await refreshFacturas();
+      } catch (e) { alert('Error: ' + e.message); }
+    });
+  });
+}
+
+async function refreshFacturas() {
+  const filters = {
+    cliente_id: document.getElementById('fl-factura-filter-cliente')?.value || null,
+    estado: document.getElementById('fl-factura-filter-estado')?.value || null,
+  };
+  freelanceState.facturas = await freelanceListFacturas(filters);
+  renderFreelanceFacturas();
+}
+
+function openFacturaDialog() {
+  const dlg = document.getElementById('fl-factura-dialog');
+  if (!dlg) return;
+  document.getElementById('fl-factura-form-error').textContent = '';
+  document.getElementById('fl-factura-form').reset();
+  document.getElementById('fl-factura-fecha-emision').value = new Date().toISOString().slice(0, 10);
+  populateClienteSelectors();
+  dlg.showModal();
+}
+
+async function submitFacturaForm(ev) {
+  ev.preventDefault();
+  const errEl = document.getElementById('fl-factura-form-error');
+  errEl.textContent = '';
+  const cliente_id = document.getElementById('fl-factura-cliente').value;
+  const monto_subtotal = parseFloat(document.getElementById('fl-factura-subtotal').value);
+  if (!cliente_id) { errEl.textContent = 'Cliente requerido'; return; }
+  if (!monto_subtotal || monto_subtotal <= 0) { errEl.textContent = 'Subtotal debe ser > 0'; return; }
+  const body = {
+    cliente_id,
+    monto_subtotal,
+    monto_iva: parseFloat(document.getElementById('fl-factura-iva').value) || null,
+    fecha_emision: document.getElementById('fl-factura-fecha-emision').value || null,
+    fecha_vencimiento: document.getElementById('fl-factura-fecha-vencimiento').value || null,
+    numero_externo: document.getElementById('fl-factura-numero').value || null,
+    concepto: document.getElementById('fl-factura-concepto').value || null,
+  };
+  try {
+    await freelanceCreateFactura(body);
+    document.getElementById('fl-factura-dialog').close();
+    await refreshFacturas();
+  } catch (e) { errEl.textContent = e.message; }
+}
+
+// --- Render: Resumen ---
+async function refreshFreelanceOverview() {
+  try {
+    const mes = document.getElementById('fl-overview-mes')?.value || null;
+    const ov = await freelanceOverview(mes);
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('fl-stat-horas', flFmtHours(ov.horas_trabajadas ?? 0));
+    set('fl-stat-horas-comp', `${ov.horas_comprometidas ?? 0}h`);
+    set('fl-stat-clientes', String(ov.clientes_activos ?? 0));
+    set('fl-stat-cxc', flFmtMoney(ov.cuentas_por_cobrar ?? 0));
+    set('fl-stat-emitido', flFmtMoney(ov.facturacion_emitida ?? 0));
+    set('fl-stat-pagado', flFmtMoney(ov.facturacion_pagada ?? 0));
+
+    // Alertas
+    const alertasEl = document.getElementById('fl-overview-alertas');
+    if (alertasEl) {
+      const alertas = ov.alertas || [];
+      if (!alertas.length) alertasEl.innerHTML = '';
+      else {
+        alertasEl.innerHTML = `<h3 style="margin:8px 0;">Alertas</h3>` +
+          alertas.map(a => `<div class="fl-badge fl-badge-vencida" style="display:block;margin:4px 0;padding:8px;">${flEsc(typeof a === 'string' ? a : (a.mensaje || JSON.stringify(a)))}</div>`).join('');
+      }
+    }
+
+    // Top clientes list
+    const topList = document.getElementById('fl-top-clientes-list');
+    if (topList) {
+      try {
+        const top = await freelanceTopClientes();
+        if (!top.length) topList.innerHTML = '<p class="task-empty">Sin facturacion en el periodo</p>';
+        else {
+          const rows = top.slice(0, 10).map((c, i) => `
+            <tr><td>${i + 1}</td><td>${flEsc(c.nombre || c.cliente_nombre || c.cliente_id)}</td><td>${flFmtMoney(c.total ?? c.facturado ?? c.monto)}</td></tr>`).join('');
+          topList.innerHTML = `<table class="freelance-table"><thead><tr><th>#</th><th>Cliente</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table>`;
+        }
+      } catch (e) {
+        topList.innerHTML = `<p class="task-empty">Error: ${flEsc(e.message)}</p>`;
+      }
+    }
+  } catch (e) {
+    console.warn('freelance overview failed', e);
+  }
+}
+
+// --- Render: Tarifas ---
+function renderFreelanceTarifas() {
+  const container = document.getElementById('fl-tarifas-list');
+  if (!container) return;
+  const list = freelanceState.clientes;
+  if (!list.length) {
+    container.innerHTML = '<p class="task-empty">Sin clientes para mostrar tarifas.</p>';
+    return;
+  }
+  const rows = list.map(c => `
+    <tr>
+      <td><strong>${flEsc(c.nombre)}</strong></td>
+      <td>${flEsc(c.modalidad || 'horas')}</td>
+      <td>${c.tarifa_hora != null ? flFmtMoney(c.tarifa_hora) : '—'}</td>
+      <td>${c.retainer_mensual != null ? flFmtMoney(c.retainer_mensual) : '—'}</td>
+      <td class="fl-actions">
+        <button type="button" class="quick-action-btn fl-btn-sm" data-fl-tarifa="${flEsc(c.cliente_id)}">Cambiar tarifa</button>
+      </td>
+    </tr>`).join('');
+  container.innerHTML = `
+    <table class="freelance-table">
+      <thead><tr><th>Cliente</th><th>Modalidad</th><th>Tarifa/h</th><th>Retainer</th><th>Acciones</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  container.querySelectorAll('[data-fl-tarifa]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.flTarifa;
+      const c = freelanceState.clientes.find(x => x.cliente_id === id);
+      const current = c?.tarifa_hora ?? '';
+      const next = prompt(`Nueva tarifa por hora (MXN) para ${c?.nombre}:`, String(current));
+      if (next === null) return;
+      const val = parseFloat(next);
+      if (!val || val <= 0) { alert('Tarifa invalida'); return; }
+      try {
+        await freelanceUpdateCliente(id, { tarifa_hora: val });
+        await ensureClientesLoaded(true);
+        renderFreelanceTarifas();
+        renderFreelanceClientes();
+      } catch (e) { alert('Error: ' + e.message); }
+    });
+  });
+}
+
+// --- Init ---
+function initFreelance() {
+  // Cliente form
+  document.getElementById('fl-cliente-new-btn')?.addEventListener('click', () => openClienteDialog(null));
+  document.getElementById('fl-cliente-form')?.addEventListener('submit', submitClienteForm);
+  document.getElementById('fl-cliente-cancel')?.addEventListener('click', () => document.getElementById('fl-cliente-dialog').close());
+  document.getElementById('fl-clientes-refresh')?.addEventListener('click', async () => {
+    await ensureClientesLoaded(true); renderFreelanceClientes();
+  });
+  document.getElementById('fl-clientes-filter-estado')?.addEventListener('change', async () => {
+    await ensureClientesLoaded(true); renderFreelanceClientes();
+  });
+
+  // Sesion form
+  document.getElementById('fl-sesion-new-btn')?.addEventListener('click', async () => {
+    await ensureClientesLoaded(); openSesionDialog();
+  });
+  document.getElementById('fl-sesion-form')?.addEventListener('submit', submitSesionForm);
+  document.getElementById('fl-sesion-cancel')?.addEventListener('click', () => document.getElementById('fl-sesion-dialog').close());
+  document.getElementById('fl-sesiones-refresh')?.addEventListener('click', refreshSesiones);
+
+  // Factura form
+  document.getElementById('fl-factura-new-btn')?.addEventListener('click', async () => {
+    await ensureClientesLoaded(); openFacturaDialog();
+  });
+  document.getElementById('fl-factura-form')?.addEventListener('submit', submitFacturaForm);
+  document.getElementById('fl-factura-cancel')?.addEventListener('click', () => document.getElementById('fl-factura-dialog').close());
+  document.getElementById('fl-facturas-refresh')?.addEventListener('click', refreshFacturas);
+
+  // Overview
+  const mesInput = document.getElementById('fl-overview-mes');
+  if (mesInput) {
+    const now = new Date();
+    mesInput.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  }
+  document.getElementById('fl-overview-refresh')?.addEventListener('click', refreshFreelanceOverview);
+
+  // Lazy-load when freelance section becomes active
+  document.querySelectorAll('.sidebar-submenu-item[data-parent="freelance"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const target = btn.dataset.subsectionTarget;
+      try {
+        if (target === 'fl-clientes') {
+          await ensureClientesLoaded(); renderFreelanceClientes();
+        } else if (target === 'fl-sesiones') {
+          await ensureClientesLoaded(); await refreshSesiones();
+        } else if (target === 'fl-facturas') {
+          await ensureClientesLoaded(); await refreshFacturas();
+        } else if (target === 'fl-tarifas') {
+          await ensureClientesLoaded(true); renderFreelanceTarifas();
+        } else if (target === 'fl-resumen') {
+          await refreshFreelanceOverview();
+        }
+      } catch (e) { console.warn('freelance load', target, e); }
+    });
+  });
+}
+
 (async () => {
   initTabs();
   await ensureBootstrapToken();
@@ -4421,5 +4972,6 @@ async function togglePrivacyMode() {
   loadMeetings();
   loadCalendar();
   loadTtsVoiceSelector();
+  initFreelance();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();
