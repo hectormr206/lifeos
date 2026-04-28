@@ -96,31 +96,32 @@ REGLAS DE TIEMPO:
 - SIEMPRE confirma la hora calculada: "Te recuerdo el lunes 31 de marzo a las 15:00 (CST)."
 - Si no estas seguro de la hora que quiere el usuario, PREGUNTA.
 
-REGLAS DE RECORDATORIOS (CRITICAS — obligatorio usar herramienta):
-- Si el usuario dice "recuerdame", "avisame", "a las X recordame", "en N minutos dime", etc., DEBES llamar la herramienta reminder_add INMEDIATAMENTE. NUNCA digas "programado" sin haber ejecutado la herramienta.
-- Para un recordatorio ONE-SHOT (una sola vez), usa reminder_add — NO uses cron_add.
-- Para tareas RECURRENTES ("todos los dias a las 7", "cada lunes"), usa cron_add.
-- Si no ejecutaste la herramienta, NO afirmes que el recordatorio quedo programado — es una mentira.
-- Despues de ejecutar reminder_add, confirma al usuario el ID y la hora exacta devuelta por la herramienta.
+## Cómo invocar herramientas (NATIVO, no en texto)
 
-EJEMPLOS OBLIGATORIOS de recordatorios:
+Las herramientas viajan en el canal `tool_calls` del API (no en el cuerpo del mensaje). El runtime te las pasa como functions estructuradas; vos respondés llamándolas con sus argumentos JSON. NUNCA pegues el JSON en el texto del mensaje al usuario — eso no ejecuta nada y termina pareciendo una mentira: Axi diría "ya guardé X" sin haber guardado nada. Si el tool_call no aparece en tu salida estructurada, **no afirmes que ejecutaste la acción**.
 
-Usuario: "Recuerdame en 1 minuto que te diga hola"
-Tu respuesta DEBE empezar con el tool call:
-<tool>reminder_add</tool>
-<args>{"in_minutes": 1, "message": "te diga hola"}</args>
-(Despues de ver el resultado, confirmas al usuario.)
+## Reglas de inferencia de intención
 
-Usuario: "Avisame a las 17:00 que me tengo que ir a banar"
-Tu respuesta DEBE empezar con el tool call:
-<tool>reminder_add</tool>
-<args>{"when": "17:00", "message": "Ir a banarse"}</args>
+Vos decidís cuándo llamar tools — el usuario NO necesita decir "guardá", "registrá" ni "anotá". Inferí del contexto:
 
-FORMATO ESTRICTO: el nombre de la herramienta va DIRECTAMENTE entre <tool>...</tool>, en la misma linea, sin <name> ni saltos. Despues, en una linea separada, <args>{...}</args>. Si emites cualquier otro formato (envoltorio <name>, <tool> con saltos internos, espacios), el parser falla y la herramienta NO se ejecuta — Axi narra que hizo algo sin haberlo hecho.
+- **Datos con formato reconocible** (números de presión arterial `116/78`, glucosa `glucose 110 mg/dL en ayunas`, peso `63.8 kg`, temperatura, IMC, pulso) → ejecutá `vital_record` directo, una llamada por métrica. Confirmá con cifras concretas.
+- **Hechos permanentes declarativos** ("soy alérgico a X", "mi tipo de sangre es O+", "tomo metformina 500mg cada 12h") → ejecutá la tool correspondiente (`health_fact_add`, `medication_start`, etc.) inmediatamente.
+- **Recordatorios y alarmas** ("avisame en 30 min", "recuerdame mañana") → `reminder_add` siempre. Si decís "ya te recuerdo" sin emitir el tool_call, mentís.
+- **Pedidos de búsqueda/recuperación** ("qué guardé sobre X", "tráeme mis vitales") → la tool de listado/recall correspondiente.
 
-NUNCA respondas "Listo, te recordaré" sin haber emitido un <tool>...</tool> para reminder_add PRIMERO.
+## Regla de ambigüedad — preguntá antes de actuar
 
-Cuando el usuario te pida algo que requiera una accion real, usa las herramientas. Si es solo conversacion, responde directamente.
+Si el mensaje del usuario podría ser un **registro** O una **pregunta/preocupación**, NO ejecutes la tool sin más; preguntá primero. Ejemplos:
+
+- *"Sentí una bola en el cuello hace 2 semanas"* — ambiguo entre síntoma compartido y antecedente médico. Respondé sugiriendo ver al médico Y preguntá: "¿Querés que lo registre como antecedente médico?"
+- *"Me duele la cabeza"* — ambiguo entre conversación y registro de dolor. Preguntá: "¿Lo registro como una entrada de dolor con intensidad / duración?"
+- *"Hoy dormí poco"* — ambiguo. Si querés precisión, preguntá horas y registrá `sleep_hours`; si es comentario social, no llames tool.
+
+Cuando preguntes, hacelo CONCRETO ("¿lo guardo como X o lo dejamos para hablar y nada más?") — no genérico.
+
+## Anti-mentira (regla absoluta)
+
+Después de emitir tu respuesta, mirá lo que dijiste. Si tu texto contiene "ya guardé", "lo anoté", "queda registrado", "ya programé el recordatorio" — y NO emitiste el tool_call correspondiente — **estás mintiéndole al usuario**. Reformulá: o ejecutá la tool ahora, o decí honestamente "no logré guardarlo, intentémoslo de nuevo". El usuario confía en que cuando decís que algo está guardado, está guardado.
 
 ## Protocolo de Memoria (OBLIGATORIO — siempre activo)
 
@@ -140,12 +141,11 @@ Si el usuario pide CREAR, DESARROLLAR, REFACTORIZAR o DISENAR algo de software (
 
 ## Herramientas disponibles
 
-Para usar una herramienta, escribe EXACTAMENTE este formato (una herramienta por bloque):
+Las herramientas con schema estructurado (`remember`, `recall`, `reminder_add`, `health_fact_add`, `health_fact_list`, `vital_record`, `vital_history`, `medication_start`, `medication_stop`, `medication_active`, `lab_add`, `health_summary`) viajan vía el canal `tools` del API y vos las invocás como function calls — NO escribas su JSON en el cuerpo del mensaje.
 
-<tool>nombre_herramienta</tool>
-<args>{"param": "valor"}</args>
+Para todas las DEMÁS herramientas listadas abajo, el runtime aún acepta el formato textual legacy `<tool>nombre</tool>\n<args>{...}</args>` (una por bloque). Idealmente movemos todo al canal estructurado a futuro; mientras tanto, ambos modos coexisten.
 
-Herramientas:
+Herramientas (formato legacy):
 
 1. **screenshot** — Captura la pantalla actual.
    args: {} (sin parametros)
@@ -1644,6 +1644,7 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
                 preferred_provider: None,
                 max_tokens: Some(256),
                 task_type: None,
+                tools: None,
             };
 
             let r = router.read().await;
@@ -2228,6 +2229,7 @@ Listo!"#;
             preferred_provider: None,
             max_tokens: Some(512),
             task_type: None,
+            tools: None,
         };
 
         let router = ctx.router.read().await;
@@ -2489,6 +2491,201 @@ Listo!"#;
     pub struct ToolCall {
         pub name: String,
         pub args: serde_json::Value,
+    }
+
+    /// OpenAI-format tool specs forwarded to the LLM via `RouterRequest.tools`.
+    ///
+    /// `--jinja` on llama-server renders these via the Qwen3.5 chat template,
+    /// so the model emits a structured `choices[0].message.tool_calls` array
+    /// instead of stuffing markdown JSON into `content`. That removes a long-
+    /// standing class of silent-forgetting bugs where the model claimed to
+    /// have saved data but never actually invoked the tool because its output
+    /// format did not match the legacy `<tool>...</tool>` text scanner.
+    ///
+    /// Schema design notes:
+    /// - Coverage is intentionally narrow: the highest-leverage write tools
+    ///   (memory, reminders, health facts/vitals, finance) get specs; deeper
+    ///   tools still rely on the legacy text scanner via `parse_tool_calls`.
+    /// - Descriptions are written for the model, not the user. They tell it
+    ///   when to fire (`when the user reports a measurement`) and crucially
+    ///   when NOT to fire (`do not invoke for ambiguous symptom reports —
+    ///   ask first`).
+    /// - Required vs optional args mirror the executor's `arg_str` calls so
+    ///   the model gets useful 4xx feedback if it hallucinates a missing key.
+    pub fn build_axi_tool_specs() -> Vec<serde_json::Value> {
+        use serde_json::json;
+        let f = |name: &str, description: &str, parameters: serde_json::Value| {
+            json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters,
+                }
+            })
+        };
+        let obj = |required: &[&str], properties: serde_json::Value| {
+            json!({
+                "type": "object",
+                "properties": properties,
+                "required": required.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            })
+        };
+
+        vec![
+            f(
+                "remember",
+                "Save a fact to long-term memory that should survive across sessions. \
+                 Call this any time the user states a stable preference, fact about \
+                 themselves, decision, or anything they would expect Axi to recall \
+                 weeks later. Do NOT use this for fleeting context (use the \
+                 conversation buffer instead).",
+                obj(
+                    &["type", "topic", "title", "content"],
+                    json!({
+                        "type": {"type": "string", "description": "bugfix | decision | architecture | discovery | pattern | config | preference"},
+                        "topic": {"type": "string", "description": "Stable topic key, e.g. 'usuario:gustos'"},
+                        "title": {"type": "string", "description": "Short verb+what, e.g. 'Cafe sin azucar'"},
+                        "content": {"type": "string", "description": "What/Why/Learned in plain prose"},
+                        "tags": {"type": "string", "description": "Optional comma-separated tags"},
+                    }),
+                ),
+            ),
+            f(
+                "recall",
+                "Search the user's persistent memory for relevant past entries.",
+                obj(&["query"], json!({"query": {"type": "string"}})),
+            ),
+            f(
+                "reminder_add",
+                "Schedule a one-shot reminder. Call this whenever the user asks to be \
+                 reminded, alerted, or pinged about something at a future moment. NEVER \
+                 reply 'I'll remind you' without invoking this — that is hallucination.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "in_minutes": {"type": "integer", "description": "Relative offset, e.g. 15 = 15 min from now"},
+                        "when": {"type": "string", "description": "Absolute time, e.g. '17:00' or '2026-04-30T09:00'"},
+                        "message": {"type": "string", "description": "What the reminder text should say"},
+                    },
+                    "required": ["message"],
+                }),
+            ),
+            f(
+                "health_fact_add",
+                "Save a permanent health fact (allergy, chronic condition, blood type, \
+                 emergency contact, donor status, insurance). Call this when the user \
+                 states something like 'I'm allergic to X', 'my blood type is X', or \
+                 explicitly asks to record/save a fact. AMBIGUITY RULE: if the user \
+                 reports a symptom or worry (e.g. 'I felt a lump in my neck'), do NOT \
+                 auto-invoke — ask first whether to register it as a medical antecedent.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "fact_type": {"type": "string", "description": "allergy|condition|blood_type|emergency_contact|donor|insurance|other"},
+                        "label": {"type": "string", "description": "Short label, e.g. 'Penicilina', 'O+'"},
+                        "severity": {"type": "string", "description": "Optional: mild|moderate|severe|life_threatening"},
+                        "notes": {"type": "string"},
+                    },
+                    "required": ["fact_type", "label"],
+                }),
+            ),
+            f(
+                "health_fact_list",
+                "List the user's saved permanent health facts, optionally filtered by type.",
+                json!({
+                    "type": "object",
+                    "properties": {"fact_type": {"type": "string"}},
+                }),
+            ),
+            f(
+                "vital_record",
+                "Record a single vital-sign reading. Fire this whenever the user sends \
+                 a measurement that fits a known vital type — including bare numbers \
+                 in conventional formats like '116/78 59 pulses' (= systolic 116, \
+                 diastolic 78, heart_rate_resting 59). For blood pressure, emit two \
+                 separate calls (systolic + diastolic) with the same measured_at.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "vital_type": {"type": "string", "description": "glucose|weight|blood_pressure_systolic|blood_pressure_diastolic|heart_rate_resting|temperature|oxygen_saturation|sleep_hours|mood|pain_intensity|migraine_intensity"},
+                        "value_numeric": {"type": "number"},
+                        "unit": {"type": "string"},
+                        "context": {"type": "string", "description": "Optional, e.g. 'en ayunas'"},
+                        "measured_at": {"type": "string", "description": "Optional ISO timestamp; defaults to now"},
+                    },
+                    "required": ["vital_type", "value_numeric"],
+                }),
+            ),
+            f(
+                "vital_history",
+                "Return time-series of a vital, most recent first.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "vital_type": {"type": "string"},
+                        "limit": {"type": "integer", "description": "Default 30"},
+                    },
+                    "required": ["vital_type"],
+                }),
+            ),
+            f(
+                "medication_start",
+                "Record the user starting a medication. If they were already on a \
+                 different dose of the same drug, call medication_stop on the old \
+                 entry first.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "dosage": {"type": "string"},
+                        "frequency": {"type": "string"},
+                        "condition": {"type": "string"},
+                        "prescribed_by": {"type": "string"},
+                        "notes": {"type": "string"},
+                    },
+                    "required": ["name", "dosage", "frequency"],
+                }),
+            ),
+            f(
+                "medication_stop",
+                "Mark the user as having stopped a medication. Needs the med_id from medication_active.",
+                json!({
+                    "type": "object",
+                    "properties": {"med_id": {"type": "string"}},
+                    "required": ["med_id"],
+                }),
+            ),
+            f(
+                "medication_active",
+                "List medications the user is currently taking.",
+                json!({"type": "object", "properties": {}}),
+            ),
+            f(
+                "lab_add",
+                "Record a lab result.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "test_name": {"type": "string"},
+                        "value_numeric": {"type": "number"},
+                        "unit": {"type": "string"},
+                        "reference_low": {"type": "number"},
+                        "reference_high": {"type": "number"},
+                        "lab_name": {"type": "string"},
+                        "notes": {"type": "string"},
+                    },
+                    "required": ["test_name"],
+                }),
+            ),
+            f(
+                "health_summary",
+                "Return the full health snapshot: permanent facts + active meds + \
+                 recent vitals + recent labs. Use it for medical-visit prep or full \
+                 history reviews.",
+                json!({"type": "object", "properties": {}}),
+            ),
+        ]
     }
 
     /// Parse tool calls from LLM response text.
@@ -3477,6 +3674,12 @@ Listo!"#;
                 preferred_provider: None,
                 max_tokens: Some(2048),
                 task_type: None,
+                // OpenAI tool specs forwarded to llama-server (`--jinja` renders
+                // them via the model's chat template). Qwen3.5 emits structured
+                // tool_calls back instead of markdown JSON in `content`. Falls
+                // back to inline `<tool>...</tool>` text parsing if the model
+                // declined to use the structured channel.
+                tools: Some(build_axi_tool_specs()),
             };
 
             let router = ctx.router.read().await;
@@ -3492,8 +3695,23 @@ Listo!"#;
             let response_text = response.text.clone();
             let provider = response.provider.clone();
 
-            // Parse tool calls from LLM response
-            let (tool_calls, text_before_tools) = parse_tool_calls(&response_text);
+            // Prefer the structured `tool_calls` returned by the OpenAI API;
+            // fall back to scanning the raw text for inline `<tool>` markup
+            // if the model emitted text-only (older paths or providers that
+            // don't surface tool_calls).
+            let (tool_calls, text_before_tools) = if !response.tool_calls.is_empty() {
+                let calls: Vec<ToolCall> = response
+                    .tool_calls
+                    .iter()
+                    .map(|tc| ToolCall {
+                        name: tc.name.clone(),
+                        args: tc.args.clone(),
+                    })
+                    .collect();
+                (calls, response_text.trim().to_string())
+            } else {
+                parse_tool_calls(&response_text)
+            };
 
             if tool_calls.is_empty() {
                 // No tool calls — this is the final response
@@ -3874,6 +4092,7 @@ Listo!"#;
             preferred_provider: None,
             max_tokens: Some(1024),
             task_type: None,
+            tools: None,
         };
 
         let router = ctx.router.read().await;
@@ -9952,6 +10171,7 @@ Listo!"#;
             preferred_provider: None,
             max_tokens: Some(1024),
         task_type: None,
+        tools: None,
         };
 
         let router = ctx.router.read().await;
@@ -10453,6 +10673,7 @@ Listo!"#;
             preferred_provider: model.map(|m| m.to_string()),
             max_tokens: Some(2048),
             task_type: None,
+            tools: None,
         };
 
         let router = ctx.router.read().await;
@@ -11025,6 +11246,7 @@ Listo!"#;
                 preferred_provider: Some(model.to_string()),
                 max_tokens: Some(2048),
             task_type: None,
+            tools: None,
             };
 
             let router = ctx.router.read().await;
@@ -11228,6 +11450,7 @@ Listo!"#;
             preferred_provider: None,
             max_tokens: Some(512),
             task_type: None,
+            tools: None,
         };
 
         let router = ctx.router.read().await;

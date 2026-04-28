@@ -707,6 +707,7 @@ impl SessionStore {
             preferred_provider: None,
             max_tokens: Some(1024),
             task_type: None,
+            tools: None,
         };
 
         let router_guard = router.read().await;
