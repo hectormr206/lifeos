@@ -1764,11 +1764,40 @@ impl MemoryPlaneManager {
         let db_path = data_dir.join(DB_FILE);
         let db = Self::open_db(&db_path)?;
 
-        db.execute_batch(SCHEMA)
-            .context("Failed to initialize memory schema")?;
+        // Three-phase schema init.
+        //
+        // Phase 1 — try to apply the full SCHEMA upfront. For fresh installs
+        // this succeeds and creates every table + index in one shot. For
+        // existing DBs from earlier LifeOS versions, this may fail mid-batch:
+        // a `CREATE INDEX ... ON memory_entries(last_accessed)` statement
+        // aborts execute_batch when the live `memory_entries` table predates
+        // that column. We KEEP the error and recover in phase 3.
+        //
+        // Phase 2 — forward-compatible migrations always run. Each one is
+        // guarded by `pragma_table_info`, so repeating them is a no-op. They
+        // bring old DBs up to the column set the SCHEMA assumes.
+        //
+        // Phase 3 — if phase 1 errored, retry SCHEMA now that the missing
+        // columns exist. All statements use `IF NOT EXISTS`, so the
+        // already-applied parts no-op and the previously failing index can
+        // finally bind. If phase 3 still fails, propagate with full context
+        // (genuine schema bug, not the column-vs-index race).
+        //
+        // Pre-fix history: phase 1's error was bubbled up directly, run_migrations
+        // never ran, and tables added after the original release (health_facts,
+        // health_medications, health_vitals, health_lab_results, etc.) were never
+        // created. INSERTs into them silently failed inside per-tool executors,
+        // surfacing as the "Axi narrates 'ya guardé' but nothing persisted"
+        // class of bug. Engram memory: bugfix #794.
+        let initial_schema_result = db.execute_batch(SCHEMA);
 
-        // Run forward-compatible migrations for columns added after initial release.
         Self::run_migrations(&db)?;
+
+        if let Err(initial_err) = initial_schema_result {
+            db.execute_batch(SCHEMA).with_context(|| {
+                format!("memory schema retry failed after migrations (initial: {initial_err})")
+            })?;
+        }
 
         Ok(Self {
             data_dir,
@@ -1785,6 +1814,15 @@ impl MemoryPlaneManager {
     /// schema version.  SQLite does not support `ADD COLUMN IF NOT EXISTS`, so
     /// we probe `pragma_table_info` first.
     fn run_migrations(db: &Connection) -> Result<()> {
+        // Helper: returns true if `table` exists in the DB (any kind).
+        // Migrations are wrapped in `table_exists` checks so that a partial
+        // SCHEMA failure (table never created) does not cascade into
+        // `no such table` errors when run_migrations runs immediately after.
+        let table_exists = |table: &str| -> bool {
+            db.prepare("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?1")
+                .and_then(|mut stmt| stmt.exists(rusqlite::params![table]))
+                .unwrap_or(false)
+        };
         // Helper: returns true if `table` already has a column called `col`.
         let has_column = |table: &str, col: &str| -> bool {
             db.prepare(&format!(
@@ -1796,6 +1834,11 @@ impl MemoryPlaneManager {
         };
 
         // -- memory_entries migrations (added after v0.2) --
+        if !table_exists("memory_entries") {
+            // Fresh install path that never created the table — SCHEMA retry
+            // will handle it. Skip column migrations for now.
+            return Ok(());
+        }
         if !has_column("memory_entries", "embedding_source") {
             db.execute_batch(
                 "ALTER TABLE memory_entries ADD COLUMN embedding_source TEXT NOT NULL DEFAULT 'fallback';",
@@ -26034,6 +26077,72 @@ mod tests {
     }
 
     // ---- BI.2: Salud médica estructurada -----------------------------------
+
+    /// Regression for engram bug #794.
+    ///
+    /// Simulates an "old" memory.db: a memory_entries table that predates the
+    /// `last_accessed` column. Pre-fix, the SCHEMA execute_batch aborted at
+    /// the `CREATE INDEX idx_memory_last_accessed` line because the column
+    /// did not exist yet, run_migrations never ran, and the new health_*
+    /// tables (added after v0.2) were never created. Then health_fact_add
+    /// would `INSERT INTO health_facts` against a non-existent table and the
+    /// failure was swallowed inside the per-tool executor. Symptom: Axi
+    /// confidently narrated "ya guardé tu tipo de sangre" without any row
+    /// landing in the DB. The new three-phase init must recover from this:
+    /// initial SCHEMA fails → run_migrations adds last_accessed → SCHEMA
+    /// retry succeeds → health_facts exists → add_health_fact persists.
+    #[tokio::test]
+    async fn schema_init_survives_pre_last_accessed_legacy_db() {
+        use rusqlite::Connection;
+        let dir = temp_dir("memory-plane-legacy-db");
+        let db_path = dir.join(DB_FILE);
+
+        // Build a "legacy" DB by hand: just memory_entries WITHOUT the
+        // newer columns. This mirrors what an upgrading user actually has
+        // on disk before the migration runs.
+        {
+            let db = Connection::open(&db_path).unwrap();
+            db.execute_batch(
+                r#"
+                CREATE TABLE memory_entries (
+                    entry_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    importance INTEGER NOT NULL,
+                    nonce_b64 TEXT NOT NULL,
+                    ciphertext_b64 TEXT NOT NULL,
+                    plaintext_sha256 TEXT NOT NULL
+                );
+                "#,
+            )
+            .unwrap();
+        }
+
+        // Now run the real init path. Pre-fix this would have errored out at
+        // "Failed to initialize memory schema" because of the index on
+        // last_accessed. With the three-phase init it should succeed and
+        // create the health_* tables.
+        let mgr = MemoryPlaneManager::new(dir.clone()).expect("init should recover");
+        mgr.initialize().await.unwrap();
+
+        // Verify: health_facts table now exists AND a write-then-read round
+        // trip works end-to-end (so we know not just that tables were created
+        // but also that they are actually usable).
+        let fact = mgr
+            .add_health_fact("blood_type", "O+", None, "", None)
+            .await
+            .expect("add_health_fact must succeed on recovered schema");
+        assert_eq!(fact.fact_type, "blood_type");
+        assert_eq!(fact.label, "O+");
+
+        let listed = mgr.list_health_facts(None).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].label, "O+");
+    }
 
     #[tokio::test]
     async fn test_health_fact_add_and_list() {
