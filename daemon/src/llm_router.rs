@@ -1761,8 +1761,9 @@ pub fn extract_openai_tool_calls(message: &serde_json::Value) -> Vec<LlmToolCall
 
     let parse_args = |raw: &serde_json::Value| -> serde_json::Value {
         match raw {
-            serde_json::Value::String(s) => serde_json::from_str(s.trim())
-                .unwrap_or_else(|_| serde_json::json!({})),
+            serde_json::Value::String(s) => {
+                serde_json::from_str(s.trim()).unwrap_or_else(|_| serde_json::json!({}))
+            }
             serde_json::Value::Object(_) => raw.clone(),
             _ => serde_json::json!({}),
         }
@@ -2378,7 +2379,7 @@ mod tests {
             complexity: Some(TaskComplexity::Simple),
             sensitivity: Some(SensitivityLevel::Low),
             task_type: None,
-        tools: None,
+            tools: None,
             max_tokens: None,
         };
 
@@ -2451,7 +2452,7 @@ mod tests {
             complexity: Some(TaskComplexity::Simple),
             sensitivity: Some(SensitivityLevel::Low),
             task_type: None,
-        tools: None,
+            tools: None,
             max_tokens: None,
         };
 

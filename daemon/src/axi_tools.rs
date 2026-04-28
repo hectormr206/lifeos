@@ -1644,7 +1644,7 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
                 preferred_provider: None,
                 max_tokens: Some(256),
                 task_type: None,
-            tools: None,
+                tools: None,
             };
 
             let r = router.read().await;
@@ -2229,7 +2229,7 @@ Listo!"#;
             preferred_provider: None,
             max_tokens: Some(512),
             task_type: None,
-        tools: None,
+            tools: None,
         };
 
         let router = ctx.router.read().await;
@@ -4092,7 +4092,7 @@ Listo!"#;
             preferred_provider: None,
             max_tokens: Some(1024),
             task_type: None,
-        tools: None,
+            tools: None,
         };
 
         let router = ctx.router.read().await;
@@ -10673,7 +10673,7 @@ Listo!"#;
             preferred_provider: model.map(|m| m.to_string()),
             max_tokens: Some(2048),
             task_type: None,
-        tools: None,
+            tools: None,
         };
 
         let router = ctx.router.read().await;
@@ -11450,7 +11450,7 @@ Listo!"#;
             preferred_provider: None,
             max_tokens: Some(512),
             task_type: None,
-        tools: None,
+            tools: None,
         };
 
         let router = ctx.router.read().await;

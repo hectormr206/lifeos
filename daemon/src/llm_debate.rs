@@ -458,7 +458,7 @@ async fn query_single_provider(
         preferred_provider: Some(provider.name.clone()),
         max_tokens: Some(1024),
         task_type: None,
-    tools: None,
+        tools: None,
     };
 
     let resp = router.chat(&router_req).await?;
@@ -660,7 +660,7 @@ async fn synthesize_with_judge(
         preferred_provider: local_provider,
         max_tokens: Some(2048),
         task_type: None,
-    tools: None,
+        tools: None,
     };
 
     let resp = router.chat(&req).await?;

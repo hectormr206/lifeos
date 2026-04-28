@@ -4716,7 +4716,7 @@ impl MemoryPlaneManager {
                 preferred_provider: None,
                 max_tokens: Some(400),
                 task_type: None,
-            tools: None,
+                tools: None,
             };
 
             let summary_text = match router.chat(&req).await {

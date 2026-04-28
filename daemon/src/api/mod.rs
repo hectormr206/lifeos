@@ -12434,7 +12434,7 @@ async fn post_llm_chat(
             preferred_provider: None,
             max_tokens: None,
             task_type: None,
-        tools: None,
+            tools: None,
         };
 
         let router = state.llm_router.read().await;
