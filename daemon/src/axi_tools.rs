@@ -1940,11 +1940,18 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
 
         #[test]
         fn sanitize_persistence_claims_rewrites_strong_positives_to_weak_uncertain() {
-            // Spanish — the most common Axi narrative pattern.
+            // Spanish — the most common Axi narrative pattern. The claim
+            // is mid-sentence ("¡Listo, Héctor! Ya guardé...") so the
+            // capitalize-first replacement path fires and maps "Ya guardé"
+            // → "Intenté guardar" (capital I). We compare on the lowercased
+            // haystack so the test does not flake on that detail — the
+            // important property is the strong→weak swap, regardless of
+            // where in the sentence the phrase landed.
             let input = "¡Listo, Héctor! Ya guardé que tu tipo de sangre es O+ en tu historial.";
             let out = sanitize_persistence_claims(input);
-            assert!(out.contains("intenté guardar"), "got: {out}");
-            assert!(!out.contains("Ya guardé"), "got: {out}");
+            let lower = out.to_lowercase();
+            assert!(lower.contains("intenté guardar"), "got: {out}");
+            assert!(!lower.contains("ya guardé"), "got: {out}");
             assert!(out.contains("O+"), "data preserved: {out}");
         }
 
