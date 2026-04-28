@@ -11,7 +11,25 @@ use std::time::Duration;
 const PROFILE_SCHEMA_VERSION: u32 = 1;
 const PROFILE_CHECK_INTERVAL_SECS: u64 = 15 * 60;
 const PROFILE_RETRY_INTERVAL_SECS: u64 = 5 * 60;
-const INITIAL_BENCHMARK_DELAY_SECS: u64 = 45;
+/// How long after lifeosd boots before the auto-benchmark fires.
+///
+/// Engram bug #793: each benchmark candidate calls `apply_runtime_env` +
+/// `restart_llama_server_sync` to measure latency, which means
+/// `/var/lib/lifeos/llama-server-runtime-profile.env` and the actually-running
+/// llama-server process flip between cpu_ram, normal_gpu, and
+/// game_guard_cpu_fallback candidates over the benchmark window. If the user
+/// chats with Axi during that window, their turn lands on whichever candidate
+/// happens to be loaded — which can be Qwen3.5-4B in CPU at full ctx, painfully
+/// slow for prefill (~50 tok/s), and prone to router timeouts.
+///
+/// The proper fix is sidecar benchmarks (run candidates as child processes on
+/// a separate port, never touch the main llama-server). That is tracked as a
+/// follow-up. For now we mitigate by deferring the auto-benchmark long enough
+/// that a user who just booted the laptop is overwhelmingly unlikely to be
+/// actively chatting when it fires. 30 minutes is a balance: the benchmark
+/// still runs unattended on most laptops, but the most common
+/// "boot → log into COSMIC → ping Axi" flow finishes long before.
+const INITIAL_BENCHMARK_DELAY_SECS: u64 = 30 * 60;
 const DEFAULT_MODEL: &str = "Qwen3.5-4B-Q4_K_M.gguf";
 const DEFAULT_ALIAS: &str = "lifeos";
 const DEFAULT_PORT: u16 = 8082;
@@ -292,6 +310,20 @@ pub fn bootstrap_runtime_profile(data_dir: &Path) -> Result<BootstrapOutcome> {
         save_runtime_profile(&profile_path, &profile)?;
     }
 
+    // Defensive recovery for engram bug #793: if a previous lifeosd instance
+    // died mid-benchmark, the on-disk runtime-profile.env can be left holding
+    // a candidate's settings (e.g. game_guard_cpu_fallback shape — gpu_layers=0,
+    // 4B model, threads=12). The unconditional write below already overwrites
+    // it with `active_settings()` (= normal_gpu when GPU is available), so
+    // boot is self-healing. But we ALSO log when we detect that drift, so the
+    // bug is observable in journals if it happens again under new code paths.
+    if let Some(found_drift) = detect_stale_candidate_in_runtime_env(&profile) {
+        warn!(
+            "[ai_runtime] runtime-profile.env had stale {found_drift} candidate state at boot — \
+             overwriting with active_settings (engram #793 recovery)"
+        );
+    }
+
     let env_changed = apply_runtime_env(&profile.active_settings())?;
     Ok(BootstrapOutcome {
         benchmark_pending: !profile.benchmark_completed,
@@ -299,6 +331,35 @@ pub fn bootstrap_runtime_profile(data_dir: &Path) -> Result<BootstrapOutcome> {
         profile_changed,
         env_changed,
     })
+}
+
+/// Inspect the on-disk runtime env file and report which (if any) candidate
+/// shape it currently holds, instead of the active profile. Returns the
+/// candidate-name string (e.g. "game_guard_cpu_fallback", "cpu_ram") when the
+/// file diverges from active_settings, or `None` when the file is already
+/// aligned (or missing). Used purely for the boot-time observability log
+/// added for engram bug #793; the unconditional `apply_runtime_env` that
+/// follows it heals the file regardless.
+fn detect_stale_candidate_in_runtime_env(profile: &RuntimeProfile) -> Option<&'static str> {
+    let path = runtime_override_env_path();
+    let content = std::fs::read_to_string(&path).ok()?;
+    let active = profile.active_settings();
+    let active_lines = active.to_env_lines();
+    // If the file already matches active settings byte-for-byte, no drift.
+    if active_lines.iter().all(|line| content.contains(line)) {
+        return None;
+    }
+    // Otherwise, see which candidate it most closely resembles.
+    if let Some(g) = profile.profiles.game_guard_cpu_fallback.as_ref() {
+        if g.to_env_lines().iter().all(|line| content.contains(line)) {
+            return Some("game_guard_cpu_fallback");
+        }
+    }
+    let cpu_lines = profile.profiles.cpu_ram.to_env_lines();
+    if cpu_lines.iter().all(|line| content.contains(line)) {
+        return Some("cpu_ram");
+    }
+    Some("unknown candidate")
 }
 
 pub async fn run_runtime_profile_manager(
