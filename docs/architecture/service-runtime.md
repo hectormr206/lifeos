@@ -64,6 +64,16 @@ journalctl -u llama-server -f
   - `/var/lib/lifeos/llama-server-runtime-profile.env`
   - `/var/lib/lifeos/llama-server-game-guard.env`
 
+## Profile model selection (Qwen3.5 9B vs 4B)
+
+`RuntimeSettings` en `daemon/src/ai_runtime_profile.rs` lleva ahora dos campos opcionales `model` y `mmproj` que se emiten como `LIFEOS_AI_MODEL` y `LIFEOS_AI_MMPROJ` en los archivos `runtime-profile.env` y `game-guard.env`. Reglas vigentes:
+
+- **`normal_gpu`**: pinea Qwen3.5-9B-Q4_K_M.gguf + Qwen3.5-9B-mmproj-F16.gguf con `gpu_layers=99`. Es el modelo canónico cuando la GPU está disponible.
+- **`game_guard_cpu_fallback`**: pinea Qwen3.5-4B-Q4_K_M.gguf + Qwen3.5-4B-mmproj-F16.gguf con `gpu_layers=0`. Cuando game_guard detecta un juego, libera la VRAM al juego y deja a Axi corriendo el modelo más chico en CPU pero **conservando ctx grande (hasta 131K en máquinas con ≥ 64GB RAM)** para no perder tool-calling ni contexto conversacional.
+- **`cpu_ram`**: deja `model=None`/`mmproj=None`, hereda lo que esté en `/etc/lifeos/llama-server.env` (default 9B). Es el perfil "no hay GPU disponible" y el usuario decide si bumpea a 4B manualmente.
+
+Como los `EnvironmentFile=` cargan en orden (`llama-server.env` → `runtime-profile.env` → `game-guard.env`), el último archivo presente gana — game_guard puede sobrescribir el modelo del runtime profile, y al limpiarse vuelve al runtime profile (9B en GPU).
+
 ## Fuentes de verdad
 
 Orden de prioridad para entender el runtime real:

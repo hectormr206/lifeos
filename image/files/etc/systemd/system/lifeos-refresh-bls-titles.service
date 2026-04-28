@@ -1,0 +1,19 @@
+[Unit]
+Description=LifeOS — refresh BLS entry titles after bootc upgrade
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target shutdown.target
+Conflicts=shutdown.target
+ConditionPathIsDirectory=/boot/loader/entries
+ConditionPathExists=/usr/bin/bootc
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lifeos-refresh-bls-titles.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeos-refresh-bls-titles
+
+[Install]
+WantedBy=multi-user.target

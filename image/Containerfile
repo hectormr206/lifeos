@@ -141,6 +141,7 @@ RUN set -eux && \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_SERVER=ON && \
+    cmake --build /tmp/llama.cpp/build -j2 --target vulkan-shaders-gen 2>/dev/null || true && \
     cmake --build /tmp/llama.cpp/build -j1 --target llama-server && \
     BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
     echo ">>> Binary found at: ${BUILD_BIN}" && \
@@ -932,6 +933,7 @@ COPY image/files/usr/local/bin/lifeos-detect-ecores.sh        /usr/local/bin/lif
 COPY image/files/usr/local/bin/lifeos-epp-switch.sh           /usr/local/bin/lifeos-epp-switch.sh
 COPY image/files/usr/local/bin/lifeos-thermal-grant.sh        /usr/local/bin/lifeos-thermal-grant.sh
 COPY image/files/usr/local/bin/lifeos-isolate-process.sh      /usr/local/bin/lifeos-isolate-process
+COPY image/files/usr/local/bin/lifeos-refresh-bls-titles.sh   /usr/local/bin/lifeos-refresh-bls-titles.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-apply-default-layout.sh \
              /usr/local/bin/lifeos-cosmic-snapshot \
@@ -959,7 +961,8 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-detect-ecores.sh \
              /usr/local/bin/lifeos-epp-switch.sh \
              /usr/local/bin/lifeos-thermal-grant.sh \
-             /usr/local/bin/lifeos-isolate-process
+             /usr/local/bin/lifeos-isolate-process \
+             /usr/local/bin/lifeos-refresh-bls-titles.sh
 
 # --- Pre-trained wake word model (works from first boot) ---
 # Generate synthetic "Axi" samples with espeak-ng and build the rustpotter .rpw model.
@@ -1104,6 +1107,7 @@ RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/di
 # Copiar unit files desde el repo
 COPY image/files/etc/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/lifeos-first-boot.service
 COPY image/files/etc/systemd/system/lifeos-cosmic-greeter-branding.service /usr/lib/systemd/system/lifeos-cosmic-greeter-branding.service
+COPY image/files/etc/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/systemd/system/lifeos-refresh-bls-titles.service
 COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
 COPY image/files/etc/systemd/system/llama-server.service.d/10-fast-kill.conf /etc/systemd/system/llama-server.service.d/10-fast-kill.conf
 COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/system/llama-embeddings.service
@@ -1181,6 +1185,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-nvidia-signed-modules.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-nvidia-signed-modules.service && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-refresh-bls-titles.service && \
     ln -sf /usr/lib/systemd/system/simplex-chat.service /usr/lib/systemd/system/multi-user.target.wants/simplex-chat.service && \
     # Canonical enablement: lifeosd starts from the graphical session target
     # so it waits for the display server to be ready (fixes the tray-icon

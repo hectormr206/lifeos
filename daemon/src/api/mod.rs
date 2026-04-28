@@ -13119,6 +13119,8 @@ mod tests {
                     parallel: 1,
                     batch_size: 256,
                     ubatch_size: 64,
+                    model: None,
+                    mmproj: None,
                 },
                 normal_gpu: Some(RuntimeSettings {
                     ctx_size: 16384,
@@ -13127,6 +13129,8 @@ mod tests {
                     parallel: 1,
                     batch_size: 512,
                     ubatch_size: 128,
+                    model: Some("Qwen3.5-9B-Q4_K_M.gguf".into()),
+                    mmproj: Some("Qwen3.5-9B-mmproj-F16.gguf".into()),
                 }),
                 game_guard_cpu_fallback: Some(RuntimeSettings {
                     ctx_size: 8192,
@@ -13135,6 +13139,8 @@ mod tests {
                     parallel: 1,
                     batch_size: 256,
                     ubatch_size: 64,
+                    model: Some("Qwen3.5-4B-Q4_K_M.gguf".into()),
+                    mmproj: Some("Qwen3.5-4B-mmproj-F16.gguf".into()),
                 }),
             },
             probe_completed: false,

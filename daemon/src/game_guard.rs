@@ -1089,6 +1089,10 @@ pub fn effective_gpu_layers(env_path: &str) -> Option<i32> {
 /// while the game runs. On machines with 16 GB+ RAM this is fine; on
 /// lower-memory machines the runtime profile should pick a smaller model.
 pub fn persist_game_guard_override(profile: Option<&RuntimeSettings>) -> Result<()> {
+    // Defensive fallback when the daemon hasn't computed a runtime profile yet
+    // (first boot, missing fingerprint, etc). Pin the smaller 4B model so the
+    // game keeps the GPU; the runtime-profile.env will override these once the
+    // first benchmark completes.
     let profile = profile.cloned().unwrap_or(RuntimeSettings {
         ctx_size: 4096,
         threads: 4,
@@ -1096,6 +1100,8 @@ pub fn persist_game_guard_override(profile: Option<&RuntimeSettings>) -> Result<
         parallel: 1,
         batch_size: 256,
         ubatch_size: 128,
+        model: Some("Qwen3.5-4B-Q4_K_M.gguf".into()),
+        mmproj: Some("Qwen3.5-4B-mmproj-F16.gguf".into()),
     });
     crate::ai_runtime_profile::write_game_guard_override(&profile)?;
     restart_llama_server()?;

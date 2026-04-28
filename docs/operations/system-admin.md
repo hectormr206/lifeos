@@ -35,7 +35,8 @@ LifeOS System Services
 │   ├── lifeos-flatpak-nvidia-sync.service system  GPU driver ↔ Flatpak GL sync
 │   ├── lifeos-security-baseline.service   system  CIS hardening baseline
 │   ├── lifeos-sentinel.service            system  System monitoring
-│   └── lifeos-cosmic-greeter-branding.service system Login screen branding
+│   ├── lifeos-cosmic-greeter-branding.service system Login screen branding
+│   └── lifeos-refresh-bls-titles.service   system  Refresh GRUB titles after bootc upgrade
 │
 ├── Hardware Management
 │   ├── lifeos-thermal.service             system  Thermal throttling
@@ -202,6 +203,25 @@ not the primary runtime model.
 | Kokoro TTS | `kokoro==0.9.4` + `numpy==1.26.4` | numpy stays on 1.x for torch 2.4.1 ABI |
 
 When bumping these in `image/Containerfile`, also update this table and the canonical upgrade checklist.
+
+### Memory plane SQLite tuning
+
+Every connection opened by `MemoryPlaneManager::open_db` enables WAL +
+synchronous=NORMAL + busy_timeout=5000 + cache_size=64 MiB +
+mmap_size=256 MiB + temp_store=MEMORY. WAL gives 3–10× write throughput
+and lets readers proceed during writes; the small power-loss durability
+window is acceptable for a personal assistant. To verify on a running
+host:
+
+```bash
+sqlite3 ~/.local/share/lifeos/memory.db 'PRAGMA journal_mode; PRAGMA synchronous;'
+# expect: wal / 1
+```
+
+`conversation_history.json` is now persisted with a tempfile + fsync +
+rename + parent-dir fsync sequence, with mode 0600 on the resulting
+file. Crash mid-write no longer corrupts the file, and the file is no
+longer world-readable across the rename.
 
 ```bash
 # Manage default system service
