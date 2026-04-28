@@ -141,7 +141,12 @@ RUN set -eux && \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_SERVER=ON && \
-    cmake --build /tmp/llama.cpp/build -j2 --target vulkan-shaders-gen 2>/dev/null || true && \
+    # -j1 alone resolves the Vulkan shader race intrinsically — CMake builds
+    # vulkan-shaders-gen first because llama-server depends on it. The earlier
+    # split build (`-j2 vulkan-shaders-gen 2>/dev/null || true` then `-j1
+    # llama-server`) silently swallowed shader-gen failures (OOM under -j2 on
+    # the self-hosted runner) and the linker then failed with thousands of
+    # `undefined reference to matmul_id_subgroup_*` symbols.
     cmake --build /tmp/llama.cpp/build -j1 --target llama-server && \
     BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
     echo ">>> Binary found at: ${BUILD_BIN}" && \
