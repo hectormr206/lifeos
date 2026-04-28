@@ -70,6 +70,26 @@ pub struct RouterRequest {
     /// Optional task type hint. If `None`, the router auto-classifies from messages.
     #[serde(default)]
     pub task_type: Option<TaskType>,
+    /// OpenAI-format tool specs. When present, the OpenAI-compatible providers
+    /// forward them in the `tools` field of the request body, and the response
+    /// is mined for `choices[0].message.tool_calls` instead of inline text
+    /// markup. Pass `None` for plain chat (no tool use available).
+    #[serde(default)]
+    pub tools: Option<Vec<serde_json::Value>>,
+}
+
+/// One tool invocation extracted from the model response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmToolCall {
+    /// Provider-supplied id (passed back as `tool_call_id` on the next turn).
+    /// May be empty when the provider does not surface one.
+    #[serde(default)]
+    pub id: String,
+    /// Tool name as registered in `axi_tools` (e.g. `health_fact_add`).
+    pub name: String,
+    /// Parsed arguments object. Always a JSON object; empty `{}` if the model
+    /// emitted nothing parseable.
+    pub args: serde_json::Value,
 }
 
 /// Response returned by the router.
@@ -81,6 +101,12 @@ pub struct RouterResponse {
     pub tokens_used: Option<u32>,
     pub latency_ms: u64,
     pub cached: bool,
+    /// Tool calls emitted by the model via the OpenAI `tool_calls` channel.
+    /// Empty when the model produced plain text (or when the provider does
+    /// not support structured tool use). Callers should prefer this over
+    /// scanning `text` for inline `<tool>` markup.
+    #[serde(default)]
+    pub tool_calls: Vec<LlmToolCall>,
 }
 
 /// Cost tracking for a provider.
@@ -786,12 +812,23 @@ impl LlmRouter {
             .unwrap_or("/v1/chat/completions");
         let url = format!("{}{}", provider.api_base, path);
 
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "model": provider.model,
             "messages": request.messages,
             "max_tokens": request.max_tokens.unwrap_or(2048),
             "stream": false,
         });
+        // Forward OpenAI-format tool specs when the caller provided them.
+        // llama-server with `--jinja` uses the model's native chat template
+        // to render these (Qwen3.5 emits structured tool_calls back), so the
+        // response stops returning markdown JSON in `content` and starts
+        // populating `choices[0].message.tool_calls` properly.
+        if let Some(tools) = &request.tools {
+            if !tools.is_empty() {
+                payload["tools"] = serde_json::Value::Array(tools.clone());
+                payload["tool_choice"] = serde_json::Value::String("auto".into());
+            }
+        }
 
         let mut req = self.http.post(&url).json(&payload);
 
@@ -843,6 +880,7 @@ impl LlmRouter {
                             .to_string();
                         let text = strip_think_tags(&raw_text);
                         let text = strip_reasoning_loop(&text);
+                        let tool_calls = extract_openai_tool_calls(msg);
                         let tokens_used = retry_body["usage"]["total_tokens"]
                             .as_u64()
                             .and_then(|t| u32::try_from(t).ok());
@@ -853,6 +891,7 @@ impl LlmRouter {
                             tokens_used,
                             latency_ms: 0,
                             cached: false,
+                            tool_calls,
                         });
                     }
                 }
@@ -881,6 +920,12 @@ impl LlmRouter {
         let text = strip_think_tags(&raw_text);
         let text = strip_reasoning_loop(&text);
 
+        // Pull structured tool_calls from the OpenAI response shape. With
+        // `--jinja` this is what Qwen3.5 emits when the caller passes a
+        // `tools` array; without `tools` the field is empty and the caller
+        // can fall back to scanning `text` for inline markup.
+        let tool_calls = extract_openai_tool_calls(msg);
+
         let tokens_used = body["usage"]["total_tokens"]
             .as_u64()
             .and_then(|t| u32::try_from(t).ok());
@@ -892,6 +937,7 @@ impl LlmRouter {
             tokens_used,
             latency_ms: 0,
             cached: false,
+            tool_calls,
         })
     }
 
@@ -980,6 +1026,7 @@ impl LlmRouter {
             tokens_used,
             latency_ms: 0,
             cached: false,
+            tool_calls: Vec::new(),
         })
     }
 
@@ -1698,6 +1745,75 @@ fn starts_with_terminal_hedge(normalized: &str, hedge: &str) -> bool {
     false
 }
 
+/// Pull tool calls out of the OpenAI-format `choices[0].message` object.
+///
+/// Two shapes are normalised:
+/// - Modern OpenAI / llama.cpp `--jinja`: `message.tool_calls` is an array of
+///   `{id, type:"function", function:{name, arguments:"<json string>"}}`.
+/// - Older / partial implementations: `message.function_call` (singular) with
+///   `{name, arguments:"<json string>"}`.
+///
+/// `arguments` is parsed from string to `serde_json::Value::Object`. Empty or
+/// malformed argument blobs degrade to `{}` rather than an error — the caller
+/// already validates per-tool args downstream.
+pub fn extract_openai_tool_calls(message: &serde_json::Value) -> Vec<LlmToolCall> {
+    let mut out: Vec<LlmToolCall> = Vec::new();
+
+    let parse_args = |raw: &serde_json::Value| -> serde_json::Value {
+        match raw {
+            serde_json::Value::String(s) => serde_json::from_str(s.trim())
+                .unwrap_or_else(|_| serde_json::json!({})),
+            serde_json::Value::Object(_) => raw.clone(),
+            _ => serde_json::json!({}),
+        }
+    };
+
+    if let Some(arr) = message.get("tool_calls").and_then(|v| v.as_array()) {
+        for tc in arr {
+            let id = tc
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let function = tc.get("function").unwrap_or(&serde_json::Value::Null);
+            let name = function
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let args = function
+                .get("arguments")
+                .map(parse_args)
+                .unwrap_or_else(|| serde_json::json!({}));
+            out.push(LlmToolCall { id, name, args });
+        }
+    } else if let Some(fc) = message.get("function_call") {
+        let name = fc
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            let args = fc
+                .get("arguments")
+                .map(parse_args)
+                .unwrap_or_else(|| serde_json::json!({}));
+            out.push(LlmToolCall {
+                id: String::new(),
+                name,
+                args,
+            });
+        }
+    }
+
+    out
+}
+
 /// Strip `<think>...</think>` blocks from LLM responses (Qwen3, DeepSeek, etc.).
 /// These models include chain-of-thought reasoning that shouldn't be shown to users.
 pub fn strip_think_tags(text: &str) -> String {
@@ -1775,6 +1891,100 @@ pub fn strip_reasoning_loop(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_openai_tool_calls_modern_array_shape() {
+        // Modern OpenAI / llama.cpp `--jinja` shape: tool_calls is an array of
+        // {id, type, function:{name, arguments}}. arguments is a JSON STRING
+        // that the parser must JSON.parse before handing to the executor.
+        let msg = serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "vital_record",
+                        "arguments": "{\"vital_type\":\"blood_pressure_systolic\",\"value_numeric\":116}"
+                    }
+                },
+                {
+                    "id": "call_def",
+                    "type": "function",
+                    "function": {
+                        "name": "vital_record",
+                        "arguments": "{\"vital_type\":\"blood_pressure_diastolic\",\"value_numeric\":78}"
+                    }
+                }
+            ]
+        });
+        let calls = extract_openai_tool_calls(&msg);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call_abc");
+        assert_eq!(calls[0].name, "vital_record");
+        assert_eq!(calls[0].args["value_numeric"], 116);
+        assert_eq!(calls[1].args["vital_type"], "blood_pressure_diastolic");
+    }
+
+    #[test]
+    fn extract_openai_tool_calls_legacy_function_call_shape() {
+        // Some providers still ship the old `function_call` singular shape.
+        let msg = serde_json::json!({
+            "role": "assistant",
+            "function_call": {
+                "name": "health_fact_add",
+                "arguments": "{\"fact_type\":\"blood_type\",\"label\":\"O+\"}"
+            }
+        });
+        let calls = extract_openai_tool_calls(&msg);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "health_fact_add");
+        assert_eq!(calls[0].args["label"], "O+");
+    }
+
+    #[test]
+    fn extract_openai_tool_calls_handles_object_arguments() {
+        // Some implementations skip the JSON.stringify step and put the args
+        // as a raw object. Accept both.
+        let msg = serde_json::json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "remember",
+                    "arguments": {"type": "preference", "topic": "x", "title": "y", "content": "z"}
+                }
+            }]
+        });
+        let calls = extract_openai_tool_calls(&msg);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].args["type"], "preference");
+    }
+
+    #[test]
+    fn extract_openai_tool_calls_skips_empty_or_malformed() {
+        // Blank name → drop. Malformed args → degrade to {} not error.
+        let msg = serde_json::json!({
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "x", "type": "function", "function": {"name": "", "arguments": "{}"}},
+                {"id": "y", "type": "function", "function": {"name": "remember", "arguments": "not-json"}}
+            ]
+        });
+        let calls = extract_openai_tool_calls(&msg);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "remember");
+        assert_eq!(calls[0].args, serde_json::json!({}));
+    }
+
+    #[test]
+    fn extract_openai_tool_calls_plain_text_response_is_empty() {
+        // No tool_calls field → empty vec, caller falls back to text scanner.
+        let msg = serde_json::json!({"role": "assistant", "content": "just a chat reply"});
+        assert!(extract_openai_tool_calls(&msg).is_empty());
+    }
 
     #[test]
     fn test_bug_reasoning_loop_qwen35_repeats_same_sentence() {
@@ -2006,6 +2216,7 @@ mod tests {
             tokens_used: None,
             latency_ms: 0,
             cached: false,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -2167,6 +2378,7 @@ mod tests {
             complexity: Some(TaskComplexity::Simple),
             sensitivity: Some(SensitivityLevel::Low),
             task_type: None,
+        tools: None,
             max_tokens: None,
         };
 
@@ -2239,6 +2451,7 @@ mod tests {
             complexity: Some(TaskComplexity::Simple),
             sensitivity: Some(SensitivityLevel::Low),
             task_type: None,
+        tools: None,
             max_tokens: None,
         };
 

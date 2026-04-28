@@ -1203,6 +1203,7 @@ Usá EXACTAMENTE este formato para cada tarea:
             preferred_provider: None,
             max_tokens: Some(4096),
             task_type: None,
+        tools: None,
         };
 
         let router_guard = router.read().await;

@@ -974,6 +974,7 @@ impl Supervisor {
                     preferred_provider: None,
                     max_tokens: Some(2048),
                     task_type: None,
+                tools: None,
                 };
 
                 let plan_result = {
@@ -1392,6 +1393,7 @@ impl Supervisor {
             preferred_provider: None,
             max_tokens: Some(256),
             task_type: None,
+        tools: None,
         };
 
         let router = self.router.read().await;
@@ -1570,6 +1572,7 @@ impl Supervisor {
             preferred_provider: None,
             max_tokens: Some(512),
         task_type: None,
+        tools: None,
         };
 
         let router = self.router.read().await;
@@ -2022,6 +2025,7 @@ Always end with a "respond" step summarizing what was done."#,
             preferred_provider: None,
             max_tokens: Some(2048),
             task_type: None,
+        tools: None,
         };
 
         let router = self.router.read().await;
@@ -2429,6 +2433,7 @@ Respond ONLY with a JSON object (no markdown):
             preferred_provider: None,
             max_tokens: Some(512),
             task_type: None,
+        tools: None,
         };
 
         let router = self.router.read().await;
@@ -2534,6 +2539,7 @@ Respond ONLY with a JSON object (no markdown):
             preferred_provider: None,
             max_tokens: Some(1024),
             task_type: None,
+        tools: None,
         };
 
         let router = self.router.read().await;
