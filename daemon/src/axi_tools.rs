@@ -107,18 +107,16 @@ EJEMPLOS OBLIGATORIOS de recordatorios:
 
 Usuario: "Recuerdame en 1 minuto que te diga hola"
 Tu respuesta DEBE empezar con el tool call:
-<tool>
-<name>reminder_add</name>
+<tool>reminder_add</tool>
 <args>{"in_minutes": 1, "message": "te diga hola"}</args>
-</tool>
 (Despues de ver el resultado, confirmas al usuario.)
 
 Usuario: "Avisame a las 17:00 que me tengo que ir a banar"
 Tu respuesta DEBE empezar con el tool call:
-<tool>
-<name>reminder_add</name>
+<tool>reminder_add</tool>
 <args>{"when": "17:00", "message": "Ir a banarse"}</args>
-</tool>
+
+FORMATO ESTRICTO: el nombre de la herramienta va DIRECTAMENTE entre <tool>...</tool>, en la misma linea, sin <name> ni saltos. Despues, en una linea separada, <args>{...}</args>. Si emites cualquier otro formato (envoltorio <name>, <tool> con saltos internos, espacios), el parser falla y la herramienta NO se ejecuta — Axi narra que hizo algo sin haberlo hecho.
 
 NUNCA respondas "Listo, te recordaré" sin haber emitido un <tool>...</tool> para reminder_add PRIMERO.
 
@@ -1862,6 +1860,55 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
         }
 
         #[test]
+        fn parse_tool_calls_canonical_format() {
+            let text = r#"Voy a registrar tu nombre.
+<tool>health_fact_add</tool>
+<args>{"fact_type": "blood_type", "label": "O+"}</args>
+Listo!"#;
+            let (calls, prefix) = parse_tool_calls(text);
+            assert_eq!(prefix, "Voy a registrar tu nombre.");
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "health_fact_add");
+            assert_eq!(calls[0].args["fact_type"], "blood_type");
+            assert_eq!(calls[0].args["label"], "O+");
+        }
+
+        #[test]
+        fn parse_tool_calls_tolerates_wrapped_name_args_variant() {
+            // The malformed shape that used to cause silent forgetting:
+            // `<tool><name>X</name><args>...</args></tool>`. Pre-fix, the
+            // entire wrapper got read as the tool name and execution silently
+            // failed. The hardened parser must treat this as an alias of the
+            // canonical form.
+            let text = r#"<tool>
+<name>vital_record</name>
+<args>{"vital_type": "blood_pressure_systolic", "value_numeric": 120}</args>
+</tool>"#;
+            let (calls, _prefix) = parse_tool_calls(text);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].name, "vital_record");
+            assert_eq!(calls[0].args["vital_type"], "blood_pressure_systolic");
+            assert_eq!(calls[0].args["value_numeric"], 120);
+        }
+
+        #[test]
+        fn parse_tool_calls_skips_blank_names() {
+            // Defensive: even if the LLM emits `<tool></tool>` somehow, we
+            // never want to call execute_tool with an empty name.
+            let text = "<tool></tool><args>{}</args>";
+            let (calls, _) = parse_tool_calls(text);
+            assert!(calls.is_empty());
+        }
+
+        #[test]
+        fn parse_tool_calls_no_tool_returns_full_text_as_prefix() {
+            let text = "Solo conversacion, sin herramientas.";
+            let (calls, prefix) = parse_tool_calls(text);
+            assert!(calls.is_empty());
+            assert_eq!(prefix, text);
+        }
+
+        #[test]
         fn parse_safe_command_rejects_shell_operators() {
             let roots = vec![PathBuf::from("/tmp/lifeos-telegram-tests")];
             let workdir = roots[0].clone();
@@ -2446,6 +2493,22 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
 
     /// Parse tool calls from LLM response text.
     /// Returns (tool_calls, remaining_text_before_first_tool).
+    ///
+    /// Canonical format the system prompt teaches:
+    ///
+    ///     <tool>tool_name</tool>
+    ///     <args>{"k": "v"}</args>
+    ///
+    /// Tolerated malformed variant (some Qwen runs wrap the name in `<name>`
+    /// and put `<args>` inside the `<tool>` block, which used to cause a
+    /// silent forgetting bug — the entire wrapper got read as the tool name,
+    /// no tool with that name existed, and Axi went on to narrate the action
+    /// it never executed):
+    ///
+    ///     <tool>
+    ///     <name>tool_name</name>
+    ///     <args>{"k": "v"}</args>
+    ///     </tool>
     pub fn parse_tool_calls(text: &str) -> (Vec<ToolCall>, String) {
         let mut calls = Vec::new();
         let mut remaining = text;
@@ -2461,31 +2524,58 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
 
         while let Some(tool_start) = remaining.find("<tool>") {
             let after_tag = &remaining[tool_start + 6..];
-            if let Some(tool_end) = after_tag.find("</tool>") {
-                let tool_name = after_tag[..tool_end].trim().to_string();
-                let after_tool = &after_tag[tool_end + 7..];
+            let Some(tool_end) = after_tag.find("</tool>") else {
+                break;
+            };
+            let tool_block = &after_tag[..tool_end];
+            let mut after_tool = &after_tag[tool_end + 7..];
 
-                let args = if let Some(args_start) = after_tool.find("<args>") {
-                    let after_args_tag = &after_tool[args_start + 6..];
-                    if let Some(args_end) = after_args_tag.find("</args>") {
-                        let args_str = after_args_tag[..args_end].trim();
-                        remaining = &after_args_tag[args_end + 7..];
-                        serde_json::from_str(args_str).unwrap_or(serde_json::json!({}))
-                    } else {
-                        remaining = after_tool;
-                        serde_json::json!({})
-                    }
+            // Decide whether the tool block uses the canonical
+            // <tool>name</tool> shape or the malformed wrapper shape
+            // <tool><name>name</name><args>...</args></tool>.
+            let (tool_name, inline_args) = if let Some(name_start) = tool_block.find("<name>") {
+                let after_name_tag = &tool_block[name_start + 6..];
+                let name = after_name_tag
+                    .find("</name>")
+                    .map(|end| after_name_tag[..end].trim().to_string())
+                    .unwrap_or_else(|| after_name_tag.trim().to_string());
+
+                // Pull a wrapped <args>...</args> if it lives inside the tool block.
+                let inline_args = tool_block.find("<args>").and_then(|args_start| {
+                    let after_args_tag = &tool_block[args_start + 6..];
+                    after_args_tag
+                        .find("</args>")
+                        .map(|end| after_args_tag[..end].trim().to_string())
+                });
+                (name, inline_args)
+            } else {
+                (tool_block.trim().to_string(), None)
+            };
+
+            let args = if let Some(json_str) = inline_args {
+                serde_json::from_str(&json_str).unwrap_or(serde_json::json!({}))
+            } else if let Some(args_start) = after_tool.find("<args>") {
+                let after_args_tag = &after_tool[args_start + 6..];
+                if let Some(args_end) = after_args_tag.find("</args>") {
+                    let args_str = after_args_tag[..args_end].trim();
+                    after_tool = &after_args_tag[args_end + 7..];
+                    serde_json::from_str(args_str).unwrap_or(serde_json::json!({}))
                 } else {
-                    remaining = after_tool;
                     serde_json::json!({})
-                };
+                }
+            } else {
+                serde_json::json!({})
+            };
 
+            remaining = after_tool;
+
+            // Skip empty tool names (defensive — shouldn't happen with the
+            // tolerant parser, but never let a blank name reach execute_tool).
+            if !tool_name.is_empty() {
                 calls.push(ToolCall {
                     name: tool_name,
                     args,
                 });
-            } else {
-                break;
             }
         }
 
