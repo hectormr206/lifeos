@@ -54,18 +54,36 @@ pub struct RuntimeSettings {
     pub parallel: u32,
     pub batch_size: u32,
     pub ubatch_size: u32,
+    /// Model GGUF filename to load with this profile. None = inherit from
+    /// /etc/lifeos/llama-server.env (the base config). Set per-profile when
+    /// a different model is preferred — e.g. `game_guard_cpu_fallback` runs
+    /// a smaller 4B model on CPU while the game keeps the GPU, vs. the 9B
+    /// that `normal_gpu` uses with full GPU offload.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Multimodal projector filename. Must match the model's architecture
+    /// (a 4B mmproj will not load alongside a 9B base model). None = inherit.
+    #[serde(default)]
+    pub mmproj: Option<String>,
 }
 
 impl RuntimeSettings {
     pub fn to_env_lines(&self) -> Vec<String> {
-        vec![
+        let mut lines = vec![
             format!("LIFEOS_AI_CTX_SIZE={}", self.ctx_size),
             format!("LIFEOS_AI_THREADS={}", self.threads),
             format!("LIFEOS_AI_GPU_LAYERS={}", self.gpu_layers),
             format!("LIFEOS_AI_PARALLEL={}", self.parallel),
             format!("LIFEOS_AI_BATCH_SIZE={}", self.batch_size),
             format!("LIFEOS_AI_UBATCH_SIZE={}", self.ubatch_size),
-        ]
+        ];
+        if let Some(model) = &self.model {
+            lines.push(format!("LIFEOS_AI_MODEL={model}"));
+        }
+        if let Some(mmproj) = &self.mmproj {
+            lines.push(format!("LIFEOS_AI_MMPROJ={mmproj}"));
+        }
+        lines
     }
 
     pub fn to_env_content(&self, header: &str) -> String {
@@ -550,6 +568,8 @@ fn heuristic_cpu_profile(
         parallel: 1,
         batch_size,
         ubatch_size,
+        model: None,
+        mmproj: None,
     }
 }
 
@@ -591,6 +611,11 @@ fn heuristic_gpu_profile(
         parallel,
         batch_size,
         ubatch_size,
+        // 9B is the canonical LifeOS model for full-GPU operation; pin it
+        // here so a profile-driven write of /var/lib/lifeos/llama-server-runtime-profile.env
+        // restores the 9B even if game_guard had previously swapped to 4B.
+        model: Some("Qwen3.5-9B-Q4_K_M.gguf".into()),
+        mmproj: Some("Qwen3.5-9B-mmproj-F16.gguf".into()),
     })
 }
 
@@ -608,13 +633,32 @@ fn heuristic_game_guard_profile(
     } else {
         384
     };
+    // Game guard runs a smaller 4B model in CPU while the game keeps the GPU.
+    // The user's request: keep the SAME large ctx (up to 131K) so tool-calling
+    // and conversational state stay consistent across profile swaps. RAM cost
+    // for 4B Q4 + Q8 KV cache at 131K ≈ ~6 GB; safe on 32GB+ machines.
+    // Lower-RAM tiers fall back to a smaller ceiling.
+    let ctx_size = if fingerprint.total_ram_mb >= 64 * 1024 {
+        inputs.requested_ctx_size.min(131_072)
+    } else if fingerprint.total_ram_mb >= 32 * 1024 {
+        inputs.requested_ctx_size.min(65_536)
+    } else if fingerprint.total_ram_mb >= 16 * 1024 {
+        inputs.requested_ctx_size.min(16_384)
+    } else {
+        inputs.requested_ctx_size.min(4_096)
+    };
     Some(RuntimeSettings {
-        ctx_size: inputs.requested_ctx_size.min(4096),
+        ctx_size,
         threads: physical.clamp(4, 12),
         gpu_layers: 0,
         parallel: 1,
         batch_size,
         ubatch_size: 128,
+        // Smaller model so tool-calling and chat stay responsive on CPU while
+        // the game holds the GPU. Same Qwen 3.5 family as the 9B → consistent
+        // tool-calling templates and personality.
+        model: Some("Qwen3.5-4B-Q4_K_M.gguf".into()),
+        mmproj: Some("Qwen3.5-4B-mmproj-F16.gguf".into()),
     })
 }
 
@@ -1762,7 +1806,8 @@ async fn run_benchmark_request(
 
 fn build_cpu_candidates(profile: &RuntimeProfile) -> Vec<RuntimeCandidate> {
     let physical = profile.fingerprint.physical_cpus.max(1) as u32;
-    let ctx_size = profile.profiles.cpu_ram.ctx_size;
+    let base = profile.profiles.cpu_ram.clone();
+    let ctx_size = base.ctx_size;
     let ram_mb = profile.fingerprint.total_ram_mb;
     let ubatch_large = if ram_mb >= 32 * 1024 { 256 } else { 128 };
 
@@ -1776,6 +1821,7 @@ fn build_cpu_candidates(profile: &RuntimeProfile) -> Vec<RuntimeCandidate> {
                 parallel: 1,
                 batch_size: 256,
                 ubatch_size: 128,
+                ..base.clone()
             },
         },
         RuntimeCandidate {
@@ -1787,6 +1833,7 @@ fn build_cpu_candidates(profile: &RuntimeProfile) -> Vec<RuntimeCandidate> {
                 parallel: 1,
                 batch_size: if ram_mb >= 16 * 1024 { 384 } else { 256 },
                 ubatch_size: 128,
+                ..base.clone()
             },
         },
         RuntimeCandidate {
@@ -1798,6 +1845,7 @@ fn build_cpu_candidates(profile: &RuntimeProfile) -> Vec<RuntimeCandidate> {
                 parallel: 1,
                 batch_size: if ram_mb >= 16 * 1024 { 512 } else { 384 },
                 ubatch_size: ubatch_large,
+                ..base
             },
         },
     ])
@@ -1805,12 +1853,10 @@ fn build_cpu_candidates(profile: &RuntimeProfile) -> Vec<RuntimeCandidate> {
 
 fn build_game_guard_candidates(profile: &RuntimeProfile) -> Vec<RuntimeCandidate> {
     let physical = profile.fingerprint.physical_cpus.max(1) as u32;
-    let ctx_size = profile
-        .profiles
-        .game_guard_cpu_fallback
-        .as_ref()
-        .map(|settings| settings.ctx_size)
-        .unwrap_or_else(|| profile.inputs.requested_ctx_size.min(4096));
+    let Some(base) = profile.profiles.game_guard_cpu_fallback.clone() else {
+        return Vec::new();
+    };
+    let ctx_size = base.ctx_size;
     let ram_mb = profile.fingerprint.total_ram_mb;
 
     dedupe_candidates(vec![
@@ -1823,6 +1869,7 @@ fn build_game_guard_candidates(profile: &RuntimeProfile) -> Vec<RuntimeCandidate
                 parallel: 1,
                 batch_size: 256,
                 ubatch_size: 128,
+                ..base.clone()
             },
         },
         RuntimeCandidate {
@@ -1834,6 +1881,7 @@ fn build_game_guard_candidates(profile: &RuntimeProfile) -> Vec<RuntimeCandidate
                 parallel: 1,
                 batch_size: if ram_mb >= 16 * 1024 { 384 } else { 256 },
                 ubatch_size: 128,
+                ..base.clone()
             },
         },
         RuntimeCandidate {
@@ -1845,6 +1893,7 @@ fn build_game_guard_candidates(profile: &RuntimeProfile) -> Vec<RuntimeCandidate
                 parallel: 1,
                 batch_size: if ram_mb >= 32 * 1024 { 512 } else { 384 },
                 ubatch_size: 128,
+                ..base
             },
         },
     ])
@@ -1936,11 +1985,26 @@ Available devices:
             parallel: 1,
             batch_size: 384,
             ubatch_size: 128,
+            model: None,
+            mmproj: None,
         };
         let content = settings.to_env_content("test");
         assert!(content.contains("LIFEOS_AI_CTX_SIZE=4096"));
         assert!(content.contains("LIFEOS_AI_THREADS=6"));
         assert!(content.contains("LIFEOS_AI_UBATCH_SIZE=128"));
+        // Without explicit model/mmproj, the env file must NOT pin them so
+        // the base /etc/lifeos/llama-server.env wins.
+        assert!(!content.contains("LIFEOS_AI_MODEL="));
+        assert!(!content.contains("LIFEOS_AI_MMPROJ="));
+
+        let with_model = RuntimeSettings {
+            model: Some("Qwen3.5-4B-Q4_K_M.gguf".into()),
+            mmproj: Some("Qwen3.5-4B-mmproj-F16.gguf".into()),
+            ..settings
+        };
+        let content = with_model.to_env_content("test");
+        assert!(content.contains("LIFEOS_AI_MODEL=Qwen3.5-4B-Q4_K_M.gguf"));
+        assert!(content.contains("LIFEOS_AI_MMPROJ=Qwen3.5-4B-mmproj-F16.gguf"));
     }
 
     #[test]
@@ -1982,6 +2046,8 @@ Available devices:
                     parallel: 1,
                     batch_size: 256,
                     ubatch_size: 128,
+                    model: None,
+                    mmproj: None,
                 },
                 normal_gpu: None,
                 game_guard_cpu_fallback: None,
@@ -2044,6 +2110,8 @@ Available devices:
             parallel: 1,
             batch_size: 256,
             ubatch_size: 128,
+            model: None,
+            mmproj: None,
         };
         let deduped = dedupe_candidates(vec![
             RuntimeCandidate {
@@ -2253,6 +2321,8 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
                 parallel: 1,
                 batch_size: 512,
                 ubatch_size: 256,
+                model: Some("Qwen3.5-9B-Q4_K_M.gguf".into()),
+                mmproj: Some("Qwen3.5-9B-mmproj-F16.gguf".into()),
             });
         }
         profile
@@ -2337,6 +2407,8 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
             parallel: 1,
             batch_size: 512,
             ubatch_size: 256,
+            model: None,
+            mmproj: None,
         };
         // Default path applies the user override (overwriting candidate).
         apply_runtime_env(&candidate).expect("apply");
