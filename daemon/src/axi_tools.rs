@@ -123,6 +123,10 @@ Cuando preguntes, hacelo CONCRETO ("¿lo guardo como X o lo dejamos para hablar 
 
 Después de emitir tu respuesta, mirá lo que dijiste. Si tu texto contiene "ya guardé", "lo anoté", "queda registrado", "ya programé el recordatorio" — y NO emitiste el tool_call correspondiente — **estás mintiéndole al usuario**. Reformulá: o ejecutá la tool ahora, o decí honestamente "no logré guardarlo, intentémoslo de nuevo". El usuario confía en que cuando decís que algo está guardado, está guardado.
 
+## Notas sobre el historial que recibís
+
+En el contexto que ves, el sistema reescribe automáticamente frases del tipo "ya guardé X" provenientes de turnos anteriores a "intenté guardar X (no verificado)". Eso es porque versiones previas del runtime a veces narraron persistencia sin haber ejecutado la tool. **Cuando veas "intentado guardar (no verificado)" o "intenté registrar" en el historial, NO asumas que el dato está guardado.** Si el usuario te lo dice de nuevo (o sigue siendo relevante), RE-INVOCÁ la tool — el storage layer es idempotente, repetir no rompe nada.
+
 ## Protocolo de Memoria (OBLIGATORIO — siempre activo)
 
 Tu memoria es PERSISTENTE y sobrevive entre sesiones. DEBES guardar automaticamente (via remember) INMEDIATAMENTE despues de:
@@ -1415,6 +1419,80 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
         voice_origin: bool,
     }
 
+    /// Replace narrative claims of persistence in assistant text with
+    /// honest, uncertainty-tagged phrasing. Used to prevent the model from
+    /// inferring "this fact is already saved, no need to call the tool"
+    /// from past assistant turns whose `tool_calls` channel may have been
+    /// empty (or whose tool execution silently failed because of a missing
+    /// table, a profile in CPU fallback, etc.).
+    ///
+    /// We do not currently track per-turn `tool_calls` in conversation
+    /// history, so the conservative move is: rewrite ALL strong-positive
+    /// persistence claims to weak-uncertain phrasing. This biases the model
+    /// to RE-INVOKE the appropriate tool when the user provides matching
+    /// data, instead of trusting the prior narrative.
+    ///
+    /// This is a mitigation; the structural fix is to persist `tool_calls`
+    /// alongside each assistant turn so we can sanitize precisely.
+    pub fn sanitize_persistence_claims(text: &str) -> String {
+        // (pattern, replacement) — case sensitivity handled by also adding
+        // capitalized variants below. Order matters: longer phrases first to
+        // avoid partial-match noise.
+        const REPLACEMENTS: &[(&str, &str)] = &[
+            // Spanish — strongest claims first
+            ("queda guardado", "intentado guardar (no verificado)"),
+            ("quedó guardado", "intentado guardar (no verificado)"),
+            ("quedo guardado", "intentado guardar (no verificado)"),
+            ("queda registrado", "intentado registrar (no verificado)"),
+            ("quedó registrado", "intentado registrar (no verificado)"),
+            ("quedo registrado", "intentado registrar (no verificado)"),
+            ("queda anotado", "intentado anotar (no verificado)"),
+            ("ya guardé", "intenté guardar"),
+            ("ya guarde", "intenté guardar"),
+            ("ya registré", "intenté registrar"),
+            ("ya registre", "intenté registrar"),
+            ("ya anoté", "intenté anotar"),
+            ("ya anote", "intenté anotar"),
+            ("ya actualicé", "intenté actualizar"),
+            ("ya actualice", "intenté actualizar"),
+            ("lo guardé", "intenté guardarlo"),
+            ("lo guarde", "intenté guardarlo"),
+            ("lo registré", "intenté registrarlo"),
+            ("lo anoté", "intenté anotarlo"),
+            ("registré tu", "intenté registrar tu"),
+            ("registre tu", "intenté registrar tu"),
+            ("guardé tu", "intenté guardar tu"),
+            ("guarde tu", "intenté guardar tu"),
+            // English variants (Qwen sometimes mixes)
+            ("I've saved", "I tried to save"),
+            ("I saved", "I tried to save"),
+            ("I've recorded", "I tried to record"),
+            ("I recorded", "I tried to record"),
+            ("Already saved", "Tried to save"),
+            ("Already recorded", "Tried to record"),
+        ];
+
+        let mut out = text.to_string();
+        for (pattern, replacement) in REPLACEMENTS {
+            if out.contains(pattern) {
+                out = out.replace(pattern, replacement);
+            }
+            // Capitalize-first variant
+            let mut cap_pat = pattern.to_string();
+            if let Some(c) = cap_pat.chars().next() {
+                cap_pat = c.to_uppercase().collect::<String>() + &cap_pat[c.len_utf8()..];
+            }
+            let mut cap_rep = replacement.to_string();
+            if let Some(c) = cap_rep.chars().next() {
+                cap_rep = c.to_uppercase().collect::<String>() + &cap_rep[c.len_utf8()..];
+            }
+            if cap_pat != *pattern && out.contains(&cap_pat) {
+                out = out.replace(&cap_pat, &cap_rep);
+            }
+        }
+        out
+    }
+
     /// Thread-safe conversation history with disk persistence and auto-compaction.
     pub struct ConversationHistory {
         chats: RwLock<HashMap<i64, ConversationEntry>>,
@@ -1858,6 +1936,53 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
                 history.get_compacted_summary(chat_id).await,
                 Some("preferencia: respuestas cortas".into())
             );
+        }
+
+        #[test]
+        fn sanitize_persistence_claims_rewrites_strong_positives_to_weak_uncertain() {
+            // Spanish — the most common Axi narrative pattern. The claim
+            // is mid-sentence ("¡Listo, Héctor! Ya guardé...") so the
+            // capitalize-first replacement path fires and maps "Ya guardé"
+            // → "Intenté guardar" (capital I). We compare on the lowercased
+            // haystack so the test does not flake on that detail — the
+            // important property is the strong→weak swap, regardless of
+            // where in the sentence the phrase landed.
+            let input = "¡Listo, Héctor! Ya guardé que tu tipo de sangre es O+ en tu historial.";
+            let out = sanitize_persistence_claims(input);
+            let lower = out.to_lowercase();
+            assert!(lower.contains("intenté guardar"), "got: {out}");
+            assert!(!lower.contains("ya guardé"), "got: {out}");
+            assert!(out.contains("O+"), "data preserved: {out}");
+        }
+
+        #[test]
+        fn sanitize_persistence_claims_handles_capitalized_first_letter() {
+            // The capitalize-first variant must also flip.
+            let out = sanitize_persistence_claims("Ya registré tu peso de 63.8 kg.");
+            assert!(out.starts_with("Intenté registrar"), "got: {out}");
+        }
+
+        #[test]
+        fn sanitize_persistence_claims_replaces_queda_phrases() {
+            let out = sanitize_persistence_claims("Tu nuevo peso queda guardado en el historial.");
+            assert!(
+                out.contains("intentado guardar (no verificado)"),
+                "got: {out}"
+            );
+            assert!(!out.contains("queda guardado"), "got: {out}");
+        }
+
+        #[test]
+        fn sanitize_persistence_claims_handles_english_mixins() {
+            let out = sanitize_persistence_claims("I've saved your blood type for emergencies.");
+            assert!(out.contains("I tried to save"), "got: {out}");
+        }
+
+        #[test]
+        fn sanitize_persistence_claims_leaves_neutral_text_untouched() {
+            // No claims → no changes.
+            let plain = "Hola Héctor, ¿cómo te sientes hoy?";
+            assert_eq!(sanitize_persistence_claims(plain), plain);
         }
 
         #[test]
@@ -3339,6 +3464,10 @@ Listo!"#;
             system_prompt.push_str(&format!("\n[Estado emocional]\n{}", emotional_hint));
         }
         if let Some(summary) = ctx.history.get_compacted_summary(chat_id).await {
+            // Sanitize false-persistence claims so the model does not infer
+            // "this is already saved, no tool needed" from a stale summary
+            // that was generated before the tool subsystem was healthy.
+            let summary = sanitize_persistence_claims(&summary);
             system_prompt.push_str(&format!(
                 "\n\n[Resumen de conversacion anterior]: {}",
                 summary
@@ -3364,15 +3493,21 @@ Listo!"#;
                             // Append compaction summary to system prompt (not as separate message)
                             if let Some(summary) = store.get_compaction_summary(&session_key).await
                             {
+                                let summary = sanitize_persistence_claims(&summary);
                                 system_prompt.push_str(&format!(
                                     "\n\n[Resumen de sesiones anteriores (persistente)]: {}",
                                     summary
                                 ));
                             }
                             for turn in &recent {
+                                let content = if turn.role == "assistant" {
+                                    sanitize_persistence_claims(&turn.content)
+                                } else {
+                                    turn.content.clone()
+                                };
                                 restored_turns.push(ChatMessage {
                                     role: turn.role.clone(),
-                                    content: serde_json::Value::String(turn.content.clone()),
+                                    content: serde_json::Value::String(content),
                                 });
                             }
                             info!(
@@ -3582,10 +3717,34 @@ Listo!"#;
             content: serde_json::Value::String(system_prompt),
         }];
 
+        // Sanitize false-persistence claims in past assistant turns BEFORE
+        // sending them back to the model. Otherwise narratives like
+        // "ya guardé tu tipo de sangre" — which may have been emitted by
+        // the LLM without the tool actually executing — bias future turns
+        // into not re-invoking the tool. This is a targeted mitigation
+        // until per-turn `tool_calls` are tracked in conversation history.
+        let sanitize_history = |msgs: Vec<ChatMessage>| -> Vec<ChatMessage> {
+            msgs.into_iter()
+                .map(|m| {
+                    if m.role == "assistant" {
+                        if let Some(text) = m.content.as_str() {
+                            return ChatMessage {
+                                role: m.role,
+                                content: serde_json::Value::String(sanitize_persistence_claims(
+                                    text,
+                                )),
+                            };
+                        }
+                    }
+                    m
+                })
+                .collect()
+        };
+
         if !history.is_empty() {
-            messages.extend(history);
+            messages.extend(sanitize_history(history));
         } else if !restored_turns.is_empty() {
-            messages.extend(restored_turns);
+            messages.extend(sanitize_history(restored_turns));
         }
 
         // Build user message (text or multimodal)
