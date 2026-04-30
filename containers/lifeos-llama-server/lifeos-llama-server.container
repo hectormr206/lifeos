@@ -53,8 +53,12 @@ Volume=/var/lib/lifeos/models:/var/lib/lifeos/models:ro,Z
 # Runtime profile env (LIFEOS_AI_MODEL, LIFEOS_AI_CTX_SIZE, LIFEOS_AI_THREADS,
 # LIFEOS_AI_GPU_LAYERS, LIFEOS_AI_PARALLEL, etc.) lives on host so the
 # benchmarker can update it without rebuilding the container.
-Volume=/var/lib/lifeos/llama-server-runtime-profile.env:/etc/llama-server-runtime-profile.env:ro,Z
-Volume=/var/lib/lifeos/llama-server-game-guard.env:/etc/llama-server-game-guard.env:ro,Z
+#
+# NO Volume= bind for these env files. The [Service] EnvironmentFile=
+# directives below load them on the HOST side (systemd reads, exports
+# vars to the podman process, podman injects as ENV into the container).
+# A separate bind mount would be redundant — llama-server reads vars
+# from its environment, not from a file path.
 
 # Defense-in-depth Capa 4.
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
@@ -88,8 +92,15 @@ Exec=/usr/sbin/llama-server \
     --jinja
 
 [Service]
-EnvironmentFile=-/etc/llama-server-runtime-profile.env
-EnvironmentFile=-/etc/llama-server-game-guard.env
+# CRITICAL: these paths are HOST paths (systemd evaluates EnvironmentFile=
+# on the host before the container is created). The benchmarker writes
+# to /var/lib/lifeos/llama-server-runtime-profile.env on the host —
+# previous version pointed at /etc/llama-server-runtime-profile.env which
+# does NOT exist on the host, so all ${LIFEOS_AI_*} vars came up empty
+# and the Exec= line above ran with --model "/var/lib/lifeos/models/"
+# (no filename) → llama-server fails to start.
+EnvironmentFile=-/var/lib/lifeos/llama-server-runtime-profile.env
+EnvironmentFile=-/var/lib/lifeos/llama-server-game-guard.env
 
 # Capa 3 — auto-restart with a longer backoff than embeddings/TTS because
 # Qwen3.5-9B warmup (model load + GPU upload + Vulkan shader cache prime)
