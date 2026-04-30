@@ -1,0 +1,105 @@
+# lifeos-llama-embeddings — nomic-embed-text via llama.cpp (CPU-only)
+#
+# Phase 2 of the architecture pivot — second service to be containerized.
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md
+#
+# Why this is Phase 2 (not Phase 1):
+#   - Same CPU-only profile as TTS, but it sits on the agentic_chat hot path:
+#     every memory recall hits embeddings before lifeosd builds the LLM
+#     prompt. Validating Phase 1 first (TTS) lets us debug the Quadlet
+#     pattern in a service that's NOT on the critical path.
+#
+# Build:
+#   podman build -t 10.66.66.1:5001/lifeos-llama-embeddings:dev \
+#     -f containers/lifeos-llama-embeddings/Containerfile \
+#     containers/lifeos-llama-embeddings/
+
+# ---------------------------------------------------------------------------
+# Stage 1 — builder
+# ---------------------------------------------------------------------------
+# Build llama-server CPU-only (no Vulkan, no CUDA, no GPU). Embeddings is
+# CPU-bound on a 84 MB model — GPU would add complexity for ~zero speedup.
+FROM fedora:43 AS builder
+
+RUN dnf -y install \
+        cmake \
+        gcc \
+        gcc-c++ \
+        make \
+        git \
+        ca-certificates \
+        curl-devel \
+        && \
+    dnf clean all
+
+# Pin to the same tag the bootc image llama-server uses, so embedding format
+# semantics match across the host (currently using --jinja for chat) and the
+# container (using --embeddings here). Bump in lockstep.
+ARG LLAMA_CPP_TAG=b8925
+
+RUN git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
+    cd /tmp/llama.cpp && \
+    git checkout "${LLAMA_CPP_TAG}"
+
+# Build only what we need: server binary, no examples, no tests, no shared
+# libs (static = self-contained binary), no GPU backends.
+RUN cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DGGML_STATIC=ON \
+        -DGGML_NATIVE=OFF \
+        -DGGML_VULKAN=OFF \
+        -DGGML_CUDA=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_SERVER=ON && \
+    cmake --build /tmp/llama.cpp/build -j1 --target llama-server
+
+# Sanity: make sure the binary produced runs.
+RUN /tmp/llama.cpp/build/bin/llama-server --version
+
+# ---------------------------------------------------------------------------
+# Stage 2 — runtime
+# ---------------------------------------------------------------------------
+# Minimal runtime — just the binary, libcurl (for model URL fetching if ever
+# needed), and tini for clean signal forwarding.
+FROM fedora:43-minimal AS runtime
+
+RUN microdnf install -y \
+        ca-certificates \
+        libcurl \
+        tini \
+        --setopt=tsflags=nodocs && \
+    microdnf clean all
+
+# Bring just the static binary. Total runtime image: ~50-80 MB.
+COPY --from=builder /tmp/llama.cpp/build/bin/llama-server /usr/sbin/llama-server
+
+# Run as a dedicated non-root user. The model on the host is read-only via
+# bind mount, so the container needs no write access to anywhere.
+RUN useradd --system --uid 65533 --no-create-home --shell /usr/sbin/nologin lifeos-embed
+USER 65533
+
+EXPOSE 8083
+
+# tini for signal forwarding so SIGTERM from systemd cleanly stops the
+# llama-server inner process and frees its mlock'd memory.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# CMD is intentionally minimal here. The Quadlet appends model-specific args
+# (--model path, --threads, etc.) so this image is reusable for ANY
+# llama-server CPU workload, not just embeddings.
+CMD ["/usr/sbin/llama-server", \
+     "--host", "127.0.0.1", \
+     "--port", "8083", \
+     "--ctx-size", "2048", \
+     "--threads", "2", \
+     "--batch-size", "256", \
+     "--ubatch-size", "64", \
+     "--embeddings", \
+     "--pooling", "mean"]
+
+LABEL org.opencontainers.image.title="lifeos-llama-embeddings"
+LABEL org.opencontainers.image.description="nomic-embed-text v1.5 via llama.cpp — CPU-only, stateless"
+LABEL org.opencontainers.image.source="https://github.com/hectormr206/lifeos"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
