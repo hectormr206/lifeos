@@ -1,0 +1,135 @@
+# lifeos-lifeosd — Rust daemon (Axi orchestrator) containerized
+#
+# Phase 3 of the architecture pivot — most complex of the CPU-only services
+# because it owns the SQLite + sqlite-vec encrypted memory store and several
+# bind mounts to /var/lib/lifeos.
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md
+#
+# === IMPORTANT — scope of this container ===
+#
+# This container ships the daemon's HTTP/agentic surfaces:
+#   - REST API on 127.0.0.1:8081
+#   - WebSocket on /ws
+#   - SimpleX bridge → 127.0.0.1:5226
+#   - Telegram bridge (in-process)
+#   - LLM router → talks to llama-server on :8082, llama-embeddings on :8083,
+#     lifeos-tts on :8084 (all on host loopback via Network=host)
+#   - SQLite + sqlite-vec memory store via bind mount to /var/lib/lifeos
+#
+# What it does NOT ship in Phase 3:
+#   - GTK4 desktop overlay ("Eye of Axi" tray icon)
+#   - Direct Wayland socket access
+#   - PipeWire / D-Bus session bus integration
+#   - Screen capture / camera direct access
+#
+# Those desktop-integration paths stay on the HOST (lifeosd-desktop, a small
+# companion binary that talks to this container's HTTP API). Splitting that
+# out is Phase 3b (follow-up). The benefit: the bulk of lifeosd (~95% of
+# functionality) gets the Quadlet treatment — atomic deploys, rollbacks,
+# resource limits — while desktop integration that REQUIRES session state
+# stays where it has to be.
+#
+# Build:
+#   podman build -t 10.66.66.1:5001/lifeos-lifeosd:dev \
+#     -f containers/lifeos-lifeosd/Containerfile .
+#   (note: build context is repo root because Cargo.toml + workspace lives there)
+
+# ---------------------------------------------------------------------------
+# Stage 1 — builder
+# ---------------------------------------------------------------------------
+# Heavy: Rust toolchain, native deps for SQLite/openssl/dbus, full cargo cache.
+# Kept entirely separate from runtime so we don't ship gcc, headers, or .cargo/.
+FROM fedora:43 AS builder
+
+RUN dnf -y install \
+        rust cargo \
+        gcc gcc-c++ make pkgconf-pkg-config \
+        openssl-devel \
+        sqlite-devel \
+        dbus-devel \
+        glib2-devel \
+        wayland-devel \
+        libxkbcommon-devel \
+        ca-certificates \
+        git \
+        && \
+    dnf clean all
+
+WORKDIR /src
+
+# Copy ONLY Cargo manifests first → Docker layer cache for deps. Source code
+# changes don't invalidate the dependency build, only the final cargo build.
+COPY Cargo.toml Cargo.lock ./
+COPY daemon/Cargo.toml daemon/
+COPY cli/Cargo.toml cli/
+COPY tests/Cargo.toml tests/
+RUN mkdir -p daemon/src cli/src tests/src && \
+    echo 'fn main(){}' > daemon/src/main.rs && \
+    echo 'fn main(){}' > cli/src/main.rs && \
+    echo 'fn main(){}' > tests/src/main.rs && \
+    cargo fetch --manifest-path daemon/Cargo.toml
+
+# Now copy real sources and build for real. The Cargo cache from `cargo fetch`
+# is reused, so this rebuild only compiles our crates, not the world.
+COPY daemon ./daemon
+COPY cli ./cli
+COPY tests ./tests
+COPY contracts ./contracts
+
+# Build features: same set the bootc image build uses for parity.
+# Keeping `dbus,http-api,messaging,wake-word` — drop `ui-overlay` because that
+# pulls GTK4 which doesn't make sense inside a headless container. The
+# overlay will live in the host-side lifeosd-desktop companion (Phase 3b).
+RUN cargo build \
+        --manifest-path daemon/Cargo.toml \
+        --release \
+        --features "dbus,http-api,messaging,wake-word"
+
+# Sanity: the binary exists and runs --version.
+RUN /src/daemon/target/release/lifeosd --version || \
+    /src/daemon/target/release/lifeosd --help | head -1
+
+# ---------------------------------------------------------------------------
+# Stage 2 — runtime
+# ---------------------------------------------------------------------------
+# fedora:43-minimal because we need libsqlite3 + libdbus + libssl runtime libs
+# and it's smaller than full fedora:43 (~80 MB vs ~250 MB). distroless is
+# tempting but lacks D-Bus libs we need for the SimpleX bridge IPC.
+FROM fedora:43-minimal AS runtime
+
+RUN microdnf install -y \
+        ca-certificates \
+        sqlite-libs \
+        openssl-libs \
+        dbus-libs \
+        libcurl \
+        glib2 \
+        tini \
+        --setopt=tsflags=nodocs && \
+    microdnf clean all
+
+# Copy just the binary and the bundled sqlite-vec extension if any (it's
+# statically linked into the daemon today via the rusqlite-vec crate, so no
+# separate .so needed — verified in cargo tree).
+COPY --from=builder /src/daemon/target/release/lifeosd /usr/bin/lifeosd
+
+# Run as a dedicated non-root user. Inside the container we own the user;
+# outside, the bind mount of /var/lib/lifeos uses :Z (SELinux relabel) so the
+# container's UID can read/write regardless of host UID mismatch.
+RUN useradd --system --uid 65534 --no-create-home --shell /usr/sbin/nologin lifeosd && \
+    mkdir -p /var/lib/lifeos /etc/lifeos && \
+    chown -R 65534:65534 /var/lib/lifeos /etc/lifeos
+USER 65534
+
+# Daemon's HTTP API.
+EXPOSE 8081
+
+# tini for clean signal forwarding so SIGTERM from systemd reaches the daemon
+# and triggers its graceful-shutdown path (flushes session_store, closes DB).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/bin/lifeosd"]
+
+LABEL org.opencontainers.image.title="lifeos-lifeosd"
+LABEL org.opencontainers.image.description="LifeOS Rust daemon (Axi orchestrator) — HTTP API + SQLite memory + agentic chat"
+LABEL org.opencontainers.image.source="https://github.com/hectormr206/lifeos"
+LABEL org.opencontainers.image.licenses="Apache-2.0"

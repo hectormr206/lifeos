@@ -1,0 +1,72 @@
+# lifeos-lifeosd.container — Quadlet for the Axi daemon
+#
+# Phase 3 of the architecture pivot. NOT auto-installed yet.
+# The "core" daemon — HTTP API, SimpleX/Telegram bridges, SQLite memory.
+# The GTK4 desktop overlay is OUT OF SCOPE for this container (Phase 3b).
+
+[Unit]
+Description=LifeOS Axi Daemon (containerized core)
+Documentation=https://github.com/hectormr206/lifeos
+After=network-online.target lifeos-image-guardian.service lifeos-tts.service lifeos-llama-embeddings.service llama-server.service simplex-chat.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/hectormr206/lifeos-lifeosd:stable
+ContainerName=lifeos-lifeosd
+HostName=lifeos-lifeosd
+
+# Network=host — daemon talks to llama-server (8082), llama-embeddings (8083),
+# lifeos-tts (8084), simplex-chat (5226) all on host loopback. Network=host
+# means zero URL changes from the existing systemd-host setup. Phase 6 PRD
+# migrates to a podman bridge `lifeos-net`.
+Network=host
+
+# === Bind mounts: state lives on host, container is stateless ===
+#
+# /var/lib/lifeos — encrypted memory DB, session_store, calendar, task queue,
+# scheduled tasks, Kokoro voice cache, etc. RW. SELinux :Z relabels so the
+# container's uid 65534 can access regardless of host SELinux policy.
+Volume=/var/lib/lifeos:/var/lib/lifeos:Z
+
+# Models read-only. lifeosd needs read access for the runtime profile env
+# file path resolution and to verify model presence.
+Volume=/var/lib/lifeos/models:/var/lib/lifeos/models:ro,Z
+
+# Configs read-only. /etc/lifeos has tts-server.env, llama-server.env,
+# llm-providers.env, etc.
+Volume=/etc/lifeos:/etc/lifeos:ro,Z
+
+# Telegram bridge in lifeosd needs CA bundle to verify TLS to api.telegram.org.
+Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,Z
+
+# Defense-in-depth Capa 4.
+ExecStartPre=/usr/local/bin/lifeos-ensure-images
+
+# === Critical environment variables ===
+# Same set the host service passes today.
+Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard
+Environment=LIFEOS_RUNTIME_DIR=/run/lifeos
+Environment=RUST_LOG=info,lifeosd=debug
+EnvironmentFile=-/etc/lifeos/llm-providers.env
+
+[Service]
+# Capa 3 of defense-in-depth — auto-restart with watchdog.
+Restart=always
+RestartSec=5s
+
+# Daemon initial startup runs migrations + opens encrypted memory DB +
+# bootstraps SimpleX bridge — give it time on cold boot.
+TimeoutStartSec=120s
+
+# WatchdogSec: the daemon implements a periodic heartbeat to systemd via
+# sd_notify (see daemon/src/main.rs). 300s matches the host service.
+WatchdogSec=300s
+
+# Resource limits. Daemon footprint is ~150-300 MB (memory_plane caches +
+# session store + LLM router state). 1G cap leaves headroom for surge.
+MemoryMax=1G
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target default.target
