@@ -2146,9 +2146,9 @@ Listo!"#;
                 "cat /var/lib/lifeos/llama-server-runtime-profile.env",
                 "df -h",
                 "free -h",
-                "podman ps",                  // listing is fine
-                "podman images",              // listing is fine
-                "systemctl status lifeosd",   // status is fine, only stop/disable/etc are blocked
+                "podman ps",                // listing is fine
+                "podman images",            // listing is fine
+                "systemctl status lifeosd", // status is fine, only stop/disable/etc are blocked
                 "journalctl --user -u lifeosd -n 50",
                 "echo hello",
                 "uname -a",
@@ -2253,10 +2253,10 @@ Listo!"#;
             let dangerous = [
                 "PODMAN RM lifeos-lifeosd",
                 "Podman   Rm  lifeos-tts",
-                "podman\trm\tlifeos-server",       // tab-separated
+                "podman\trm\tlifeos-server", // tab-separated
                 "podman    system     prune    -a",
                 "RM -RF /var/lib/lifeos",
-                "  rm -rf /var/lib/lifeos  ",     // leading/trailing whitespace
+                "  rm -rf /var/lib/lifeos  ", // leading/trailing whitespace
             ];
             for cmd in dangerous {
                 assert!(
