@@ -57,13 +57,24 @@ RUN apt-get update && \
 
 COPY --from=extract /out/simplex-chat /usr/local/bin/simplex-chat
 
-# Run as a dedicated non-root user. SimpleX state goes in a bind mount so
-# UID mismatch handled by SELinux :Z relabel (host setup) plus permissive
-# perms inside.
-RUN useradd --system --uid 65532 --no-create-home --shell /usr/sbin/nologin lifeos-simplex && \
-    mkdir -p /var/lib/lifeos/simplex && \
-    chown 65532:65532 /var/lib/lifeos/simplex
-USER 65532
+# UID/GID strategy — Phase 5 pragmatic choice.
+#
+# The host service runs simplex-chat as ROOT (verified in
+# image/files/etc/systemd/system/simplex-chat.service: no User= directive,
+# the service uses StateDirectory + ReadWritePaths). The bind mount
+# /var/lib/lifeos/simplex is therefore root-owned with SQLite WAL files
+# accessible only to root.
+#
+# A container running as uid=65532 would fail to open bot_chat.db etc.
+# SELinux ':Z' rellabels security context but does NOT change UIDs.
+#
+# Phase 5 pragmatic decision: container runs as ROOT inside (no USER
+# directive). The Quadlet is rootful; external defenses (Capa 1 storage
+# isolation, Capa 2 sudoers, Capa 5 code blocklist) provide the security
+# boundary. Long-term fix tracked: UserNS=keep-id with subuid mapping
+# would let us match the host's root ownership without running root in
+# the container — Phase 6 hardening work.
+RUN mkdir -p /var/lib/lifeos/simplex
 
 # WebSocket port that lifeosd connects to.
 EXPOSE 5226
