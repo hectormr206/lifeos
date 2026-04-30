@@ -58,9 +58,17 @@ RestartSec=5s
 # bootstraps SimpleX bridge — give it time on cold boot.
 TimeoutStartSec=120s
 
-# WatchdogSec: the daemon implements a periodic heartbeat to systemd via
-# sd_notify (see daemon/src/main.rs). 300s matches the host service.
-WatchdogSec=300s
+# WatchdogSec is INTENTIONALLY NOT SET.
+# Audit (Día del Juicio) found: daemon/src/main.rs implements notify_ready()
+# (one-shot READY=1) and notify_stopping() (one-shot STOPPING=1) but NO
+# periodic loop sending WATCHDOG=1. Setting WatchdogSec=300s here would
+# make systemd SIGABRT the container every 5 minutes waiting for a
+# heartbeat that never comes — RestartSec=5s would re-launch and the
+# cycle repeats forever.
+#
+# Re-enable ONLY after daemon/src/main.rs implements the watchdog ping
+# loop following the systemd protocol (every WatchdogSec/2 seconds):
+# WatchdogSec=300s
 
 # Resource limits. Daemon footprint is ~150-300 MB (memory_plane caches +
 # session store + LLM router state). 1G cap leaves headroom for surge.
