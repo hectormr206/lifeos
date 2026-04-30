@@ -70,16 +70,31 @@ RUN /opt/lifeos/kokoro-env/bin/python3 -c \
 # Slim base + only the libs needed at runtime. No build tools, no headers.
 FROM python:3.12-slim AS runtime
 
-# Minimal runtime deps: libsndfile for soundfile, ca-certs for HTTPS, tini as
-# PID 1 for clean signal forwarding (so SIGTERM from systemd actually reaches
-# the Python process and triggers its in-process watchdog graceful exit).
+# Minimal runtime deps:
+#   - libsndfile1: needed by soundfile python package for OGG/WAV writing
+#   - libespeak-ng1 + espeak-ng-data: REQUIRED by Kokoro phonemizer; without
+#     this Kokoro crashes on the first synthesis call. The host script sets
+#     PHONEMIZER_ESPEAK_LIBRARY=/usr/lib64/libespeak-ng.so.1 (Fedora path);
+#     we symlink Debian's `/usr/lib/x86_64-linux-gnu/` location to the same
+#     `/usr/lib64` path so the script env var works unchanged.
+#   - ca-certificates: HTTPS verification (defensive — Kokoro should run
+#     fully offline with HF_HUB_OFFLINE=1, but TLS libs save grief if any
+#     dep tries to network)
+#   - ffmpeg: lifeos-tts-server.py uses it as the OGG encoding fallback
+#     subprocess (also primary on environments where libsndfile lacks codec)
+#   - tini: PID 1 for clean SIGTERM forwarding to the Python process
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         libsndfile1 \
+        libespeak-ng1 \
+        espeak-ng-data \
+        ffmpeg \
         tini \
         && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /usr/lib64 && \
+    ln -sf /usr/lib/x86_64-linux-gnu/libespeak-ng.so.1 /usr/lib64/libespeak-ng.so.1
 
 # Bring the prebuilt venv from the builder. This is the bulk of the image
 # (~850 MB — torch dominates). Nothing else is copied — the script itself

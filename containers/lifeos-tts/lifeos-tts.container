@@ -59,6 +59,15 @@ Volume=/etc/lifeos/tts-server.env:/etc/lifeos/tts-server.env:ro,Z
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
 
 [Service]
+# Load the env file BOTH ways: as systemd EnvironmentFile= so podman
+# inherits the vars and exports them into the container ENV (the Python
+# script reads via os.environ). The Volume= bind mount in [Container]
+# is REDUNDANT for the script's needs but kept for parity with the host
+# service (some operators may grep the file inside the container for
+# debugging). The `-` prefix tolerates the file being absent on a fresh
+# laptop where /etc/lifeos hasn't been provisioned yet.
+EnvironmentFile=-/etc/lifeos/tts-server.env
+
 # Capa 3 of defense-in-depth — auto-restart with watchdog.
 Restart=always
 RestartSec=5s
