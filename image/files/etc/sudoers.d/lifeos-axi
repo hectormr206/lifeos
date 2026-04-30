@@ -65,6 +65,21 @@
 %wheel ALL=(root) NOPASSWD: /usr/sbin/smartctl -j -a /dev/nvme*
 %wheel ALL=(root) NOPASSWD: /usr/sbin/smartctl -j -a /dev/sd*
 
+# === AUDIT INSPECTION (read-only — Capa 6 of defense-in-depth) ===
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md §5e Capa 6.
+# These commands list rules / status / search the audit log. They never
+# modify audit state (rule changes use auditctl -e/-D/-w which are NOT here).
+# Allows the daemon (and Hector via dev workflow) to inspect the audit trail
+# without prompting for a password.
+%wheel ALL=(root) NOPASSWD: /usr/sbin/auditctl -l
+%wheel ALL=(root) NOPASSWD: /usr/sbin/auditctl -s
+%wheel ALL=(root) NOPASSWD: /sbin/auditctl -l
+%wheel ALL=(root) NOPASSWD: /sbin/auditctl -s
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k *
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k *
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch --key *
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch --key *
+
 # === NETWORK SECURITY (read-only) ===
 # proactive.rs — firewall status check
 %wheel ALL=(root) NOPASSWD: /usr/sbin/nft list ruleset
