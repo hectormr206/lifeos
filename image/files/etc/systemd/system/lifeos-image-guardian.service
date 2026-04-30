@@ -1,0 +1,34 @@
+[Unit]
+Description=LifeOS Image Guardian — re-pull missing system container images
+Documentation=file:///usr/local/bin/lifeos-ensure-images
+Documentation=file:///docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md
+
+# Run after the network is up — without it the pulls would always fail. We
+# don't strictly REQUIRE network (the script is best-effort), so use Wants= to
+# avoid blocking boot when network is slow.
+After=network-online.target
+Wants=network-online.target
+
+# Start before the Quadlet-generated services so any missing image gets
+# re-pulled before the dependent container tries to start. Quadlets get
+# generated under multi-user.target by default.
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+ExecStart=/usr/local/bin/lifeos-ensure-images
+
+# The script never exits non-zero, but be defensive: if a future change does
+# return an error, don't fail the unit (best-effort policy is the contract).
+SuccessExitStatus=0 1
+
+StandardOutput=journal
+StandardError=journal
+
+# Allow ample time for first-boot pulls of multi-GB images.
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target
