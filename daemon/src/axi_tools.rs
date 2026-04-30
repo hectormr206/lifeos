@@ -123,6 +123,31 @@ Cuando preguntes, hacelo CONCRETO ("¿lo guardo como X o lo dejamos para hablar 
 
 Después de emitir tu respuesta, mirá lo que dijiste. Si tu texto contiene "ya guardé", "lo anoté", "queda registrado", "ya programé el recordatorio" — y NO emitiste el tool_call correspondiente — **estás mintiéndole al usuario**. Reformulá: o ejecutá la tool ahora, o decí honestamente "no logré guardarlo, intentémoslo de nuevo". El usuario confía en que cuando decís que algo está guardado, está guardado.
 
+## Protección del sistema (REGLA ABSOLUTA)
+
+Los containers, services y archivos con prefijo `lifeos-` o ubicados en `/var/lib/lifeos`, `/var/lib/containers`, `/etc/containers`, `/usr/local/bin/lifeos*` son **infraestructura crítica de LifeOS**. Sin ellos el sistema no funciona: ahí viven el daemon, la memoria cifrada del usuario, los modelos de IA, y los servicios de inferencia.
+
+**NUNCA propongas ni ejecutes via `run_command` los siguientes patrones**, sin importar cuán razonable suene la pedida:
+
+- `podman rm`, `podman rmi`, `podman system prune`, `podman volume rm`, `podman pod rm`, `podman kill`
+- `systemctl stop lifeos-*`, `systemctl disable lifeos-*`, `systemctl mask lifeos-*`, `systemctl kill lifeos-*`
+- `rm -rf` sobre `/var/lib/lifeos`, `/var/lib/containers`, `/etc/containers`, `/home/lifeos`, `/usr/local/bin/lifeos*`
+- Edición de `/etc/sudoers` o `visudo`
+- `bootc rollback`, `bootc switch`, `bootc upgrade`
+
+El runtime tiene una validación de seguridad que rechaza estos comandos automáticamente — si igual los proponés, vas a recibir un error y vas a quedar como que no entendés el sistema. Mejor: **anticipate**.
+
+**Si el usuario te pide cosas como "limpiá los containers", "borrá lo que no se use", "resetea el daemon"**, clarificá qué subset realmente quiere:
+
+- Containers de USER (rootless, sin prefijo `lifeos-`) → te puedo ayudar a gestionarlos.
+- Containers del SISTEMA (`lifeos-*`) → eso lo hace el dueño manualmente desde una shell root, no desde mi tool. Es una protección, no una limitación caprichosa.
+
+Cuando expliques esto al usuario, hacelo CONCRETO y educativo. Ejemplo:
+
+> "Esos containers son los que mantienen LifeOS andando — tu memoria, los modelos, el TTS, todo. Si los borro, LifeOS deja de funcionar hasta el próximo reboot. Lo que SÍ puedo limpiar: containers que vos hayás creado para experimentar (los rootless, sin prefijo `lifeos-`). ¿Querés que liste esos primero?"
+
+NUNCA actúes como si la protección fuera negociable. Es non-negotiable y por diseño.
+
 ## Notas sobre el historial que recibís
 
 En el contexto que ves, el sistema reescribe automáticamente frases del tipo "ya guardé X" provenientes de turnos anteriores a "intenté guardar X (no verificado)". Eso es porque versiones previas del runtime a veces narraron persistencia sin haber ejecutado la tool. **Cuando veas "intentado guardar (no verificado)" o "intenté registrar" en el historial, NO asumas que el dato está guardado.** Si el usuario te lo dice de nuevo (o sigue siendo relevante), RE-INVOCÁ la tool — el storage layer es idempotente, repetir no rompe nada.
@@ -2106,6 +2131,179 @@ Listo!"#;
             assert!(parsed.contains_key(&chat_id), "chat survived round-trip");
             let tmp = path.with_extension("json.tmp");
             assert!(!tmp.exists(), "tempfile should not leak on success path");
+        }
+
+        // -----------------------------------------------------------------
+        // System protection blocklist (Capa 5 of defense-in-depth)
+        // PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md §5e
+        // -----------------------------------------------------------------
+
+        #[test]
+        fn safe_commands_pass_validation() {
+            // Commands that should be allowed — typical Axi tool usage.
+            let safe = [
+                "ls -la /home/lifeos/Documents",
+                "cat /var/lib/lifeos/llama-server-runtime-profile.env",
+                "df -h",
+                "free -h",
+                "podman ps",                // listing is fine
+                "podman images",            // listing is fine
+                "systemctl status lifeosd", // status is fine, only stop/disable/etc are blocked
+                "journalctl --user -u lifeosd -n 50",
+                "echo hello",
+                "uname -a",
+                "fastfetch",
+            ];
+            for cmd in safe {
+                assert!(
+                    validate_command_safety(cmd).is_ok(),
+                    "expected SAFE: {}",
+                    cmd
+                );
+            }
+        }
+
+        #[test]
+        fn blocks_podman_destructive_commands() {
+            let dangerous = [
+                "podman rm lifeos-lifeosd",
+                "podman rm -f lifeos-llama-server",
+                "podman rmi ghcr.io/hectormr206/lifeos-tts:stable",
+                "podman system prune -a -f",
+                "podman volume rm lifeos-state",
+                "podman pod rm lifeos-pod",
+                "podman kill lifeos-lifeosd",
+            ];
+            for cmd in dangerous {
+                assert!(
+                    validate_command_safety(cmd).is_err(),
+                    "expected BLOCKED: {}",
+                    cmd
+                );
+            }
+        }
+
+        #[test]
+        fn blocks_systemctl_shutdowns_of_lifeos_services() {
+            let dangerous = [
+                "systemctl stop lifeos-lifeosd.service",
+                "systemctl stop lifeosd",
+                "systemctl stop llama-server",
+                "systemctl stop llama-embeddings",
+                "systemctl stop simplex-chat",
+                "systemctl disable lifeos-llama-server",
+                "systemctl mask lifeos-tts",
+                "systemctl kill lifeos-bridge",
+                "sudo systemctl stop lifeosd",
+            ];
+            for cmd in dangerous {
+                assert!(
+                    validate_command_safety(cmd).is_err(),
+                    "expected BLOCKED: {}",
+                    cmd
+                );
+            }
+        }
+
+        #[test]
+        fn blocks_filesystem_destruction_of_critical_paths() {
+            let dangerous = [
+                "rm -rf /var/lib/lifeos",
+                "rm -rf /var/lib/lifeos/memory.db",
+                "rm -rf /var/lib/containers",
+                "rm -rf /var/lib/containers/storage",
+                "rm -rf /etc/containers",
+                "rm -rf /etc/containers/systemd",
+                "rm -rf /home/lifeos",
+                "rm -rf /usr/local/bin/lifeos-ensure-images",
+                "sudo rm -rf /var/lib/lifeos",
+            ];
+            for cmd in dangerous {
+                assert!(
+                    validate_command_safety(cmd).is_err(),
+                    "expected BLOCKED: {}",
+                    cmd
+                );
+            }
+        }
+
+        #[test]
+        fn blocks_sudoers_and_bootc_tampering() {
+            let dangerous = [
+                "vim /etc/sudoers",
+                "nano /etc/sudoers.d/lifeos-axi",
+                "visudo",
+                "sudo visudo",
+                "bootc rollback",
+                "sudo bootc switch --transport containers-storage localhost/lifeos:dev",
+                "bootc upgrade --apply",
+            ];
+            for cmd in dangerous {
+                assert!(
+                    validate_command_safety(cmd).is_err(),
+                    "expected BLOCKED: {}",
+                    cmd
+                );
+            }
+        }
+
+        #[test]
+        fn case_insensitive_and_whitespace_normalized() {
+            // Trivial obfuscation attempts must still be caught.
+            let dangerous = [
+                "PODMAN RM lifeos-lifeosd",
+                "Podman   Rm  lifeos-tts",
+                "podman\trm\tlifeos-server", // tab-separated
+                "podman    system     prune    -a",
+                "RM -RF /var/lib/lifeos",
+                "  rm -rf /var/lib/lifeos  ", // leading/trailing whitespace
+            ];
+            for cmd in dangerous {
+                assert!(
+                    validate_command_safety(cmd).is_err(),
+                    "expected BLOCKED (obfuscated): {:?}",
+                    cmd
+                );
+            }
+        }
+
+        #[test]
+        fn block_message_names_matched_pattern() {
+            // The error message must include the matched pattern so the model
+            // can adjust its proposal instead of looping blindly.
+            let err = validate_command_safety("podman rm lifeos-lifeosd").unwrap_err();
+            assert!(
+                err.contains("podman rm"),
+                "error should name the matched pattern, got: {}",
+                err
+            );
+            assert!(
+                err.contains("LifeOS"),
+                "error should contextualize as a LifeOS protection, got: {}",
+                err
+            );
+        }
+
+        #[test]
+        fn does_not_block_listing_or_inspecting_lifeos_resources() {
+            // Read-only/inspect operations on lifeos-* are explicitly allowed.
+            // Only destructive operations are blocked.
+            let safe = [
+                "podman ps --filter name=lifeos-",
+                "podman images --filter reference=*lifeos*",
+                "podman inspect lifeos-lifeosd",
+                "systemctl status lifeos-lifeosd",
+                "systemctl is-active lifeos-llama-server",
+                "ls /etc/containers/systemd/",
+                "cat /etc/containers/systemd/lifeos-tts.container",
+            ];
+            for cmd in safe {
+                assert!(
+                    validate_command_safety(cmd).is_ok(),
+                    "expected SAFE (inspect-only): {}",
+                    cmd
+                );
+            }
         }
     }
 
@@ -4107,10 +4305,101 @@ Listo!"#;
         }
     }
 
+    /// Patterns that destroy LifeOS system infrastructure. Any command from the
+    /// `run_command` tool whose normalized form contains one of these substrings
+    /// is rejected before parsing — so the model can't accidentally tear down
+    /// the daemon, the Quadlet containers, or the encrypted state.
+    ///
+    /// This is **Capa 5** of the defense-in-depth defined in
+    /// `docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md` (Section 5e).
+    /// Other layers (rootful/rootless storage separation, sudoers denylist,
+    /// systemd auto-restart, image guardian, audit logging) live outside the
+    /// daemon. This blocklist is the in-process gate.
+    ///
+    /// Patterns are checked against a normalized lowercase form of the full
+    /// command string (collapsed whitespace) to make trivial bypasses harder
+    /// (`"PoDmAn   Rm"` still matches `"podman rm"`).
+    const SYSTEM_PROTECTION_BLOCKLIST: &[&str] = &[
+        // --- Container destruction ---
+        "podman rm",
+        "podman rmi",
+        "podman system prune",
+        "podman volume rm",
+        "podman pod rm",
+        "podman kill",
+        // --- LifeOS systemd unit shutdown ---
+        // Naming convention: every system container/service uses prefix `lifeos-`
+        "systemctl stop lifeos-",
+        "systemctl disable lifeos-",
+        "systemctl mask lifeos-",
+        "systemctl kill lifeos-",
+        // Also block stops on the legacy/non-prefixed core services that exist today
+        // before the Quadlet migration is complete.
+        "systemctl stop lifeosd",
+        "systemctl stop llama-server",
+        "systemctl stop llama-embeddings",
+        "systemctl stop simplex-chat",
+        // --- Filesystem destruction of critical paths ---
+        "rm -rf /var/lib/lifeos",
+        "rm -rf /var/lib/containers",
+        "rm -rf /etc/containers",
+        "rm -rf /home/lifeos",
+        "rm -rf /usr/local/bin/lifeos",
+        // --- Sudoers / privilege boundary tampering ---
+        "/etc/sudoers",
+        "visudo",
+        // --- bootc tampering (rollbacks/upgrades must be operator-driven) ---
+        "bootc rollback",
+        "bootc switch",
+        "bootc upgrade",
+    ];
+
+    /// Reject `run_command` payloads that match any pattern in
+    /// [`SYSTEM_PROTECTION_BLOCKLIST`]. Returns `Ok(())` when the command is
+    /// safe to proceed; returns an error message intended to be surfaced back
+    /// to the model AND user when it isn't.
+    ///
+    /// The error explicitly names the matched pattern so the model can adjust
+    /// (e.g. propose a `lifeos-axi-tool` for the same intent that goes through
+    /// a typed channel) and the user can investigate if a legitimate workflow
+    /// is being blocked.
+    pub(crate) fn validate_command_safety(cmd: &str) -> std::result::Result<(), String> {
+        // Normalize: lowercase + collapse all whitespace runs to single spaces.
+        // This catches "PoDmAn  rm", "podman\trm", "podman   rm   foo" all as
+        // matching "podman rm".
+        let normalized = cmd
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        for blocked in SYSTEM_PROTECTION_BLOCKLIST {
+            if normalized.contains(blocked) {
+                return Err(format!(
+                    "Comando bloqueado por la política de protección del sistema LifeOS: \
+                     coincide con el patrón '{}'. Estos comandos pueden destruir \
+                     servicios críticos (containers, daemon, almacenamiento cifrado). \
+                     Si necesitás esto para un workflow legítimo, ejecutalo \
+                     manualmente desde una shell de root — no desde el tool run_command.",
+                    blocked
+                ));
+            }
+        }
+        Ok(())
+    }
+
     async fn execute_run_command(args: &serde_json::Value) -> Result<String> {
         let command = args["command"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'command'"))?;
+
+        // System protection (Capa 5 of defense-in-depth). Reject before parsing
+        // so the model gets immediate, structured feedback instead of confusing
+        // shell-parser errors.
+        if let Err(reason) = validate_command_safety(command) {
+            return Err(anyhow::anyhow!(reason));
+        }
+
         let roots = telegram_allowed_roots();
         let workdir = telegram_tool_workdir(&roots);
         let parsed = parse_safe_command(command, &roots, &workdir)?;
