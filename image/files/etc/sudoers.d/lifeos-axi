@@ -149,3 +149,86 @@
 %wheel ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --subsystem-match=cpu --action=add
 %wheel ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --subsystem-match=cpu --action=change
 %wheel ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --subsystem-match=cpu --action=remove
+
+# === DENYLIST: SYSTEM PROTECTION (Capa 2 of defense-in-depth) ===
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md §5e — Capa 2.
+#
+# These rules use `!Cmnd_Alias` to OVERRIDE the default `%wheel ALL=(ALL) ALL`
+# permission inherited from /etc/sudoers. The last matching rule wins in
+# sudoers — files in /etc/sudoers.d/ are loaded after the main file, so the
+# denials below take precedence over the wheel-default ALL permission for
+# these specific commands. Even with the user's password, %wheel members
+# (and root via sudo -u) cannot run them.
+#
+# Scope rationale:
+#   * We deny ALL `sudo podman rm/rmi/system prune/volume rm/pod rm/kill`,
+#     not just lifeos-* targets. There is no legitimate use case for sudo'ing
+#     destructive podman commands on a LifeOS host — system containers are
+#     managed by systemd Quadlets (auto-restart), and user containers run
+#     rootless (don't need sudo). The single exception is `podman load -i
+#     /tmp/lifeos-*.tar`, which is allowlisted above for the deploy script.
+#   * For systemctl, we ONLY deny stops/disables/masks/kills targeting
+#     lifeos-*, lifeosd, or actions (kill, mask) that no daemon path needs.
+#     We do NOT deny `systemctl stop llama-server.service` because the
+#     daemon legitimately uses it for game-guard (see allowlist above);
+#     that path is protected by Capa 5 (code blocklist in axi_tools.rs).
+#   * Filesystem deletes target only LifeOS-owned paths. The user's home
+#     and other system paths are out of scope here.
+#
+# Bypass model (for legitimate operator work):
+#   The owner of the machine, with a real shell as root (not via sudo from
+#   the lifeos user account), can still do anything. These rules guard
+#   against accidents and AI-tool-driven misuse, not against a determined
+#   operator with physical access.
+
+# --- Container destruction (NEVER allowed via sudo on a LifeOS host) ---
+Cmnd_Alias LIFEOS_PROTECTED_PODMAN_DESTRUCTIVE = \
+    /usr/bin/podman rm, \
+    /usr/bin/podman rm *, \
+    /usr/bin/podman rmi, \
+    /usr/bin/podman rmi *, \
+    /usr/bin/podman system prune, \
+    /usr/bin/podman system prune *, \
+    /usr/bin/podman volume rm, \
+    /usr/bin/podman volume rm *, \
+    /usr/bin/podman pod rm, \
+    /usr/bin/podman pod rm *, \
+    /usr/bin/podman kill, \
+    /usr/bin/podman kill *
+
+# --- Systemd shutdowns of LifeOS infra (Quadlet services + the daemon itself) ---
+# Note: legitimate stops of llama-server/whisper-stt are allowlisted above.
+Cmnd_Alias LIFEOS_PROTECTED_SYSTEMD_DESTRUCTIVE = \
+    /usr/bin/systemctl stop lifeos-*, \
+    /usr/bin/systemctl disable lifeos-*, \
+    /usr/bin/systemctl mask lifeos-*, \
+    /usr/bin/systemctl kill lifeos-*, \
+    /usr/bin/systemctl stop lifeosd, \
+    /usr/bin/systemctl stop lifeosd.service, \
+    /usr/bin/systemctl disable lifeosd, \
+    /usr/bin/systemctl disable lifeosd.service, \
+    /usr/bin/systemctl mask lifeosd, \
+    /usr/bin/systemctl mask lifeosd.service, \
+    /usr/bin/systemctl kill lifeosd, \
+    /usr/bin/systemctl kill lifeosd.service
+
+# --- Filesystem destruction of LifeOS-owned paths ---
+Cmnd_Alias LIFEOS_PROTECTED_FS = \
+    /usr/bin/rm -rf /var/lib/lifeos, \
+    /usr/bin/rm -rf /var/lib/lifeos/, \
+    /usr/bin/rm -rf /var/lib/lifeos/*, \
+    /usr/bin/rm -rf /var/lib/containers, \
+    /usr/bin/rm -rf /var/lib/containers/, \
+    /usr/bin/rm -rf /var/lib/containers/*, \
+    /usr/bin/rm -rf /etc/containers, \
+    /usr/bin/rm -rf /etc/containers/, \
+    /usr/bin/rm -rf /etc/containers/*, \
+    /usr/bin/rm -rf /home/lifeos, \
+    /usr/bin/rm -rf /home/lifeos/, \
+    /usr/bin/rm -rf /home/lifeos/*, \
+    /usr/bin/rm -rf /usr/local/bin/lifeos*
+
+# --- Apply denials. Last match wins → these override wheel-default ALL. ---
+%wheel ALL=(ALL) !LIFEOS_PROTECTED_PODMAN_DESTRUCTIVE
+%wheel ALL=(ALL) !LIFEOS_PROTECTED_SYSTEMD_DESTRUCTIVE
+%wheel ALL=(ALL) !LIFEOS_PROTECTED_FS
