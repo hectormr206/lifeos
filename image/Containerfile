@@ -1137,6 +1137,10 @@ COPY image/files/etc/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/s
 COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
 COPY image/files/etc/systemd/system/llama-server.service.d/10-fast-kill.conf /etc/systemd/system/llama-server.service.d/10-fast-kill.conf
 COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/system/llama-embeddings.service
+# Phase 2: nomic-embed-text → Quadlet. Generator turns this into
+# lifeos-llama-embeddings.service. Image is built by side-images.yml,
+# pulled at first boot via lifeos-ensure-images.
+COPY containers/lifeos-llama-embeddings/lifeos-llama-embeddings.container /etc/containers/systemd/lifeos-llama-embeddings.container
 COPY image/files/etc/systemd/system/whisper-stt.service       /usr/lib/systemd/system/whisper-stt.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.service /usr/lib/systemd/system/lifeos-btrfs-snapshot.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.timer   /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer
@@ -1146,6 +1150,9 @@ COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/sy
 COPY image/files/etc/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/lifeos-sentinel.service
 COPY image/files/etc/systemd/system/simplex-chat.service /usr/lib/systemd/system/simplex-chat.service
 COPY image/files/etc/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf /usr/lib/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf
+# Phase 5: simplex-chat → Quadlet. Generator produces
+# lifeos-simplex-bridge.service. Image is built by side-images.yml.
+COPY containers/lifeos-simplex-bridge/lifeos-simplex-bridge.container /etc/containers/systemd/lifeos-simplex-bridge.container
 COPY image/files/usr/local/bin/lifeos-simplex-setup.sh /usr/local/bin/lifeos-simplex-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-simplex-setup.sh
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
@@ -1212,7 +1219,6 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
     ln -sf /usr/lib/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-refresh-bls-titles.service && \
-    ln -sf /usr/lib/systemd/system/simplex-chat.service /usr/lib/systemd/system/multi-user.target.wants/simplex-chat.service && \
     # Canonical enablement: lifeosd starts from the graphical session target
     # so it waits for the display server to be ready (fixes the tray-icon
     # race where lifeosd gave up after its 30s wait before COSMIC was up).
@@ -1227,7 +1233,6 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
         ln -sf /usr/lib/systemd/system/nvidia-persistenced.service /usr/lib/systemd/system/multi-user.target.wants/nvidia-persistenced.service; \
     fi && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
-    ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
     ln -sf /usr/lib/systemd/system/fstrim.timer /usr/lib/systemd/system/timers.target.wants/fstrim.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
