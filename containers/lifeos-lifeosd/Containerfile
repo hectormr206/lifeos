@@ -90,16 +90,16 @@ RUN cargo build \
         --features "dbus,http-api,messaging"
 
 # Sanity: the binary exists and runs --version.
-RUN /src/daemon/target/release/lifeosd --version || \
-    /src/daemon/target/release/lifeosd --help | head -1
+RUN /src/target/release/lifeosd --version || \
+    /src/target/release/lifeosd --help | head -1
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime
 # ---------------------------------------------------------------------------
-# fedora:43-minimal because we need libsqlite3 + libdbus + libssl runtime libs
+# fedora-minimal:43 because we need libsqlite3 + libdbus + libssl runtime libs
 # and it's smaller than full fedora:43 (~80 MB vs ~250 MB). distroless is
 # tempting but lacks D-Bus libs we need for the SimpleX bridge IPC.
-FROM fedora:43-minimal AS runtime
+FROM fedora-minimal:43 AS runtime
 
 RUN microdnf install -y \
         ca-certificates \
@@ -115,7 +115,7 @@ RUN microdnf install -y \
 # Copy just the binary and the bundled sqlite-vec extension if any (it's
 # statically linked into the daemon today via the rusqlite-vec crate, so no
 # separate .so needed — verified in cargo tree).
-COPY --from=builder /src/daemon/target/release/lifeosd /usr/bin/lifeosd
+COPY --from=builder /src/target/release/lifeosd /usr/bin/lifeosd
 
 # UID/GID strategy — Phase 3a pragmatic choice.
 #
