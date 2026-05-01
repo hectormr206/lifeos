@@ -229,6 +229,18 @@ Cmnd_Alias LIFEOS_PROTECTED_FS = \
     /usr/bin/rm -rf /usr/local/bin/lifeos*
 
 # --- Apply denials. Last match wins → these override wheel-default ALL. ---
+#
+# Two scopes for defense in depth:
+#   * %wheel — covers ANY user in the wheel group (today: lifeos), so a
+#     future user added to wheel for admin work still hits the denylist.
+#   * lifeos — explicit binding to the daemon's runtime user. If a future
+#     change drops `lifeos` from wheel (e.g. tightening default sudoers),
+#     the %wheel rule no longer matches and the denylist would silently
+#     disengage. The explicit `lifeos` rule keeps Capa 2 active regardless
+#     of group membership.
 %wheel ALL=(ALL) !LIFEOS_PROTECTED_PODMAN_DESTRUCTIVE
 %wheel ALL=(ALL) !LIFEOS_PROTECTED_SYSTEMD_DESTRUCTIVE
 %wheel ALL=(ALL) !LIFEOS_PROTECTED_FS
+lifeos ALL=(ALL) !LIFEOS_PROTECTED_PODMAN_DESTRUCTIVE
+lifeos ALL=(ALL) !LIFEOS_PROTECTED_SYSTEMD_DESTRUCTIVE
+lifeos ALL=(ALL) !LIFEOS_PROTECTED_FS
