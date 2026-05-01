@@ -91,11 +91,22 @@ RUN microdnf install -y \
 
 COPY --from=builder /tmp/llama.cpp/build/bin/llama-server /usr/sbin/llama-server
 
-# Non-root user inside container. The GPU device file (/dev/nvidia*) gets
-# bind-mounted into the container by CDI as group `nvidia` typically — we
-# add this user to that group at the Quadlet level via `--group-add`.
-RUN useradd --system --uid 65535 --no-create-home --shell /usr/sbin/nologin lifeos-llm
-USER 65535
+# Non-root user inside container. UID picked to avoid collisions with
+# Fedora system reserved IDs:
+#   65534 = nfsnobody / overflowuid (kernel.overflowuid default)
+#   65535 = nobody on Fedora; sometimes rejected by useradd as the
+#           "uid_max" sentinel
+# 65530 is far enough from both to be safe across Fedora versions and
+# leaves a gap from sibling containers (TTS=65532, simplex=65532,
+# embeddings=65533, lifeosd=65534).
+#
+# The GPU device file (/dev/nvidia*) is exposed by CDI; the kernel ACL
+# requires this user to be a member of the `nvidia` (or `video`) group.
+# That group is added at runtime by the Quadlet's `GroupAdd=keep-groups`
+# directive (NOT here in the image — the in-container `/etc/group`
+# created by useradd would be wrong on a host with non-default GID).
+RUN useradd --system --uid 65530 --no-create-home --shell /usr/sbin/nologin lifeos-llm
+USER 65530
 
 EXPOSE 8082
 
