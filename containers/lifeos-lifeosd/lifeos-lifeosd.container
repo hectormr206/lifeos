@@ -90,7 +90,33 @@ TimeoutStartSec=120s
 # session store + LLM router state). 1G cap leaves headroom for surge.
 MemoryMax=1G
 
+# === Round 2 hardening — narrow the in-container blast radius ===
+#
+# C3 fix made the container run as root inside (UID mismatch with bind-
+# mounted host /var/lib/lifeos). Round 2 audit correctly flagged that
+# a root-inside container with broad bind mounts is strictly worse than
+# the legacy non-containerized daemon unless we drop unnecessary
+# capabilities and lock down what little is left.
+#
+# Strategy: deny EVERYTHING by default, add back only what the daemon
+# needs at runtime.
 NoNewPrivileges=true
+# DropCapability=all blanks the bounding set. Daemon needs:
+#   - NET_BIND_SERVICE: bind to :8081 HTTP API (port < 1024 not used,
+#     but kept for future-proofing if dashboard ever moves to :443)
+#   - DAC_OVERRIDE: read/write the host-owned /var/lib/lifeos/*.db.
+#     Without this, the in-container root still hits POSIX perm checks
+#     against host UID 1000 even though SELinux :z lets the container
+#     reach the path.
+DropCapability=all
+AddCapability=NET_BIND_SERVICE DAC_OVERRIDE
+
+# Container-typed SELinux process label restricts what the container's
+# root can do at the MAC layer (e.g. cannot write outside the labeled
+# bind mounts even if DAC checks pass). Combined with :z shared-label
+# bind mounts, the daemon ends up with: full read/write on its three
+# host paths, nothing else.
+SecurityLabel=type:container_t
 
 [Install]
 WantedBy=multi-user.target default.target
