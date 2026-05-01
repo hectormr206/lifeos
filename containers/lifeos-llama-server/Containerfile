@@ -1,4 +1,9 @@
-# lifeos-llama-server — Qwen3.5-9B chat inference server (GPU-accelerated)
+# lifeos-llama-server — Qwen3.5 chat inference server (GPU-accelerated)
+#
+# Default LIFEOS_AI_MODEL is Qwen3.5-4B (per memory decision_default_model_4b);
+# 9B is opt-in for hosts with 8GB+ VRAM. The image is model-agnostic — it
+# bakes only the llama.cpp server binary; the model file is bind-mounted
+# read-only from /var/lib/lifeos/models/ at runtime.
 #
 # Phase 4 of the architecture pivot — the most complex piece because it
 # requires GPU passthrough via CDI, Vulkan inside the container, and
@@ -121,6 +126,6 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/usr/sbin/llama-server"]
 
 LABEL org.opencontainers.image.title="lifeos-llama-server"
-LABEL org.opencontainers.image.description="Qwen3.5-9B chat inference (Vulkan GPU) — stateless"
+LABEL org.opencontainers.image.description="Qwen3.5 chat inference (Vulkan GPU) — stateless; 4B default, 9B opt-in via LIFEOS_AI_MODEL"
 LABEL org.opencontainers.image.source="https://github.com/hectormr206/lifeos"
 LABEL org.opencontainers.image.licenses="Apache-2.0"

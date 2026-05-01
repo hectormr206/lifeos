@@ -102,21 +102,32 @@ MemoryMax=1G
 # needs at runtime.
 NoNewPrivileges=true
 # DropCapability=all blanks the bounding set. Daemon needs:
-#   - NET_BIND_SERVICE: bind to :8081 HTTP API (port < 1024 not used,
-#     but kept for future-proofing if dashboard ever moves to :443)
 #   - DAC_OVERRIDE: read/write the host-owned /var/lib/lifeos/*.db.
 #     Without this, the in-container root still hits POSIX perm checks
 #     against host UID 1000 even though SELinux :z lets the container
 #     reach the path.
+#   - CHOWN, FOWNER: lifeosd creates new files under /var/lib/lifeos
+#     (session_store, scheduled_tasks DB, calendar) and may chown to
+#     match existing perms. Without these, create succeeds but chown
+#     EPERMs and the file ends up with wrong ownership.
+#
+# NOT included: NET_BIND_SERVICE — port 8081 > 1024 doesn't need any
+# capability. Round 3 audit correctly flagged the previous "future-proof
+# for :443" justification as a least-privilege violation. If/when the
+# dashboard moves to :443, add it at that commit.
+# NOT included: SYS_PTRACE, NET_RAW — daemon doesn't currently use
+# them. Add when/if a code path requires.
 DropCapability=all
-AddCapability=NET_BIND_SERVICE DAC_OVERRIDE
+AddCapability=DAC_OVERRIDE CHOWN FOWNER
 
-# Container-typed SELinux process label restricts what the container's
-# root can do at the MAC layer (e.g. cannot write outside the labeled
-# bind mounts even if DAC checks pass). Combined with :z shared-label
-# bind mounts, the daemon ends up with: full read/write on its three
-# host paths, nothing else.
-SecurityLabel=type:container_t
+# SELinux process type. Round 3 audit caught the previous syntax —
+# `SecurityLabel=type:container_t` — was systemd pre-Quadlet form that
+# silently no-ops in Quadlet. The correct Quadlet `[Container]` key is
+# `SecurityLabelType=`. `container_t` is podman's default for rootful
+# containers anyway, so this is mostly explicit-documentation /
+# belt-and-suspenders; for narrower per-container MCS isolation, add
+# `SecurityLabelLevel=s0:c100,c200`.
+SecurityLabelType=container_t
 
 [Install]
 WantedBy=multi-user.target default.target

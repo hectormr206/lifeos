@@ -1,4 +1,7 @@
-# lifeos-llama-server.container — Qwen3.5-9B Vulkan inference Quadlet
+# lifeos-llama-server.container — Qwen3.5 Vulkan inference Quadlet
+# Default LIFEOS_AI_MODEL is Qwen3.5-4B (per decision_default_model_4b);
+# 9B is opt-in via the runtime-profile env file. The Quadlet itself is
+# model-agnostic.
 #
 # Phase 4 of the architecture pivot. NOT auto-installed; BLOCKED on
 # nvidia-container-toolkit availability in the bootc image (see

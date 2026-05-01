@@ -165,7 +165,15 @@
 # Sudoers keeps the wildcard because the args ARE user-chosen paths; the
 # safety comes from the in-script validation (read-only allowlist). See
 # lifeos-dev-deploy.sh for the full check.
-%wheel ALL=(root) NOPASSWD: /var/lib/lifeos/lifeos-dev-deploy.sh *
+#
+# Round 3 audit removed `/var/lib/lifeos/lifeos-dev-deploy.sh *` from
+# this allowlist. /var/lib/lifeos is WRITABLE by the lifeos user (the
+# daemon writes memory.db et al there), so any wheel/lifeos user could
+# `cp /tmp/evil.sh /var/lib/lifeos/lifeos-dev-deploy.sh` and then sudo
+# the now-malicious script — the in-script hardening is irrelevant
+# because the attacker controls the script body. Pinning to
+# /usr/local/bin/ ensures the script lives on read-only /usr (bootc
+# guarantees) and CANNOT be replaced without a bootc image rebase.
 %wheel ALL=(root) NOPASSWD: /usr/local/bin/lifeos-dev-deploy.sh *
 
 # === UDEV RELOAD (AI-driven dev workflow — re-apply rules after deploy) ===

@@ -199,7 +199,7 @@ Capas implementadas en commit `67eb003` (PR #68, mergeado 2026-04-30):
 
 - **Capa 5** — `run_command` desde Axi rechaza patterns destructivos en `daemon/src/axi_tools.rs::validate_command_safety`. Si el modelo propone `podman rm lifeos-tts`, el tool retorna error sin ejecutar.
 - **Capa 2** — `/etc/sudoers.d/lifeos-axi` deniega `sudo podman rm/rmi/system prune`, `sudo systemctl stop lifeos-*`, y `sudo rm -rf /var/lib/lifeos*` incluso con tu password.
-- **Capa 6** — `auditd` registra cualquier write a `/etc/containers/systemd/`, `/var/lib/containers/storage/`, `/etc/sudoers.d/`, `/var/lib/lifeos/`. Forensics post-incidente con `sudo ausearch -k lifeos_quadlet_changed`.
+- **Capa 6** — `auditd` registra cualquier write a `/etc/containers/systemd/`, `/var/lib/containers/storage/`, `/etc/sudoers.d/lifeos-axi` (file-specific, key `lifeos_sudoers_changed`), `/usr/local/bin/lifeos-ensure-images`, `/etc/lifeos/`, `/var/lib/lifeos/`. La directorio-amplia `/etc/sudoers.d/` también está watchada con la key CIS `privilege_escalation` (cualquier sudoers drop-in nuevo, no solo `lifeos-axi`). Forensics post-incidente con `sudo ausearch -k <key>` — las 6 keys LifeOS están NOPASSWD-allowlisted en sudoers.
 
 La única forma de bajar un container del sistema es vos, manualmente, desde una shell de root real (no via sudo desde la cuenta `lifeos`). Esto es por diseño — vos sos el operador, las protecciones son contra accidentes y AI-misuse.
 

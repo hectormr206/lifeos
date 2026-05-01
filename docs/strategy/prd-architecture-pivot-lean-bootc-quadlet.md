@@ -603,17 +603,31 @@ Y al system prompt de Axi se agrega regla absoluta:
 
 ### Capa 6 — Audit logging
 
-`auditd` ya está en LifeOS. Agregar reglas en imagen bootc:
+`auditd` ya está en LifeOS. Las reglas LifeOS-específicas viven en
+`image/files/etc/audit/rules.d/50-lifeos.rules` y aportan **6 keys**
+que SOC tooling y `sudo ausearch -k <key>` (NOPASSWD-allowlisted)
+pueden filtrar:
+
+| Key | Path watched | Volumen | Propósito |
+|-----|--------------|---------|-----------|
+| `lifeos_config` | `/etc/lifeos/` | Bajo | Config del daemon (env files, etc) |
+| `lifeos_data` | `/var/lib/lifeos/` | Alto (DB writes) | Estado del daemon |
+| `lifeos_quadlet_changed` | `/etc/containers/systemd/` | Bajo | Tampering con Quadlet definitions |
+| `lifeos_storage_changed` | `/var/lib/containers/storage/` | Alto (image pulls + container starts) | Tampering con root containers-storage |
+| `lifeos_guardian_changed` | `/usr/local/bin/lifeos-ensure-images` | Cero (read-only `/usr`) | Intento de modificar el image guardian script (capturado aunque kernel lo bloquee con EROFS) |
+| `lifeos_sudoers_changed` | `/etc/sudoers.d/lifeos-axi` | Cero (immutable post-boot) | Tampering con la lista de allow/deny de Capa 2 |
 
 ```bash
-# /etc/audit/rules.d/lifeos-containers.rules
+# /etc/audit/rules.d/50-lifeos.rules (excerpt — 6 LifeOS keys)
+-w /etc/lifeos/ -p wa -k lifeos_config
+-w /var/lib/lifeos/ -p wa -k lifeos_data
 -w /etc/containers/systemd/ -p wa -k lifeos_quadlet_changed
 -w /var/lib/containers/storage/ -p wa -k lifeos_storage_changed
--w /etc/sudoers.d/lifeos-axi -p wa -k lifeos_sudoers_changed
 -w /usr/local/bin/lifeos-ensure-images -p wa -k lifeos_guardian_changed
+-w /etc/sudoers.d/lifeos-axi -p wa -k lifeos_sudoers_changed
 ```
 
-Cualquier write/attribute change a esos paths queda registrado en `/var/log/audit/audit.log` con su timestamp + uid + comando. Forensics post-incidente.
+Cualquier write/attribute change a esos paths queda registrado en `/var/log/audit/audit.log` con su timestamp + uid + comando. Forensics post-incidente. Las primeras dos keys (`lifeos_config`, `lifeos_data`) son CIS-style watches que ya existían pre-pivot; las últimas cuatro son específicas del defense-in-depth de container infra.
 
 ### Tabla resumen — qué protege cada capa contra qué amenaza
 
