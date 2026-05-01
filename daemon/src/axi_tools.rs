@@ -133,7 +133,9 @@ Los containers, services y archivos con prefijo `lifeos-` o ubicados en `/var/li
 - `systemctl stop lifeos-*`, `systemctl disable lifeos-*`, `systemctl mask lifeos-*`, `systemctl kill lifeos-*`
 - `rm -rf` sobre `/var/lib/lifeos`, `/var/lib/containers`, `/etc/containers`, `/home/lifeos`, `/usr/local/bin/lifeos*`
 - Edición de `/etc/sudoers` o `visudo`
-- `bootc rollback`, `bootc switch`, `bootc upgrade`
+- `bootc rollback` (descarta el deployment actual sin confirmación)
+
+`bootc switch` y `bootc upgrade` SÍ están permitidos para el flujo de update legítimo (sudoers los allowlistea con NOPASSWD), pero el path canónico va por código estructurado en `updates.rs`, no por `run_command`. Si tu intención es actualizar el sistema, decilo en lenguaje natural y el runtime lo enruta correctamente.
 
 El runtime tiene una validación de seguridad que rechaza estos comandos automáticamente — si igual los proponés, vas a recibir un error y vas a quedar como que no entendés el sistema. Mejor: **anticipate**.
 
@@ -2228,20 +2230,46 @@ Listo!"#;
         }
 
         #[test]
-        fn blocks_sudoers_and_bootc_tampering() {
+        fn blocks_sudoers_tampering_and_bootc_rollback() {
+            // Sudoers tampering: ALL forms blocked.
+            // bootc: only `rollback` is blocked. `switch` and `upgrade` are
+            // sudoers-allowlisted update paths — see SYSTEM_PROTECTION_BLOCKLIST
+            // for the rationale.
             let dangerous = [
                 "vim /etc/sudoers",
                 "nano /etc/sudoers.d/lifeos-axi",
                 "visudo",
                 "sudo visudo",
                 "bootc rollback",
-                "sudo bootc switch --transport containers-storage localhost/lifeos:dev",
-                "bootc upgrade --apply",
+                "sudo bootc rollback",
             ];
             for cmd in dangerous {
                 assert!(
                     validate_command_safety(cmd).is_err(),
                     "expected BLOCKED: {}",
+                    cmd
+                );
+            }
+        }
+
+        #[test]
+        fn allows_bootc_legitimate_update_paths() {
+            // Capa 5 ↔ Capa 2 contract: sudoers allowlists the canonical
+            // bootc switch + upgrade forms used by the daemon's update flow.
+            // The in-process blocklist must NOT shadow those legitimate paths.
+            let safe = [
+                "sudo bootc switch --transport containers-storage localhost/lifeos:dev",
+                "sudo bootc switch --transport containers-storage localhost/lifeos:stable",
+                "sudo bootc upgrade",
+                "sudo bootc upgrade --apply",
+                "sudo bootc upgrade --check",
+                "bootc status --json",
+                "bootc status",
+            ];
+            for cmd in safe {
+                assert!(
+                    validate_command_safety(cmd).is_ok(),
+                    "expected ALLOWED (legitimate update path): {}",
                     cmd
                 );
             }
@@ -4348,10 +4376,24 @@ Listo!"#;
         // --- Sudoers / privilege boundary tampering ---
         "/etc/sudoers",
         "visudo",
-        // --- bootc tampering (rollbacks/upgrades must be operator-driven) ---
+        // --- bootc tampering ---
+        // Only `bootc rollback` is destructive enough to deny outright — it
+        // discards the current deployment without confirmation. `bootc switch`
+        // and `bootc upgrade` are LEGITIMATE update paths used by the daemon
+        // (sudoers `/etc/sudoers.d/lifeos-axi` allowlists the canonical forms:
+        //   sudo bootc switch --transport containers-storage localhost/lifeos:dev
+        //   sudo bootc switch --transport containers-storage localhost/lifeos:stable
+        //   sudo bootc upgrade [--apply]
+        // Blocking those substring matches here would create a Capa 5 ↔ Capa 2
+        // conflict: sudoers permits the call, but the in-process blocklist
+        // rejects it before sudo is even reached. Future code paths that
+        // legitimately route bootc through `run_command` (e.g. an "apply
+        // pending update" tool) would fail with a misleading "blocked by
+        // policy" error while sudoers was actually willing.
+        // The legitimate update path goes through structured Rust code in
+        // updates.rs, not through this tool — so removing these patterns
+        // doesn't open an attack vector today, just unblocks future routes.
         "bootc rollback",
-        "bootc switch",
-        "bootc upgrade",
     ];
 
     /// Reject `run_command` payloads that match any pattern in

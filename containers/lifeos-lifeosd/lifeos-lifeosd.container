@@ -1,0 +1,133 @@
+# lifeos-lifeosd.container — Quadlet for the Axi daemon
+#
+# Phase 3 of the architecture pivot. NOT auto-installed yet.
+# The "core" daemon — HTTP API, SimpleX/Telegram bridges, SQLite memory.
+# The GTK4 desktop overlay is OUT OF SCOPE for this container (Phase 3b).
+
+[Unit]
+Description=LifeOS Axi Daemon (containerized core)
+Documentation=https://github.com/hectormr206/lifeos
+# All Quadlet-generated unit names use the `lifeos-` prefix. The earlier
+# version of this file referenced `llama-server.service` and
+# `simplex-chat.service` (the LEGACY non-prefixed host services); systemd
+# silently dropped ordering against those after Phase 4/5 flipped the
+# legacy units to masked/removed state.
+After=network-online.target lifeos-image-guardian.service lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
+Wants=network-online.target lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
+
+[Container]
+Image=ghcr.io/hectormr206/lifeos-lifeosd:stable
+ContainerName=lifeos-lifeosd
+HostName=lifeos-lifeosd
+
+# Network=host — daemon talks to llama-server (8082), llama-embeddings (8083),
+# lifeos-tts (8084), simplex-chat (5226) all on host loopback. Network=host
+# means zero URL changes from the existing systemd-host setup. Phase 6 PRD
+# migrates to a podman bridge `lifeos-net`.
+Network=host
+
+# === Bind mounts: state lives on host, container is stateless ===
+#
+# /var/lib/lifeos — encrypted memory DB, session_store, calendar, task
+# queue, scheduled tasks, Kokoro voice cache, etc. RW. C3 fix means
+# container runs as root inside, so the host UID 1000 owner is reachable.
+#
+# ':z' (lowercase, SHARED MCS label) — multiple containers and the
+# legacy host services bind paths under /var/lib/lifeos and /etc/lifeos.
+# ':Z' (uppercase, private) would assign a per-container category and
+# lock out everyone else — exactly the rollback-breaking behavior the
+# audit flagged.
+Volume=/var/lib/lifeos:/var/lib/lifeos:z
+
+# (Models bind is REDUNDANT — /var/lib/lifeos/models is already covered
+# by the parent /var/lib/lifeos:z mount above. A nested RO mount over
+# an RW parent has unreliable semantics across podman versions and
+# triggers double-relabel races. Removed.)
+
+# Configs read-only. /etc/lifeos has tts-server.env, llama-server.env,
+# llm-providers.env, etc. ':z' shared label so TTS/embeddings/legacy
+# services keep access.
+Volume=/etc/lifeos:/etc/lifeos:ro,z
+
+# Telegram bridge in lifeosd needs CA bundle to verify TLS to
+# api.telegram.org. ':z' shared label — touching the system-wide CA
+# trust dir with ':Z' would relabel it and break TLS for every other
+# host service.
+Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
+
+# Defense-in-depth Capa 4.
+ExecStartPre=/usr/local/bin/lifeos-ensure-images
+
+# === Critical environment variables ===
+# Same set the host service passes today.
+Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard
+Environment=LIFEOS_RUNTIME_DIR=/run/lifeos
+Environment=RUST_LOG=info,lifeosd=debug
+EnvironmentFile=-/etc/lifeos/llm-providers.env
+
+[Service]
+# Capa 3 of defense-in-depth — auto-restart with watchdog.
+Restart=always
+RestartSec=5s
+
+# Daemon initial startup runs migrations + opens encrypted memory DB +
+# bootstraps SimpleX bridge — give it time on cold boot.
+TimeoutStartSec=120s
+
+# WatchdogSec is INTENTIONALLY NOT SET.
+# Audit (Día del Juicio) found: daemon/src/main.rs implements notify_ready()
+# (one-shot READY=1) and notify_stopping() (one-shot STOPPING=1) but NO
+# periodic loop sending WATCHDOG=1. Setting WatchdogSec=300s here would
+# make systemd SIGABRT the container every 5 minutes waiting for a
+# heartbeat that never comes — RestartSec=5s would re-launch and the
+# cycle repeats forever.
+#
+# Re-enable ONLY after daemon/src/main.rs implements the watchdog ping
+# loop following the systemd protocol (every WatchdogSec/2 seconds):
+# WatchdogSec=300s
+
+# Resource limits. Daemon footprint is ~150-300 MB (memory_plane caches +
+# session store + LLM router state). 1G cap leaves headroom for surge.
+MemoryMax=1G
+
+# === Round 2 hardening — narrow the in-container blast radius ===
+#
+# C3 fix made the container run as root inside (UID mismatch with bind-
+# mounted host /var/lib/lifeos). Round 2 audit correctly flagged that
+# a root-inside container with broad bind mounts is strictly worse than
+# the legacy non-containerized daemon unless we drop unnecessary
+# capabilities and lock down what little is left.
+#
+# Strategy: deny EVERYTHING by default, add back only what the daemon
+# needs at runtime.
+NoNewPrivileges=true
+# DropCapability=all blanks the bounding set. Daemon needs:
+#   - DAC_OVERRIDE: read/write the host-owned /var/lib/lifeos/*.db.
+#     Without this, the in-container root still hits POSIX perm checks
+#     against host UID 1000 even though SELinux :z lets the container
+#     reach the path.
+#   - CHOWN, FOWNER: lifeosd creates new files under /var/lib/lifeos
+#     (session_store, scheduled_tasks DB, calendar) and may chown to
+#     match existing perms. Without these, create succeeds but chown
+#     EPERMs and the file ends up with wrong ownership.
+#
+# NOT included: NET_BIND_SERVICE — port 8081 > 1024 doesn't need any
+# capability. Round 3 audit correctly flagged the previous "future-proof
+# for :443" justification as a least-privilege violation. If/when the
+# dashboard moves to :443, add it at that commit.
+# NOT included: SYS_PTRACE, NET_RAW — daemon doesn't currently use
+# them. Add when/if a code path requires.
+DropCapability=all
+AddCapability=DAC_OVERRIDE CHOWN FOWNER
+
+# SELinux process type. Round 3 audit caught the previous syntax —
+# `SecurityLabel=type:container_t` — was systemd pre-Quadlet form that
+# silently no-ops in Quadlet. The correct Quadlet `[Container]` key is
+# `SecurityLabelType=`. `container_t` is podman's default for rootful
+# containers anyway, so this is mostly explicit-documentation /
+# belt-and-suspenders; for narrower per-container MCS isolation, add
+# `SecurityLabelLevel=s0:c100,c200`.
+SecurityLabelType=container_t
+
+[Install]
+WantedBy=multi-user.target default.target

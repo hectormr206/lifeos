@@ -1,0 +1,79 @@
+# lifeos-llama-embeddings.container — Quadlet for nomic-embed-text server
+#
+# Phase 2 of the architecture pivot. NOT auto-installed yet — see
+# containers/lifeos-llama-embeddings/README.md for the manual deploy recipe.
+
+[Unit]
+Description=LifeOS Semantic Embeddings Server (containerized)
+Documentation=https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF
+After=network-online.target lifeos-image-guardian.service
+Wants=network-online.target
+# lifeosd does memory recall via embeddings — keep this up before lifeosd.
+# Use the Quadlet-generated unit name; ordering vs the legacy
+# 'lifeosd.service' is silently dropped because that unit doesn't exist
+# after Phase 3 flips.
+Before=lifeos-lifeosd.service
+
+[Container]
+Image=ghcr.io/hectormr206/lifeos-llama-embeddings:stable
+ContainerName=lifeos-llama-embeddings
+HostName=lifeos-llama-embeddings
+
+# Network=host — Phase 2 sticks with the same Phase 1 choice. Loopback only,
+# zero URL changes in lifeosd.
+Network=host
+
+# Models bind mount — read-only. The model file (currently
+# nomic-embed-text-v1.5.f16.gguf, ~262 MB) lives on host /var/lib/lifeos/models/
+# and survives container recreation. NEVER bake the model into the image —
+# it'd inflate the image to ~400+ MB and forces a rebuild on model bumps.
+#
+# ':z' (lowercase, SHARED label). /var/lib/lifeos/models is read by
+# lifeos-llama-embeddings AND lifeos-llama-server AND lifeosd. ':Z'
+# (uppercase, private) would assign a per-container MCS category and
+# lock out the others. ':z' shares the label cleanly across consumers.
+Volume=/var/lib/lifeos/models:/models:ro,z
+
+# Env file from host so model name (LIFEOS_EMBED_MODEL) is configurable
+# without rebuilding the container.
+# ':z' shared label — /etc/lifeos is read by multiple containers + the
+# legacy host service (rollback path). Same reasoning as models bind.
+Volume=/etc/lifeos/llama-embeddings.env:/etc/lifeos/llama-embeddings.env:ro,z
+
+# Override the image's CMD to point at the model from the bind mount. The
+# model name is read from the env file at start time — keeps the Quadlet
+# generic across model bumps.
+Exec=/usr/sbin/llama-server \
+    --model /models/${LIFEOS_EMBED_MODEL} \
+    --alias lifeos-embeddings \
+    --host 127.0.0.1 \
+    --port 8083 \
+    --ctx-size 2048 \
+    --threads 2 \
+    --batch-size 256 \
+    --ubatch-size 64 \
+    --embeddings \
+    --pooling mean
+
+# Defense-in-depth Capa 4.
+ExecStartPre=/usr/local/bin/lifeos-ensure-images
+
+[Service]
+EnvironmentFile=-/etc/lifeos/llama-embeddings.env
+
+# Capa 3 of defense-in-depth — auto-restart with sane backoff. Embeddings
+# warm-up is fast (~5s), so RestartSec is shorter than TTS (which warms ~15s).
+Restart=always
+RestartSec=5s
+TimeoutStartSec=60s
+
+# Resource limits — slightly tighter than the host service (1G) because
+# container overhead is ~50-100 MB extra so 1280M caps the total at the same
+# ~1.3 GB envelope.
+MemoryMax=1280M
+CPUQuota=200%
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target default.target

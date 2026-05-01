@@ -1,0 +1,16 @@
+[Unit]
+Description=LifeOS dev registry — daily GC + tag prune
+Documentation=file:///home/hectormr/scripts/vps-registry-gc.sh
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=hectormr
+ExecStart=/home/hectormr/scripts/vps-registry-gc.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=30min
+
+# Best-effort, never fail the timer if a transient curl hiccups.
+SuccessExitStatus=0 1

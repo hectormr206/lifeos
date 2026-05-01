@@ -1,0 +1,131 @@
+# lifeos-llama-server — Qwen3.5 chat inference server (GPU-accelerated)
+#
+# Default LIFEOS_AI_MODEL is Qwen3.5-4B (per memory decision_default_model_4b);
+# 9B is opt-in for hosts with 8GB+ VRAM. The image is model-agnostic — it
+# bakes only the llama.cpp server binary; the model file is bind-mounted
+# read-only from /var/lib/lifeos/models/ at runtime.
+#
+# Phase 4 of the architecture pivot — the most complex piece because it
+# requires GPU passthrough via CDI, Vulkan inside the container, and
+# binding multi-GB GGUF models read-only.
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md
+#
+# === BLOCKER ===
+#
+# This container CANNOT run on the current LifeOS host until the bootc
+# image has nvidia-container-toolkit installed. Today (2026-04-30) it's
+# blocked by a Fedora 43 RPM digest issue — the NVIDIA RPMs lack digest
+# metadata which DNF6 rejects. Tracked in:
+#   .claude/projects/.../memory/project_pending_nvidia_container_toolkit.md
+#
+# Until that's resolved, this scaffold is REFERENCE ONLY. The Containerfile
+# is structurally complete; do NOT enable in production.
+#
+# Build (when unblocked):
+#   podman build -t 10.66.66.1:5001/lifeos-llama-server:dev \
+#     -f containers/lifeos-llama-server/Containerfile \
+#     containers/lifeos-llama-server/
+
+# ---------------------------------------------------------------------------
+# Stage 1 — builder
+# ---------------------------------------------------------------------------
+# Heavy: shader-gen tool needs Vulkan headers + glslang. Build is slower
+# than embeddings (~20-30 min) because shader compilation alone is heavy.
+# Same image base as the host bootc llama-server build for parity.
+FROM fedora:43 AS builder
+
+RUN dnf -y install \
+        cmake \
+        gcc gcc-c++ make \
+        git \
+        ca-certificates \
+        curl-devel \
+        # Vulkan SDK pieces — same set the host Containerfile installs.
+        vulkan-headers \
+        vulkan-loader-devel \
+        glslang \
+        glslc \
+        spirv-tools \
+        pkgconf-pkg-config \
+        && \
+    dnf clean all
+
+# MUST match the host bootc llama-server's pinned tag for chat-template
+# compatibility. Bump in lockstep across both Containerfiles.
+ARG LLAMA_CPP_TAG=b8925
+
+RUN git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
+    cd /tmp/llama.cpp && \
+    git checkout "${LLAMA_CPP_TAG}"
+
+# Build with Vulkan ON. -j1 because vulkan-shaders-gen forks parallel
+# glslangValidator children which OOM at higher parallelism on weaker
+# runners (we hit this on ubuntu-latest in CI; VPS runner cap respects it).
+RUN cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DGGML_STATIC=ON \
+        -DGGML_NATIVE=OFF \
+        -DGGML_VULKAN=ON \
+        -DGGML_CUDA=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_SERVER=ON && \
+    cmake --build /tmp/llama.cpp/build -j1
+
+# Sanity. Note: this just verifies the binary CAN run; actual GPU access
+# requires the runtime stage's Vulkan ICD + nvidia-container-toolkit on host.
+RUN /tmp/llama.cpp/build/bin/llama-server --version
+
+# ---------------------------------------------------------------------------
+# Stage 2 — runtime
+# ---------------------------------------------------------------------------
+# Needs: vulkan-loader (libvulkan.so.1), libcurl (HTTP), tini, ca-certs.
+# Critically does NOT need NVIDIA driver libraries — those come from the
+# HOST via CDI passthrough at container start time. The container only
+# needs vulkan-loader to find them.
+FROM fedora:43-minimal AS runtime
+
+RUN microdnf install -y \
+        ca-certificates \
+        vulkan-loader \
+        libcurl \
+        tini \
+        --setopt=tsflags=nodocs && \
+    microdnf clean all
+
+COPY --from=builder /tmp/llama.cpp/build/bin/llama-server /usr/sbin/llama-server
+
+# Non-root user inside container. UID picked to avoid collisions with
+# Fedora system reserved IDs:
+#   65534 = nfsnobody / overflowuid (kernel.overflowuid default)
+#   65535 = nobody on Fedora; sometimes rejected by useradd as the
+#           "uid_max" sentinel
+# 65530 is far enough from both to be safe across Fedora versions and
+# leaves a gap from sibling containers (TTS=65532, simplex=65532,
+# embeddings=65533, lifeosd=65534).
+#
+# GPU access goes through CDI device injection at runtime (Quadlet's
+# `AddDevice=nvidia.com/gpu=all`). CDI sets /dev/nvidia* permissions
+# to mode 666 by default and adds cgroup device permission rules that
+# grant the container user access without needing membership in any
+# host-managed group. So no `groupadd nvidia` here — round-2 audit
+# pointed out that the previous `GroupAdd=keep-groups` claim was a
+# misleading no-op anyway. CDI is the contract.
+RUN useradd --system --uid 65530 --no-create-home --shell /usr/sbin/nologin lifeos-llm
+USER 65530
+
+EXPOSE 8082
+
+# tini for signal forwarding so SIGTERM cleanly stops the inference (saves
+# the prompt cache and frees mlock'd model RAM gracefully).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# CMD has no args here — the Quadlet wires the model + ctx + GPU layers.
+# Same image is reusable for any GGUF chat model on Vulkan.
+CMD ["/usr/sbin/llama-server"]
+
+LABEL org.opencontainers.image.title="lifeos-llama-server"
+LABEL org.opencontainers.image.description="Qwen3.5 chat inference (Vulkan GPU) — stateless; 4B default, 9B opt-in via LIFEOS_AI_MODEL"
+LABEL org.opencontainers.image.source="https://github.com/hectormr206/lifeos"
+LABEL org.opencontainers.image.licenses="Apache-2.0"

@@ -65,6 +65,32 @@
 %wheel ALL=(root) NOPASSWD: /usr/sbin/smartctl -j -a /dev/nvme*
 %wheel ALL=(root) NOPASSWD: /usr/sbin/smartctl -j -a /dev/sd*
 
+# === AUDIT INSPECTION (read-only — Capa 6 of defense-in-depth) ===
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md §5e Capa 6.
+# These commands list rules / status / search the audit log. They never
+# modify audit state (rule changes use auditctl -e/-D/-w which are NOT here).
+# Allows the daemon (and Hector via dev workflow) to inspect the audit trail
+# without prompting for a password.
+%wheel ALL=(root) NOPASSWD: /usr/sbin/auditctl -l
+%wheel ALL=(root) NOPASSWD: /usr/sbin/auditctl -s
+%wheel ALL=(root) NOPASSWD: /sbin/auditctl -l
+%wheel ALL=(root) NOPASSWD: /sbin/auditctl -s
+# Round-2 audit: enumerate the LifeOS-specific keys explicitly instead
+# of `-k *` (which would let any wheel user read system audit events
+# beyond LifeOS scope — logins, identity, kernel modules, mounts, etc.).
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_config
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_data
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_quadlet_changed
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_storage_changed
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_guardian_changed
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_sudoers_changed
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_config
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_data
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_quadlet_changed
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_storage_changed
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_guardian_changed
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_sudoers_changed
+
 # === NETWORK SECURITY (read-only) ===
 # proactive.rs — firewall status check
 %wheel ALL=(root) NOPASSWD: /usr/sbin/nft list ruleset
@@ -139,7 +165,15 @@
 # Sudoers keeps the wildcard because the args ARE user-chosen paths; the
 # safety comes from the in-script validation (read-only allowlist). See
 # lifeos-dev-deploy.sh for the full check.
-%wheel ALL=(root) NOPASSWD: /var/lib/lifeos/lifeos-dev-deploy.sh *
+#
+# Round 3 audit removed `/var/lib/lifeos/lifeos-dev-deploy.sh *` from
+# this allowlist. /var/lib/lifeos is WRITABLE by the lifeos user (the
+# daemon writes memory.db et al there), so any wheel/lifeos user could
+# `cp /tmp/evil.sh /var/lib/lifeos/lifeos-dev-deploy.sh` and then sudo
+# the now-malicious script — the in-script hardening is irrelevant
+# because the attacker controls the script body. Pinning to
+# /usr/local/bin/ ensures the script lives on read-only /usr (bootc
+# guarantees) and CANNOT be replaced without a bootc image rebase.
 %wheel ALL=(root) NOPASSWD: /usr/local/bin/lifeos-dev-deploy.sh *
 
 # === UDEV RELOAD (AI-driven dev workflow — re-apply rules after deploy) ===
@@ -229,6 +263,18 @@ Cmnd_Alias LIFEOS_PROTECTED_FS = \
     /usr/bin/rm -rf /usr/local/bin/lifeos*
 
 # --- Apply denials. Last match wins → these override wheel-default ALL. ---
+#
+# Two scopes for defense in depth:
+#   * %wheel — covers ANY user in the wheel group (today: lifeos), so a
+#     future user added to wheel for admin work still hits the denylist.
+#   * lifeos — explicit binding to the daemon's runtime user. If a future
+#     change drops `lifeos` from wheel (e.g. tightening default sudoers),
+#     the %wheel rule no longer matches and the denylist would silently
+#     disengage. The explicit `lifeos` rule keeps Capa 2 active regardless
+#     of group membership.
 %wheel ALL=(ALL) !LIFEOS_PROTECTED_PODMAN_DESTRUCTIVE
 %wheel ALL=(ALL) !LIFEOS_PROTECTED_SYSTEMD_DESTRUCTIVE
 %wheel ALL=(ALL) !LIFEOS_PROTECTED_FS
+lifeos ALL=(ALL) !LIFEOS_PROTECTED_PODMAN_DESTRUCTIVE
+lifeos ALL=(ALL) !LIFEOS_PROTECTED_SYSTEMD_DESTRUCTIVE
+lifeos ALL=(ALL) !LIFEOS_PROTECTED_FS

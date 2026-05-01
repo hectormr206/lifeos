@@ -1,0 +1,10 @@
+[Unit]
+Description=LifeOS dev registry — daily GC schedule (04:00 local)
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

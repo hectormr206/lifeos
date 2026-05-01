@@ -17,9 +17,17 @@ set -euo pipefail
 REPO_BASE="/var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files"
 
 # Allowed destination prefixes (least-privilege)
+#
+# Round 3 audit removed `/etc/sudoers.d/lifeos-` from this allowlist.
+# Sudoers is the wrong file class to deploy from a developer-driven
+# script: regex-based content guards (the previous Round 2 attempt) are
+# bypassable by sudoers-legal whitespace and runas variants — the
+# language is too rich for a denylist. Sudoers MUST come through the
+# bootc image build, where the contents are reviewed in PR and shipped
+# read-only on /etc/ overlay. The two LifeOS sudoers drop-ins
+# (lifeos-axi, lifeos-dev-ai) are COPY'd by image/Containerfile.
 ALLOWED_DESTS=(
     "/var/lib/lifeos/"
-    "/etc/sudoers.d/lifeos-"
     "/etc/systemd/"
     "/etc/udev/rules.d/"
     "/etc/tmpfiles.d/"
@@ -69,16 +77,15 @@ $allowed || die "Destination not in allowed paths: $DEST (allowed: ${ALLOWED_DES
 mkdir -p "$(dirname "$DEST")"
 
 if [[ "$DEST" == /etc/sudoers.d/* ]]; then
-    # Sudoers: validate syntax on source FIRST. If invalid, abort without
-    # touching the existing dest (deletion would lock us out of sudo).
-    if ! /usr/sbin/visudo -c -f "$SRC" >/dev/null 2>&1; then
-        die "sudoers syntax check failed for $SRC — existing $DEST untouched"
-    fi
-    # Atomic replace via temp file
-    cp "$SRC" "${DEST}.tmp"
-    chown root:root "${DEST}.tmp"
-    chmod 440 "${DEST}.tmp"
-    mv -f "${DEST}.tmp" "$DEST"
+    # Round 3 audit: regex-based content guards on sudoers files were
+    # bypassable (sudoers grammar accepts whitespace/runas variants the
+    # regex doesn't catch). The proper fix is to refuse sudoers
+    # deployment from this developer-driven path entirely. ALLOWED_DESTS
+    # above no longer contains /etc/sudoers.d/, so this branch is
+    # unreachable in practice — but kept as a defense-in-depth guard
+    # that yells loudly if a future change re-adds the prefix without
+    # re-thinking the guard model.
+    die "sudoers deploy is disabled in this script — sudoers ships via the bootc image (image/Containerfile COPY), not via dev-deploy"
 else
     cp "$SRC" "$DEST"
     # Files going to bin dirs are always executable; everything else is 644.

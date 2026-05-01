@@ -1,0 +1,97 @@
+# lifeos-simplex-bridge — SimpleX CLI bot containerized
+#
+# Phase 5 of the architecture pivot — bridges (SimpleX, dashboard).
+# The SimpleX CLI is a Haskell binary that owns the SimpleX protocol
+# session. lifeosd connects to it over WebSocket on :5226 to send/receive
+# end-to-end encrypted messages.
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md
+#
+# Build:
+#   podman build -t 10.66.66.1:5001/lifeos-simplex-bridge:dev \
+#     -f containers/lifeos-simplex-bridge/Containerfile \
+#     containers/lifeos-simplex-bridge/
+
+# ---------------------------------------------------------------------------
+# Stage 1 — extract simplex-chat from upstream Ubuntu .deb
+# ---------------------------------------------------------------------------
+# SimpleX ships only Ubuntu 22.04 .debs. We extract the binary in a stage
+# (not building from source — Haskell GHC build is a 1-2h ordeal) and
+# carry just the binary into the runtime stage.
+FROM ubuntu:22.04 AS extract
+
+ARG SIMPLEX_CLI_VERSION=v6.4.11
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        bsdtar \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN curl -fSL -o /tmp/simplex-chat.deb \
+        "https://github.com/simplex-chat/simplex-chat/releases/download/${SIMPLEX_CLI_VERSION}/simplex-chat-ubuntu-22_04-x86_64.deb" && \
+    mkdir -p /tmp/deb-extract && \
+    cd /tmp/deb-extract && \
+    bsdtar xf /tmp/simplex-chat.deb && \
+    bsdtar xf data.tar.* && \
+    install -m 0755 usr/bin/simplex-chat /out/simplex-chat && \
+    /out/simplex-chat --version
+
+# ---------------------------------------------------------------------------
+# Stage 2 — runtime
+# ---------------------------------------------------------------------------
+# Ubuntu 22.04 minimal because the simplex-chat binary is dynamically linked
+# against ubuntu-22.04 glibc + libgmp + libffi. Trying to run it on Fedora
+# fails with versioned symbol mismatches (libgmp.so.10 vs .12, etc.).
+FROM ubuntu:22.04 AS runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgmp10 \
+        libffi8 \
+        tini \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=extract /out/simplex-chat /usr/local/bin/simplex-chat
+
+# UID/GID strategy — Phase 5 pragmatic choice.
+#
+# The host service runs simplex-chat as ROOT (verified in
+# image/files/etc/systemd/system/simplex-chat.service: no User= directive,
+# the service uses StateDirectory + ReadWritePaths). The bind mount
+# /var/lib/lifeos/simplex is therefore root-owned with SQLite WAL files
+# accessible only to root.
+#
+# A container running as uid=65532 would fail to open bot_chat.db etc.
+# SELinux ':Z' rellabels security context but does NOT change UIDs.
+#
+# Phase 5 pragmatic decision: container runs as ROOT inside (no USER
+# directive). The Quadlet is rootful; external defenses (Capa 1 storage
+# isolation, Capa 2 sudoers, Capa 5 code blocklist) provide the security
+# boundary. Long-term fix tracked: UserNS=keep-id with subuid mapping
+# would let us match the host's root ownership without running root in
+# the container — Phase 6 hardening work.
+RUN mkdir -p /var/lib/lifeos/simplex
+
+# WebSocket port that lifeosd connects to.
+EXPOSE 5226
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Args mirror the host service exec line: -p 5226 (port), -d <prefix>
+# (database file PREFIX, not directory — every SQLite file lands at
+# <prefix>_chat.db, <prefix>_files.db, etc.), -y (yes to all prompts),
+# bot display name = Axi.
+CMD ["/usr/local/bin/simplex-chat", \
+     "-p", "5226", \
+     "-d", "/var/lib/lifeos/simplex/bot", \
+     "-y", \
+     "--create-bot-display-name", "Axi"]
+
+LABEL org.opencontainers.image.title="lifeos-simplex-bridge"
+LABEL org.opencontainers.image.description="SimpleX CLI bot for LifeOS — E2E encrypted messaging"
+LABEL org.opencontainers.image.source="https://github.com/hectormr206/lifeos"
+LABEL org.opencontainers.image.licenses="Apache-2.0"

@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# lifeos-ensure-images — Capa 4 of LifeOS defense-in-depth.
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md §5e Capa 4.
+#
+# Purpose:
+#   Guarantees that every container image referenced by a system Quadlet
+#   actually exists in the rootful containers-storage. Runs at boot via
+#   `lifeos-image-guardian.service` AND as ExecStartPre of every system
+#   container (defense-in-depth — even if guardian.service is masked, each
+#   container self-heals).
+#
+# Why this matters:
+#   - User or AI accidentally `podman rmi ghcr.io/hectormr206/lifeos-tts:stable`
+#     would normally leave the next container restart with an unresolvable
+#     image. systemd would loop. This script re-pulls before the loop starts.
+#   - On a fresh boot after bootc upgrade, new Quadlet `.container` files may
+#     reference images that haven't been pulled yet. The guardian pulls them
+#     so containers start cleanly the first time.
+#
+# Source of truth:
+#   `/etc/containers/systemd/lifeos-*.container` — every system Quadlet must
+#   live here and have an `Image=` line. The script auto-discovers; no code
+#   change required when you add a new container, just drop the .container.
+#
+# Best-effort policy:
+#   On network failure (no WiFi, registry down, GHCR rate limit), the script
+#   logs a warning but ALWAYS exits 0. We never want guardian failure to
+#   block the boot or the dependent services. systemd will retry the
+#   containers on its own schedule.
+#
+# Run as: root (system service), or with `sudo` from a script.
+
+set -uo pipefail
+# Note: deliberately NOT using `set -e` — best-effort by design.
+
+QUADLET_DIR="/etc/containers/systemd"
+LOG_TAG="lifeos-ensure-images"
+
+log() { logger -t "$LOG_TAG" "$*"; printf "[%s] %s\n" "$LOG_TAG" "$*"; }
+
+# Refuse to run as non-root — we touch the rootful containers-storage.
+if [[ $EUID -ne 0 ]]; then
+    log "ERROR: must run as root (got uid=$EUID)"
+    exit 1
+fi
+
+# Quadlets land here only on bootc images that have system Quadlets defined.
+# On a fresh image with no system containers yet, the dir may not exist —
+# treat that as "nothing to ensure" and exit cleanly.
+if [[ ! -d "$QUADLET_DIR" ]]; then
+    log "no $QUADLET_DIR — nothing to ensure"
+    exit 0
+fi
+
+shopt -s nullglob
+quadlets=("$QUADLET_DIR"/lifeos-*.container)
+shopt -u nullglob
+
+if [[ ${#quadlets[@]} -eq 0 ]]; then
+    log "no lifeos-*.container Quadlets in $QUADLET_DIR — nothing to ensure"
+    exit 0
+fi
+
+log "found ${#quadlets[@]} system Quadlet(s) — checking images..."
+
+missing=0
+pulled=0
+for quadlet in "${quadlets[@]}"; do
+    # Extract Image= lines. Quadlet syntax is `Image=<ref>` (one per file
+    # typically). Skip comment lines (`# Image=...`), strip whitespace.
+    images=$(awk -F= '
+        /^[[:space:]]*#/{next}
+        /^[[:space:]]*Image[[:space:]]*=/{
+            sub(/^[[:space:]]*Image[[:space:]]*=[[:space:]]*/, "", $0);
+            sub(/[[:space:]]*$/, "", $0);
+            print
+        }
+    ' "$quadlet")
+
+    while IFS= read -r image; do
+        [[ -z "$image" ]] && continue
+
+        # Skip un-resolvable patterns:
+        #   - `${VAR}` style — Quadlet generator expands at unit-emit time,
+        #     not at script-execute time. We can't resolve here without
+        #     duplicating Quadlet's logic.
+        #   - `localhost/...` — used during the dev-test workflow per the
+        #     phase READMEs (operator pulls a :dev tag and retags as
+        #     localhost/lifeos-X:current). The local image is what's there
+        #     intentionally; we shouldn't try to pull from a registry.
+        if [[ "$image" == *'${'* ]]; then
+            log "skip: $image — has unexpanded \${VAR}, can't resolve here"
+            continue
+        fi
+        if [[ "$image" == localhost/* ]]; then
+            log "skip: $image — local-only image (dev-test workflow)"
+            continue
+        fi
+
+        if podman image exists "$image" >/dev/null 2>&1; then
+            continue
+        fi
+
+        log "missing image: $image — pulling (best-effort)"
+        ((missing+=1)) || true
+
+        if podman pull "$image" >/dev/null 2>&1; then
+            log "pulled: $image"
+            ((pulled+=1)) || true
+        else
+            log "WARN: failed to pull $image — systemd will retry the dependent service"
+        fi
+    done <<< "$images"
+done
+
+log "done — missing=$missing pulled=$pulled"
+exit 0

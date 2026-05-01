@@ -1,0 +1,154 @@
+# lifeos-lifeosd — Rust daemon (Axi orchestrator) containerized
+#
+# Phase 3 of the architecture pivot — most complex of the CPU-only services
+# because it owns the SQLite + sqlite-vec encrypted memory store and several
+# bind mounts to /var/lib/lifeos.
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md
+#
+# === IMPORTANT — scope of this container ===
+#
+# This container ships the daemon's HTTP/agentic surfaces:
+#   - REST API on 127.0.0.1:8081
+#   - WebSocket on /ws
+#   - SimpleX bridge → 127.0.0.1:5226
+#   - Telegram bridge (in-process)
+#   - LLM router → talks to llama-server on :8082, llama-embeddings on :8083,
+#     lifeos-tts on :8084 (all on host loopback via Network=host)
+#   - SQLite + sqlite-vec memory store via bind mount to /var/lib/lifeos
+#
+# What it does NOT ship in Phase 3:
+#   - GTK4 desktop overlay ("Eye of Axi" tray icon)
+#   - Direct Wayland socket access
+#   - PipeWire / D-Bus session bus integration
+#   - Screen capture / camera direct access
+#
+# Those desktop-integration paths stay on the HOST (lifeosd-desktop, a small
+# companion binary that talks to this container's HTTP API). Splitting that
+# out is Phase 3b (follow-up). The benefit: the bulk of lifeosd (~95% of
+# functionality) gets the Quadlet treatment — atomic deploys, rollbacks,
+# resource limits — while desktop integration that REQUIRES session state
+# stays where it has to be.
+#
+# Build:
+#   podman build -t 10.66.66.1:5001/lifeos-lifeosd:dev \
+#     -f containers/lifeos-lifeosd/Containerfile .
+#   (note: build context is repo root because Cargo.toml + workspace lives there)
+
+# ---------------------------------------------------------------------------
+# Stage 1 — builder
+# ---------------------------------------------------------------------------
+# Heavy: Rust toolchain, native deps for SQLite/openssl/dbus, full cargo cache.
+# Kept entirely separate from runtime so we don't ship gcc, headers, or .cargo/.
+FROM fedora:43 AS builder
+
+RUN dnf -y install \
+        rust cargo \
+        gcc gcc-c++ make pkgconf-pkg-config \
+        openssl-devel \
+        sqlite-devel \
+        dbus-devel \
+        glib2-devel \
+        wayland-devel \
+        libxkbcommon-devel \
+        ca-certificates \
+        git \
+        && \
+    dnf clean all
+
+WORKDIR /src
+
+# Copy ONLY Cargo manifests first → Docker layer cache for deps. Source code
+# changes don't invalidate the dependency build, only the final cargo build.
+COPY Cargo.toml Cargo.lock ./
+COPY daemon/Cargo.toml daemon/
+COPY cli/Cargo.toml cli/
+COPY tests/Cargo.toml tests/
+RUN mkdir -p daemon/src cli/src tests/src && \
+    echo 'fn main(){}' > daemon/src/main.rs && \
+    echo 'fn main(){}' > cli/src/main.rs && \
+    echo 'fn main(){}' > tests/src/main.rs && \
+    cargo fetch --manifest-path daemon/Cargo.toml
+
+# Now copy real sources and build for real. The Cargo cache from `cargo fetch`
+# is reused, so this rebuild only compiles our crates, not the world.
+COPY daemon ./daemon
+COPY cli ./cli
+COPY tests ./tests
+COPY contracts ./contracts
+
+# Build features: drop BOTH `ui-overlay` and `wake-word`.
+#   - `ui-overlay` (GTK4) makes no sense in a headless container.
+#   - `wake-word` (rustpotter) needs continuous PipeWire input from the user
+#     session. The container has no PipeWire socket — the feature would
+#     either crash or log-spam attempting to open the input stream.
+# Both desktop-bound paths move to the host companion lifeosd-desktop
+# (Phase 3b) which can talk to this container's HTTP API for the
+# Axi-side responses while owning the session-side capture itself.
+RUN cargo build \
+        --manifest-path daemon/Cargo.toml \
+        --release \
+        --features "dbus,http-api,messaging"
+
+# Sanity: the binary exists and runs --version.
+RUN /src/daemon/target/release/lifeosd --version || \
+    /src/daemon/target/release/lifeosd --help | head -1
+
+# ---------------------------------------------------------------------------
+# Stage 2 — runtime
+# ---------------------------------------------------------------------------
+# fedora:43-minimal because we need libsqlite3 + libdbus + libssl runtime libs
+# and it's smaller than full fedora:43 (~80 MB vs ~250 MB). distroless is
+# tempting but lacks D-Bus libs we need for the SimpleX bridge IPC.
+FROM fedora:43-minimal AS runtime
+
+RUN microdnf install -y \
+        ca-certificates \
+        sqlite-libs \
+        openssl-libs \
+        dbus-libs \
+        libcurl \
+        glib2 \
+        tini \
+        --setopt=tsflags=nodocs && \
+    microdnf clean all
+
+# Copy just the binary and the bundled sqlite-vec extension if any (it's
+# statically linked into the daemon today via the rusqlite-vec crate, so no
+# separate .so needed — verified in cargo tree).
+COPY --from=builder /src/daemon/target/release/lifeosd /usr/bin/lifeosd
+
+# UID/GID strategy — Phase 3a pragmatic choice.
+#
+# The bind mount /var/lib/lifeos comes from the host owned by uid=1000
+# (lifeos) with mode 600/700 on critical files (memory.db has 600 because
+# it's encrypted state). SELinux ':z'/':Z' relabel security context but
+# do NOT change file UIDs. A container running as a non-root UID would
+# get permission denied opening memory.db.
+#
+# Correct long-term fix: podman `UserNS=keep-id:uid=1000,gid=1000` on the
+# Quadlet (maps container 1000 ↔ host 1000), which requires subuid setup
+# on the host for the lifeos user. Tracked for Phase 3b.
+#
+# Phase 3a pragmatic decision: container runs as ROOT inside (no USER
+# directive). The Quadlet is rootful → systemd PID 1 owns the container,
+# external defenses (Capa 1 storage isolation, Capa 2 sudoers, Capa 5
+# code blocklist) provide the real security boundary. The internal
+# non-root convention is dropped to unblock the bind mount.
+#
+# Intentionally NO mkdir/chown of /var/lib/lifeos or /etc/lifeos here:
+# bind mounts at runtime mask whatever in-image directories exist, so
+# any chown applied at build time is a no-op that misleads readers
+# into thinking the in-image owner matters.
+
+# Daemon's HTTP API.
+EXPOSE 8081
+
+# tini for clean signal forwarding so SIGTERM from systemd reaches the daemon
+# and triggers its graceful-shutdown path (flushes session_store, closes DB).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/bin/lifeosd"]
+
+LABEL org.opencontainers.image.title="lifeos-lifeosd"
+LABEL org.opencontainers.image.description="LifeOS Rust daemon (Axi orchestrator) — HTTP API + SQLite memory + agentic chat"
+LABEL org.opencontainers.image.source="https://github.com/hectormr206/lifeos"
+LABEL org.opencontainers.image.licenses="Apache-2.0"

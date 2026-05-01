@@ -1,0 +1,62 @@
+# lifeos-simplex-bridge.container — SimpleX CLI bot Quadlet
+
+[Unit]
+Description=LifeOS SimpleX Chat Bot (Axi private messaging — containerized)
+Documentation=https://github.com/simplex-chat/simplex-chat
+After=network-online.target lifeos-image-guardian.service
+Wants=network-online.target
+# lifeosd connects to :5226 — keep this up before lifeosd.
+Before=lifeos-lifeosd.service
+
+[Container]
+Image=ghcr.io/hectormr206/lifeos-simplex-bridge:stable
+ContainerName=lifeos-simplex-bridge
+HostName=lifeos-simplex-bridge
+
+# Network=host — lifeosd connects via WebSocket on 127.0.0.1:5226. The
+# SimpleX protocol itself reaches out to SMP relays over TCP/443, which
+# Network=host gives us automatically without firewall fiddling.
+Network=host
+
+# === SimpleX state — survives container recreate ===
+#
+# The CLI creates several SQLite files under the bind-mounted prefix:
+#   bot_chat.db, bot_files.db, bot_agent.db, etc.
+# Plus the message vault (encrypted local store) and the contact list.
+# All of this is the single most important state piece for the bridge —
+# losing it means re-pairing every contact (Hector's phone, etc.).
+#
+# ':z' (lowercase, shared MCS label). The legacy host
+# `simplex-chat.service` reads the same path during rollback flow;
+# ':Z' (private) would lock the legacy service out post-rollback.
+Volume=/var/lib/lifeos/simplex:/var/lib/lifeos/simplex:z
+
+# CA bundle for TLS to SMP relays.
+# ':z' shared label — touching the system-wide CA trust dir with ':Z'
+# would relabel it and break TLS for every other host service.
+Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
+
+# Defense-in-depth Capa 4.
+ExecStartPre=/usr/local/bin/lifeos-ensure-images
+
+[Service]
+# Capa 3 — SimpleX is touchy about graceful shutdown (DB locks). RestartSec
+# matches the host service's 10s, giving SimpleX time to flush WAL on SIGTERM.
+Restart=always
+RestartSec=10s
+TimeoutStartSec=30s
+
+# Initial profile bootstrap: the host today has lifeos-simplex-setup.sh
+# that runs as ExecStartPre. After Phase 5 flips, that setup logic moves
+# into the container's ENTRYPOINT or a sidecar init container — TBD when
+# Phase 5 actually flips. For now this Quadlet assumes /var/lib/lifeos/simplex
+# already exists (created by the host service or manually).
+
+# Resource limits. SimpleX is light: ~50-100 MB RAM, minimal CPU.
+MemoryMax=512M
+CPUQuota=100%
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target default.target

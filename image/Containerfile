@@ -989,6 +989,14 @@ COPY image/files/etc/polkit-1/rules.d/50-lifeos-llama-server.rules /etc/polkit-1
 COPY image/files/etc/sudoers.d/lifeos-axi /etc/sudoers.d/lifeos-axi
 RUN chmod 0440 /etc/sudoers.d/lifeos-axi
 
+# Round 3 audit found lifeos-dev-ai was an orphan in repo (defined but
+# never deployed because the dev-deploy script can no longer write to
+# /etc/sudoers.d/ as of R3-CB1). Ship it via the bootc image like
+# lifeos-axi above.
+COPY image/files/etc/sudoers.d/lifeos-dev-ai /etc/sudoers.d/lifeos-dev-ai
+RUN chmod 0440 /etc/sudoers.d/lifeos-dev-ai && \
+    /usr/sbin/visudo -c -f /etc/sudoers.d/lifeos-dev-ai
+
 # --- Thermal management (laptop auto-cap) ---
 # --- Battery management (laptop charge threshold persistence + smart charging) ---
 COPY image/files/etc/systemd/system/lifeos-battery.service /usr/lib/systemd/system/lifeos-battery.service
