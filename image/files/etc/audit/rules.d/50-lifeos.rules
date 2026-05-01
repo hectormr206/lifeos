@@ -57,18 +57,31 @@
 # Track modifications to Quadlet service definitions, rootful container
 # storage, and the image guardian script so post-incident forensics can
 # identify who changed what.
-# (/etc/sudoers.d/ is already covered above by privilege_escalation key.)
 #
-# Volume note: container_storage_changed is a high-frequency key — every
+# Key naming MUST match the PRD §5e spec — SOC tooling and the sudoers
+# audit-inspection NOPASSWDs filter on these exact strings. Round 2
+# audit caught a drift between PRD spec and impl: previous version used
+# 'lifeos_container_storage_changed' (impl-only) and umbrella
+# 'privilege_escalation' for sudoers — neither matched the PRD's
+# 'lifeos_storage_changed' / 'lifeos_sudoers_changed'. Aligned now.
+#
+# Volume note: lifeos_storage_changed is a high-frequency key — every
 # image pull, container start, and layer write hits it. This is intentional;
 # the trail is more valuable than the log size on a single-user laptop.
 -w /etc/containers/systemd/ -p wa -k lifeos_quadlet_changed
--w /var/lib/containers/storage/ -p wa -k lifeos_container_storage_changed
+-w /var/lib/containers/storage/ -p wa -k lifeos_storage_changed
 
 # Guardian script (`lifeos-ensure-images`) lives on read-only /usr but the
 # attempt to write counts — the audit log captures the SYSCALL even when
 # the kernel blocks the write with EROFS. Required by PRD §5e Capa 6.
 -w /usr/local/bin/lifeos-ensure-images -p wa -k lifeos_guardian_changed
+
+# Sudoers drop-in for LifeOS specifically — separate from the broader CIS
+# 'privilege_escalation' key on /etc/sudoers.d/ (added earlier in this
+# file). The dedicated key lets SOC tooling distinguish LifeOS-specific
+# Capa 2 tampering from generic admin sudoers changes. PRD §5e Capa 6
+# mandates this exact key name.
+-w /etc/sudoers.d/lifeos-axi -p wa -k lifeos_sudoers_changed
 
 # Make audit configuration immutable (requires reboot to change)
 -e 2
