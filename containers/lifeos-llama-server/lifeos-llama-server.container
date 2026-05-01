@@ -68,10 +68,12 @@ AddDevice=nvidia.com/gpu=all
 # === Models bind mount — the largest single state item in LifeOS ===
 #
 # /var/lib/lifeos/models holds:
-#   Qwen3.5-9B-Q4_K_M.gguf      5.3 GB  ← the model
-#   Qwen3.5-9B-mmproj-F16.gguf  876 MB  ← multimodal projection
-#   + smaller fallbacks (4B, 2B, 0.8B + their mmproj)
-#   + nomic-embed-text-v1.5.f16.gguf
+#   Qwen3.5-4B-Q4_K_M.gguf      ~2.5 GB ← default model (per
+#                                          decision_default_model_4b)
+#   Qwen3.5-4B-mmproj-F16.gguf  ~640 MB ← default multimodal projection
+#   + opt-in larger 9B (5.3 GB + 876 MB mmproj) for hosts with 8GB+ VRAM
+#   + smaller 2B/0.8B fallbacks for low-spec hosts
+#   + nomic-embed-text-v1.5.f16.gguf  (used by lifeos-llama-embeddings)
 #
 # Always bind-mount RO. Models NEVER live inside the container image — that
 # would inflate to ~14 GB and force a rebuild on model bumps.
@@ -134,7 +136,7 @@ EnvironmentFile=-/var/lib/lifeos/llama-server-runtime-profile.env
 EnvironmentFile=-/var/lib/lifeos/llama-server-game-guard.env
 
 # Capa 3 — auto-restart with a longer backoff than embeddings/TTS because
-# Qwen3.5-9B warmup (model load + GPU upload + Vulkan shader cache prime)
+# Qwen3.5 warmup (model load + GPU upload + Vulkan shader cache prime)
 # takes ~30-60s. Avoid restart-thrash on transient OOM.
 Restart=always
 RestartSec=15s
