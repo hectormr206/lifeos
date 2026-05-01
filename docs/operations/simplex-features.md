@@ -1,7 +1,7 @@
 # Axi on SimpleX
 
 > Documentation for all Axi interaction features via SimpleX Chat.
-> Updated: 2026-04-13
+> Updated: 2026-05-01
 
 ## Overview
 
@@ -12,8 +12,13 @@ the network. The connection is end-to-end encrypted and routed through
 SimpleX relay servers that never learn who is talking to whom.
 
 Axi connects to a local `simplex-chat` process running in headless/WebSocket
-mode on `ws://127.0.0.1:5226`. All messages are dispatched through the shared
-agentic tool system in `daemon/src/axi_tools.rs` — same LLM, same tools, same
+mode on `ws://127.0.0.1:5226`. As of 0.8.28 the process runs as a podman
+Quadlet (`lifeos-simplex-bridge.service` generated from
+`/etc/containers/systemd/lifeos-simplex-bridge.container`) pulling
+`ghcr.io/hectormr206/lifeos-simplex-bridge:stable`. The legacy
+`simplex-chat.service` remains in `/usr/lib/systemd/system/` as a manual
+rollback target. All messages are dispatched through the shared agentic
+tool system in `daemon/src/axi_tools.rs` — same LLM, same tools, same
 conversation memory across SimpleX and the dashboard.
 
 On first connect, the SimpleX profile is auto-configured (name: **Axi**,
