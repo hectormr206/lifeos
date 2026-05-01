@@ -100,11 +100,13 @@ COPY --from=builder /tmp/llama.cpp/build/bin/llama-server /usr/sbin/llama-server
 # leaves a gap from sibling containers (TTS=65532, simplex=65532,
 # embeddings=65533, lifeosd=65534).
 #
-# The GPU device file (/dev/nvidia*) is exposed by CDI; the kernel ACL
-# requires this user to be a member of the `nvidia` (or `video`) group.
-# That group is added at runtime by the Quadlet's `GroupAdd=keep-groups`
-# directive (NOT here in the image — the in-container `/etc/group`
-# created by useradd would be wrong on a host with non-default GID).
+# GPU access goes through CDI device injection at runtime (Quadlet's
+# `AddDevice=nvidia.com/gpu=all`). CDI sets /dev/nvidia* permissions
+# to mode 666 by default and adds cgroup device permission rules that
+# grant the container user access without needing membership in any
+# host-managed group. So no `groupadd nvidia` here — round-2 audit
+# pointed out that the previous `GroupAdd=keep-groups` claim was a
+# misleading no-op anyway. CDI is the contract.
 RUN useradd --system --uid 65530 --no-create-home --shell /usr/sbin/nologin lifeos-llm
 USER 65530
 
