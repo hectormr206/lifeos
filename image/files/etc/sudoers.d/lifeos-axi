@@ -75,10 +75,21 @@
 %wheel ALL=(root) NOPASSWD: /usr/sbin/auditctl -s
 %wheel ALL=(root) NOPASSWD: /sbin/auditctl -l
 %wheel ALL=(root) NOPASSWD: /sbin/auditctl -s
-%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k *
-%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k *
-%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch --key *
-%wheel ALL=(root) NOPASSWD: /sbin/ausearch --key *
+# Round-2 audit: enumerate the LifeOS-specific keys explicitly instead
+# of `-k *` (which would let any wheel user read system audit events
+# beyond LifeOS scope — logins, identity, kernel modules, mounts, etc.).
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_config
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_data
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_quadlet_changed
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_storage_changed
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_guardian_changed
+%wheel ALL=(root) NOPASSWD: /usr/sbin/ausearch -k lifeos_sudoers_changed
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_config
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_data
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_quadlet_changed
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_storage_changed
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_guardian_changed
+%wheel ALL=(root) NOPASSWD: /sbin/ausearch -k lifeos_sudoers_changed
 
 # === NETWORK SECURITY (read-only) ===
 # proactive.rs — firewall status check
