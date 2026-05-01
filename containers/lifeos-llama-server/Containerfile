@@ -46,6 +46,7 @@ RUN dnf -y install \
         glslang \
         glslc \
         spirv-tools \
+        spirv-headers-devel \
         pkgconf-pkg-config \
         && \
     dnf clean all
