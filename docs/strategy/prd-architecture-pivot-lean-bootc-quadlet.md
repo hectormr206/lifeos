@@ -332,13 +332,22 @@ ssh laptop "
 
 ### Garbage collection del registry dev
 
-Cron en VPS (ya existe pattern para podman):
+El registry corre en **Docker** en el VPS (legacy de la instalación
+inicial — comparte network/runtime con Coolify y n8n que también son
+Docker). Eso difiere del laptop que usa Podman para los Quadlets, pero
+ambos hablan el mismo protocolo OCI distribution v2 → skopeo copy y
+podman pull funcionan transparentes contra el registry Docker.
 
 ```bash
-# Cada 72h — eliminar tags :dev y :branch-* viejos del registry privado
-podman exec lifeos-vps-registry registry garbage-collect /etc/docker/registry/config.yml
-podman image prune --filter "until=72h" -f
+# Cada 72h — eliminar tags :dev y :branch-* viejos del registry privado.
+# El script vps-registry-gc.sh hace esto + retention via API DELETE.
+sudo docker exec lifeos-registry registry garbage-collect /etc/docker/registry/config.yml
+sudo docker image prune --filter "until=72h" -f
 ```
+
+Si en el futuro migrás el VPS a Podman (consolidar runtime), reemplaza
+`docker exec` por `podman exec` y `docker image prune` por `podman
+image prune`. Los argumentos son idénticos.
 
 ---
 
