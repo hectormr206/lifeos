@@ -68,15 +68,35 @@ missing=0
 pulled=0
 for quadlet in "${quadlets[@]}"; do
     # Extract Image= lines. Quadlet syntax is `Image=<ref>` (one per file
-    # typically). Strip whitespace and ignore comments.
-    images=$(awk -F= '/^[[:space:]]*Image[[:space:]]*=/{
-        sub(/^[[:space:]]*Image[[:space:]]*=[[:space:]]*/, "", $0);
-        sub(/[[:space:]]*$/, "", $0);
-        print
-    }' "$quadlet")
+    # typically). Skip comment lines (`# Image=...`), strip whitespace.
+    images=$(awk -F= '
+        /^[[:space:]]*#/{next}
+        /^[[:space:]]*Image[[:space:]]*=/{
+            sub(/^[[:space:]]*Image[[:space:]]*=[[:space:]]*/, "", $0);
+            sub(/[[:space:]]*$/, "", $0);
+            print
+        }
+    ' "$quadlet")
 
     while IFS= read -r image; do
         [[ -z "$image" ]] && continue
+
+        # Skip un-resolvable patterns:
+        #   - `${VAR}` style — Quadlet generator expands at unit-emit time,
+        #     not at script-execute time. We can't resolve here without
+        #     duplicating Quadlet's logic.
+        #   - `localhost/...` — used during the dev-test workflow per the
+        #     phase READMEs (operator pulls a :dev tag and retags as
+        #     localhost/lifeos-X:current). The local image is what's there
+        #     intentionally; we shouldn't try to pull from a registry.
+        if [[ "$image" == *'${'* ]]; then
+            log "skip: $image — has unexpanded \${VAR}, can't resolve here"
+            continue
+        fi
+        if [[ "$image" == localhost/* ]]; then
+            log "skip: $image — local-only image (dev-test workflow)"
+            continue
+        fi
 
         if podman image exists "$image" >/dev/null 2>&1; then
             continue

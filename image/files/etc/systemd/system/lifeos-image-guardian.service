@@ -9,9 +9,21 @@ Documentation=file:///docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md
 After=network-online.target
 Wants=network-online.target
 
-# Start before the Quadlet-generated services so any missing image gets
-# re-pulled before the dependent container tries to start. Quadlets get
-# generated under multi-user.target by default.
+# Start before EVERY system Quadlet so any missing image gets re-pulled
+# before the dependent container tries to start. Per-Quadlet ExecStartPre=
+# is also wired for defense in depth; this Before= block ensures the
+# guardian runs first when systemd schedules the boot transaction
+# instead of relying purely on the per-unit pre-script.
+#
+# `Before=multi-user.target` alone was insufficient — Quadlet-generated
+# units default to `WantedBy=multi-user.target default.target` and may
+# be activated in a default.target transaction without re-ordering vs.
+# multi-user. Listing each Quadlet explicitly is verbose but correct.
+Before=lifeos-tts.service
+Before=lifeos-llama-embeddings.service
+Before=lifeos-lifeosd.service
+Before=lifeos-llama-server.service
+Before=lifeos-simplex-bridge.service
 Before=multi-user.target
 
 [Service]
@@ -27,8 +39,16 @@ SuccessExitStatus=0 1
 StandardOutput=journal
 StandardError=journal
 
-# Allow ample time for first-boot pulls of multi-GB images.
-TimeoutStartSec=30min
+# Best-effort policy means the timeout is the actual boot ceiling: if the
+# registry is unreachable we'd rather log a WARN and let containers fall
+# back to their own ExecStartPre retries than block boot for half an hour.
+# 5 min covers a full first-boot pull of the largest container (~14 GB) on
+# a 100 Mbps link.
+TimeoutStartSec=5min
 
 [Install]
-WantedBy=multi-user.target
+# WantedBy multi-user.target AND default.target so the unit gets pulled in
+# regardless of which target activates first on a given boot path
+# (graphical-session boots can default to default.target before
+# multi-user.target finishes).
+WantedBy=multi-user.target default.target

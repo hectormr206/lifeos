@@ -25,9 +25,12 @@ Description=LifeOS Kokoro TTS Server (containerized)
 Documentation=https://github.com/hexgrad/kokoro
 After=network-online.target lifeos-image-guardian.service
 Wants=network-online.target
-# lifeosd reads from :8084 — keep TTS up before lifeosd. Quadlets generate
-# .service units, so reference the generated name.
-Before=lifeosd.service
+# lifeosd reads from :8084 — keep TTS up before lifeosd. After Phase 3
+# flips, the daemon is the Quadlet-generated `lifeos-lifeosd.service`,
+# NOT the legacy `lifeosd.service`. Use the Quadlet name so systemd
+# actually orders correctly — ordering against a non-existent unit is
+# silently dropped.
+Before=lifeos-lifeosd.service
 
 [Container]
 Image=ghcr.io/hectormr206/lifeos-tts:stable
@@ -46,13 +49,25 @@ Network=host
 # Bind-mount the live script from the host as read-only. This means the
 # container image is stable across script edits — change .py, systemctl
 # restart lifeos-tts, see new behavior. No rebuild, no push, no pull.
-# `:Z` relabels for SELinux so the container can read the file.
-Volume=/usr/local/bin/lifeos-tts-server.py:/usr/local/bin/lifeos-tts-server.py:ro,Z
+#
+# IMPORTANT: NO `:Z` here. `/usr/` is read-only on Fedora bootc 43 →
+# any podman attempt to chcon-relabel via `:Z` fails with EROFS or
+# silently no-ops with stale label. The script ships in the bootc
+# image with `bin_t` SELinux context (default for /usr/local/bin/*),
+# which is already container-readable. Use plain `:ro`.
+Volume=/usr/local/bin/lifeos-tts-server.py:/usr/local/bin/lifeos-tts-server.py:ro
 
 # The legacy systemd unit reads /etc/lifeos/tts-server.env. Same here for
 # parity — the env file lives in the bootc image, no container rebuild
 # required when env keys change.
-Volume=/etc/lifeos/tts-server.env:/etc/lifeos/tts-server.env:ro,Z
+#
+# IMPORTANT: `:z` (lowercase, SHARED label) — NOT `:Z` (private, per-
+# container). The legacy `lifeos-tts-server.service` reads the same
+# host file directly during rollback flow, and other Quadlets
+# (lifeosd, embeddings) bind-mount /etc/lifeos. `:Z` would assign a
+# container-private MCS category, breaking access for everyone else.
+# `:z` shares the label across consumers — safe for read-only configs.
+Volume=/etc/lifeos/tts-server.env:/etc/lifeos/tts-server.env:ro,z
 
 # Defense-in-depth Capa 4: re-pull the image from the registry if it was
 # deleted from local storage. Cheap if image is present (skopeo no-op).
