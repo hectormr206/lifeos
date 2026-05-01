@@ -1,6 +1,6 @@
 # TTS Service — Kokoro
 
-> Updated: 2026-04-18
+> Updated: 2026-05-01
 
 ## Overview
 
@@ -8,9 +8,18 @@ LifeOS ships **Kokoro-82M** as its text-to-speech engine. Kokoro is an open-weig
 model released under the Apache 2.0 license with 50+ high-quality voices across
 multiple languages.
 
-The engine runs as a **system service** (`lifeos-tts-server.service`) that exposes
-a local HTTP API on `127.0.0.1:8084`. The service starts automatically at boot
-and is ready before `lifeosd.service` launches.
+As of 0.8.26 the engine runs as a **systemd Quadlet** (`lifeos-tts.service`)
+generated from `/etc/containers/systemd/lifeos-tts.container`. The Quadlet
+pulls `ghcr.io/hectormr206/lifeos-tts:stable` and exposes the same local
+HTTP API on `127.0.0.1:8084` via `Network=host` — clients (lifeosd) keep
+working unchanged. This is Phase 1 of the architecture pivot
+(`docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md`).
+
+The legacy `lifeos-tts-server.service` is still installed in
+`/usr/lib/systemd/system/` as a manual rollback target (no longer wired
+into `multi-user.target.wants/`). Run `systemctl start lifeos-tts-server.service`
+after `systemctl stop lifeos-tts.service` if the containerized path
+ever needs to be bypassed for an incident.
 
 | Property | Value |
 |----------|-------|

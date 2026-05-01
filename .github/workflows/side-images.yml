@@ -1,0 +1,132 @@
+name: Side Container Images
+
+# Builds and pushes the per-service Quadlet container images that the bootc
+# host image references at runtime (lifeos-tts, lifeos-llama-embeddings,
+# lifeos-lifeosd, lifeos-llama-server, lifeos-simplex-bridge).
+#
+# These are the "lean" containers introduced by the architecture pivot
+# (PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md). They
+# decouple service deploys from the monolithic bootc image — bumping a
+# voice model or daemon binary no longer requires a 14 GB image refresh.
+#
+# Trigger semantics:
+#   - push to main + per-image path filter → rebuild only the changed image.
+#   - workflow_dispatch → rebuild all (manual full sweep).
+#   - schedule weekly → catch upstream base image CVEs even when our code
+#     hasn't changed.
+#
+# llama-server is excluded by default because its runtime is BLOCKED on
+# nvidia-container-toolkit (Fedora 43 RPM digest issue). The container builds
+# fine; production cannot start it. Build is gated behind `build-llama-server`
+# input so we don't waste a 30-min vulkan compile every CI cycle.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'containers/**'
+      - '.github/workflows/side-images.yml'
+  workflow_dispatch:
+    inputs:
+      build-llama-server:
+        description: 'Also build lifeos-llama-server (vulkan, ~30 min, runtime BLOCKED)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+  schedule:
+    # Weekly Monday 05:00 UTC, after the bootc image cron at 04:00.
+    - cron: '0 5 * * 1'
+
+concurrency:
+  group: side-images-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  REPO_OWNER: ${{ github.repository_owner }}
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  build-image:
+    runs-on: [self-hosted, vps]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: lifeos-tts
+            context: containers/lifeos-tts
+            dockerfile: containers/lifeos-tts/Containerfile
+            extra: ''
+          - name: lifeos-llama-embeddings
+            context: containers/lifeos-llama-embeddings
+            dockerfile: containers/lifeos-llama-embeddings/Containerfile
+            extra: ''
+          - name: lifeos-lifeosd
+            # Build context is repo root because the Cargo workspace lives
+            # there — daemon/Cargo.toml references workspace deps from the
+            # root Cargo.toml.
+            context: .
+            dockerfile: containers/lifeos-lifeosd/Containerfile
+            extra: ''
+          - name: lifeos-simplex-bridge
+            context: containers/lifeos-simplex-bridge
+            dockerfile: containers/lifeos-simplex-bridge/Containerfile
+            extra: ''
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: |
+          podman build \
+            -t ghcr.io/${REPO_OWNER}/${{ matrix.name }}:stable \
+            -t ghcr.io/${REPO_OWNER}/${{ matrix.name }}:${GITHUB_SHA::8} \
+            -f ${{ matrix.dockerfile }} \
+            ${{ matrix.context }}
+
+      - name: Push image
+        run: |
+          podman push ghcr.io/${REPO_OWNER}/${{ matrix.name }}:stable
+          podman push ghcr.io/${REPO_OWNER}/${{ matrix.name }}:${GITHUB_SHA::8}
+
+  build-llama-server:
+    # Vulkan compile is ~30 min; gate behind explicit dispatch input so we
+    # don't burn it on every push. Schedule still picks it up weekly.
+    if: github.event_name == 'schedule' || github.event.inputs.build-llama-server == 'true'
+    runs-on: [self-hosted, vps]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build lifeos-llama-server (vulkan)
+        run: |
+          podman build \
+            -t ghcr.io/${REPO_OWNER}/lifeos-llama-server:stable \
+            -t ghcr.io/${REPO_OWNER}/lifeos-llama-server:${GITHUB_SHA::8} \
+            -f containers/lifeos-llama-server/Containerfile \
+            containers/lifeos-llama-server
+
+      - name: Push image
+        run: |
+          podman push ghcr.io/${REPO_OWNER}/lifeos-llama-server:stable
+          podman push ghcr.io/${REPO_OWNER}/lifeos-llama-server:${GITHUB_SHA::8}

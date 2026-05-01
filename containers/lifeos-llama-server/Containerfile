@@ -46,6 +46,7 @@ RUN dnf -y install \
         glslang \
         glslc \
         spirv-tools \
+        spirv-headers-devel \
         pkgconf-pkg-config \
         && \
     dnf clean all
@@ -84,7 +85,7 @@ RUN /tmp/llama.cpp/build/bin/llama-server --version
 # Critically does NOT need NVIDIA driver libraries — those come from the
 # HOST via CDI passthrough at container start time. The container only
 # needs vulkan-loader to find them.
-FROM fedora:43-minimal AS runtime
+FROM fedora-minimal:43 AS runtime
 
 RUN microdnf install -y \
         ca-certificates \

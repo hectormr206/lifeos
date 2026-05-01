@@ -53,6 +53,7 @@ RUN /opt/lifeos/kokoro-env/bin/pip install --upgrade pip && \
         torchaudio==2.6.0 \
         --index-url https://download.pytorch.org/whl/cpu && \
     /opt/lifeos/kokoro-env/bin/pip install --no-cache-dir \
+        aiohttp \
         soundfile \
         numpy \
         "kokoro==0.9.4" \

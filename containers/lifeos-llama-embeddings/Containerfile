@@ -63,7 +63,7 @@ RUN /tmp/llama.cpp/build/bin/llama-server --version
 # ---------------------------------------------------------------------------
 # Minimal runtime — just the binary, libcurl (for model URL fetching if ever
 # needed), and tini for clean signal forwarding.
-FROM fedora:43-minimal AS runtime
+FROM fedora-minimal:43 AS runtime
 
 RUN microdnf install -y \
         ca-certificates \

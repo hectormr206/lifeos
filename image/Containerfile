@@ -791,6 +791,16 @@ COPY image/files/etc/systemd/system/lifeos-tts-server.service /usr/lib/systemd/s
 COPY image/files/etc/lifeos/tts-server.env /etc/lifeos/tts-server.env
 RUN chmod +x /usr/local/bin/lifeos-tts-server.py
 
+# --- Phase 1: TTS Quadlet (architecture pivot) ---
+# Drop the systemd Quadlet definition. systemd-generator picks it up at boot
+# and synthesizes lifeos-tts.service automatically — no symlink needed.
+# The Quadlet image (ghcr.io/hectormr206/lifeos-tts:stable) is built by the
+# side-images.yml workflow and pulled at first boot via lifeos-ensure-images.
+# The legacy /usr/lib/systemd/system/lifeos-tts-server.service stays in the
+# image as a fallback ONLY (no longer auto-enabled below). Phase 1 PRD:
+# docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md §5a.
+COPY containers/lifeos-tts/lifeos-tts.container /etc/containers/systemd/lifeos-tts.container
+
 # Smoke test: the venv's python must resolve and import ssl/hashlib before
 # we ship. Catches cross-distro linker regressions at build time instead of
 # 203/EXEC crash-loops in production.
@@ -1219,7 +1229,6 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
-    ln -sf /usr/lib/systemd/system/lifeos-tts-server.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-tts-server.service && \
     ln -sf /usr/lib/systemd/system/fstrim.timer /usr/lib/systemd/system/timers.target.wants/fstrim.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer /usr/lib/systemd/system/timers.target.wants/lifeos-maintenance-cleanup.timer && \

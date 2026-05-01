@@ -25,13 +25,13 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        bsdtar \
+        libarchive-tools \
         && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -fSL -o /tmp/simplex-chat.deb \
+RUN mkdir -p /out /tmp/deb-extract && \
+    curl -fSL -o /tmp/simplex-chat.deb \
         "https://github.com/simplex-chat/simplex-chat/releases/download/${SIMPLEX_CLI_VERSION}/simplex-chat-ubuntu-22_04-x86_64.deb" && \
-    mkdir -p /tmp/deb-extract && \
     cd /tmp/deb-extract && \
     bsdtar xf /tmp/simplex-chat.deb && \
     bsdtar xf data.tar.* && \
