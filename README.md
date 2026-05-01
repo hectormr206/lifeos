@@ -113,10 +113,13 @@ All documentation is organized in [`docs/`](docs/README.md):
 ## Tech Stack
 
 - **Language:** Rust 2021 (daemon + CLI)
-- **OS Base:** Fedora bootc (immutable, OCI-based)
+- **OS Base:** Fedora bootc (immutable, OCI-based) + per-service podman Quadlets
 - **Desktop:** COSMIC (System76) on Wayland
 - **AI Runtime:** llama.cpp / llama-server
-- **TTS:** Kokoro-82M (Apache 2.0) via `lifeos-tts-server.service` on `127.0.0.1:8084`
+- **TTS:** Kokoro-82M (Apache 2.0) — runs as a podman Quadlet (`lifeos-tts.service`) pulling `ghcr.io/hectormr206/lifeos-tts:stable`, exposes `127.0.0.1:8084`
+- **Service architecture:** lean bootc host + ghcr.io side images per service
+  (`lifeos-tts`, `lifeos-llama-embeddings`, `lifeos-lifeosd`, `lifeos-simplex-bridge`).
+  See `docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md`.
 - **Database:** SQLite with WAL + sqlite-vec for embeddings
 - **API:** Axum REST + WebSocket on localhost:8081
 - **Protocols:** MCP (Model Context Protocol), AT-SPI2, D-Bus, CDP

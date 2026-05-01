@@ -791,6 +791,16 @@ COPY image/files/etc/systemd/system/lifeos-tts-server.service /usr/lib/systemd/s
 COPY image/files/etc/lifeos/tts-server.env /etc/lifeos/tts-server.env
 RUN chmod +x /usr/local/bin/lifeos-tts-server.py
 
+# --- Capa 4 — image guardian (PRD §5e) ---
+# Best-effort script + systemd unit that re-pulls system Quadlet images if
+# they were deleted from rootful containers-storage. Also wired as
+# ExecStartPre of every Quadlet, so the same code path runs before each
+# container start (defense-in-depth — works even if guardian.service is
+# masked).
+COPY image/files/usr/local/bin/lifeos-ensure-images /usr/local/bin/lifeos-ensure-images
+COPY image/files/etc/systemd/system/lifeos-image-guardian.service /usr/lib/systemd/system/lifeos-image-guardian.service
+RUN chmod +x /usr/local/bin/lifeos-ensure-images
+
 # --- Phase 1: TTS Quadlet (architecture pivot) ---
 # Drop the systemd Quadlet definition. systemd-generator picks it up at boot
 # and synthesizes lifeos-tts.service automatically — no symlink needed.
@@ -1137,10 +1147,13 @@ COPY image/files/etc/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/s
 COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
 COPY image/files/etc/systemd/system/llama-server.service.d/10-fast-kill.conf /etc/systemd/system/llama-server.service.d/10-fast-kill.conf
 COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/system/llama-embeddings.service
-# Phase 2: nomic-embed-text → Quadlet. Generator turns this into
-# lifeos-llama-embeddings.service. Image is built by side-images.yml,
-# pulled at first boot via lifeos-ensure-images.
-COPY containers/lifeos-llama-embeddings/lifeos-llama-embeddings.container /etc/containers/systemd/lifeos-llama-embeddings.container
+# Phase 2 (embeddings) flip is REVERTED — the Quadlet relies on the host
+# setup script `lifeos-embeddings-setup.sh` to populate
+# /etc/lifeos/llama-embeddings.env (LIFEOS_EMBED_MODEL=...) and download
+# the GGUF, but the Quadlet doesn't invoke it. Re-flipping requires either
+# baking that bootstrap into the .container's ExecStartPre OR keeping the
+# legacy llama-embeddings.service auto-enabled with ExecCondition skipping
+# llama-server. Tracked for a follow-up PR.
 COPY image/files/etc/systemd/system/whisper-stt.service       /usr/lib/systemd/system/whisper-stt.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.service /usr/lib/systemd/system/lifeos-btrfs-snapshot.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.timer   /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer
@@ -1150,9 +1163,12 @@ COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/sy
 COPY image/files/etc/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/lifeos-sentinel.service
 COPY image/files/etc/systemd/system/simplex-chat.service /usr/lib/systemd/system/simplex-chat.service
 COPY image/files/etc/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf /usr/lib/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf
-# Phase 5: simplex-chat → Quadlet. Generator produces
-# lifeos-simplex-bridge.service. Image is built by side-images.yml.
-COPY containers/lifeos-simplex-bridge/lifeos-simplex-bridge.container /etc/containers/systemd/lifeos-simplex-bridge.container
+# Phase 5 (simplex) flip is REVERTED — the Quadlet relies on
+# /var/lib/lifeos/simplex pre-existing with correct mode/owner AND on
+# `lifeos-simplex-setup.sh` having run to bootstrap the Axi profile.
+# Both came from the legacy host service which #73 removed from
+# multi-user.target.wants/. Re-flipping requires moving those into the
+# Quadlet's ExecStartPre or shipping a one-shot setup unit. Follow-up.
 COPY image/files/usr/local/bin/lifeos-simplex-setup.sh /usr/local/bin/lifeos-simplex-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-simplex-setup.sh
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
@@ -1219,6 +1235,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
     ln -sf /usr/lib/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-refresh-bls-titles.service && \
+    ln -sf /usr/lib/systemd/system/simplex-chat.service /usr/lib/systemd/system/multi-user.target.wants/simplex-chat.service && \
     # Canonical enablement: lifeosd starts from the graphical session target
     # so it waits for the display server to be ready (fixes the tray-icon
     # race where lifeosd gave up after its 30s wait before COSMIC was up).
@@ -1233,6 +1250,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
         ln -sf /usr/lib/systemd/system/nvidia-persistenced.service /usr/lib/systemd/system/multi-user.target.wants/nvidia-persistenced.service; \
     fi && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
+    ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
     ln -sf /usr/lib/systemd/system/fstrim.timer /usr/lib/systemd/system/timers.target.wants/fstrim.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
@@ -1240,6 +1258,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-flatpak-update.timer /usr/lib/systemd/system/timers.target.wants/lifeos-flatpak-update.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-flatpak-nvidia-sync.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-flatpak-nvidia-sync.service && \
     ln -sf /usr/lib/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-aide-check.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-image-guardian.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-image-guardian.service && \
     ln -sf /usr/lib/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-update-stage.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-stage.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
@@ -1442,6 +1461,10 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -x /usr/local/bin/lifeos-tts-server.py || fail "/usr/local/bin/lifeos-tts-server.py"; \
     test -f /usr/lib/systemd/system/lifeos-tts-server.service || fail "lifeos-tts-server.service"; \
     test -f /etc/lifeos/tts-server.env    || fail "/etc/lifeos/tts-server.env"; \
+    test -x /usr/local/bin/lifeos-ensure-images || fail "/usr/local/bin/lifeos-ensure-images"; \
+    test -f /usr/lib/systemd/system/lifeos-image-guardian.service || fail "lifeos-image-guardian.service"; \
+    test -L /usr/lib/systemd/system/multi-user.target.wants/lifeos-image-guardian.service || fail "guardian wants symlink"; \
+    test -f /etc/containers/systemd/lifeos-tts.container || fail "lifeos-tts.container"; \
     test -d /opt/lifeos/kokoro-env        || fail "/opt/lifeos/kokoro-env"; \
     test -f /opt/lifeos/kokoro-env/voices-manifest.json || fail "kokoro voices-manifest.json"; \
     test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
