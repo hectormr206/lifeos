@@ -7,8 +7,13 @@
 [Unit]
 Description=LifeOS Axi Daemon (containerized core)
 Documentation=https://github.com/hectormr206/lifeos
-After=network-online.target lifeos-image-guardian.service lifeos-tts.service lifeos-llama-embeddings.service llama-server.service simplex-chat.service
-Wants=network-online.target
+# All Quadlet-generated unit names use the `lifeos-` prefix. The earlier
+# version of this file referenced `llama-server.service` and
+# `simplex-chat.service` (the LEGACY non-prefixed host services); systemd
+# silently dropped ordering against those after Phase 4/5 flipped the
+# legacy units to masked/removed state.
+After=network-online.target lifeos-image-guardian.service lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
+Wants=network-online.target lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
 
 [Container]
 Image=ghcr.io/hectormr206/lifeos-lifeosd:stable
@@ -23,21 +28,32 @@ Network=host
 
 # === Bind mounts: state lives on host, container is stateless ===
 #
-# /var/lib/lifeos — encrypted memory DB, session_store, calendar, task queue,
-# scheduled tasks, Kokoro voice cache, etc. RW. SELinux :Z relabels so the
-# container's uid 65534 can access regardless of host SELinux policy.
-Volume=/var/lib/lifeos:/var/lib/lifeos:Z
+# /var/lib/lifeos — encrypted memory DB, session_store, calendar, task
+# queue, scheduled tasks, Kokoro voice cache, etc. RW. C3 fix means
+# container runs as root inside, so the host UID 1000 owner is reachable.
+#
+# ':z' (lowercase, SHARED MCS label) — multiple containers and the
+# legacy host services bind paths under /var/lib/lifeos and /etc/lifeos.
+# ':Z' (uppercase, private) would assign a per-container category and
+# lock out everyone else — exactly the rollback-breaking behavior the
+# audit flagged.
+Volume=/var/lib/lifeos:/var/lib/lifeos:z
 
-# Models read-only. lifeosd needs read access for the runtime profile env
-# file path resolution and to verify model presence.
-Volume=/var/lib/lifeos/models:/var/lib/lifeos/models:ro,Z
+# (Models bind is REDUNDANT — /var/lib/lifeos/models is already covered
+# by the parent /var/lib/lifeos:z mount above. A nested RO mount over
+# an RW parent has unreliable semantics across podman versions and
+# triggers double-relabel races. Removed.)
 
 # Configs read-only. /etc/lifeos has tts-server.env, llama-server.env,
-# llm-providers.env, etc.
-Volume=/etc/lifeos:/etc/lifeos:ro,Z
+# llm-providers.env, etc. ':z' shared label so TTS/embeddings/legacy
+# services keep access.
+Volume=/etc/lifeos:/etc/lifeos:ro,z
 
-# Telegram bridge in lifeosd needs CA bundle to verify TLS to api.telegram.org.
-Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,Z
+# Telegram bridge in lifeosd needs CA bundle to verify TLS to
+# api.telegram.org. ':z' shared label — touching the system-wide CA
+# trust dir with ':Z' would relabel it and break TLS for every other
+# host service.
+Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
 
 # Defense-in-depth Capa 4.
 ExecStartPre=/usr/local/bin/lifeos-ensure-images

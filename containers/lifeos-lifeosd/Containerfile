@@ -121,9 +121,9 @@ COPY --from=builder /src/daemon/target/release/lifeosd /usr/bin/lifeosd
 #
 # The bind mount /var/lib/lifeos comes from the host owned by uid=1000
 # (lifeos) with mode 600/700 on critical files (memory.db has 600 because
-# it's encrypted state). SELinux `:Z` rellabels the SECURITY context but
-# does NOT change file UIDs. A container running as uid=65534 would get
-# permission denied opening memory.db.
+# it's encrypted state). SELinux ':z'/':Z' relabel security context but
+# do NOT change file UIDs. A container running as a non-root UID would
+# get permission denied opening memory.db.
 #
 # Correct long-term fix: podman `UserNS=keep-id:uid=1000,gid=1000` on the
 # Quadlet (maps container 1000 ↔ host 1000), which requires subuid setup
@@ -134,7 +134,11 @@ COPY --from=builder /src/daemon/target/release/lifeosd /usr/bin/lifeosd
 # external defenses (Capa 1 storage isolation, Capa 2 sudoers, Capa 5
 # code blocklist) provide the real security boundary. The internal
 # non-root convention is dropped to unblock the bind mount.
-RUN mkdir -p /var/lib/lifeos /etc/lifeos
+#
+# Intentionally NO mkdir/chown of /var/lib/lifeos or /etc/lifeos here:
+# bind mounts at runtime mask whatever in-image directories exist, so
+# any chown applied at build time is a no-op that misleads readers
+# into thinking the in-image owner matters.
 
 # Daemon's HTTP API.
 EXPOSE 8081

@@ -127,7 +127,13 @@ podman tag 10.66.66.1:5001/lifeos-lifeosd:dev ghcr.io/hectormr206/lifeos-lifeosd
 podman push ghcr.io/hectormr206/lifeos-lifeosd:stable
 ```
 
-## Rollback (10 seconds, no data loss)
+## Rollback (10 seconds, no data loss) — keep the legacy unit MASKED, not removed
+
+When Phase 3a flips operationally, the bootc image MUST keep the legacy
+`lifeosd.service` (user systemd) on disk in MASKED state — NOT removed.
+Removing it would force any rollback through `bootc rollback`, which is
+denied by the Capa 5 `run_command` blocklist (and is heavyweight anyway:
+full bootc deployment swap + reboot for what should be a 10s revert).
 
 ```bash
 ssh laptop "
@@ -139,13 +145,20 @@ ssh laptop "
 
 The bind-mounted `/var/lib/lifeos` is untouched — the host service binds the same DB and picks up exactly where the container left off. **Zero data loss** is the contract.
 
+If the legacy unit was wrongly REMOVED (regression in some future image),
+the only recovery is a full image rollback:
+
+```bash
+ssh laptop "sudo bootc rollback"   # requires reboot
+```
+
 ## Trade-offs accepted
 
 | Decision | Why | Trade-off |
 |---|---|---|
-| Container ships only `messaging,wake-word,dbus,http-api` features (no `ui-overlay`) | GTK in headless container is dead weight; that path goes via Phase 3b host companion | First container deploy loses the tray icon until Phase 3b ships |
-| Bind mount `/var/lib/lifeos` rw with `:Z` | DBs survive container recreation. SELinux :Z relabels container UID. | Single-host coupling — these images can never be deployed standalone, only on a LifeOS host. Acceptable. |
-| `useradd uid 65534` inside container, NOT root | Defense in depth: even if a tool RCE happened, the container user can't write outside `/var/lib/lifeos` | UID mismatch with host's `lifeos` user requires `:Z` relabel to work. SELinux handles it. |
+| Container ships only `dbus,http-api,messaging` features (no `ui-overlay`, no `wake-word`) | GTK in headless container is dead weight; rustpotter wake-word needs PipeWire which the container has no socket for. Both move to the Phase 3b host companion. | First container deploy loses the tray icon AND wake-word listener until Phase 3b ships. |
+| Bind mount `/var/lib/lifeos` rw with `:z` (shared label) | DBs survive container recreation. `:z` (lowercase) shares the SELinux MCS label across consumers — `:Z` (uppercase, private) would lock out other Quadlets and the legacy host service from the same paths. | Single-host coupling — these images can never be deployed standalone, only on a LifeOS host. Acceptable. |
+| Container runs as ROOT inside (no `USER` directive) | Host bind-mounts are owned by uid=1000 (`lifeos`); SELinux `:z` does NOT remap UIDs, only security contexts. Running as root inside is the only way to read/write the host-owned DBs. The Quadlet is rootful and external defenses (Capa 1 storage isolation, Capa 2 sudoers, Capa 5 code blocklist) carry the security weight. | Loses container-internal non-root convention. Long-term fix: podman `UserNS=keep-id:uid=1000` mapping in Phase 6. |
 | Static link sqlite-vec into binary (via rusqlite-vec crate) | One file copy, no .so loader path issues | Adds ~3 MB to binary. Negligible. |
 | Network=host (Phase 1 choice continued) | Zero URL changes; talks to llama-server/embeddings/tts on 127.0.0.1 | Less isolation. Phase 6 PRD migrates to lifeos-net bridge. |
 
