@@ -55,9 +55,6 @@ Volume=/etc/lifeos:/etc/lifeos:ro,z
 # host service.
 Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
 
-# Defense-in-depth Capa 4.
-ExecStartPre=/usr/local/bin/lifeos-ensure-images
-
 # === Critical environment variables ===
 # Same set the host service passes today.
 Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard
@@ -66,6 +63,10 @@ Environment=RUST_LOG=info,lifeosd=debug
 EnvironmentFile=-/etc/lifeos/llm-providers.env
 
 [Service]
+# Defense-in-depth Capa 4: ensure image is present locally before starting.
+# Quadlet requires ExecStartPre in [Service], not [Container].
+ExecStartPre=/usr/local/bin/lifeos-ensure-images
+
 # Capa 3 of defense-in-depth — auto-restart with watchdog.
 Restart=always
 RestartSec=5s

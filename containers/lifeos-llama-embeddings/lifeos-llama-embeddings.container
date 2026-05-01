@@ -55,10 +55,11 @@ Exec=/usr/sbin/llama-server \
     --embeddings \
     --pooling mean
 
-# Defense-in-depth Capa 4.
+[Service]
+# Defense-in-depth Capa 4: ensure image is present locally before starting.
+# Quadlet requires ExecStartPre in [Service], not [Container].
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
 
-[Service]
 EnvironmentFile=-/etc/lifeos/llama-embeddings.env
 
 # Capa 3 of defense-in-depth — auto-restart with sane backoff. Embeddings

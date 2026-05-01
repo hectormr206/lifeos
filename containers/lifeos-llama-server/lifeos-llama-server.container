@@ -93,9 +93,6 @@ Volume=/var/lib/lifeos/models:/var/lib/lifeos/models:ro,z
 # A separate bind mount would be redundant — llama-server reads vars
 # from its environment, not from a file path.
 
-# Defense-in-depth Capa 4.
-ExecStartPre=/usr/local/bin/lifeos-ensure-images
-
 # === The exec line — same args the host service uses ===
 #
 # Reads model + tuning from the runtime-profile env file. The benchmarker
@@ -125,6 +122,10 @@ Exec=/usr/sbin/llama-server \
     --jinja
 
 [Service]
+# Defense-in-depth Capa 4: ensure image is present locally before starting.
+# Quadlet requires ExecStartPre in [Service], not [Container].
+ExecStartPre=/usr/local/bin/lifeos-ensure-images
+
 # CRITICAL: these paths are HOST paths (systemd evaluates EnvironmentFile=
 # on the host before the container is created). The benchmarker writes
 # to /var/lib/lifeos/llama-server-runtime-profile.env on the host —

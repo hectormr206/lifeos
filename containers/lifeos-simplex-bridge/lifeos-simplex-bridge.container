@@ -36,10 +36,11 @@ Volume=/var/lib/lifeos/simplex:/var/lib/lifeos/simplex:z
 # would relabel it and break TLS for every other host service.
 Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
 
-# Defense-in-depth Capa 4.
+[Service]
+# Defense-in-depth Capa 4: ensure image is present locally before starting.
+# Quadlet requires ExecStartPre in [Service], not [Container].
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
 
-[Service]
 # Capa 3 — SimpleX is touchy about graceful shutdown (DB locks). RestartSec
 # matches the host service's 10s, giving SimpleX time to flush WAL on SIGTERM.
 Restart=always

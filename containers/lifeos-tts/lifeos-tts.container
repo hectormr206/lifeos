@@ -77,11 +77,11 @@ Volume=/opt/lifeos/kokoro-env/voices-manifest.json:/opt/lifeos/kokoro-env/voices
 # `:z` shares the label across consumers — safe for read-only configs.
 Volume=/etc/lifeos/tts-server.env:/etc/lifeos/tts-server.env:ro,z
 
-# Defense-in-depth Capa 4: re-pull the image from the registry if it was
-# deleted from local storage. Cheap if image is present (skopeo no-op).
+[Service]
+# Defense-in-depth Capa 4: ensure image is present locally before starting.
+# Quadlet requires ExecStartPre in [Service], not [Container].
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
 
-[Service]
 # Load the env file BOTH ways: as systemd EnvironmentFile= so podman
 # inherits the vars and exports them into the container ENV (the Python
 # script reads via os.environ). The Volume= bind mount in [Container]
