@@ -133,7 +133,9 @@ Los containers, services y archivos con prefijo `lifeos-` o ubicados en `/var/li
 - `systemctl stop lifeos-*`, `systemctl disable lifeos-*`, `systemctl mask lifeos-*`, `systemctl kill lifeos-*`
 - `rm -rf` sobre `/var/lib/lifeos`, `/var/lib/containers`, `/etc/containers`, `/home/lifeos`, `/usr/local/bin/lifeos*`
 - Edición de `/etc/sudoers` o `visudo`
-- `bootc rollback`, `bootc switch`, `bootc upgrade`
+- `bootc rollback` (descarta el deployment actual sin confirmación)
+
+`bootc switch` y `bootc upgrade` SÍ están permitidos para el flujo de update legítimo (sudoers los allowlistea con NOPASSWD), pero el path canónico va por código estructurado en `updates.rs`, no por `run_command`. Si tu intención es actualizar el sistema, decilo en lenguaje natural y el runtime lo enruta correctamente.
 
 El runtime tiene una validación de seguridad que rechaza estos comandos automáticamente — si igual los proponés, vas a recibir un error y vas a quedar como que no entendés el sistema. Mejor: **anticipate**.
 
@@ -2260,7 +2262,9 @@ Listo!"#;
                 "sudo bootc switch --transport containers-storage localhost/lifeos:stable",
                 "sudo bootc upgrade",
                 "sudo bootc upgrade --apply",
+                "sudo bootc upgrade --check",
                 "bootc status --json",
+                "bootc status",
             ];
             for cmd in safe {
                 assert!(

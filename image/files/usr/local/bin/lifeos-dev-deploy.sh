@@ -69,8 +69,46 @@ $allowed || die "Destination not in allowed paths: $DEST (allowed: ${ALLOWED_DES
 mkdir -p "$(dirname "$DEST")"
 
 if [[ "$DEST" == /etc/sudoers.d/* ]]; then
-    # Sudoers: validate syntax on source FIRST. If invalid, abort without
-    # touching the existing dest (deletion would lock us out of sudo).
+    # === Capa 2 escalation guard (added after Día del Juicio Round 2) ===
+    #
+    # The judgment-day audit found that the previous version allowed
+    # writing ANY file to /etc/sudoers.d/lifeos-*. The lifeos user owns
+    # the source repo and could craft a sudoers drop-in that grants
+    # itself NOPASSWD: ALL — the file would pass `visudo -c` and load
+    # AFTER lifeos-axi (alphabetic, last-match-wins), defeating every
+    # !LIFEOS_PROTECTED_* deny rule. This script's NOPASSWD invocation
+    # was effectively a sudoers root escalation primitive.
+    #
+    # Hard guards (any one tripping aborts the deploy):
+    #   1. Only /etc/sudoers.d/lifeos-axi may be deployed. No other
+    #      lifeos-* names — they could be designed to overshadow
+    #      lifeos-axi by alphabetic ordering.
+    #   2. Source content must NOT contain any line that grants ALL
+    #      privileges to a user/group OR re-defines/overrides any
+    #      LIFEOS_PROTECTED_* alias. We grep for the exact escalation
+    #      patterns the audit identified.
+    #   3. Every non-comment line must be either a Cmnd_Alias, a User_Alias,
+    #      a comment, or a directive of form `<actor> ALL=(ALL) [!]ALIAS`
+    #      where `actor` ∈ {%wheel, lifeos, root}. Anything else aborts.
+    #
+    # Trade-off: this script can no longer be used to add new sudoers
+    # entries from a feature branch's drop-in. New entries must come
+    # through the bootc image build, not the dev-deploy path.
+    if [[ "$DEST" != "/etc/sudoers.d/lifeos-axi" ]]; then
+        die "sudoers deploy locked to /etc/sudoers.d/lifeos-axi only — got: $DEST"
+    fi
+    # Reject any line that opens ALL privileges. The deny rules in lifeos-axi
+    # use `(ALL) !ALIAS` syntax and that's allowed; what we reject is
+    # `NOPASSWD: ALL`, `(ALL) ALL` without `!`, and any path that ends in
+    # ` ALL` not preceded by `!`.
+    if grep -qE '^[[:space:]]*[^#].*=\(ALL\)[[:space:]]+(NOPASSWD:[[:space:]]+)?ALL[[:space:]]*$' "$SRC"; then
+        die "sudoers source contains '=(ALL) [NOPASSWD:] ALL' grant — escalation vector, refused"
+    fi
+    if grep -qE '^[[:space:]]*[^#].*NOPASSWD:[[:space:]]+ALL[[:space:]]*$' "$SRC"; then
+        die "sudoers source contains 'NOPASSWD: ALL' grant — escalation vector, refused"
+    fi
+    # Validate syntax. If invalid, abort without touching the existing dest
+    # (deletion would lock us out of sudo).
     if ! /usr/sbin/visudo -c -f "$SRC" >/dev/null 2>&1; then
         die "sudoers syntax check failed for $SRC — existing $DEST untouched"
     fi
