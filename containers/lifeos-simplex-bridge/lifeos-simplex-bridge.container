@@ -25,10 +25,16 @@ Network=host
 # Plus the message vault (encrypted local store) and the contact list.
 # All of this is the single most important state piece for the bridge —
 # losing it means re-pairing every contact (Hector's phone, etc.).
-Volume=/var/lib/lifeos/simplex:/var/lib/lifeos/simplex:Z
+#
+# ':z' (lowercase, shared MCS label). The legacy host
+# `simplex-chat.service` reads the same path during rollback flow;
+# ':Z' (private) would lock the legacy service out post-rollback.
+Volume=/var/lib/lifeos/simplex:/var/lib/lifeos/simplex:z
 
 # CA bundle for TLS to SMP relays.
-Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,Z
+# ':z' shared label — touching the system-wide CA trust dir with ':Z'
+# would relabel it and break TLS for every other host service.
+Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
 
 # Defense-in-depth Capa 4.
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
