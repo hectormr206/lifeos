@@ -354,6 +354,15 @@ RUN dnf -y install dnf5-plugins && \
     dnf -y --setopt=localpkg_gpgcheck=1 install \
       "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
       "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" && \
+    # The rpmfusion release RPM ships rawhide + updates-testing repo files
+    # ENABLED by default. On Fedora 44 that pulls ffmpeg from fc45 rawhide
+    # which needs glibc 2.44 (not on fc44). Disable both leaving only the
+    # release-stable channel for both free and nonfree.
+    dnf config-manager setopt \
+      rpmfusion-free-rawhide.enabled=0 \
+      rpmfusion-free-updates-testing.enabled=0 \
+      rpmfusion-nonfree-rawhide.enabled=0 \
+      rpmfusion-nonfree-updates-testing.enabled=0 && \
     dnf clean all
 
 # --- Escritorio COSMIC y Base ---
