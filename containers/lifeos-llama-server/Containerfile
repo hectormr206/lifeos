@@ -53,7 +53,7 @@ RUN dnf -y install \
 
 # MUST match the host bootc llama-server's pinned tag for chat-template
 # compatibility. Bump in lockstep across both Containerfiles.
-ARG LLAMA_CPP_TAG=b8925
+ARG LLAMA_CPP_TAG=b8999
 
 RUN git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
     cd /tmp/llama.cpp && \
