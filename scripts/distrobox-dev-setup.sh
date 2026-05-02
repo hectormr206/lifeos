@@ -2,7 +2,7 @@
 #
 # distrobox-dev-setup.sh — Provision the LifeOS developer distrobox.
 #
-# Phase 0 of the architecture pivot. Creates a Fedora 43 distrobox named
+# Phase 0 of the architecture pivot. Creates a Fedora 44 distrobox named
 # `lifeos-dev` with everything you need to:
 #   - cargo build the daemon + cli WITHOUT touching the host bootc rootfs
 #   - podman build any of the lifeos-* containers
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 DISTROBOX_NAME="lifeos-dev"
-BASE_IMAGE="quay.io/fedora/fedora:43"
+BASE_IMAGE="quay.io/fedora/fedora:44"
 
 log() { printf "[distrobox-dev-setup] %s\n" "$*"; }
 

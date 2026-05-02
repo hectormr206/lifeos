@@ -32,7 +32,7 @@
 # Heavy: shader-gen tool needs Vulkan headers + glslang. Build is slower
 # than embeddings (~20-30 min) because shader compilation alone is heavy.
 # Same image base as the host bootc llama-server build for parity.
-FROM fedora:43 AS builder
+FROM fedora:44 AS builder
 
 RUN dnf -y install \
         cmake \
@@ -85,7 +85,7 @@ RUN /tmp/llama.cpp/build/bin/llama-server --version
 # Critically does NOT need NVIDIA driver libraries — those come from the
 # HOST via CDI passthrough at container start time. The container only
 # needs vulkan-loader to find them.
-FROM fedora-minimal:43 AS runtime
+FROM fedora-minimal:44 AS runtime
 
 RUN microdnf install -y \
         ca-certificates \

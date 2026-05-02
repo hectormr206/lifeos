@@ -12,7 +12,14 @@
 #   podman build --build-arg LIFEOS_CHANNEL=edge -t lifeos:edge -f image/Containerfile .
 
 # Build against the latest supported Fedora major release.
-ARG FEDORA_MAJOR=43
+ARG FEDORA_MAJOR=44
+
+# Pre-compiled NVIDIA RPM image — must match FEDORA_MAJOR's kernel ABI.
+# Declared at global scope so the `FROM ...:${NVIDIA_DRIVERS_TAG}` in the
+# nvidia-rpms stage can reference it (Dockerfile rule: ARGs used in FROM
+# must be declared before any FROM, not inside a previous stage). Built
+# and published by lifeos-nvidia-drivers CI per Fedora major.
+ARG NVIDIA_DRIVERS_TAG=latest-f44-x86_64
 
 # ============================================================================
 # Stage 1: Build CLI + Daemon (Rust)
@@ -313,7 +320,14 @@ RUN set -eux && \
 # kernel), nvidia-kmod-common, nvidia-modprobe, nvidia-settings,
 # nvidia-persistenced, nvidia-driver-selinux, nvidia-container-toolkit,
 # libnvidia-container.
-FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:latest-f43-x86_64 AS nvidia-rpms
+# BLOCKER on Fedora bumps: lifeos-nvidia-drivers must publish a matching
+# `f${FEDORA_MAJOR}` tag BEFORE this Containerfile bumps — the pre-compiled
+# kmod-nvidia is linked against the kernel ABI of its build distro and
+# crossing majors fails modprobe at first boot. NVIDIA_DRIVERS_TAG is
+# declared at global scope at the top of the file (Dockerfile requires
+# ARGs used in FROM to be declared before any FROM line, not inside a
+# prior stage).
+FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:${NVIDIA_DRIVERS_TAG} AS nvidia-rpms
 
 # ============================================================================
 # Stage 6: Sistema Final
@@ -321,7 +335,7 @@ FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:latest-f43-x86_64 AS nvidia-rpms
 FROM quay.io/fedora/fedora-bootc:${FEDORA_MAJOR}
 
 ARG LIFEOS_PRELOAD_MODEL=false
-ARG FEDORA_MAJOR=43
+ARG FEDORA_MAJOR=44
 
 ARG LIFEOS_CHANNEL=edge
 # Runtime booted version for bootc/channel manifests.
@@ -354,6 +368,25 @@ RUN dnf -y install dnf5-plugins && \
     dnf -y --setopt=localpkg_gpgcheck=1 install \
       "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
       "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" && \
+    # The rpmfusion release RPM ships rawhide + updates-testing repo files
+    # in /etc/yum.repos.d/. On Fedora 44 the rawhide repo points at
+    # ffmpeg-libs-8.0.1-9.fc45 which needs glibc 2.44 (not on fc44),
+    # breaking the ffmpeg install later. Force-disable both rawhide and
+    # updates-testing for free + nonfree by rewriting `enabled=1` to
+    # `enabled=0` directly. The dnf5 `config-manager setopt` errors out
+    # when the repoid is missing, which made the previous attempt
+    # non-portable across rpmfusion package versions; sed on the actual
+    # .repo files is robust to that.
+    # Use find so the loop self-adapts if rpmfusion renames or adds repo
+    # files in future package versions. Empirically on rpmfusion-44:
+    # only `rpmfusion-free-rawhide.repo` ships with `enabled=1`; the
+    # updates-testing repos already ship `enabled=0`, and there is no
+    # `rpmfusion-nonfree-rawhide.repo` at all. The find pattern catches
+    # any matching file regardless of which entries the future package
+    # actually ships.
+    find /etc/yum.repos.d -maxdepth 1 -type f \
+        \( -name 'rpmfusion-*-rawhide*.repo' -o -name 'rpmfusion-*-updates-testing*.repo' \) \
+        -exec sed -i 's/^enabled *= *1/enabled=0/' {} + && \
     dnf clean all
 
 # --- Escritorio COSMIC y Base ---
@@ -622,7 +655,7 @@ RUN set -eux && \
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \
     firefox \
-    intel-media-driver \
+    libva-intel-media-driver \
     libva-utils \
     && dnf clean all
 

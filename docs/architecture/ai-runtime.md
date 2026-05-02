@@ -2253,7 +2253,7 @@ RUN dnf -y install cosmic-desktop cosmic-files cosmic-terminal \
 # --- Nvidia Optimus (GPU hibrida) ---
 # NVIDIA driver RPMs provienen de hectormr206/lifeos-nvidia-drivers
 # (Production Branch, Blackwell-ready, actualizado semanalmente).
-FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:latest-f43-x86_64 AS nvidia-rpms
+FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:latest-f44-x86_64 AS nvidia-rpms
 # (en stage final)
 RUN --mount=type=bind,from=nvidia-rpms,source=/,target=/mnt/nvidia-rpms,ro \
     dnf -y install /mnt/nvidia-rpms/*.rpm supergfxctl && dnf clean all

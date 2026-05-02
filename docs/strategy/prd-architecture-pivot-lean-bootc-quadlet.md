@@ -189,7 +189,7 @@ TOTAL: 3-5 minutos por iteración
 
 ```bash
 # 1. Crear distrobox dev (una sola vez)
-distrobox create --name lifeos-dev --image fedora:43 --nvidia
+distrobox create --name lifeos-dev --image fedora:44 --nvidia
 distrobox enter lifeos-dev
 # adentro: rustup default stable, cargo, etc.
 
@@ -361,7 +361,7 @@ image prune`. Los argumentos son idénticos.
 
 ```dockerfile
 # Build stage — Fedora con cargo
-FROM fedora:43 AS builder
+FROM fedora:44 AS builder
 RUN dnf install -y rust cargo openssl-devel sqlite-devel
 WORKDIR /build
 COPY . .
@@ -380,7 +380,7 @@ Resultado esperado: ~30-50 MB vs ~500 MB con full Fedora runtime.
 
 ```dockerfile
 # Build stage con todas las deps
-FROM fedora:43 AS builder
+FROM fedora:44 AS builder
 RUN dnf install -y cmake gcc-c++ vulkan-headers glslang glslc \
     pkgconf-pkg-config curl-devel
 WORKDIR /build
@@ -390,7 +390,7 @@ RUN git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp \
     && cmake --build build -j1
 
 # Runtime stage — solo lo mínimo para correr
-FROM fedora:43-minimal
+FROM fedora-minimal:44
 RUN microdnf install -y vulkan-loader libcurl --setopt=tsflags=nodocs && microdnf clean all
 COPY --from=builder /build/build/bin/llama-server /usr/sbin/llama-server
 ENTRYPOINT ["/usr/sbin/llama-server"]
@@ -404,7 +404,7 @@ Definir un `lifeos-base` mínimo común:
 
 ```dockerfile
 # containers/lifeos-base/Containerfile
-FROM fedora:43-minimal
+FROM fedora-minimal:44
 RUN microdnf install -y ca-certificates tzdata libcurl --setopt=tsflags=nodocs \
     && microdnf clean all
 ```

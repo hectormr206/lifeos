@@ -39,7 +39,7 @@
 # ---------------------------------------------------------------------------
 # Heavy: Rust toolchain, native deps for SQLite/openssl/dbus, full cargo cache.
 # Kept entirely separate from runtime so we don't ship gcc, headers, or .cargo/.
-FROM fedora:43 AS builder
+FROM fedora:44 AS builder
 
 RUN dnf -y install \
         rust cargo \
@@ -96,10 +96,10 @@ RUN /src/target/release/lifeosd --version || \
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime
 # ---------------------------------------------------------------------------
-# fedora-minimal:43 because we need libsqlite3 + libdbus + libssl runtime libs
-# and it's smaller than full fedora:43 (~80 MB vs ~250 MB). distroless is
+# fedora-minimal:44 because we need libsqlite3 + libdbus + libssl runtime libs
+# and it's smaller than full fedora:44 (~80 MB vs ~250 MB). distroless is
 # tempting but lacks D-Bus libs we need for the SimpleX bridge IPC.
-FROM fedora-minimal:43 AS runtime
+FROM fedora-minimal:44 AS runtime
 
 RUN microdnf install -y \
         ca-certificates \
