@@ -19,7 +19,7 @@
 # carry just the binary into the runtime stage.
 FROM ubuntu:22.04 AS extract
 
-ARG SIMPLEX_CLI_VERSION=v6.4.11
+ARG SIMPLEX_CLI_VERSION=v6.5.0
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \

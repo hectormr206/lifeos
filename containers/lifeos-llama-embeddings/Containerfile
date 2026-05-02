@@ -35,7 +35,7 @@ RUN dnf -y install \
 # Pin to the same tag the bootc image llama-server uses, so embedding format
 # semantics match across the host (currently using --jinja for chat) and the
 # container (using --embeddings here). Bump in lockstep.
-ARG LLAMA_CPP_TAG=b8925
+ARG LLAMA_CPP_TAG=b8999
 
 RUN git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
     cd /tmp/llama.cpp && \
