@@ -106,13 +106,19 @@ TimeoutStartSec=60s
 # WatchdogSec=60s
 
 # Resource limits — same as the legacy systemd unit.
+# NOTE: applied to the systemd cgroup that wraps the podman process. With
+# Quadlet's `--cgroups=split` the container gets its own sub-cgroup; these
+# limits cap the parent so the WHOLE service envelope stays bounded.
 MemoryMax=1536M
 CPUQuota=200%
 
-# Security hardening that doesn't conflict with podman containerization.
-# Several hardenings (ProtectSystem=strict, PrivateDevices=true) are
-# implicit when running inside a container.
-NoNewPrivileges=true
+# DO NOT add `NoNewPrivileges=true` here. On Fedora 43 + podman 5.x +
+# Quadlet, NNP combined with `--cgroups=split` blocks podman's runtime
+# init lock acquisition (`/run/libpod/alive.lck` returns EACCES even
+# though the unit runs as root). The container-level hardening that
+# matters is set INSIDE [Container] (DropCapability=, ReadOnly=,
+# SecurityLabel=*) which Quadlet translates to podman flags directly.
+# Re-enable only after proving it works on a current Fedora image.
 
 [Install]
 WantedBy=multi-user.target default.target
