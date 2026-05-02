@@ -14,6 +14,13 @@
 # Build against the latest supported Fedora major release.
 ARG FEDORA_MAJOR=44
 
+# Pre-compiled NVIDIA RPM image — must match FEDORA_MAJOR's kernel ABI.
+# Declared at global scope so the `FROM ...:${NVIDIA_DRIVERS_TAG}` in the
+# nvidia-rpms stage can reference it (Dockerfile rule: ARGs used in FROM
+# must be declared before any FROM, not inside a previous stage). Built
+# and published by lifeos-nvidia-drivers CI per Fedora major.
+ARG NVIDIA_DRIVERS_TAG=latest-f44-x86_64
+
 # ============================================================================
 # Stage 1: Build CLI + Daemon (Rust)
 # ============================================================================
@@ -313,14 +320,13 @@ RUN set -eux && \
 # kernel), nvidia-kmod-common, nvidia-modprobe, nvidia-settings,
 # nvidia-persistenced, nvidia-driver-selinux, nvidia-container-toolkit,
 # libnvidia-container.
-# BLOCKER on Fedora bumps: this image must be rebuilt + republished with a
-# matching `f${FEDORA_MAJOR}` tag in the lifeos-nvidia-drivers repo BEFORE
-# this Containerfile bumps. The pre-compiled kmod-nvidia in this image is
-# linked against fc${X}'s kernel ABI; mixing fc43 kmod into an fc44 base
-# fails modprobe at first boot. CI should fail at the FROM line if the tag
-# does not exist, surfacing the blocker explicitly rather than silently
-# shipping a broken image.
-ARG NVIDIA_DRIVERS_TAG=latest-f44-x86_64
+# BLOCKER on Fedora bumps: lifeos-nvidia-drivers must publish a matching
+# `f${FEDORA_MAJOR}` tag BEFORE this Containerfile bumps — the pre-compiled
+# kmod-nvidia is linked against the kernel ABI of its build distro and
+# crossing majors fails modprobe at first boot. NVIDIA_DRIVERS_TAG is
+# declared at global scope at the top of the file (Dockerfile requires
+# ARGs used in FROM to be declared before any FROM line, not inside a
+# prior stage).
 FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:${NVIDIA_DRIVERS_TAG} AS nvidia-rpms
 
 # ============================================================================
