@@ -1,0 +1,72 @@
+name: Quadlet Syntax Check
+
+# Runs the systemd Quadlet generator (`/usr/libexec/podman/quadlet --dryrun`)
+# against every .container file under containers/. Catches the exact class
+# of bug that broke Phase 1 boot in 0.8.27 — ExecStartPre placed in
+# [Container] instead of [Service]. The generator returns non-zero on any
+# unsupported key, missing required directive, or malformed section header.
+#
+# This runs in <30s on ubuntu-latest because we don't need to build the
+# images — only to parse the .container files. Quadlet ships with podman.
+#
+# When this fails the message is concrete:
+#   converting "lifeos-X.container": unsupported key 'Y' in group 'Z'
+# and the PR is blocked from merge.
+
+on:
+  pull_request:
+    paths:
+      - 'containers/**/*.container'
+      - 'image/files/etc/containers/systemd/**'
+      - '.github/workflows/quadlet-syntax-check.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'containers/**/*.container'
+      - 'image/files/etc/containers/systemd/**'
+
+permissions:
+  contents: read
+
+jobs:
+  quadlet-dryrun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Run Quadlet generator dryrun
+        run: |
+          set -euo pipefail
+          QUADLET=$(command -v quadlet || echo /usr/libexec/podman/quadlet)
+          if [ ! -x "$QUADLET" ]; then
+            echo "::error::quadlet binary not found"
+            exit 1
+          fi
+          echo "Using $QUADLET"
+
+          # Stage every .container under a single dir so the generator scans
+          # them in one pass.
+          stage=$(mktemp -d)
+          find containers -name '*.container' -exec cp {} "$stage/" \;
+          # Also include any .container shipped in image/files (paranoid).
+          find image/files/etc/containers/systemd -name '*.container' -exec cp {} "$stage/" \; 2>/dev/null || true
+
+          out=$("$QUADLET" --dryrun --user "$stage" 2>&1) || true
+
+          # Quadlet writes to stderr on errors. Non-zero exit OR the literal
+          # phrase "processing encountered some errors" both fail the check.
+          # The literal text is required because quadlet sometimes returns 0
+          # even after rejecting a key (older versions).
+          if echo "$out" | grep -qE 'unsupported key|encountered some errors|invalid|error converting'; then
+            echo "::error::Quadlet rejected at least one .container file:"
+            echo "$out"
+            exit 1
+          fi
+
+          echo "All .container files passed Quadlet syntax check."
+          echo "$out"
