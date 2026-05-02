@@ -197,7 +197,8 @@ not the primary runtime model.
 
 | Component | Pinned tag | Notes |
 |---|---|---|
-| llama.cpp | `b8925` (2026-04) | Vulkan FA DP4A, CUDA mem-leak fix, llama-server hardening |
+| llama.cpp | `b8999` (2026-05) | b8925 → b8999: ~74 commits, Vulkan opts + llama-server security patches |
+| simplex-chat | `v6.5.0` (2026-04) | bumped from v6.4.11; minor release line |
 | whisper.cpp | `v1.8.4` (2026-03) | Reproducible build (was unpinned HEAD) |
 | Bun runtime | `1.3.13` (2026-04) | Used by Claude Code Channels plugins |
 | Kokoro TTS | `kokoro==0.9.4` + `numpy==1.26.4` | numpy stays on 1.x for torch 2.4.1 ABI |
