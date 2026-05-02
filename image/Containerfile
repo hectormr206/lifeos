@@ -355,14 +355,20 @@ RUN dnf -y install dnf5-plugins && \
       "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
       "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" && \
     # The rpmfusion release RPM ships rawhide + updates-testing repo files
-    # ENABLED by default. On Fedora 44 that pulls ffmpeg from fc45 rawhide
-    # which needs glibc 2.44 (not on fc44). Disable both leaving only the
-    # release-stable channel for both free and nonfree.
-    dnf config-manager setopt \
-      rpmfusion-free-rawhide.enabled=0 \
-      rpmfusion-free-updates-testing.enabled=0 \
-      rpmfusion-nonfree-rawhide.enabled=0 \
-      rpmfusion-nonfree-updates-testing.enabled=0 && \
+    # in /etc/yum.repos.d/. On Fedora 44 the rawhide repo points at
+    # ffmpeg-libs-8.0.1-9.fc45 which needs glibc 2.44 (not on fc44),
+    # breaking the ffmpeg install later. Force-disable both rawhide and
+    # updates-testing for free + nonfree by rewriting `enabled=1` to
+    # `enabled=0` directly. The dnf5 `config-manager setopt` errors out
+    # when the repoid is missing, which made the previous attempt
+    # non-portable across rpmfusion package versions; sed on the actual
+    # .repo files is robust to that.
+    for repo in /etc/yum.repos.d/rpmfusion-free-rawhide.repo \
+                /etc/yum.repos.d/rpmfusion-free-updates-testing.repo \
+                /etc/yum.repos.d/rpmfusion-nonfree-rawhide.repo \
+                /etc/yum.repos.d/rpmfusion-nonfree-updates-testing.repo; do \
+        [ -f "$repo" ] && sed -i 's/^enabled *= *1/enabled=0/' "$repo" || true; \
+    done && \
     dnf clean all
 
 # --- Escritorio COSMIC y Base ---
