@@ -313,7 +313,15 @@ RUN set -eux && \
 # kernel), nvidia-kmod-common, nvidia-modprobe, nvidia-settings,
 # nvidia-persistenced, nvidia-driver-selinux, nvidia-container-toolkit,
 # libnvidia-container.
-FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:latest-f43-x86_64 AS nvidia-rpms
+# BLOCKER on Fedora bumps: this image must be rebuilt + republished with a
+# matching `f${FEDORA_MAJOR}` tag in the lifeos-nvidia-drivers repo BEFORE
+# this Containerfile bumps. The pre-compiled kmod-nvidia in this image is
+# linked against fc${X}'s kernel ABI; mixing fc43 kmod into an fc44 base
+# fails modprobe at first boot. CI should fail at the FROM line if the tag
+# does not exist, surfacing the blocker explicitly rather than silently
+# shipping a broken image.
+ARG NVIDIA_DRIVERS_TAG=latest-f44-x86_64
+FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:${NVIDIA_DRIVERS_TAG} AS nvidia-rpms
 
 # ============================================================================
 # Stage 6: Sistema Final
@@ -363,12 +371,16 @@ RUN dnf -y install dnf5-plugins && \
     # when the repoid is missing, which made the previous attempt
     # non-portable across rpmfusion package versions; sed on the actual
     # .repo files is robust to that.
-    for repo in /etc/yum.repos.d/rpmfusion-free-rawhide.repo \
-                /etc/yum.repos.d/rpmfusion-free-updates-testing.repo \
-                /etc/yum.repos.d/rpmfusion-nonfree-rawhide.repo \
-                /etc/yum.repos.d/rpmfusion-nonfree-updates-testing.repo; do \
-        [ -f "$repo" ] && sed -i 's/^enabled *= *1/enabled=0/' "$repo" || true; \
-    done && \
+    # Use find so the loop self-adapts if rpmfusion renames or adds repo
+    # files in future package versions. Empirically on rpmfusion-44:
+    # only `rpmfusion-free-rawhide.repo` ships with `enabled=1`; the
+    # updates-testing repos already ship `enabled=0`, and there is no
+    # `rpmfusion-nonfree-rawhide.repo` at all. The find pattern catches
+    # any matching file regardless of which entries the future package
+    # actually ships.
+    find /etc/yum.repos.d -maxdepth 1 -type f \
+        \( -name 'rpmfusion-*-rawhide*.repo' -o -name 'rpmfusion-*-updates-testing*.repo' \) \
+        -exec sed -i 's/^enabled *= *1/enabled=0/' {} + && \
     dnf clean all
 
 # --- Escritorio COSMIC y Base ---

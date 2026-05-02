@@ -97,7 +97,7 @@ RUN /src/target/release/lifeosd --version || \
 # Stage 2 — runtime
 # ---------------------------------------------------------------------------
 # fedora-minimal:44 because we need libsqlite3 + libdbus + libssl runtime libs
-# and it's smaller than full fedora:43 (~80 MB vs ~250 MB). distroless is
+# and it's smaller than full fedora:44 (~80 MB vs ~250 MB). distroless is
 # tempting but lacks D-Bus libs we need for the SimpleX bridge IPC.
 FROM fedora-minimal:44 AS runtime
 
