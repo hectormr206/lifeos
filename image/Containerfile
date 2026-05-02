@@ -655,7 +655,7 @@ RUN set -eux && \
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \
     firefox \
-    intel-media-driver \
+    libva-intel-media-driver \
     libva-utils \
     && dnf clean all
 
