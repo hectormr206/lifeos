@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------------
 # Build llama-server CPU-only (no Vulkan, no CUDA, no GPU). Embeddings is
 # CPU-bound on a 84 MB model — GPU would add complexity for ~zero speedup.
-FROM fedora:43 AS builder
+FROM fedora:44 AS builder
 
 RUN dnf -y install \
         cmake \
@@ -63,7 +63,7 @@ RUN /tmp/llama.cpp/build/bin/llama-server --version
 # ---------------------------------------------------------------------------
 # Minimal runtime — just the binary, libcurl (for model URL fetching if ever
 # needed), and tini for clean signal forwarding.
-FROM fedora-minimal:43 AS runtime
+FROM fedora-minimal:44 AS runtime
 
 RUN microdnf install -y \
         ca-certificates \

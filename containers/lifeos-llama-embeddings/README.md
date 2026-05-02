@@ -28,7 +28,7 @@ podman build -t 10.66.66.1:5001/lifeos-llama-embeddings:dev \
   containers/lifeos-llama-embeddings/
 ```
 
-Expected size: ~50-80 MB (fedora-minimal:43 + the static llama-server binary). The build takes 5-10 minutes for the cmake compile.
+Expected size: ~50-80 MB (fedora-minimal:44 + the static llama-server binary). The build takes 5-10 minutes for the cmake compile.
 
 ## Test on laptop (manual, until Phase 2 flips)
 
