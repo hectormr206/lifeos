@@ -125,7 +125,7 @@ RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel vulk
 # b8925 (2026-04) covers ~224 commits since b8701 incl. Vulkan FA DP4A perf
 # improvements, CUDA memory leak fix, and llama-server security patches.
 # https://github.com/ggml-org/llama.cpp/releases/tag/b8925
-ARG LLAMA_CPP_TAG=b8925
+ARG LLAMA_CPP_TAG=b8999
 RUN set -eux && \
     echo ">>> Building llama-server from source (Vulkan-enabled, pinned ${LLAMA_CPP_TAG})..." && \
     git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
@@ -286,7 +286,7 @@ RUN find /opt/lifeos/kokoro-env -type d -name '__pycache__' -exec rm -rf {} + 2>
 # We use bsdtar (libarchive) which natively handles .deb (ar) and .tar.zst
 # without needing dpkg or extra packages.
 FROM fedora:${FEDORA_MAJOR} AS simplex-extract
-ARG SIMPLEX_CLI_VERSION=v6.4.11
+ARG SIMPLEX_CLI_VERSION=v6.5.0
 RUN set -eux && \
     dnf -y install bsdtar curl && \
     curl -fSL -o /tmp/simplex-chat.deb \

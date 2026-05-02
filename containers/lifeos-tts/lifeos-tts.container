@@ -57,13 +57,16 @@ Network=host
 # which is already container-readable. Use plain `:ro`.
 Volume=/usr/local/bin/lifeos-tts-server.py:/usr/local/bin/lifeos-tts-server.py:ro
 
-# voices-manifest.json lives on the host inside the venv dir. Without this
-# bind-mount the script reports `voices_loaded: 0`, /voices returns [], and
-# /tts rejects valid voice names with HTTP 400. The manifest is curated
-# host-side (regenerated on Kokoro updates), so we keep it on the host and
-# mount read-only — same `:z` rationale as the env file (shared with rollback
-# host service and other readers).
-Volume=/opt/lifeos/kokoro-env/voices-manifest.json:/opt/lifeos/kokoro-env/voices-manifest.json:ro,z
+# voices-manifest.json lives in the bootc venv at /opt/lifeos/kokoro-env/.
+# Without this bind-mount the script reports `voices_loaded: 0`, /voices
+# returns [], and /tts rejects valid voice names with HTTP 400.
+#
+# IMPORTANT: NO `:z` here. /opt/ is part of the read-only bootc layer
+# (alongside /usr/) so podman's chcon-on-relabel via `:z` fails with
+# `lsetxattr ... read-only file system`. The file ships with the SELinux
+# label assigned at image build time (container-readable by default for
+# /opt/* on Fedora), so plain `:ro` is correct.
+Volume=/opt/lifeos/kokoro-env/voices-manifest.json:/opt/lifeos/kokoro-env/voices-manifest.json:ro
 
 # The legacy systemd unit reads /etc/lifeos/tts-server.env. Same here for
 # parity — the env file lives in the bootc image, no container rebuild
