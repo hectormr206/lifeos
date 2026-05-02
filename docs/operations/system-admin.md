@@ -197,6 +197,7 @@ not the primary runtime model.
 
 | Component | Pinned tag | Notes |
 |---|---|---|
+| Base distro | `Fedora 44` (`FEDORA_MAJOR=44`) | bumped from Fedora 43 — kernel + glibc + every RPM rebuilt |
 | llama.cpp | `b8999` (2026-05) | b8925 → b8999: ~74 commits, Vulkan opts + llama-server security patches |
 | simplex-chat | `v6.5.0` (2026-04) | bumped from v6.4.11; minor release line |
 | whisper.cpp | `v1.8.4` (2026-03) | Reproducible build (was unpinned HEAD) |
