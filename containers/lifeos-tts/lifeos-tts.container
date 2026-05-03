@@ -1,35 +1,21 @@
-# lifeos-tts.container — Quadlet definition for Kokoro TTS server
+# lifeos-tts.container — Quadlet for Kokoro TTS server (self-contained image)
 #
-# Phase 1 of the architecture pivot — first system Quadlet.
+# Phase 6 of the architecture pivot — the side image now carries the full
+# Kokoro venv + voice models + voices-manifest.json + the server script.
+# The bootc image no longer ships /opt/lifeos/kokoro-env or
+# /usr/local/bin/lifeos-tts-server.py — both moved INTO the container
+# image, removing ~850 MB from bootc.
+#
 # PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md
-#
-# NOT auto-installed yet. When Phase 1 actually flips, this file will be
-# copied into image/files/etc/containers/systemd/lifeos-tts.container by the
-# Containerfile, and the legacy /etc/systemd/system/lifeos-tts-server.service
-# will be removed (or masked) in the same change.
-#
-# To deploy this manually for testing on a laptop already on 0.8.25+:
-#   1. Stop the legacy service:
-#        sudo systemctl stop lifeos-tts-server.service
-#        sudo systemctl mask lifeos-tts-server.service
-#   2. Drop this file at /etc/containers/systemd/lifeos-tts.container.
-#   3. sudo systemctl daemon-reload
-#   4. sudo systemctl start lifeos-tts.service
-#   5. curl http://127.0.0.1:8084/health
-#
-# Both the legacy service and this Quadlet bind 127.0.0.1:8084 — running
-# them simultaneously will fail one. Always mask one before starting the other.
 
 [Unit]
 Description=LifeOS Kokoro TTS Server (containerized)
 Documentation=https://github.com/hexgrad/kokoro
 After=network-online.target lifeos-image-guardian.service
 Wants=network-online.target
-# lifeosd reads from :8084 — keep TTS up before lifeosd. After Phase 3
-# flips, the daemon is the Quadlet-generated `lifeos-lifeosd.service`,
-# NOT the legacy `lifeosd.service`. Use the Quadlet name so systemd
-# actually orders correctly — ordering against a non-existent unit is
-# silently dropped.
+# After Phase 3 flips lifeosd to a Quadlet, this should re-target the
+# Quadlet-generated unit name. For now legacy lifeosd.service is the
+# host unit; ordering against a non-existent unit is silently dropped.
 Before=lifeos-lifeosd.service
 
 [Container]
@@ -37,101 +23,47 @@ Image=ghcr.io/hectormr206/lifeos-tts:stable
 ContainerName=lifeos-tts
 HostName=lifeos-tts
 
-# Network=host is the Phase 1 choice (PRD §3 — Networking Opción A).
-# - Container listens on 127.0.0.1:8084 inside its netns AND on the host's
-#   loopback simultaneously, so existing clients (lifeosd) reach it without
-#   changing any URL.
-# - Network=host loses isolation between containers but they're already all
-#   on localhost, so we lose nothing real.
-# - Phase 6 will migrate to a podman bridge `lifeos-net` for proper isolation.
+# Network=host — Phase 1 networking choice (PRD §3 Opción A). Container
+# binds 127.0.0.1:8084 in the host netns; lifeosd reaches it unchanged.
 Network=host
 
-# Bind-mount the live script from the host as read-only. This means the
-# container image is stable across script edits — change .py, systemctl
-# restart lifeos-tts, see new behavior. No rebuild, no push, no pull.
+# Only surface left: the env file. Phase 6 makes everything else
+# (venv, voice models, manifest, server script) live INSIDE the
+# container image.
 #
-# IMPORTANT: NO `:Z` here. `/usr/` is read-only on Fedora bootc 43 →
-# any podman attempt to chcon-relabel via `:Z` fails with EROFS or
-# silently no-ops with stale label. The script ships in the bootc
-# image with `bin_t` SELinux context (default for /usr/local/bin/*),
-# which is already container-readable. Use plain `:ro`.
-Volume=/usr/local/bin/lifeos-tts-server.py:/usr/local/bin/lifeos-tts-server.py:ro
-
-# voices-manifest.json lives in the bootc venv at /opt/lifeos/kokoro-env/.
-# Without this bind-mount the script reports `voices_loaded: 0`, /voices
-# returns [], and /tts rejects valid voice names with HTTP 400.
-#
-# IMPORTANT: NO `:z` here. /opt/ is part of the read-only bootc layer
-# (alongside /usr/) so podman's chcon-on-relabel via `:z` fails with
-# `lsetxattr ... read-only file system`. The file ships with the SELinux
-# label assigned at image build time (container-readable by default for
-# /opt/* on Fedora), so plain `:ro` is correct.
-Volume=/opt/lifeos/kokoro-env/voices-manifest.json:/opt/lifeos/kokoro-env/voices-manifest.json:ro
-
-# The legacy systemd unit reads /etc/lifeos/tts-server.env. Same here for
-# parity — the env file lives in the bootc image, no container rebuild
-# required when env keys change.
-#
-# IMPORTANT: `:z` (lowercase, SHARED label) — NOT `:Z` (private, per-
-# container). The legacy `lifeos-tts-server.service` reads the same
-# host file directly during rollback flow, and other Quadlets
-# (lifeosd, embeddings) bind-mount /etc/lifeos. `:Z` would assign a
-# container-private MCS category, breaking access for everyone else.
-# `:z` shares the label across consumers — safe for read-only configs.
-Volume=/etc/lifeos/tts-server.env:/etc/lifeos/tts-server.env:ro,z
-
-# HuggingFace cache from the host venv. Without this bind, the container's
-# /opt/lifeos/kokoro-env/hf-cache is empty (the side image only carries the
-# Python venv + libraries, not the multi-GB voice/model weights). On first
-# /tts call Kokoro tries to fetch from HF Hub, hits HF_HUB_OFFLINE=1, and
-# the service crashes with `LocalEntryNotFoundError`. The host bake
-# pre-populates this dir at image build time so a runtime bind-mount is the
-# correct surface. NO `:z` — /opt is on the read-only bootc layer (same
-# rationale as the voices-manifest.json mount above).
-Volume=/opt/lifeos/kokoro-env/hf-cache:/opt/lifeos/kokoro-env/hf-cache:ro
-
-# Pass /etc/lifeos/tts-server.env CONTENTS into the container's process
-# env via podman --env-file. Without this, the Python script's os.environ
-# lookups (PHONEMIZER_ESPEAK_LIBRARY, HF_HOME, HF_HUB_OFFLINE,
-# LIFEOS_TTS_*) are undefined → phonemizer falls back to grapheme output
-# and Kokoro tries to fetch models online (which fails offline). [Service]
-# EnvironmentFile= only loads vars into systemd's exec env for substitution
-# in ExecStart=; podman does NOT inherit them into the container without
-# this [Container] directive.
+# We use Quadlet's [Container] EnvironmentFile= which translates to
+# `podman --env-file=/etc/lifeos/tts-server.env`, propagating the
+# file's vars into the container process env. The script reads via
+# os.environ, never opens the path inside the container — so a
+# Volume= bind of the same file would be redundant AND would trigger
+# an SELinux `:z` relabel of /etc/lifeos/tts-server.env to
+# container_file_t (host services that read the same file would
+# then get an unexpected MCS label). Single source of truth: this
+# EnvironmentFile= line.
 EnvironmentFile=/etc/lifeos/tts-server.env
 
 [Service]
 # Defense-in-depth Capa 4: ensure image is present locally before starting.
-# Quadlet requires ExecStartPre in [Service], not [Container].
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
 
-# Capa 3 of defense-in-depth — auto-restart with watchdog.
+# Capa 3 — auto-restart.
 Restart=always
 RestartSec=5s
 
-# Kokoro warmup loads ~500 MB of model weights — give it room to spin up.
+# Kokoro warmup is now FAST because models are baked in (no model load
+# round-trip to HF Hub, no big tensor copies between mounts).
 TimeoutStartSec=60s
 
-# WatchdogSec relies on the container reporting back to systemd via
-# sd_notify. The current Python script doesn't do that, so we leave Watchdog
-# off for now and rely on health checks (planned: HTTP probe on /health).
-# When the script learns sd_notify, uncomment:
-# WatchdogSec=60s
-
-# Resource limits — same as the legacy systemd unit.
-# NOTE: applied to the systemd cgroup that wraps the podman process. With
-# Quadlet's `--cgroups=split` the container gets its own sub-cgroup; these
-# limits cap the parent so the WHOLE service envelope stays bounded.
+# Resource limits — applied to the systemd cgroup wrapping the podman
+# process. With --cgroups=split the container gets its own sub-cgroup;
+# these cap the whole service envelope.
 MemoryMax=1536M
 CPUQuota=200%
 
-# DO NOT add `NoNewPrivileges=true` here. On Fedora 43 + podman 5.x +
-# Quadlet, NNP combined with `--cgroups=split` blocks podman's runtime
-# init lock acquisition (`/run/libpod/alive.lck` returns EACCES even
-# though the unit runs as root). The container-level hardening that
-# matters is set INSIDE [Container] (DropCapability=, ReadOnly=,
-# SecurityLabel=*) which Quadlet translates to podman flags directly.
-# Re-enable only after proving it works on a current Fedora image.
+# DO NOT add `NoNewPrivileges=true`. NNP + Quadlet `--cgroups=split` on
+# Fedora 44 + podman 5.x blocks /run/libpod/alive.lck acquisition.
+# Container-side hardening goes in [Container] (Quadlet translates to
+# podman flags directly).
 
 [Install]
 WantedBy=multi-user.target default.target

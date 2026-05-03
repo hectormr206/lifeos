@@ -2,9 +2,19 @@
 
 The Rust daemon (Axi orchestrator) containerized. **The most complex of the CPU-only services** because it owns the encrypted SQLite memory + sqlite-vec embeddings store and several bind mounts.
 
-## Status
+## Status — DEFERRED (intentional)
 
-**Scaffold — NOT yet active.** Same posture as `lifeos-tts/` and `lifeos-llama-embeddings/`.
+**Scaffold — NOT yet active.** Unlike `lifeos-tts/` and `lifeos-llama-embeddings/` which shipped in Phases 1 + 2 + 6, this Quadlet stays unflipped pending the desktop companion split-out.
+
+`lifeosd` runs canonically as a USER service (`systemctl --user`) so it inherits the Wayland session, D-Bus user bus, PipeWire socket, and gnome-keyring secrets. A system-level Quadlet — even `Network=host` — is NOT the user's session and polkit / dbus-broker reject system principals for user-bus operations. Containerizing breaks the GTK4 tray, screen capture, wake-word PipeWire input, and any portal-mediated feature.
+
+Three pieces have to land before this Quadlet activates:
+
+1. Build a **`lifeosd-desktop`** companion binary, user-scope, that owns the tray + screen capture + wake-word loop. Talks to the containerized core via the existing HTTP API on `127.0.0.1:8081`.
+2. Migrate state from `~/.local/share/lifeos/` to `/var/lib/lifeos/` (per-user → per-machine).
+3. Split the Cargo workspace into `daemon-core/` (containerized features) and `daemon-desktop/` (host features). Both compile in CI.
+
+A follow-up PRD will sequence those. The scaffold below is structurally correct for when the work lands but does NOT get COPYed into `/etc/containers/systemd/` in the bootc image yet.
 
 ## Scope split — Phase 3a vs Phase 3b
 

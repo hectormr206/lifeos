@@ -9,7 +9,7 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/lifeos-stt-setup.sh
 ExecStop=/usr/bin/true
-TimeoutStartSec=60
+TimeoutStartSec=600
 
 # Logging
 StandardOutput=journal

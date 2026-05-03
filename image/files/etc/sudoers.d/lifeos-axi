@@ -280,7 +280,7 @@ Cmnd_Alias LIFEOS_PROTECTED_FS = \
 #     directory).
 #   - systemctl restart / mask / unmask is restricted to lifeos-*.service —
 #     the prefix excludes legacy host services that ship without that prefix
-#     (lifeos-tts-server, lifeos-image-guardian still match because they DO
+#     (lifeos-tts, lifeos-image-guardian still match because they DO
 #     start with `lifeos-`; this is intentional, those are LifeOS-managed).
 #   - systemctl reboot is included so post-staging deploys don't need
 #     interactive auth either. Capa 2 LIFEOS_PROTECTED_SYSTEMD_DESTRUCTIVE

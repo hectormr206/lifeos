@@ -1,0 +1,18 @@
+# .dockerignore at repo root — limits the build context podman/buildkit
+# uploads when a workflow or local build uses `context: .` (currently
+# lifeos-tts and lifeos-lifeosd side images do this).
+target/
+**/target/
+.git/
+.github/runner/
+evidence/
+docs/
+node_modules/
+**/node_modules/
+dashboard/dist/
+*.tar
+*.tar.zst
+*.tar.gz
+*.iso
+*.qcow2
+*.img
