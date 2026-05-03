@@ -60,6 +60,15 @@ Exec=/usr/sbin/llama-server \
 # Quadlet requires ExecStartPre in [Service], not [Container].
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
 
+# Bootstrap the GGUF model + write LIFEOS_EMBED_MODEL into the env file.
+# The legacy host service ran this as ExecCondition; folding it here lets
+# us flip cleanly without keeping the legacy unit around. The script
+# returns 0 on ready, 1-254 on clean skip (Capa 5: model missing AND
+# auto-manage off → exit 1, systemd treats as success and the container
+# never starts → MemoryPlaneManager falls back to hash embedding without
+# polluting the journal).
+ExecStartPre=/usr/local/bin/lifeos-embeddings-setup.sh
+
 EnvironmentFile=-/etc/lifeos/llama-embeddings.env
 
 # Capa 3 of defense-in-depth — auto-restart with sane backoff. Embeddings
@@ -74,7 +83,10 @@ TimeoutStartSec=60s
 MemoryMax=1280M
 CPUQuota=200%
 
-NoNewPrivileges=true
+# DO NOT add `NoNewPrivileges=true` here — same Fedora podman --cgroups=split
+# interaction that broke TTS on first reboot. The Quadlet generator already
+# applies container-side isolation; NNP at the [Service] layer is redundant
+# and breaks runtime init lock acquisition.
 
 [Install]
 WantedBy=multi-user.target default.target
