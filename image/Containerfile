@@ -725,7 +725,9 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /va
     chmod 0775 /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos && \
     chgrp wheel /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos
 
-COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
+# Phase 6b: whisper /out/models/whisper is intentionally empty (only the
+# binaries copy at lines above ship in bootc now). lifeos-stt-setup.sh
+# fetches the GGML weights at first boot.
 COPY --from=wespeaker-builder /out/models/wespeaker /usr/share/lifeos/models/wespeaker
 
 # --- Kokoro TTS runtime: env file only ---
@@ -1450,8 +1452,6 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /etc/lifeos/design-tokens.json || fail "/etc/lifeos/design-tokens.json"; \
     ls /usr/lib/udev/rules.d/*-steam*.rules >/dev/null 2>&1 || fail "steam udev rules"; \
     test -f /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml || fail "60-lifeos-split-lock-detect.toml"; \
-    test -f /usr/share/lifeos/models/whisper/ggml-base.bin || fail "whisper/ggml-base.bin"; \
-    test -f /usr/share/lifeos/models/whisper/ggml-tiny.bin || fail "whisper/ggml-tiny.bin"; \
     test -f /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx || fail "wespeaker/voxceleb_resnet34_LM.onnx"; \
     test -f /usr/share/lifeos/models/rustpotter/axi.rpw || fail "rustpotter/axi.rpw"; \
     test -d /usr/share/backgrounds/lifeos || fail "/usr/share/backgrounds/lifeos"; \

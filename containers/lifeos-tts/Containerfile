@@ -62,7 +62,7 @@ RUN /opt/lifeos/kokoro-env/bin/pip install --upgrade pip && \
 # Pre-warm: download voice .pt weights into HF_HOME (bakes ~200-500 MB of
 # model files into the image so the runtime container has zero network
 # dependency). Same script the bootc image used.
-COPY prewarm-kokoro.py /build/prewarm-kokoro.py
+COPY containers/lifeos-tts/prewarm-kokoro.py /build/prewarm-kokoro.py
 ENV HF_HOME=/opt/lifeos/kokoro-env/hf-cache
 RUN HF_HUB_OFFLINE=0 \
     /opt/lifeos/kokoro-env/bin/python3 /build/prewarm-kokoro.py
@@ -74,7 +74,7 @@ RUN find /opt/lifeos/kokoro-env -name 'if_sara*' | grep -q '.' || \
 # Generate voices-manifest.json — the runtime script reads this from
 # /opt/lifeos/kokoro-env/voices-manifest.json to populate the /voices
 # endpoint and validate /tts voice= parameters.
-COPY build-kokoro-manifest.py /build/build-kokoro-manifest.py
+COPY containers/lifeos-tts/build-kokoro-manifest.py /build/build-kokoro-manifest.py
 RUN LIFEOS_TTS_DEFAULT_VOICE=if_sara \
     /opt/lifeos/kokoro-env/bin/python3 /build/build-kokoro-manifest.py \
         --venv-dir /opt/lifeos/kokoro-env \
@@ -118,7 +118,7 @@ COPY --from=builder /opt/lifeos/kokoro-env /opt/lifeos/kokoro-env
 # the host). Iterating on the script now requires a container rebuild —
 # acceptable trade for removing /usr/local/bin/lifeos-tts-server.py from
 # the bootc image.
-COPY lifeos-tts-server.py /usr/local/bin/lifeos-tts-server.py
+COPY containers/lifeos-tts/lifeos-tts-server.py /usr/local/bin/lifeos-tts-server.py
 RUN chmod +x /usr/local/bin/lifeos-tts-server.py
 
 RUN useradd --system --uid 65532 --no-create-home --shell /usr/sbin/nologin lifeos-tts

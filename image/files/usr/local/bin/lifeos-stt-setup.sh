@@ -61,13 +61,20 @@ if [ ! -f "$DEST" ]; then
                 echo "[lifeos-stt-setup] downloaded: $DEST"
             else
                 rm -f "$TMP"
-                echo "[lifeos-stt-setup] download failed — service will skip"
-                exit 1
+                echo "[lifeos-stt-setup] download failed — STT will be unavailable until network recovers and the service re-runs."
+                # Exit 0 so the oneshot ExecStart unit doesn't park in the
+                # `failed` state on first-boot timeouts. lifeosd's STT path
+                # checks for the model file at runtime and gracefully
+                # falls back to no-transcription when absent.
+                exit 0
             fi
             ;;
         *)
-            echo "[lifeos-stt-setup] LIFEOS_AI_AUTO_MANAGE_MODELS=$AUTO_MANAGE_MODELS — skipping download"
-            exit 1
+            echo "[lifeos-stt-setup] LIFEOS_AI_AUTO_MANAGE_MODELS=$AUTO_MANAGE_MODELS — STT model not present and auto-download is opt-in. Set the env var or drop ggml-base.bin into $MODEL_DIR/ manually."
+            # Exit 0 so the oneshot ExecStart unit reports success and
+            # doesn't appear in `systemctl --failed`. The user is opted out
+            # of STT model management; this is the documented behaviour.
+            exit 0
             ;;
     esac
 fi
@@ -81,8 +88,7 @@ fi
 if [ -f "$DEST" ]; then
     echo "stt model ready: $DEST"
 else
-    echo "WARNING: default STT model not found at $DEST"
-    exit 1
+    echo "WARNING: default STT model not found at $DEST — STT calls will fall back gracefully"
 fi
 
 exit 0
