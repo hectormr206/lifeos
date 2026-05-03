@@ -61,13 +61,14 @@ Exec=/usr/sbin/llama-server \
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
 
 # Bootstrap the GGUF model + write LIFEOS_EMBED_MODEL into the env file.
-# The legacy host service ran this as ExecCondition; folding it here lets
-# us flip cleanly without keeping the legacy unit around. The script
-# returns 0 on ready, 1-254 on clean skip (Capa 5: model missing AND
-# auto-manage off → exit 1, systemd treats as success and the container
-# never starts → MemoryPlaneManager falls back to hash embedding without
-# polluting the journal).
-ExecStartPre=/usr/local/bin/lifeos-embeddings-setup.sh
+# Leading-dash (`-`) makes systemd ignore non-zero exits from this step.
+# The legacy host service used `ExecCondition=`, which has the semantic
+# that exit 1-254 is a CLEAN SKIP. Quadlet only allows ExecStartPre, so
+# we replicate the skip-on-non-zero behavior with the dash prefix —
+# essential for the model-missing + LIFEOS_AI_AUTO_MANAGE_MODELS=false
+# path (script exits 1; without the dash the unit would crash-loop).
+# Script contract: 0 = ready, 1-254 = clean skip, 255 = hard fail.
+ExecStartPre=-/usr/local/bin/lifeos-embeddings-setup.sh
 
 EnvironmentFile=-/etc/lifeos/llama-embeddings.env
 

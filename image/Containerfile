@@ -1499,6 +1499,10 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /usr/lib/systemd/system/lifeos-image-guardian.service || fail "lifeos-image-guardian.service"; \
     test -L /usr/lib/systemd/system/multi-user.target.wants/lifeos-image-guardian.service || fail "guardian wants symlink"; \
     test -f /etc/containers/systemd/lifeos-tts.container || fail "lifeos-tts.container"; \
+    test -f /etc/containers/systemd/lifeos-llama-embeddings.container || fail "lifeos-llama-embeddings.container"; \
+    test -f /etc/containers/systemd/lifeos-simplex-bridge.container || fail "lifeos-simplex-bridge.container"; \
+    test -x /usr/local/bin/lifeos-embeddings-setup.sh || fail "/usr/local/bin/lifeos-embeddings-setup.sh"; \
+    test -x /usr/local/bin/lifeos-simplex-setup.sh || fail "/usr/local/bin/lifeos-simplex-setup.sh"; \
     test -d /opt/lifeos/kokoro-env        || fail "/opt/lifeos/kokoro-env"; \
     test -f /opt/lifeos/kokoro-env/voices-manifest.json || fail "kokoro voices-manifest.json"; \
     test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
