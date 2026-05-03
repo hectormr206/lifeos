@@ -80,6 +80,16 @@ Volume=/opt/lifeos/kokoro-env/voices-manifest.json:/opt/lifeos/kokoro-env/voices
 # `:z` shares the label across consumers — safe for read-only configs.
 Volume=/etc/lifeos/tts-server.env:/etc/lifeos/tts-server.env:ro,z
 
+# HuggingFace cache from the host venv. Without this bind, the container's
+# /opt/lifeos/kokoro-env/hf-cache is empty (the side image only carries the
+# Python venv + libraries, not the multi-GB voice/model weights). On first
+# /tts call Kokoro tries to fetch from HF Hub, hits HF_HUB_OFFLINE=1, and
+# the service crashes with `LocalEntryNotFoundError`. The host bake
+# pre-populates this dir at image build time so a runtime bind-mount is the
+# correct surface. NO `:z` — /opt is on the read-only bootc layer (same
+# rationale as the voices-manifest.json mount above).
+Volume=/opt/lifeos/kokoro-env/hf-cache:/opt/lifeos/kokoro-env/hf-cache:ro
+
 # Pass /etc/lifeos/tts-server.env CONTENTS into the container's process
 # env via podman --env-file. Without this, the Python script's os.environ
 # lookups (PHONEMIZER_ESPEAK_LIBRARY, HF_HOME, HF_HUB_OFFLINE,

@@ -272,6 +272,28 @@ Cmnd_Alias LIFEOS_PROTECTED_FS = \
 #     the %wheel rule no longer matches and the denylist would silently
 #     disengage. The explicit `lifeos` rule keeps Capa 2 active regardless
 #     of group membership.
+# === QUADLET HOT-FIX OPS (assistant automation lane) ===
+# Lets the assistant apply per-service hot-fixes without prompting for
+# Hector's password while he's away. Scoped tightly:
+#   - sed -i is restricted to *.container files under /etc/containers/systemd
+#     (does NOT match arbitrary /etc paths or anything outside the Quadlet
+#     directory).
+#   - systemctl restart / mask / unmask is restricted to lifeos-*.service —
+#     the prefix excludes legacy host services that ship without that prefix
+#     (lifeos-tts-server, lifeos-image-guardian still match because they DO
+#     start with `lifeos-`; this is intentional, those are LifeOS-managed).
+#   - systemctl reboot is included so post-staging deploys don't need
+#     interactive auth either. Capa 2 LIFEOS_PROTECTED_SYSTEMD_DESTRUCTIVE
+#     still blocks `systemctl stop lifeos-*` (final two `!` rules below).
+Cmnd_Alias LIFEOS_QUADLET_OPS = \
+    /usr/bin/sed -i * /etc/containers/systemd/*.container, \
+    /usr/bin/systemctl daemon-reload, \
+    /usr/bin/systemctl restart lifeos-*.service, \
+    /usr/bin/systemctl mask lifeos-*.service, \
+    /usr/bin/systemctl unmask lifeos-*.service, \
+    /usr/bin/systemctl reboot
+lifeos ALL=(root) NOPASSWD: LIFEOS_QUADLET_OPS
+
 %wheel ALL=(ALL) !LIFEOS_PROTECTED_PODMAN_DESTRUCTIVE
 %wheel ALL=(ALL) !LIFEOS_PROTECTED_SYSTEMD_DESTRUCTIVE
 %wheel ALL=(ALL) !LIFEOS_PROTECTED_FS
