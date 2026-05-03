@@ -206,6 +206,20 @@ not the primary runtime model.
 
 When bumping these in `image/Containerfile`, also update this table and the canonical upgrade checklist.
 
+### Quadlet flip status
+
+Per `docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md`. Each row reflects whether the service runs as a podman Quadlet (image pulled from GHCR) or as a host systemd service.
+
+| Service | Mode | Generated unit |
+|---|---|---|
+| Kokoro TTS | Quadlet | `lifeos-tts.service` (Phase 1) |
+| nomic embeddings | Quadlet | `lifeos-llama-embeddings.service` (Phase 2) |
+| SimpleX bot | Quadlet | `lifeos-simplex-bridge.service` (Phase 5) |
+| llama-server (chat) | host | `llama-server.service` (Phase 4 BLOCKED on nvidia-container-toolkit) |
+| lifeosd (daemon) | host | `lifeosd.service` (Phase 3 deferred — UID/UserNS work) |
+
+Legacy host service files for the flipped services (Kokoro, embeddings, SimpleX) stay installed in `/usr/lib/systemd/system/` as manual rollback targets but are no longer wired into `multi-user.target.wants/`.
+
 ### Memory plane SQLite tuning
 
 Every connection opened by `MemoryPlaneManager::open_db` enables WAL +
