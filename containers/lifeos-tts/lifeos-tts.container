@@ -27,16 +27,19 @@ HostName=lifeos-tts
 # binds 127.0.0.1:8084 in the host netns; lifeosd reaches it unchanged.
 Network=host
 
-# Only host bind-mount left: env file. All Kokoro state (venv, manifest,
-# HF cache, server script) ships INSIDE the container image as of Phase 6.
-# `:z` (shared label) — safe for read-only configs read by both the
-# Quadlet container and the legacy rollback path.
-Volume=/etc/lifeos/tts-server.env:/etc/lifeos/tts-server.env:ro,z
-
-# Propagate env file CONTENTS into the container's process env (the script
-# reads via os.environ). [Service] EnvironmentFile= only loads vars into
-# systemd's exec env for ExecStart= substitution; podman doesn't inherit
-# without this [Container]-side EnvironmentFile.
+# Only surface left: the env file. Phase 6 makes everything else
+# (venv, voice models, manifest, server script) live INSIDE the
+# container image.
+#
+# We use Quadlet's [Container] EnvironmentFile= which translates to
+# `podman --env-file=/etc/lifeos/tts-server.env`, propagating the
+# file's vars into the container process env. The script reads via
+# os.environ, never opens the path inside the container — so a
+# Volume= bind of the same file would be redundant AND would trigger
+# an SELinux `:z` relabel of /etc/lifeos/tts-server.env to
+# container_file_t (host services that read the same file would
+# then get an unexpected MCS label). Single source of truth: this
+# EnvironmentFile= line.
 EnvironmentFile=/etc/lifeos/tts-server.env
 
 [Service]

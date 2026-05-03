@@ -18,7 +18,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SERVER_SCRIPT="${REPO_ROOT}/image/files/usr/local/bin/lifeos-tts-server.py"
+# Phase 6 moved the script + venv into the lifeos-tts side container image.
+# This shell test still runs the script directly when the venv is available
+# (developer-machine inner-loop test). On a deployed laptop the venv is
+# inside the Quadlet container, not on the host, so set
+# LIFEOS_TTS_SERVER_URL to a running endpoint and the start_server step
+# is skipped.
+SERVER_SCRIPT="${REPO_ROOT}/containers/lifeos-tts/lifeos-tts-server.py"
 SERVER_URL="${LIFEOS_TTS_SERVER_URL:-http://127.0.0.1:8084}"
 VENV_PYTHON="${LIFEOS_TTS_VENV_PYTHON:-/opt/lifeos/kokoro-env/bin/python3}"
 WAIT_TIMEOUT=60   # seconds to wait for /health to become 200

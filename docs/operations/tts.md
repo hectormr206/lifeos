@@ -15,9 +15,9 @@ HTTP API on `127.0.0.1:8084` via `Network=host` — clients (lifeosd) keep
 working unchanged. This is Phase 1 of the architecture pivot
 (`docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md`).
 
-The legacy `lifeos-tts-server.service` is still installed in
+The legacy `lifeos-tts.service` is still installed in
 `/usr/lib/systemd/system/` as a manual rollback target (no longer wired
-into `multi-user.target.wants/`). Run `systemctl start lifeos-tts-server.service`
+into `multi-user.target.wants/`). Run `systemctl start lifeos-tts.service`
 after `systemctl stop lifeos-tts.service` if the containerized path
 ever needs to be bypassed for an incident.
 
@@ -44,12 +44,12 @@ naturalness noticeably.
 
 ### Required environment
 
-`lifeos-tts-server.service` needs `PHONEMIZER_ESPEAK_LIBRARY=/usr/lib64/libespeak-ng.so.1`
+`lifeos-tts.service` needs `PHONEMIZER_ESPEAK_LIBRARY=/usr/lib64/libespeak-ng.so.1`
 to point the `phonemizer` Python library at the Fedora-shipped `libespeak-ng`.
 Without it, phonemizer fails silently and Kokoro falls back to grapheme-level
 tokens — every voice sounds robotic regardless of selection. The variable is
 set both in `/etc/lifeos/tts-server.env` and as a hard-coded `os.environ.setdefault`
-inside `lifeos-tts-server.py` for defense in depth.
+inside `lifeos-tts.py` for defense in depth.
 
 `lifeosd` itself reads `LIFEOS_TTS_SERVER_URL` (defaulted to `http://127.0.0.1:8084`
 in the `00-tts.conf` drop-in for the user-scope service) and falls back to
@@ -65,7 +65,7 @@ variable is unset.
 
 ```
                                   ┌──────────────────────┐
-                                  │  lifeos-tts-server   │
+                                  │  lifeos-tts   │
   lifeosd ──POST /tts────────────►│  (Kokoro-82M, :8084) │──► pw-play / aplay
           ◄── audio/wav ──────────│  127.0.0.1 only      │    (host speakers)
                                   └──────────────────────┘
@@ -95,23 +95,23 @@ variable is unset.
 ### Check status
 
 ```bash
-systemctl status lifeos-tts-server
+systemctl status lifeos-tts
 ```
 
 ### View logs
 
 ```bash
-journalctl -u lifeos-tts-server -f
-journalctl -u lifeos-tts-server --since "10 minutes ago"
+journalctl -u lifeos-tts -f
+journalctl -u lifeos-tts --since "10 minutes ago"
 ```
 
 ### Start / stop / restart
 
 ```bash
 # These require appropriate polkit / sudo permissions:
-systemctl start lifeos-tts-server
-systemctl stop lifeos-tts-server
-systemctl restart lifeos-tts-server
+systemctl start lifeos-tts
+systemctl stop lifeos-tts
+systemctl restart lifeos-tts
 ```
 
 ### Health check
@@ -326,8 +326,8 @@ de voces se mantienen estables:
 1. Check the service status and logs:
 
 ```bash
-systemctl status lifeos-tts-server
-journalctl -u lifeos-tts-server -n 50
+systemctl status lifeos-tts
+journalctl -u lifeos-tts -n 50
 ```
 
 2. Verify the Python venv exists:
@@ -393,8 +393,8 @@ on memory, the service may be OOM-killed and restarted by systemd.
 To check:
 
 ```bash
-systemctl status lifeos-tts-server | grep Memory
-journalctl -u lifeos-tts-server | grep -i "oom\|killed\|memory"
+systemctl status lifeos-tts | grep Memory
+journalctl -u lifeos-tts | grep -i "oom\|killed\|memory"
 ```
 
 If the service is being killed repeatedly, consider closing other memory-intensive

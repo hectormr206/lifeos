@@ -62,7 +62,12 @@ jobs:
       matrix:
         include:
           - name: lifeos-tts
-            context: containers/lifeos-tts
+            # Context is repo root because Phase 6 bakes vendored
+            # build-assets/wheels/ (torch 2.4.1+cpu) into the side image
+            # build — same wheel dir the legacy bootc kokoro-builder
+            # used. The Containerfile's COPY build-assets/wheels/
+            # only resolves with repo root as context.
+            context: .
             dockerfile: containers/lifeos-tts/Containerfile
             extra: ''
           - name: lifeos-llama-embeddings

@@ -36,14 +36,22 @@ RUN apt-get update && \
 
 RUN python3 -m venv /opt/lifeos/kokoro-env
 
+# Vendored wheels for torch — same approach the old bootc kokoro-builder
+# used. If build-assets/wheels/ is empty (local builds without git LFS
+# pulls), pip falls through to https://download.pytorch.org/whl/cpu.
+# CI runs from a checkout that should have the wheels populated.
+COPY build-assets/wheels/ /build-assets/wheels/
+
 # All Python deps pinned to match what the bootc image used to ship —
 # preserves identical synthesis behaviour pre/post Phase 6 flip.
 # torch 2.4.1 + numpy 1.26.x ABI compat (numpy 2.x breaks torch 2.4).
 RUN /opt/lifeos/kokoro-env/bin/pip install --upgrade pip && \
     /opt/lifeos/kokoro-env/bin/pip install --no-cache-dir \
+        --find-links /build-assets/wheels/ \
         "torch==2.4.1+cpu" \
         --index-url https://download.pytorch.org/whl/cpu && \
     /opt/lifeos/kokoro-env/bin/pip install --no-cache-dir \
+        --find-links /build-assets/wheels/ \
         "kokoro==0.9.4" \
         "aiohttp==3.13.5" \
         "soundfile==0.13.1" \

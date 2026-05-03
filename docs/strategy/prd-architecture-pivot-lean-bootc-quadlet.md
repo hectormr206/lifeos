@@ -24,7 +24,7 @@ Hoy, todo lo que es LifeOS — desde el kernel hasta el TTS de Kokoro — vive d
 ### Por qué AHORA es el momento
 
 1. **Pain point validado por experiencia real:** sesión del 2026-04-28/29 documenta múltiples ciclos build → deploy → "se rompió otra cosa", incluyendo el bug de silent forgetting que tomó 3 PRs y un día completo de troubleshooting porque sólo se reproducía en imagen instalada.
-2. **Arquitectura lista para migrar:** los servicios ya hablan por **HTTP REST localhost** (lifeosd ↔ llama-server :8082, llama-embeddings :8083, lifeos-tts-server :8084, simplex-chat :5226). **Cero cambios de código** para containerizar — sólo empaquetar.
+2. **Arquitectura lista para migrar:** los servicios ya hablan por **HTTP REST localhost** (lifeosd ↔ llama-server :8082, llama-embeddings :8083, lifeos-tts :8084, simplex-chat :5226). **Cero cambios de código** para containerizar — sólo empaquetar.
 3. **Modelos ya están fuera de la imagen:** los GGUF de inferencia (~13GB) viven en `/var/lib/lifeos/models/`, no en `/usr/`. La imagen bootc actualmente es ~14GB principalmente por dependencias del sistema, no por payload de IA.
 4. **El stack VPS-builder + WG deploy ya armado:** el self-hosted runner en VPS y los scripts `vps-prepare-laptop-update.sh` / `vps-deploy-to-laptop.sh` permiten iterar containers individuales sin reconstruir la imagen completa.
 
