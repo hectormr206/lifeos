@@ -1,89 +1,95 @@
-# lifeos-tts — Kokoro TTS server (CPU-only)
+# lifeos-tts — Kokoro TTS server (CPU-only, fully self-contained)
 #
-# Phase 1 of the architecture pivot — first service to be containerized.
+# Phase 6 of the architecture pivot — Kokoro Python venv + voice models +
+# manifest + server script all live INSIDE this image now. The bootc base
+# no longer ships /opt/lifeos/kokoro-env (~850 MB removed from bootc).
 # PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md
 #
-# Why TTS is the test bed for Phase 1:
-#   - Pure CPU (no GPU passthrough, no CDI, no Vulkan dance)
-#   - Stateless (Kokoro voice models baked in the Python venv, no bind mount
-#     to /var/lib/lifeos needed)
-#   - Loosely coupled (clients reach :8084 over HTTP, no IPC, no shared FDs)
-#   - If anything breaks, only TTS is affected — Axi keeps working
+# Runtime contract:
+#   - HTTP API on 127.0.0.1:8084 via Network=host in the Quadlet.
+#   - HF_HUB_OFFLINE=1 — model weights are pre-warmed at build time. No
+#     runtime network access required.
+#   - voices-manifest.json shipped INSIDE the image at the same path the
+#     script expects (/opt/lifeos/kokoro-env/voices-manifest.json).
+#   - Server script baked at /usr/local/bin/lifeos-tts-server.py.
 #
 # Build:
 #   podman build -t 10.66.66.1:5001/lifeos-tts:dev \
 #     -f containers/lifeos-tts/Containerfile \
 #     containers/lifeos-tts/
-#
-# Test inner-loop:
-#   See docs/contributor/quadlet-dev-workflow.md for the full edit → push :dev →
-#   laptop test → promote :stable workflow.
-#
-# Promote to production:
-#   podman tag 10.66.66.1:5001/lifeos-tts:dev ghcr.io/hectormr206/lifeos-tts:stable
-#   podman push ghcr.io/hectormr206/lifeos-tts:stable
 
 # ---------------------------------------------------------------------------
 # Stage 1 — builder
 # ---------------------------------------------------------------------------
-# Heavy Python build deps (torch ~750 MB) + Kokoro install. Kept separate so
-# the runtime image doesn't ship gcc, headers, or pip cache.
+# Heavy: torch + kokoro + pre-warm + manifest gen. Kept separate so the
+# runtime image doesn't ship gcc, headers, or pip cache.
 FROM python:3.12-slim AS builder
 
-# Build deps for native wheels (torch, sentencepiece, etc.) and ca-certs for
-# pip download. Cleaned in the same RUN so the layer doesn't carry them.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         build-essential \
         git \
+        libsndfile1 \
         && \
     rm -rf /var/lib/apt/lists/*
 
-# Build the venv at the same path the existing systemd unit uses
-# (/opt/lifeos/kokoro-env). Keeping the path identical means the lifeos-tts-server.py
-# script needs zero changes when migrating from systemd-host to containerized.
 RUN python3 -m venv /opt/lifeos/kokoro-env
 
-# Pin to the same Kokoro version the host service uses to avoid behavior drift
-# during the migration. Bump explicitly when validating a new version.
+# All Python deps pinned to match what the bootc image used to ship —
+# preserves identical synthesis behaviour pre/post Phase 6 flip.
+# torch 2.4.1 + numpy 1.26.x ABI compat (numpy 2.x breaks torch 2.4).
 RUN /opt/lifeos/kokoro-env/bin/pip install --upgrade pip && \
     /opt/lifeos/kokoro-env/bin/pip install --no-cache-dir \
-        torch==2.6.0 \
-        torchaudio==2.6.0 \
+        "torch==2.4.1+cpu" \
         --index-url https://download.pytorch.org/whl/cpu && \
     /opt/lifeos/kokoro-env/bin/pip install --no-cache-dir \
-        aiohttp \
-        soundfile \
-        numpy \
         "kokoro==0.9.4" \
+        "aiohttp==3.13.5" \
+        "soundfile==0.13.1" \
+        "numpy==1.26.4" \
         "misaki[en]" \
         "misaki[es]"
 
-# Sanity check: import kokoro inside the venv. If this fails the build fails
-# fast — better than discovering the breakage at container start time.
+# Pre-warm: download voice .pt weights into HF_HOME (bakes ~200-500 MB of
+# model files into the image so the runtime container has zero network
+# dependency). Same script the bootc image used.
+COPY prewarm-kokoro.py /build/prewarm-kokoro.py
+ENV HF_HOME=/opt/lifeos/kokoro-env/hf-cache
+RUN HF_HUB_OFFLINE=0 \
+    /opt/lifeos/kokoro-env/bin/python3 /build/prewarm-kokoro.py
+
+# Verify default voice artifact exists post-prewarm.
+RUN find /opt/lifeos/kokoro-env -name 'if_sara*' | grep -q '.' || \
+    (echo 'ERROR: if_sara voice artifact not found after pre-warm' && exit 1)
+
+# Generate voices-manifest.json — the runtime script reads this from
+# /opt/lifeos/kokoro-env/voices-manifest.json to populate the /voices
+# endpoint and validate /tts voice= parameters.
+COPY build-kokoro-manifest.py /build/build-kokoro-manifest.py
+RUN LIFEOS_TTS_DEFAULT_VOICE=if_sara \
+    /opt/lifeos/kokoro-env/bin/python3 /build/build-kokoro-manifest.py \
+        --venv-dir /opt/lifeos/kokoro-env \
+        --output /opt/lifeos/kokoro-env/voices-manifest.json && \
+    test -s /opt/lifeos/kokoro-env/voices-manifest.json
+
+# Strip build artefacts.
+RUN find /opt/lifeos/kokoro-env -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/lifeos/kokoro-env -name '*.pyc' -delete 2>/dev/null || true && \
+    find /opt/lifeos/kokoro-env -path '*/tests/*.py' -not -name '__init__.py' -delete 2>/dev/null || true
+
 RUN /opt/lifeos/kokoro-env/bin/python3 -c \
     "from kokoro import KPipeline; print('kokoro import OK')"
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime
 # ---------------------------------------------------------------------------
-# Slim base + only the libs needed at runtime. No build tools, no headers.
 FROM python:3.12-slim AS runtime
 
-# Minimal runtime deps:
-#   - libsndfile1: needed by soundfile python package for OGG/WAV writing
-#   - libespeak-ng1 + espeak-ng-data: REQUIRED by Kokoro phonemizer; without
-#     this Kokoro crashes on the first synthesis call. The host script sets
-#     PHONEMIZER_ESPEAK_LIBRARY=/usr/lib64/libespeak-ng.so.1 (Fedora path);
-#     we symlink Debian's `/usr/lib/x86_64-linux-gnu/` location to the same
-#     `/usr/lib64` path so the script env var works unchanged.
-#   - ca-certificates: HTTPS verification (defensive — Kokoro should run
-#     fully offline with HF_HUB_OFFLINE=1, but TLS libs save grief if any
-#     dep tries to network)
-#   - ffmpeg: lifeos-tts-server.py uses it as the OGG encoding fallback
-#     subprocess (also primary on environments where libsndfile lacks codec)
-#   - tini: PID 1 for clean SIGTERM forwarding to the Python process
+#   - libsndfile1: soundfile package for OGG/WAV writing
+#   - libespeak-ng1 + espeak-ng-data: REQUIRED by Kokoro phonemizer
+#   - ffmpeg: OGG encoding fallback used by lifeos-tts-server.py
+#   - tini: PID 1 for SIGTERM forwarding
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -97,31 +103,25 @@ RUN apt-get update && \
     mkdir -p /usr/lib64 && \
     ln -sf /usr/lib/x86_64-linux-gnu/libespeak-ng.so.1 /usr/lib64/libespeak-ng.so.1
 
-# Bring the prebuilt venv from the builder. This is the bulk of the image
-# (~850 MB — torch dominates). Nothing else is copied — the script itself
-# is bind-mounted from the host (see Quadlet) so iteration on the script
-# doesn't require a container rebuild.
+# Venv + pre-warmed HF cache + manifest, all baked.
 COPY --from=builder /opt/lifeos/kokoro-env /opt/lifeos/kokoro-env
 
-# The Quadlet bind-mounts the live host script at /usr/local/bin/lifeos-tts-server.py
-# (read-only). This means: edit the .py on the host → restart the container →
-# reload, no rebuild needed. The image stays stable even when the script changes.
+# Server script baked into the image (Phase 6: no longer bind-mounted from
+# the host). Iterating on the script now requires a container rebuild —
+# acceptable trade for removing /usr/local/bin/lifeos-tts-server.py from
+# the bootc image.
+COPY lifeos-tts-server.py /usr/local/bin/lifeos-tts-server.py
+RUN chmod +x /usr/local/bin/lifeos-tts-server.py
 
-# Run as a non-root user inside the container. systemd's DynamicUser= on the
-# host service achieved the same; we replicate the isolation here.
 RUN useradd --system --uid 65532 --no-create-home --shell /usr/sbin/nologin lifeos-tts
 USER 65532
 
 EXPOSE 8084
 
-# tini reaps zombies and forwards signals correctly — important because
-# kokoro spawns subprocesses for audio synthesis. Without tini, SIGTERM from
-# systemd doesn't reach those children cleanly.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/opt/lifeos/kokoro-env/bin/python3", "/usr/local/bin/lifeos-tts-server.py"]
 
-# Image labels for traceability + cosign verification matching.
 LABEL org.opencontainers.image.title="lifeos-tts"
-LABEL org.opencontainers.image.description="Kokoro TTS server for LifeOS — CPU-only, stateless"
+LABEL org.opencontainers.image.description="Kokoro TTS server for LifeOS — CPU-only, fully self-contained"
 LABEL org.opencontainers.image.source="https://github.com/hectormr206/lifeos"
 LABEL org.opencontainers.image.licenses="Apache-2.0"

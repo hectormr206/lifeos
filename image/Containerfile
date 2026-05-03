@@ -217,76 +217,11 @@ RUN set -eux && \
     test -s /out/models/wespeaker/voxceleb_resnet34_LM.onnx && \
     echo ">>> WeSpeaker ONNX model downloaded ($(du -sh /out/models/wespeaker/voxceleb_resnet34_LM.onnx | cut -f1))"
 
-# ============================================================================
-# Stage 5: Build Kokoro TTS Python environment (CPU-only)
-# ============================================================================
-# Uses python:3.12-slim as base (Debian) for a smaller pip-install surface.
-# The resulting /opt/lifeos/kokoro-env venv is copied into the final image.
-# Torch wheel is sourced from vendored build-assets/wheels/ so this stage
-# never requires network access to download.pytorch.org at build time.
-# Approximate size: ~850 MB (torch ~750 MB + kokoro + deps ~100 MB).
-FROM python:3.12-slim AS kokoro-builder
-
-# Install system deps needed for pip build steps + ffmpeg (for OGG encoding)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libsndfile1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create venv
-RUN python3 -m venv /opt/lifeos/kokoro-env
-
-# Copy vendored wheel directory (torch ~180 MB, pre-downloaded for offline builds)
-# If the wheel is absent, pip falls back to https://download.pytorch.org/whl/cpu
-# during the build — CI should always have the vendored wheel.
-COPY build-assets/wheels/ /build-assets/wheels/
-
-# Install Python dependencies with pip cache mount for layer efficiency.
-# All versions pinned for reproducible builds (was floating, see audit 2026-04-24).
-# torch: CPU-only variant from vendored wheel or PyTorch whl index.
-# kokoro 0.9.4: latest as of 2026-04-24, no v2 announced.
-# numpy<2.0: pinned to 1.x because torch 2.4.1 was not built against numpy 2.x ABI.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    /opt/lifeos/kokoro-env/bin/pip install --upgrade pip && \
-    /opt/lifeos/kokoro-env/bin/pip install \
-        --find-links /build-assets/wheels/ \
-        "torch==2.4.1+cpu" \
-        --index-url https://download.pytorch.org/whl/cpu && \
-    /opt/lifeos/kokoro-env/bin/pip install \
-        --find-links /build-assets/wheels/ \
-        "kokoro==0.9.4" \
-        "aiohttp==3.13.5" \
-        "soundfile==0.13.1" \
-        "numpy==1.26.4"
-
-# Pre-warm the default voice (if_sara) to materialise .pt weights files
-# and verify kokoro can synthesise without network access.
-# NOTE: Python code lives in a separate file to avoid Dockerfile parser
-# confusion — a `from X import Y` line inside an inline RUN heredoc gets
-# misparsed as a `FROM` stage directive by buildkit.
-COPY image/scripts/prewarm-kokoro.py /build/prewarm-kokoro.py
-ENV HF_HOME=/opt/lifeos/kokoro-env/hf-cache
-RUN HF_HUB_OFFLINE=0 \
-    /opt/lifeos/kokoro-env/bin/python3 /build/prewarm-kokoro.py
-
-# Verify if_sara voice artifact exists after pre-warm (weights land in HF_HOME)
-RUN find /opt/lifeos/kokoro-env -name 'if_sara*' | grep -q '.' || \
-    (echo 'ERROR: if_sara voice artifact not found after pre-warm' && exit 1)
-
-# Copy the manifest builder script and generate voices-manifest.json
-COPY image/scripts/build-kokoro-manifest.py /build/build-kokoro-manifest.py
-RUN LIFEOS_TTS_DEFAULT_VOICE=if_sara \
-    /opt/lifeos/kokoro-env/bin/python3 /build/build-kokoro-manifest.py \
-        --venv-dir /opt/lifeos/kokoro-env \
-        --output /opt/lifeos/kokoro-env/voices-manifest.json && \
-    test -s /opt/lifeos/kokoro-env/voices-manifest.json && \
-    echo "voices-manifest.json generated ($(wc -l < /opt/lifeos/kokoro-env/voices-manifest.json) lines)"
-
-# Strip build artifacts to reduce image size
-RUN find /opt/lifeos/kokoro-env -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true && \
-    find /opt/lifeos/kokoro-env -name '*.pyc' -delete 2>/dev/null || true && \
-    find /opt/lifeos/kokoro-env -path '*/tests/*.py' -not -name '__init__.py' -delete 2>/dev/null || true
-
+# Stage 5 (Kokoro TTS Python venv) is REMOVED in Phase 6 of the
+# architecture pivot — the Kokoro venv, voice models, manifest, and
+# server script all moved INTO the lifeos-tts:stable side image.
+# bootc no longer carries the ~850 MB Python/torch/kokoro stack.
+# See containers/lifeos-tts/Containerfile for the new build site.
 # ============================================================================
 # Stage 6a-simplex: Extract SimpleX CLI binary from Ubuntu .deb
 # ============================================================================
@@ -798,31 +733,14 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /va
 COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
 COPY --from=wespeaker-builder /out/models/wespeaker /usr/share/lifeos/models/wespeaker
 
-# --- Kokoro TTS runtime (Python 3.12 interpreter + venv + voices + manifest) ---
+# --- Kokoro TTS runtime: env file only ---
 #
-# The venv in /opt/lifeos/kokoro-env was created in the `kokoro-builder` stage
-# (python:3.12-slim, Debian). Its `bin/python3` symlink points at
-# `/usr/local/bin/python3` — which only exists in the Debian builder. The
-# Fedora runtime ships Python 3.14 at `/usr/bin/python3`; that mismatch leaves
-# the venv with a dangling interpreter and systemd fails with 203/EXEC.
-#
-# Fix: copy the exact Python 3.12 runtime bundle the venv was built against
-# (interpreter + stdlib + shared libpython) from the builder stage into the
-# final image at its original paths, plus the `python3` symlink. The Python
-# binary only dynamically links to glibc-level libs (libc, libm, libssl,
-# libffi, libz) that are present in Fedora with compatible ABI.
-COPY --from=kokoro-builder /usr/local/bin/python3.12 /usr/local/bin/python3.12
-COPY --from=kokoro-builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
-COPY --from=kokoro-builder /usr/local/lib/libpython3.12.so.1.0 /usr/local/lib/libpython3.12.so.1.0
-RUN ln -sf python3.12 /usr/local/bin/python3 && \
-    echo '/usr/local/lib' > /etc/ld.so.conf.d/lifeos-python3.12.conf && \
-    ldconfig
-
-COPY --from=kokoro-builder /opt/lifeos/kokoro-env /opt/lifeos/kokoro-env
-COPY image/files/usr/local/bin/lifeos-tts-server.py /usr/local/bin/lifeos-tts-server.py
-COPY image/files/etc/systemd/system/lifeos-tts-server.service /usr/lib/systemd/system/lifeos-tts-server.service
+# Phase 6 of the architecture pivot — the Python venv, voice models,
+# manifest, and server script all moved INTO ghcr.io/hectormr206/lifeos-tts:stable.
+# bootc only ships the env file the Quadlet bind-mounts at runtime.
+# The legacy lifeos-tts-server.service is removed; rollback path is
+# `bootc rollback` to the previous deployment.
 COPY image/files/etc/lifeos/tts-server.env /etc/lifeos/tts-server.env
-RUN chmod +x /usr/local/bin/lifeos-tts-server.py
 
 # --- Capa 4 — image guardian (PRD §5e) ---
 # Best-effort script + systemd unit that re-pulls system Quadlet images if
@@ -839,15 +757,14 @@ RUN chmod +x /usr/local/bin/lifeos-ensure-images
 # and synthesizes lifeos-tts.service automatically — no symlink needed.
 # The Quadlet image (ghcr.io/hectormr206/lifeos-tts:stable) is built by the
 # side-images.yml workflow and pulled at first boot via lifeos-ensure-images.
-# The legacy /usr/lib/systemd/system/lifeos-tts-server.service stays in the
-# image as a fallback ONLY (no longer auto-enabled below). Phase 1 PRD:
-# docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md §5a.
+# The legacy lifeos-tts-server.service was REMOVED in Phase 6. The bootc
+# rollback path is now `bootc rollback` to a previous deployment, not a
+# manual systemctl unmask of an in-image legacy unit. PRD §5a + §6.
 COPY containers/lifeos-tts/lifeos-tts.container /etc/containers/systemd/lifeos-tts.container
 
-# Smoke test: the venv's python must resolve and import ssl/hashlib before
-# we ship. Catches cross-distro linker regressions at build time instead of
-# 203/EXEC crash-loops in production.
-RUN /opt/lifeos/kokoro-env/bin/python3 -c "import ssl, hashlib, socket; print('lifeos-tts venv ok:', ssl.OPENSSL_VERSION)"
+# Phase 6: the venv smoke test moved into containers/lifeos-tts/Containerfile
+# (`from kokoro import KPipeline` runs there at build time). The bootc image
+# no longer ships the venv to test.
 
 # --- AI Model (pre-bundled) ---
 # Qwen3.5-4B: multimodal vision-language model with hybrid DeltaNet architecture.
@@ -1492,8 +1409,6 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -x /usr/bin/wl-copy              || fail "/usr/bin/wl-copy"; \
     test -x /usr/bin/tesseract            || fail "/usr/bin/tesseract"; \
     test -x /usr/bin/espeak-ng            || fail "/usr/bin/espeak-ng"; \
-    test -x /usr/local/bin/lifeos-tts-server.py || fail "/usr/local/bin/lifeos-tts-server.py"; \
-    test -f /usr/lib/systemd/system/lifeos-tts-server.service || fail "lifeos-tts-server.service"; \
     test -f /etc/lifeos/tts-server.env    || fail "/etc/lifeos/tts-server.env"; \
     test -x /usr/local/bin/lifeos-ensure-images || fail "/usr/local/bin/lifeos-ensure-images"; \
     test -f /usr/lib/systemd/system/lifeos-image-guardian.service || fail "lifeos-image-guardian.service"; \
@@ -1503,8 +1418,6 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /etc/containers/systemd/lifeos-simplex-bridge.container || fail "lifeos-simplex-bridge.container"; \
     test -x /usr/local/bin/lifeos-embeddings-setup.sh || fail "/usr/local/bin/lifeos-embeddings-setup.sh"; \
     test -x /usr/local/bin/lifeos-simplex-setup.sh || fail "/usr/local/bin/lifeos-simplex-setup.sh"; \
-    test -d /opt/lifeos/kokoro-env        || fail "/opt/lifeos/kokoro-env"; \
-    test -f /opt/lifeos/kokoro-env/voices-manifest.json || fail "kokoro voices-manifest.json"; \
     test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
     test -x /usr/bin/virsh                || fail "/usr/bin/virsh"; \
     test -x /usr/bin/pkg-config           || fail "/usr/bin/pkg-config"; \
