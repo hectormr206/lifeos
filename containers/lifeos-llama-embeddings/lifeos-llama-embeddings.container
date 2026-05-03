@@ -60,6 +60,16 @@ Exec=/usr/sbin/llama-server \
 # Quadlet requires ExecStartPre in [Service], not [Container].
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
 
+# Bootstrap the GGUF model + write LIFEOS_EMBED_MODEL into the env file.
+# Leading-dash (`-`) makes systemd ignore non-zero exits from this step.
+# The legacy host service used `ExecCondition=`, which has the semantic
+# that exit 1-254 is a CLEAN SKIP. Quadlet only allows ExecStartPre, so
+# we replicate the skip-on-non-zero behavior with the dash prefix —
+# essential for the model-missing + LIFEOS_AI_AUTO_MANAGE_MODELS=false
+# path (script exits 1; without the dash the unit would crash-loop).
+# Script contract: 0 = ready, 1-254 = clean skip, 255 = hard fail.
+ExecStartPre=-/usr/local/bin/lifeos-embeddings-setup.sh
+
 EnvironmentFile=-/etc/lifeos/llama-embeddings.env
 
 # Capa 3 of defense-in-depth — auto-restart with sane backoff. Embeddings
@@ -74,7 +84,10 @@ TimeoutStartSec=60s
 MemoryMax=1280M
 CPUQuota=200%
 
-NoNewPrivileges=true
+# DO NOT add `NoNewPrivileges=true` here — same Fedora podman --cgroups=split
+# interaction that broke TTS on first reboot. The Quadlet generator already
+# applies container-side isolation; NNP at the [Service] layer is redundant
+# and breaks runtime init lock acquisition.
 
 [Install]
 WantedBy=multi-user.target default.target

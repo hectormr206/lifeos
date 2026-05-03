@@ -34,12 +34,27 @@ Volume=/var/lib/lifeos/simplex:/var/lib/lifeos/simplex:z
 # CA bundle for TLS to SMP relays.
 # ':z' shared label — touching the system-wide CA trust dir with ':Z'
 # would relabel it and break TLS for every other host service.
-Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
+# NO `:z` on /etc/pki/ca-trust/extracted — relabeling host CA bundle to
+# container_file_t breaks TLS for everything else on the host (curl,
+# openssl, etc. expect cert_t / system_conf_t). Plain `:ro` is correct;
+# Fedora ships /etc/pki readable by container_t by default.
+Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro
 
 [Service]
 # Defense-in-depth Capa 4: ensure image is present locally before starting.
 # Quadlet requires ExecStartPre in [Service], not [Container].
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
+
+# Provision /var/lib/lifeos/simplex with the right perms (legacy unit's
+# StateDirectory= no longer runs since we removed it from
+# multi-user.target.wants). Idempotent — install -d only creates if absent.
+ExecStartPre=/usr/bin/install -d -m 0700 /var/lib/lifeos/simplex
+
+# Bootstrap the SimpleX bot profile (Axi). The script runs simplex-chat
+# once with `-e /quit` to satisfy the interactive "display name:" prompt
+# and seed the bot DB. Idempotent — exits 0 if the marker file already
+# exists. Same script the legacy simplex-chat.service used.
+ExecStartPre=/usr/local/bin/lifeos-simplex-setup.sh
 
 # Capa 3 — SimpleX is touchy about graceful shutdown (DB locks). RestartSec
 # matches the host service's 10s, giving SimpleX time to flush WAL on SIGTERM.
@@ -47,17 +62,13 @@ Restart=always
 RestartSec=10s
 TimeoutStartSec=30s
 
-# Initial profile bootstrap: the host today has lifeos-simplex-setup.sh
-# that runs as ExecStartPre. After Phase 5 flips, that setup logic moves
-# into the container's ENTRYPOINT or a sidecar init container — TBD when
-# Phase 5 actually flips. For now this Quadlet assumes /var/lib/lifeos/simplex
-# already exists (created by the host service or manually).
-
 # Resource limits. SimpleX is light: ~50-100 MB RAM, minimal CPU.
 MemoryMax=512M
 CPUQuota=100%
 
-NoNewPrivileges=true
+# DO NOT add `NoNewPrivileges=true` here — same Fedora podman --cgroups=split
+# interaction that broke TTS. Container-side hardening covers what NNP would
+# at the systemd layer.
 
 [Install]
 WantedBy=multi-user.target default.target
