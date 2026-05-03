@@ -192,15 +192,10 @@ RUN set -eux && \
     mkdir -p /out/models/whisper && \
     install -m 0755 "${CLI_BIN}" /out/whisper-cli && \
     install -m 0755 "${STREAM_BIN}" /out/whisper-stream && \
-    curl -fSL --retry 3 --connect-timeout 60 \
-      -o /out/models/whisper/ggml-base.bin \
-      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin && \
-    curl -fSL --retry 3 --connect-timeout 60 \
-      -o /out/models/whisper/ggml-tiny.bin \
-      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin && \
-    test -s /out/models/whisper/ggml-base.bin && \
-    test -s /out/models/whisper/ggml-tiny.bin && \
     rm -rf /tmp/whisper.cpp
+# Phase 6b: STT model files (ggml-base.bin, ggml-tiny.bin) no longer baked
+# into the bootc image. lifeos-stt-setup.sh downloads them on first boot
+# when LIFEOS_AI_AUTO_MANAGE_MODELS=true. Saves ~200 MB from bootc.
 
 # ============================================================================
 # Stage 4b: Download WeSpeaker ONNX model for speaker identification
