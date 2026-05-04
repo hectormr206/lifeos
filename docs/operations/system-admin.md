@@ -2,23 +2,43 @@
 
 This guide is for system administrators managing LifeOS deployments.
 
+> **Phase 3 / 7 / 8 of the architecture pivot (2026-Q2)**: lifeosd, the chat
+> LLM, embeddings, TTS and the SimpleX bridge now run as **system Quadlet
+> containers** under the `lifeos-` prefix instead of bespoke host services.
+> The legacy unit names below are kept inside the bootc image as rollback
+> targets but are **disabled by default** via `80-lifeos.preset`. New
+> operational commands use the `lifeos-` prefixed names.
+
 ## Architecture Overview
 
 ### System Components
 
 ```
-LifeOS System Services
+LifeOS System Quadlets (post-Phase-3/7/8 — canonical)
 │
-├── Core (user session)
-│   └── lifeosd.service                    user    AI daemon, API server, event bus
+├── Core
+│   └── lifeos-lifeosd.service             system  Axi daemon (HTTP API, memory, agentic chat,
+│                                                  SimpleX bridge, whisper-cli for STT)
 │
-├── AI Runtime (system)
-│   ├── llama-server.service               system  Local LLM inference (llama.cpp)
-│   ├── llama-embeddings.service           system  Vector embeddings
-│   └── whisper-stt.service                system  Speech-to-text
+├── AI Runtime
+│   ├── lifeos-llama-server.service        system  Local LLM inference (llama.cpp + Vulkan/CDI GPU)
+│   ├── lifeos-llama-embeddings.service    system  Vector embeddings (nomic-embed-text)
+│   ├── lifeos-tts.service                 system  Kokoro TTS (HTTP wrapper)
+│   └── whisper-stt.service                system  Oneshot model bootstrap (downloads ggml-base.bin)
 │
 ├── Communication
-│   └── simplex-chat.service               system  SimpleX messaging bridge (privacy-first, E2E)
+│   └── lifeos-simplex-bridge.service      system  SimpleX bot (E2E private messaging)
+│
+├── Bootstrap
+│   ├── lifeos-state-migrate.service       system  Oneshot — migrate legacy
+│   │                                              ~/.local/share/lifeos to /var/lib/lifeos
+│   ├── lifeos-image-guardian.service      system  Pull missing container images at boot
+│   └── lifeos-net.network                 system  Bridge for the side containers (10.89.0.0/24)
+│
+├── (Legacy host services — installed but DISABLED, kept for `bootc rollback`)
+│   ├── lifeosd.service                    user    Pre-Phase-3 — gone
+│   ├── llama-server.service / llama-embeddings.service  Pre-Phase-2/4 — gone
+│   ├── simplex-chat.service               Pre-Phase-5 — gone
 │
 ├── Maintenance Timers
 │   ├── lifeos-maintenance-cleanup.timer   system  Every 12h — podman/Flatpak/Rust cache cleanup

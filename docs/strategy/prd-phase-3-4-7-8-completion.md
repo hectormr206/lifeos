@@ -1,24 +1,24 @@
-# PRD — Completion of architecture pivot Phases 3, 4, 7, 8
+# PRD — Completion of architecture pivot Phases 3, 7, 8
 
-> Sub-PRD of `prd-architecture-pivot-lean-bootc-quadlet.md`. Captures the remaining work to reach the goal "bootc has only what's necessary; everything else lives in containers" after Phases 1+2+5+6 shipped.
+> Sub-PRD of `prd-architecture-pivot-lean-bootc-quadlet.md`. Captures the remaining work to reach the goal "bootc has only what's necessary; everything else lives in containers" after Phases 1+2+4+5+6 shipped.
 
 ## Status entering this PRD
 
-Already shipped (branches `feat/lean-bootc-quadlet-suite` + earlier PRs):
+Already shipped:
 
 - ✅ Phase 1: TTS Quadlet
 - ✅ Phase 2: nomic embeddings Quadlet
+- ✅ Phase 4: llama-server GPU Quadlet (fc44 unblocked nvidia-container-toolkit; ~200 MB + Vulkan toolchain out of bootc)
 - ✅ Phase 5: SimpleX bot Quadlet
 - ✅ Phase 6: TTS side image fully self-contained (~850 MB out of bootc)
 - ✅ Phase 6b: whisper STT models out of bootc, runtime download (~200 MB out)
 
-Total trim so far: ~1 GB.
+Total trim so far: ~1.25 GB.
 
-Remaining gap to "100% PRD" — what still ships in bootc that PRD wants in containers:
+Remaining gap to "100% PRD":
 
-- `lifeosd` binary + user-scope systemd unit (Phase 3).
-- `llama-server` (Vulkan, ~30 MB binary + GPU model file) (Phase 4).
-- `whisper-cli` / `whisper-stream` binaries (Phase 7, depends on Phase 3).
+- `lifeosd` binary + user-scope systemd unit (Phase 3, the hardest one).
+- `whisper-cli` / `whisper-stream` binaries (Phase 7, depends on Phase 3, ~10 MB win).
 - Containers all use `Network=host` instead of a bridge (Phase 8, mostly cosmetic but in PRD).
 
 ## Phase 3 — lifeosd to a Quadlet (or rootless user Quadlet)

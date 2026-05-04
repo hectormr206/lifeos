@@ -17,30 +17,21 @@ MEMORY_THRESHOLD=95
 LIFEOS_PRIMARY_USER="${LIFEOS_PRIMARY_USER:-lifeos}"
 LIFEOS_PRIMARY_UID="${LIFEOS_PRIMARY_UID:-1000}"
 
-user_systemctl() {
-    local runtime_dir="/run/user/${LIFEOS_PRIMARY_UID}"
-    local user_bus="${runtime_dir}/bus"
-
-    if ! command -v runuser >/dev/null 2>&1; then
-        return 1
-    fi
-
-    if [ ! -S "$user_bus" ]; then
-        return 1
-    fi
-
-    runuser -u "$LIFEOS_PRIMARY_USER" -- \
-        env XDG_RUNTIME_DIR="$runtime_dir" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=${user_bus}" \
-            systemctl --user "$@"
-}
+# Phase 3 of the architecture pivot: the legacy `user_systemctl()` helper
+# (which proxied `systemctl --user` against /run/user/1000/bus) is gone.
+# All sentinel actions now go through system-scope `systemctl` against the
+# Quadlet-generated lifeos-* services. The lifeos-sentinel.service unit
+# also enables ProtectHome=true now, which would block /run/user access
+# even if the helper had survived. LIFEOS_PRIMARY_USER / LIFEOS_PRIMARY_UID
+# are still defined above for the bootstrap-token rollback path that
+# checks /run/user/<uid>/lifeos as a secondary location.
 
 restart_lifeosd() {
-    # Canonical path: restart the user-scoped daemon. Keep the system-scope
-    # alias only as a legacy/debug fallback if the user bus is unavailable.
-    user_systemctl restart lifeosd.service 2>/dev/null || \
-        systemctl restart lifeosd.service 2>/dev/null || \
-        log "Failed to restart lifeosd in both user and system scopes"
+    # Canonical path after Phase 3 of the architecture pivot: restart the
+    # system-scope Quadlet `lifeos-lifeosd.service`. The legacy user-scope
+    # `lifeosd.service` no longer exists.
+    systemctl restart lifeos-lifeosd.service 2>/dev/null || \
+        log "Failed to restart lifeos-lifeosd.service"
 }
 
 log() {
@@ -52,10 +43,22 @@ log() {
 }
 
 read_bootstrap_token() {
-    local token_path="/run/user/${LIFEOS_PRIMARY_UID}/lifeos/bootstrap.token"
-    if [ -r "$token_path" ]; then
-        cat "$token_path" 2>/dev/null
-    fi
+    # Phase 3 of architecture pivot: lifeos-lifeosd is now a system Quadlet
+    # with LIFEOS_RUNTIME_DIR=/run/lifeos (bind-mounted host↔container so
+    # both sides see the same token file). The legacy user-scope path
+    # /run/user/<uid>/lifeos/bootstrap.token is checked second as a
+    # rollback compatibility shim — it would only match if the operator
+    # rolled back to a pre-Phase-3 deployment that still ran lifeosd as a
+    # user service.
+    for token_path in \
+        "/run/lifeos/bootstrap.token" \
+        "/run/user/${LIFEOS_PRIMARY_UID}/lifeos/bootstrap.token"
+    do
+        if [ -r "$token_path" ]; then
+            cat "$token_path" 2>/dev/null
+            return
+        fi
+    done
 }
 
 check_health() {
@@ -105,8 +108,7 @@ check_memory() {
     pct_used=$(( (mem_total - mem_available) * 100 / mem_total ))
     if [ "$pct_used" -ge "$MEMORY_THRESHOLD" ]; then
         log "MEMORY CRITICAL: ${pct_used}% used — stopping llama-server to free RAM"
-        systemctl --user stop llama-server.service 2>/dev/null || \
-            systemctl stop llama-server.service 2>/dev/null || true
+        systemctl stop lifeos-llama-server.service 2>/dev/null || true
         # Brief pause to let memory settle
         sleep 2
     fi
@@ -115,7 +117,7 @@ check_memory() {
 # Collect recent journal logs for debugging context in alerts.
 collect_recent_logs() {
     local recent_logs
-    recent_logs=$(journalctl --user -u lifeosd -n 5 --no-pager 2>/dev/null || echo "no logs")
+    recent_logs=$(journalctl -u lifeos-lifeosd -n 5 --no-pager 2>/dev/null || echo "no logs")
     echo "$recent_logs"
 }
 
@@ -180,8 +182,7 @@ ${local_logs}"
 
         # Step 1: Stop llama-server to free GPU/RAM
         log "Recovery step 1: stopping llama-server"
-        systemctl --user stop llama-server.service 2>/dev/null || \
-            systemctl stop llama-server.service 2>/dev/null || true
+        systemctl stop lifeos-llama-server.service 2>/dev/null || true
 
         # Step 2: Clear temporary files
         log "Recovery step 2: clearing /tmp/lifeos-* temporary files"
@@ -189,8 +190,7 @@ ${local_logs}"
 
         # Step 3: Full daemon restart with environment reset
         log "Recovery step 3: full daemon restart with reset-failed"
-        user_systemctl reset-failed lifeosd.service 2>/dev/null || \
-            systemctl reset-failed lifeosd.service 2>/dev/null || true
+        systemctl reset-failed lifeos-lifeosd.service 2>/dev/null || true
         restart_lifeosd
 
         # Step 4: Wait and check if recovery worked

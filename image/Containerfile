@@ -108,94 +108,37 @@ COPY daemon/static daemon/static/
 COPY contracts/ contracts/
 
 # Build binaries with deterministic dependency resolution, then keep only artifacts.
+# Phase 3: lifeosd is no longer built here. The daemon ships from
+# ghcr.io/hectormr206/lifeos-lifeosd:stable, built by .github/workflows/side-images.yml
+# from containers/lifeos-lifeosd/Containerfile. Dropping the daemon build out
+# of bootc cuts ~10 minutes of CI per host image and removes ~150 MB of
+# linker-time artifacts from the layer cache.
 RUN set -eux && \
     cargo build --release --locked -p life && \
-    cargo build --release --locked -p lifeosd \
-        --features "dbus,http-api,ui-overlay,wake-word,speaker-id,messaging,tray" && \
+    cargo build --release --locked -p lifeosd --bin lifeos-train-wakeword \
+        --features "wake-word" && \
     install -D -m 0755 /build/target/release/life /out/life && \
-    install -D -m 0755 /build/target/release/lifeosd /out/lifeosd && \
     install -D -m 0755 /build/target/release/lifeos-train-wakeword /out/lifeos-train-wakeword && \
     rm -rf /build/target /root/.cargo/registry /root/.cargo/git
 
+# Stage 2 (llama.cpp build) is REMOVED in Phase 4 of the architecture pivot —
+# llama-server now runs inside ghcr.io/hectormr206/lifeos-llama-server:stable
+# via /usr/share/containers/systemd/lifeos-llama-server.container. The bootc
+# image no longer carries the ~200 MB Vulkan-built binary or the cmake/glslang
+# build chain. See containers/lifeos-llama-server/Containerfile for the new
+# build site.
 # ============================================================================
-# Stage 2: Build llama-server (GPU-capable via Vulkan)
+# Stage 3: whisper.cpp STT tools — REMOVED (Phase 7 of architecture pivot)
 # ============================================================================
-FROM fedora:${FEDORA_MAJOR} AS llama-builder
-
-# spirv-headers-devel needed since llama.cpp b8800+ (ggml-vulkan.cpp
-# includes spirv/unified1/spirv.hpp) — was implicit on older builds.
-RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel vulkan-headers spirv-headers-devel glslc glslang && \
-    dnf clean all
-
-# Pin llama.cpp to a stable tag. Upstream master sometimes ships broken Vulkan
-# shaders that fail to build. Update periodically after verifying tag builds.
-# b8925 (2026-04) covers ~224 commits since b8701 incl. Vulkan FA DP4A perf
-# improvements, CUDA memory leak fix, and llama-server security patches.
-# https://github.com/ggml-org/llama.cpp/releases/tag/b8925
-ARG LLAMA_CPP_TAG=b8999
-RUN set -eux && \
-    echo ">>> Building llama-server from source (Vulkan-enabled, pinned ${LLAMA_CPP_TAG})..." && \
-    git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
-    cd /tmp/llama.cpp && \
-    git checkout "${LLAMA_CPP_TAG}" && \
-    cd - && \
-    cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DGGML_STATIC=ON \
-        -DGGML_NATIVE=OFF \
-        -DGGML_VULKAN=ON \
-        -DLLAMA_BUILD_TESTS=OFF \
-        -DLLAMA_BUILD_EXAMPLES=OFF \
-        -DLLAMA_BUILD_SERVER=ON && \
-    # Build the full default target chain (no --target). This runs the
-    # vulkan-shaders-gen executable AND its add_custom_command that generates
-    # ggml-vulkan-shaders source — passing only `--target llama-server`
-    # builds the gen executable but does not always trigger the generation
-    # step on ubuntu-latest, which then fails the link with thousands of
-    # `undefined reference to matmul_id_subgroup_*` symbols. -j1 keeps memory
-    # pressure low (matters on self-hosted under llama-server stress and
-    # equally on the 16GB ubuntu-latest runner) and lets CMake walk the
-    # dependency graph serially.
-    cmake --build /tmp/llama.cpp/build -j1 && \
-    BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
-    echo ">>> Binary found at: ${BUILD_BIN}" && \
-    mkdir -p /out && \
-    install -m 0755 "${BUILD_BIN}" /out/llama-server && \
-    /out/llama-server --version && \
-    rm -rf /tmp/llama.cpp
-
-# ============================================================================
-# Stage 3: Build whisper.cpp STT tools + ship default STT models
-# ============================================================================
-FROM fedora:${FEDORA_MAJOR} AS whisper-builder
-
-RUN dnf install -y cmake make gcc-c++ git openssl-devel curl SDL2-devel && \
-    dnf clean all
-
-# Pin whisper.cpp to a release tag for reproducibility (was --depth=1 HEAD).
-ARG WHISPER_CPP_TAG=v1.8.4
-RUN set -eux && \
-    echo ">>> Building whisper.cpp STT tools from source (pinned ${WHISPER_CPP_TAG})..." && \
-    git clone --branch "${WHISPER_CPP_TAG}" --depth=1 https://github.com/ggml-org/whisper.cpp /tmp/whisper.cpp && \
-    cmake -S /tmp/whisper.cpp -B /tmp/whisper.cpp/build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DWHISPER_BUILD_TESTS=OFF \
-        -DWHISPER_SDL2=ON \
-        -DWHISPER_BUILD_EXAMPLES=ON && \
-    cmake --build /tmp/whisper.cpp/build -j"$(nproc)" --target whisper-cli whisper-stream && \
-    CLI_BIN="$(find /tmp/whisper.cpp/build -name 'whisper-cli' -type f | head -1)" && \
-    STREAM_BIN="$(find /tmp/whisper.cpp/build -name 'whisper-stream' -type f | head -1)" && \
-    echo ">>> whisper-cli found at: ${CLI_BIN}" && \
-    echo ">>> whisper-stream found at: ${STREAM_BIN}" && \
-    mkdir -p /out/models/whisper && \
-    install -m 0755 "${CLI_BIN}" /out/whisper-cli && \
-    install -m 0755 "${STREAM_BIN}" /out/whisper-stream && \
-    rm -rf /tmp/whisper.cpp
-# Phase 6b: STT model files (ggml-base.bin, ggml-tiny.bin) no longer baked
-# into the bootc image. lifeos-stt-setup.sh downloads them on first boot
-# when LIFEOS_AI_AUTO_MANAGE_MODELS=true. Saves ~200 MB from bootc.
+# whisper-cli now ships INSIDE the lifeos-lifeosd container (the only
+# consumer post-Phase-3). See containers/lifeos-lifeosd/Containerfile —
+# stage `whisper-builder`. Saves ~10 MB host image and the SDL2/cmake
+# build chain that this stage previously required.
+# whisper-stream (live PipeWire capture) is deferred to the lifeosd-desktop
+# companion (Phase 3b) and not built in any image today.
+# Phase 6b: STT model files (ggml-base.bin, ggml-tiny.bin) are downloaded
+# at first-boot by lifeos-stt-setup.sh into /var/lib/lifeos/models/whisper
+# which is bind-mounted into lifeos-lifeosd.
 
 # ============================================================================
 # Stage 4b: Download WeSpeaker ONNX model for speaker identification
@@ -352,10 +295,10 @@ RUN dnf -y install --skip-unavailable \
 # fails against scratch stages in rootless buildah ("openat2 mnt: No such file
 # or directory"), so we COPY the RPMs into a temp dir, install, then remove.
 COPY --from=nvidia-rpms / /tmp/nvidia-rpms/
-# Skip nvidia-container-toolkit + libnvidia-container — they target Bazzite/uBlue
-# bases (require `libseccomp2` compat shim that fedora-bootc doesn't ship) and
-# enable GPU-in-container workloads that LifeOS does not use (llama-server runs
-# natively, not under podman/docker --gpus). Install everything else.
+# Skip nvidia-container-toolkit + libnvidia-container from this RPM pile —
+# we install fresher upstream versions from nvidia.github.io later in the
+# build (Phase 4 GPU passthrough for Quadlets). Install everything else
+# (driver, kmod, modprobe, settings).
 RUN find /tmp/nvidia-rpms -maxdepth 1 -name '*.rpm' \
         ! -name 'nvidia-container-toolkit*' \
         ! -name 'libnvidia-container*' \
@@ -702,21 +645,40 @@ RUN chmod +x /usr/local/bin/lifeos-train-wakeword
 # --- SimpleX Chat CLI (extracted in Ubuntu stage where dpkg works) ---
 COPY --from=simplex-extract /out/simplex-chat /usr/local/bin/simplex-chat
 
-# --- AI Runtime (llama.cpp / llama-server) ---
-# Built in isolated stage to avoid pulling/removing toolchains in the final image.
-COPY --from=llama-builder /out/llama-server /usr/sbin/llama-server
-COPY --from=whisper-builder /out/whisper-cli /usr/bin/whisper-cli
-COPY --from=whisper-builder /out/whisper-stream /usr/bin/whisper-stream
-RUN set -eux && \
-    ln -f /usr/sbin/llama-server /usr/bin/llama-server 2>/dev/null || true && \
-    ln -f /usr/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null || true && \
-    ln -f /usr/bin/whisper-stream /usr/local/bin/whisper-stream 2>/dev/null || true && \
-    echo ">>> Verifying AI runtime binaries..." && \
-    /usr/sbin/llama-server --version && \
-    /usr/bin/whisper-cli -h >/dev/null && \
-    /usr/bin/whisper-stream -h >/dev/null && \
-    echo ">>> llama-server installed at /usr/sbin and /usr/bin" && \
-    ls -la /usr/sbin/llama-server /usr/bin/llama-server /usr/bin/whisper-cli /usr/bin/whisper-stream
+# --- AI Runtime ---
+# Phase 4: llama-server moved to ghcr.io/hectormr206/lifeos-llama-server
+#   (Quadlet + nvidia-container-toolkit CDI for GPU passthrough).
+# Phase 7: whisper-cli moved INTO ghcr.io/hectormr206/lifeos-lifeosd because
+#   the daemon (now itself a Quadlet) is the only consumer of whisper-cli for
+#   file-based STT (simplex voice notes, meeting clips). Saves ~10 MB host
+#   image. whisper-stream (live PipeWire capture) is deferred to the
+#   lifeosd-desktop companion (Phase 3b) — it needs the user's PipeWire
+#   socket which a headless Quadlet container does not have.
+# The host-side lifeos-stt-setup.sh + whisper-stt.service still download
+# model files into /var/lib/lifeos/models/whisper; that path is bind-mounted
+# into the lifeos-lifeosd container so the daemon's whisper-cli reads it.
+
+# --- Phase 4: nvidia-container-toolkit for GPU passthrough into Quadlets ---
+# Required so the lifeos-llama-server.container can request `nvidia.com/gpu=all`
+# and get the host driver injected via CDI. The Fedora 43 RPM digest issue
+# documented in earlier sessions is gone in fc44 — packages install cleanly.
+# `sslverify=0` on the repo file is a workaround for a current /etc/pki ca-bundle
+# corruption inside the bootc rootfs builder; the package is GPG-verified by
+# its own gpgkey directive so SSL is just transport hardening.
+RUN curl -fsSL -o /etc/yum.repos.d/nvidia-container-toolkit.repo \
+        https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo && \
+    sed -i 's/^sslverify=1/sslverify=0/' /etc/yum.repos.d/nvidia-container-toolkit.repo && \
+    dnf -y install nvidia-container-toolkit && \
+    dnf clean all
+
+# Generate the CDI spec at image build time so the laptop boots with a
+# valid /etc/cdi/nvidia.yaml without first-boot regen latency. The
+# nvidia-cdi-refresh.path watcher (installed by the toolkit) keeps the
+# spec in sync with driver updates afterwards.
+# We can't run nvidia-ctk against the actual host GPU during the bootc
+# build (the builder has no /dev/nvidia*), so we ship the toolkit and
+# let the post-install scriptlet's nvidia-cdi-refresh handle first-boot
+# regeneration via systemd path activation.
 
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
@@ -757,7 +719,14 @@ RUN chmod +x /usr/local/bin/lifeos-ensure-images
 # The legacy lifeos-tts-server.service was REMOVED in Phase 6. The bootc
 # rollback path is now `bootc rollback` to a previous deployment, not a
 # manual systemctl unmask of an in-image legacy unit. PRD §5a + §6.
-COPY containers/lifeos-tts/lifeos-tts.container /etc/containers/systemd/lifeos-tts.container
+COPY containers/lifeos-tts/lifeos-tts.container /usr/share/containers/systemd/lifeos-tts.container
+
+# Phase 8: dedicated podman bridge `lifeos-net`. Side containers (TTS,
+# llama-server, llama-embeddings, simplex-bridge) attach to it instead of
+# the host network namespace. Each one keeps PublishPort=127.0.0.1:PORT:PORT
+# so the daemon (still Network=host until Phase 8b daemon URL refactor)
+# reaches them via loopback unchanged.
+COPY containers/lifeos-net/lifeos-net.network /usr/share/containers/systemd/lifeos-net.network
 
 # Phase 6: the venv smoke test moved into containers/lifeos-tts/Containerfile
 # (`from kokoro import KPipeline` runs there at build time). The bootc image
@@ -857,8 +826,13 @@ COPY image/files/etc/skel/.mozilla/firefox/profiles.ini /etc/skel/.mozilla/firef
 COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/user.js /etc/skel/.mozilla/firefox/lifeos.default/user.js
 COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css
 
+# Phase 3 of the architecture pivot removed lifeos-ensure-daemon.sh (login-time
+# profile.d hook that started the user-scope lifeosd.service). The daemon now
+# runs as the system Quadlet `lifeos-lifeosd.service` which auto-starts at boot
+# via the Quadlet generator's [Install] WantedBy — no per-login bootstrap
+# needed any more.
+
 # Wayland environment for Firefox
-COPY image/files/etc/profile.d/lifeos-ensure-daemon.sh /etc/profile.d/lifeos-ensure-daemon.sh
 COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland.sh
 COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
 COPY image/files/etc/profile.d/lifeos-firefox-profile.sh /etc/profile.d/lifeos-firefox-profile.sh
@@ -975,6 +949,10 @@ COPY image/files/etc/systemd/system/lifeos-thermal.service /usr/lib/systemd/syst
 COPY image/files/etc/tmpfiles.d/lifeos-thermal.conf /usr/lib/tmpfiles.d/lifeos-thermal.conf
 # Force 0600 on actions-runner/.env and llm-providers.env (token-bearing).
 COPY image/files/usr/lib/tmpfiles.d/lifeos-secrets.conf /usr/lib/tmpfiles.d/lifeos-secrets.conf
+# Phase 3 of architecture pivot: /run/lifeos must exist on host before
+# lifeos-lifeosd Quadlet starts (the bind mount fails on a missing host
+# path). systemd-tmpfiles re-creates it each boot since /run is tmpfs.
+COPY image/files/usr/lib/tmpfiles.d/lifeos-runtime.conf /usr/lib/tmpfiles.d/lifeos-runtime.conf
 # Enforce /etc/os-release as a symlink to /usr/lib/os-release on every boot.
 # Anaconda (and some OEM installers) copy /usr/lib/os-release into
 # /etc/os-release as a regular file at install time. bootc's 3-way merge
@@ -1091,8 +1069,10 @@ RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/di
 COPY image/files/etc/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/lifeos-first-boot.service
 COPY image/files/etc/systemd/system/lifeos-cosmic-greeter-branding.service /usr/lib/systemd/system/lifeos-cosmic-greeter-branding.service
 COPY image/files/etc/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/systemd/system/lifeos-refresh-bls-titles.service
-COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
-COPY image/files/etc/systemd/system/llama-server.service.d/10-fast-kill.conf /etc/systemd/system/llama-server.service.d/10-fast-kill.conf
+# Phase 4: legacy llama-server.service was REMOVED. Chat inference runs
+# in the lifeos-llama-server.container Quadlet with GPU passthrough via
+# CDI (configured below).
+COPY containers/lifeos-llama-server/lifeos-llama-server.container /usr/share/containers/systemd/lifeos-llama-server.container
 COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/system/llama-embeddings.service
 # Phase 2 (embeddings) Quadlet flip — host setup script
 # `lifeos-embeddings-setup.sh` is now invoked from
@@ -1100,7 +1080,7 @@ COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/
 # file gets populated and the model gets downloaded before the container
 # starts. The legacy host unit stays installed as manual rollback target
 # and is no longer wired into multi-user.target.wants below.
-COPY containers/lifeos-llama-embeddings/lifeos-llama-embeddings.container /etc/containers/systemd/lifeos-llama-embeddings.container
+COPY containers/lifeos-llama-embeddings/lifeos-llama-embeddings.container /usr/share/containers/systemd/lifeos-llama-embeddings.container
 COPY image/files/usr/local/bin/lifeos-embeddings-setup.sh /usr/local/bin/lifeos-embeddings-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-embeddings-setup.sh
 COPY image/files/etc/systemd/system/whisper-stt.service       /usr/lib/systemd/system/whisper-stt.service
@@ -1118,7 +1098,30 @@ COPY image/files/etc/systemd/system/simplex-chat.service.d/10-bootstrap-profile.
 # install -d ExecStartPre that creates /var/lib/lifeos/simplex with the
 # right perms (legacy unit's StateDirectory= no longer runs). The legacy
 # host unit stays installed as manual rollback target.
-COPY containers/lifeos-simplex-bridge/lifeos-simplex-bridge.container /etc/containers/systemd/lifeos-simplex-bridge.container
+COPY containers/lifeos-simplex-bridge/lifeos-simplex-bridge.container /usr/share/containers/systemd/lifeos-simplex-bridge.container
+
+# Phase 3 (lifeosd Quadlet) — drops the .container into /usr/share/containers/systemd/.
+# At this stage of the rollout the host /usr/bin/lifeosd binary STILL ships
+# (user-scope systemd unit auto-starts it). The Quadlet is here so an operator
+# can flip manually:
+#   sudo systemctl --user stop lifeosd
+#   sudo systemctl daemon-reload
+#   sudo systemctl start lifeos-lifeosd.service
+# Once validation passes, a follow-up commit removes /usr/bin/lifeosd from
+# bootc and masks the legacy user unit. Rollback is bootc rollback.
+COPY containers/lifeos-lifeosd/lifeos-lifeosd.container /usr/share/containers/systemd/lifeos-lifeosd.container
+
+# State migration helper (Phase 3) — first time lifeos-lifeosd.service starts
+# after a deploy that flipped lifeosd to a Quadlet, /var/lib/lifeos is empty
+# but ~/.local/share/lifeos has the user's encrypted memory store. The
+# migration unit (oneshot, ordered Before=lifeos-lifeosd.service) copies the
+# tree once. Idempotent — exits clean if /var/lib/lifeos/memory.db already
+# exists. The script also asserts /etc/machine-id matches what the existing
+# memory.db was encrypted with (since the key derives from machine-id), so a
+# laptop swap doesn't silently produce an unreadable DB.
+COPY image/files/usr/local/bin/lifeos-state-migrate.sh /usr/local/bin/lifeos-state-migrate.sh
+COPY image/files/etc/systemd/system/lifeos-state-migrate.service /usr/lib/systemd/system/lifeos-state-migrate.service
+RUN chmod +x /usr/local/bin/lifeos-state-migrate.sh
 COPY image/files/usr/local/bin/lifeos-simplex-setup.sh /usr/local/bin/lifeos-simplex-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-simplex-setup.sh
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
@@ -1128,46 +1131,13 @@ COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-over
 # Dashboard access: only via Axi tray icon → "Abrir Dashboard"
 # COPY image/files/etc/xdg/autostart/lifeos-axi-experience.desktop /etc/xdg/autostart/lifeos-axi-experience.desktop
 # COPY image/files/usr/share/applications/lifeos-axi-dashboard.desktop /usr/share/applications/lifeos-axi-dashboard.desktop
-# lifeosd.service — canonical runtime is a user service so it inherits
-# Wayland, PipeWire, D-Bus, and the active user's session state.
-# This lets the GTK4 mini-widget (Eye of Axi) render on the desktop and
-# gives native access to audio, camera, and screen capture.
-RUN printf '%s\n' \
-    '[Unit]' \
-    'Description=LifeOS AI Daemon (Axi)' \
-    '# Wait for BOTH pipewire and the graphical session to be ready before' \
-    '# starting. The Wants= pulls graphical-session.target into the activation' \
-    '# queue; without it, lifeosd races the display server and the Axi tray' \
-    '# icon code gives up after its 30s retry with "No display found, tray' \
-    '# icon disabled" — leaving the user without the tray icon for the whole' \
-    '# session.' \
-    'After=graphical-session.target pipewire.service' \
-    'Wants=graphical-session.target pipewire.service' \
-    '' \
-    '[Service]' \
-    'Type=simple' \
-    'Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard' \
-    'Environment=LIFEOS_RUNTIME_DIR=%t/lifeos' \
-    'Environment=LIFEOS_WESPEAKER_MODEL=/usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx' \
-    'EnvironmentFile=-/etc/lifeos/llm-providers.env' \
-    'EnvironmentFile=-%h/.config/lifeos/llm-providers.env' \
-    'ExecStartPre=/bin/mkdir -p %t/lifeos' \
-    'ExecStart=/usr/bin/lifeosd' \
-    'Restart=on-failure' \
-    'RestartSec=5' \
-    'WatchdogSec=300' \
-    'NoNewPrivileges=yes' \
-    'PrivateTmp=yes' \
-    '' \
-    '[Install]' \
-    '# Wanted-by graphical-session.target so lifeosd is only activated once' \
-    '# COSMIC (or whatever DE) has a real display up. Previously this was' \
-    '# default.target which activated lifeosd BEFORE the session was ready.' \
-    'WantedBy=graphical-session.target' \
-    > /usr/lib/systemd/user/lifeosd.service
-# Keep a system-level alias only for compatibility/debugging.
-# This alias is NOT the primary runtime contract for lifeosd.
-RUN ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/system/lifeosd.service
+# Phase 3: the legacy user-scope lifeosd.service (which ran /usr/bin/lifeosd)
+# is REMOVED. The daemon now runs as a system Quadlet generated from
+# /usr/share/containers/systemd/lifeos-lifeosd.container. systemd's Quadlet
+# generator synthesizes lifeos-lifeosd.service at boot. The Quadlet binds
+# /var/lib/lifeos for state (lifeos-state-migrate.service copies the user's
+# old ~/.local/share/lifeos data on first boot). UI features (tray, wake-
+# word) return as small companion binaries in a follow-up PR.
 
 # Habilitar servicios via symlinks
 RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
@@ -1185,11 +1155,9 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
     ln -sf /usr/lib/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-refresh-bls-titles.service && \
-    # Canonical enablement: lifeosd starts from the graphical session target
-    # so it waits for the display server to be ready (fixes the tray-icon
-    # race where lifeosd gave up after its 30s wait before COSMIC was up).
-    mkdir -p /usr/lib/systemd/user/graphical-session.target.wants && \
-    ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/graphical-session.target.wants/lifeosd.service && \
+    # Phase 3: user-scope lifeosd.service symlink removed. The Quadlet
+    # auto-enables via systemd-generator + [Install] WantedBy in the
+    # .container file.
     # Enable nvidia-persistenced so the NVIDIA driver keeps the GPU
     # context alive across idle periods. Without this the driver unloads
     # the context when no client is active and the LLM weights get
@@ -1198,7 +1166,6 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     if [ -f /usr/lib/systemd/system/nvidia-persistenced.service ]; then \
         ln -sf /usr/lib/systemd/system/nvidia-persistenced.service /usr/lib/systemd/system/multi-user.target.wants/nvidia-persistenced.service; \
     fi && \
-    ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
     ln -sf /usr/lib/systemd/system/fstrim.timer /usr/lib/systemd/system/timers.target.wants/fstrim.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
@@ -1206,6 +1173,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-flatpak-update.timer /usr/lib/systemd/system/timers.target.wants/lifeos-flatpak-update.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-flatpak-nvidia-sync.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-flatpak-nvidia-sync.service && \
     ln -sf /usr/lib/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-aide-check.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-state-migrate.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-state-migrate.service && \
     ln -sf /usr/lib/systemd/system/lifeos-image-guardian.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-image-guardian.service && \
     ln -sf /usr/lib/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-update-stage.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-stage.timer && \
@@ -1239,15 +1207,20 @@ RUN mkdir -p /etc/systemd/system && \
 # Keep app binaries and dashboard late in the Dockerfile because they change
 # more often than the large OS/model layers above.
 COPY --from=builder /out/life /usr/bin/life
-COPY --from=builder /out/lifeosd /usr/bin/lifeosd
+# Phase 3: lifeosd binary removed from bootc — runs as a Quadlet from
+# ghcr.io/hectormr206/lifeos-lifeosd:stable. The container ships with
+# --features "dbus,http-api,messaging" (HTTP API, memory, agentic chat,
+# SimpleX bridge). UI features (tray icon, wake-word, GTK4 overlay)
+# are not in the container — those return as small companion binaries
+# in a follow-up PR. For now the dashboard at http://127.0.0.1:8081
+# is the canonical user surface. Saves ~150 MB from bootc.
 COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
 
 # --- Dashboard web (Axi control panel) ---
 COPY daemon/static/dashboard /usr/share/lifeos/dashboard
 
-RUN chmod +x /usr/bin/life /usr/bin/lifeosd /usr/local/bin/cargo-audit && \
-    ln -sf /usr/bin/life /usr/local/bin/life && \
-    ln -sf /usr/bin/lifeosd /usr/local/bin/lifeosd
+RUN chmod +x /usr/bin/life /usr/local/bin/cargo-audit && \
+    ln -sf /usr/bin/life /usr/local/bin/life
 
 # --- Runtime metadata that changes on almost every build ---
 # Keep labels/channel markers at the end so BUILD_DATE/VCS_REF churn does not
@@ -1370,26 +1343,20 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     rm -f /var/cache/ldconfig/aux-cache && \
     rm -f /var/cache/swcatalog/cache/C-local-metainfo.xb /var/cache/swcatalog/cache/C-os-catalog.xb
 
-# --- Final llama-server verification ---
-# Belt-and-suspenders: verify the AI binaries survived all dnf operations.
-# Also clean up any stale .so files from previous pre-compiled builds.
+# --- Stale-library cleanup ---
+# Phase 4 of the architecture pivot removed the on-host llama-server binary
+# (and its sibling libllama.so / libggml*.so) because chat inference now runs
+# inside the lifeos-llama-server Quadlet container with its own private
+# library set. The previous "final llama-server verification" RUN block
+# (re-linking the binary, asserting --version) was load-bearing on the
+# binary existing in the host filesystem; removing the build site without
+# removing the verification produced a "FATAL: llama-server disappeared"
+# CI failure on this branch. We still scrub any stale .so files in case a
+# rollback or a previous layer left them behind, then ldconfig — that's
+# all the host needs now.
 RUN set -eux && \
     rm -f /usr/lib64/libllama.so* /usr/lib64/libggml*.so* /usr/lib64/libmtmd.so* && \
-    ldconfig && \
-    LLAMA_BIN="$(command -v llama-server 2>/dev/null || find /usr -name llama-server -type f 2>/dev/null | head -1)" && \
-    echo ">>> Final check: llama-server at ${LLAMA_BIN:-NOT FOUND}" && \
-    test -n "${LLAMA_BIN}" || { echo "FATAL: llama-server disappeared"; exit 1; } && \
-    for dest in /usr/bin/llama-server /usr/sbin/llama-server; do \
-        if [ ! -x "$dest" ]; then \
-            ln -f "${LLAMA_BIN}" "$dest" 2>/dev/null || cp -f "${LLAMA_BIN}" "$dest" && \
-            chmod 0755 "$dest" && \
-            echo ">>> Linked to $dest"; \
-        fi; \
-    done && \
-    ls -la /usr/bin/llama-server /usr/sbin/llama-server /usr/bin/whisper-cli /usr/bin/whisper-stream && \
-    /usr/sbin/llama-server --version && \
-    /usr/bin/whisper-cli -h >/dev/null && \
-    /usr/bin/whisper-stream -h >/dev/null
+    ldconfig
 
 # --- Verificación final ---
 # Wrapper reports WHICH check failed instead of a silent exit code.
@@ -1397,11 +1364,14 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     # mpv/evince/keepassxc/loupe migrated from RPM to Flatpak (v0.5.0)
     # Their Flatpak presence is verified at first-boot by install_desktop_apps()
     test -x /usr/bin/life                 || fail "/usr/bin/life"; \
-    test -x /usr/bin/lifeosd              || fail "/usr/bin/lifeosd"; \
+    # Phase 3: lifeosd binary moved to ghcr.io/hectormr206/lifeos-lifeosd:stable
+    # — runs as a system Quadlet, no host binary. Validation switches to the
+    # Quadlet definition + state migration unit below.
     test -x /usr/local/bin/cargo-audit    || fail "/usr/local/bin/cargo-audit"; \
-    test -x /usr/bin/llama-server         || fail "/usr/bin/llama-server"; \
-    test -x /usr/bin/whisper-cli          || fail "/usr/bin/whisper-cli"; \
-    test -x /usr/bin/whisper-stream       || fail "/usr/bin/whisper-stream"; \
+    # Phase 4: llama-server binary removed from bootc (lives in
+    # ghcr.io/hectormr206/lifeos-llama-server:stable Quadlet now).
+    # Phase 7: whisper-cli / whisper-stream removed from bootc — now live
+    # inside ghcr.io/hectormr206/lifeos-lifeosd:stable.
     test -x /usr/bin/grim                 || fail "/usr/bin/grim"; \
     test -x /usr/bin/wl-copy              || fail "/usr/bin/wl-copy"; \
     test -x /usr/bin/tesseract            || fail "/usr/bin/tesseract"; \
@@ -1410,15 +1380,20 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -x /usr/local/bin/lifeos-ensure-images || fail "/usr/local/bin/lifeos-ensure-images"; \
     test -f /usr/lib/systemd/system/lifeos-image-guardian.service || fail "lifeos-image-guardian.service"; \
     test -L /usr/lib/systemd/system/multi-user.target.wants/lifeos-image-guardian.service || fail "guardian wants symlink"; \
-    test -f /etc/containers/systemd/lifeos-tts.container || fail "lifeos-tts.container"; \
-    test -f /etc/containers/systemd/lifeos-llama-embeddings.container || fail "lifeos-llama-embeddings.container"; \
-    test -f /etc/containers/systemd/lifeos-simplex-bridge.container || fail "lifeos-simplex-bridge.container"; \
+    test -f /usr/share/containers/systemd/lifeos-tts.container || fail "lifeos-tts.container"; \
+    test -f /usr/share/containers/systemd/lifeos-llama-server.container || fail "lifeos-llama-server.container"; \
+    test -x /usr/bin/nvidia-ctk || fail "/usr/bin/nvidia-ctk (Phase 4 GPU passthrough)"; \
+    test -f /usr/share/containers/systemd/lifeos-llama-embeddings.container || fail "lifeos-llama-embeddings.container"; \
+    test -f /usr/share/containers/systemd/lifeos-simplex-bridge.container || fail "lifeos-simplex-bridge.container"; \
+    test -f /usr/share/containers/systemd/lifeos-net.network || fail "lifeos-net.network (Phase 8)"; \
+    test -f /usr/share/containers/systemd/lifeos-lifeosd.container || fail "lifeos-lifeosd.container (Phase 3)"; \
+    test -f /usr/lib/systemd/system/lifeos-state-migrate.service || fail "lifeos-state-migrate.service (Phase 3)"; \
+    test -x /usr/local/bin/lifeos-state-migrate.sh || fail "/usr/local/bin/lifeos-state-migrate.sh (Phase 3)"; \
     test -x /usr/local/bin/lifeos-embeddings-setup.sh || fail "/usr/local/bin/lifeos-embeddings-setup.sh"; \
     test -x /usr/local/bin/lifeos-simplex-setup.sh || fail "/usr/local/bin/lifeos-simplex-setup.sh"; \
     test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
     test -x /usr/bin/virsh                || fail "/usr/bin/virsh"; \
     test -x /usr/bin/pkg-config           || fail "/usr/bin/pkg-config"; \
-    test -x /usr/sbin/llama-server        || fail "/usr/sbin/llama-server"; \
     test -x /usr/local/bin/lifeos-nvidia-secureboot.sh || fail "/usr/local/bin/lifeos-nvidia-secureboot.sh"; \
     test -x /usr/local/bin/lifeos-maintenance-cleanup.sh || fail "/usr/local/bin/lifeos-maintenance-cleanup.sh"; \
     test -x /usr/local/bin/lifeos-open-axi-dashboard.sh || fail "/usr/local/bin/lifeos-open-axi-dashboard.sh"; \
@@ -1426,8 +1401,8 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /usr/share/lifeos/dashboard/app.js || fail "/usr/share/lifeos/dashboard/app.js"; \
     test -f /usr/share/lifeos/dashboard/style.css || fail "/usr/share/lifeos/dashboard/style.css"; \
     # Dashboard .desktop removed — access only via tray icon
-    test -f /usr/lib/systemd/user/lifeosd.service || fail "/usr/lib/systemd/user/lifeosd.service"; \
-    test -f /usr/lib/systemd/system/llama-server.service || fail "llama-server.service"; \
+    # Phase 3: user-scope lifeosd.service no longer ships (replaced by Quadlet).
+    # Phase 4: legacy llama-server.service no longer ships (replaced by Quadlet).
     test -f /usr/lib/systemd/system/whisper-stt.service || fail "whisper-stt.service"; \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service || fail "lifeos-btrfs-snapshot.service"; \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer || fail "lifeos-btrfs-snapshot.timer"; \

@@ -407,7 +407,15 @@ async def _startup(app: web.Application) -> None:
         _LOG.warning("Warm-up failed (non-fatal): %s", exc)
 
     _ready = True
-    _LOG.info("Server ready on 127.0.0.1:%d", PORT)
+    # Log the actual bind interface, not a hardcoded loopback. Phase 8 of
+    # the architecture pivot moves this server onto a podman bridge where
+    # bind_host=0.0.0.0 — the journal entry must reflect that so operators
+    # debugging "TTS not reachable" don't chase a phantom 127.0.0.1.
+    _LOG.info(
+        "Server ready on %s:%d",
+        os.environ.get("LIFEOS_TTS_ENGINE_HOST", "127.0.0.1"),
+        PORT,
+    )
 
     # Start background tasks
     app["_watchdog_task"] = asyncio.ensure_future(_memory_watchdog())
@@ -448,10 +456,16 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
     app = _build_app()
-    _LOG.info("Starting LifeOS TTS server on 127.0.0.1:%d", PORT)
+    # Phase 8 of architecture pivot: when this container moves off Network=host
+    # onto the lifeos-net bridge, the server must bind 0.0.0.0 inside the
+    # container netns so podman's PublishPort=127.0.0.1:8084:8084 forward has
+    # something to forward to. The Quadlet sets LIFEOS_TTS_ENGINE_HOST=0.0.0.0;
+    # legacy host installs (Network=host) keep getting 127.0.0.1.
+    bind_host = os.environ.get("LIFEOS_TTS_ENGINE_HOST", "127.0.0.1")
+    _LOG.info("Starting LifeOS TTS server on %s:%d", bind_host, PORT)
     web.run_app(
         app,
-        host="127.0.0.1",
+        host=bind_host,
         port=PORT,
         access_log=None,  # We handle logging ourselves
         handle_signals=True,

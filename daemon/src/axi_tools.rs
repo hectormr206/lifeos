@@ -24,6 +24,24 @@ pub mod inner {
 
     use crate::browser_automation::BrowserAutomation;
     use crate::computer_use::{ComputerUseAction, ComputerUseManager};
+
+    /// Whitelist of systemd unit names the `service_manage` Axi tool is
+    /// allowed to mutate. Phase 3/4/5 of the architecture pivot moved chat
+    /// inference, embeddings, TTS, the SimpleX bridge, and the daemon itself
+    /// into Quadlet system services with the `lifeos-` prefix. Keeping the
+    /// list at module level (instead of buried inside the function body)
+    /// lets the tests below verify the canonical names are present without
+    /// constructing a full ToolContext + JSON args round-trip.
+    pub const SERVICE_MANAGE_ALLOWED_SERVICES: [&str; 8] = [
+        "nftables",
+        "firewalld",
+        "lifeos-llama-server",
+        "lifeos-llama-embeddings",
+        "lifeos-tts",
+        "lifeos-simplex-bridge",
+        "lifeos-lifeosd",
+        "whisper-stt",
+    ];
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
     use crate::memory_plane::{
         crisis_resources_mx, detect_crisis_in_text, extract_entities_from_text, BookStatus,
@@ -88,7 +106,7 @@ VISION: Si recibes una imagen, SIEMPRE describela y responde sobre ella. Si no p
 
 MENSAJES DE VOZ: Cuando recibes un mensaje de voz del usuario, el sistema YA lo transcribio automaticamente usando Whisper. El texto que ves ES la transcripcion del audio. NUNCA digas que no puedes escuchar o analizar audio — ya lo hiciste. Responde directamente al contenido transcrito.
 
-GESTION DE SERVICIOS: Puedes administrar servicios del sistema usando la herramienta service_manage. Si el usuario te pide activar el firewall, usa service=firewalld (es el firewall por defecto de Fedora/LifeOS). Servicios disponibles: nftables, firewalld, llama-server, whisper-stt.
+GESTION DE SERVICIOS: Puedes administrar servicios del sistema usando la herramienta service_manage. Si el usuario te pide activar el firewall, usa service=firewalld (es el firewall por defecto de Fedora/LifeOS). Servicios disponibles: nftables, firewalld, lifeos-llama-server, lifeos-llama-embeddings, lifeos-tts, lifeos-simplex-bridge, lifeos-lifeosd, whisper-stt.
 
 REGLAS DE TIEMPO:
 - SIEMPRE usa la hora del [Contexto temporal] mostrado arriba. NUNCA inventes una hora.
@@ -1166,9 +1184,9 @@ REGLAS FIRMES:
 78. **memory_protect** — Marca una memoria como permanente (nunca se borra ni decae).
     args: {"query": "nombre de mi suegro"}
 
-79. **service_manage** — Gestiona servicios del sistema (firewall, llama-server, whisper, etc).
-    args: {"service": "nftables", "action": "start"}
-    Servicios permitidos: nftables, firewalld, llama-server, whisper-stt
+79. **service_manage** — Gestiona servicios del sistema (firewall, lifeos-llama-server, whisper, etc).
+    args: {"service": "lifeos-llama-server", "action": "restart"}
+    Servicios permitidos: nftables, firewalld, lifeos-llama-server, lifeos-llama-embeddings, lifeos-tts, lifeos-simplex-bridge, lifeos-lifeosd, whisper-stt
     Acciones: start, stop, restart, enable, disable, status
     SEGURIDAD: Solo servicios en la lista blanca. Para activar firewall, usa service=firewalld action=start (Fedora usa firewalld por defecto, no nftables directo).
 
@@ -2010,6 +2028,44 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
             // No claims → no changes.
             let plain = "Hola Héctor, ¿cómo te sientes hoy?";
             assert_eq!(sanitize_persistence_claims(plain), plain);
+        }
+
+        #[test]
+        fn service_manage_allowlist_uses_post_pivot_unit_names() {
+            // Phase 3/4/5 of the architecture pivot: the canonical unit
+            // names are `lifeos-*` (Quadlet-generated), not the legacy
+            // `llama-server` / `simplex-chat` / `lifeosd` names. Catches
+            // a regression where a future refactor of the allowlist drops
+            // a Quadlet service or re-introduces a legacy name that points
+            // at a now-removed unit (silent service_manage no-op).
+            let canonical = [
+                "lifeos-llama-server",
+                "lifeos-llama-embeddings",
+                "lifeos-tts",
+                "lifeos-simplex-bridge",
+                "lifeos-lifeosd",
+            ];
+            for name in canonical {
+                assert!(
+                    SERVICE_MANAGE_ALLOWED_SERVICES.contains(&name),
+                    "post-pivot unit '{name}' missing from service_manage allowlist"
+                );
+            }
+            // Legacy names that were valid pre-pivot must NOT be re-added —
+            // they would route service_manage to non-existent units and
+            // report success on a no-op. The list intentionally still
+            // includes `whisper-stt` (genuine bootstrap unit kept on host).
+            for forbidden in [
+                "llama-server",
+                "llama-embeddings",
+                "simplex-chat",
+                "lifeosd",
+            ] {
+                assert!(
+                    !SERVICE_MANAGE_ALLOWED_SERVICES.contains(&forbidden),
+                    "legacy unit '{forbidden}' should not be in allowlist after Quadlet pivot"
+                );
+            }
         }
 
         #[test]
@@ -13499,8 +13555,9 @@ max_context = 128000
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'action'"))?;
 
-        // Whitelist of allowed services
-        let allowed_services = ["nftables", "firewalld", "llama-server", "whisper-stt"];
+        // Whitelist of allowed services. See SERVICE_MANAGE_ALLOWED_SERVICES
+        // (module-level const, tested below) for the canonical list.
+        let allowed_services = SERVICE_MANAGE_ALLOWED_SERVICES;
 
         // Normalize service name to systemd unit
         let unit = if service.ends_with(".service") {

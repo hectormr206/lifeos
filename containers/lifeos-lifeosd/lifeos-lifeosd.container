@@ -12,8 +12,18 @@ Documentation=https://github.com/hectormr206/lifeos
 # `simplex-chat.service` (the LEGACY non-prefixed host services); systemd
 # silently dropped ordering against those after Phase 4/5 flipped the
 # legacy units to masked/removed state.
-After=network-online.target lifeos-image-guardian.service lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
-Wants=network-online.target lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
+After=network-online.target lifeos-image-guardian.service lifeos-state-migrate.service lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
+# `Wants=` on the migration unit (NOT `Requires=`) — round-2 audit caught
+# that `Requires=` would block the daemon forever if the migration unit
+# failed even once (Type=oneshot has no Restart= and the daemon would
+# need a manual `systemctl reset-failed` to come back). With `Wants=` the
+# migration is best-effort: if it fails, the daemon still starts against
+# whatever state /var/lib/lifeos has, the operator gets a journal entry
+# explaining the failure, and the sentinel can do its job. The daemon's
+# memory-plane code already handles "no memory.db yet" cleanly (fresh
+# DB on first start) — losing migration is recoverable; losing the
+# entire daemon-start path is not.
+Wants=lifeos-state-migrate.service network-online.target lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
 
 [Container]
 Image=ghcr.io/hectormr206/lifeos-lifeosd:stable
@@ -62,6 +72,38 @@ Environment=LIFEOS_RUNTIME_DIR=/run/lifeos
 Environment=RUST_LOG=info,lifeosd=debug
 EnvironmentFile=-/etc/lifeos/llm-providers.env
 
+# Memory DB encryption key derives from /etc/machine-id + /etc/hostname
+# (see daemon/src/memory_plane.rs::derive_machine_key). Without these
+# bind-mounts, podman generates a fresh /etc/machine-id inside the
+# container, the derived key changes, and the existing memory.db (encrypted
+# with the host's key) becomes unreadable. RO + no `:z` because relabeling
+# /etc/machine-id to container_file_t breaks D-Bus + journald + half of
+# systemd on the host.
+Volume=/etc/machine-id:/etc/machine-id:ro
+Volume=/etc/hostname:/etc/hostname:ro
+
+# /run/lifeos shared with host: the daemon writes
+# /run/lifeos/bootstrap.token (LIFEOS_RUNTIME_DIR=/run/lifeos), and
+# lifeos-sentinel.sh on the host reads that file every 30 s to authenticate
+# its health probe. Without this bind the daemon writes to the container's
+# private /run tmpfs; the sentinel sees an empty token, fails every health
+# check, and crash-loops the daemon. Host-side /run/lifeos is created at
+# boot by tmpfiles.d/lifeos-runtime.conf. ':z' (shared MCS) — same path is
+# also touched by other host-side LifeOS services in future phases.
+Volume=/run/lifeos:/run/lifeos:z
+
+# === Container hardening (Quadlet [Container] directives) ===
+# Strategy: drop everything by default, add only what the daemon needs.
+DropCapability=all
+# DAC_OVERRIDE: read/write host-owned /var/lib/lifeos/*.db.
+# CHOWN, FOWNER: lifeosd creates new files under /var/lib/lifeos and may
+#   chown to match existing perms.
+AddCapability=DAC_OVERRIDE CHOWN FOWNER
+# SELinux type — container_t is podman default for rootful but explicit
+# is documentation. Per-container MCS isolation: add SecurityLabelLevel=
+# if/when sibling containers stop sharing :z paths.
+SecurityLabelType=container_t
+
 [Service]
 # Defense-in-depth Capa 4: ensure image is present locally before starting.
 # Quadlet requires ExecStartPre in [Service], not [Container].
@@ -87,48 +129,15 @@ TimeoutStartSec=120s
 # loop following the systemd protocol (every WatchdogSec/2 seconds):
 # WatchdogSec=300s
 
-# Resource limits. Daemon footprint is ~150-300 MB (memory_plane caches +
-# session store + LLM router state). 1G cap leaves headroom for surge.
+# Resource limits — applied to the systemd cgroup wrapping the podman
+# process. With Quadlet's --cgroups=split the container gets its own
+# sub-cgroup; this caps the whole service envelope.
 MemoryMax=1G
 
-# === Round 2 hardening — narrow the in-container blast radius ===
-#
-# C3 fix made the container run as root inside (UID mismatch with bind-
-# mounted host /var/lib/lifeos). Round 2 audit correctly flagged that
-# a root-inside container with broad bind mounts is strictly worse than
-# the legacy non-containerized daemon unless we drop unnecessary
-# capabilities and lock down what little is left.
-#
-# Strategy: deny EVERYTHING by default, add back only what the daemon
-# needs at runtime.
-NoNewPrivileges=true
-# DropCapability=all blanks the bounding set. Daemon needs:
-#   - DAC_OVERRIDE: read/write the host-owned /var/lib/lifeos/*.db.
-#     Without this, the in-container root still hits POSIX perm checks
-#     against host UID 1000 even though SELinux :z lets the container
-#     reach the path.
-#   - CHOWN, FOWNER: lifeosd creates new files under /var/lib/lifeos
-#     (session_store, scheduled_tasks DB, calendar) and may chown to
-#     match existing perms. Without these, create succeeds but chown
-#     EPERMs and the file ends up with wrong ownership.
-#
-# NOT included: NET_BIND_SERVICE — port 8081 > 1024 doesn't need any
-# capability. Round 3 audit correctly flagged the previous "future-proof
-# for :443" justification as a least-privilege violation. If/when the
-# dashboard moves to :443, add it at that commit.
-# NOT included: SYS_PTRACE, NET_RAW — daemon doesn't currently use
-# them. Add when/if a code path requires.
-DropCapability=all
-AddCapability=DAC_OVERRIDE CHOWN FOWNER
-
-# SELinux process type. Round 3 audit caught the previous syntax —
-# `SecurityLabel=type:container_t` — was systemd pre-Quadlet form that
-# silently no-ops in Quadlet. The correct Quadlet `[Container]` key is
-# `SecurityLabelType=`. `container_t` is podman's default for rootful
-# containers anyway, so this is mostly explicit-documentation /
-# belt-and-suspenders; for narrower per-container MCS isolation, add
-# `SecurityLabelLevel=s0:c100,c200`.
-SecurityLabelType=container_t
+# DO NOT add NoNewPrivileges= here. NNP + Quadlet --cgroups=split on
+# Fedora 44 + podman 5.x blocks /run/libpod/alive.lck acquisition
+# (broke TTS in PR #77 with the same daemon stack). Container hardening
+# lives in [Container] above (DropCapability/AddCapability/SecurityLabel).
 
 [Install]
 WantedBy=multi-user.target default.target

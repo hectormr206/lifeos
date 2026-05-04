@@ -3,8 +3,10 @@
 [Unit]
 Description=LifeOS SimpleX Chat Bot (Axi private messaging — containerized)
 Documentation=https://github.com/simplex-chat/simplex-chat
-After=network-online.target lifeos-image-guardian.service
+After=network-online.target lifeos-image-guardian.service lifeos-net-network.service
 Wants=network-online.target
+# Hard bridge dependency — see lifeos-tts.container for rationale.
+Requires=lifeos-net-network.service
 # lifeosd connects to :5226 — keep this up before lifeosd.
 Before=lifeos-lifeosd.service
 
@@ -13,10 +15,13 @@ Image=ghcr.io/hectormr206/lifeos-simplex-bridge:stable
 ContainerName=lifeos-simplex-bridge
 HostName=lifeos-simplex-bridge
 
-# Network=host — lifeosd connects via WebSocket on 127.0.0.1:5226. The
-# SimpleX protocol itself reaches out to SMP relays over TCP/443, which
-# Network=host gives us automatically without firewall fiddling.
-Network=host
+# Phase 8: bridge network. simplex-chat binds its WebSocket on :5226 inside
+# the container netns; PublishPort= forwards host loopback :5226 to the
+# bridge IP. lifeosd (Network=host) keeps its existing
+# ws://127.0.0.1:5226 URL. SimpleX protocol's outbound TCP/443 to SMP relays
+# works equally on bridge — podman SNAT handles it.
+Network=lifeos-net.network
+PublishPort=127.0.0.1:5226:5226
 
 # === SimpleX state — survives container recreate ===
 #

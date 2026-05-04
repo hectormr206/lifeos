@@ -11,11 +11,17 @@
 [Unit]
 Description=LifeOS Kokoro TTS Server (containerized)
 Documentation=https://github.com/hexgrad/kokoro
-After=network-online.target lifeos-image-guardian.service
+After=network-online.target lifeos-image-guardian.service lifeos-net-network.service
 Wants=network-online.target
-# After Phase 3 flips lifeosd to a Quadlet, this should re-target the
-# Quadlet-generated unit name. For now legacy lifeosd.service is the
-# host unit; ordering against a non-existent unit is silently dropped.
+# Hard dependency on the bridge: without it the container starts but
+# can't attach to lifeos-net, PublishPort= forwards die silently, and
+# the daemon's loopback connections are refused. Requires= pulls the
+# network in if it's not already running.
+Requires=lifeos-net-network.service
+# Order before the daemon Quadlet so TTS is up by the time the daemon's
+# sensory_pipeline first probes /tts. Phase 3 made lifeosd itself a
+# Quadlet (`lifeos-lifeosd.service`), so this Before= now resolves
+# against a real generated unit instead of a no-op.
 Before=lifeos-lifeosd.service
 
 [Container]
@@ -23,9 +29,16 @@ Image=ghcr.io/hectormr206/lifeos-tts:stable
 ContainerName=lifeos-tts
 HostName=lifeos-tts
 
-# Network=host — Phase 1 networking choice (PRD §3 Opción A). Container
-# binds 127.0.0.1:8084 in the host netns; lifeosd reaches it unchanged.
-Network=host
+# Phase 8: container moves off Network=host onto the dedicated podman bridge
+# `lifeos-net`. Publish=127.0.0.1:8084:8084 keeps the daemon's existing
+# loopback URL (http://127.0.0.1:8084) working unchanged — the daemon is
+# still on Network=host until its hardcoded URLs (sensory_pipeline.rs,
+# llm_router.rs, ai.rs) move behind env vars that can resolve container DNS
+# (Phase 8b daemon refactor — deferred). Net effect today: the TTS process
+# no longer shares the host network namespace, which is the defense-in-depth
+# win Phase 8 was about. End-to-end behaviour unchanged.
+Network=lifeos-net.network
+PublishPort=127.0.0.1:8084:8084
 
 # Only surface left: the env file. Phase 6 makes everything else
 # (venv, voice models, manifest, server script) live INSIDE the
@@ -41,6 +54,12 @@ Network=host
 # then get an unexpected MCS label). Single source of truth: this
 # EnvironmentFile= line.
 EnvironmentFile=/etc/lifeos/tts-server.env
+
+# Phase 8: bind on the bridge interface so PublishPort= forwards reach the
+# server. Without this the server binds only the container's own loopback,
+# the bridge IP has nobody listening, and the daemon's loopback connections
+# get silently refused.
+Environment=LIFEOS_TTS_ENGINE_HOST=0.0.0.0
 
 [Service]
 # Defense-in-depth Capa 4: ensure image is present locally before starting.

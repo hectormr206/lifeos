@@ -1,6 +1,6 @@
 [Unit]
 Description=LifeOS SimpleX Chat Bot (Axi private messaging)
-After=network-online.target lifeosd.service
+After=network-online.target lifeos-lifeosd.service
 Wants=network-online.target
 
 [Service]
