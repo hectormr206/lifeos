@@ -2,7 +2,27 @@
 
 Este documento define la verdad canonica del runtime model actual de servicios en LifeOS.
 
-## Resumen ejecutivo
+> **Actualizacion Phase 3 / 4 / 5 / 6 / 7 / 8 (2026-Q2)**: el runtime model
+> cambio profundamente. Casi todos los servicios pesados ahora corren como
+> **Quadlets de sistema** (containers podman generados en
+> `/usr/share/containers/systemd/lifeos-*.container`). El daemon `lifeosd`
+> ya **no** es un user service — es el container `lifeos-lifeosd.service`.
+> El historial debajo se mantiene por contexto pero quedo desactualizado;
+> hay un follow-up para reescribir este archivo de cero.
+
+## Resumen ejecutivo (post-pivot)
+
+| Componente                  | Runtime primario hoy        | Notas                                                |
+| ---                         | ---                         | ---                                                  |
+| `lifeos-lifeosd.service`    | system Quadlet (root)       | Daemon Rust + memoria SQLite + bridge SimpleX + STT  |
+| `lifeos-llama-server`       | system Quadlet (GPU)        | Vulkan/CDI llama.cpp                                 |
+| `lifeos-llama-embeddings`   | system Quadlet              | nomic-embed-text                                     |
+| `lifeos-tts`                | system Quadlet              | Kokoro 82M + venv self-contained                     |
+| `lifeos-simplex-bridge`     | system Quadlet              | SimpleX CLI bot                                      |
+| `whisper-stt.service`       | system oneshot              | Bootstrap solamente — descarga ggml-base.bin         |
+| `lifeos-state-migrate`      | system oneshot              | Una vez por host: migra `~/.local/share/lifeos`      |
+
+## Resumen ejecutivo (historico — pre-pivot, deprecated)
 
 | Componente | Runtime primario hoy | Fallback soportado | Legacy / debug |
 | --- | --- | --- | --- |

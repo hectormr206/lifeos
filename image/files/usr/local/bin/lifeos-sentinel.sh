@@ -52,10 +52,22 @@ log() {
 }
 
 read_bootstrap_token() {
-    local token_path="/run/user/${LIFEOS_PRIMARY_UID}/lifeos/bootstrap.token"
-    if [ -r "$token_path" ]; then
-        cat "$token_path" 2>/dev/null
-    fi
+    # Phase 3 of architecture pivot: lifeos-lifeosd is now a system Quadlet
+    # with LIFEOS_RUNTIME_DIR=/run/lifeos (bind-mounted host↔container so
+    # both sides see the same token file). The legacy user-scope path
+    # /run/user/<uid>/lifeos/bootstrap.token is checked second as a
+    # rollback compatibility shim — it would only match if the operator
+    # rolled back to a pre-Phase-3 deployment that still ran lifeosd as a
+    # user service.
+    for token_path in \
+        "/run/lifeos/bootstrap.token" \
+        "/run/user/${LIFEOS_PRIMARY_UID}/lifeos/bootstrap.token"
+    do
+        if [ -r "$token_path" ]; then
+            cat "$token_path" 2>/dev/null
+            return
+        fi
+    done
 }
 
 check_health() {

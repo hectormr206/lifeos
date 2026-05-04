@@ -88,7 +88,7 @@ VISION: Si recibes una imagen, SIEMPRE describela y responde sobre ella. Si no p
 
 MENSAJES DE VOZ: Cuando recibes un mensaje de voz del usuario, el sistema YA lo transcribio automaticamente usando Whisper. El texto que ves ES la transcripcion del audio. NUNCA digas que no puedes escuchar o analizar audio — ya lo hiciste. Responde directamente al contenido transcrito.
 
-GESTION DE SERVICIOS: Puedes administrar servicios del sistema usando la herramienta service_manage. Si el usuario te pide activar el firewall, usa service=firewalld (es el firewall por defecto de Fedora/LifeOS). Servicios disponibles: nftables, firewalld, llama-server, whisper-stt.
+GESTION DE SERVICIOS: Puedes administrar servicios del sistema usando la herramienta service_manage. Si el usuario te pide activar el firewall, usa service=firewalld (es el firewall por defecto de Fedora/LifeOS). Servicios disponibles: nftables, firewalld, lifeos-llama-server, lifeos-llama-embeddings, lifeos-tts, lifeos-simplex-bridge, lifeos-lifeosd, whisper-stt.
 
 REGLAS DE TIEMPO:
 - SIEMPRE usa la hora del [Contexto temporal] mostrado arriba. NUNCA inventes una hora.
@@ -1166,9 +1166,9 @@ REGLAS FIRMES:
 78. **memory_protect** — Marca una memoria como permanente (nunca se borra ni decae).
     args: {"query": "nombre de mi suegro"}
 
-79. **service_manage** — Gestiona servicios del sistema (firewall, llama-server, whisper, etc).
-    args: {"service": "nftables", "action": "start"}
-    Servicios permitidos: nftables, firewalld, llama-server, whisper-stt
+79. **service_manage** — Gestiona servicios del sistema (firewall, lifeos-llama-server, whisper, etc).
+    args: {"service": "lifeos-llama-server", "action": "restart"}
+    Servicios permitidos: nftables, firewalld, lifeos-llama-server, lifeos-llama-embeddings, lifeos-tts, lifeos-simplex-bridge, lifeos-lifeosd, whisper-stt
     Acciones: start, stop, restart, enable, disable, status
     SEGURIDAD: Solo servicios en la lista blanca. Para activar firewall, usa service=firewalld action=start (Fedora usa firewalld por defecto, no nftables directo).
 
@@ -13499,8 +13499,20 @@ max_context = 128000
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'action'"))?;
 
-        // Whitelist of allowed services
-        let allowed_services = ["nftables", "firewalld", "llama-server", "whisper-stt"];
+        // Whitelist of allowed services. Phase 3/4/5 of the architecture
+        // pivot moved chat inference, embeddings, TTS, the SimpleX bridge,
+        // and the daemon itself into Quadlet system services with the
+        // `lifeos-` prefix. The legacy non-prefixed names are gone.
+        let allowed_services = [
+            "nftables",
+            "firewalld",
+            "lifeos-llama-server",
+            "lifeos-llama-embeddings",
+            "lifeos-tts",
+            "lifeos-simplex-bridge",
+            "lifeos-lifeosd",
+            "whisper-stt",
+        ];
 
         // Normalize service name to systemd unit
         let unit = if service.ends_with(".service") {

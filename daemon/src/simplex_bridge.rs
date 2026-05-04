@@ -642,21 +642,50 @@ mod inner {
 
     /// Transcribe an audio file using Whisper CLI.
     async fn transcribe_audio(path: &str) -> Option<String> {
-        // Try whisper-cli first, then whisper-cpp
-        let whisper = if Path::new("/usr/local/bin/whisper-cli").exists() {
-            "/usr/local/bin/whisper-cli"
-        } else if Path::new("/usr/local/bin/whisper-cpp").exists() {
-            "/usr/local/bin/whisper-cpp"
-        } else {
-            warn!("[simplex_bridge] No whisper binary found for transcription");
-            return None;
+        // Phase 7 of architecture pivot: whisper-cli now ships at /usr/bin/
+        // inside the lifeos-lifeosd container (the legacy /usr/local/bin
+        // host paths are gone). Probe candidates in order; PATH-first lets
+        // dev installs override.
+        let whisper_candidates = [
+            "/usr/bin/whisper-cli",
+            "/usr/local/bin/whisper-cli",
+            "/usr/bin/whisper",
+            "/usr/bin/whisper-cpp",
+            "/usr/local/bin/whisper-cpp",
+        ];
+        let whisper = match whisper_candidates.iter().find(|p| Path::new(p).exists()) {
+            Some(p) => *p,
+            None => {
+                warn!("[simplex_bridge] No whisper binary found for transcription");
+                return None;
+            }
         };
 
-        let model = "/usr/share/lifeos/models/whisper/ggml-small.bin";
-        if !Path::new(model).exists() {
-            warn!("[simplex_bridge] Whisper model not found at {}", model);
-            return None;
-        }
+        // Phase 6b/7: STT models live under /var/lib/lifeos/models/whisper
+        // (bind-mounted into the container). lifeos-stt-setup.sh downloads
+        // ggml-base.bin by default; fall back through other ggml-*.bin files
+        // so any model the operator dropped in works.
+        let model_dir = "/var/lib/lifeos/models/whisper";
+        let model_candidates = [
+            "ggml-base.bin",
+            "ggml-small.bin",
+            "ggml-tiny.bin",
+            "ggml-medium.bin",
+        ];
+        let model_owned = model_candidates
+            .iter()
+            .map(|m| format!("{}/{}", model_dir, m))
+            .find(|p| Path::new(p).exists());
+        let model = match model_owned.as_deref() {
+            Some(p) => p,
+            None => {
+                warn!(
+                    "[simplex_bridge] No whisper model found under {} (looked for {:?})",
+                    model_dir, model_candidates
+                );
+                return None;
+            }
+        };
 
         // Convert to WAV first (voice notes may be OGG/OPUS)
         let wav_path = format!("{}.wav", path);

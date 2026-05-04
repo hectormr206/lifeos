@@ -8,6 +8,16 @@
 **Estado:** Blueprint ejecutable (MVP + Roadmap 24 meses)
 **Audiencia:** usuarios principiantes, power users, developers, empresas
 
+> **Nota Phase 3 / 4 / 5 / 6 / 7 / 8 (2026-Q2)**: las menciones de unidades
+> systemd con nombres legacy (`lifeosd.service`, `llama-server.service`,
+> `simplex-chat.service`) en este documento corresponden al runtime
+> previo al pivot de arquitectura. Hoy el runtime canonico son Quadlets
+> de sistema con prefijo `lifeos-` (`lifeos-lifeosd`, `lifeos-llama-server`,
+> `lifeos-llama-embeddings`, `lifeos-tts`, `lifeos-simplex-bridge`). Las
+> reglas polkit y sudoers tambien quedaron actualizadas. Un follow-up
+> reescribira este documento; mientras tanto, ver `docs/strategy/
+> prd-architecture-pivot-lean-bootc-quadlet.md` para la arquitectura actual.
+
 ---
 
 ## 0. Contrato de ejecucion para LLM implementador

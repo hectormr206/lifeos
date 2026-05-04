@@ -26,6 +26,8 @@ NetworkName=lifeos-net
 # default and the 10.66.66.0/24 WireGuard tunnel the laptop uses.
 Subnet=10.89.0.0/24
 Gateway=10.89.0.1
-# Disable DNS proxying upstream — containers only need internal DNS to
-# resolve sibling lifeos-* names. External DNS still works via the host.
-DisableDNS=false
+# Embedded DNS is on by default (via netavark), which lets sibling
+# containers resolve each other by name when the daemon refactor (Phase 8b)
+# moves it onto this bridge. We do NOT set `DisableDNS=` — the directive is
+# either unrecognized or misnamed across podman versions and an explicit
+# value here only adds risk of hard rejection on a future podman bump.

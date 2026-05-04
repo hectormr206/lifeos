@@ -11,7 +11,7 @@
 [Unit]
 Description=LifeOS Kokoro TTS Server (containerized)
 Documentation=https://github.com/hexgrad/kokoro
-After=network-online.target lifeos-image-guardian.service
+After=network-online.target lifeos-image-guardian.service lifeos-net-network.service
 Wants=network-online.target
 # After Phase 3 flips lifeosd to a Quadlet, this should re-target the
 # Quadlet-generated unit name. For now legacy lifeosd.service is the
@@ -48,6 +48,12 @@ PublishPort=127.0.0.1:8084:8084
 # then get an unexpected MCS label). Single source of truth: this
 # EnvironmentFile= line.
 EnvironmentFile=/etc/lifeos/tts-server.env
+
+# Phase 8: bind on the bridge interface so PublishPort= forwards reach the
+# server. Without this the server binds only the container's own loopback,
+# the bridge IP has nobody listening, and the daemon's loopback connections
+# get silently refused.
+Environment=LIFEOS_TTS_ENGINE_HOST=0.0.0.0
 
 [Service]
 # Defense-in-depth Capa 4: ensure image is present locally before starting.

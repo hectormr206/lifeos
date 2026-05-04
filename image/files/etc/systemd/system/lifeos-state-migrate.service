@@ -1,7 +1,10 @@
 [Unit]
 Description=LifeOS State Migration — ~/.local/share/lifeos to /var/lib/lifeos
 Documentation=man:lifeos-state-migrate(8)
-ConditionPathExists=/home/lifeos/.local/share/lifeos
+# No ConditionPathExists= for the source: the script resolves UID 1000's
+# home dynamically via getent, so a hard-coded /home/lifeos path would
+# wrongly skip the unit on hosts where the LifeOS user has a different name.
+# The script itself exits cleanly when there's nothing to migrate.
 # Run BEFORE the lifeos-lifeosd Quadlet so the data is in place when the
 # container opens memory.db. systemd silently drops Before= against units
 # that don't exist (e.g. on a fresh install where lifeos-lifeosd.service

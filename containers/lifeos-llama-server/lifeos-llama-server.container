@@ -13,7 +13,7 @@ Documentation=https://github.com/ggml-org/llama.cpp
 # lifeosd reads from :8082 — keep llama-server up before lifeosd. Use the
 # Quadlet-generated unit name; ordering vs the legacy `llama-server.service`
 # (host) is silently dropped because that unit is masked post-Phase-4.
-After=network-online.target lifeos-image-guardian.service nvidia-cdi-refresh.service
+After=network-online.target lifeos-image-guardian.service nvidia-cdi-refresh.service lifeos-net-network.service
 Before=lifeos-lifeosd.service
 # nvidia-cdi-refresh.service ships with nvidia-container-toolkit and regenerates
 # the CDI spec at boot. Wants= because if it's absent (driver hot-swap, custom
@@ -152,7 +152,11 @@ TimeoutStartSec=180s
 MemoryMax=8G
 CPUQuota=400%
 
-NoNewPrivileges=true
+# DO NOT add `NoNewPrivileges=true`. Same Fedora 44 + podman 5.x
+# `--cgroups=split` interaction that broke TTS in PR #77 — NNP at the
+# [Service] layer blocks /run/libpod/alive.lck acquisition. The other
+# four LifeOS Quadlets have this comment too; this one was the outlier
+# until JD round 1 caught it.
 
 [Install]
 WantedBy=multi-user.target default.target

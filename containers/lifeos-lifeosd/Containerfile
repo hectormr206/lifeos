@@ -165,6 +165,14 @@ COPY --from=builder /src/target/release/lifeosd /usr/bin/lifeosd
 # host-side `lifeos-stt-setup.sh` continues to download model files there).
 COPY --from=whisper-builder /out/whisper-cli /usr/bin/whisper-cli
 
+# Dashboard static assets — the Quadlet sets LIFEOS_DASHBOARD_DIR=
+# /usr/share/lifeos/dashboard. Pre-Phase-3 this lived on the host bootc
+# image; Axum's ServeDir does not error on missing directory, it just
+# returns 404 for every request — silent dashboard breakage. We bake the
+# assets into the runtime image so the in-process web server has something
+# to serve. Build context is the repo root (per side-images.yml workflow).
+COPY daemon/static/dashboard /usr/share/lifeos/dashboard
+
 # UID/GID strategy — Phase 3a pragmatic choice.
 #
 # The bind mount /var/lib/lifeos comes from the host owned by uid=1000

@@ -1,7 +1,11 @@
 [Unit]
 Description=LifeOS Sentinel — Independent watchdog for lifeosd
-# Sentinel observes lifeosd over loopback; it does not define the daemon's
-# primary runtime model. lifeosd itself runs canonically as a user service.
+# Sentinel observes lifeos-lifeosd over loopback; it does not define the
+# daemon's primary runtime model. After Phase 3 of the architecture pivot,
+# lifeosd runs canonically as the system Quadlet `lifeos-lifeosd.service`
+# (generated from /usr/share/containers/systemd/lifeos-lifeosd.container).
+# The bootstrap token is bind-mounted at /run/lifeos/bootstrap.token from
+# inside the container so this sentinel can authenticate health probes.
 After=network-online.target
 Wants=network-online.target
 
@@ -12,15 +16,16 @@ Restart=always
 RestartSec=10
 
 # Security: minimal privileges.
-# NOTE: ProtectHome=true is intentionally NOT set. Sentinel must reach
-# /run/user/1000/bus (to restart lifeosd via `systemctl --user`) and
-# /run/user/1000/lifeos/bootstrap.token (to authenticate health checks
-# against /api/v1/health). ProtectHome blocks /run/user entirely, which
-# is why earlier revisions of this unit had the watchdog silently
-# reading HTTP 401 on every probe and escalating to structured recovery
-# that stopped llama-server on a loop.
+# Phase 3: bootstrap token now lives at /run/lifeos/bootstrap.token (host
+# tmpfs, bind-mounted into the lifeos-lifeosd container by its Quadlet),
+# so we no longer need /run/user/1000 access. The sentinel restarts the
+# system Quadlet via `systemctl restart lifeos-lifeosd.service` (root
+# scope), no user bus involved. ProtectHome=true is now safe to enable —
+# sentinel reads no $HOME paths.
 NoNewPrivileges=true
 ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/run/lifeos
 ReadWritePaths=/var/log/lifeos
 
 [Install]

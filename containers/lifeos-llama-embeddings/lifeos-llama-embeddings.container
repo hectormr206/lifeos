@@ -6,7 +6,7 @@
 [Unit]
 Description=LifeOS Semantic Embeddings Server (containerized)
 Documentation=https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF
-After=network-online.target lifeos-image-guardian.service
+After=network-online.target lifeos-image-guardian.service lifeos-net-network.service
 Wants=network-online.target
 # lifeosd does memory recall via embeddings — keep this up before lifeosd.
 # Use the Quadlet-generated unit name; ordering vs the legacy
