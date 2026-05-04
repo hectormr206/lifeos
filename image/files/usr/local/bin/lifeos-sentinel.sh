@@ -36,11 +36,11 @@ user_systemctl() {
 }
 
 restart_lifeosd() {
-    # Canonical path: restart the user-scoped daemon. Keep the system-scope
-    # alias only as a legacy/debug fallback if the user bus is unavailable.
-    user_systemctl restart lifeosd.service 2>/dev/null || \
-        systemctl restart lifeosd.service 2>/dev/null || \
-        log "Failed to restart lifeosd in both user and system scopes"
+    # Canonical path after Phase 3 of the architecture pivot: restart the
+    # system-scope Quadlet `lifeos-lifeosd.service`. The legacy user-scope
+    # `lifeosd.service` no longer exists.
+    systemctl restart lifeos-lifeosd.service 2>/dev/null || \
+        log "Failed to restart lifeos-lifeosd.service"
 }
 
 log() {
@@ -105,8 +105,7 @@ check_memory() {
     pct_used=$(( (mem_total - mem_available) * 100 / mem_total ))
     if [ "$pct_used" -ge "$MEMORY_THRESHOLD" ]; then
         log "MEMORY CRITICAL: ${pct_used}% used — stopping llama-server to free RAM"
-        systemctl --user stop llama-server.service 2>/dev/null || \
-            systemctl stop llama-server.service 2>/dev/null || true
+        systemctl stop lifeos-llama-server.service 2>/dev/null || true
         # Brief pause to let memory settle
         sleep 2
     fi
@@ -115,7 +114,7 @@ check_memory() {
 # Collect recent journal logs for debugging context in alerts.
 collect_recent_logs() {
     local recent_logs
-    recent_logs=$(journalctl --user -u lifeosd -n 5 --no-pager 2>/dev/null || echo "no logs")
+    recent_logs=$(journalctl -u lifeos-lifeosd -n 5 --no-pager 2>/dev/null || echo "no logs")
     echo "$recent_logs"
 }
 
@@ -180,8 +179,7 @@ ${local_logs}"
 
         # Step 1: Stop llama-server to free GPU/RAM
         log "Recovery step 1: stopping llama-server"
-        systemctl --user stop llama-server.service 2>/dev/null || \
-            systemctl stop llama-server.service 2>/dev/null || true
+        systemctl stop lifeos-llama-server.service 2>/dev/null || true
 
         # Step 2: Clear temporary files
         log "Recovery step 2: clearing /tmp/lifeos-* temporary files"
@@ -189,8 +187,7 @@ ${local_logs}"
 
         # Step 3: Full daemon restart with environment reset
         log "Recovery step 3: full daemon restart with reset-failed"
-        user_systemctl reset-failed lifeosd.service 2>/dev/null || \
-            systemctl reset-failed lifeosd.service 2>/dev/null || true
+        systemctl reset-failed lifeos-lifeosd.service 2>/dev/null || true
         restart_lifeosd
 
         # Step 4: Wait and check if recovery worked

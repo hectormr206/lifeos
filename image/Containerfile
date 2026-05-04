@@ -108,12 +108,16 @@ COPY daemon/static daemon/static/
 COPY contracts/ contracts/
 
 # Build binaries with deterministic dependency resolution, then keep only artifacts.
+# Phase 3: lifeosd is no longer built here. The daemon ships from
+# ghcr.io/hectormr206/lifeos-lifeosd:stable, built by .github/workflows/side-images.yml
+# from containers/lifeos-lifeosd/Containerfile. Dropping the daemon build out
+# of bootc cuts ~10 minutes of CI per host image and removes ~150 MB of
+# linker-time artifacts from the layer cache.
 RUN set -eux && \
     cargo build --release --locked -p life && \
-    cargo build --release --locked -p lifeosd \
-        --features "dbus,http-api,ui-overlay,wake-word,speaker-id,messaging,tray" && \
+    cargo build --release --locked -p lifeosd --bin lifeos-train-wakeword \
+        --features "wake-word" && \
     install -D -m 0755 /build/target/release/life /out/life && \
-    install -D -m 0755 /build/target/release/lifeosd /out/lifeosd && \
     install -D -m 0755 /build/target/release/lifeos-train-wakeword /out/lifeos-train-wakeword && \
     rm -rf /build/target /root/.cargo/registry /root/.cargo/git
 
@@ -836,8 +840,13 @@ COPY image/files/etc/skel/.mozilla/firefox/profiles.ini /etc/skel/.mozilla/firef
 COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/user.js /etc/skel/.mozilla/firefox/lifeos.default/user.js
 COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css
 
+# Phase 3 of the architecture pivot removed lifeos-ensure-daemon.sh (login-time
+# profile.d hook that started the user-scope lifeosd.service). The daemon now
+# runs as the system Quadlet `lifeos-lifeosd.service` which auto-starts at boot
+# via the Quadlet generator's [Install] WantedBy — no per-login bootstrap
+# needed any more.
+
 # Wayland environment for Firefox
-COPY image/files/etc/profile.d/lifeos-ensure-daemon.sh /etc/profile.d/lifeos-ensure-daemon.sh
 COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland.sh
 COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
 COPY image/files/etc/profile.d/lifeos-firefox-profile.sh /etc/profile.d/lifeos-firefox-profile.sh
@@ -1100,6 +1109,29 @@ COPY image/files/etc/systemd/system/simplex-chat.service.d/10-bootstrap-profile.
 # right perms (legacy unit's StateDirectory= no longer runs). The legacy
 # host unit stays installed as manual rollback target.
 COPY containers/lifeos-simplex-bridge/lifeos-simplex-bridge.container /usr/share/containers/systemd/lifeos-simplex-bridge.container
+
+# Phase 3 (lifeosd Quadlet) — drops the .container into /usr/share/containers/systemd/.
+# At this stage of the rollout the host /usr/bin/lifeosd binary STILL ships
+# (user-scope systemd unit auto-starts it). The Quadlet is here so an operator
+# can flip manually:
+#   sudo systemctl --user stop lifeosd
+#   sudo systemctl daemon-reload
+#   sudo systemctl start lifeos-lifeosd.service
+# Once validation passes, a follow-up commit removes /usr/bin/lifeosd from
+# bootc and masks the legacy user unit. Rollback is bootc rollback.
+COPY containers/lifeos-lifeosd/lifeos-lifeosd.container /usr/share/containers/systemd/lifeos-lifeosd.container
+
+# State migration helper (Phase 3) — first time lifeos-lifeosd.service starts
+# after a deploy that flipped lifeosd to a Quadlet, /var/lib/lifeos is empty
+# but ~/.local/share/lifeos has the user's encrypted memory store. The
+# migration unit (oneshot, ordered Before=lifeos-lifeosd.service) copies the
+# tree once. Idempotent — exits clean if /var/lib/lifeos/memory.db already
+# exists. The script also asserts /etc/machine-id matches what the existing
+# memory.db was encrypted with (since the key derives from machine-id), so a
+# laptop swap doesn't silently produce an unreadable DB.
+COPY image/files/usr/local/bin/lifeos-state-migrate.sh /usr/local/bin/lifeos-state-migrate.sh
+COPY image/files/etc/systemd/system/lifeos-state-migrate.service /usr/lib/systemd/system/lifeos-state-migrate.service
+RUN chmod +x /usr/local/bin/lifeos-state-migrate.sh
 COPY image/files/usr/local/bin/lifeos-simplex-setup.sh /usr/local/bin/lifeos-simplex-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-simplex-setup.sh
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
@@ -1109,46 +1141,13 @@ COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-over
 # Dashboard access: only via Axi tray icon → "Abrir Dashboard"
 # COPY image/files/etc/xdg/autostart/lifeos-axi-experience.desktop /etc/xdg/autostart/lifeos-axi-experience.desktop
 # COPY image/files/usr/share/applications/lifeos-axi-dashboard.desktop /usr/share/applications/lifeos-axi-dashboard.desktop
-# lifeosd.service — canonical runtime is a user service so it inherits
-# Wayland, PipeWire, D-Bus, and the active user's session state.
-# This lets the GTK4 mini-widget (Eye of Axi) render on the desktop and
-# gives native access to audio, camera, and screen capture.
-RUN printf '%s\n' \
-    '[Unit]' \
-    'Description=LifeOS AI Daemon (Axi)' \
-    '# Wait for BOTH pipewire and the graphical session to be ready before' \
-    '# starting. The Wants= pulls graphical-session.target into the activation' \
-    '# queue; without it, lifeosd races the display server and the Axi tray' \
-    '# icon code gives up after its 30s retry with "No display found, tray' \
-    '# icon disabled" — leaving the user without the tray icon for the whole' \
-    '# session.' \
-    'After=graphical-session.target pipewire.service' \
-    'Wants=graphical-session.target pipewire.service' \
-    '' \
-    '[Service]' \
-    'Type=simple' \
-    'Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard' \
-    'Environment=LIFEOS_RUNTIME_DIR=%t/lifeos' \
-    'Environment=LIFEOS_WESPEAKER_MODEL=/usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx' \
-    'EnvironmentFile=-/etc/lifeos/llm-providers.env' \
-    'EnvironmentFile=-%h/.config/lifeos/llm-providers.env' \
-    'ExecStartPre=/bin/mkdir -p %t/lifeos' \
-    'ExecStart=/usr/bin/lifeosd' \
-    'Restart=on-failure' \
-    'RestartSec=5' \
-    'WatchdogSec=300' \
-    'NoNewPrivileges=yes' \
-    'PrivateTmp=yes' \
-    '' \
-    '[Install]' \
-    '# Wanted-by graphical-session.target so lifeosd is only activated once' \
-    '# COSMIC (or whatever DE) has a real display up. Previously this was' \
-    '# default.target which activated lifeosd BEFORE the session was ready.' \
-    'WantedBy=graphical-session.target' \
-    > /usr/lib/systemd/user/lifeosd.service
-# Keep a system-level alias only for compatibility/debugging.
-# This alias is NOT the primary runtime contract for lifeosd.
-RUN ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/system/lifeosd.service
+# Phase 3: the legacy user-scope lifeosd.service (which ran /usr/bin/lifeosd)
+# is REMOVED. The daemon now runs as a system Quadlet generated from
+# /usr/share/containers/systemd/lifeos-lifeosd.container. systemd's Quadlet
+# generator synthesizes lifeos-lifeosd.service at boot. The Quadlet binds
+# /var/lib/lifeos for state (lifeos-state-migrate.service copies the user's
+# old ~/.local/share/lifeos data on first boot). UI features (tray, wake-
+# word) return as small companion binaries in a follow-up PR.
 
 # Habilitar servicios via symlinks
 RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
@@ -1166,11 +1165,9 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
     ln -sf /usr/lib/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-refresh-bls-titles.service && \
-    # Canonical enablement: lifeosd starts from the graphical session target
-    # so it waits for the display server to be ready (fixes the tray-icon
-    # race where lifeosd gave up after its 30s wait before COSMIC was up).
-    mkdir -p /usr/lib/systemd/user/graphical-session.target.wants && \
-    ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/graphical-session.target.wants/lifeosd.service && \
+    # Phase 3: user-scope lifeosd.service symlink removed. The Quadlet
+    # auto-enables via systemd-generator + [Install] WantedBy in the
+    # .container file.
     # Enable nvidia-persistenced so the NVIDIA driver keeps the GPU
     # context alive across idle periods. Without this the driver unloads
     # the context when no client is active and the LLM weights get
@@ -1186,6 +1183,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-flatpak-update.timer /usr/lib/systemd/system/timers.target.wants/lifeos-flatpak-update.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-flatpak-nvidia-sync.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-flatpak-nvidia-sync.service && \
     ln -sf /usr/lib/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-aide-check.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-state-migrate.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-state-migrate.service && \
     ln -sf /usr/lib/systemd/system/lifeos-image-guardian.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-image-guardian.service && \
     ln -sf /usr/lib/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-update-stage.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-stage.timer && \
@@ -1219,15 +1217,20 @@ RUN mkdir -p /etc/systemd/system && \
 # Keep app binaries and dashboard late in the Dockerfile because they change
 # more often than the large OS/model layers above.
 COPY --from=builder /out/life /usr/bin/life
-COPY --from=builder /out/lifeosd /usr/bin/lifeosd
+# Phase 3: lifeosd binary removed from bootc — runs as a Quadlet from
+# ghcr.io/hectormr206/lifeos-lifeosd:stable. The container ships with
+# --features "dbus,http-api,messaging" (HTTP API, memory, agentic chat,
+# SimpleX bridge). UI features (tray icon, wake-word, GTK4 overlay)
+# are not in the container — those return as small companion binaries
+# in a follow-up PR. For now the dashboard at http://127.0.0.1:8081
+# is the canonical user surface. Saves ~150 MB from bootc.
 COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
 
 # --- Dashboard web (Axi control panel) ---
 COPY daemon/static/dashboard /usr/share/lifeos/dashboard
 
-RUN chmod +x /usr/bin/life /usr/bin/lifeosd /usr/local/bin/cargo-audit && \
-    ln -sf /usr/bin/life /usr/local/bin/life && \
-    ln -sf /usr/bin/lifeosd /usr/local/bin/lifeosd
+RUN chmod +x /usr/bin/life /usr/local/bin/cargo-audit && \
+    ln -sf /usr/bin/life /usr/local/bin/life
 
 # --- Runtime metadata that changes on almost every build ---
 # Keep labels/channel markers at the end so BUILD_DATE/VCS_REF churn does not
@@ -1377,7 +1380,9 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     # mpv/evince/keepassxc/loupe migrated from RPM to Flatpak (v0.5.0)
     # Their Flatpak presence is verified at first-boot by install_desktop_apps()
     test -x /usr/bin/life                 || fail "/usr/bin/life"; \
-    test -x /usr/bin/lifeosd              || fail "/usr/bin/lifeosd"; \
+    # Phase 3: lifeosd binary moved to ghcr.io/hectormr206/lifeos-lifeosd:stable
+    # — runs as a system Quadlet, no host binary. Validation switches to the
+    # Quadlet definition + state migration unit below.
     test -x /usr/local/bin/cargo-audit    || fail "/usr/local/bin/cargo-audit"; \
     test -x /usr/bin/llama-server         || fail "/usr/bin/llama-server"; \
     test -x /usr/bin/whisper-cli          || fail "/usr/bin/whisper-cli"; \
@@ -1395,6 +1400,9 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -x /usr/bin/nvidia-ctk || fail "/usr/bin/nvidia-ctk (Phase 4 GPU passthrough)"; \
     test -f /usr/share/containers/systemd/lifeos-llama-embeddings.container || fail "lifeos-llama-embeddings.container"; \
     test -f /usr/share/containers/systemd/lifeos-simplex-bridge.container || fail "lifeos-simplex-bridge.container"; \
+    test -f /usr/share/containers/systemd/lifeos-lifeosd.container || fail "lifeos-lifeosd.container (Phase 3)"; \
+    test -f /usr/lib/systemd/system/lifeos-state-migrate.service || fail "lifeos-state-migrate.service (Phase 3)"; \
+    test -x /usr/local/bin/lifeos-state-migrate.sh || fail "/usr/local/bin/lifeos-state-migrate.sh (Phase 3)"; \
     test -x /usr/local/bin/lifeos-embeddings-setup.sh || fail "/usr/local/bin/lifeos-embeddings-setup.sh"; \
     test -x /usr/local/bin/lifeos-simplex-setup.sh || fail "/usr/local/bin/lifeos-simplex-setup.sh"; \
     test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
@@ -1408,8 +1416,8 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /usr/share/lifeos/dashboard/app.js || fail "/usr/share/lifeos/dashboard/app.js"; \
     test -f /usr/share/lifeos/dashboard/style.css || fail "/usr/share/lifeos/dashboard/style.css"; \
     # Dashboard .desktop removed — access only via tray icon
-    test -f /usr/lib/systemd/user/lifeosd.service || fail "/usr/lib/systemd/user/lifeosd.service"; \
-    test -f /usr/lib/systemd/system/llama-server.service || fail "llama-server.service"; \
+    # Phase 3: user-scope lifeosd.service no longer ships (replaced by Quadlet).
+    # Phase 4: legacy llama-server.service no longer ships (replaced by Quadlet).
     test -f /usr/lib/systemd/system/whisper-stt.service || fail "whisper-stt.service"; \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service || fail "lifeos-btrfs-snapshot.service"; \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer || fail "lifeos-btrfs-snapshot.timer"; \

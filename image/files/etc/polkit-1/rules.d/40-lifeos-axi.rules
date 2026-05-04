@@ -1,9 +1,9 @@
 // Allow wheel group members to manage LifeOS system services without a password.
-// This enables Axi (lifeosd) to transparently manage its own ecosystem:
-//   - Restart the legacy/debug system-scope alias of lifeosd when needed
-//   - Manage llama-server for GPU offload (Game Guard)
-//   - Manage whisper-stt for voice pipeline
-//   - Reload systemd daemon after drop-in changes
+// This enables Axi (lifeos-lifeosd) to transparently manage its own ecosystem.
+// After Phase 3 of the architecture pivot, lifeosd runs as the system Quadlet
+// `lifeos-lifeosd.service`; the legacy user-scope `lifeosd.service` is gone.
+// The other side images (TTS, embeddings, llama-server, simplex-bridge) are
+// also Quadlet system services — same `lifeos-*` prefix.
 //
 // Uses wheel group so any user created during installation gets access.
 // Principle: Axi can manage its own ecosystem, but NOT arbitrary system services.
@@ -12,8 +12,11 @@ polkit.addRule(function(action, subject) {
         subject.isInGroup("wheel")) {
         var unit = action.lookup("unit");
         var allowedUnits = [
-            "lifeosd.service",
-            "llama-server.service",
+            "lifeos-lifeosd.service",
+            "lifeos-llama-server.service",
+            "lifeos-llama-embeddings.service",
+            "lifeos-tts.service",
+            "lifeos-simplex-bridge.service",
             "whisper-stt.service"
         ];
         for (var i = 0; i < allowedUnits.length; i++) {
