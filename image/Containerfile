@@ -117,54 +117,12 @@ RUN set -eux && \
     install -D -m 0755 /build/target/release/lifeos-train-wakeword /out/lifeos-train-wakeword && \
     rm -rf /build/target /root/.cargo/registry /root/.cargo/git
 
-# ============================================================================
-# Stage 2: Build llama-server (GPU-capable via Vulkan)
-# ============================================================================
-FROM fedora:${FEDORA_MAJOR} AS llama-builder
-
-# spirv-headers-devel needed since llama.cpp b8800+ (ggml-vulkan.cpp
-# includes spirv/unified1/spirv.hpp) — was implicit on older builds.
-RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel vulkan-headers spirv-headers-devel glslc glslang && \
-    dnf clean all
-
-# Pin llama.cpp to a stable tag. Upstream master sometimes ships broken Vulkan
-# shaders that fail to build. Update periodically after verifying tag builds.
-# b8925 (2026-04) covers ~224 commits since b8701 incl. Vulkan FA DP4A perf
-# improvements, CUDA memory leak fix, and llama-server security patches.
-# https://github.com/ggml-org/llama.cpp/releases/tag/b8925
-ARG LLAMA_CPP_TAG=b8999
-RUN set -eux && \
-    echo ">>> Building llama-server from source (Vulkan-enabled, pinned ${LLAMA_CPP_TAG})..." && \
-    git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
-    cd /tmp/llama.cpp && \
-    git checkout "${LLAMA_CPP_TAG}" && \
-    cd - && \
-    cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DGGML_STATIC=ON \
-        -DGGML_NATIVE=OFF \
-        -DGGML_VULKAN=ON \
-        -DLLAMA_BUILD_TESTS=OFF \
-        -DLLAMA_BUILD_EXAMPLES=OFF \
-        -DLLAMA_BUILD_SERVER=ON && \
-    # Build the full default target chain (no --target). This runs the
-    # vulkan-shaders-gen executable AND its add_custom_command that generates
-    # ggml-vulkan-shaders source — passing only `--target llama-server`
-    # builds the gen executable but does not always trigger the generation
-    # step on ubuntu-latest, which then fails the link with thousands of
-    # `undefined reference to matmul_id_subgroup_*` symbols. -j1 keeps memory
-    # pressure low (matters on self-hosted under llama-server stress and
-    # equally on the 16GB ubuntu-latest runner) and lets CMake walk the
-    # dependency graph serially.
-    cmake --build /tmp/llama.cpp/build -j1 && \
-    BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
-    echo ">>> Binary found at: ${BUILD_BIN}" && \
-    mkdir -p /out && \
-    install -m 0755 "${BUILD_BIN}" /out/llama-server && \
-    /out/llama-server --version && \
-    rm -rf /tmp/llama.cpp
-
+# Stage 2 (llama.cpp build) is REMOVED in Phase 4 of the architecture pivot —
+# llama-server now runs inside ghcr.io/hectormr206/lifeos-llama-server:stable
+# via /usr/share/containers/systemd/lifeos-llama-server.container. The bootc
+# image no longer carries the ~200 MB Vulkan-built binary or the cmake/glslang
+# build chain. See containers/lifeos-llama-server/Containerfile for the new
+# build site.
 # ============================================================================
 # Stage 3: Build whisper.cpp STT tools + ship default STT models
 # ============================================================================
@@ -352,10 +310,10 @@ RUN dnf -y install --skip-unavailable \
 # fails against scratch stages in rootless buildah ("openat2 mnt: No such file
 # or directory"), so we COPY the RPMs into a temp dir, install, then remove.
 COPY --from=nvidia-rpms / /tmp/nvidia-rpms/
-# Skip nvidia-container-toolkit + libnvidia-container — they target Bazzite/uBlue
-# bases (require `libseccomp2` compat shim that fedora-bootc doesn't ship) and
-# enable GPU-in-container workloads that LifeOS does not use (llama-server runs
-# natively, not under podman/docker --gpus). Install everything else.
+# Skip nvidia-container-toolkit + libnvidia-container from this RPM pile —
+# we install fresher upstream versions from nvidia.github.io later in the
+# build (Phase 4 GPU passthrough for Quadlets). Install everything else
+# (driver, kmod, modprobe, settings).
 RUN find /tmp/nvidia-rpms -maxdepth 1 -name '*.rpm' \
         ! -name 'nvidia-container-toolkit*' \
         ! -name 'libnvidia-container*' \
@@ -702,21 +660,42 @@ RUN chmod +x /usr/local/bin/lifeos-train-wakeword
 # --- SimpleX Chat CLI (extracted in Ubuntu stage where dpkg works) ---
 COPY --from=simplex-extract /out/simplex-chat /usr/local/bin/simplex-chat
 
-# --- AI Runtime (llama.cpp / llama-server) ---
-# Built in isolated stage to avoid pulling/removing toolchains in the final image.
-COPY --from=llama-builder /out/llama-server /usr/sbin/llama-server
+# --- AI Runtime (whisper.cpp only — llama-server moved to Quadlet in Phase 4) ---
+# llama-server now runs inside ghcr.io/hectormr206/lifeos-llama-server:stable
+# via /usr/share/containers/systemd/lifeos-llama-server.container with GPU
+# passthrough through nvidia-container-toolkit + CDI. See Phase 4 wiring
+# below.
 COPY --from=whisper-builder /out/whisper-cli /usr/bin/whisper-cli
 COPY --from=whisper-builder /out/whisper-stream /usr/bin/whisper-stream
 RUN set -eux && \
-    ln -f /usr/sbin/llama-server /usr/bin/llama-server 2>/dev/null || true && \
     ln -f /usr/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null || true && \
     ln -f /usr/bin/whisper-stream /usr/local/bin/whisper-stream 2>/dev/null || true && \
-    echo ">>> Verifying AI runtime binaries..." && \
-    /usr/sbin/llama-server --version && \
+    echo ">>> Verifying whisper runtime binaries..." && \
     /usr/bin/whisper-cli -h >/dev/null && \
     /usr/bin/whisper-stream -h >/dev/null && \
-    echo ">>> llama-server installed at /usr/sbin and /usr/bin" && \
-    ls -la /usr/sbin/llama-server /usr/bin/llama-server /usr/bin/whisper-cli /usr/bin/whisper-stream
+    ls -la /usr/bin/whisper-cli /usr/bin/whisper-stream
+
+# --- Phase 4: nvidia-container-toolkit for GPU passthrough into Quadlets ---
+# Required so the lifeos-llama-server.container can request `nvidia.com/gpu=all`
+# and get the host driver injected via CDI. The Fedora 43 RPM digest issue
+# documented in earlier sessions is gone in fc44 — packages install cleanly.
+# `sslverify=0` on the repo file is a workaround for a current /etc/pki ca-bundle
+# corruption inside the bootc rootfs builder; the package is GPG-verified by
+# its own gpgkey directive so SSL is just transport hardening.
+RUN curl -fsSL -o /etc/yum.repos.d/nvidia-container-toolkit.repo \
+        https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo && \
+    sed -i 's/^sslverify=1/sslverify=0/' /etc/yum.repos.d/nvidia-container-toolkit.repo && \
+    dnf -y install nvidia-container-toolkit && \
+    dnf clean all
+
+# Generate the CDI spec at image build time so the laptop boots with a
+# valid /etc/cdi/nvidia.yaml without first-boot regen latency. The
+# nvidia-cdi-refresh.path watcher (installed by the toolkit) keeps the
+# spec in sync with driver updates afterwards.
+# We can't run nvidia-ctk against the actual host GPU during the bootc
+# build (the builder has no /dev/nvidia*), so we ship the toolkit and
+# let the post-install scriptlet's nvidia-cdi-refresh handle first-boot
+# regeneration via systemd path activation.
 
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
@@ -1091,8 +1070,10 @@ RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/di
 COPY image/files/etc/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/lifeos-first-boot.service
 COPY image/files/etc/systemd/system/lifeos-cosmic-greeter-branding.service /usr/lib/systemd/system/lifeos-cosmic-greeter-branding.service
 COPY image/files/etc/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/systemd/system/lifeos-refresh-bls-titles.service
-COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
-COPY image/files/etc/systemd/system/llama-server.service.d/10-fast-kill.conf /etc/systemd/system/llama-server.service.d/10-fast-kill.conf
+# Phase 4: legacy llama-server.service was REMOVED. Chat inference runs
+# in the lifeos-llama-server.container Quadlet with GPU passthrough via
+# CDI (configured below).
+COPY containers/lifeos-llama-server/lifeos-llama-server.container /usr/share/containers/systemd/lifeos-llama-server.container
 COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/system/llama-embeddings.service
 # Phase 2 (embeddings) Quadlet flip — host setup script
 # `lifeos-embeddings-setup.sh` is now invoked from
@@ -1198,7 +1179,6 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     if [ -f /usr/lib/systemd/system/nvidia-persistenced.service ]; then \
         ln -sf /usr/lib/systemd/system/nvidia-persistenced.service /usr/lib/systemd/system/multi-user.target.wants/nvidia-persistenced.service; \
     fi && \
-    ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
     ln -sf /usr/lib/systemd/system/fstrim.timer /usr/lib/systemd/system/timers.target.wants/fstrim.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
@@ -1411,6 +1391,8 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /usr/lib/systemd/system/lifeos-image-guardian.service || fail "lifeos-image-guardian.service"; \
     test -L /usr/lib/systemd/system/multi-user.target.wants/lifeos-image-guardian.service || fail "guardian wants symlink"; \
     test -f /usr/share/containers/systemd/lifeos-tts.container || fail "lifeos-tts.container"; \
+    test -f /usr/share/containers/systemd/lifeos-llama-server.container || fail "lifeos-llama-server.container"; \
+    test -x /usr/bin/nvidia-ctk || fail "/usr/bin/nvidia-ctk (Phase 4 GPU passthrough)"; \
     test -f /usr/share/containers/systemd/lifeos-llama-embeddings.container || fail "lifeos-llama-embeddings.container"; \
     test -f /usr/share/containers/systemd/lifeos-simplex-bridge.container || fail "lifeos-simplex-bridge.container"; \
     test -x /usr/local/bin/lifeos-embeddings-setup.sh || fail "/usr/local/bin/lifeos-embeddings-setup.sh"; \

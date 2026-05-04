@@ -30,9 +30,9 @@ on:
   workflow_dispatch:
     inputs:
       build-llama-server:
-        description: 'Also build lifeos-llama-server (vulkan, ~30 min, runtime BLOCKED)'
+        description: 'Also build lifeos-llama-server (vulkan, ~30 min). Phase 4 active on fc44 — runtime UNBLOCKED.'
         required: false
-        default: 'false'
+        default: 'true'
         type: choice
         options:
           - 'false'
@@ -109,9 +109,12 @@ jobs:
           podman push ghcr.io/${REPO_OWNER}/${{ matrix.name }}:${GITHUB_SHA::8}
 
   build-llama-server:
-    # Vulkan compile is ~30 min; gate behind explicit dispatch input so we
-    # don't burn it on every push. Schedule still picks it up weekly.
-    if: github.event_name == 'schedule' || github.event.inputs.build-llama-server == 'true'
+    # Vulkan compile is ~30 min. Now that Phase 4 GPU passthrough is live
+    # on fc44, the build runs on every push to containers/**, the weekly
+    # cron, and on workflow_dispatch (default 'true'). Set the dispatch
+    # input to 'false' if you need to skip the long compile for an
+    # unrelated container-only change.
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.build-llama-server == 'true'
     runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v6
