@@ -14,6 +14,8 @@ Documentation=https://github.com/ggml-org/llama.cpp
 # Quadlet-generated unit name; ordering vs the legacy `llama-server.service`
 # (host) is silently dropped because that unit is masked post-Phase-4.
 After=network-online.target lifeos-image-guardian.service nvidia-cdi-refresh.service lifeos-net-network.service
+# Hard bridge dependency — see lifeos-tts.container for rationale.
+Requires=lifeos-net-network.service
 Before=lifeos-lifeosd.service
 # nvidia-cdi-refresh.service ships with nvidia-container-toolkit and regenerates
 # the CDI spec at boot. Wants= because if it's absent (driver hot-swap, custom

@@ -13,9 +13,15 @@ Description=LifeOS Kokoro TTS Server (containerized)
 Documentation=https://github.com/hexgrad/kokoro
 After=network-online.target lifeos-image-guardian.service lifeos-net-network.service
 Wants=network-online.target
-# After Phase 3 flips lifeosd to a Quadlet, this should re-target the
-# Quadlet-generated unit name. For now legacy lifeosd.service is the
-# host unit; ordering against a non-existent unit is silently dropped.
+# Hard dependency on the bridge: without it the container starts but
+# can't attach to lifeos-net, PublishPort= forwards die silently, and
+# the daemon's loopback connections are refused. Requires= pulls the
+# network in if it's not already running.
+Requires=lifeos-net-network.service
+# Order before the daemon Quadlet so TTS is up by the time the daemon's
+# sensory_pipeline first probes /tts. Phase 3 made lifeosd itself a
+# Quadlet (`lifeos-lifeosd.service`), so this Before= now resolves
+# against a real generated unit instead of a no-op.
 Before=lifeos-lifeosd.service
 
 [Container]

@@ -407,7 +407,15 @@ async def _startup(app: web.Application) -> None:
         _LOG.warning("Warm-up failed (non-fatal): %s", exc)
 
     _ready = True
-    _LOG.info("Server ready on 127.0.0.1:%d", PORT)
+    # Log the actual bind interface, not a hardcoded loopback. Phase 8 of
+    # the architecture pivot moves this server onto a podman bridge where
+    # bind_host=0.0.0.0 — the journal entry must reflect that so operators
+    # debugging "TTS not reachable" don't chase a phantom 127.0.0.1.
+    _LOG.info(
+        "Server ready on %s:%d",
+        os.environ.get("LIFEOS_TTS_ENGINE_HOST", "127.0.0.1"),
+        PORT,
+    )
 
     # Start background tasks
     app["_watchdog_task"] = asyncio.ensure_future(_memory_watchdog())

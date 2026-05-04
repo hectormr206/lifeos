@@ -101,7 +101,14 @@ done
 
 for d in "${DAEMON_DIRS[@]}"; do
     if [[ -d "${SRC}/${d}" ]]; then
-        if ! cp -a "${SRC}/${d}" "${DST}/${d}"; then
+        # Use trailing slash + dot so cp merges contents instead of nesting:
+        # `cp -a SRC/voices DST/voices` when DST/voices already exists puts
+        # the source dir INSIDE the destination → DST/voices/voices/ — the
+        # Kokoro voice cache then loads from the wrong path. Pre-create the
+        # destination, copy contents, get a clean merge in both fresh and
+        # partial-rerun cases.
+        mkdir -p "${DST}/${d}"
+        if ! cp -a "${SRC}/${d}/." "${DST}/${d}/"; then
             log "ERROR: failed to copy directory ${d}"
             exit 1
         fi

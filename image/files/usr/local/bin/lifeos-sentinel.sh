@@ -17,23 +17,14 @@ MEMORY_THRESHOLD=95
 LIFEOS_PRIMARY_USER="${LIFEOS_PRIMARY_USER:-lifeos}"
 LIFEOS_PRIMARY_UID="${LIFEOS_PRIMARY_UID:-1000}"
 
-user_systemctl() {
-    local runtime_dir="/run/user/${LIFEOS_PRIMARY_UID}"
-    local user_bus="${runtime_dir}/bus"
-
-    if ! command -v runuser >/dev/null 2>&1; then
-        return 1
-    fi
-
-    if [ ! -S "$user_bus" ]; then
-        return 1
-    fi
-
-    runuser -u "$LIFEOS_PRIMARY_USER" -- \
-        env XDG_RUNTIME_DIR="$runtime_dir" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=${user_bus}" \
-            systemctl --user "$@"
-}
+# Phase 3 of the architecture pivot: the legacy `user_systemctl()` helper
+# (which proxied `systemctl --user` against /run/user/1000/bus) is gone.
+# All sentinel actions now go through system-scope `systemctl` against the
+# Quadlet-generated lifeos-* services. The lifeos-sentinel.service unit
+# also enables ProtectHome=true now, which would block /run/user access
+# even if the helper had survived. LIFEOS_PRIMARY_USER / LIFEOS_PRIMARY_UID
+# are still defined above for the bootstrap-token rollback path that
+# checks /run/user/<uid>/lifeos as a secondary location.
 
 restart_lifeosd() {
     # Canonical path after Phase 3 of the architecture pivot: restart the

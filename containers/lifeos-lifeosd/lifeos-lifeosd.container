@@ -13,13 +13,17 @@ Documentation=https://github.com/hectormr206/lifeos
 # silently dropped ordering against those after Phase 4/5 flipped the
 # legacy units to masked/removed state.
 After=network-online.target lifeos-image-guardian.service lifeos-state-migrate.service lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
-# Requires= on the migration unit makes the ordering survive `systemctl
-# start lifeos-lifeosd.service` issued manually outside the
-# multi-user.target activation transaction (operator rollback path). The
-# migration is a Type=oneshot RemainAfterExit=yes, so once it has run
-# successfully on a previous boot it stays "active" and is a no-op.
-Requires=lifeos-state-migrate.service
-Wants=network-online.target lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
+# `Wants=` on the migration unit (NOT `Requires=`) — round-2 audit caught
+# that `Requires=` would block the daemon forever if the migration unit
+# failed even once (Type=oneshot has no Restart= and the daemon would
+# need a manual `systemctl reset-failed` to come back). With `Wants=` the
+# migration is best-effort: if it fails, the daemon still starts against
+# whatever state /var/lib/lifeos has, the operator gets a journal entry
+# explaining the failure, and the sentinel can do its job. The daemon's
+# memory-plane code already handles "no memory.db yet" cleanly (fresh
+# DB on first start) — losing migration is recoverable; losing the
+# entire daemon-start path is not.
+Wants=lifeos-state-migrate.service network-online.target lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
 
 [Container]
 Image=ghcr.io/hectormr206/lifeos-lifeosd:stable

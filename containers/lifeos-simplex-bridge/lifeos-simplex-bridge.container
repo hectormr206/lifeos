@@ -5,6 +5,8 @@ Description=LifeOS SimpleX Chat Bot (Axi private messaging — containerized)
 Documentation=https://github.com/simplex-chat/simplex-chat
 After=network-online.target lifeos-image-guardian.service lifeos-net-network.service
 Wants=network-online.target
+# Hard bridge dependency — see lifeos-tts.container for rationale.
+Requires=lifeos-net-network.service
 # lifeosd connects to :5226 — keep this up before lifeosd.
 Before=lifeos-lifeosd.service
 
