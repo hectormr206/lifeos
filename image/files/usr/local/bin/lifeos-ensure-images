@@ -34,7 +34,15 @@
 set -uo pipefail
 # Note: deliberately NOT using `set -e` — best-effort by design.
 
-QUADLET_DIR="/etc/containers/systemd"
+# Quadlet generator scans /etc/containers/systemd/ (user override) and
+# /usr/share/containers/systemd/ (image default). LifeOS ships .container
+# files to /usr/share/ so bootc upgrades replace them cleanly without
+# /etc-overlay shadowing — operator drift in /etc therefore wins, but the
+# upgrade path stays clean.
+QUADLET_DIRS=(
+    /etc/containers/systemd
+    /usr/share/containers/systemd
+)
 LOG_TAG="lifeos-ensure-images"
 
 log() { logger -t "$LOG_TAG" "$*"; printf "[%s] %s\n" "$LOG_TAG" "$*"; }
@@ -45,20 +53,24 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-# Quadlets land here only on bootc images that have system Quadlets defined.
-# On a fresh image with no system containers yet, the dir may not exist —
-# treat that as "nothing to ensure" and exit cleanly.
-if [[ ! -d "$QUADLET_DIR" ]]; then
-    log "no $QUADLET_DIR — nothing to ensure"
-    exit 0
-fi
-
 shopt -s nullglob
-quadlets=("$QUADLET_DIR"/lifeos-*.container)
+declare -A seen
+quadlets=()
+for dir in "${QUADLET_DIRS[@]}"; do
+    [[ -d "$dir" ]] || continue
+    for q in "$dir"/lifeos-*.container; do
+        # Files in /etc shadow /usr/share by name (Quadlet generator behaviour),
+        # so first occurrence wins.
+        name="$(basename "$q")"
+        [[ -n "${seen[$name]:-}" ]] && continue
+        seen["$name"]=1
+        quadlets+=("$q")
+    done
+done
 shopt -u nullglob
 
 if [[ ${#quadlets[@]} -eq 0 ]]; then
-    log "no lifeos-*.container Quadlets in $QUADLET_DIR — nothing to ensure"
+    log "no lifeos-*.container Quadlets under ${QUADLET_DIRS[*]} — nothing to ensure"
     exit 0
 fi
 
@@ -98,16 +110,27 @@ for quadlet in "${quadlets[@]}"; do
             continue
         fi
 
+        # Always attempt the pull — `podman pull <tag>` is idempotent at
+        # blob level (it only fetches changed layers) and crucially it
+        # resolves the upstream digest, so a `:stable` tag whose remote
+        # digest moved gets refreshed locally. The previous "skip if image
+        # exists" check left a stale tag pinned forever, which masked
+        # Phase 6 of the architecture pivot until manual `podman pull`.
+        local_present=0
         if podman image exists "$image" >/dev/null 2>&1; then
-            continue
+            local_present=1
+        else
+            ((missing+=1)) || true
+            log "image not local: $image — pulling"
         fi
 
-        log "missing image: $image — pulling (best-effort)"
-        ((missing+=1)) || true
-
         if podman pull "$image" >/dev/null 2>&1; then
-            log "pulled: $image"
-            ((pulled+=1)) || true
+            if [[ "$local_present" -eq 0 ]]; then
+                log "pulled (new): $image"
+                ((pulled+=1)) || true
+            else
+                log "pulled (refreshed if needed): $image"
+            fi
         else
             log "WARN: failed to pull $image — systemd will retry the dependent service"
         fi

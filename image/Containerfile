@@ -757,7 +757,7 @@ RUN chmod +x /usr/local/bin/lifeos-ensure-images
 # The legacy lifeos-tts-server.service was REMOVED in Phase 6. The bootc
 # rollback path is now `bootc rollback` to a previous deployment, not a
 # manual systemctl unmask of an in-image legacy unit. PRD §5a + §6.
-COPY containers/lifeos-tts/lifeos-tts.container /etc/containers/systemd/lifeos-tts.container
+COPY containers/lifeos-tts/lifeos-tts.container /usr/share/containers/systemd/lifeos-tts.container
 
 # Phase 6: the venv smoke test moved into containers/lifeos-tts/Containerfile
 # (`from kokoro import KPipeline` runs there at build time). The bootc image
@@ -1100,7 +1100,7 @@ COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/
 # file gets populated and the model gets downloaded before the container
 # starts. The legacy host unit stays installed as manual rollback target
 # and is no longer wired into multi-user.target.wants below.
-COPY containers/lifeos-llama-embeddings/lifeos-llama-embeddings.container /etc/containers/systemd/lifeos-llama-embeddings.container
+COPY containers/lifeos-llama-embeddings/lifeos-llama-embeddings.container /usr/share/containers/systemd/lifeos-llama-embeddings.container
 COPY image/files/usr/local/bin/lifeos-embeddings-setup.sh /usr/local/bin/lifeos-embeddings-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-embeddings-setup.sh
 COPY image/files/etc/systemd/system/whisper-stt.service       /usr/lib/systemd/system/whisper-stt.service
@@ -1118,7 +1118,7 @@ COPY image/files/etc/systemd/system/simplex-chat.service.d/10-bootstrap-profile.
 # install -d ExecStartPre that creates /var/lib/lifeos/simplex with the
 # right perms (legacy unit's StateDirectory= no longer runs). The legacy
 # host unit stays installed as manual rollback target.
-COPY containers/lifeos-simplex-bridge/lifeos-simplex-bridge.container /etc/containers/systemd/lifeos-simplex-bridge.container
+COPY containers/lifeos-simplex-bridge/lifeos-simplex-bridge.container /usr/share/containers/systemd/lifeos-simplex-bridge.container
 COPY image/files/usr/local/bin/lifeos-simplex-setup.sh /usr/local/bin/lifeos-simplex-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-simplex-setup.sh
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
@@ -1410,9 +1410,9 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -x /usr/local/bin/lifeos-ensure-images || fail "/usr/local/bin/lifeos-ensure-images"; \
     test -f /usr/lib/systemd/system/lifeos-image-guardian.service || fail "lifeos-image-guardian.service"; \
     test -L /usr/lib/systemd/system/multi-user.target.wants/lifeos-image-guardian.service || fail "guardian wants symlink"; \
-    test -f /etc/containers/systemd/lifeos-tts.container || fail "lifeos-tts.container"; \
-    test -f /etc/containers/systemd/lifeos-llama-embeddings.container || fail "lifeos-llama-embeddings.container"; \
-    test -f /etc/containers/systemd/lifeos-simplex-bridge.container || fail "lifeos-simplex-bridge.container"; \
+    test -f /usr/share/containers/systemd/lifeos-tts.container || fail "lifeos-tts.container"; \
+    test -f /usr/share/containers/systemd/lifeos-llama-embeddings.container || fail "lifeos-llama-embeddings.container"; \
+    test -f /usr/share/containers/systemd/lifeos-simplex-bridge.container || fail "lifeos-simplex-bridge.container"; \
     test -x /usr/local/bin/lifeos-embeddings-setup.sh || fail "/usr/local/bin/lifeos-embeddings-setup.sh"; \
     test -x /usr/local/bin/lifeos-simplex-setup.sh || fail "/usr/local/bin/lifeos-simplex-setup.sh"; \
     test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
