@@ -1343,27 +1343,20 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     rm -f /var/cache/ldconfig/aux-cache && \
     rm -f /var/cache/swcatalog/cache/C-local-metainfo.xb /var/cache/swcatalog/cache/C-os-catalog.xb
 
-# --- Final llama-server / whisper verification ---
-# Belt-and-suspenders: clean up any stale .so files from previous pre-compiled
-# builds, then verify the host-side AI binaries that still ship.
-# Phase 4: legacy llama-server binary stays on host as a rollback target only;
-# the active path is the lifeos-llama-server Quadlet. Phase 7: whisper-cli /
-# whisper-stream removed from bootc (they live inside lifeos-lifeosd now).
+# --- Stale-library cleanup ---
+# Phase 4 of the architecture pivot removed the on-host llama-server binary
+# (and its sibling libllama.so / libggml*.so) because chat inference now runs
+# inside the lifeos-llama-server Quadlet container with its own private
+# library set. The previous "final llama-server verification" RUN block
+# (re-linking the binary, asserting --version) was load-bearing on the
+# binary existing in the host filesystem; removing the build site without
+# removing the verification produced a "FATAL: llama-server disappeared"
+# CI failure on this branch. We still scrub any stale .so files in case a
+# rollback or a previous layer left them behind, then ldconfig — that's
+# all the host needs now.
 RUN set -eux && \
     rm -f /usr/lib64/libllama.so* /usr/lib64/libggml*.so* /usr/lib64/libmtmd.so* && \
-    ldconfig && \
-    LLAMA_BIN="$(command -v llama-server 2>/dev/null || find /usr -name llama-server -type f 2>/dev/null | head -1)" && \
-    echo ">>> Final check: llama-server at ${LLAMA_BIN:-NOT FOUND}" && \
-    test -n "${LLAMA_BIN}" || { echo "FATAL: llama-server disappeared"; exit 1; } && \
-    for dest in /usr/bin/llama-server /usr/sbin/llama-server; do \
-        if [ ! -x "$dest" ]; then \
-            ln -f "${LLAMA_BIN}" "$dest" 2>/dev/null || cp -f "${LLAMA_BIN}" "$dest" && \
-            chmod 0755 "$dest" && \
-            echo ">>> Linked to $dest"; \
-        fi; \
-    done && \
-    ls -la /usr/bin/llama-server /usr/sbin/llama-server && \
-    /usr/sbin/llama-server --version
+    ldconfig
 
 # --- Verificación final ---
 # Wrapper reports WHICH check failed instead of a silent exit code.
@@ -1375,7 +1368,8 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     # — runs as a system Quadlet, no host binary. Validation switches to the
     # Quadlet definition + state migration unit below.
     test -x /usr/local/bin/cargo-audit    || fail "/usr/local/bin/cargo-audit"; \
-    test -x /usr/bin/llama-server         || fail "/usr/bin/llama-server"; \
+    # Phase 4: llama-server binary removed from bootc (lives in
+    # ghcr.io/hectormr206/lifeos-llama-server:stable Quadlet now).
     # Phase 7: whisper-cli / whisper-stream removed from bootc — now live
     # inside ghcr.io/hectormr206/lifeos-lifeosd:stable.
     test -x /usr/bin/grim                 || fail "/usr/bin/grim"; \
@@ -1400,7 +1394,6 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
     test -x /usr/bin/virsh                || fail "/usr/bin/virsh"; \
     test -x /usr/bin/pkg-config           || fail "/usr/bin/pkg-config"; \
-    test -x /usr/sbin/llama-server        || fail "/usr/sbin/llama-server"; \
     test -x /usr/local/bin/lifeos-nvidia-secureboot.sh || fail "/usr/local/bin/lifeos-nvidia-secureboot.sh"; \
     test -x /usr/local/bin/lifeos-maintenance-cleanup.sh || fail "/usr/local/bin/lifeos-maintenance-cleanup.sh"; \
     test -x /usr/local/bin/lifeos-open-axi-dashboard.sh || fail "/usr/local/bin/lifeos-open-axi-dashboard.sh"; \
