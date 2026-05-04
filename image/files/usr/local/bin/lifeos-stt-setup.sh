@@ -11,26 +11,11 @@
 #   3. Else, exit clean (lifeosd falls back to non-STT operation).
 set -euo pipefail
 
-STT_BIN=""
-STREAM_BIN=""
-for candidate in /usr/bin/whisper-cli /usr/local/bin/whisper-cli /usr/bin/whisper /usr/bin/whisper-cpp; do
-    if [ -x "$candidate" ]; then
-        STT_BIN="$candidate"
-        break
-    fi
-done
-
-for candidate in /usr/bin/whisper-stream /usr/local/bin/whisper-stream; do
-    if [ -x "$candidate" ]; then
-        STREAM_BIN="$candidate"
-        break
-    fi
-done
-
-if [ -z "$STT_BIN" ]; then
-    echo "WARNING: whisper STT binary not found (expected whisper-cli/whisper)."
-    exit 0
-fi
+# Phase 7 of architecture pivot: whisper-cli moved INTO the lifeos-lifeosd
+# container (the only consumer post-Phase-3 was the daemon). The host no
+# longer ships /usr/bin/whisper-cli, so this script intentionally does NOT
+# probe for it any more — its only job is to populate the model directory
+# that the container reads via the /var/lib/lifeos bind mount.
 
 MODEL_DIR="/var/lib/lifeos/models/whisper"
 PRELOAD_DIR="/usr/share/lifeos/models/whisper"
@@ -79,14 +64,8 @@ if [ ! -f "$DEST" ]; then
     esac
 fi
 
-echo "whisper binary ready: $STT_BIN"
-if [ -n "$STREAM_BIN" ]; then
-    echo "whisper stream binary ready: $STREAM_BIN"
-else
-    echo "WARNING: whisper-stream binary not found"
-fi
 if [ -f "$DEST" ]; then
-    echo "stt model ready: $DEST"
+    echo "stt model ready: $DEST (consumed inside lifeos-lifeosd container)"
 else
     echo "WARNING: default STT model not found at $DEST — STT calls will fall back gracefully"
 fi

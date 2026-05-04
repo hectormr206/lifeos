@@ -19,9 +19,11 @@ Image=ghcr.io/hectormr206/lifeos-llama-embeddings:stable
 ContainerName=lifeos-llama-embeddings
 HostName=lifeos-llama-embeddings
 
-# Network=host — Phase 2 sticks with the same Phase 1 choice. Loopback only,
-# zero URL changes in lifeosd.
-Network=host
+# Phase 8: bridge network. Server binds 0.0.0.0:8083 inside the container
+# netns; PublishPort= forwards host loopback :8083 → bridge IP. lifeosd
+# (Network=host) keeps reaching it via http://127.0.0.1:8083 unchanged.
+Network=lifeos-net.network
+PublishPort=127.0.0.1:8083:8083
 
 # Models bind mount — read-only. The model file (currently
 # nomic-embed-text-v1.5.f16.gguf, ~262 MB) lives on host /var/lib/lifeos/models/
@@ -46,7 +48,7 @@ Volume=/etc/lifeos/llama-embeddings.env:/etc/lifeos/llama-embeddings.env:ro,z
 Exec=/usr/sbin/llama-server \
     --model /models/${LIFEOS_EMBED_MODEL} \
     --alias lifeos-embeddings \
-    --host 127.0.0.1 \
+    --host 0.0.0.0 \
     --port 8083 \
     --ctx-size 2048 \
     --threads 2 \

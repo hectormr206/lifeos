@@ -1,0 +1,31 @@
+# lifeos-net.network — shared bridge network for LifeOS Quadlets.
+#
+# Phase 8 of the architecture pivot moves the side containers off
+# Network=host onto a dedicated podman bridge so they no longer share the
+# host network namespace. lifeos-lifeosd stays on Network=host until the
+# daemon's HTTP client URLs (currently hardcoded to 127.0.0.1:80xx in
+# llm_router.rs / ai.rs / sensory_pipeline.rs) move behind env vars that
+# can resolve container DNS names — that's the deferred Phase 8b daemon
+# refactor.
+#
+# Side containers (TTS, llama-server, llama-embeddings, simplex-bridge)
+# Publish=127.0.0.1:PORT:PORT so the daemon (still on Network=host) keeps
+# reaching them via loopback unchanged. End-result: same threat model the
+# daemon sees, but each side container has its own network namespace plus
+# bridge IP — defense in depth against a compromised side container
+# enumerating arbitrary host loopback services.
+#
+# PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md §Phase 8
+
+[Unit]
+Description=LifeOS Quadlet bridge network
+
+[Network]
+NetworkName=lifeos-net
+# Default IPv4 subnet — picked to avoid the common 10.88.0.0/16 podman
+# default and the 10.66.66.0/24 WireGuard tunnel the laptop uses.
+Subnet=10.89.0.0/24
+Gateway=10.89.0.1
+# Disable DNS proxying upstream — containers only need internal DNS to
+# resolve sibling lifeos-* names. External DNS still works via the host.
+DisableDNS=false

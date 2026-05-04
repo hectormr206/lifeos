@@ -25,9 +25,12 @@ Image=ghcr.io/hectormr206/lifeos-llama-server:stable
 ContainerName=lifeos-llama-server
 HostName=lifeos-llama-server
 
-# Network=host — chat clients (lifeosd, dashboard) reach :8082 on loopback,
-# zero URL changes from current systemd-host setup.
-Network=host
+# Phase 8: bridge network. The Exec= below now binds the server on
+# `--host 0.0.0.0` inside the container (container netns) so it listens on
+# the bridge IP; PublishPort= forwards host loopback :8082 to that bridge IP.
+# lifeosd (still on Network=host) keeps using http://127.0.0.1:8082 unchanged.
+Network=lifeos-net.network
+PublishPort=127.0.0.1:8082:8082
 
 # === GPU passthrough via CDI ===
 #
@@ -102,7 +105,7 @@ Exec=/usr/sbin/llama-server \
     --model /var/lib/lifeos/models/${LIFEOS_AI_MODEL} \
     --mmproj /var/lib/lifeos/models/${LIFEOS_AI_MMPROJ} \
     --alias lifeos \
-    --host 127.0.0.1 \
+    --host 0.0.0.0 \
     --port 8082 \
     --ctx-size ${LIFEOS_AI_CTX_SIZE} \
     --threads ${LIFEOS_AI_THREADS} \

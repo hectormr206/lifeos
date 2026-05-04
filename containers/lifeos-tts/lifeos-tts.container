@@ -23,9 +23,16 @@ Image=ghcr.io/hectormr206/lifeos-tts:stable
 ContainerName=lifeos-tts
 HostName=lifeos-tts
 
-# Network=host — Phase 1 networking choice (PRD §3 Opción A). Container
-# binds 127.0.0.1:8084 in the host netns; lifeosd reaches it unchanged.
-Network=host
+# Phase 8: container moves off Network=host onto the dedicated podman bridge
+# `lifeos-net`. Publish=127.0.0.1:8084:8084 keeps the daemon's existing
+# loopback URL (http://127.0.0.1:8084) working unchanged — the daemon is
+# still on Network=host until its hardcoded URLs (sensory_pipeline.rs,
+# llm_router.rs, ai.rs) move behind env vars that can resolve container DNS
+# (Phase 8b daemon refactor — deferred). Net effect today: the TTS process
+# no longer shares the host network namespace, which is the defense-in-depth
+# win Phase 8 was about. End-to-end behaviour unchanged.
+Network=lifeos-net.network
+PublishPort=127.0.0.1:8084:8084
 
 # Only surface left: the env file. Phase 6 makes everything else
 # (venv, voice models, manifest, server script) live INSIDE the
