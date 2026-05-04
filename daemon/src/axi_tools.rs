@@ -2055,7 +2055,12 @@ LifeOS lleva el inventario de tus autos, sus mantenimientos, seguros y cargas de
             // they would route service_manage to non-existent units and
             // report success on a no-op. The list intentionally still
             // includes `whisper-stt` (genuine bootstrap unit kept on host).
-            for forbidden in ["llama-server", "llama-embeddings", "simplex-chat", "lifeosd"] {
+            for forbidden in [
+                "llama-server",
+                "llama-embeddings",
+                "simplex-chat",
+                "lifeosd",
+            ] {
                 assert!(
                     !SERVICE_MANAGE_ALLOWED_SERVICES.contains(&forbidden),
                     "legacy unit '{forbidden}' should not be in allowlist after Quadlet pivot"
