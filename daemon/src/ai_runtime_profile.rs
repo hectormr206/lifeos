@@ -46,7 +46,13 @@ const CTX_SIZE_PROBE_LADDER: &[u32] = &[131_072, 65_536, 32_768, 16_384, 8_192];
 const DEFAULT_GPU_LAYERS: i32 = 99;
 const DEFAULT_GAME_GUARD_VRAM_THRESHOLD_MB: u64 = 500;
 const RUNTIME_ENV_DROPIN_NAME: &str = "99-lifeos-runtime-envs.conf";
-const USER_LLAMA_UNIT_NAME: &str = "llama-server.service";
+/// Canonical systemd unit name for chat inference. Phase 4 of the
+/// architecture pivot moved llama-server from the legacy host service
+/// `llama-server.service` to the `lifeos-llama-server.service` Quadlet.
+/// The constant name is kept for legacy reasons (it predates the rename
+/// and refers to the unit name regardless of scope, not the user-scope
+/// path which is a deprecated fallback handled separately below).
+const USER_LLAMA_UNIT_NAME: &str = "lifeos-llama-server.service";
 const LLAMA_PREFLIGHT_REASON_PATH: &str = "/var/lib/lifeos/llama-server-preflight.reason";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1004,7 +1010,7 @@ fn install_llama_runtime_dropin() -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .context("failed to spawn systemctl edit for llama-server.service")?;
+        .with_context(|| format!("failed to spawn systemctl edit for {USER_LLAMA_UNIT_NAME}"))?;
 
     let mut stdin = child
         .stdin
@@ -1066,7 +1072,7 @@ fn llama_user_unit_path() -> Result<PathBuf> {
         return Ok(PathBuf::from(path));
     }
     let home = std::env::var_os("HOME").context("HOME is not set for user llama-server unit")?;
-    Ok(PathBuf::from(home).join(".config/systemd/user/llama-server.service"))
+    Ok(PathBuf::from(home).join(".config/systemd/user/lifeos-llama-server.service"))
 }
 
 fn ensure_user_llama_service() -> Result<()> {
@@ -1121,13 +1127,13 @@ fn llama_service_environment_files() -> Result<Vec<PathBuf>> {
     let output = Command::new("systemctl")
         .args([
             "show",
-            "llama-server.service",
+            USER_LLAMA_UNIT_NAME,
             "-p",
             "EnvironmentFiles",
             "--value",
         ])
         .output()
-        .context("failed to inspect llama-server.service environment files")?;
+        .with_context(|| format!("failed to inspect {USER_LLAMA_UNIT_NAME} environment files"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         anyhow::bail!("systemctl show failed: {stderr}");

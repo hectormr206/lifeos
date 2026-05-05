@@ -2569,23 +2569,36 @@ async fn detect_llama_service_status() -> LlamaServiceStatusSnapshot {
 }
 
 async fn systemctl_main_pid(user_scope: bool) -> Option<u32> {
-    let mut command = Command::new("systemctl");
-    if user_scope {
-        command.arg("--user");
+    // Phase 4: probe the Quadlet unit name first, fall through to the
+    // legacy name for rolled-back hosts.
+    for unit in ["lifeos-llama-server.service", "llama-server.service"] {
+        let mut command = Command::new("systemctl");
+        if user_scope {
+            command.arg("--user");
+        }
+        let Ok(output) = command
+            .args(["show", unit, "-p", "MainPID", "--value"])
+            .output()
+            .await
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        if let Some(pid) = parse_systemctl_main_pid(&output.stdout) {
+            return Some(pid);
+        }
     }
-    let output = command
-        .args(["show", "llama-server.service", "-p", "MainPID", "--value"])
-        .output()
-        .await
-        .ok()?;
-    if !output.status.success() {
+    None
+}
+
+fn parse_systemctl_main_pid(stdout: &[u8]) -> Option<u32> {
+    let trimmed = std::str::from_utf8(stdout).ok()?.trim();
+    if trimmed.is_empty() || trimmed == "0" {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u32>()
-        .ok()
-        .filter(|pid| *pid > 0)
+    trimmed.parse::<u32>().ok().filter(|pid| *pid > 0)
 }
 
 async fn detect_llama_pid_via_pgrep() -> Option<u32> {
@@ -2969,15 +2982,13 @@ fn resolve_existing_stt_model_path(candidate: &str) -> Option<String> {
     let file_name = std::path::Path::new(candidate)
         .file_name()
         .and_then(|name| name.to_str())?;
-    [
-        "/var/lib/lifeos/models/whisper",
-        "/usr/share/lifeos/models/whisper",
-        "/var/lib/lifeos/models",
-        "/usr/share/lifeos/models",
-    ]
-    .iter()
-    .map(|dir| format!("{dir}/{file_name}"))
-    .find(|path| std::path::Path::new(path).exists())
+    // Phase 6b/7 of the architecture pivot: STT models live exclusively
+    // under /var/lib/lifeos/models/whisper now. The /usr/share/lifeos/models
+    // paths were the pre-Phase-6b host location and are gone.
+    ["/var/lib/lifeos/models/whisper", "/var/lib/lifeos/models"]
+        .iter()
+        .map(|dir| format!("{dir}/{file_name}"))
+        .find(|path| std::path::Path::new(path).exists())
 }
 
 fn resolve_stt_model_path(model: Option<&str>) -> Option<String> {
@@ -2991,13 +3002,11 @@ fn resolve_stt_model_path(model: Option<&str>) -> Option<String> {
         }
     }
 
+    // Phase 6b/7 of the architecture pivot: see resolve_existing_stt_model_path.
     [
         "/var/lib/lifeos/models/whisper/ggml-base.bin",
-        "/usr/share/lifeos/models/whisper/ggml-base.bin",
         "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
-        "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
         "/var/lib/lifeos/models/whisper/ggml-small.bin",
-        "/usr/share/lifeos/models/whisper/ggml-small.bin",
     ]
     .iter()
     .find(|candidate| std::path::Path::new(candidate).exists())

@@ -84,7 +84,10 @@ pub async fn execute(args: DoctorArgs) -> anyhow::Result<()> {
                 println!("    Error: {}", format!("{e}").dimmed());
                 println!();
                 println!("  {} Is the daemon running?", "Hint:".dimmed());
-                println!("    {}", "systemctl --user status lifeosd".cyan());
+                println!(
+                    "    {}",
+                    "sudo systemctl status lifeos-lifeosd.service".cyan()
+                );
             }
         }
     }
@@ -136,12 +139,16 @@ impl StepResult {
     }
 }
 
-/// Run a systemctl --user command, returning Ok(true) on success.
-async fn systemctl_user(args: &[&str]) -> anyhow::Result<bool> {
-    let mut cmd = vec!["--user"];
-    cmd.extend_from_slice(args);
+/// Run a systemctl command in the system scope, returning Ok(true) on success.
+///
+/// Phase 3 of the architecture pivot moved lifeosd from a user-scope service
+/// (`systemctl --user lifeosd`) to a system Quadlet (`lifeos-lifeosd.service`).
+/// Repair operations now run against the system scope and require root;
+/// `life doctor --repair` is invoked via sudo or via the polkit rule that
+/// allowlists `lifeos-lifeosd.service` for wheel users.
+async fn systemctl_system(args: &[&str]) -> anyhow::Result<bool> {
     let output = tokio::process::Command::new("systemctl")
-        .args(&cmd)
+        .args(args)
         .output()
         .await?;
     Ok(output.status.success())
@@ -176,7 +183,7 @@ async fn run_repair(base: &str, json_mode: bool) -> anyhow::Result<()> {
     }
 
     // --- Step 1: Reset failed services ---
-    let step1 = match systemctl_user(&["reset-failed", "lifeosd"]).await {
+    let step1 = match systemctl_system(&["reset-failed", "lifeos-lifeosd.service"]).await {
         Ok(true) => StepResult::ok("Resetting failed services"),
         Ok(false) => StepResult::fail("Resetting failed services", "reset-failed exited non-zero"),
         Err(e) => StepResult::fail("Resetting failed services", &format!("{e}")),
@@ -187,7 +194,7 @@ async fn run_repair(base: &str, json_mode: bool) -> anyhow::Result<()> {
     results.push(step1);
 
     // --- Step 2: Restart the daemon ---
-    let step2 = match systemctl_user(&["restart", "lifeosd"]).await {
+    let step2 = match systemctl_system(&["restart", "lifeos-lifeosd.service"]).await {
         Ok(true) => StepResult::ok("Restarting lifeosd"),
         Ok(false) => StepResult::fail("Restarting lifeosd", "restart exited non-zero"),
         Err(e) => StepResult::fail("Restarting lifeosd", &format!("{e}")),
@@ -335,7 +342,7 @@ async fn run_repair(base: &str, json_mode: bool) -> anyhow::Result<()> {
                 println!(
                     "    {} Check daemon logs: {}",
                     "Hint:".dimmed(),
-                    "journalctl --user -u lifeosd -n 50".cyan()
+                    "sudo journalctl -u lifeos-lifeosd.service -n 50".cyan()
                 );
             }
         } else {

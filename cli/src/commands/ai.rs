@@ -8,6 +8,12 @@ use std::process::Command;
 
 use crate::daemon_client;
 
+/// Canonical chat-inference systemd unit (Quadlet-generated post-Phase-4).
+/// `life ai start` / `life ai stop` enable/stop this unit first; the legacy
+/// pre-pivot `llama-server.service` is the rollback fallback.
+const LLAMA_SERVICE_UNIT_QUADLET: &str = "lifeos-llama-server.service";
+const LLAMA_SERVICE_UNIT_LEGACY: &str = "llama-server.service";
+
 /// Default llama-server host
 const LLAMA_SERVER_HOST: &str = "http://localhost:8082";
 /// Default model directory
@@ -345,15 +351,28 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
         }
     }
 
-    // Enable auto-start if requested
+    // Enable auto-start if requested.
+    // Phase 4: target the Quadlet unit (lifeos-llama-server.service); fall
+    // back to the legacy unit name for rolled-back hosts.
     if enable {
         print!("Enabling auto-start on boot... ");
-        match Command::new("sudo")
-            .args(["systemctl", "enable", "llama-server.service"])
-            .output()
-        {
-            Ok(output) if output.status.success() => println!("{}", "OK".green()),
-            _ => println!("{}", "FAILED".yellow()),
+        let canonical_ok = matches!(
+            Command::new("sudo")
+                .args(["systemctl", "enable", LLAMA_SERVICE_UNIT_QUADLET])
+                .output(),
+            Ok(out) if out.status.success()
+        );
+        let ok = canonical_ok
+            || matches!(
+                Command::new("sudo")
+                    .args(["systemctl", "enable", LLAMA_SERVICE_UNIT_LEGACY])
+                    .output(),
+                Ok(out) if out.status.success()
+            );
+        if ok {
+            println!("{}", "OK".green());
+        } else {
+            println!("{}", "FAILED".yellow());
         }
     }
 
@@ -382,14 +401,25 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
 async fn stop_ai() -> anyhow::Result<()> {
     println!("{}", "Stopping AI services...".bold().blue());
 
-    match Command::new("sudo")
-        .args(["systemctl", "stop", "llama-server.service"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
+    // Phase 4: stop the Quadlet unit; if it doesn't exist (rolled-back
+    // host) fall through to the legacy unit name so older deployments
+    // still respond to `life ai stop`.
+    let stopped = matches!(
+        Command::new("sudo")
+            .args(["systemctl", "stop", LLAMA_SERVICE_UNIT_QUADLET])
+            .output(),
+        Ok(out) if out.status.success()
+    ) || matches!(
+        Command::new("sudo")
+            .args(["systemctl", "stop", LLAMA_SERVICE_UNIT_LEGACY])
+            .output(),
+        Ok(out) if out.status.success()
+    );
+    match stopped {
+        true => {
             println!("{}", "llama-server service stopped".green());
         }
-        _ => {
+        false => {
             println!("{}", "Service may not be running".yellow());
         }
     }
@@ -2519,5 +2549,24 @@ mod tests {
         assert!(!is_selectable_model_asset("Qwen3.5-4B-mmproj-F16.gguf"));
         assert!(!is_selectable_model_asset("nomic-embed-text-v1.5.f16.gguf"));
         assert!(!is_selectable_model_asset("whisper-small.gguf"));
+    }
+
+    #[test]
+    fn llama_service_unit_constants_match_post_pivot_names() {
+        // Phase 4 of the architecture pivot: chat inference is the system
+        // Quadlet `lifeos-llama-server.service`; the legacy pre-pivot host
+        // unit is `llama-server.service`. Catches a regression where a
+        // future refactor renames either constant to a non-existent unit
+        // (silent `life ai start/stop` failure that reports success).
+        assert_eq!(
+            super::LLAMA_SERVICE_UNIT_QUADLET,
+            "lifeos-llama-server.service"
+        );
+        assert_eq!(super::LLAMA_SERVICE_UNIT_LEGACY, "llama-server.service");
+        assert!(super::LLAMA_SERVICE_UNIT_QUADLET.starts_with("lifeos-"));
+        assert_ne!(
+            super::LLAMA_SERVICE_UNIT_QUADLET,
+            super::LLAMA_SERVICE_UNIT_LEGACY
+        );
     }
 }
