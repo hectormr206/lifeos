@@ -22,15 +22,15 @@ enable lifeos-security-baseline.service
 enable lifeos-nvidia-signed-modules.service
 
 # --- AI runtime ---
-# After the architecture pivot (Phases 4, 2, 5 of prd-architecture-pivot-...),
-# llama-server / llama-embeddings / simplex-chat run as system Quadlets
-# (lifeos-llama-server, lifeos-llama-embeddings, lifeos-simplex-bridge). The
-# Quadlet generator auto-enables them via [Install] WantedBy in the .container
-# files, so no preset line is needed for the new units. The legacy host units
-# below stay installed as rollback targets but are DISABLED by default to
-# prevent port conflicts (8082/8083/5226) with the Quadlets.
-disable llama-server.service
-disable llama-embeddings.service
+# After the architecture pivot (Phases 2, 4, 5, 7), chat inference,
+# embeddings, TTS, the SimpleX bot, and STT all run as system Quadlets
+# (lifeos-llama-server, lifeos-llama-embeddings, lifeos-tts,
+# lifeos-simplex-bridge, plus whisper-cli inside lifeos-lifeosd). The
+# Quadlet generator auto-enables them via [Install] WantedBy=
+# multi-user.target in each .container file — no preset lines needed.
+# The legacy host service unit files were dropped from bootc in the
+# Phase-3 trim, so the previous `disable llama-server.service` /
+# `disable simplex-chat.service` lines have nothing left to disable.
 enable whisper-stt.service
 
 # --- Timers ---
@@ -41,8 +41,3 @@ enable lifeos-flatpak-update.timer
 enable lifeos-update-check.timer
 enable lifeos-update-stage.timer
 disable lifeos-update-stage.service
-
-# --- Messaging bridge ---
-# Phase 5 replaced this with lifeos-simplex-bridge.container (Quadlet).
-# Keep the legacy unit installed as rollback target but DISABLED.
-disable simplex-chat.service

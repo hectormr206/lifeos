@@ -111,6 +111,26 @@ RUN /src/target/release/lifeosd --version || \
 # whisper-stream (live PipeWire capture for wake-word / meeting realtime)
 # is NOT shipped here — it needs the user's PipeWire socket bound in, and
 # that path is deferred to the lifeosd-desktop companion (Phase 3b).
+
+# ---------------------------------------------------------------------------
+# Stage 1c — WeSpeaker ONNX model fetch (speaker identification)
+# ---------------------------------------------------------------------------
+# WeSpeaker ResNet34 ONNX (~24 MB) used by daemon/src/speaker_id.rs via the
+# lifeos-speaker-embedding.py Python helper. Pre-Phase-3-trim it lived on
+# the bootc host at /usr/share/lifeos/models/wespeaker; moved INTO this
+# container so the bootc image carries no LifeOS-specific model bytes.
+# Daemon code path stays the same (/usr/share/lifeos/models/wespeaker/...
+# is INSIDE the container now, not on the host).
+FROM fedora:44 AS wespeaker-fetch
+
+RUN dnf -y install curl && dnf clean all
+RUN set -eux && \
+    mkdir -p /out/models/wespeaker && \
+    curl -fSL --retry 3 --connect-timeout 120 \
+      -o /out/models/wespeaker/voxceleb_resnet34_LM.onnx \
+      "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx?download=true" && \
+    test -s /out/models/wespeaker/voxceleb_resnet34_LM.onnx
+
 FROM fedora:44 AS whisper-builder
 
 RUN dnf install -y cmake make gcc-c++ git openssl-devel curl && \
@@ -150,8 +170,17 @@ RUN microdnf install -y \
         libcurl \
         glib2 \
         tini \
+        python3 \
+        python3-pip \
+        python3-numpy \
         --setopt=tsflags=nodocs && \
     microdnf clean all
+
+# Speaker-identification runtime: onnxruntime via pip (no Fedora rpm yet).
+# Used by daemon/src/speaker_id.rs through lifeos-speaker-embedding.py.
+# Adds ~80 MB to the runtime image but trims that same weight off bootc.
+RUN pip3 install --no-cache-dir onnxruntime && \
+    python3 -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
 
 # Copy just the binary and the bundled sqlite-vec extension if any (it's
 # statically linked into the daemon today via the rusqlite-vec crate, so no
@@ -164,6 +193,16 @@ COPY --from=builder /src/target/release/lifeosd /usr/bin/lifeosd
 # /var/lib/lifeos/models/whisper which is bind-mounted from the host (the
 # host-side `lifeos-stt-setup.sh` continues to download model files there).
 COPY --from=whisper-builder /out/whisper-cli /usr/bin/whisper-cli
+
+# Speaker identification: WeSpeaker ONNX model + Python helper. The daemon
+# spawns python3 lifeos-speaker-embedding.py at runtime to extract a 256-D
+# embedding from a WAV; both paths are hard-coded in
+# daemon/src/speaker_id.rs (SPEAKER_EMBEDDING_SCRIPT,
+# WESPEAKER_MODEL_PATH). Both moved INTO this image as part of the bootc
+# trim so the host carries no model bytes.
+COPY --from=wespeaker-fetch /out/models/wespeaker/voxceleb_resnet34_LM.onnx /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx
+COPY image/files/usr/local/bin/lifeos-speaker-embedding.py /usr/local/bin/lifeos-speaker-embedding.py
+RUN chmod +x /usr/local/bin/lifeos-speaker-embedding.py
 
 # Dashboard static assets — the Quadlet sets LIFEOS_DASHBOARD_DIR=
 # /usr/share/lifeos/dashboard. Pre-Phase-3 this lived on the host bootc
