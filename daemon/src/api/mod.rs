@@ -2985,13 +2985,10 @@ fn resolve_existing_stt_model_path(candidate: &str) -> Option<String> {
     // Phase 6b/7 of the architecture pivot: STT models live exclusively
     // under /var/lib/lifeos/models/whisper now. The /usr/share/lifeos/models
     // paths were the pre-Phase-6b host location and are gone.
-    [
-        "/var/lib/lifeos/models/whisper",
-        "/var/lib/lifeos/models",
-    ]
-    .iter()
-    .map(|dir| format!("{dir}/{file_name}"))
-    .find(|path| std::path::Path::new(path).exists())
+    ["/var/lib/lifeos/models/whisper", "/var/lib/lifeos/models"]
+        .iter()
+        .map(|dir| format!("{dir}/{file_name}"))
+        .find(|path| std::path::Path::new(path).exists())
 }
 
 fn resolve_stt_model_path(model: Option<&str>) -> Option<String> {

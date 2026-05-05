@@ -5958,13 +5958,10 @@ fn resolve_existing_stt_model(candidate: &str) -> Option<String> {
         .file_name()
         .and_then(|name| name.to_str())?;
     // Phase 6b/7: STT models live exclusively under /var/lib/lifeos/models.
-    [
-        "/var/lib/lifeos/models/whisper",
-        "/var/lib/lifeos/models",
-    ]
-    .iter()
-    .map(|dir| format!("{dir}/{file_name}"))
-    .find(|path| Path::new(path).exists())
+    ["/var/lib/lifeos/models/whisper", "/var/lib/lifeos/models"]
+        .iter()
+        .map(|dir| format!("{dir}/{file_name}"))
+        .find(|path| Path::new(path).exists())
 }
 
 fn espeak_voice_for_language(language: Option<&str>) -> &'static str {
