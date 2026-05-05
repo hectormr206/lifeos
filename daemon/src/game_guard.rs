@@ -1251,11 +1251,17 @@ mod tests {
 
     #[test]
     fn test_parse_nvidia_pmon_output() {
+        // Use PIDs far beyond `kernel.pid_max` (default 4194304 on Linux)
+        // so `parse_nvidia_pmon_output`'s call to `get_game_name_from_pid`
+        // returns None for our synthetic data and falls through to the
+        // pmon `command` column. Otherwise the CI runner's real /proc
+        // entries occasionally collide (we saw PID 5678 resolve to
+        // `lifeosd-db97203` and break this test).
         let sample = "\
 # gpu        pid  type    fb   command
-    0       1234     C   2816   llama-server
-    0       5678     G  10240   RERequiem
-    0       9999     G    128   gnome-shell
+    0   90001234     C   2816   llama-server
+    0   90005678     G  10240   RERequiem
+    0   90009999     G    128   gnome-shell
 ";
         let results = parse_nvidia_pmon_output(sample, 500, false);
         // llama-server excluded, gnome-shell excluded (below threshold), RERequiem included
