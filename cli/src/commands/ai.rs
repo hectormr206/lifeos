@@ -2558,9 +2558,15 @@ mod tests {
         // unit is `llama-server.service`. Catches a regression where a
         // future refactor renames either constant to a non-existent unit
         // (silent `life ai start/stop` failure that reports success).
-        assert_eq!(super::LLAMA_SERVICE_UNIT_QUADLET, "lifeos-llama-server.service");
+        assert_eq!(
+            super::LLAMA_SERVICE_UNIT_QUADLET,
+            "lifeos-llama-server.service"
+        );
         assert_eq!(super::LLAMA_SERVICE_UNIT_LEGACY, "llama-server.service");
         assert!(super::LLAMA_SERVICE_UNIT_QUADLET.starts_with("lifeos-"));
-        assert_ne!(super::LLAMA_SERVICE_UNIT_QUADLET, super::LLAMA_SERVICE_UNIT_LEGACY);
+        assert_ne!(
+            super::LLAMA_SERVICE_UNIT_QUADLET,
+            super::LLAMA_SERVICE_UNIT_LEGACY
+        );
     }
 }
