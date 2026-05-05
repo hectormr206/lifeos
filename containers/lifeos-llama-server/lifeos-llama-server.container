@@ -13,14 +13,24 @@ Documentation=https://github.com/ggml-org/llama.cpp
 # lifeosd reads from :8082 — keep llama-server up before lifeosd. Use the
 # Quadlet-generated unit name; ordering vs the legacy `llama-server.service`
 # (host) is silently dropped because that unit is masked post-Phase-4.
-After=network-online.target lifeos-image-guardian.service nvidia-cdi-refresh.service lifeos-net-network.service
+After=network-online.target lifeos-image-guardian.service lifeos-net-network.service
 # Hard bridge dependency — see lifeos-tts.container for rationale.
 Requires=lifeos-net-network.service
 Before=lifeos-lifeosd.service
-# nvidia-cdi-refresh.service ships with nvidia-container-toolkit and regenerates
-# the CDI spec at boot. Wants= because if it's absent (driver hot-swap, custom
-# host config) we still try and let CDI errors fail loudly.
-Wants=network-online.target nvidia-cdi-refresh.service
+# Note: NO After=/Wants=nvidia-cdi-refresh.service.
+# nvidia-cdi-refresh.service ships from nvidia-container-toolkit with
+# `After=multi-user.target`. Our Quadlet has `WantedBy=multi-user.target`,
+# so adding After= or Wants= against it produces an ordering cycle that
+# systemd breaks by DELETING our service from the boot transaction —
+# observed live in production: Phase-4 deploy left llama-server failing on
+# every boot until manually restarted, with the journal showing
+# "Found ordering cycle ... Job lifeos-llama-server.service/start deleted
+# to break ordering cycle". The CDI refresh runs independently when the
+# .path unit triggers (modules.dep / nvidia-ctk install changes). The
+# ExecStartPre below waits for the CDI spec to actually exist before
+# podman tries to inject the device, which races cleanly with whenever
+# nvidia-cdi-refresh decides to write it.
+Wants=network-online.target
 
 [Container]
 Image=ghcr.io/hectormr206/lifeos-llama-server:stable
@@ -130,6 +140,16 @@ Exec=/usr/sbin/llama-server \
 # Defense-in-depth Capa 4: ensure image is present locally before starting.
 # Quadlet requires ExecStartPre in [Service], not [Container].
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
+
+# Wait up to 60 s for nvidia-cdi-refresh.service to publish the CDI spec.
+# We can't `After=` it (ordering cycle — see [Unit] comments), so we poll
+# the canonical paths instead. NVIDIA's unit writes /var/run/cdi/nvidia.yaml
+# (NVIDIA_CTK_CDI_OUTPUT_FILE_PATH default); /etc/cdi/ is a manual path
+# operators sometimes populate. Either lets podman's CDI lookup succeed
+# for `AddDevice=nvidia.com/gpu=all`. Hyphen-prefix + bash makes the step
+# best-effort: if 60 s pass without a spec we still try to start (Restart=
+# always handles a hard failure).
+ExecStartPre=-/bin/bash -c 'i=0; while [ $i -lt 60 ]; do for f in /run/cdi/nvidia.yaml /var/run/cdi/nvidia.yaml /etc/cdi/nvidia.yaml; do [ -s "$f" ] && exit 0; done; sleep 1; i=$((i+1)); done; exit 0'
 
 # CRITICAL: these paths are HOST paths (systemd evaluates EnvironmentFile=
 # on the host before the container is created). The benchmarker writes

@@ -1276,6 +1276,25 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_nvidia_pmon_skips_below_vram_threshold() {
+        // Same trick as test_parse_nvidia_pmon_output: synthetic PIDs >
+        // pid_max so /proc lookups return None. Verifies the threshold
+        // gate filters out small VRAM consumers (gnome-shell at 128 MB
+        // here is below the 500 MB threshold). Pair test for the PID-
+        // collision regression we just fixed.
+        let sample = "\
+# gpu        pid  type    fb   command
+    0   90001000     G    100   gnome-shell
+    0   90002000     G    400   firefox
+";
+        let results = parse_nvidia_pmon_output(sample, 500, false);
+        assert!(
+            results.is_empty(),
+            "no process should clear the 500MB threshold"
+        );
+    }
+
+    #[test]
     fn test_gamemode_status_requires_real_active_state() {
         assert!(gamemode_status_is_active("gamemode is active"));
         assert!(gamemode_status_is_active("GameMode is ACTIVE\n"));

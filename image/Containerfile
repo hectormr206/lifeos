@@ -115,11 +115,12 @@ COPY contracts/ contracts/
 # linker-time artifacts from the layer cache.
 RUN set -eux && \
     cargo build --release --locked -p life && \
-    cargo build --release --locked -p lifeosd --bin lifeos-train-wakeword \
-        --features "wake-word" && \
     install -D -m 0755 /build/target/release/life /out/life && \
-    install -D -m 0755 /build/target/release/lifeos-train-wakeword /out/lifeos-train-wakeword && \
     rm -rf /build/target /root/.cargo/registry /root/.cargo/git
+# Note: lifeos-train-wakeword binary build removed from bootc — wake-word
+# personalization is a niche one-off training step (see comment in Stage
+# 4-runtime where the binary used to be COPY'd). Removing the build here
+# also drops the `wake-word` feature compile from the bootc CI path.
 
 # Stage 2 (llama.cpp build) is REMOVED in Phase 4 of the architecture pivot —
 # llama-server now runs inside ghcr.io/hectormr206/lifeos-llama-server:stable
@@ -141,19 +142,13 @@ RUN set -eux && \
 # which is bind-mounted into lifeos-lifeosd.
 
 # ============================================================================
-# Stage 4b: Download WeSpeaker ONNX model for speaker identification
+# Stage 4b: WeSpeaker ONNX — REMOVED (moved to lifeos-lifeosd container)
 # ============================================================================
-FROM fedora:${FEDORA_MAJOR} AS wespeaker-builder
-
-RUN dnf install -y curl && dnf clean all
-
-RUN set -eux && \
-    mkdir -p /out/models/wespeaker && \
-    curl -fSL --retry 3 --connect-timeout 120 \
-      -o /out/models/wespeaker/voxceleb_resnet34_LM.onnx \
-      "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx?download=true" && \
-    test -s /out/models/wespeaker/voxceleb_resnet34_LM.onnx && \
-    echo ">>> WeSpeaker ONNX model downloaded ($(du -sh /out/models/wespeaker/voxceleb_resnet34_LM.onnx | cut -f1))"
+# The 24 MB ResNet34 ONNX model + the Python helper script + the
+# onnxruntime pip package all live INSIDE ghcr.io/hectormr206/lifeos-lifeosd
+# now. See containers/lifeos-lifeosd/Containerfile stages `wespeaker-fetch`
+# and the runtime stage's pip install. Saves ~120 MB of host bytes
+# (24 MB model + ~80 MB onnxruntime + python3-numpy + python3-pip).
 
 # Stage 5 (Kokoro TTS Python venv) is REMOVED in Phase 6 of the
 # architecture pivot — the Kokoro venv, voice models, manifest, and
@@ -165,21 +160,10 @@ RUN set -eux && \
 # ============================================================================
 # We use bsdtar (libarchive) which natively handles .deb (ar) and .tar.zst
 # without needing dpkg or extra packages.
-FROM fedora:${FEDORA_MAJOR} AS simplex-extract
-ARG SIMPLEX_CLI_VERSION=v6.5.0
-RUN set -eux && \
-    dnf -y install bsdtar curl && \
-    curl -fSL -o /tmp/simplex-chat.deb \
-        "https://github.com/simplex-chat/simplex-chat/releases/download/${SIMPLEX_CLI_VERSION}/simplex-chat-ubuntu-22_04-x86_64.deb" && \
-    mkdir -p /tmp/deb-extract && \
-    cd /tmp/deb-extract && \
-    bsdtar xf /tmp/simplex-chat.deb && \
-    bsdtar xf data.tar.* && \
-    mkdir -p /out && \
-    install -m 0755 usr/bin/simplex-chat /out/simplex-chat && \
-    ls -la /out/simplex-chat && \
-    cd / && rm -rf /tmp/simplex-chat.deb /tmp/deb-extract && \
-    dnf clean all
+# simplex-chat host binary stage REMOVED — Phase 5 replaced the host
+# CLI with the lifeos-simplex-bridge Quadlet container which downloads
+# its own simplex-chat from the upstream Ubuntu .deb. Nothing on the
+# bootc host needs the binary any more.
 
 # ============================================================================
 # Stage 6a: NVIDIA driver RPMs from lifeos-nvidia-drivers upstream
@@ -601,11 +585,11 @@ RUN dnf -y install \
 # --- Pre-generate fontconfig cache (avoids cold-cache delay on first boot) ---
 RUN fc-cache -f 2>&1 | tail -5 || true
 
-# --- Speaker identification runtime (WeSpeaker ONNX) ---
-RUN dnf -y install python3-pip python3-numpy && \
-    pip3 install --no-cache-dir onnxruntime && \
-    python3 -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)" && \
-    dnf clean all
+# --- Speaker identification runtime — REMOVED ---
+# The WeSpeaker ONNX runtime (python3-pip + python3-numpy + onnxruntime
+# pip package, ~150 MB) moved INTO ghcr.io/hectormr206/lifeos-lifeosd:stable.
+# The daemon spawns python3 lifeos-speaker-embedding.py inside the
+# container; nothing on the host needs onnxruntime any more.
 
 # --- Aplicaciones de Escritorio (Flatpak — auto-update via lifeos-flatpak-update.timer) ---
 # mpv, evince, keepassxc, loupe moved from RPM to Flatpak for independent updates.
@@ -637,13 +621,16 @@ RUN set -eux && \
     fi
 
 # --- CLI LifeOS build artifacts needed before app/config layers ---
-# Keep the frequently changing CLI/dashboard bits for later so they do not
-# force new copies of large model/runtime layers on every update.
-COPY --from=builder /out/lifeos-train-wakeword /usr/local/bin/lifeos-train-wakeword
-RUN chmod +x /usr/local/bin/lifeos-train-wakeword
-
-# --- SimpleX Chat CLI (extracted in Ubuntu stage where dpkg works) ---
-COPY --from=simplex-extract /out/simplex-chat /usr/local/bin/simplex-chat
+# Phase-3-trim: lifeos-train-wakeword removed from bootc (~80 MB). Wake-word
+# personalization is a niche one-off training step that runs in a distrobox
+# / Toolbx, not a daily host binary; users who need it can pull a dedicated
+# training container. The Cargo build no longer produces it either (see the
+# Stage 1 builder rules).
+# Phase-3-trim: legacy /usr/local/bin/simplex-chat host binary removed
+# (~30 MB). Phase 5 of the architecture pivot replaced it with the
+# ghcr.io/hectormr206/lifeos-simplex-bridge:stable Quadlet container; the
+# host copy was kept only as a manual rollback target. With Phase 3/7/8
+# in production we don't need it any more.
 
 # --- AI Runtime ---
 # Phase 4: llama-server moved to ghcr.io/hectormr206/lifeos-llama-server
@@ -687,10 +674,12 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /va
     chmod 0775 /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos && \
     chgrp wheel /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos
 
-# Phase 6b: whisper /out/models/whisper is intentionally empty (only the
-# binaries copy at lines above ship in bootc now). lifeos-stt-setup.sh
-# fetches the GGML weights at first boot.
-COPY --from=wespeaker-builder /out/models/wespeaker /usr/share/lifeos/models/wespeaker
+# Phase 6b: whisper STT models live at /var/lib/lifeos/models/whisper —
+# downloaded at first boot by lifeos-stt-setup.sh, bind-mounted into the
+# lifeos-lifeosd container.
+# Phase-3-trim: WeSpeaker ONNX moved INTO the lifeos-lifeosd container
+# (containers/lifeos-lifeosd/Containerfile, stage `wespeaker-fetch`).
+# The /usr/share/lifeos/models/ directory above stays empty on bootc.
 
 # --- Kokoro TTS runtime: env file only ---
 #
@@ -872,8 +861,11 @@ COPY image/files/usr/local/bin/lifeos-maintenance-cleanup.sh /usr/local/bin/life
 COPY image/files/usr/local/bin/lifeos-open-axi-dashboard.sh /usr/local/bin/lifeos-open-axi-dashboard.sh
 COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
 COPY image/files/usr/local/bin/lifeos-llama-gpu-layers.sh       /usr/local/bin/lifeos-llama-gpu-layers.sh
-COPY image/files/usr/local/bin/lifeos-generate-wakeword.sh     /usr/local/bin/lifeos-generate-wakeword.sh
-COPY image/files/usr/local/bin/lifeos-speaker-embedding.py     /usr/local/bin/lifeos-speaker-embedding.py
+# lifeos-generate-wakeword.sh / lifeos-speaker-embedding.py REMOVED from
+# bootc as part of the Phase-3 trim. The wake-word generator depends on
+# the lifeos-train-wakeword binary which no longer ships here, and the
+# speaker-embedding helper moved INSIDE lifeos-lifeosd container alongside
+# the WeSpeaker ONNX + onnxruntime runtime it needs.
 COPY image/files/usr/local/bin/lifeos-diarize.py               /usr/local/bin/lifeos-diarize.py
 COPY image/files/usr/local/bin/lifeos-sentinel.sh              /usr/local/bin/lifeos-sentinel.sh
 COPY image/files/usr/local/bin/lifeos-libreoffice-verify.py   /usr/local/bin/lifeos-libreoffice-verify.py
@@ -900,8 +892,6 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-nvidia-secureboot.sh \
              /usr/local/bin/lifeos-open-axi-dashboard.sh \
              /usr/local/bin/lifeos-llama-gpu-layers.sh \
-             /usr/local/bin/lifeos-generate-wakeword.sh \
-             /usr/local/bin/lifeos-speaker-embedding.py \
              /usr/local/bin/lifeos-diarize.py \
              /usr/local/bin/lifeos-check \
              /usr/local/bin/lifeos-sentinel.sh \
@@ -913,15 +903,13 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-isolate-process \
              /usr/local/bin/lifeos-refresh-bls-titles.sh
 
-# --- Pre-trained wake word model (works from first boot) ---
-# Generate synthetic "Axi" samples with espeak-ng and build the rustpotter .rpw model.
-# This ensures wake word detection works immediately without user training.
-RUN set -eux && \
-    LIFEOS_TRAIN_WAKEWORD_BIN=/usr/local/bin/lifeos-train-wakeword \
-    /usr/local/bin/lifeos-generate-wakeword.sh \
-      /usr/share/lifeos/models/rustpotter/axi.rpw && \
-    test -f /usr/share/lifeos/models/rustpotter/axi.rpw && \
-    echo ">>> Pre-trained wake word model generated successfully"
+# Pre-trained wake-word model REMOVED from bootc as part of the Phase-3
+# trim. The model itself is small but its generation pulled the
+# lifeos-train-wakeword binary into bootc; both are gone now. Wake-word
+# activation is feature-gated to the deferred lifeosd-desktop companion
+# (Phase 3b) since the headless lifeos-lifeosd Quadlet has no PipeWire
+# socket. When 3b ships the .rpw can be regenerated INSIDE that companion
+# container or downloaded at runtime.
 
 # Axi polkit: allow wheel group to manage LifeOS services without password
 COPY image/files/etc/polkit-1/rules.d/40-lifeos-axi.rules /etc/polkit-1/rules.d/40-lifeos-axi.rules
@@ -979,7 +967,11 @@ COPY image/files/etc/systemd/system/lifeos-powertune.service /usr/lib/systemd/sy
 COPY image/files/etc/systemd/system/lifeos-background.slice /usr/lib/systemd/system/lifeos-background.slice
 COPY image/files/etc/systemd/system/lifeos-ecore-pin.service /usr/lib/systemd/system/lifeos-ecore-pin.service
 COPY image/files/etc/systemd/system/whisper-stt.service.d/20-lifeos-background.conf /usr/lib/systemd/system/whisper-stt.service.d/20-lifeos-background.conf
-COPY image/files/etc/systemd/system/llama-embeddings.service.d/20-lifeos-background.conf /usr/lib/systemd/system/llama-embeddings.service.d/20-lifeos-background.conf
+# Phase 2/4 trim: dropins for legacy host llama-server.service /
+# llama-embeddings.service removed — those services no longer exist on
+# the host (replaced by lifeos-llama-server / lifeos-llama-embeddings
+# Quadlets which apply their own resource limits via [Service] in the
+# .container files).
 
 # --- Security hardening (Fase AU — Security by Default) ---
 # Kernel hardening sysctl (CIS Benchmark Level 1)
@@ -1073,13 +1065,12 @@ COPY image/files/etc/systemd/system/lifeos-refresh-bls-titles.service /usr/lib/s
 # in the lifeos-llama-server.container Quadlet with GPU passthrough via
 # CDI (configured below).
 COPY containers/lifeos-llama-server/lifeos-llama-server.container /usr/share/containers/systemd/lifeos-llama-server.container
-COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/system/llama-embeddings.service
-# Phase 2 (embeddings) Quadlet flip — host setup script
-# `lifeos-embeddings-setup.sh` is now invoked from
-# lifeos-llama-embeddings.container's [Service] ExecStartPre, so the env
-# file gets populated and the model gets downloaded before the container
-# starts. The legacy host unit stays installed as manual rollback target
-# and is no longer wired into multi-user.target.wants below.
+# Legacy llama-embeddings.service host unit REMOVED from bootc as part
+# of the Phase-3-trim. Phase 2 replaced it with the
+# lifeos-llama-embeddings Quadlet container; the host file was kept only
+# as a manual rollback target. With Phase 3/7/8 in production we don't
+# need it any more. lifeos-embeddings-setup.sh continues to run from
+# lifeos-llama-embeddings.container's [Service] ExecStartPre.
 COPY containers/lifeos-llama-embeddings/lifeos-llama-embeddings.container /usr/share/containers/systemd/lifeos-llama-embeddings.container
 COPY image/files/usr/local/bin/lifeos-embeddings-setup.sh /usr/local/bin/lifeos-embeddings-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-embeddings-setup.sh
@@ -1090,14 +1081,12 @@ COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.service /usr/lib/
 COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/lifeos-sentinel.service
-COPY image/files/etc/systemd/system/simplex-chat.service /usr/lib/systemd/system/simplex-chat.service
-COPY image/files/etc/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf /usr/lib/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf
-# Phase 5 (simplex) Quadlet flip — host setup script
-# `lifeos-simplex-setup.sh` is now invoked from
-# lifeos-simplex-bridge.container's [Service] ExecStartPre, plus an
-# install -d ExecStartPre that creates /var/lib/lifeos/simplex with the
-# right perms (legacy unit's StateDirectory= no longer runs). The legacy
-# host unit stays installed as manual rollback target.
+# Legacy simplex-chat.service unit + drop-in REMOVED from bootc as part
+# of the Phase-3 trim. Phase 5 of the architecture pivot replaced it with
+# the lifeos-simplex-bridge Quadlet container; the host unit was kept
+# only as a manual rollback target. With Phase 3/7/8 in production we
+# no longer need it. lifeos-simplex-setup.sh is now invoked exclusively
+# from lifeos-simplex-bridge.container's [Service] ExecStartPre.
 COPY containers/lifeos-simplex-bridge/lifeos-simplex-bridge.container /usr/share/containers/systemd/lifeos-simplex-bridge.container
 
 # Phase 3 (lifeosd Quadlet) — drops the .container into /usr/share/containers/systemd/.
@@ -1216,8 +1205,14 @@ COPY --from=builder /out/life /usr/bin/life
 # is the canonical user surface. Saves ~150 MB from bootc.
 COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
 
-# --- Dashboard web (Axi control panel) ---
-COPY daemon/static/dashboard /usr/share/lifeos/dashboard
+# Dashboard web (Axi control panel) — REMOVED from bootc.
+# Phase 3 of the architecture pivot moved lifeosd into a Quadlet container
+# (ghcr.io/hectormr206/lifeos-lifeosd:stable) which now bakes the dashboard
+# assets directly via `COPY daemon/static/dashboard /usr/share/lifeos/dashboard`
+# in containers/lifeos-lifeosd/Containerfile. The Quadlet sets
+# Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard, so the
+# daemon's Axum ServeDir reads from inside the container, not from the host.
+# Keeping a duplicate copy on the host was dead weight (~344 KB).
 
 RUN chmod +x /usr/bin/life /usr/local/bin/cargo-audit && \
     ln -sf /usr/bin/life /usr/local/bin/life
@@ -1397,9 +1392,8 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -x /usr/local/bin/lifeos-nvidia-secureboot.sh || fail "/usr/local/bin/lifeos-nvidia-secureboot.sh"; \
     test -x /usr/local/bin/lifeos-maintenance-cleanup.sh || fail "/usr/local/bin/lifeos-maintenance-cleanup.sh"; \
     test -x /usr/local/bin/lifeos-open-axi-dashboard.sh || fail "/usr/local/bin/lifeos-open-axi-dashboard.sh"; \
-    test -f /usr/share/lifeos/dashboard/index.html || fail "/usr/share/lifeos/dashboard/index.html"; \
-    test -f /usr/share/lifeos/dashboard/app.js || fail "/usr/share/lifeos/dashboard/app.js"; \
-    test -f /usr/share/lifeos/dashboard/style.css || fail "/usr/share/lifeos/dashboard/style.css"; \
+    # Dashboard moved INTO ghcr.io/hectormr206/lifeos-lifeosd:stable —
+    # validated by the side-images CI on container build, not on host bootc.
     # Dashboard .desktop removed — access only via tray icon
     # Phase 3: user-scope lifeosd.service no longer ships (replaced by Quadlet).
     # Phase 4: legacy llama-server.service no longer ships (replaced by Quadlet).
@@ -1427,8 +1421,10 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /etc/lifeos/design-tokens.json || fail "/etc/lifeos/design-tokens.json"; \
     ls /usr/lib/udev/rules.d/*-steam*.rules >/dev/null 2>&1 || fail "steam udev rules"; \
     test -f /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml || fail "60-lifeos-split-lock-detect.toml"; \
-    test -f /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx || fail "wespeaker/voxceleb_resnet34_LM.onnx"; \
-    test -f /usr/share/lifeos/models/rustpotter/axi.rpw || fail "rustpotter/axi.rpw"; \
+    # WeSpeaker ONNX moved INSIDE the lifeos-lifeosd container — bootc no
+    # longer ships it. Verified by side-images CI on container build.
+    # Pre-trained wake-word model removed from bootc (Phase-3-trim);
+    # regenerated by lifeos-desktop companion when Phase 3b ships.
     test -d /usr/share/backgrounds/lifeos || fail "/usr/share/backgrounds/lifeos"; \
     test -d /usr/share/icons/LifeOS       || fail "/usr/share/icons/LifeOS"; \
     test -f /usr/share/themes/LifeOS-Dark/index.theme || fail "LifeOS-Dark/index.theme"; \
@@ -1498,7 +1494,8 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /usr/lib/systemd/system/lifeos-ecore-pin.service || fail "lifeos-ecore-pin.service"; \
     test -x /usr/local/bin/lifeos-detect-ecores.sh || fail "lifeos-detect-ecores.sh"; \
     test -f /usr/lib/systemd/system/whisper-stt.service.d/20-lifeos-background.conf || fail "whisper-stt 20-lifeos-background.conf"; \
-    test -f /usr/lib/systemd/system/llama-embeddings.service.d/20-lifeos-background.conf || fail "llama-embeddings 20-lifeos-background.conf"; \
+    # Legacy llama-embeddings/llama-server dropins removed — units no
+    # longer exist on host (Phase 2/4 Quadlet flips).
     test -x /usr/local/bin/lifeos-dev-deploy.sh || fail "lifeos-dev-deploy.sh"; \
     test -x /usr/local/bin/lifeos-apply-default-layout.sh || fail "lifeos-apply-default-layout.sh"
 
