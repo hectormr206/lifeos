@@ -1561,7 +1561,12 @@ impl AgentRuntimeManager {
     }
 
     pub async fn self_defense_status(&self) -> SelfDefenseStatus {
-        let ai_service_running = is_service_active("llama-server.service").await;
+        // Phase 4 cutover: chat inference now runs as the
+        // `lifeos-llama-server.service` Quadlet. Probe both names so
+        // self-defense correctly observes the AI on any rolled-back host
+        // that still uses the legacy unit.
+        let ai_service_running = is_service_active("lifeos-llama-server.service").await
+            || is_service_active("llama-server.service").await;
         let network_online = has_default_network_route().await;
         let rollback_available = has_bootc_rollback_capability().await;
         let disk_usage_percent = read_disk_usage_percent("/var").await.unwrap_or(0.0);
@@ -1578,7 +1583,7 @@ impl AgentRuntimeManager {
         let degraded_offline = !network_online || !ai_service_running;
         let mut recommended_actions = Vec::new();
         if !ai_service_running {
-            recommended_actions.push("restart llama-server service".to_string());
+            recommended_actions.push("restart lifeos-llama-server service".to_string());
         }
         if !network_online {
             recommended_actions.push("switch to offline degraded operation mode".to_string());
@@ -1612,20 +1617,31 @@ impl AgentRuntimeManager {
         let mut actions_taken = Vec::new();
 
         if !status_before.ai_service_running {
-            let output = Command::new("systemctl")
-                .args(["restart", "llama-server.service"])
+            // Phase 4: target the Quadlet unit. Fall through to the legacy
+            // name only if the new unit doesn't exist on this host (rollback).
+            let canonical = "lifeos-llama-server.service";
+            let mut output = Command::new("systemctl")
+                .args(["restart", canonical])
                 .output()
                 .await;
+            let mut unit_used: &str = canonical;
+            if matches!(&output, Ok(out) if !out.status.success()) {
+                let legacy = "llama-server.service";
+                output = Command::new("systemctl")
+                    .args(["restart", legacy])
+                    .output()
+                    .await;
+                if matches!(&output, Ok(out) if out.status.success()) {
+                    unit_used = legacy;
+                }
+            }
             match output {
                 Ok(out) if out.status.success() => {
-                    actions_taken.push("restarted llama-server.service".to_string());
+                    actions_taken.push(format!("restarted {unit_used}"));
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                    actions_taken.push(format!(
-                        "failed to restart llama-server.service: {}",
-                        stderr
-                    ));
+                    actions_taken.push(format!("failed to restart {canonical}: {stderr}"));
                 }
                 Err(e) => {
                     actions_taken.push(format!("failed to execute restart command: {}", e));

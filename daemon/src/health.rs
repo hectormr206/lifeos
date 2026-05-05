@@ -340,13 +340,18 @@ async fn check_disk_space() -> anyhow::Result<(bool, String)> {
 }
 
 async fn check_ai_service() -> anyhow::Result<(bool, String)> {
-    // Prefer systemd status when available.
-    if let Ok(output) = Command::new("systemctl")
-        .args(["is-active", "--quiet", "llama-server.service"])
-        .output()
-    {
-        if output.status.success() {
-            return Ok((true, "llama-server service is active".to_string()));
+    // Phase 4 of the architecture pivot moved chat inference to the
+    // `lifeos-llama-server.service` system Quadlet. Probe the new unit
+    // first; fall back to the legacy `llama-server.service` name only
+    // for hosts that haven't picked up the cutover yet (rollback).
+    for unit in ["lifeos-llama-server.service", "llama-server.service"] {
+        if let Ok(output) = Command::new("systemctl")
+            .args(["is-active", "--quiet", unit])
+            .output()
+        {
+            if output.status.success() {
+                return Ok((true, format!("{unit} is active")));
+            }
         }
     }
 

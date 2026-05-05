@@ -4001,11 +4001,15 @@ async fn maybe_apply_gpu_rebalance(
         }
 
         if llama_server_running {
-            Command::new("systemctl")
-                .args(["try-restart", "llama-server.service"])
-                .status()
-                .await
-                .ok();
+            // Phase 4: try-restart the Quadlet first; fall through to the
+            // legacy unit name for rolled-back hosts. try-restart is a no-op
+            // on units that don't exist, so trying both is safe.
+            for unit in ["lifeos-llama-server.service", "llama-server.service"] {
+                let _ = Command::new("systemctl")
+                    .args(["try-restart", unit])
+                    .status()
+                    .await;
+            }
         }
     }
 
@@ -4316,15 +4320,17 @@ async fn resolve_streaming_stt_model(override_model: Option<&str>) -> Option<Str
         }
     }
 
+    // Phase 6b/7 of the architecture pivot: STT models live exclusively
+    // under /var/lib/lifeos/models/whisper now (downloaded by lifeos-stt-
+    // setup.sh on host, bind-mounted into the daemon container). The
+    // /usr/share/lifeos/models/whisper paths were the pre-Phase-6b host
+    // location and are gone — keeping them in the candidate list only
+    // produced misleading filesystem probes in strace/auditd output.
     [
         "/var/lib/lifeos/models/whisper/ggml-tiny.bin",
-        "/usr/share/lifeos/models/whisper/ggml-tiny.bin",
         "/var/lib/lifeos/models/whisper/ggml-base.bin",
-        "/usr/share/lifeos/models/whisper/ggml-base.bin",
         "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
-        "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
         "/var/lib/lifeos/models/whisper/ggml-small.bin",
-        "/usr/share/lifeos/models/whisper/ggml-small.bin",
     ]
     .iter()
     .find(|candidate| Path::new(candidate).exists())
@@ -5883,42 +5889,35 @@ async fn resolve_stt_model(override_model: Option<&str>) -> Option<String> {
     // Auto-select whisper model based on available RAM
     let available_ram_gb = read_available_ram_gb();
 
-    // Tier the candidate list: prefer larger models when RAM allows
+    // Tier the candidate list: prefer larger models when RAM allows.
+    // Phase 6b/7 of the architecture pivot: STT models live exclusively
+    // under /var/lib/lifeos/models/whisper now (downloaded by lifeos-stt-
+    // setup.sh on host, bind-mounted into the daemon container). The
+    // /usr/share/lifeos/models/whisper paths were the pre-Phase-6b host
+    // location and have been removed.
     let candidates: &[&str] = if available_ram_gb > 8.0 {
         // >8 GB available — prefer medium for better accuracy on quiet speech
         &[
             "/var/lib/lifeos/models/whisper/ggml-medium.bin",
-            "/usr/share/lifeos/models/whisper/ggml-medium.bin",
             "/var/lib/lifeos/models/whisper/ggml-base.bin",
-            "/usr/share/lifeos/models/whisper/ggml-base.bin",
             "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
-            "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
             "/var/lib/lifeos/models/whisper/ggml-small.bin",
-            "/usr/share/lifeos/models/whisper/ggml-small.bin",
             "/var/lib/lifeos/models/whisper/ggml-tiny.bin",
-            "/usr/share/lifeos/models/whisper/ggml-tiny.bin",
         ]
     } else if available_ram_gb > 4.0 {
         // >4 GB — prefer base
         &[
             "/var/lib/lifeos/models/whisper/ggml-base.bin",
-            "/usr/share/lifeos/models/whisper/ggml-base.bin",
             "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
-            "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
             "/var/lib/lifeos/models/whisper/ggml-small.bin",
-            "/usr/share/lifeos/models/whisper/ggml-small.bin",
             "/var/lib/lifeos/models/whisper/ggml-tiny.bin",
-            "/usr/share/lifeos/models/whisper/ggml-tiny.bin",
         ]
     } else {
         // <4 GB — prefer tiny/small to conserve memory
         &[
             "/var/lib/lifeos/models/whisper/ggml-tiny.bin",
-            "/usr/share/lifeos/models/whisper/ggml-tiny.bin",
             "/var/lib/lifeos/models/whisper/ggml-small.bin",
-            "/usr/share/lifeos/models/whisper/ggml-small.bin",
             "/var/lib/lifeos/models/whisper/ggml-base.bin",
-            "/usr/share/lifeos/models/whisper/ggml-base.bin",
         ]
     };
 
@@ -5958,11 +5957,10 @@ fn resolve_existing_stt_model(candidate: &str) -> Option<String> {
     let file_name = Path::new(candidate)
         .file_name()
         .and_then(|name| name.to_str())?;
+    // Phase 6b/7: STT models live exclusively under /var/lib/lifeos/models.
     [
         "/var/lib/lifeos/models/whisper",
-        "/usr/share/lifeos/models/whisper",
         "/var/lib/lifeos/models",
-        "/usr/share/lifeos/models",
     ]
     .iter()
     .map(|dir| format!("{dir}/{file_name}"))
@@ -6008,22 +6006,29 @@ async fn detect_llama_runtime_backend() -> Option<String> {
 }
 
 async fn detect_llama_runtime_gpu_failure() -> Option<String> {
-    let output = Command::new("journalctl")
-        .args(["-u", "llama-server.service", "-b", "-n", "80", "--no-pager"])
-        .output()
-        .await
-        .ok()?;
-
-    if !output.status.success() {
+    // Phase 4: probe both the Quadlet unit name and the legacy host unit
+    // name so a recent GPU failure in either is matched (rollback-safe).
+    let mut combined = String::new();
+    for unit in ["lifeos-llama-server.service", "llama-server.service"] {
+        let Ok(output) = Command::new("journalctl")
+            .args(["-u", unit, "-b", "-n", "80", "--no-pager"])
+            .output()
+            .await
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        combined.push_str(&String::from_utf8_lossy(&output.stdout));
+        combined.push('\n');
+        combined.push_str(&String::from_utf8_lossy(&output.stderr));
+        combined.push('\n');
+    }
+    if combined.trim().is_empty() {
         return None;
     }
-
-    let journal = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-    .to_lowercase();
+    let journal = combined.to_lowercase();
 
     if journal.contains("no usable gpu found")
         || journal.contains("ggml_vulkan: no devices found")

@@ -528,7 +528,22 @@ fn check_ai_service_issue() -> Option<String> {
 }
 
 fn assess_llama_service() -> AiServiceAssessment {
-    assess_ai_service(
+    // Phase 4 of the architecture pivot: chat inference is the system
+    // Quadlet `lifeos-llama-server.service`. We probe the new name first,
+    // then fall back to the legacy `llama-server.service` so a host that
+    // rolled back keeps reporting accurate status.
+    let system_state = systemd_unit_state(
+        &[
+            "systemctl",
+            "show",
+            "lifeos-llama-server.service",
+            "--property=LoadState,ActiveState,SubState,Result",
+        ],
+        "system",
+    );
+    let system_state = if system_state.is_some() {
+        system_state
+    } else {
         systemd_unit_state(
             &[
                 "systemctl",
@@ -537,13 +552,16 @@ fn assess_llama_service() -> AiServiceAssessment {
                 "--property=LoadState,ActiveState,SubState,Result",
             ],
             "system",
-        ),
+        )
+    };
+    assess_ai_service(
+        system_state,
         systemd_unit_state(
             &[
                 "systemctl",
                 "--user",
                 "show",
-                "llama-server.service",
+                "lifeos-llama-server.service",
                 "--property=LoadState,ActiveState,SubState,Result",
             ],
             "user",
@@ -677,12 +695,18 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     });
 
     // --- Repair actions for failed services ---
+    // Phase 3/4 of the architecture pivot: lifeosd and llama-server are
+    // now system Quadlets (lifeos-lifeosd.service, lifeos-llama-server.service).
+    // Try the canonical names first, then the legacy host units for hosts
+    // that rolled back to a pre-Quadlet image.
     if ai_assessment.restart_recommended {
-        if restart_unit(&["systemctl", "restart", "llama-server.service"]) {
+        let restarted = restart_unit(&["systemctl", "restart", "lifeos-llama-server.service"])
+            || restart_unit(&["systemctl", "restart", "llama-server.service"]);
+        if restarted {
             report.repairs.push("Restarted ai-service".to_string());
         } else {
             report.repairs.push(
-                "Failed to restart ai-service (try: sudo systemctl restart llama-server.service)"
+                "Failed to restart ai-service (try: sudo systemctl restart lifeos-llama-server.service)"
                     .to_string(),
             );
         }
@@ -690,7 +714,8 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
 
     if !daemon_running {
         let restarted_lifeosd =
-            restart_unit(&["systemctl", "--user", "restart", "lifeosd.service"])
+            restart_unit(&["systemctl", "restart", "lifeos-lifeosd.service"])
+                || restart_unit(&["systemctl", "--user", "restart", "lifeosd.service"])
                 || restart_unit(&["systemctl", "--user", "start", "lifeosd.service"])
                 || restart_unit(&["systemctl", "restart", "lifeosd.service"]);
 
@@ -698,7 +723,7 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
             report.repairs.push("Restarted lifeosd".to_string());
         } else {
             report.repairs.push(
-                "Failed to restart lifeosd (try: systemctl --user restart lifeosd.service)"
+                "Failed to restart lifeosd (try: sudo systemctl restart lifeos-lifeosd.service)"
                     .to_string(),
             );
         }

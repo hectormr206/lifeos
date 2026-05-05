@@ -2850,13 +2850,11 @@ async fn resolve_whisper_model() -> Result<String> {
     // (~142MB) on Spanish / accented speech at the cost of ~3× CPU
     // time, which is still well under the meeting duration itself.
     // Caption model (live) stays on `tiny` via `resolve_caption_model`.
+    // Phase 6b/7: STT models live exclusively under /var/lib/lifeos/models/whisper.
     let candidates = [
         "/var/lib/lifeos/models/whisper/ggml-medium.bin",
-        "/usr/share/lifeos/models/whisper/ggml-medium.bin",
         "/var/lib/lifeos/models/whisper/ggml-small.bin",
-        "/usr/share/lifeos/models/whisper/ggml-small.bin",
         "/var/lib/lifeos/models/whisper/ggml-base.bin",
-        "/usr/share/lifeos/models/whisper/ggml-base.bin",
     ];
     for path in &candidates {
         if tokio::fs::metadata(path).await.is_ok() {
@@ -2869,11 +2867,10 @@ async fn resolve_whisper_model() -> Result<String> {
 /// Resolve the whisper model for real-time captions (BB.8).
 /// Prefers the tiny model for minimal latency, falls back to base.
 async fn resolve_caption_model() -> Result<String> {
+    // Phase 6b/7: STT models live exclusively under /var/lib/lifeos/models/whisper.
     let candidates = [
         "/var/lib/lifeos/models/whisper/ggml-tiny.bin",
-        "/usr/share/lifeos/models/whisper/ggml-tiny.bin",
         "/var/lib/lifeos/models/whisper/ggml-base.bin",
-        "/usr/share/lifeos/models/whisper/ggml-base.bin",
     ];
     for path in &candidates {
         if tokio::fs::metadata(path).await.is_ok() {

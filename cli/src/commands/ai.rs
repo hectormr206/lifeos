@@ -345,15 +345,28 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
         }
     }
 
-    // Enable auto-start if requested
+    // Enable auto-start if requested.
+    // Phase 4: target the Quadlet unit (lifeos-llama-server.service); fall
+    // back to the legacy unit name for rolled-back hosts.
     if enable {
         print!("Enabling auto-start on boot... ");
-        match Command::new("sudo")
-            .args(["systemctl", "enable", "llama-server.service"])
-            .output()
-        {
-            Ok(output) if output.status.success() => println!("{}", "OK".green()),
-            _ => println!("{}", "FAILED".yellow()),
+        let canonical_ok = matches!(
+            Command::new("sudo")
+                .args(["systemctl", "enable", "lifeos-llama-server.service"])
+                .output(),
+            Ok(out) if out.status.success()
+        );
+        let ok = canonical_ok
+            || matches!(
+                Command::new("sudo")
+                    .args(["systemctl", "enable", "llama-server.service"])
+                    .output(),
+                Ok(out) if out.status.success()
+            );
+        if ok {
+            println!("{}", "OK".green());
+        } else {
+            println!("{}", "FAILED".yellow());
         }
     }
 
@@ -382,14 +395,25 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
 async fn stop_ai() -> anyhow::Result<()> {
     println!("{}", "Stopping AI services...".bold().blue());
 
-    match Command::new("sudo")
-        .args(["systemctl", "stop", "llama-server.service"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
+    // Phase 4: stop the Quadlet unit; if it doesn't exist (rolled-back
+    // host) fall through to the legacy unit name so older deployments
+    // still respond to `life ai stop`.
+    let stopped = matches!(
+        Command::new("sudo")
+            .args(["systemctl", "stop", "lifeos-llama-server.service"])
+            .output(),
+        Ok(out) if out.status.success()
+    ) || matches!(
+        Command::new("sudo")
+            .args(["systemctl", "stop", "llama-server.service"])
+            .output(),
+        Ok(out) if out.status.success()
+    );
+    match stopped {
+        true => {
             println!("{}", "llama-server service stopped".green());
         }
-        _ => {
+        false => {
             println!("{}", "Service may not be running".yellow());
         }
     }
