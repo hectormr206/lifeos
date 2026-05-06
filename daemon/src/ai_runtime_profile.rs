@@ -107,6 +107,23 @@ impl RuntimeSettings {
         if let Some(mmproj) = &self.mmproj {
             lines.push(format!("LIFEOS_AI_MMPROJ={mmproj}"));
         }
+        // GPU-vs-CPU device split for the lifeos-llama-server Quadlet's Exec
+        // line. The Quadlet expands these literally into the llama-server
+        // command, so empty is fine — but keeping `-mg 0 --cache-type-* q8_0`
+        // hardcoded in the Quadlet causes "invalid value for main_gpu: 0
+        // (available devices: 0)" the moment Vulkan can't enumerate a
+        // device (every CPU-only deploy + every host where lifeos-nvidia-
+        // drivers ships without proper headless Vulkan support).
+        if self.gpu_layers == 0 {
+            lines.push("LIFEOS_AI_DEVICE_FLAGS=--device none".to_string());
+            lines.push("LIFEOS_AI_GPU_TUNING=".to_string());
+        } else {
+            lines.push("LIFEOS_AI_DEVICE_FLAGS=".to_string());
+            lines.push(
+                "LIFEOS_AI_GPU_TUNING=-sm none -mg 0 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn auto"
+                    .to_string(),
+            );
+        }
         lines
     }
 
@@ -628,6 +645,13 @@ fn heuristic_cpu_profile(
         inputs.requested_ctx_size.min(4_096)
     };
 
+    // Pin the small Qwen 3.5 4B Q4_K_M as the CPU baseline: ~2.7 GB on disk,
+    // ~3-4 GB RAM at runtime, runs at ~10-20 tokens/s on a Raptor Lake-S CPU
+    // (measured 14 t/s on Hector's machine post-Phase-3 cutover before the
+    // Vulkan-headless workaround landed). Without this default the daemon
+    // would write a profile with no LIFEOS_AI_MODEL, and the
+    // lifeos-llama-server Quadlet would crash-loop on `--model
+    // /var/lib/lifeos/models/` (empty path).
     RuntimeSettings {
         ctx_size,
         threads,
@@ -635,8 +659,8 @@ fn heuristic_cpu_profile(
         parallel: 1,
         batch_size,
         ubatch_size,
-        model: None,
-        mmproj: None,
+        model: Some("Qwen3.5-4B-Q4_K_M.gguf".into()),
+        mmproj: Some("Qwen3.5-4B-mmproj-F16.gguf".into()),
     }
 }
 
@@ -816,6 +840,19 @@ fn detect_accelerator() -> Option<AcceleratorInfo> {
         return None;
     }
 
+    // Phase 4 of the architecture pivot moved llama-server into its own
+    // Quadlet container, so the binary is no longer guaranteed to live next
+    // to lifeosd. Try the binary first (still present on dev hosts and CPU
+    // builds), and fall back to nvidia-smi for the headless-container case
+    // where chat inference runs in lifeos-llama-server but lifeosd needs to
+    // know the GPU exists to pick the right runtime profile.
+    if let Some(info) = detect_accelerator_via_llama_server() {
+        return Some(info);
+    }
+    detect_accelerator_via_nvidia_smi()
+}
+
+fn detect_accelerator_via_llama_server() -> Option<AcceleratorInfo> {
     let output = Command::new("llama-server")
         .arg("--list-devices")
         .output()
@@ -844,6 +881,54 @@ fn detect_accelerator() -> Option<AcceleratorInfo> {
         }
     }
 
+    best
+}
+
+/// Probe the GPU directly through nvidia-smi. Used when no llama-server
+/// binary is reachable (lifeosd runs in a Quadlet container with the
+/// nvidia-smi tool injected by CDI, but no llama-server next to it).
+/// Returns the highest-VRAM NVIDIA device or None.
+fn detect_accelerator_via_nvidia_smi() -> Option<AcceleratorInfo> {
+    let output = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_nvidia_smi_query(&stdout)
+}
+
+fn parse_nvidia_smi_query(output: &str) -> Option<AcceleratorInfo> {
+    let mut best: Option<AcceleratorInfo> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // CSV format with `--format=csv,noheader,nounits`:
+        //   "NVIDIA GeForce RTX 5070 Laptop GPU, 12227"
+        let mut parts = line.splitn(2, ',');
+        let name = parts.next()?.trim().to_string();
+        let mem = parts.next()?.trim().parse::<u64>().ok()?;
+        if name.is_empty() {
+            continue;
+        }
+        let candidate = AcceleratorInfo {
+            backend: "nvidia".to_string(),
+            name,
+            total_mem_mb: mem,
+        };
+        match &best {
+            None => best = Some(candidate),
+            Some(current) if candidate.total_mem_mb > current.total_mem_mb => best = Some(candidate),
+            _ => {}
+        }
+    }
     best
 }
 
