@@ -107,6 +107,7 @@ mod thermal_manager;
 mod time_context;
 mod translation;
 mod tuf;
+mod uds_handout;
 mod update_scheduler;
 mod updates;
 #[cfg_attr(not(feature = "messaging"), allow(dead_code))]
@@ -599,6 +600,18 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+
+    // Phase 8c: expose the bootstrap token over a Unix-domain socket
+    // authenticated by SO_PEERCRED. Lets local clients (life CLI,
+    // sentinel, lifeos-check, the future Phase 3b companion) obtain the
+    // token without reading the legacy /run/lifeos/bootstrap.token file
+    // (whose perms 0750 root:root block the user session). The handle
+    // is intentionally NOT joined on shutdown — the listener is just a
+    // background accept loop; the OS reclaims the socket file when the
+    // daemon exits.
+    let _handout_handle = bootstrap_token
+        .as_deref()
+        .map(|t| uds_handout::spawn(t.to_string()));
 
     // Initialize wake word detector (rustpotter) if available.
     let wake_word_notify = Arc::new(tokio::sync::Notify::new());

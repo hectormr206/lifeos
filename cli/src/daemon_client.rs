@@ -4,12 +4,47 @@
 //! to get an authenticated reqwest client.
 
 use reqwest::Client;
-use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::io::{IsTerminal, Read, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:8081";
 const TOKEN_FILENAME: &str = "bootstrap.token";
+const DEFAULT_HANDOUT_SOCKET: &str = "/run/lifeos-bootstrap.sock";
+
+/// Read the bootstrap token via the daemon's SO_PEERCRED-authenticated
+/// handout socket (Phase 8c). The kernel reports the calling process's
+/// UID; the daemon writes the token bytes back if the UID is in its
+/// allowlist (root + LIFEOS_HANDOUT_UID, default 1000), else the
+/// literal "FORBIDDEN".
+///
+/// Returns `None` when the socket is missing, unreachable, or the
+/// daemon refused — the caller falls through to the file-on-disk path
+/// for legacy hosts.
+fn read_token_from_handout() -> Option<String> {
+    let path = std::env::var("LIFEOS_HANDOUT_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_HANDOUT_SOCKET));
+    if !Path::new(&path).exists() {
+        return None;
+    }
+    let mut stream = UnixStream::connect(&path).ok()?;
+    // 200 ms is generous — the daemon writes the token + newline + closes
+    // without waiting for any client input. Anything slower indicates the
+    // daemon is stuck and we should fall back rather than hang the CLI.
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.write_all(b""); // no payload required; trigger SO_PEERCRED
+    let mut buf = String::new();
+    stream.read_to_string(&mut buf).ok()?;
+    let token = buf.trim();
+    if token.is_empty() || token == "FORBIDDEN" {
+        None
+    } else {
+        Some(token.to_string())
+    }
+}
 
 /// Get the daemon API base URL
 pub fn daemon_url() -> String {
@@ -27,6 +62,15 @@ fn read_bootstrap_token() -> Option<String> {
         if !token.is_empty() {
             return Some(token);
         }
+    }
+
+    // 2) Phase 8c: SO_PEERCRED-authenticated handout socket. No sudo
+    // prompt, no file-perm gymnastics — the kernel certifies the
+    // CLI's UID and the daemon hands back the token if it's in the
+    // allowlist. Falls through silently when the socket is absent
+    // (legacy hosts) or refused (UID not whitelisted).
+    if let Some(token) = read_token_from_handout() {
+        return Some(token);
     }
 
     for token_path in bootstrap_token_candidates() {

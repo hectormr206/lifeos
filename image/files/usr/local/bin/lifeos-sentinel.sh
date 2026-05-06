@@ -43,13 +43,29 @@ log() {
 }
 
 read_bootstrap_token() {
-    # Phase 3 of architecture pivot: lifeos-lifeosd is now a system Quadlet
-    # with LIFEOS_RUNTIME_DIR=/run/lifeos (bind-mounted host↔container so
-    # both sides see the same token file). The legacy user-scope path
-    # /run/user/<uid>/lifeos/bootstrap.token is checked second as a
-    # rollback compatibility shim — it would only match if the operator
-    # rolled back to a pre-Phase-3 deployment that still ran lifeosd as a
-    # user service.
+    # Phase 8c: prefer the UDS handout authenticated by SO_PEERCRED. The
+    # daemon writes the token bytes when the peer's UID matches an
+    # allowlist (root + LIFEOS_PRIMARY_UID); sentinel runs as root so it
+    # is always allowed. The handout decouples token retrieval from the
+    # /run/lifeos/bootstrap.token file's directory perms (0750 root:root
+    # by default, which blocks non-root traversal).
+    local handout="${LIFEOS_HANDOUT_SOCKET:-/run/lifeos-bootstrap.sock}"
+    if [ -S "$handout" ] && command -v socat >/dev/null 2>&1; then
+        local token
+        token="$(socat - "UNIX-CONNECT:${handout}" 2>/dev/null | head -n 1)"
+        # Daemon writes "FORBIDDEN\n" for unauthorized peers; the kernel
+        # enforces the actual gate via SO_PEERCRED. Treat that body as a
+        # miss and fall through to the legacy file paths.
+        if [ -n "$token" ] && [ "$token" != "FORBIDDEN" ]; then
+            printf '%s' "$token"
+            return
+        fi
+    fi
+    # Phase 3 fallback (still in place for rollback / for hosts where
+    # socat is not installed yet). lifeos-lifeosd writes
+    # /run/lifeos/bootstrap.token with LIFEOS_RUNTIME_DIR=/run/lifeos
+    # bind-mounted host↔container. The user-scope path is the older
+    # pre-Phase-3 layout.
     for token_path in \
         "/run/lifeos/bootstrap.token" \
         "/run/user/${LIFEOS_PRIMARY_UID}/lifeos/bootstrap.token"

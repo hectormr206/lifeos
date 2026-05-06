@@ -368,7 +368,20 @@ echo
 
 # --- Daemon (lifeosd) ---
 echo -e "${BOLD}Daemon${NC}"
-TOKEN=$(sudo cat /run/lifeos/bootstrap.token 2>/dev/null)
+# Phase 8c: try the UDS handout first (SO_PEERCRED-authenticated, no
+# sudo needed when the calling user is in the allowlist), fall back to
+# the file-on-disk read.
+HANDOUT_SOCKET="${LIFEOS_HANDOUT_SOCKET:-/run/lifeos-bootstrap.sock}"
+TOKEN=""
+if [[ -S "$HANDOUT_SOCKET" ]] && command -v socat >/dev/null 2>&1; then
+    TOKEN=$(socat - "UNIX-CONNECT:${HANDOUT_SOCKET}" 2>/dev/null | head -n 1)
+    if [[ "$TOKEN" == "FORBIDDEN" ]]; then
+        TOKEN=""
+    fi
+fi
+if [[ -z "$TOKEN" ]]; then
+    TOKEN=$(sudo cat /run/lifeos/bootstrap.token 2>/dev/null)
+fi
 if [[ -n "$TOKEN" ]]; then
     ok "Bootstrap token: presente"
     HEALTH=$(curl -sf -H "x-bootstrap-token: $TOKEN" http://127.0.0.1:8081/api/v1/health 2>/dev/null)
