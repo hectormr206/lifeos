@@ -12,7 +12,12 @@ Documentation=https://github.com/hectormr206/lifeos
 # `simplex-chat.service` (the LEGACY non-prefixed host services); systemd
 # silently dropped ordering against those after Phase 4/5 flipped the
 # legacy units to masked/removed state.
-After=network-online.target lifeos-image-guardian.service lifeos-state-migrate.service lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
+After=network-online.target lifeos-image-guardian.service lifeos-state-migrate.service lifeos-net-network.service lifeos-tts.service lifeos-llama-embeddings.service lifeos-llama-server.service lifeos-simplex-bridge.service
+# Hard bridge dependency — see lifeos-tts.container for rationale. Without
+# this lifeos-net.network failing to start would let the daemon come up
+# with no network attachment, PublishPort= forwards die silently, and the
+# dashboard/sentinel/CLI all hang on connect.
+Requires=lifeos-net-network.service
 # `Wants=` on the migration unit (NOT `Requires=`) — round-2 audit caught
 # that `Requires=` would block the daemon forever if the migration unit
 # failed even once (Type=oneshot has no Restart= and the daemon would
@@ -30,10 +35,27 @@ Image=ghcr.io/hectormr206/lifeos-lifeosd:stable
 ContainerName=lifeos-lifeosd
 HostName=lifeos-lifeosd
 
-# Network=host — daemon talks to llama-server (8082), llama-embeddings (8083),
-# lifeos-tts (8084), simplex-chat (5226) all on host loopback. Network=host
-# means zero URL changes from the existing systemd-host setup. Phase 6 PRD
-# migrates to a podman bridge `lifeos-net`.
+# lifeos-lifeosd stays on Network=host — Phase 8b's empirical validation
+# (test on rootful podman 5.8.2 + netavark 1.17.2 + Fedora 44, 2026-05-06)
+# showed that PublishPort=127.0.0.1:Y:Y SNATs incoming connections to the
+# bridge gateway IP (10.89.0.1), so the container sees `peer=10.89.0.1`
+# instead of `127.0.0.1`. With the daemon's peer-loopback gate (api/mod.rs
+# `require_loopback_peer` middleware + the inline check in
+# dashboard_bootstrap), every legitimate dashboard fetch / sentinel probe
+# / `life` CLI call would 403 because the gateway IP is not loopback.
+# Accepting `10.89.0.1` as loopback-equivalent does not work either —
+# every sibling container on lifeos-net shares that gateway, so it would
+# be the exact lateral-compromise surface JD round-3 caught.
+#
+# The clean fix is bind-mounting a Unix-domain socket from the host into
+# the container and using SO_PEERCRED to authenticate locally — see
+# `~/.claude/projects/-home-hectormr-dev-gama-lifeos/memory/project_pending_phase8b_unix_socket_migration.md`.
+# Until that lands, lifeos-lifeosd uses Network=host like the pre-pivot
+# topology. Sibling containers (lifeos-tts/llama-server/etc.) are still
+# on lifeos-net.network and expose their ports back to the host via their
+# own PublishPort=, so the daemon reaches them at the same `127.0.0.1:80xx`
+# URLs the endpoints.rs defaults already use. The URL refactor stays in
+# code — the env vars just go unused on this host topology.
 Network=host
 
 # === Bind mounts: state lives on host, container is stateless ===
@@ -66,10 +88,14 @@ Volume=/etc/lifeos:/etc/lifeos:ro,z
 Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
 
 # === Critical environment variables ===
-# Same set the host service passes today.
-Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard
-Environment=LIFEOS_RUNTIME_DIR=/run/lifeos
-Environment=RUST_LOG=info,lifeosd=debug
+#
+# Round-2 JD ordering note: systemd applies Environment= and EnvironmentFile=
+# in DIRECTIVE ORDER (later overrides earlier). EnvironmentFile= MUST come
+# FIRST so the inline Environment= values below win for any LIFEOS_* key
+# the legacy llm-providers.env file might also contain — otherwise an
+# operator who copied LIFEOS_TTS_URL into /etc/lifeos/llm-providers.env
+# could silently override the bridged Quadlet topology.
+#
 # Quadlet does NOT honor the systemd `-` "optional" prefix on
 # EnvironmentFile= when the directive lives in the [Container] section —
 # it interprets the dash as a leading path segment and tries to open the
@@ -77,6 +103,20 @@ Environment=RUST_LOG=info,lifeosd=debug
 # bootc image always ships /etc/lifeos/llm-providers.env (lifeos-secrets.conf
 # enforces 0600 root) so the file is always present — drop the dash.
 EnvironmentFile=/etc/lifeos/llm-providers.env
+Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard
+Environment=LIFEOS_RUNTIME_DIR=/run/lifeos
+Environment=RUST_LOG=info,lifeosd=debug
+# Network=host: the daemon binds its own loopback on 127.0.0.1:8081
+# (LIFEOS_API_BIND default in DaemonConfig). The wildcard-bind override
+# only made sense on the bridge (PublishPort needed an external-facing
+# listener); on host network it would expose the daemon on every NIC.
+# No LIFEOS_API_BIND= here on purpose.
+
+# Sibling URLs default to http://127.0.0.1:80xx in endpoints.rs, which
+# is correct for Network=host (and for the bridged sibling containers
+# whose own PublishPort= forwards their loopback ports back to the host).
+# The LIFEOS_*_URL env vars are intentionally unset; if the Unix-socket
+# migration lands and the daemon goes back to lifeos-net, set them then.
 
 # Memory DB encryption key derives from /etc/machine-id + /etc/hostname
 # (see daemon/src/memory_plane.rs::derive_machine_key). Without these

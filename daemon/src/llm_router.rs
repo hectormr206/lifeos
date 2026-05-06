@@ -1266,11 +1266,22 @@ fn dirs_home() -> Option<std::path::PathBuf> {
 fn default_providers() -> Vec<ProviderConfig> {
     // Provider priority: Local > Cerebras (privacy+speed) > Groq (privacy+speed)
     //                    > Z.AI paid (if balance) > OpenRouter (fallback, mixed privacy)
+    // Phase 8b: the local provider's api_base used to be hardcoded to
+    // http://127.0.0.1:8082, which silently 404s once lifeosd lives on a
+    // podman bridge (127.0.0.1 inside the container is no longer the host
+    // loopback). crate::endpoints::llama_url() honors LIFEOS_LLAMA_URL
+    // and falls back to the loopback default for legacy Network=host hosts.
+    //
+    // **Frozen at startup** — this function builds the provider vector
+    // once when LlmRouter is constructed; subsequent runtime changes to
+    // LIFEOS_LLAMA_URL in /etc/lifeos/*.env will NOT take effect until
+    // the operator runs `systemctl restart lifeos-lifeosd`.
+    let local_llama_base = crate::endpoints::llama_url();
     vec![
         // ===== Priority 1: Local — max privacy, zero cost =====
         ProviderConfig {
             name: "local".into(),
-            api_base: "http://127.0.0.1:8082".into(),
+            api_base: local_llama_base,
             api_key_env: "".into(),
             model: "local".into(),
             api_format: ApiFormat::OpenAiCompatible,

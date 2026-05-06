@@ -3822,8 +3822,9 @@ async fn probe_kokoro_tts_server() -> ProbeOutcome {
         // No estampamos aquí — sólo estampamos en éxito (ver abajo).
     }
 
-    let base_url = std::env::var("LIFEOS_TTS_SERVER_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8084".to_string());
+    // Phase 8b: centralised lookup respects LIFEOS_TTS_URL (new canonical
+    // name) and the legacy LIFEOS_TTS_SERVER_URL for backwards compat.
+    let base_url = crate::endpoints::tts_url();
 
     let client = kokoro_probe_client();
 
@@ -4727,10 +4728,11 @@ async fn synthesize_tts(
 ) -> Result<(String, String)> {
     let tts_text = prepare_tts_text(text);
 
-    // Determine if Kokoro server URL is configured.
-    let server_url = std::env::var("LIFEOS_TTS_SERVER_URL")
-        .ok()
-        .filter(|s| !s.is_empty());
+    // Resolve Kokoro server URL via the central endpoint resolver.
+    // The resolver honors LIFEOS_TTS_URL (canonical) and falls back to
+    // LIFEOS_TTS_SERVER_URL (legacy) so this codepath works on both the
+    // bridged-network Quadlet and the legacy host loopback layout.
+    let server_url = Some(crate::endpoints::tts_url());
 
     if let Some(ref base_url) = server_url {
         let env_default =
@@ -4918,9 +4920,7 @@ async fn synthesize_single_chunk(
     language: Option<&str>,
     voice: &str,
 ) -> Result<String> {
-    let server_url = std::env::var("LIFEOS_TTS_SERVER_URL")
-        .ok()
-        .filter(|s| !s.is_empty());
+    let server_url = Some(crate::endpoints::tts_url());
 
     if let Some(ref base_url) = server_url {
         match synthesize_with_kokoro_http(data_dir, base_url, text, voice, "wav").await {

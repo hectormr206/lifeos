@@ -100,13 +100,19 @@ Boot order:
 4. `lifeos-lifeosd` waits for all of the above (Wants= soft, After= hard) so memory recall + chat path are ready when the daemon boots.
 5. Host-side `lifeosd-desktop` (Phase 3b) waits for `lifeos-lifeosd` HTTP API to respond.
 
-## Phase 6 — hardening (planned, not yet shipped)
+## Phase 6 — hardening (partially shipped, partially blocked)
 
-### 6.1 — Migrate Network=host → podman bridge `lifeos-net`
+### 6.1 — Network=host → podman bridge `lifeos-net` (partial — `lifeos-lifeosd` STAYS on host)
 
-Today every container uses `Network=host`. This was the Phase 1 choice for "zero URL changes in lifeosd" — every service kept its existing `127.0.0.1:<port>` URL. It's working but loses container-to-container isolation.
+> **Status (2026-05-06 update):** The sibling containers (`lifeos-tts`, `lifeos-llama-server`, `lifeos-llama-embeddings`, `lifeos-simplex-bridge`) run on `lifeos-net.network` with `PublishPort=127.0.0.1:80xx:80xx` exposing their loopback ports back to the host. **`lifeos-lifeosd` stays on `Network=host`** — the bridge migration was attempted in Phase 8b and reverted after empirical validation showed netavark SNATs the source IP of PublishPort traffic to the bridge gateway (10.89.0.1), making every legitimate dashboard / sentinel / `life` CLI request 403 at the daemon's peer-loopback gate.
+>
+> Concrete numbers from the validation run on rootful podman 5.8.2 + netavark 1.17.2 + Fedora 44 (2026-05-06): a Python echo container on `Network=lifeos-net.network` with `PublishPort=127.0.0.1:8888:8888` reported `peer=10.89.0.1` for a `curl http://127.0.0.1:8888/` from host loopback. Accepting `10.89.0.1` as loopback-equivalent is unsafe because that IP is the gateway every sibling container shares — it is the exact lateral-compromise surface the round-3 JD identified. The clean fix is migrating the daemon's HTTP listener to a Unix-domain socket bind-mounted from the host and using `SO_PEERCRED` to authenticate locally; until that work lands (tracked as a follow-up PR), `lifeos-lifeosd` runs on `Network=host` like the pre-pivot topology.
+>
+> What stays from Phase 8b in code (no rollback): `daemon/src/endpoints.rs` URL resolver (OnceLock-cached, with `sanitize_url` validation, `LIFEOS_TTS_SERVER_URL` deprecation warning), the `require_loopback_peer` axum middleware applied to `/metrics`, `/api/security/alerts`, `/dashboard`, `/meetings-files`, `/swagger-ui`, `/api-docs/openapi.json`, `/dashboard/bootstrap`, `/ws`, `/api/v1/events/stream`, the `is_loopback_ip()` helper with IPv4-mapped IPv6 support, and 12 unit tests for the security-critical paths. With `Network=host` the daemon's bind address is `127.0.0.1:8081` and every peer is a real host-loopback peer, so the middleware passes through transparently. When the Unix-socket migration lands, the middleware swaps to a `ConnectInfo<UdsConnectInfo>` extractor and the same logic applies.
 
-Phase 6 migrates to a private podman bridge:
+The historical Phase 1 choice of `Network=host` was kept for `lifeos-lifeosd` for the same reason it was originally chosen: zero URL changes from the existing setup. The trade-off is reduced container-to-container isolation for the daemon's outbound HTTP calls — accepted because the alternative (the bridge) is currently broken by the SNAT behavior above.
+
+Phase 6 originally proposed migrating every container to a private podman bridge:
 
 ```ini
 # /etc/containers/systemd/lifeos-net.network

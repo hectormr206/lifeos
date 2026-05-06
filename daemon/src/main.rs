@@ -41,6 +41,7 @@ mod context_policies;
 mod control_layers;
 mod desktop_operator;
 mod email_bridge;
+mod endpoints;
 mod events;
 mod exec_whitelist;
 mod experience_modes;
@@ -106,6 +107,7 @@ mod thermal_manager;
 mod time_context;
 mod translation;
 mod tuf;
+mod uds_handout;
 mod update_scheduler;
 mod updates;
 #[cfg_attr(not(feature = "messaging"), allow(dead_code))]
@@ -598,6 +600,18 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+
+    // Phase 8c: expose the bootstrap token over a Unix-domain socket
+    // authenticated by SO_PEERCRED. Lets local clients (life CLI,
+    // sentinel, lifeos-check, the future Phase 3b companion) obtain the
+    // token without reading the legacy /run/lifeos/bootstrap.token file
+    // (whose perms 0750 root:root block the user session). The handle
+    // is intentionally NOT joined on shutdown — the listener is just a
+    // background accept loop; the OS reclaims the socket file when the
+    // daemon exits.
+    let _handout_handle = bootstrap_token
+        .as_deref()
+        .map(|t| uds_handout::spawn(t.to_string()));
 
     // Initialize wake word detector (rustpotter) if available.
     let wake_word_notify = Arc::new(tokio::sync::Notify::new());
@@ -2370,14 +2384,43 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/etc/lifeos/daemon.toml"));
 
+    // Env override for bind address (Phase 8b — bridged Quadlet sets this to
+    // 0.0.0.0:8081 so PublishPort can reach the listener inside the
+    // container's netns; loopback inside the container is unreachable from
+    // the host bridge). The env var wins over the TOML value when both are
+    // present, so the Quadlet Environment= block is authoritative.
+    let env_bind: Option<SocketAddr> = std::env::var("LIFEOS_API_BIND")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .and_then(|s| match s.parse() {
+            Ok(addr) => Some(addr),
+            Err(e) => {
+                warn!(
+                    "LIFEOS_API_BIND={:?} is not a valid SocketAddr ({}); ignoring",
+                    s, e
+                );
+                None
+            }
+        });
+
     if config_path.exists() {
         let contents = tokio::fs::read_to_string(config_path).await?;
         let config: DaemonConfigFile = toml::from_str(&contents)?;
 
-        let api_bind = config
-            .api_bind_address
-            .parse()
-            .unwrap_or_else(|_| "127.0.0.1:8081".parse().unwrap());
+        let toml_bind: SocketAddr = match config.api_bind_address.trim().parse() {
+            Ok(addr) => addr,
+            Err(e) => {
+                warn!(
+                    "daemon.toml api_bind_address={:?} is not a valid SocketAddr ({}); \
+                     defaulting to 127.0.0.1:8081",
+                    config.api_bind_address, e
+                );
+                "127.0.0.1:8081".parse().unwrap()
+            }
+        };
+
+        let api_bind = env_bind.unwrap_or(toml_bind);
 
         return Ok(DaemonConfig {
             health_check_interval: Duration::from_secs(config.health_check_interval_secs),
@@ -2392,7 +2435,11 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
         });
     }
 
-    Ok(DaemonConfig::default())
+    let mut cfg = DaemonConfig::default();
+    if let Some(addr) = env_bind {
+        cfg.api_bind_address = addr;
+    }
+    Ok(cfg)
 }
 
 /// Configuration file structure

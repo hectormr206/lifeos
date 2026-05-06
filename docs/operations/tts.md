@@ -52,13 +52,35 @@ tokens — every voice sounds robotic regardless of selection. The variable is
 set both in `/etc/lifeos/tts-server.env` and as a hard-coded `os.environ.setdefault`
 inside `lifeos-tts-server.py` for defense in depth.
 
-`lifeosd` itself reads `LIFEOS_TTS_SERVER_URL` (defaulted to `http://127.0.0.1:8084`
-in the `00-tts.conf` drop-in for the user-scope service) and falls back to
-`espeak-ng` when that variable is empty — which makes every voice sound the same
-because espeak has no voice embeddings. If the dashboard's voice selector does
-nothing audible, check `tts.tts_engine` in the `POST /api/v1/sensory/tts/speak`
-response: `kokoro:<voice>` means success, `/usr/bin/espeak-ng` means the
-variable is unset.
+`lifeosd` resolves the TTS endpoint via `daemon/src/endpoints.rs::tts_url()`,
+which checks (in order):
+
+1. `LIFEOS_TTS_URL` — canonical name. The Phase 8b Quadlet sets this to
+   `http://lifeos-tts:8084` so the daemon reaches the TTS container by
+   service name on the `lifeos-net` bridge.
+2. `LIFEOS_TTS_SERVER_URL` — legacy name, kept for compatibility with
+   pre-pivot hosts that still ship `00-tts.conf` drop-ins.
+3. Default `http://127.0.0.1:8084` for the legacy `Network=host` rollback
+   path.
+
+Both variables must be a bare `scheme://host[:port]` URL — no path, no
+query, no embedded whitespace, no empty authority, at most one trailing
+slash. Anything else is logged at `WARN` and the default is used.
+
+Caveat: on the bridged Quadlet (`Network=lifeos-net.network`) the default
+`http://127.0.0.1:8084` resolves to lifeosd's OWN container loopback,
+where no Kokoro listener exists. If both env vars are unset or invalid
+on the bridged path, every TTS call refuses connection and falls through
+to `espeak-ng`. That silent degradation is the operator's signal that
+`/etc/lifeos/llm-providers.env` (or the inline Quadlet `Environment=`
+block) needs the bridged URL `http://lifeos-tts:8084`. Check
+`tts.tts_engine` in the `POST /api/v1/sensory/tts/speak` response:
+`kokoro:<voice>` means success, `/usr/bin/espeak-ng` means the URL was
+unreachable or both env vars resolved to empty/invalid values.
+
+Each URL is resolved once at daemon startup; changes to
+`/etc/lifeos/*.env` need `systemctl restart lifeos-lifeosd` to take
+effect, and the journal records the resolved URL at INFO.
 
 ---
 

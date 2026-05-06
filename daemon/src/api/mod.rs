@@ -1647,43 +1647,91 @@ pub fn create_router(state: ApiState) -> Router {
             require_bootstrap_token,
         ));
 
-    // SSE endpoint lives outside the auth middleware — it checks ?token= query param
-    // since EventSource cannot set custom headers.
+    // SSE endpoint lives outside the bearer-token middleware — it checks
+    // `?token=` query param since EventSource cannot set custom headers.
+    // R7 JD B caught that the application-layer token check is the ONLY
+    // defense for sibling containers on lifeos-net; without a peer gate
+    // they could brute-force tokens against this listener indefinitely.
+    // `life` CLI connects via loopback, so the gate does not break it.
     let sse_route = Router::new()
         .route("/api/v1/events/stream", get(event_stream))
+        .layer(axum::middleware::from_fn(require_loopback_peer))
         .with_state(state.clone());
 
     // WebSocket control plane — handles its own auth on first message.
+    // Same R7 reasoning as sse_route: peer-loopback gate as belt-and-
+    // suspenders against bridge-side bruteforce, no break for loopback
+    // clients.
     let ws_route = Router::new()
         .route("/ws", get(crate::ws_gateway::ws_handler))
+        .layer(axum::middleware::from_fn(require_loopback_peer))
         .with_state(state.clone());
 
-    // Dashboard static files (no auth required — local-only server).
+    // Phase 8b round-6: every non-/api/v1 surface that previously assumed
+    // "local-only because Network=host" needs the peer-loopback gate now
+    // that the daemon binds 0.0.0.0:8081 inside the lifeos-net bridge.
+    // R5 JD A+B caught /meetings-files (CRITICAL — user meeting recordings
+    // exfiltratable from siblings), /dashboard (HIGH — SPA enumeration),
+    // and /swagger-ui + /api-docs/openapi.json (HIGH — full API surface
+    // map). Same middleware, applied at each nest/merge.
+    let loopback_layer = || axum::middleware::from_fn(require_loopback_peer);
+
     let dashboard_dir = std::env::var("LIFEOS_DASHBOARD_DIR")
         .unwrap_or_else(|_| "daemon/static/dashboard".to_string());
     let dashboard_service = ServeDir::new(&dashboard_dir).append_index_html_on_directories(true);
+    // R7 JD B drift-risk fix: the bootstrap handler self-guards via the
+    // inline is_loopback_ip check, but applying the same middleware here
+    // (belt-and-suspenders) keeps the rule "every non-/api/v1 surface gets
+    // the peer gate" uniform across the merge list. If a future contributor
+    // accidentally drops the inline guard while refactoring the handler,
+    // the layer still enforces the loopback contract.
     let dashboard_bootstrap_route = Router::new()
         .route("/dashboard/bootstrap", get(dashboard_bootstrap))
+        .layer(axum::middleware::from_fn(require_loopback_peer))
         .with_state(state.clone());
 
-    // Read-only security alerts feed — no auth, localhost-only (same policy
-    // as the dashboard bootstrap endpoint). Exposes the in-memory ring
-    // buffer populated by the security_ai monitor every 30s.
+    // Read-only security alerts feed — gated by require_loopback_peer
+    // since R4. Same policy as /metrics: a sibling container on lifeos-net
+    // would otherwise read the ring buffer over the bridge.
     let security_alerts_route = Router::new()
         .route("/api/security/alerts", get(get_security_alerts))
+        .layer(loopback_layer())
         .with_state(state.clone());
 
-    // Meeting screenshots/files — served from the meetings data directory.
-    // No auth required because the server is local-only (127.0.0.1).
+    // Meeting recordings, screenshots, transcripts. R5 CRITICAL: this used
+    // to be unguarded with a "local-only" comment that is FALSE on the
+    // bridge. Wrap in a sub-router so the middleware actually applies to
+    // every path under /meetings-files/*.
     let meetings_data_dir =
         std::env::var("LIFEOS_DATA_DIR").unwrap_or_else(|_| "/var/lib/lifeos".to_string());
     let meetings_files_dir = format!("{}/meetings", meetings_data_dir);
-    let meetings_service = ServeDir::new(&meetings_files_dir);
+    let meetings_route = Router::new()
+        .nest_service("/meetings-files", ServeDir::new(&meetings_files_dir))
+        .layer(loopback_layer());
 
-    // Prometheus metrics endpoint — no auth required (standard practice)
+    // Dashboard SPA static files. The bundle itself is not a secret (it
+    // ships in the bootc image) but enumeration from a sibling reveals
+    // the API surface and lets an attacker confirm liveness/version, so
+    // gate it at the same layer as the rest. /dashboard/bootstrap is a
+    // separate router with its own richer guards (Host header etc.) and
+    // is merged at the top level so it stays reachable for the loopback
+    // peer that this layer also accepts.
+    let dashboard_static_route = Router::new()
+        .nest_service("/dashboard", dashboard_service)
+        .layer(loopback_layer());
+
+    // Prometheus metrics + SwaggerUi + OpenAPI JSON. Same peer-loopback
+    // gate; SwaggerUi nested in its own sub-router because the type that
+    // SwaggerUi::new() returns is a router, not a service, and merging it
+    // with a layer applied at the outer level would not actually wrap it.
     let metrics_route = Router::new()
         .route("/metrics", get(handle_metrics))
+        .layer(loopback_layer())
         .with_state(state.clone());
+
+    let swagger_route = Router::new()
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .layer(loopback_layer());
 
     Router::new()
         .nest("/api/v1", api_v1)
@@ -1692,28 +1740,90 @@ pub fn create_router(state: ApiState) -> Router {
         .merge(metrics_route)
         .merge(dashboard_bootstrap_route)
         .merge(security_alerts_route)
-        .nest_service("/dashboard", dashboard_service)
-        .nest_service("/meetings-files", meetings_service)
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge(dashboard_static_route)
+        .merge(meetings_route)
+        .merge(swagger_route)
         .with_state(state)
+}
+
+/// Middleware that requires the connecting TCP peer to be on a loopback
+/// interface. Phase 8b round-4: when the daemon binds 0.0.0.0:8081 inside
+/// the `lifeos-net.network` Quadlet so `PublishPort=127.0.0.1:8081:8081`
+/// can forward host-loopback traffic into the netns, sibling containers
+/// can reach the listener over the bridge. Routes that previously
+/// assumed "local-only" via Network=host (notably `/metrics` and
+/// `/api/security/alerts`) need an in-process gate that matches the
+/// dashboard-bootstrap handler's defense.
+///
+/// FAIL-CLOSED: if `ConnectInfo<SocketAddr>` is missing (would indicate
+/// `axum::serve` was called without `into_make_service_with_connect_info`)
+/// the request is rejected. Reaching that branch is a regression, not a
+/// soft event.
+async fn require_loopback_peer(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    let peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0);
+    let peer_addr = match peer {
+        Some(p) => p,
+        None => {
+            log::error!(
+                "loopback-peer middleware: ConnectInfo<SocketAddr> missing — \
+                 axum::serve must use into_make_service_with_connect_info::<SocketAddr>()"
+            );
+            return Err(StatusCode::FORBIDDEN);
+        }
+    };
+    if !is_loopback_ip(peer_addr.ip()) {
+        log::warn!(
+            "loopback-peer middleware: rejected non-loopback peer {} for {}",
+            peer_addr,
+            request.uri().path()
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(request).await)
+}
+
+/// Loopback check that handles the IPv4-mapped IPv6 form. R5 JD B caught
+/// that on dual-stack listeners Linux can present a host-loopback peer as
+/// `::ffff:127.0.0.1`; `Ipv6Addr::is_loopback()` returns false for that
+/// address (only `::1` is the IPv6 loopback). Without the canonicalisation
+/// every legitimate dashboard fetch would 403 with no obvious diagnostic.
+/// Used by both `require_loopback_peer` (middleware) and the inline guard
+/// in `dashboard_bootstrap` so the rule cannot drift between the two.
+fn is_loopback_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_loopback(),
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                return true;
+            }
+            // RFC 4291 §2.5.5.2 IPv4-mapped IPv6: `::ffff:a.b.c.d`.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return v4.is_loopback();
+            }
+            false
+        }
+    }
 }
 
 async fn dashboard_bootstrap(
     State(state): State<ApiState>,
     request: Request<Body>,
 ) -> Result<Json<DashboardBootstrapResponse>, (StatusCode, Json<ApiError>)> {
-    // Only serve bootstrap token when the server is bound to loopback.
-    // This prevents token leakage if the daemon is ever exposed externally.
-    if !state.config.bind_address.ip().is_loopback() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ApiError {
-                error: "Forbidden".to_string(),
-                message: "Bootstrap endpoint is only available on localhost".to_string(),
-                code: 403,
-            }),
-        ));
-    }
+    // Note: we no longer gate on `state.config.bind_address.ip().is_loopback()`.
+    // Phase 8b moves lifeosd into a Quadlet bridge network, so the daemon
+    // must bind 0.0.0.0:8081 inside the container for `PublishPort` to
+    // forward host loopback traffic into it. The combination of (1) the
+    // Host-header loopback check below, (2) the Origin loopback check, and
+    // (3) the peer-address loopback check at the end of this handler
+    // already enforces the same policy as the old bind-address gate
+    // without breaking the bridged topology — `PublishPort=127.0.0.1:8081:8081`
+    // forces every external peer to come from the host's loopback iface.
 
     // Defense-in-depth against DNS rebinding: a browser visiting an attacker
     // page that rebinds its hostname to 127.0.0.1 still sends the attacker's
@@ -1751,31 +1861,70 @@ async fn dashboard_bootstrap(
         }
     }
 
+    // Phase 8b round-2: this guard is THE primary defense once the bind is
+    // 0.0.0.0 (so PublishPort can forward into the bridged container netns).
+    // Host/Origin headers are operator-controlled — a sibling container on
+    // `lifeos-net` can spoof `Host: localhost`, and non-browser callers can
+    // omit Origin entirely. The peer address is the only field a remote
+    // attacker cannot forge.
+    //
+    // FAIL-CLOSED: if ConnectInfo is absent (would indicate `axum::serve`
+    // wasn't called with `into_make_service_with_connect_info`), refuse
+    // rather than fall through. Round-2 JD caught the dead-code variant
+    // of this branch — reaching it is a regression, not a soft event.
     let peer = request
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0);
-
-    // Defense-in-depth: reject TCP peers that are not on the loopback
-    // interface even if the bind check and header checks passed. This
-    // closes the theoretical "bound to 0.0.0.0 by misconfiguration"
-    // window as a belt-and-braces guard.
-    if let Some(peer_addr) = peer {
-        if !peer_addr.ip().is_loopback() {
-            log::warn!(
-                "Dashboard bootstrap rejected: non-loopback peer {}",
-                peer_addr
+    let peer_addr = match peer {
+        Some(p) => p,
+        None => {
+            log::error!(
+                "Dashboard bootstrap rejected: ConnectInfo<SocketAddr> missing — \
+                 axum::serve must use into_make_service_with_connect_info::<SocketAddr>()"
             );
             return Err((
                 StatusCode::FORBIDDEN,
                 Json(ApiError {
                     error: "Forbidden".to_string(),
-                    message: "Bootstrap endpoint rejects non-loopback peers".to_string(),
+                    message: "Bootstrap endpoint requires peer-address binding".to_string(),
                     code: 403,
                 }),
             ));
         }
+    };
+    if !is_loopback_ip(peer_addr.ip()) {
+        log::warn!(
+            "Dashboard bootstrap rejected: non-loopback peer {}",
+            peer_addr
+        );
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "Bootstrap endpoint rejects non-loopback peers".to_string(),
+                code: 403,
+            }),
+        ));
     }
+
+    // Origin is checked above when present (non-loopback Origin → 403).
+    // Round-3 JD considered making Origin MANDATORY but two real-world
+    // facts vetoed that path:
+    //   1. `lifeos-open-axi-dashboard.sh` polls /dashboard/bootstrap with
+    //      curl during boot — curl does not set Origin by default; mandatory
+    //      Origin would fail every probe and the user's first-boot
+    //      dashboard would never launch.
+    //   2. Chromium-family browsers omit `Origin` on same-origin GET
+    //      `fetch()` requests (Fetch spec, https://fetch.spec.whatwg.org/
+    //      §3.1 "Origin header"). The dashboard SPA fetches via GET and
+    //      runs same-origin; a mandatory-Origin gate would 403 every
+    //      legitimate Chromium/Edge/Brave user.
+    // The real defense is the peer-loopback check above (now actually
+    // wired via into_make_service_with_connect_info) plus the Host-header
+    // loopback check plus PublishPort=127.0.0.1 capping host reachability.
+    // Origin from a non-browser caller is operator-controlled / forgeable
+    // and would add no defense once the local peer is already trusted.
 
     // Coarse rate-limit. A local attacker with a poisoned Host header is
     // blocked upstream; this just bounds how many tokens a misbehaving
@@ -12520,7 +12669,19 @@ pub async fn start_api_server(state: ApiState) -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    axum::serve(listener, router).await?;
+    // Phase 8b round-2 CRITICAL fix: serve with ConnectInfo so handlers
+    // that check `request.extensions().get::<ConnectInfo<SocketAddr>>()`
+    // (notably dashboard_bootstrap's peer-address loopback guard) actually
+    // see the peer address. Without this wrapper `ConnectInfo` is never
+    // inserted, the guard's `if let Some(peer_addr)` branch is dead code,
+    // and with `LIFEOS_API_BIND=0.0.0.0:8081` ANY sibling container on
+    // `lifeos-net` could resolve `lifeos-lifeosd:8081`, send `Host: localhost`,
+    // and exfiltrate the bootstrap token.
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -13570,5 +13731,171 @@ mod tests {
         std::env::set_var("LIFEOS_LLAMA_ENV", &path);
         assert_eq!(read_baseline_ctx_size(), 65_536);
         std::env::remove_var("LIFEOS_LLAMA_ENV");
+    }
+
+    // ===== Phase 8b round-6: peer-loopback gate tests =====
+    //
+    // These cover the security-critical paths the JD A+B kept demanding:
+    //   - is_loopback_ip handles both IPv4 and IPv4-mapped IPv6 forms
+    //     (round-5 caught that ::ffff:127.0.0.1 silently failed before).
+    //   - require_loopback_peer fails closed on missing ConnectInfo
+    //     (round-2 wired axum::serve correctly; reaching the missing
+    //     branch is a regression).
+    //   - require_loopback_peer accepts the loopback peer.
+    //   - require_loopback_peer rejects a public peer.
+    //
+    // dashboard_bootstrap itself takes State<ApiState> which is heavyweight
+    // to construct in a unit test (whole daemon state); the inline guard
+    // there delegates to is_loopback_ip via the same helper, so the
+    // is_loopback_ip + middleware tests cover the same logic.
+
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    #[test]
+    fn is_loopback_ip_accepts_ipv4_loopback() {
+        assert!(is_loopback_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(is_loopback_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(is_loopback_ip(IpAddr::V4(Ipv4Addr::new(127, 5, 5, 5))));
+    }
+
+    #[test]
+    fn is_loopback_ip_accepts_ipv6_loopback() {
+        assert!(is_loopback_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+    #[test]
+    fn is_loopback_ip_accepts_ipv4_mapped_ipv6_loopback() {
+        // ::ffff:127.0.0.1 — the form Linux dual-stack listeners present
+        // for an IPv4 host-loopback connection. Round-5 JD B caught this
+        // silently failing the bootstrap-token gate before round-6.
+        let mapped = Ipv6Addr::from([0, 0, 0, 0, 0, 0xffff, 0x7f00, 0x0001]);
+        assert!(is_loopback_ip(IpAddr::V6(mapped)));
+    }
+
+    #[test]
+    fn is_loopback_ip_rejects_public_v4() {
+        assert!(!is_loopback_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn is_loopback_ip_rejects_bridge_gateway() {
+        // Default lifeos-net subnet 10.89.0.0/24 — gateway is the form
+        // sibling containers would present if netavark ever rewrote the
+        // PublishPort source IP. Must NOT be accepted as loopback.
+        assert!(!is_loopback_ip(IpAddr::V4(Ipv4Addr::new(10, 89, 0, 1))));
+    }
+
+    #[test]
+    fn is_loopback_ip_rejects_ipv4_mapped_public() {
+        // ::ffff:8.8.8.8 — mapped form of a public address. Must not slip.
+        let mapped = Ipv6Addr::from([0, 0, 0, 0, 0, 0xffff, 0x0808, 0x0808]);
+        assert!(!is_loopback_ip(IpAddr::V6(mapped)));
+    }
+
+    #[test]
+    fn is_loopback_ip_rejects_ipv6_public() {
+        // 2001:db8::1 — documentation prefix, definitely not loopback.
+        let pub6 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        assert!(!is_loopback_ip(IpAddr::V6(pub6)));
+    }
+
+    /// Build a minimal axum Router that mounts a probe handler behind
+    /// `require_loopback_peer`. The handler responds 200 with a body
+    /// when reached, so a 403 from the test exercises the middleware.
+    fn router_with_loopback_gate() -> axum::Router {
+        async fn ok_probe() -> &'static str {
+            "ok"
+        }
+        axum::Router::new()
+            .route("/probe", axum::routing::get(ok_probe))
+            .layer(axum::middleware::from_fn(require_loopback_peer))
+    }
+
+    #[tokio::test]
+    async fn require_loopback_peer_fails_closed_on_missing_connect_info() {
+        use axum::body::Body;
+        use http::Request;
+        use tower::util::ServiceExt;
+
+        // No ConnectInfo extension is inserted — middleware must 403,
+        // not fall through. This is the round-2 regression guard.
+        let req = Request::builder()
+            .uri("/probe")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router_with_loopback_gate().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn require_loopback_peer_accepts_ipv4_loopback() {
+        use axum::body::Body;
+        use axum::extract::ConnectInfo;
+        use http::Request;
+        use tower::util::ServiceExt;
+
+        let mut req = Request::builder()
+            .uri("/probe")
+            .body(Body::empty())
+            .unwrap();
+        let peer: SocketAddr = "127.0.0.1:54321".parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer));
+        let resp = router_with_loopback_gate().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn require_loopback_peer_accepts_ipv4_mapped_ipv6_loopback() {
+        use axum::body::Body;
+        use axum::extract::ConnectInfo;
+        use http::Request;
+        use tower::util::ServiceExt;
+
+        let mut req = Request::builder()
+            .uri("/probe")
+            .body(Body::empty())
+            .unwrap();
+        // ::ffff:127.0.0.1 form — round-5 IPv6 dual-stack edge case.
+        let mapped = Ipv6Addr::from([0, 0, 0, 0, 0, 0xffff, 0x7f00, 0x0001]);
+        let peer: SocketAddr = (IpAddr::V6(mapped), 54321).into();
+        req.extensions_mut().insert(ConnectInfo(peer));
+        let resp = router_with_loopback_gate().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn require_loopback_peer_rejects_public_peer() {
+        use axum::body::Body;
+        use axum::extract::ConnectInfo;
+        use http::Request;
+        use tower::util::ServiceExt;
+
+        let mut req = Request::builder()
+            .uri("/probe")
+            .body(Body::empty())
+            .unwrap();
+        let peer: SocketAddr = "8.8.8.8:54321".parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer));
+        let resp = router_with_loopback_gate().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn require_loopback_peer_rejects_bridge_gateway() {
+        use axum::body::Body;
+        use axum::extract::ConnectInfo;
+        use http::Request;
+        use tower::util::ServiceExt;
+
+        let mut req = Request::builder()
+            .uri("/probe")
+            .body(Body::empty())
+            .unwrap();
+        // Sibling container address on lifeos-net.network — the exact
+        // attacker model R3/R5 JD called out.
+        let peer: SocketAddr = "10.89.0.5:54321".parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer));
+        let resp = router_with_loopback_gate().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

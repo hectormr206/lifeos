@@ -552,7 +552,13 @@ RUN cd /usr/share/plymouth/themes/lifeos && \
 # --- Herramientas del Sistema ---
 # Incluye toolchain de desarrollo para que LifeOS pueda auto-hospedar
 # build/test de `life` y `lifeosd --all-features` sin toolbox adicional.
-RUN dnf -y install \
+# Fedora 44's bootc base image now ships `ffmpeg-free` pre-installed,
+# which conflicts with the `ffmpeg` package from rpmfusion-free that
+# we install for SimpleX voice/video transcoding. `--allowerasing`
+# lets dnf swap the free variant for the rpmfusion variant in a single
+# transaction. Without it the build fails at line 576 with
+# `installed package ffmpeg-free conflicts with ffmpeg from rpmfusion-free`.
+RUN dnf -y install --allowerasing \
     toolbox btrfs-progs smartmontools podman podman-docker podman-compose buildah skopeo flatpak \
     qemu-kvm libvirt-client libvirt-daemon libvirt-daemon-config-network libvirt-daemon-kvm \
     libvirt-daemon-driver-qemu libvirt-daemon-driver-network \
