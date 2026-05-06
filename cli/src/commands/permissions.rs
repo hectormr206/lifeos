@@ -114,7 +114,7 @@ fn cmd_log(lines: usize) -> anyhow::Result<()> {
     let output = Command::new("journalctl")
         .args([
             "-u",
-            "lifeosd",
+            "lifeos-lifeosd.service",
             "-n",
             &lines,
             "--no-pager",
@@ -128,7 +128,7 @@ fn cmd_log(lines: usize) -> anyhow::Result<()> {
                     "-n",
                     "journalctl",
                     "-u",
-                    "lifeosd",
+                    "lifeos-lifeosd.service",
                     "-n",
                     &lines,
                     "--no-pager",
@@ -142,7 +142,7 @@ fn cmd_log(lines: usize) -> anyhow::Result<()> {
                 .args([
                     "journalctl",
                     "-u",
-                    "lifeosd",
+                    "lifeos-lifeosd.service",
                     "-n",
                     &lines,
                     "--no-pager",
@@ -153,7 +153,7 @@ fn cmd_log(lines: usize) -> anyhow::Result<()> {
         })?;
 
     if !output.status.success() {
-        anyhow::bail!("Failed to read journalctl logs for lifeosd");
+        anyhow::bail!("Failed to read journalctl logs for lifeos-lifeosd.service");
     }
 
     let raw = String::from_utf8_lossy(&output.stdout);

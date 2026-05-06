@@ -262,4 +262,19 @@ Rollback image: ghcr.io/hectormr206/lifeos:edge-20260403-b369513
         );
         assert!(assessment.restart_recommended);
     }
+
+    /// Phase 3 cutover canonicalization: `lifeosd_status_message` must
+    /// return a message that references either the canonical post-pivot
+    /// unit name `lifeos-lifeosd.service` or the legacy `lifeosd` name
+    /// (rollback path). Anchors the display-string contract so a future
+    /// rename does not silently regress what the user sees in `life check`.
+    #[test]
+    fn test_lifeosd_status_message_running_mentions_lifeosd() {
+        let msg = lifeosd_status_message(true);
+        assert!(
+            msg.contains("lifeosd"),
+            "expected message to reference lifeosd; got {:?}",
+            msg
+        );
+    }
 }
