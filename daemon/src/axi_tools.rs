@@ -2204,8 +2204,8 @@ Listo!"#;
                 "cat /var/lib/lifeos/llama-server-runtime-profile.env",
                 "df -h",
                 "free -h",
-                "podman ps",                // listing is fine
-                "podman images",            // listing is fine
+                "podman ps",                                  // listing is fine
+                "podman images",                              // listing is fine
                 "systemctl status lifeosd", // legacy name — status is fine, only stop/disable/etc are blocked
                 "systemctl status lifeos-lifeosd.service", // canonical post-Phase-3 name
                 "journalctl --user -u lifeosd -n 50", // legacy
