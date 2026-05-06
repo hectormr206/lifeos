@@ -3822,8 +3822,9 @@ async fn probe_kokoro_tts_server() -> ProbeOutcome {
         // No estampamos aquí — sólo estampamos en éxito (ver abajo).
     }
 
-    let base_url = std::env::var("LIFEOS_TTS_SERVER_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8084".to_string());
+    // Phase 8b: centralised lookup respects LIFEOS_TTS_URL (new canonical
+    // name) and the legacy LIFEOS_TTS_SERVER_URL for backwards compat.
+    let base_url = crate::endpoints::tts_url();
 
     let client = kokoro_probe_client();
 

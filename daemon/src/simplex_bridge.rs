@@ -1525,12 +1525,11 @@ mod inner {
                                                         false
                                                     };
                                                     if reply.len() <= 600 && tts_gate_ok {
+                                                        // Phase 8b: centralised TTS URL lookup
+                                                        // honors LIFEOS_TTS_URL (new) and the
+                                                        // legacy LIFEOS_TTS_SERVER_URL.
                                                         let server_url =
-                                                            std::env::var("LIFEOS_TTS_SERVER_URL")
-                                                                .unwrap_or_else(|_| {
-                                                                    "http://127.0.0.1:8084"
-                                                                        .to_string()
-                                                                });
+                                                            crate::endpoints::tts_url();
                                                         let env_default = std::env::var(
                                                             "LIFEOS_TTS_DEFAULT_VOICE",
                                                         )

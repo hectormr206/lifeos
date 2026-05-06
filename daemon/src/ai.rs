@@ -157,7 +157,11 @@ impl AiManager {
             Ok(c) => c,
             Err(_) => return false,
         };
-        match client.get("http://127.0.0.1:8082/health").send().await {
+        match client
+            .get(format!("{}/health", crate::endpoints::llama_url()))
+            .send()
+            .await
+        {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
         }
@@ -350,7 +354,10 @@ impl AiManager {
             .to_string();
 
         let response = reqwest::Client::new()
-            .post("http://127.0.0.1:8082/v1/chat/completions")
+            .post(format!(
+                "{}/v1/chat/completions",
+                crate::endpoints::llama_url()
+            ))
             .json(&payload)
             .send()
             .await?;
@@ -404,7 +411,10 @@ impl AiManager {
             .to_string();
 
         let response = reqwest::Client::new()
-            .post("http://127.0.0.1:8082/v1/chat/completions")
+            .post(format!(
+                "{}/v1/chat/completions",
+                crate::endpoints::llama_url()
+            ))
             .json(&payload)
             .send()
             .await?;
@@ -490,7 +500,7 @@ impl AiManager {
     /// mixing would silently corrupt the vec0 index.
     pub async fn embed(&self, text: &str) -> anyhow::Result<EmbeddingResponse> {
         const EMBEDDING_DIM: usize = 768;
-        const EMBED_URL: &str = "http://127.0.0.1:8083/v1/embeddings";
+        let embed_url = format!("{}/v1/embeddings", crate::endpoints::embeddings_url());
 
         // -- 1. Dedicated semantic embeddings server (nomic-embed-text) --
         let payload = serde_json::json!({
@@ -499,7 +509,7 @@ impl AiManager {
         });
 
         match reqwest::Client::new()
-            .post(EMBED_URL)
+            .post(&embed_url)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(15))
             .send()

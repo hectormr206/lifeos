@@ -41,6 +41,7 @@ mod context_policies;
 mod control_layers;
 mod desktop_operator;
 mod email_bridge;
+mod endpoints;
 mod events;
 mod exec_whitelist;
 mod experience_modes;
