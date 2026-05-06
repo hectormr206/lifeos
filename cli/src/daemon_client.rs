@@ -4,7 +4,7 @@
 //! to get an authenticated reqwest client.
 
 use reqwest::Client;
-use std::io::{IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -12,13 +12,13 @@ use std::time::Duration;
 
 const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:8081";
 const TOKEN_FILENAME: &str = "bootstrap.token";
-const DEFAULT_HANDOUT_SOCKET: &str = "/run/lifeos-bootstrap.sock";
+const DEFAULT_HANDOUT_SOCKET: &str = "/run/lifeos/lifeos-bootstrap.sock";
 
 /// Read the bootstrap token via the daemon's SO_PEERCRED-authenticated
 /// handout socket (Phase 8c). The kernel reports the calling process's
-/// UID; the daemon writes the token bytes back if the UID is in its
-/// allowlist (root + LIFEOS_HANDOUT_UID, default 1000), else the
-/// literal "FORBIDDEN".
+/// UID at `connect(2)` time; the daemon writes the token bytes back if
+/// the UID is in its allowlist (root + LIFEOS_HANDOUT_UID, default
+/// 1000), else a payload starting with the literal "FORBIDDEN".
 ///
 /// Returns `None` when the socket is missing, unreachable, or the
 /// daemon refused — the caller falls through to the file-on-disk path
@@ -30,16 +30,31 @@ fn read_token_from_handout() -> Option<String> {
     if !Path::new(&path).exists() {
         return None;
     }
-    let mut stream = UnixStream::connect(&path).ok()?;
-    // 200 ms is generous — the daemon writes the token + newline + closes
-    // without waiting for any client input. Anything slower indicates the
-    // daemon is stuck and we should fall back rather than hang the CLI.
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-    let _ = stream.write_all(b""); // no payload required; trigger SO_PEERCRED
+    let stream = UnixStream::connect(&path).ok()?;
+    // 500 ms is plenty — the daemon writes the token + newline + closes
+    // without waiting for any client input. Anything slower indicates
+    // the daemon is stuck and we fall back rather than hang the CLI.
+    // Set both read AND write timeouts (the latter would matter only
+    // if a future change introduces a client→daemon payload, but
+    // defence-in-depth is cheap).
+    if stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .is_err()
+    {
+        return None;
+    }
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+    // No payload — SO_PEERCRED is filled by the kernel at accept(2)
+    // time on the daemon side; the empty write the previous version
+    // attempted was a no-op. Just read.
     let mut buf = String::new();
-    stream.read_to_string(&mut buf).ok()?;
+    let mut reader = stream;
+    reader.read_to_string(&mut buf).ok()?;
     let token = buf.trim();
-    if token.is_empty() || token == "FORBIDDEN" {
+    // R1 JD: match the FORBIDDEN prefix (not exact string) so the
+    // daemon can later add a diagnostic suffix like "FORBIDDEN: uid=N"
+    // without poisoning the token field with a bogus value.
+    if token.is_empty() || token.starts_with("FORBIDDEN") {
         None
     } else {
         Some(token.to_string())

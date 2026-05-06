@@ -49,17 +49,21 @@ read_bootstrap_token() {
     # is always allowed. The handout decouples token retrieval from the
     # /run/lifeos/bootstrap.token file's directory perms (0750 root:root
     # by default, which blocks non-root traversal).
-    local handout="${LIFEOS_HANDOUT_SOCKET:-/run/lifeos-bootstrap.sock}"
+    local handout="${LIFEOS_HANDOUT_SOCKET:-/run/lifeos/lifeos-bootstrap.sock}"
     if [ -S "$handout" ] && command -v socat >/dev/null 2>&1; then
         local token
-        token="$(socat - "UNIX-CONNECT:${handout}" 2>/dev/null | head -n 1)"
-        # Daemon writes "FORBIDDEN\n" for unauthorized peers; the kernel
-        # enforces the actual gate via SO_PEERCRED. Treat that body as a
-        # miss and fall through to the legacy file paths.
-        if [ -n "$token" ] && [ "$token" != "FORBIDDEN" ]; then
-            printf '%s' "$token"
-            return
-        fi
+        # `socat -t 2 -T 2` caps connect/idle/total at 2s so a hung
+        # daemon never blocks the sentinel probe. `IFS= read -r` reads
+        # exactly one line without invoking head's SIGPIPE behaviour.
+        token="$(socat -t 2 -T 2 - "UNIX-CONNECT:${handout}" 2>/dev/null | { IFS= read -r line; printf '%s' "$line"; })"
+        # Daemon writes a payload starting with "FORBIDDEN" for
+        # unauthorized peers; the kernel enforces the actual gate via
+        # SO_PEERCRED. `case` on the prefix tolerates a future
+        # diagnostic suffix like "FORBIDDEN: uid=N".
+        case "$token" in
+            ""|FORBIDDEN*) : ;;  # fall through
+            *) printf '%s' "$token"; return ;;
+        esac
     fi
     # Phase 3 fallback (still in place for rollback / for hosts where
     # socat is not installed yet). lifeos-lifeosd writes
