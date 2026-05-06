@@ -1669,8 +1669,16 @@ pub fn create_router(state: ApiState) -> Router {
     // Read-only security alerts feed — no auth, localhost-only (same policy
     // as the dashboard bootstrap endpoint). Exposes the in-memory ring
     // buffer populated by the security_ai monitor every 30s.
+    //
+    // Phase 8b round-4: when the daemon binds 0.0.0.0:8081 inside
+    // `lifeos-net.network`, sibling containers can reach this route
+    // unless we gate it. The previous "no auth required because the
+    // server is local-only" comment was true on Network=host and
+    // FALSE on the bridge — JD R3 caught the same exposure pattern as
+    // dashboard_bootstrap. Apply the peer-loopback guard middleware.
     let security_alerts_route = Router::new()
         .route("/api/security/alerts", get(get_security_alerts))
+        .layer(axum::middleware::from_fn(require_loopback_peer))
         .with_state(state.clone());
 
     // Meeting screenshots/files — served from the meetings data directory.
@@ -1680,9 +1688,14 @@ pub fn create_router(state: ApiState) -> Router {
     let meetings_files_dir = format!("{}/meetings", meetings_data_dir);
     let meetings_service = ServeDir::new(&meetings_files_dir);
 
-    // Prometheus metrics endpoint — no auth required (standard practice)
+    // Prometheus metrics endpoint — no auth required by Prometheus
+    // convention, but exposure on the bridge would let a sibling
+    // container scrape model names, request counts, and any sensitive
+    // labels we eventually export. Same peer-loopback gate as the
+    // security-alerts route above.
     let metrics_route = Router::new()
         .route("/metrics", get(handle_metrics))
+        .layer(axum::middleware::from_fn(require_loopback_peer))
         .with_state(state.clone());
 
     Router::new()
@@ -1696,6 +1709,48 @@ pub fn create_router(state: ApiState) -> Router {
         .nest_service("/meetings-files", meetings_service)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state)
+}
+
+/// Middleware that requires the connecting TCP peer to be on a loopback
+/// interface. Phase 8b round-4: when the daemon binds 0.0.0.0:8081 inside
+/// the `lifeos-net.network` Quadlet so `PublishPort=127.0.0.1:8081:8081`
+/// can forward host-loopback traffic into the netns, sibling containers
+/// can reach the listener over the bridge. Routes that previously
+/// assumed "local-only" via Network=host (notably `/metrics` and
+/// `/api/security/alerts`) need an in-process gate that matches the
+/// dashboard-bootstrap handler's defense.
+///
+/// FAIL-CLOSED: if `ConnectInfo<SocketAddr>` is missing (would indicate
+/// `axum::serve` was called without `into_make_service_with_connect_info`)
+/// the request is rejected. Reaching that branch is a regression, not a
+/// soft event.
+async fn require_loopback_peer(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    let peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0);
+    let peer_addr = match peer {
+        Some(p) => p,
+        None => {
+            log::error!(
+                "loopback-peer middleware: ConnectInfo<SocketAddr> missing — \
+                 axum::serve must use into_make_service_with_connect_info::<SocketAddr>()"
+            );
+            return Err(StatusCode::FORBIDDEN);
+        }
+    };
+    if !peer_addr.ip().is_loopback() {
+        log::warn!(
+            "loopback-peer middleware: rejected non-loopback peer {} for {}",
+            peer_addr,
+            request.uri().path()
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(request).await)
 }
 
 async fn dashboard_bootstrap(
@@ -1795,27 +1850,23 @@ async fn dashboard_bootstrap(
         ));
     }
 
-    // Origin defense (CRITICAL #2 mitigation): if a non-browser caller (curl,
-    // a sibling container, a malicious local script) omits Origin, the
-    // optional check above is a no-op. Combined with a spoofed Host header
-    // that the loopback peer somehow holds, it would slip through. Require
-    // an Origin header on every request that reaches this point — browsers
-    // always set it on XHR/fetch, our dashboard included, so legitimate
-    // clients are unaffected.
-    if headers.get(axum::http::header::ORIGIN).is_none() {
-        log::warn!(
-            "Dashboard bootstrap rejected: missing Origin header from peer {}",
-            peer_addr
-        );
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ApiError {
-                error: "Forbidden".to_string(),
-                message: "Bootstrap endpoint requires an Origin header".to_string(),
-                code: 403,
-            }),
-        ));
-    }
+    // Origin is checked above when present (non-loopback Origin → 403).
+    // Round-3 JD considered making Origin MANDATORY but two real-world
+    // facts vetoed that path:
+    //   1. `lifeos-open-axi-dashboard.sh` polls /dashboard/bootstrap with
+    //      curl during boot — curl does not set Origin by default; mandatory
+    //      Origin would fail every probe and the user's first-boot
+    //      dashboard would never launch.
+    //   2. Chromium-family browsers omit `Origin` on same-origin GET
+    //      `fetch()` requests (Fetch spec, https://fetch.spec.whatwg.org/
+    //      §3.1 "Origin header"). The dashboard SPA fetches via GET and
+    //      runs same-origin; a mandatory-Origin gate would 403 every
+    //      legitimate Chromium/Edge/Brave user.
+    // The real defense is the peer-loopback check above (now actually
+    // wired via into_make_service_with_connect_info) plus the Host-header
+    // loopback check plus PublishPort=127.0.0.1 capping host reachability.
+    // Origin from a non-browser caller is operator-controlled / forgeable
+    // and would add no defense once the local peer is already trusted.
 
     // Coarse rate-limit. A local attacker with a poisoned Host header is
     // blocked upstream; this just bounds how many tokens a misbehaving
