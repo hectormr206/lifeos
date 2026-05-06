@@ -28,8 +28,10 @@
 //! as a Quadlet container with its own mount namespace — the container's
 //! `/run/` is private tmpfs, only `/run/lifeos/` is bind-mounted from
 //! the host. Putting the socket inside the bind-mounted directory lets
-//! both sides see it; the directory perms are relaxed to `0755 root:root`
-//! by `lifeos-runtime.conf` so the user session can `connect()`.
+//! both sides see it; the directory perms are tightened to `0751 root:root`
+//! by `lifeos-runtime.conf` — `--x` for other lets the user session
+//! `connect()` to the known socket path while blocking `readdir(2)` so
+//! non-root cannot enumerate filenames in `/run/lifeos/`.
 //!
 //! File mode: `0666`. The kernel `SO_PEERCRED` check is the security
 //! boundary; the permissive file mode just lets local clients reach
@@ -324,9 +326,11 @@ mod tests {
     /// End-to-end test: bind on a tmp path, connect from the same
     /// process (uid will match either 0 in CI as root, or current uid
     /// otherwise), assert the returned token bytes match. Holds the
-    /// ENV_LOCK because `bind()` mutates process-global umask; without
-    /// serialisation parallel test runs intermittently fail with
-    /// EACCES on the bind syscall.
+    /// ENV_LOCK because sibling tests in this module mutate
+    /// `LIFEOS_HANDOUT_UID` / `LIFEOS_HANDOUT_SOCKET`, and parallel
+    /// test runs would race on those env vars (the process-wide umask
+    /// rationale that justified this lock in round-2 was removed when
+    /// round-3 dropped the `umask()` manipulation).
     #[tokio::test]
     async fn handout_returns_token_to_authorized_peer() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());

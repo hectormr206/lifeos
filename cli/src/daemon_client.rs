@@ -93,7 +93,7 @@ fn read_bootstrap_token() -> Option<String> {
     }
 
     for token_path in bootstrap_token_candidates() {
-        // 2) Direct read (works when running as root or token is world/group readable)
+        // 3) Direct read (works when running as root or token is world/group readable)
         if let Some(token) = std::fs::read_to_string(&token_path)
             .ok()
             .map(|t| t.trim().to_string())
@@ -102,7 +102,7 @@ fn read_bootstrap_token() -> Option<String> {
             return Some(token);
         }
 
-        // 3) Best-effort privileged read without prompting (fails fast if sudo is unavailable)
+        // 4) Best-effort privileged read without prompting (fails fast if sudo is unavailable)
         if let Some(token) = Command::new("sudo")
             .arg("-n")
             .arg("cat")
@@ -117,7 +117,7 @@ fn read_bootstrap_token() -> Option<String> {
             return Some(token);
         }
 
-        // 4) Interactive sudo fallback for terminal users.
+        // 5) Interactive sudo fallback for terminal users.
         // This resolves 401 errors on systems where the token is root-only.
         if std::io::stdin().is_terminal() {
             if let Some(token) = Command::new("sudo")
