@@ -35,19 +35,28 @@ Image=ghcr.io/hectormr206/lifeos-lifeosd:stable
 ContainerName=lifeos-lifeosd
 HostName=lifeos-lifeosd
 
-# Phase 8b: lifeos-lifeosd joins the lifeos-net bridge alongside the
-# side containers. Each sibling is reachable by its podman DNS name
-# (lifeos-llama-server, lifeos-llama-embeddings, lifeos-tts) without
-# leaving the bridge. The daemon's HTTP port 8081 is forwarded back to
-# host loopback via PublishPort= so the dashboard, sentinel, and
-# `life` CLI keep their existing URLs.
+# lifeos-lifeosd stays on Network=host — Phase 8b's empirical validation
+# (test on rootful podman 5.8.2 + netavark 1.17.2 + Fedora 44, 2026-05-06)
+# showed that PublishPort=127.0.0.1:Y:Y SNATs incoming connections to the
+# bridge gateway IP (10.89.0.1), so the container sees `peer=10.89.0.1`
+# instead of `127.0.0.1`. With the daemon's peer-loopback gate (api/mod.rs
+# `require_loopback_peer` middleware + the inline check in
+# dashboard_bootstrap), every legitimate dashboard fetch / sentinel probe
+# / `life` CLI call would 403 because the gateway IP is not loopback.
+# Accepting `10.89.0.1` as loopback-equivalent does not work either —
+# every sibling container on lifeos-net shares that gateway, so it would
+# be the exact lateral-compromise surface JD round-3 caught.
 #
-# Inside the container, 127.0.0.1:80xx is the container's own loopback
-# (NOT the host), so every hardcoded URL got moved behind
-# crate::endpoints::* (LIFEOS_LLAMA_URL / LIFEOS_EMBED_URL /
-# LIFEOS_TTS_URL) which the Environment= block below fills in.
-Network=lifeos-net.network
-PublishPort=127.0.0.1:8081:8081
+# The clean fix is bind-mounting a Unix-domain socket from the host into
+# the container and using SO_PEERCRED to authenticate locally — see
+# `~/.claude/projects/-home-hectormr-dev-gama-lifeos/memory/project_pending_phase8b_unix_socket_migration.md`.
+# Until that lands, lifeos-lifeosd uses Network=host like the pre-pivot
+# topology. Sibling containers (lifeos-tts/llama-server/etc.) are still
+# on lifeos-net.network and expose their ports back to the host via their
+# own PublishPort=, so the daemon reaches them at the same `127.0.0.1:80xx`
+# URLs the endpoints.rs defaults already use. The URL refactor stays in
+# code — the env vars just go unused on this host topology.
+Network=host
 
 # === Bind mounts: state lives on host, container is stateless ===
 #
@@ -97,26 +106,17 @@ EnvironmentFile=/etc/lifeos/llm-providers.env
 Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard
 Environment=LIFEOS_RUNTIME_DIR=/run/lifeos
 Environment=RUST_LOG=info,lifeosd=debug
-# Phase 8b: bind wildcard inside the container netns so PublishPort can
-# forward host loopback traffic into the listener — the container's own
-# 127.0.0.1 is unreachable from outside its netns. Round-2 JD caught
-# that the previously-claimed "triple-guard" was a double-guard because
-# axum::serve was not wrapped with into_make_service_with_connect_info,
-# so the peer-address check was dead code. The fix in api/mod.rs wires
-# ConnectInfo, makes the peer-loopback check fail-closed (refuse on
-# missing ConnectInfo), and additionally requires an Origin header on
-# every bootstrap-token request. PublishPort=127.0.0.1 still caps host
-# reachability at loopback, but the in-process guards now actually run.
-Environment=LIFEOS_API_BIND=0.0.0.0:8081
+# Network=host: the daemon binds its own loopback on 127.0.0.1:8081
+# (LIFEOS_API_BIND default in DaemonConfig). The wildcard-bind override
+# only made sense on the bridge (PublishPort needed an external-facing
+# listener); on host network it would expose the daemon on every NIC.
+# No LIFEOS_API_BIND= here on purpose.
 
-# Phase 8b: sibling-service URLs resolved via podman's embedded DNS
-# inside the lifeos-net bridge. Inside the container 127.0.0.1 is the
-# container's own loopback, not the host, so the daemon must address
-# siblings by their ContainerName/HostName. Override at runtime if a
-# host needs a different topology (e.g. legacy Network=host rollback).
-Environment=LIFEOS_LLAMA_URL=http://lifeos-llama-server:8082
-Environment=LIFEOS_EMBED_URL=http://lifeos-llama-embeddings:8083
-Environment=LIFEOS_TTS_URL=http://lifeos-tts:8084
+# Sibling URLs default to http://127.0.0.1:80xx in endpoints.rs, which
+# is correct for Network=host (and for the bridged sibling containers
+# whose own PublishPort= forwards their loopback ports back to the host).
+# The LIFEOS_*_URL env vars are intentionally unset; if the Unix-socket
+# migration lands and the daemon goes back to lifeos-net, set them then.
 
 # Memory DB encryption key derives from /etc/machine-id + /etc/hostname
 # (see daemon/src/memory_plane.rs::derive_machine_key). Without these
