@@ -215,11 +215,8 @@ async fn serve(listener: UnixListener, token: Arc<str>, allowed_uids: Arc<[u32]>
         let allowed = allowed_uids.clone();
         tokio::spawn(async move {
             let _permit = permit; // released when this task returns
-            match tokio::time::timeout(
-                HANDLER_TIMEOUT,
-                handle_connection(stream, &token, &allowed),
-            )
-            .await
+            match tokio::time::timeout(HANDLER_TIMEOUT, handle_connection(stream, &token, &allowed))
+                .await
             {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => debug!("bootstrap-token handout: dropped connection ({})", e),
