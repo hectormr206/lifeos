@@ -124,7 +124,14 @@ Volume=/var/lib/lifeos/models:/var/lib/lifeos/models:ro,z
 # devices: 0)" when the binary couldn't enumerate Vulkan devices in the
 # headless container — the proximate cause of every restart-loop in the
 # field today.
-Exec=/usr/sbin/llama-server \
+# systemd's Exec= tokenises BEFORE expanding ${VAR}, so an empty
+# variable expands to a literal empty-string argv token (`""`) — not
+# zero tokens. llama-server then sees `argv[i] == ""` and either errors
+# out or misparses the next flag. We therefore wrap the command in
+# `bash -c '...'` and use `${VAR:+$VAR}` so an empty value produces
+# zero tokens (proper shell word-splitting of a single space-separated
+# flag string).
+Exec=/bin/bash -c 'exec /usr/sbin/llama-server \
     --model /var/lib/lifeos/models/${LIFEOS_AI_MODEL} \
     --mmproj /var/lib/lifeos/models/${LIFEOS_AI_MMPROJ} \
     --alias lifeos \
@@ -139,12 +146,12 @@ Exec=/usr/sbin/llama-server \
     --ubatch-size ${LIFEOS_AI_UBATCH_SIZE} \
     --n-predict 2048 \
     -kvu -cram -1 \
-    ${LIFEOS_AI_DEVICE_FLAGS} \
-    ${LIFEOS_AI_GPU_TUNING} \
+    ${LIFEOS_AI_DEVICE_FLAGS:+$LIFEOS_AI_DEVICE_FLAGS} \
+    ${LIFEOS_AI_GPU_TUNING:+$LIFEOS_AI_GPU_TUNING} \
     --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 \
     --presence-penalty 0.0 --repeat-penalty 1.0 \
     --reasoning off \
-    --jinja
+    --jinja'
 
 [Service]
 # Defense-in-depth Capa 4: ensure image is present locally before starting.
