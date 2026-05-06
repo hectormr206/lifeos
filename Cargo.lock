@@ -2600,7 +2600,7 @@ dependencies = [
 
 [[package]]
 name = "life"
-version = "0.8.44"
+version = "0.8.45"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2626,7 +2626,7 @@ dependencies = [
 
 [[package]]
 name = "lifeos-integration-tests"
-version = "0.8.44"
+version = "0.8.45"
 dependencies = [
  "life",
  "serde_json",
@@ -2637,7 +2637,7 @@ dependencies = [
 
 [[package]]
 name = "lifeosd"
-version = "0.8.44"
+version = "0.8.45"
 dependencies = [
  "aes-gcm-siv",
  "anyhow",
@@ -2658,6 +2658,7 @@ dependencies = [
  "gtk4",
  "half",
  "hmac",
+ "http",
  "iana-time-zone",
  "image",
  "ksni",
@@ -2682,6 +2683,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.29.0",
  "toml 0.8.23",
+ "tower",
  "tower-http",
  "url",
  "utoipa",
