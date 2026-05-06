@@ -64,14 +64,23 @@ which checks (in order):
    path.
 
 Both variables must be a bare `scheme://host[:port]` URL — no path, no
-query, at most one trailing slash. Anything else is logged at `WARN`
-and the default is used (so the daemon never silently degrades to the
-robot voice from a typo in the env file).
+query, no embedded whitespace, no empty authority, at most one trailing
+slash. Anything else is logged at `WARN` and the default is used.
 
-If the dashboard's voice selector produces no audio, check `tts.tts_engine`
-in the `POST /api/v1/sensory/tts/speak` response: `kokoro:<voice>` means
-success, `/usr/bin/espeak-ng` means the URL was unreachable or both env
-vars resolved to empty/invalid values.
+Caveat: on the bridged Quadlet (`Network=lifeos-net.network`) the default
+`http://127.0.0.1:8084` resolves to lifeosd's OWN container loopback,
+where no Kokoro listener exists. If both env vars are unset or invalid
+on the bridged path, every TTS call refuses connection and falls through
+to `espeak-ng`. That silent degradation is the operator's signal that
+`/etc/lifeos/llm-providers.env` (or the inline Quadlet `Environment=`
+block) needs the bridged URL `http://lifeos-tts:8084`. Check
+`tts.tts_engine` in the `POST /api/v1/sensory/tts/speak` response:
+`kokoro:<voice>` means success, `/usr/bin/espeak-ng` means the URL was
+unreachable or both env vars resolved to empty/invalid values.
+
+Each URL is resolved once at daemon startup; changes to
+`/etc/lifeos/*.env` need `systemctl restart lifeos-lifeosd` to take
+effect, and the journal records the resolved URL at INFO.
 
 ---
 

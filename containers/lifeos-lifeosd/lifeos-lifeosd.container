@@ -79,17 +79,34 @@ Volume=/etc/lifeos:/etc/lifeos:ro,z
 Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
 
 # === Critical environment variables ===
-# Same set the host service passes today.
+#
+# Round-2 JD ordering note: systemd applies Environment= and EnvironmentFile=
+# in DIRECTIVE ORDER (later overrides earlier). EnvironmentFile= MUST come
+# FIRST so the inline Environment= values below win for any LIFEOS_* key
+# the legacy llm-providers.env file might also contain — otherwise an
+# operator who copied LIFEOS_TTS_URL into /etc/lifeos/llm-providers.env
+# could silently override the bridged Quadlet topology.
+#
+# Quadlet does NOT honor the systemd `-` "optional" prefix on
+# EnvironmentFile= when the directive lives in the [Container] section —
+# it interprets the dash as a leading path segment and tries to open the
+# file as `/usr/share/containers/systemd/-/etc/lifeos/...`. The host
+# bootc image always ships /etc/lifeos/llm-providers.env (lifeos-secrets.conf
+# enforces 0600 root) so the file is always present — drop the dash.
+EnvironmentFile=/etc/lifeos/llm-providers.env
 Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard
 Environment=LIFEOS_RUNTIME_DIR=/run/lifeos
 Environment=RUST_LOG=info,lifeosd=debug
 # Phase 8b: bind wildcard inside the container netns so PublishPort can
 # forward host loopback traffic into the listener — the container's own
-# 127.0.0.1 is unreachable from outside its netns. Despite the wildcard
-# bind, the bootstrap-token handler still enforces loopback origin via
-# the Host-header + Origin + peer-address triple guard, and PublishPort
-# itself is limited to 127.0.0.1 on the host, so external interfaces
-# never see this listener.
+# 127.0.0.1 is unreachable from outside its netns. Round-2 JD caught
+# that the previously-claimed "triple-guard" was a double-guard because
+# axum::serve was not wrapped with into_make_service_with_connect_info,
+# so the peer-address check was dead code. The fix in api/mod.rs wires
+# ConnectInfo, makes the peer-loopback check fail-closed (refuse on
+# missing ConnectInfo), and additionally requires an Origin header on
+# every bootstrap-token request. PublishPort=127.0.0.1 still caps host
+# reachability at loopback, but the in-process guards now actually run.
 Environment=LIFEOS_API_BIND=0.0.0.0:8081
 
 # Phase 8b: sibling-service URLs resolved via podman's embedded DNS
@@ -100,13 +117,6 @@ Environment=LIFEOS_API_BIND=0.0.0.0:8081
 Environment=LIFEOS_LLAMA_URL=http://lifeos-llama-server:8082
 Environment=LIFEOS_EMBED_URL=http://lifeos-llama-embeddings:8083
 Environment=LIFEOS_TTS_URL=http://lifeos-tts:8084
-# Quadlet does NOT honor the systemd `-` "optional" prefix on
-# EnvironmentFile= when the directive lives in the [Container] section —
-# it interprets the dash as a leading path segment and tries to open the
-# file as `/usr/share/containers/systemd/-/etc/lifeos/...`. The host
-# bootc image always ships /etc/lifeos/llm-providers.env (lifeos-secrets.conf
-# enforces 0600 root) so the file is always present — drop the dash.
-EnvironmentFile=/etc/lifeos/llm-providers.env
 
 # Memory DB encryption key derives from /etc/machine-id + /etc/hostname
 # (see daemon/src/memory_plane.rs::derive_machine_key). Without these

@@ -2378,11 +2378,15 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
     // present, so the Quadlet Environment= block is authoritative.
     let env_bind: Option<SocketAddr> = std::env::var("LIFEOS_API_BIND")
         .ok()
-        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
         .and_then(|s| match s.parse() {
             Ok(addr) => Some(addr),
             Err(e) => {
-                warn!("LIFEOS_API_BIND={} is not a valid SocketAddr ({}); ignoring", s, e);
+                warn!(
+                    "LIFEOS_API_BIND={:?} is not a valid SocketAddr ({}); ignoring",
+                    s, e
+                );
                 None
             }
         });
@@ -2391,10 +2395,17 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
         let contents = tokio::fs::read_to_string(config_path).await?;
         let config: DaemonConfigFile = toml::from_str(&contents)?;
 
-        let toml_bind: SocketAddr = config
-            .api_bind_address
-            .parse()
-            .unwrap_or_else(|_| "127.0.0.1:8081".parse().unwrap());
+        let toml_bind: SocketAddr = match config.api_bind_address.trim().parse() {
+            Ok(addr) => addr,
+            Err(e) => {
+                warn!(
+                    "daemon.toml api_bind_address={:?} is not a valid SocketAddr ({}); \
+                     defaulting to 127.0.0.1:8081",
+                    config.api_bind_address, e
+                );
+                "127.0.0.1:8081".parse().unwrap()
+            }
+        };
 
         let api_bind = env_bind.unwrap_or(toml_bind);
 

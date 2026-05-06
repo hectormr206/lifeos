@@ -1748,30 +1748,73 @@ async fn dashboard_bootstrap(
         }
     }
 
+    // Phase 8b round-2: this guard is THE primary defense once the bind is
+    // 0.0.0.0 (so PublishPort can forward into the bridged container netns).
+    // Host/Origin headers are operator-controlled — a sibling container on
+    // `lifeos-net` can spoof `Host: localhost`, and non-browser callers can
+    // omit Origin entirely. The peer address is the only field a remote
+    // attacker cannot forge.
+    //
+    // FAIL-CLOSED: if ConnectInfo is absent (would indicate `axum::serve`
+    // wasn't called with `into_make_service_with_connect_info`), refuse
+    // rather than fall through. Round-2 JD caught the dead-code variant
+    // of this branch — reaching it is a regression, not a soft event.
     let peer = request
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0);
-
-    // Defense-in-depth: reject TCP peers that are not on the loopback
-    // interface even if the bind check and header checks passed. This
-    // closes the theoretical "bound to 0.0.0.0 by misconfiguration"
-    // window as a belt-and-braces guard.
-    if let Some(peer_addr) = peer {
-        if !peer_addr.ip().is_loopback() {
-            log::warn!(
-                "Dashboard bootstrap rejected: non-loopback peer {}",
-                peer_addr
+    let peer_addr = match peer {
+        Some(p) => p,
+        None => {
+            log::error!(
+                "Dashboard bootstrap rejected: ConnectInfo<SocketAddr> missing — \
+                 axum::serve must use into_make_service_with_connect_info::<SocketAddr>()"
             );
             return Err((
                 StatusCode::FORBIDDEN,
                 Json(ApiError {
                     error: "Forbidden".to_string(),
-                    message: "Bootstrap endpoint rejects non-loopback peers".to_string(),
+                    message: "Bootstrap endpoint requires peer-address binding".to_string(),
                     code: 403,
                 }),
             ));
         }
+    };
+    if !peer_addr.ip().is_loopback() {
+        log::warn!(
+            "Dashboard bootstrap rejected: non-loopback peer {}",
+            peer_addr
+        );
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "Bootstrap endpoint rejects non-loopback peers".to_string(),
+                code: 403,
+            }),
+        ));
+    }
+
+    // Origin defense (CRITICAL #2 mitigation): if a non-browser caller (curl,
+    // a sibling container, a malicious local script) omits Origin, the
+    // optional check above is a no-op. Combined with a spoofed Host header
+    // that the loopback peer somehow holds, it would slip through. Require
+    // an Origin header on every request that reaches this point — browsers
+    // always set it on XHR/fetch, our dashboard included, so legitimate
+    // clients are unaffected.
+    if headers.get(axum::http::header::ORIGIN).is_none() {
+        log::warn!(
+            "Dashboard bootstrap rejected: missing Origin header from peer {}",
+            peer_addr
+        );
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "Bootstrap endpoint requires an Origin header".to_string(),
+                code: 403,
+            }),
+        ));
     }
 
     // Coarse rate-limit. A local attacker with a poisoned Host header is
@@ -12517,7 +12560,19 @@ pub async fn start_api_server(state: ApiState) -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    axum::serve(listener, router).await?;
+    // Phase 8b round-2 CRITICAL fix: serve with ConnectInfo so handlers
+    // that check `request.extensions().get::<ConnectInfo<SocketAddr>>()`
+    // (notably dashboard_bootstrap's peer-address loopback guard) actually
+    // see the peer address. Without this wrapper `ConnectInfo` is never
+    // inserted, the guard's `if let Some(peer_addr)` branch is dead code,
+    // and with `LIFEOS_API_BIND=0.0.0.0:8081` ANY sibling container on
+    // `lifeos-net` could resolve `lifeos-lifeosd:8081`, send `Host: localhost`,
+    // and exfiltrate the bootstrap token.
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
