@@ -1,4 +1,4 @@
-# lifeos-llama-server.container — Qwen3.5 Vulkan inference Quadlet
+# lifeos-llama-server.container — Qwen3.5 CUDA inference Quadlet
 # Default LIFEOS_AI_MODEL is Qwen3.5-4B (per decision_default_model_4b);
 # 9B is opt-in via the runtime-profile env file. The Quadlet itself is
 # model-agnostic.
@@ -8,7 +8,7 @@
 # project_pending_nvidia_container_toolkit memory).
 
 [Unit]
-Description=LifeOS LLM Server (Qwen3.5 chat, Vulkan GPU, containerized)
+Description=LifeOS LLM Server (Qwen3.5 chat, CUDA GPU, containerized)
 Documentation=https://github.com/ggml-org/llama.cpp
 # lifeosd reads from :8082 — keep llama-server up before lifeosd. Use the
 # Quadlet-generated unit name; ordering vs the legacy `llama-server.service`
@@ -162,14 +162,14 @@ EnvironmentFile=-/var/lib/lifeos/llama-server-runtime-profile.env
 EnvironmentFile=-/var/lib/lifeos/llama-server-game-guard.env
 
 # Capa 3 — auto-restart with a longer backoff than embeddings/TTS because
-# Qwen3.5 warmup (model load + GPU upload + Vulkan shader cache prime)
+# Qwen3.5 warmup (model load + GPU upload + CUDA module/PTX JIT prime)
 # takes ~30-60s. Avoid restart-thrash on transient OOM.
 Restart=always
 RestartSec=15s
 TimeoutStartSec=180s
 
 # Resource limits. The model itself fills GPU VRAM (5.3 GB Q4); host RAM is
-# for the kv-cache, server overhead, and Vulkan staging. 8G cap is generous
+# for the kv-cache, server overhead, and CUDA staging. 8G cap is generous
 # but realistic for the 131K context profile.
 MemoryMax=8G
 CPUQuota=400%

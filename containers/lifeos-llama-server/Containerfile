@@ -44,7 +44,13 @@
 # still getting full GPU offload. Trade-off: CUDA build pulls the CUDA toolkit
 # into the builder stage (~3 GB while compiling, dropped in stage 2). Worth
 # it: ~25-50 t/s on Qwen 9B vs ~14 t/s CPU.
-FROM nvidia/cuda:12.6.3-cudnn-devel-ubi9 AS builder
+#
+# CUDA 12.8+ is REQUIRED — sm_100/sm_120 (Blackwell, RTX 50xx) support
+# was added in 12.8. Earlier toolkits abort with
+# "Invalid target architecture 'sm_120'" when nvcc is asked to build
+# for our CMAKE_CUDA_ARCHITECTURES list. Hector's RTX 5070 Ti Laptop is
+# sm_120, so dropping below 12.8 means nvcc fails the build entirely.
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubi9 AS builder
 
 RUN dnf -y install \
         cmake \
@@ -97,9 +103,18 @@ FROM fedora-minimal:44 AS runtime
 RUN microdnf install -y \
         ca-certificates \
         libcurl \
+        libstdc++ \
         tini \
         --setopt=tsflags=nodocs && \
     microdnf clean all
+# Note on libstdc++: GGML_STATIC=OFF in the builder stage means
+# llama-server is dynamically linked against libstdc++.so.6. fedora-minimal
+# strips libstdc++ from the base, so without this microdnf install the
+# binary fails at startup with "error while loading shared libraries:
+# libstdc++.so.6: cannot open shared object file". The Vulkan build had
+# GGML_STATIC=ON which baked libstdc++ into the binary; CUDA can't fully
+# static-link (libcudart needs to come from the host via CDI) so we ship
+# libstdc++ explicitly.
 
 COPY --from=builder /tmp/llama.cpp/build/bin/llama-server /usr/sbin/llama-server
 
