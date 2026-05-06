@@ -790,7 +790,7 @@ impl LabManager {
         // `lifeos-lifeosd.service` (Quadlet-generated). Probe the canonical
         // name first; the legacy name is kept as a rollback fallback so a
         // host that rolled back to a pre-Phase-3 image still passes.
-        let critical_services = vec![
+        let critical_services = [
             "lifeos-lifeosd.service",
             "lifeosd.service",
             "NetworkManager.service",
