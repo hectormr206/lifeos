@@ -18,7 +18,7 @@ name: Side Container Images
 # llama-server is excluded by default because its runtime is BLOCKED on
 # nvidia-container-toolkit (Fedora 43 RPM digest issue). The container builds
 # fine; production cannot start it. Build is gated behind `build-llama-server`
-# input so we don't waste a 30-min vulkan compile every CI cycle.
+# input so we don't waste a 30-min CUDA compile every CI cycle.
 
 on:
   push:
@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       build-llama-server:
-        description: 'Also build lifeos-llama-server (vulkan, ~30 min). Phase 4 active on fc44 — runtime UNBLOCKED.'
+        description: 'Also build lifeos-llama-server (CUDA, ~30-45 min). Phase 4 active on fc44 — runtime UNBLOCKED.'
         required: false
         default: 'true'
         type: choice
@@ -109,7 +109,9 @@ jobs:
           podman push ghcr.io/${REPO_OWNER}/${{ matrix.name }}:${GITHUB_SHA::8}
 
   build-llama-server:
-    # Vulkan compile is ~30 min. Now that Phase 4 GPU passthrough is live
+    # CUDA compile is ~30-45 min (slightly longer than the previous Vulkan
+    # build because nvcc compiles per-arch device code for sm_75..sm_120).
+    # Now that Phase 4 GPU passthrough is live
     # on fc44, the build runs on every push to containers/**, the weekly
     # cron, and on workflow_dispatch (default 'true'). Set the dispatch
     # input to 'false' if you need to skip the long compile for an
@@ -126,7 +128,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build lifeos-llama-server (vulkan)
+      - name: Build lifeos-llama-server (CUDA)
         run: |
           podman build \
             -t ghcr.io/${REPO_OWNER}/lifeos-llama-server:stable \
