@@ -2206,8 +2206,10 @@ Listo!"#;
                 "free -h",
                 "podman ps",                // listing is fine
                 "podman images",            // listing is fine
-                "systemctl status lifeosd", // status is fine, only stop/disable/etc are blocked
-                "journalctl --user -u lifeosd -n 50",
+                "systemctl status lifeosd", // legacy name — status is fine, only stop/disable/etc are blocked
+                "systemctl status lifeos-lifeosd.service", // canonical post-Phase-3 name
+                "journalctl --user -u lifeosd -n 50", // legacy
+                "journalctl -u lifeos-lifeosd.service -n 50", // canonical
                 "echo hello",
                 "uname -a",
                 "fastfetch",
