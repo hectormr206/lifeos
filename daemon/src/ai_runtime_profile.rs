@@ -107,6 +107,26 @@ impl RuntimeSettings {
         if let Some(mmproj) = &self.mmproj {
             lines.push(format!("LIFEOS_AI_MMPROJ={mmproj}"));
         }
+        // GPU-vs-CPU device split for the lifeos-llama-server Quadlet's Exec
+        // line. The Quadlet expands these literally into the llama-server
+        // command, so empty is fine — but keeping `-mg 0 --cache-type-* q8_0`
+        // hardcoded in the Quadlet causes "invalid value for main_gpu: 0
+        // (available devices: 0)" the moment Vulkan can't enumerate a
+        // device (every CPU-only deploy + every host where lifeos-nvidia-
+        // drivers ships without proper headless Vulkan support).
+        // --cache-type-k/v q8_0 are GOOD for both CPU and GPU paths
+        // (they cut KV cache memory ~2× regardless of backend), so they
+        // live in the unconditional part of the Quadlet's Exec= line.
+        // Only the truly GPU-specific flags (`-sm none -mg 0
+        // --flash-attn auto`) need parameterising — those error on a
+        // CPU-only binary that can't enumerate a Vulkan/CUDA device.
+        if self.gpu_layers == 0 {
+            lines.push("LIFEOS_AI_DEVICE_FLAGS=--device none".to_string());
+            lines.push("LIFEOS_AI_GPU_TUNING=".to_string());
+        } else {
+            lines.push("LIFEOS_AI_DEVICE_FLAGS=".to_string());
+            lines.push("LIFEOS_AI_GPU_TUNING=-sm none -mg 0 --flash-attn auto".to_string());
+        }
         lines
     }
 
@@ -628,6 +648,13 @@ fn heuristic_cpu_profile(
         inputs.requested_ctx_size.min(4_096)
     };
 
+    // Pin the small Qwen 3.5 4B Q4_K_M as the CPU baseline: ~2.7 GB on disk,
+    // ~3-4 GB RAM at runtime, runs at ~10-20 tokens/s on a Raptor Lake-S CPU
+    // (measured 14 t/s on Hector's machine post-Phase-3 cutover before the
+    // Vulkan-headless workaround landed). Without this default the daemon
+    // would write a profile with no LIFEOS_AI_MODEL, and the
+    // lifeos-llama-server Quadlet would crash-loop on `--model
+    // /var/lib/lifeos/models/` (empty path).
     RuntimeSettings {
         ctx_size,
         threads,
@@ -635,8 +662,8 @@ fn heuristic_cpu_profile(
         parallel: 1,
         batch_size,
         ubatch_size,
-        model: None,
-        mmproj: None,
+        model: Some("Qwen3.5-4B-Q4_K_M.gguf".into()),
+        mmproj: Some("Qwen3.5-4B-mmproj-F16.gguf".into()),
     }
 }
 
@@ -816,6 +843,19 @@ fn detect_accelerator() -> Option<AcceleratorInfo> {
         return None;
     }
 
+    // Phase 4 of the architecture pivot moved llama-server into its own
+    // Quadlet container, so the binary is no longer guaranteed to live next
+    // to lifeosd. Try the binary first (still present on dev hosts and CPU
+    // builds), and fall back to nvidia-smi for the headless-container case
+    // where chat inference runs in lifeos-llama-server but lifeosd needs to
+    // know the GPU exists to pick the right runtime profile.
+    if let Some(info) = detect_accelerator_via_llama_server() {
+        return Some(info);
+    }
+    detect_accelerator_via_nvidia_smi()
+}
+
+fn detect_accelerator_via_llama_server() -> Option<AcceleratorInfo> {
     let output = Command::new("llama-server")
         .arg("--list-devices")
         .output()
@@ -844,6 +884,86 @@ fn detect_accelerator() -> Option<AcceleratorInfo> {
         }
     }
 
+    best
+}
+
+/// Probe the GPU directly through nvidia-smi. Used when no llama-server
+/// binary is reachable (lifeosd runs in a Quadlet container with the
+/// nvidia-smi tool injected by CDI, but no llama-server next to it).
+/// Returns the highest-VRAM dedicated NVIDIA device or None. Tries the
+/// PATH binary first then falls back to the toolkit's canonical
+/// /usr/bin/nvidia-smi (CDI sometimes lands the binary at a path that
+/// isn't on $PATH inside the daemon container).
+fn detect_accelerator_via_nvidia_smi() -> Option<AcceleratorInfo> {
+    let candidates = ["nvidia-smi", "/usr/bin/nvidia-smi"];
+    for binary in candidates {
+        let Ok(output) = Command::new(binary)
+            .args([
+                "--query-gpu=name,memory.total",
+                "--format=csv,noheader,nounits",
+            ])
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed = parse_nvidia_smi_query(&stdout);
+        if parsed.is_some() {
+            return parsed;
+        }
+    }
+    None
+}
+
+fn parse_nvidia_smi_query(output: &str) -> Option<AcceleratorInfo> {
+    let mut best: Option<AcceleratorInfo> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // CSV format with `--format=csv,noheader,nounits`:
+        //   "NVIDIA GeForce RTX 5070 Laptop GPU, 12227"
+        // Bad rows must `continue`, never `?`-return — `?` exits the whole
+        // function and silently drops every following GPU line. Locale-
+        // formatted numbers (`12,227`) and `[N/A]` driver-init failures
+        // would otherwise mask working GPUs further down the list.
+        let mut parts = line.splitn(2, ',');
+        let Some(name_raw) = parts.next() else {
+            continue;
+        };
+        let name = name_raw.trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let Some(mem_raw) = parts.next() else {
+            continue;
+        };
+        let Ok(mem) = mem_raw.trim().parse::<u64>() else {
+            continue;
+        };
+        let candidate = AcceleratorInfo {
+            backend: "nvidia".to_string(),
+            name,
+            total_mem_mb: mem,
+        };
+        // Only keep dedicated GPUs (skip Intel/Apple iGPUs that may show
+        // up if nvidia-smi is replaced by a stub or on hybrid hosts).
+        // Mirrors the llama-server selection logic above.
+        if !is_dedicated_gpu(&candidate) {
+            continue;
+        }
+        match &best {
+            None => best = Some(candidate),
+            Some(current) if candidate.total_mem_mb > current.total_mem_mb => {
+                best = Some(candidate)
+            }
+            _ => {}
+        }
+    }
     best
 }
 
@@ -892,19 +1012,35 @@ fn parse_llama_list_devices_output(output: &str) -> Vec<AcceleratorInfo> {
 }
 
 fn detect_nvidia_driver_version() -> Option<String> {
-    let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=driver_version", "--format=csv,noheader"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+    // Mirror detect_accelerator_via_nvidia_smi's two-candidate lookup so
+    // the daemon's HardwareFingerprint stays consistent regardless of
+    // whether `nvidia-smi` is on $PATH inside its container. CDI injects
+    // it at /usr/bin/nvidia-smi; some container images don't include /usr/
+    // bin in PATH for non-root users, so a bare Command::new("nvidia-smi")
+    // returns Err and driver_version flips to None — that flip flips
+    // PartialEq on HardwareFingerprint and triggers a benchmark re-run on
+    // every restart.
+    for binary in ["nvidia-smi", "/usr/bin/nvidia-smi"] {
+        let Ok(output) = Command::new(binary)
+            .args(["--query-gpu=driver_version", "--format=csv,noheader"])
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let parsed = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if parsed.is_some() {
+            return parsed;
+        }
     }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+    None
 }
 
 fn detect_llama_server_version() -> Option<String> {
@@ -2072,6 +2208,76 @@ Available devices:
         let content = with_model.to_env_content("test");
         assert!(content.contains("LIFEOS_AI_MODEL=Qwen3.5-4B-Q4_K_M.gguf"));
         assert!(content.contains("LIFEOS_AI_MMPROJ=Qwen3.5-4B-mmproj-F16.gguf"));
+
+        // CPU profile (gpu_layers == 0) emits --device none and an empty
+        // GPU tuning string so the lifeos-llama-server Quadlet's bash
+        // wrapper short-circuits the GPU-only flags. Catches a regression
+        // where a future refactor stops emitting these env vars and
+        // llama-server crash-loops on '-mg 0 (available devices: 0)'.
+        assert!(content.contains("LIFEOS_AI_DEVICE_FLAGS=--device none"));
+        assert!(
+            content.contains("LIFEOS_AI_GPU_TUNING=\n")
+                || content.ends_with("LIFEOS_AI_GPU_TUNING=\n")
+        );
+    }
+
+    #[test]
+    fn runtime_settings_emits_gpu_tuning_when_gpu_layers_active() {
+        // Mirror of the GPU branch — ensures GPU deploys keep getting
+        // the same tuning flags the Quadlet used to hard-code.
+        let settings = RuntimeSettings {
+            ctx_size: 32_768,
+            threads: 8,
+            gpu_layers: 99,
+            parallel: 2,
+            batch_size: 1024,
+            ubatch_size: 256,
+            model: Some("Qwen3.5-9B-Q4_K_M.gguf".into()),
+            mmproj: Some("Qwen3.5-9B-mmproj-F16.gguf".into()),
+        };
+        let content = settings.to_env_content("test");
+        // Pin the EMPTY-line invariant precisely so a future regression
+        // that emits `LIFEOS_AI_DEVICE_FLAGS=--device none` for a GPU
+        // profile (CPU value swapped in) trips this test.
+        assert!(content.contains("LIFEOS_AI_DEVICE_FLAGS=\n"));
+        assert!(content.contains("LIFEOS_AI_GPU_TUNING=-sm none -mg 0 --flash-attn auto"));
+    }
+
+    #[test]
+    fn parse_nvidia_smi_query_picks_highest_vram_dedicated_gpu() {
+        // Multi-GPU csv output (one iGPU + one dGPU). is_dedicated_gpu
+        // filters Intel out, so we MUST end up with the NVIDIA card even
+        // though Intel reported more "memory" (it's shared system RAM and
+        // unrelated to dedicated VRAM).
+        let csv = "\
+NVIDIA GeForce RTX 5070 Laptop GPU, 12227
+Intel(R) Iris Xe Graphics, 32768
+NVIDIA GeForce RTX 4060 Laptop GPU, 8192
+";
+        let dev = parse_nvidia_smi_query(csv).expect("expected an NVIDIA device");
+        assert_eq!(dev.name, "NVIDIA GeForce RTX 5070 Laptop GPU");
+        assert_eq!(dev.total_mem_mb, 12_227);
+        assert_eq!(dev.backend, "nvidia");
+    }
+
+    #[test]
+    fn parse_nvidia_smi_query_skips_malformed_rows_without_aborting() {
+        // The pre-fix version used `?` and would early-return None at the
+        // first malformed row, dropping every row after it. With let-else
+        // continue, the second valid row is still found.
+        let csv = "\
+[N/A], [N/A]
+NVIDIA GeForce RTX 5070, 12227
+";
+        let dev = parse_nvidia_smi_query(csv).expect("RTX 5070 must still be picked up");
+        assert_eq!(dev.name, "NVIDIA GeForce RTX 5070");
+    }
+
+    #[test]
+    fn parse_nvidia_smi_query_returns_none_on_empty_or_no_dgpu() {
+        assert!(parse_nvidia_smi_query("").is_none());
+        // Pure iGPU output — no dedicated GPU, must return None.
+        assert!(parse_nvidia_smi_query("Intel(R) UHD Graphics, 8192\n").is_none());
     }
 
     #[test]

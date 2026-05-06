@@ -113,7 +113,25 @@ Volume=/var/lib/lifeos/models:/var/lib/lifeos/models:ro,z
 # Reads model + tuning from the runtime-profile env file. The benchmarker
 # (defer benchmark, PR #65) writes that file with hardware-tuned values.
 # Game-guard env file overrides for low-power profiles when gaming detected.
-Exec=/usr/sbin/llama-server \
+# LIFEOS_AI_DEVICE_FLAGS / LIFEOS_AI_GPU_TUNING are written by lifeosd
+# alongside the rest of the runtime profile, parameterizing the
+# GPU-vs-CPU split:
+#   GPU profile (Vulkan/CUDA OK) → LIFEOS_AI_DEVICE_FLAGS=""           (no override)
+#                                  LIFEOS_AI_GPU_TUNING="-sm none -mg 0 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn auto"
+#   CPU profile (no GPU)         → LIFEOS_AI_DEVICE_FLAGS="--device none"
+#                                  LIFEOS_AI_GPU_TUNING=""
+# Hardcoding `-mg 0` produced "invalid value for main_gpu: 0 (available
+# devices: 0)" when the binary couldn't enumerate Vulkan devices in the
+# headless container — the proximate cause of every restart-loop in the
+# field today.
+# systemd's Exec= tokenises BEFORE expanding ${VAR}, so an empty
+# variable expands to a literal empty-string argv token (`""`) — not
+# zero tokens. llama-server then sees `argv[i] == ""` and either errors
+# out or misparses the next flag. We therefore wrap the command in
+# `bash -c '...'` and use `${VAR:+$VAR}` so an empty value produces
+# zero tokens (proper shell word-splitting of a single space-separated
+# flag string).
+Exec=/bin/bash -c 'exec /usr/sbin/llama-server \
     --model /var/lib/lifeos/models/${LIFEOS_AI_MODEL} \
     --mmproj /var/lib/lifeos/models/${LIFEOS_AI_MMPROJ} \
     --alias lifeos \
@@ -127,14 +145,15 @@ Exec=/usr/sbin/llama-server \
     --batch-size ${LIFEOS_AI_BATCH_SIZE} \
     --ubatch-size ${LIFEOS_AI_UBATCH_SIZE} \
     --n-predict 2048 \
-    --flash-attn auto \
+    -kvu -cram -1 \
     --cache-type-k q8_0 \
     --cache-type-v q8_0 \
-    -kvu -cram -1 -sm none -mg 0 \
+    ${LIFEOS_AI_DEVICE_FLAGS:+$LIFEOS_AI_DEVICE_FLAGS} \
+    ${LIFEOS_AI_GPU_TUNING:+$LIFEOS_AI_GPU_TUNING} \
     --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 \
     --presence-penalty 0.0 --repeat-penalty 1.0 \
     --reasoning off \
-    --jinja
+    --jinja'
 
 [Service]
 # Defense-in-depth Capa 4: ensure image is present locally before starting.
@@ -150,6 +169,19 @@ ExecStartPre=/usr/local/bin/lifeos-ensure-images
 # best-effort: if 60 s pass without a spec we still try to start (Restart=
 # always handles a hard failure).
 ExecStartPre=-/bin/bash -c 'i=0; while [ $i -lt 60 ]; do for f in /run/cdi/nvidia.yaml /var/run/cdi/nvidia.yaml /etc/cdi/nvidia.yaml; do [ -s "$f" ] && exit 0; done; sleep 1; i=$((i+1)); done; exit 0'
+
+# Wait up to 90 s for lifeosd (running in its own Quadlet container) to
+# write LIFEOS_AI_MODEL into the runtime profile file. Without this, the
+# container starts with --model "/var/lib/lifeos/models/" (empty model
+# name from unset env var), llama-server exits 1 with "failed to load
+# model", Restart=always kicks in, and we restart-loop forever — exactly
+# the regression first observed when lifeosd lost host /dev/nvidia0
+# access in Phase 3 and stopped picking a GPU profile. Keeping this
+# guard even after the lifeos-lifeosd Quadlet gains AddDevice=nvidia.com/
+# gpu=all so a still-warming-up daemon doesn't trigger false-failure
+# Restart= cycles. Hyphen + `exit 0` on timeout: if 90 s pass we still
+# try to start; the underlying failure mode is logged the same way.
+ExecStartPre=-/bin/bash -c 'i=0; while [ $i -lt 90 ]; do f=/var/lib/lifeos/llama-server-runtime-profile.env; if [ -s "$f" ] && grep -q "^LIFEOS_AI_MODEL=" "$f"; then exit 0; fi; sleep 1; i=$((i+1)); done; echo "WARN: LIFEOS_AI_MODEL not set after 90s — starting anyway"; exit 0'
 
 # CRITICAL: these paths are HOST paths (systemd evaluates EnvironmentFile=
 # on the host before the container is created). The benchmarker writes

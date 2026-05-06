@@ -138,6 +138,27 @@ Volume=/etc/hostname:/etc/hostname:ro
 # also touched by other host-side LifeOS services in future phases.
 Volume=/run/lifeos:/run/lifeos:z
 
+# === GPU access for hardware-tuned profile detection ===
+#
+# The daemon's ai_runtime_profile.rs::compute_runtime_profile reads
+# /sys/class/drm + nvidia-smi to detect a dedicated GPU and pick the
+# right Qwen model (9B + GPU layers if dedicated GPU present, smaller
+# 4B CPU profile if not). Pre-Phase-3 lifeosd ran on the host and saw
+# /dev/nvidia0 directly. Post-Phase-3 it lives in this container with
+# no device access — so it always reports "no dedicated GPU", writes
+# /var/lib/lifeos/llama-server-runtime-profile.env without
+# LIFEOS_AI_MODEL/LIFEOS_AI_MMPROJ, and lifeos-llama-server.service
+# then starts with an empty `--model` flag and crash-loops.
+#
+# CDI passthrough fixes this — same mechanism lifeos-llama-server
+# uses. The daemon doesn't actually do GPU compute (that's
+# llama-server's job); it just needs to *detect* the GPU. The host
+# nvidia-container-toolkit publishes nvidia.yaml at /run/cdi or
+# /etc/cdi; podman injects /dev/nvidia* + libnvidia-* into the
+# container at start. Skipped silently on hosts with no NVIDIA driver
+# (CDI spec absent) — daemon falls back to CPU profile.
+AddDevice=nvidia.com/gpu=all
+
 # === Container hardening (Quadlet [Container] directives) ===
 # Strategy: drop everything by default, add only what the daemon needs.
 DropCapability=all
@@ -154,6 +175,16 @@ SecurityLabelType=container_t
 # Defense-in-depth Capa 4: ensure image is present locally before starting.
 # Quadlet requires ExecStartPre in [Service], not [Container].
 ExecStartPre=/usr/local/bin/lifeos-ensure-images
+
+# CDI spec poll — same guard the lifeos-llama-server Quadlet uses. The
+# AddDevice=nvidia.com/gpu=all directive above only succeeds when CDI
+# has published nvidia.yaml; on cold boot nvidia-cdi-refresh.service
+# may not have run yet (we can't After= it without producing the
+# ordering cycle that bit lifeos-llama-server in production). Up to
+# 60 s, fall through if absent — Restart=always covers a hard miss
+# and on hosts without NVIDIA the loop simply times out and the daemon
+# proceeds with no GPU detected (CPU profile path).
+ExecStartPre=-/bin/bash -c 'i=0; while [ $i -lt 60 ]; do for f in /run/cdi/nvidia.yaml /var/run/cdi/nvidia.yaml /etc/cdi/nvidia.yaml; do [ -s "$f" ] && exit 0; done; sleep 1; i=$((i+1)); done; exit 0'
 
 # Capa 3 of defense-in-depth — auto-restart with watchdog.
 Restart=always
