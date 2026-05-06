@@ -146,6 +146,8 @@ Exec=/bin/bash -c 'exec /usr/sbin/llama-server \
     --ubatch-size ${LIFEOS_AI_UBATCH_SIZE} \
     --n-predict 2048 \
     -kvu -cram -1 \
+    --cache-type-k q8_0 \
+    --cache-type-v q8_0 \
     ${LIFEOS_AI_DEVICE_FLAGS:+$LIFEOS_AI_DEVICE_FLAGS} \
     ${LIFEOS_AI_GPU_TUNING:+$LIFEOS_AI_GPU_TUNING} \
     --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 \

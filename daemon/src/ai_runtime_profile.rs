@@ -114,15 +114,18 @@ impl RuntimeSettings {
         // (available devices: 0)" the moment Vulkan can't enumerate a
         // device (every CPU-only deploy + every host where lifeos-nvidia-
         // drivers ships without proper headless Vulkan support).
+        // --cache-type-k/v q8_0 are GOOD for both CPU and GPU paths
+        // (they cut KV cache memory ~2× regardless of backend), so they
+        // live in the unconditional part of the Quadlet's Exec= line.
+        // Only the truly GPU-specific flags (`-sm none -mg 0
+        // --flash-attn auto`) need parameterising — those error on a
+        // CPU-only binary that can't enumerate a Vulkan/CUDA device.
         if self.gpu_layers == 0 {
             lines.push("LIFEOS_AI_DEVICE_FLAGS=--device none".to_string());
             lines.push("LIFEOS_AI_GPU_TUNING=".to_string());
         } else {
             lines.push("LIFEOS_AI_DEVICE_FLAGS=".to_string());
-            lines.push(
-                "LIFEOS_AI_GPU_TUNING=-sm none -mg 0 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn auto"
-                    .to_string(),
-            );
+            lines.push("LIFEOS_AI_GPU_TUNING=-sm none -mg 0 --flash-attn auto".to_string());
         }
         lines
     }
@@ -1007,19 +1010,35 @@ fn parse_llama_list_devices_output(output: &str) -> Vec<AcceleratorInfo> {
 }
 
 fn detect_nvidia_driver_version() -> Option<String> {
-    let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=driver_version", "--format=csv,noheader"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+    // Mirror detect_accelerator_via_nvidia_smi's two-candidate lookup so
+    // the daemon's HardwareFingerprint stays consistent regardless of
+    // whether `nvidia-smi` is on $PATH inside its container. CDI injects
+    // it at /usr/bin/nvidia-smi; some container images don't include /usr/
+    // bin in PATH for non-root users, so a bare Command::new("nvidia-smi")
+    // returns Err and driver_version flips to None — that flip flips
+    // PartialEq on HardwareFingerprint and triggers a benchmark re-run on
+    // every restart.
+    for binary in ["nvidia-smi", "/usr/bin/nvidia-smi"] {
+        let Ok(output) = Command::new(binary)
+            .args(["--query-gpu=driver_version", "--format=csv,noheader"])
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let parsed = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if parsed.is_some() {
+            return parsed;
+        }
     }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+    None
 }
 
 fn detect_llama_server_version() -> Option<String> {
@@ -2212,8 +2231,11 @@ Available devices:
             mmproj: Some("Qwen3.5-9B-mmproj-F16.gguf".into()),
         };
         let content = settings.to_env_content("test");
-        assert!(content.contains("LIFEOS_AI_DEVICE_FLAGS=\n") || content.contains("LIFEOS_AI_DEVICE_FLAGS="));
-        assert!(content.contains("LIFEOS_AI_GPU_TUNING=-sm none -mg 0 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn auto"));
+        // Pin the EMPTY-line invariant precisely so a future regression
+        // that emits `LIFEOS_AI_DEVICE_FLAGS=--device none` for a GPU
+        // profile (CPU value swapped in) trips this test.
+        assert!(content.contains("LIFEOS_AI_DEVICE_FLAGS=\n"));
+        assert!(content.contains("LIFEOS_AI_GPU_TUNING=-sm none -mg 0 --flash-attn auto"));
     }
 
     #[test]
