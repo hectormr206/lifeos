@@ -96,10 +96,9 @@ cosmic-client-toolkit = { version = "0.2", optional = true }
 wayland-client = { version = "0.31", optional = true }
 
 [dev-dependencies]
-# tower::util::ServiceExt::oneshot — used by api/mod.rs unit tests for
-# the require_loopback_peer middleware. axum re-exports tower internally
-# but does not surface ServiceExt at a stable path; pin tower 0.5 (which
-# matches axum 0.7's transitive choice) explicitly so the tests build.
+# tower 0.5 dev-dep for ServiceExt::oneshot; matches axum 0.7's transitive
+# tower 0.5 choice (verified single version in Cargo.lock). Used by the
+# require_loopback_peer middleware tests in api/mod.rs.
 tower = { version = "0.5", features = ["util"] }
 http = "1"
 

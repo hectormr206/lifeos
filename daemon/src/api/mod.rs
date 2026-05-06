@@ -1647,15 +1647,24 @@ pub fn create_router(state: ApiState) -> Router {
             require_bootstrap_token,
         ));
 
-    // SSE endpoint lives outside the auth middleware — it checks ?token= query param
-    // since EventSource cannot set custom headers.
+    // SSE endpoint lives outside the bearer-token middleware — it checks
+    // `?token=` query param since EventSource cannot set custom headers.
+    // R7 JD B caught that the application-layer token check is the ONLY
+    // defense for sibling containers on lifeos-net; without a peer gate
+    // they could brute-force tokens against this listener indefinitely.
+    // `life` CLI connects via loopback, so the gate does not break it.
     let sse_route = Router::new()
         .route("/api/v1/events/stream", get(event_stream))
+        .layer(axum::middleware::from_fn(require_loopback_peer))
         .with_state(state.clone());
 
     // WebSocket control plane — handles its own auth on first message.
+    // Same R7 reasoning as sse_route: peer-loopback gate as belt-and-
+    // suspenders against bridge-side bruteforce, no break for loopback
+    // clients.
     let ws_route = Router::new()
         .route("/ws", get(crate::ws_gateway::ws_handler))
+        .layer(axum::middleware::from_fn(require_loopback_peer))
         .with_state(state.clone());
 
     // Phase 8b round-6: every non-/api/v1 surface that previously assumed
@@ -1670,8 +1679,15 @@ pub fn create_router(state: ApiState) -> Router {
     let dashboard_dir = std::env::var("LIFEOS_DASHBOARD_DIR")
         .unwrap_or_else(|_| "daemon/static/dashboard".to_string());
     let dashboard_service = ServeDir::new(&dashboard_dir).append_index_html_on_directories(true);
+    // R7 JD B drift-risk fix: the bootstrap handler self-guards via the
+    // inline is_loopback_ip check, but applying the same middleware here
+    // (belt-and-suspenders) keeps the rule "every non-/api/v1 surface gets
+    // the peer gate" uniform across the merge list. If a future contributor
+    // accidentally drops the inline guard while refactoring the handler,
+    // the layer still enforces the loopback contract.
     let dashboard_bootstrap_route = Router::new()
         .route("/dashboard/bootstrap", get(dashboard_bootstrap))
+        .layer(axum::middleware::from_fn(require_loopback_peer))
         .with_state(state.clone());
 
     // Read-only security alerts feed — gated by require_loopback_peer
