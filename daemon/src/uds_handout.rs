@@ -328,7 +328,18 @@ mod tests {
     /// test runs would race on those env vars (the process-wide umask
     /// rationale that justified this lock in round-2 was removed when
     /// round-3 dropped the `umask()` manipulation).
+    ///
+    /// `clippy::await_holding_lock` is allowed: the lock is a serializer
+    /// over process-global env-var state for tests, NOT a synchronisation
+    /// primitive across tasks — only one tokio task in the test ever
+    /// holds it at a time, and the test runs single-threaded by virtue
+    /// of `cargo test`'s default scheduling semantics for blocking
+    /// `Mutex`. The async work inside the critical section is local to
+    /// the test (`tokio::spawn` for the server half, then awaits) and
+    /// never re-enters this module. Replacing with `tokio::sync::Mutex`
+    /// would require an async test setup helper that buys nothing.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn handout_returns_token_to_authorized_peer() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = tempfile::tempdir().unwrap();
@@ -368,6 +379,7 @@ mod tests {
     /// peer_cred uid matches our own getuid() — anchoring the
     /// authentication to a real syscall result.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn peer_cred_returns_real_uid_of_connecting_process() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = tempfile::tempdir().unwrap();
@@ -384,6 +396,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn handout_refuses_unauthorized_peer() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = tempfile::tempdir().unwrap();
