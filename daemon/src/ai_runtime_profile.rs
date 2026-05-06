@@ -958,7 +958,9 @@ fn parse_nvidia_smi_query(output: &str) -> Option<AcceleratorInfo> {
         }
         match &best {
             None => best = Some(candidate),
-            Some(current) if candidate.total_mem_mb > current.total_mem_mb => best = Some(candidate),
+            Some(current) if candidate.total_mem_mb > current.total_mem_mb => {
+                best = Some(candidate)
+            }
             _ => {}
         }
     }
@@ -2213,7 +2215,10 @@ Available devices:
         // where a future refactor stops emitting these env vars and
         // llama-server crash-loops on '-mg 0 (available devices: 0)'.
         assert!(content.contains("LIFEOS_AI_DEVICE_FLAGS=--device none"));
-        assert!(content.contains("LIFEOS_AI_GPU_TUNING=\n") || content.ends_with("LIFEOS_AI_GPU_TUNING=\n"));
+        assert!(
+            content.contains("LIFEOS_AI_GPU_TUNING=\n")
+                || content.ends_with("LIFEOS_AI_GPU_TUNING=\n")
+        );
     }
 
     #[test]
