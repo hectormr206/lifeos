@@ -4,7 +4,7 @@
 //! to get an authenticated reqwest client.
 
 use reqwest::Client;
-use std::io::{IsTerminal, Read};
+use std::io::{BufRead, BufReader, IsTerminal};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -46,10 +46,14 @@ fn read_token_from_handout() -> Option<String> {
     let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
     // No payload — SO_PEERCRED is filled by the kernel at accept(2)
     // time on the daemon side; the empty write the previous version
-    // attempted was a no-op. Just read.
+    // attempted was a no-op. Read exactly one line (Round-3 JD B):
+    // `BufReader::read_line` stops at the first `\n` so a future
+    // multi-line payload (e.g. diagnostic suffix on the FORBIDDEN
+    // path, or accidental log spew) does not leak into the token
+    // value. `read_to_string` would have concatenated it all.
+    let mut reader = BufReader::new(stream);
     let mut buf = String::new();
-    let mut reader = stream;
-    reader.read_to_string(&mut buf).ok()?;
+    reader.read_line(&mut buf).ok()?;
     let token = buf.trim();
     // R1 JD: match the FORBIDDEN prefix (not exact string) so the
     // daemon can later add a diagnostic suffix like "FORBIDDEN: uid=N"

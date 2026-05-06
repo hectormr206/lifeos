@@ -55,7 +55,12 @@ read_bootstrap_token() {
         # `socat -t 2 -T 2` caps connect/idle/total at 2s so a hung
         # daemon never blocks the sentinel probe. `IFS= read -r` reads
         # exactly one line without invoking head's SIGPIPE behaviour.
-        token="$(socat -t 2 -T 2 - "UNIX-CONNECT:${handout}" 2>/dev/null | { IFS= read -r line; printf '%s' "$line"; })"
+        # `|| true` guards against `set -euo pipefail` (line 8) killing
+        # the script when socat times out and `read` returns non-zero
+        # on EOF-without-newline — Round-3 JD A caught that the previous
+        # version would terminate sentinel mid-probe instead of
+        # gracefully falling through to the file path.
+        token="$(socat -t 2 -T 2 - "UNIX-CONNECT:${handout}" 2>/dev/null | { IFS= read -r line; printf '%s' "$line"; } || true)"
         # Daemon writes a payload starting with "FORBIDDEN" for
         # unauthorized peers; the kernel enforces the actual gate via
         # SO_PEERCRED. `case` on the prefix tolerates a future

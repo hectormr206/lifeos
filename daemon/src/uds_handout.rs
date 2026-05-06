@@ -125,16 +125,19 @@ pub fn spawn(token: String) -> Option<tokio::task::JoinHandle<()>> {
 }
 
 fn bind(path: &Path) -> anyhow::Result<UnixListener> {
-    // Round-2 JD caught a TOCTOU surface around the previous
-    // `path.exists()` + `remove_file()` + `bind()` chain: between
-    // those calls a privileged-equivalent attacker could have replaced
-    // the path with a symlink to a sensitive file. The daemon runs as
-    // root inside the container; even a small attack surface here is
-    // worth closing. We refuse to remove anything that is not the
-    // expected stale-socket leftover (i.e. not a regular socket OR
-    // not owned by uid 0). On any unexpected state we log and bail —
-    // the daemon will continue without the handout listener and
-    // clients fall back to the file path.
+    // The previous `path.exists()` + `remove_file()` + `bind()` chain
+    // had a small attack surface: a privileged-equivalent attacker
+    // could swap the path for a symlink before the unlink. Round-2
+    // narrowed it with a `symlink_metadata()` precheck — refuse to
+    // remove unless the path is `S_IFSOCK` and `uid == 0`. Round-3
+    // honest acknowledgement: this defends only against NON-root
+    // pre-planting. A root-equivalent attacker can race any number
+    // of `unlink`/`bind` syscalls and we cannot close that window
+    // without `openat2(RESOLVE_NO_SYMLINKS)` + `unlinkat(parent_fd)`,
+    // which is overkill for the threat model — a root attacker
+    // already controls the daemon. Leaving the precheck because it
+    // catches misconfigured environments and bad rollback states
+    // cheaply.
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         let mode = meta.mode();
         let is_socket = (mode & libc::S_IFMT) == libc::S_IFSOCK;
@@ -156,17 +159,22 @@ fn bind(path: &Path) -> anyhow::Result<UnixListener> {
             .with_context(|| format!("remove stale socket {}", path.display()))?;
     }
 
-    // Set umask before bind so the new socket is born with predictable
-    // permissions; we still chmod afterwards (defence in depth) but
-    // this avoids the brief window where the socket exists with the
-    // process's default umask perms (which on Fedora are typically
-    // 0022 → 0755 socket file, blocking non-root from connecting).
-    let prev_umask = unsafe { libc::umask(0o111) }; // socket born 0666
-    let listener_result = UnixListener::bind(path);
-    unsafe {
-        libc::umask(prev_umask);
-    }
-    let listener = listener_result
+    // Round-3 JD A+B: the previous `umask(0o111)` dance was a real
+    // bug. `umask()` is process-global, not thread-local. Daemon
+    // startup spawns many concurrent tokio tasks (telemetry,
+    // sensory_pipeline, browser_automation, experience_modes …) that
+    // create files; any file create that happened between the two
+    // umask calls would inherit the relaxed mask and be born 0666.
+    // The single chmod immediately after bind is sufficient on its
+    // own — the only window where the socket exists with the
+    // process's default umask perms (typically 0755) is the few
+    // microseconds between bind() returning and set_permissions()
+    // returning. During that window the kernel still gates connects
+    // by directory perms; a peer that wins the race connects to a
+    // socket where SO_PEERCRED still fires correctly inside
+    // handle_connection. Information leak: zero — the rejection
+    // payload is the same `FORBIDDEN`. Drop the umask trick.
+    let listener = UnixListener::bind(path)
         .with_context(|| format!("UnixListener::bind({})", path.display()))?;
 
     let mut perms = std::fs::metadata(path)
@@ -181,25 +189,30 @@ fn bind(path: &Path) -> anyhow::Result<UnixListener> {
 async fn serve(listener: UnixListener, token: Arc<str>, allowed_uids: Arc<[u32]>) {
     let permits = Arc::new(Semaphore::new(HANDLER_PERMITS));
     loop {
+        // Round-3 JD A+B: acquire the permit BEFORE accept so the loop
+        // itself back-pressures. Holding the permit while we wait for a
+        // connection is the desired behaviour — it caps the number of
+        // accepted-but-unhandled streams (each consuming an fd) at
+        // HANDLER_PERMITS. Round-2 acquired the permit AFTER spawn,
+        // letting a flooder grow the tokio task queue without bound and
+        // exhausting RLIMIT_NOFILE before HANDLER_PERMITS ever caught up.
+        let permit = match permits.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => return, // semaphore closed → daemon shutting down
+        };
         let (stream, _addr) = match listener.accept().await {
             Ok(s) => s,
             Err(e) => {
                 error!("bootstrap-token handout accept failed: {}", e);
+                drop(permit);
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
-        // Acquire a permit; if the cap is hit we wait, which back-pressures
-        // the accept loop so a flooder cannot exhaust the runtime. Permit
-        // is owned by the spawned task and dropped when it returns.
-        let permits = permits.clone();
         let token = token.clone();
         let allowed = allowed_uids.clone();
         tokio::spawn(async move {
-            let _permit = match permits.acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => return, // semaphore closed → daemon shutting down
-            };
+            let _permit = permit; // released when this task returns
             match tokio::time::timeout(
                 HANDLER_TIMEOUT,
                 handle_connection(stream, &token, &allowed),
