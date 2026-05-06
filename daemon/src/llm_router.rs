@@ -1271,6 +1271,11 @@ fn default_providers() -> Vec<ProviderConfig> {
     // podman bridge (127.0.0.1 inside the container is no longer the host
     // loopback). crate::endpoints::llama_url() honors LIFEOS_LLAMA_URL
     // and falls back to the loopback default for legacy Network=host hosts.
+    //
+    // **Frozen at startup** — this function builds the provider vector
+    // once when LlmRouter is constructed; subsequent runtime changes to
+    // LIFEOS_LLAMA_URL in /etc/lifeos/*.env will NOT take effect until
+    // the operator runs `systemctl restart lifeos-lifeosd`.
     let local_llama_base = crate::endpoints::llama_url();
     vec![
         // ===== Priority 1: Local — max privacy, zero cost =====

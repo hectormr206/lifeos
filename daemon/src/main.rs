@@ -2371,14 +2371,32 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/etc/lifeos/daemon.toml"));
 
+    // Env override for bind address (Phase 8b — bridged Quadlet sets this to
+    // 0.0.0.0:8081 so PublishPort can reach the listener inside the
+    // container's netns; loopback inside the container is unreachable from
+    // the host bridge). The env var wins over the TOML value when both are
+    // present, so the Quadlet Environment= block is authoritative.
+    let env_bind: Option<SocketAddr> = std::env::var("LIFEOS_API_BIND")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| match s.parse() {
+            Ok(addr) => Some(addr),
+            Err(e) => {
+                warn!("LIFEOS_API_BIND={} is not a valid SocketAddr ({}); ignoring", s, e);
+                None
+            }
+        });
+
     if config_path.exists() {
         let contents = tokio::fs::read_to_string(config_path).await?;
         let config: DaemonConfigFile = toml::from_str(&contents)?;
 
-        let api_bind = config
+        let toml_bind: SocketAddr = config
             .api_bind_address
             .parse()
             .unwrap_or_else(|_| "127.0.0.1:8081".parse().unwrap());
+
+        let api_bind = env_bind.unwrap_or(toml_bind);
 
         return Ok(DaemonConfig {
             health_check_interval: Duration::from_secs(config.health_check_interval_secs),
@@ -2393,7 +2411,11 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
         });
     }
 
-    Ok(DaemonConfig::default())
+    let mut cfg = DaemonConfig::default();
+    if let Some(addr) = env_bind {
+        cfg.api_bind_address = addr;
+    }
+    Ok(cfg)
 }
 
 /// Configuration file structure

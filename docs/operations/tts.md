@@ -52,13 +52,26 @@ tokens — every voice sounds robotic regardless of selection. The variable is
 set both in `/etc/lifeos/tts-server.env` and as a hard-coded `os.environ.setdefault`
 inside `lifeos-tts-server.py` for defense in depth.
 
-`lifeosd` itself reads `LIFEOS_TTS_SERVER_URL` (defaulted to `http://127.0.0.1:8084`
-in the `00-tts.conf` drop-in for the user-scope service) and falls back to
-`espeak-ng` when that variable is empty — which makes every voice sound the same
-because espeak has no voice embeddings. If the dashboard's voice selector does
-nothing audible, check `tts.tts_engine` in the `POST /api/v1/sensory/tts/speak`
-response: `kokoro:<voice>` means success, `/usr/bin/espeak-ng` means the
-variable is unset.
+`lifeosd` resolves the TTS endpoint via `daemon/src/endpoints.rs::tts_url()`,
+which checks (in order):
+
+1. `LIFEOS_TTS_URL` — canonical name. The Phase 8b Quadlet sets this to
+   `http://lifeos-tts:8084` so the daemon reaches the TTS container by
+   service name on the `lifeos-net` bridge.
+2. `LIFEOS_TTS_SERVER_URL` — legacy name, kept for compatibility with
+   pre-pivot hosts that still ship `00-tts.conf` drop-ins.
+3. Default `http://127.0.0.1:8084` for the legacy `Network=host` rollback
+   path.
+
+Both variables must be a bare `scheme://host[:port]` URL — no path, no
+query, at most one trailing slash. Anything else is logged at `WARN`
+and the default is used (so the daemon never silently degrades to the
+robot voice from a typo in the env file).
+
+If the dashboard's voice selector produces no audio, check `tts.tts_engine`
+in the `POST /api/v1/sensory/tts/speak` response: `kokoro:<voice>` means
+success, `/usr/bin/espeak-ng` means the URL was unreachable or both env
+vars resolved to empty/invalid values.
 
 ---
 

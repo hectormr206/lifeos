@@ -104,6 +104,12 @@ Boot order:
 
 ### 6.1 — Migrate Network=host → podman bridge `lifeos-net`
 
+> **Status update (Phase 8b):** `lifeos-lifeosd` is the first container to migrate off `Network=host` onto `lifeos-net.network`. The other containers (`lifeos-llama-server`, `lifeos-llama-embeddings`, `lifeos-tts`, `lifeos-simplex-bridge`) remain on `Network=host` until their PRs land. The migration is gradual to avoid an all-or-nothing flip.
+>
+> The lifeosd container additionally exports `LIFEOS_API_BIND=0.0.0.0:8081`. Inside the bridge netns the container's own `127.0.0.1` is unreachable from the host, so the daemon must listen on the wildcard for `PublishPort=127.0.0.1:8081:8081` to forward traffic into it. The bootstrap-token handler still rejects non-loopback peers (Host header + Origin + peer-address triple guard), so wildcard binding does not weaken the security posture — the only reachable ingress is host-loopback through `PublishPort`.
+>
+> Sibling URLs are resolved at startup by `daemon/src/endpoints.rs::{llama_url, embeddings_url, tts_url}`, which read `LIFEOS_LLAMA_URL`, `LIFEOS_EMBED_URL`, and `LIFEOS_TTS_URL` (with `LIFEOS_TTS_SERVER_URL` as a legacy alias). Defaults remain `http://127.0.0.1:80xx` for `Network=host` rollback. Values must be bare `scheme://host[:port]` — paths/queries are rejected with a `WARN` log so misconfiguration cannot silently degrade behavior. **Changing these values requires a `systemctl restart lifeos-lifeosd`** because the URLs are captured into the LLM router's provider list at process start.
+
 Today every container uses `Network=host`. This was the Phase 1 choice for "zero URL changes in lifeosd" — every service kept its existing `127.0.0.1:<port>` URL. It's working but loses container-to-container isolation.
 
 Phase 6 migrates to a private podman bridge:

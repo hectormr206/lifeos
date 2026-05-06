@@ -1702,18 +1702,15 @@ async fn dashboard_bootstrap(
     State(state): State<ApiState>,
     request: Request<Body>,
 ) -> Result<Json<DashboardBootstrapResponse>, (StatusCode, Json<ApiError>)> {
-    // Only serve bootstrap token when the server is bound to loopback.
-    // This prevents token leakage if the daemon is ever exposed externally.
-    if !state.config.bind_address.ip().is_loopback() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ApiError {
-                error: "Forbidden".to_string(),
-                message: "Bootstrap endpoint is only available on localhost".to_string(),
-                code: 403,
-            }),
-        ));
-    }
+    // Note: we no longer gate on `state.config.bind_address.ip().is_loopback()`.
+    // Phase 8b moves lifeosd into a Quadlet bridge network, so the daemon
+    // must bind 0.0.0.0:8081 inside the container for `PublishPort` to
+    // forward host loopback traffic into it. The combination of (1) the
+    // Host-header loopback check below, (2) the Origin loopback check, and
+    // (3) the peer-address loopback check at the end of this handler
+    // already enforces the same policy as the old bind-address gate
+    // without breaking the bridged topology — `PublishPort=127.0.0.1:8081:8081`
+    // forces every external peer to come from the host's loopback iface.
 
     // Defense-in-depth against DNS rebinding: a browser visiting an attacker
     // page that rebinds its hostname to 127.0.0.1 still sends the attacker's

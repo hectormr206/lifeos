@@ -83,6 +83,14 @@ Volume=/etc/pki/ca-trust/extracted:/etc/pki/ca-trust/extracted:ro,z
 Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard
 Environment=LIFEOS_RUNTIME_DIR=/run/lifeos
 Environment=RUST_LOG=info,lifeosd=debug
+# Phase 8b: bind wildcard inside the container netns so PublishPort can
+# forward host loopback traffic into the listener — the container's own
+# 127.0.0.1 is unreachable from outside its netns. Despite the wildcard
+# bind, the bootstrap-token handler still enforces loopback origin via
+# the Host-header + Origin + peer-address triple guard, and PublishPort
+# itself is limited to 127.0.0.1 on the host, so external interfaces
+# never see this listener.
+Environment=LIFEOS_API_BIND=0.0.0.0:8081
 
 # Phase 8b: sibling-service URLs resolved via podman's embedded DNS
 # inside the lifeos-net bridge. Inside the container 127.0.0.1 is the
