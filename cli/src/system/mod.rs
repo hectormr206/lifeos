@@ -497,7 +497,17 @@ fn restart_unit(args: &[&str]) -> bool {
 }
 
 fn is_lifeosd_running() -> bool {
+    // Phase 3 of the architecture pivot moved the daemon from a
+    // user-scope service to the `lifeos-lifeosd.service` system Quadlet.
+    // Probe the canonical post-Phase-3 unit first, then fall back to the
+    // legacy user-scope and bare-system names so rolled-back hosts still
+    // report the daemon correctly.
     systemd_unit_is_active(&[
+        "systemctl",
+        "is-active",
+        "--quiet",
+        "lifeos-lifeosd.service",
+    ]) || systemd_unit_is_active(&[
         "systemctl",
         "--user",
         "is-active",
@@ -509,6 +519,13 @@ fn is_lifeosd_running() -> bool {
 fn lifeosd_status_message(is_running: bool) -> String {
     if is_running {
         "lifeosd is running".to_string()
+    } else if systemd_unit_is_active(&[
+        "systemctl",
+        "is-enabled",
+        "--quiet",
+        "lifeos-lifeosd.service",
+    ]) {
+        "lifeos-lifeosd.service is enabled but not running".to_string()
     } else if systemd_unit_is_active(&[
         "systemctl",
         "--user",

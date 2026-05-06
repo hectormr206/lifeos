@@ -785,9 +785,36 @@ impl LabManager {
     }
 
     async fn test_service_availability(&self) -> (bool, Option<String>) {
-        let critical_services = vec!["lifeosd.service", "NetworkManager.service"];
+        // Phase 3 of the architecture pivot renamed the daemon unit from
+        // user-scope `lifeosd.service` to system-scope
+        // `lifeos-lifeosd.service` (Quadlet-generated). Probe the canonical
+        // name first; the legacy name is kept as a rollback fallback so a
+        // host that rolled back to a pre-Phase-3 image still passes.
+        let critical_services = vec![
+            "lifeos-lifeosd.service",
+            "lifeosd.service",
+            "NetworkManager.service",
+        ];
 
-        for service in critical_services {
+        // lifeosd: succeed if EITHER the new or legacy unit is active. The
+        // remaining services (NetworkManager) must be active by themselves.
+        let lifeosd_active = ["lifeos-lifeosd.service", "lifeosd.service"]
+            .iter()
+            .any(|s| {
+                Command::new("systemctl")
+                    .args(["is-active", "--quiet", s])
+                    .status()
+                    .map(|st| st.success())
+                    .unwrap_or(false)
+            });
+        if !lifeosd_active {
+            return (
+                false,
+                Some("Service lifeos-lifeosd.service not active".to_string()),
+            );
+        }
+
+        for service in &critical_services[2..] {
             if let Ok(output) = Command::new("systemctl")
                 .args(["is-active", "--quiet", service])
                 .output()
@@ -838,7 +865,12 @@ impl LabManager {
                 "--since",
                 "1 hour ago",
                 "-u",
-                "lifeosd",
+                // Phase 3: canonical unit name is lifeos-lifeosd.service
+                // (Quadlet-generated). The legacy `lifeosd` unit is gone,
+                // querying it would silently return zero entries and the
+                // error_rate metric would always read 0 — masking real
+                // failures.
+                "lifeos-lifeosd.service",
                 "-p",
                 "err",
                 "--no-pager",
