@@ -50,7 +50,7 @@
 # "Invalid target architecture 'sm_120'" when nvcc is asked to build
 # for our CMAKE_CUDA_ARCHITECTURES list. Hector's RTX 5070 Ti Laptop is
 # sm_120, so dropping below 12.8 means nvcc fails the build entirely.
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubi9 AS builder
+FROM docker.io/nvidia/cuda:12.8.1-cudnn-devel-ubi9 AS builder
 
 RUN dnf -y install \
         cmake \
