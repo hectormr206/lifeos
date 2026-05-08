@@ -26,7 +26,7 @@ let
 
   # Single source filter covering the entire workspace.
   # Excludes: docs/, image/, containers/, nix/, lifeos-site/, target/.
-  # Includes: Cargo.{toml,lock}, src/**, build.rs, embedded resources.
+  # Includes: Cargo.{toml,lock}, src/**, build.rs, and all embedded resources.
   src = pkgs.lib.cleanSourceWith {
     src = ../..;  # repo root (two levels up from nix/lib/)
     filter = path: type:
@@ -34,10 +34,15 @@ let
         rel = pkgs.lib.removePrefix (toString ../.. + "/") (toString path);
       in
         (craneLib.filterCargoSources path type)
+        # daemon embedded static assets
         || (pkgs.lib.hasPrefix "daemon/defaults/" rel)
         || (pkgs.lib.hasPrefix "daemon/static/" rel)
+        # cli embedded assets (model catalog)
         || (pkgs.lib.hasPrefix "cli/assets/" rel)
-        || (pkgs.lib.hasPrefix "desktop/src/" rel);
+        # desktop embedded assets
+        || (pkgs.lib.hasPrefix "desktop/src/" rel)
+        # contracts: model catalog JSON + sig (embedded via include_str!)
+        || (pkgs.lib.hasPrefix "contracts/" rel);
     name = "lifeos-workspace";
   };
 
