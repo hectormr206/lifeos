@@ -2,7 +2,7 @@
  *
  * NixOS integration test for the lifeosd module.
  *
- * TDD phase: RED (written before lifeosd.nix exists)
+ * TDD phase: GREEN — module, packages, and test wired together.
  *
  * Run (after flake is wired):
  *   nix build .#checks.x86_64-linux.lifeosd-vm-test
@@ -21,17 +21,13 @@ pkgs.nixosTest {
 
     services.lifeos.lifeosd = {
       enable = true;
-      package = config.lifeos.packages.lifeosd;
-      sqliteVecPackage = config.lifeos.packages.sqlite-vec;
-      bootstrapTokenFile = pkgs.writeText "bootstrap-token" "test-token-insecure";
-    };
-
-    # Make packages available via specialArgs
-    _module.args.lifeos = {
-      packages = {
-        lifeosd = pkgs.lifeosd;
-        sqlite-vec = pkgs.sqlite-vec;
-      };
+      # pkgs.lifeosd and pkgs.sqlite-vec are injected via the overlay in
+      # the flake's mkPkgs (or via overlays passed to nixosTest pkgs).
+      package = pkgs.lifeosd;
+      sqliteVecPackage = pkgs.sqlite-vec;
+      bootstrapTokenFile = pkgs.writeText "bootstrap-token" ''
+        LIFEOS_BOOTSTRAP_TOKEN=test-token-insecure
+      '';
     };
   };
 

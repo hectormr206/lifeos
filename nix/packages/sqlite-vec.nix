@@ -17,10 +17,18 @@ stdenv.mkDerivation rec {
     owner = "asg017";
     repo = "sqlite-vec";
     rev = "v${version}";
-    hash = "sha256-KcYzPWumP7Ai2Ft6hHT6OIUWZ+OQ9Q5fOB+Y9bBIpE=";
+    hash = "sha256-CgeSoRoQRMb/V+RzU5NQuIk/3OonYjAfolWD2hqNuXU=";
   };
 
-  nativeBuildInputs = [ sqlite ];
+  nativeBuildInputs = with pkgs; [ gcc ];
+
+  buildInputs = [ sqlite ];
+
+  # The Makefile uses `git rev-parse HEAD` for COMMIT — override to avoid
+  # needing git in the sandbox (pure, reproducible build).
+  preBuild = ''
+    export COMMIT="v${version}"
+  '';
 
   buildPhase = ''
     runHook preBuild
@@ -31,8 +39,8 @@ stdenv.mkDerivation rec {
   installPhase = ''
     runHook preInstall
     mkdir -p $out/lib
-    # The extension uses the platform's shared library extension (.so on Linux)
-    cp dist/vec0${stdenv.hostPlatform.extensions.sharedLibrary} $out/lib/
+    # On Linux: dist/vec0.so
+    cp dist/vec0${stdenv.hostPlatform.extensions.sharedLibrary} $out/lib/vec0.so
     runHook postInstall
   '';
 
