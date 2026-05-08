@@ -25,7 +25,7 @@
 //! (the daemon's in-process detector fires instead). Phase 3c will implement
 //! the full PipeWire+rustpotter listener here.
 //!
-//! TODO(phase-3c): implement full wake-word listener in companion.
+//! Phase 3c will implement the full PipeWire+rustpotter listener here.
 //! See design §5 `wake_word.rs` skeleton for the target API.
 
 #[cfg(feature = "wake-word")]
@@ -38,7 +38,7 @@ mod inner {
     use tokio_util::sync::CancellationToken;
 
     /// Model paths — duplicated from `daemon/src/wake_word.rs` constants.
-    /// TODO(phase-3c): extract these into a shared `lifeos-common` crate.
+    /// Phase 3c will extract these into a shared `lifeos-common` crate.
     const RUSTPOTTER_MODEL_PATH: &str = "/var/lib/lifeos/models/rustpotter/axi.rpw";
     const RUSTPOTTER_IMAGE_MODEL_PATH: &str = "/usr/share/lifeos/models/rustpotter/axi.rpw";
 
@@ -73,7 +73,7 @@ mod inner {
         log::error!(
             "[wake-word] companion wake-word listener is a stub in Phase 3b — \
              the daemon's in-process detector is active instead. \
-             TODO(phase-3c): implement PipeWire+rustpotter listener here."
+             Phase 3c will implement the PipeWire+rustpotter listener here."
         );
 
         // Idle until cancelled — don't crash the companion, just skip wake-word.

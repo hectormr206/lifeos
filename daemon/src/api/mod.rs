@@ -9601,7 +9601,7 @@ async fn trigger_wake_word_external(
         }));
     }
 
-    // TODO: also check active meeting recording state (Phase 3c will wire this).
+    // Phase 3c will also gate this on active meeting recording state.
     if !always_on.enabled || !sensory.audio_enabled {
         log::info!(
             "[wake-word/trigger] rejected: always-on not ready (word={} score={:.2} source=companion always_on={} audio={})",

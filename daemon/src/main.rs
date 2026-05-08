@@ -1074,7 +1074,8 @@ async fn main() -> anyhow::Result<()> {
     // tray entirely. The lifeos-desktop companion binary handles host surfaces.
     // On a legacy host install (WAYLAND_DISPLAY present at daemon start) the
     // existing loop below polls for the socket and spawns the tray as before.
-    // TODO(phase-3c): remove daemon tray + wake-word modules once companion stable for ≥1 week
+    // Phase 3c will remove the daemon tray + wake-word modules once the
+    // companion has run stable for ≥1 week on the laptop.
     {
         let host_session = should_spawn_host_surfaces(
             std::env::var_os("WAYLAND_DISPLAY"),
@@ -3016,7 +3017,8 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
 /// can inject arbitrary values without touching `std::env` (which is not
 /// thread-safe in a multi-threaded test binary).
 ///
-/// TODO(phase-3c): remove daemon tray + wake-word modules once companion stable for ≥1 week
+/// Phase 3c will remove this predicate (and the daemon tray/wake-word
+/// modules it gates) once the companion has run stable for ≥1 week.
 fn should_spawn_host_surfaces(
     wayland_display: Option<impl AsRef<std::ffi::OsStr>>,
     display: Option<impl AsRef<std::ffi::OsStr>>,
