@@ -105,6 +105,10 @@ in
         LIFEOS_DATA_DIR = cfg.dataDir;
         LIFEOS_API_SOCKET = cfg.socketPath;
         LIFEOS_API_TCP = "127.0.0.1:${toString cfg.tcpPort}";
+        # Pin the runtime dir so the bootstrap token is always at a known path.
+        # lifeosd selects the first writable candidate; without this it falls
+        # back to $HOME/.local/state/lifeos/runtime which varies by user setup.
+        LIFEOS_RUNTIME_DIR = "/run/lifeos";
         # Runtime-loadable sqlite-vec extension (REQ-2.3)
         LIFEOS_SQLITE_VEC_PATH = "${cfg.sqliteVecPackage}/lib/vec0.so";
         RUST_LOG = cfg.logLevel;
@@ -115,7 +119,11 @@ in
         Type = "simple";
         ExecStart = "${cfg.package}/bin/lifeosd";
 
-        # Bootstrap token loaded from file — NOT from nix store (secrets hygiene)
+        # Bootstrap token file loaded from secrets — available as
+        # LIFEOS_BOOTSTRAP_TOKEN env var for client tools (life CLI, food_importer).
+        # NOT used by lifeosd itself to authenticate API requests: the daemon
+        # generates a random token at startup saved to
+        # $LIFEOS_RUNTIME_DIR/bootstrap.token (i.e. /run/lifeos/bootstrap.token).
         EnvironmentFile = cfg.bootstrapTokenFile;
 
         User = cfg.user;
@@ -162,17 +170,20 @@ in
         MemoryMax = "1G";
       };
 
-      # Post-start health gate: wait up to 60s for the TCP API to accept requests.
-      # - Uses TCP (not UDS) to avoid SO_PEERCRED UID gate issues (UID 970 is not
-      #   in the allowlist by default — postStart runs as the service user).
-      # - Passes the bootstrap token via x-bootstrap-token header because
-      #   /api/v1/* routes require it (require_bootstrap_token middleware).
-      # - LIFEOS_BOOTSTRAP_TOKEN is available because EnvironmentFile is loaded
-      #   before postStart executes.
+      # Post-start health gate: wait up to 60s for the TCP API to accept
+      # authenticated requests.
+      # - Uses TCP (not UDS) to avoid SO_PEERCRED UID gate (service user UID 970
+      #   is not in the default allowlist).
+      # - lifeosd generates a random token at startup and writes it to
+      #   /run/lifeos/bootstrap.token (LIFEOS_RUNTIME_DIR is pinned above).
+      #   postStart reads that file and passes it as x-bootstrap-token.
+      # - The retry loop also covers the race between postStart and the daemon
+      #   writing the token file.
       postStart = ''
         for i in $(seq 1 60); do
-          if ${pkgs.curl}/bin/curl -sf \
-              -H "x-bootstrap-token: $LIFEOS_BOOTSTRAP_TOKEN" \
+          TOKEN=$(cat /run/lifeos/bootstrap.token 2>/dev/null)
+          if [ -n "$TOKEN" ] && ${pkgs.curl}/bin/curl -sf \
+              -H "x-bootstrap-token: $TOKEN" \
               http://127.0.0.1:${toString cfg.tcpPort}/api/v1/health \
               --max-time 2 \
               > /dev/null 2>&1; then
