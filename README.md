@@ -41,7 +41,34 @@ LifeOS is built in Mexico and developed in the open for users, contributors, and
 - **User-configurable AI context size** (`integrated in repo`) - the dashboard exposes `LIFEOS_AI_CTX_SIZE` so you can pin the llama.cpp ctx (default 128K) and the daemon honors it across restarts and benchmark cycles. The auto-benchmarker still tunes threads/batch/parallel per hardware
 - **VPS-first deploy with layer deltas** (`developer convenience`) - solo dev workflow: `~/bin/vps-prepare-laptop-update.sh` syncs GHCR → VPS local registry, `~/bin/vps-deploy-to-laptop.sh` makes the laptop pull only changed layers via WireGuard. Typical update: ~20 seconds vs ~8 minutes with the previous tar-archive flow. Not part of the bootc image — these are personal scripts in the maintainer's `~/bin/`
 
-## Quick Start
+## Building with Nix (Phase A — VM only)
+
+LifeOS is transitioning to NixOS. The Nix flake is the new canonical build path.
+
+```bash
+# Build the daemon
+nix build .#lifeosd
+
+# Build the CLI
+nix build .#life
+
+# Enter the dev shell (pins Rust toolchain)
+nix develop
+
+# Run all checks + nixos-tests
+nix flake check
+
+# Boot the VM (QEMU)
+nix run .#nixosConfigurations.vm.config.system.build.vm
+```
+
+See [`docs/operations/nix-build.md`](docs/operations/nix-build.md) for the full guide.
+
+**Status:** Phase A (VM + lifeosd + crane + attic). COSMIC + laptop migration in Phase B/C.
+
+The bootc image build path (`make build`) remains active during the transition and will be archived in Phase C.
+
+## Quick Start (bootc — current)
 
 ```bash
 make build      # Build CLI + daemon (Rust)
