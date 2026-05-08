@@ -22,7 +22,8 @@
     home = "/var/lib/lifeos";
     uid = 970;
     description = "LifeOS system user";
-    shell = pkgs.shadow;
+    # nologin shell for non-interactive system user
+    shell = "${pkgs.shadow}/bin/nologin";
   };
 
   users.groups.lifeos = {
