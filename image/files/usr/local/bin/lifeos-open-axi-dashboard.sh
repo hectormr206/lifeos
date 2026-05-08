@@ -7,7 +7,12 @@ fi
 
 dashboard_port="${LIFEOS_DASHBOARD_PORT:-8081}"
 dashboard_base="http://127.0.0.1:${dashboard_port}/dashboard/"
-bootstrap_url="http://127.0.0.1:${dashboard_port}/dashboard/bootstrap"
+# Phase 8b: readiness probe via UDS (SO_PEERCRED auth). The Firefox
+# launch URL stays at the TCP address (browsers cannot open UDS).
+# The probe path still checks /dashboard/bootstrap — only the transport
+# changes from TCP to UDS.
+lifeos_api_socket="${LIFEOS_API_SOCKET:-/run/lifeos/lifeosd.sock}"
+bootstrap_probe_url="http://localhost/dashboard/bootstrap"
 state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
 marker_dir="${state_home}/lifeos"
 marker_file="${marker_dir}/axi-experience-version"
@@ -61,7 +66,7 @@ dashboard_url="${dashboard_base}${query}"
 i=0
 consecutive_failures=0
 while [ "${i}" -lt 45 ]; do
-    if curl -fsS "${bootstrap_url}" >/dev/null 2>&1; then
+    if curl -fsS --unix-socket "${lifeos_api_socket}" "${bootstrap_probe_url}" >/dev/null 2>&1; then
         [ "${once_per_version}" -eq 1 ] && printf '%s' "${version_key}" > "${marker_file}"
         if command -v firefox >/dev/null 2>&1; then
             lifeos_profile="${HOME}/.mozilla/firefox/lifeos.default"

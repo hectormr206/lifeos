@@ -170,7 +170,7 @@ ssh laptop "sudo bootc rollback"   # requires reboot
 | Bind mount `/var/lib/lifeos` rw with `:z` (shared label) | DBs survive container recreation. `:z` (lowercase) shares the SELinux MCS label across consumers — `:Z` (uppercase, private) would lock out other Quadlets and the legacy host service from the same paths. | Single-host coupling — these images can never be deployed standalone, only on a LifeOS host. Acceptable. |
 | Container runs as ROOT inside (no `USER` directive) | Host bind-mounts are owned by uid=1000 (`lifeos`); SELinux `:z` does NOT remap UIDs, only security contexts. Running as root inside is the only way to read/write the host-owned DBs. The Quadlet is rootful and external defenses (Capa 1 storage isolation, Capa 2 sudoers, Capa 5 code blocklist) carry the security weight. | Loses container-internal non-root convention. Long-term fix: podman `UserNS=keep-id:uid=1000` mapping in Phase 6. |
 | Static link sqlite-vec into binary (via rusqlite-vec crate) | One file copy, no .so loader path issues | Adds ~3 MB to binary. Negligible. |
-| Network=host (Phase 1 choice continued) | Zero URL changes; talks to llama-server/embeddings/tts on 127.0.0.1 | Less isolation. Phase 6 PRD migrates to lifeos-net bridge. |
+| `Network=lifeos-net.network` + UDS (Phase 8b) | UDS `/run/lifeos/lifeosd.sock` for machine clients (SO_PEERCRED auth); TCP `127.0.0.1:8081` via `PublishPort` for browser dashboard. Eliminates netavark SNAT false-403 issue. | Sibling container URLs (llama-server, embeddings, TTS) still use 127.0.0.1 addresses — DNS migration to container names is deferred. |
 
 ## Open questions for when Phase 3a flips
 

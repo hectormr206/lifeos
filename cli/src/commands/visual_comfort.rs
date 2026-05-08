@@ -49,56 +49,36 @@ async fn show_status() -> anyhow::Result<()> {
     println!("{}", "Visual Comfort Status".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/visual-comfort/status",
-        daemon_client::daemon_url()
-    );
-
-    let response = client.get(url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to get visual comfort status (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/visual-comfort/status").await?;
 
     let temperature = body
         .get("current_temperature")
         .and_then(|t| t.as_u64())
         .unwrap_or(6500);
-
     let target_temp = body
         .get("target_temperature")
         .and_then(|t| t.as_u64())
         .unwrap_or(6500);
-
     let font_scale = body
         .get("current_font_scale")
         .and_then(|s| s.as_f64())
         .unwrap_or(1.0) as f32;
-
     let animations = body
         .get("animations_enabled")
         .and_then(|a| a.as_bool())
         .unwrap_or(true);
-
     let profile = body
         .get("active_profile")
         .and_then(|p| p.as_str())
         .unwrap_or("default");
-
     let session_minutes = body
         .get("session_duration_minutes")
         .and_then(|m| m.as_u64())
         .unwrap_or(0);
-
     let is_night = body
         .get("is_night_time")
         .and_then(|n| n.as_bool())
         .unwrap_or(false);
-
     let transitioning = body
         .get("transitioning")
         .and_then(|t| t.as_bool())
@@ -116,13 +96,11 @@ async fn show_status() -> anyhow::Result<()> {
         format!("{}K", temperature).yellow(),
         temp_suffix.dimmed()
     );
-
     println!(
         "  {}: {:.0}%",
         "Font Scale".bold().cyan(),
         font_scale * 100.0
     );
-
     println!(
         "  {}: {}",
         "Animations".bold().cyan(),
@@ -132,9 +110,7 @@ async fn show_status() -> anyhow::Result<()> {
             "disabled".red()
         }
     );
-
     println!("  {}: {}", "Active Profile".bold().cyan(), profile.cyan());
-
     println!(
         "  {}: {}",
         "Time of Day".bold().cyan(),
@@ -144,18 +120,15 @@ async fn show_status() -> anyhow::Result<()> {
             "day".yellow()
         }
     );
-
     println!(
         "  {}: {} minutes",
         "Session Duration".bold().cyan(),
         session_minutes
     );
-
     if transitioning {
         println!();
         println!("{}", "⏳ Transitioning...".dimmed());
     }
-
     println!();
     println!("{}", "Commands:".bold());
     println!(
@@ -199,22 +172,9 @@ async fn set_profile(name: &str) -> anyhow::Result<()> {
     );
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/visual-comfort/profile",
-        daemon_client::daemon_url()
-    );
-
-    let payload = serde_json::json!({
-        "profile": profile
-    });
-
-    let response = client.post(url).json(&payload).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to set profile (status: {})", status);
-    }
+    let payload = serde_json::json!({ "profile": profile });
+    let _: serde_json::Value =
+        daemon_client::post_json("/api/v1/visual-comfort/profile", &payload).await?;
 
     println!("{}", "Profile applied successfully".green().bold());
     println!();
@@ -245,20 +205,8 @@ async fn list_profiles() -> anyhow::Result<()> {
     println!("{}", "Available Comfort Profiles".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/visual-comfort/profiles",
-        daemon_client::daemon_url()
-    );
-
-    let response = client.get(url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to list profiles (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value =
+        daemon_client::get_json("/api/v1/visual-comfort/profiles").await?;
 
     if let Some(profiles) = body.as_array() {
         for profile in profiles {
@@ -311,22 +259,9 @@ async fn set_temperature(kelvin: u32) -> anyhow::Result<()> {
     );
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/visual-comfort/temperature",
-        daemon_client::daemon_url()
-    );
-
-    let payload = serde_json::json!({
-        "temperature": kelvin
-    });
-
-    let response = client.post(url).json(&payload).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to set temperature (status: {})", status);
-    }
+    let payload = serde_json::json!({ "temperature": kelvin });
+    let _: serde_json::Value =
+        daemon_client::post_json("/api/v1/visual-comfort/temperature", &payload).await?;
 
     println!("{}", "Temperature applied successfully".green().bold());
 
@@ -359,22 +294,9 @@ async fn set_font_scale(scale: f32) -> anyhow::Result<()> {
     );
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/visual-comfort/font-scale",
-        daemon_client::daemon_url()
-    );
-
-    let payload = serde_json::json!({
-        "scale": scale
-    });
-
-    let response = client.post(url).json(&payload).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to set font scale (status: {})", status);
-    }
+    let payload = serde_json::json!({ "scale": scale });
+    let _: serde_json::Value =
+        daemon_client::post_json("/api/v1/visual-comfort/font-scale", &payload).await?;
 
     println!("{}", "Font scale applied successfully".green().bold());
 
@@ -399,22 +321,9 @@ async fn set_animations(state: &str) -> anyhow::Result<()> {
     );
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/visual-comfort/animations",
-        daemon_client::daemon_url()
-    );
-
-    let payload = serde_json::json!({
-        "enabled": enabled
-    });
-
-    let response = client.post(url).json(&payload).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to set animations (status: {})", status);
-    }
+    let payload = serde_json::json!({ "enabled": enabled });
+    let _: serde_json::Value =
+        daemon_client::post_json("/api/v1/visual-comfort/animations", &payload).await?;
 
     println!(
         "{}",
@@ -428,18 +337,7 @@ async fn reset_session() -> anyhow::Result<()> {
     println!("{}", "Resetting visual comfort session...".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/visual-comfort/reset",
-        daemon_client::daemon_url()
-    );
-
-    let response = client.post(url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to reset session (status: {})", status);
-    }
+    let _: serde_json::Value = daemon_client::post_empty("/api/v1/visual-comfort/reset").await?;
 
     println!("{}", "Session reset successfully".green().bold());
     println!();

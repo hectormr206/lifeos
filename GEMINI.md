@@ -38,7 +38,7 @@ All docs are organized in `docs/`. Read `docs/README.md` for the full index.
 
 | Service | Address | Notes |
 |---------|---------|-------|
-| `lifeosd` REST API | `127.0.0.1:8081` | Auth: `x-bootstrap-token` header |
+| `lifeosd` REST API | UDS `/run/lifeos/lifeosd.sock` (machine clients) + TCP `127.0.0.1:8081` (browser) | Auth: SO_PEERCRED on UDS; `x-bootstrap-token` on TCP |
 | `llama-server` | `127.0.0.1:8082` | Local LLM inference (llama.cpp) |
 | `lifeos-tts` | `127.0.0.1:8084` | TTS: Kokoro-82M (Apache 2.0), 50+ voices. See [`docs/operations/tts.md`](docs/operations/tts.md) |
 | `llama-embeddings` | `127.0.0.1:8083` | Semantic embeddings (nomic-embed-text-v1.5 via llama.cpp) |
@@ -53,4 +53,5 @@ All docs are organized in `docs/`. Read `docs/README.md` for the full index.
 | `daemon/src/llm_router.rs` | Multi-provider LLM routing with privacy filtering |
 | `daemon/src/axi_tools.rs` | Shared agentic chat engine + tools (used by SimpleX + dashboard) |
 | `daemon/src/supervisor.rs` | Autonomous task execution |
+| `desktop/src/main.rs` | Desktop companion entry: tray, wake-word, bootstrap |
 | `image/Containerfile` | OS image build definition |

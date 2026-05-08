@@ -261,21 +261,21 @@ pub async fn execute(args: IntentsCommands) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn daemon_url() -> String {
-    daemon_client::daemon_url()
+fn print_daemon_down() {
+    println!(
+        "{}",
+        "Cannot connect to lifeosd. Is the daemon running?".red()
+    );
 }
 
 async fn cmd_plan(description: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/intents/plan", daemon_url()))
-        .json(&serde_json::json!({ "description": description }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/intents/plan",
+        &serde_json::json!({ "description": description }),
+    )
+    .await
+    {
+        Ok(body) => {
             let intent = &body["intent"];
             println!("{}", "Intent planned".green().bold());
             println!(
@@ -298,34 +298,28 @@ async fn cmd_plan(description: &str) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to plan intent: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            Ok(())
+        Err(e) => {
+            if e.to_string().contains("is lifeosd running") {
+                print_daemon_down();
+                Ok(())
+            } else {
+                anyhow::bail!("Failed to plan intent: {}", e);
+            }
         }
     }
 }
 
 async fn cmd_apply(intent_id: &str, approve: bool) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/intents/apply", daemon_url()))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/intents/apply",
+        &serde_json::json!({
             "intent_id": intent_id,
             "approved": approve
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             let intent = &body["intent"];
             let status = intent["status"].as_str().unwrap_or("unknown");
             if status == "awaiting_approval" {
@@ -341,34 +335,25 @@ async fn cmd_apply(intent_id: &str, approve: bool) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to apply intent: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            Ok(())
+        Err(e) => {
+            if e.to_string().contains("is lifeosd running") {
+                print_daemon_down();
+                Ok(())
+            } else {
+                anyhow::bail!("Failed to apply intent: {}", e);
+            }
         }
     }
 }
 
 async fn cmd_status(intent_id: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/intents/status/{}",
-            daemon_url(),
-            intent_id
-        ))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>(&format!(
+        "/api/v1/intents/status/{}",
+        intent_id
+    ))
+    .await
+    {
+        Ok(body) => {
             let intent = &body["intent"];
             println!("{}", "Intent status".bold().blue());
             println!(
@@ -387,16 +372,13 @@ async fn cmd_status(intent_id: &str) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get intent status: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            Ok(())
+        Err(e) => {
+            if e.to_string().contains("is lifeosd running") {
+                print_daemon_down();
+                Ok(())
+            } else {
+                anyhow::bail!("Failed to get intent status: {}", e);
+            }
         }
     }
 }
@@ -405,16 +387,10 @@ async fn cmd_validate(path: &str) -> anyhow::Result<()> {
     let content = std::fs::read_to_string(path)?;
     let payload: serde_json::Value = serde_json::from_str(&content)?;
 
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/intents/validate", daemon_url()))
-        .json(&payload)
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::post_json::<_, serde_json::Value>("/api/v1/intents/validate", &payload)
+        .await
+    {
+        Ok(body) => {
             let valid = body["valid"].as_bool().unwrap_or(false);
             if valid {
                 println!("{}", "Intent payload is valid".green().bold());
@@ -443,16 +419,12 @@ async fn cmd_validate(path: &str) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to validate intent payload: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
+        }
+        Err(e) => {
+            anyhow::bail!("Failed to validate intent payload: {}", e);
         }
     }
 }
@@ -463,19 +435,13 @@ async fn cmd_log(
     passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     let limit = limit.clamp(1, 500);
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/intents/log?limit={}",
-            daemon_url(),
-            limit
-        ))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>(&format!(
+        "/api/v1/intents/log?limit={}",
+        limit
+    ))
+    .await
+    {
+        Ok(body) => {
             println!("{}", "Agent ledger".bold().blue());
             println!();
             if let Some(entries) = body["entries"].as_array() {
@@ -503,48 +469,39 @@ async fn cmd_log(
                     .or_else(|| std::env::var("LIFEOS_LEDGER_PASSPHRASE").ok())
                     .unwrap_or_else(|| "lifeos-local-dev-key".to_string());
 
-                let export_resp = client
-                    .post(format!("{}/api/v1/intents/ledger/export", daemon_url()))
-                    .json(&serde_json::json!({
+                let export_json: serde_json::Value = daemon_client::post_json(
+                    "/api/v1/intents/ledger/export",
+                    &serde_json::json!({
                         "passphrase": key,
                         "limit": limit,
-                    }))
-                    .send()
-                    .await?;
+                    }),
+                )
+                .await?;
 
-                if export_resp.status().is_success() {
-                    let export_json: serde_json::Value = export_resp.json().await?;
-                    let content = serde_json::to_string_pretty(&export_json)?;
-                    std::fs::write(path, content)?;
-                    println!();
+                let content = serde_json::to_string_pretty(&export_json)?;
+                std::fs::write(path, content)?;
+                println!();
+                println!(
+                    "{} {}",
+                    "Encrypted ledger exported to".green().bold(),
+                    path.cyan()
+                );
+                if passphrase.is_none() && std::env::var("LIFEOS_LEDGER_PASSPHRASE").is_err() {
                     println!(
-                        "{} {}",
-                        "Encrypted ledger exported to".green().bold(),
-                        path.cyan()
+                        "{}",
+                        "Warning: using default local passphrase fallback (set --passphrase or LIFEOS_LEDGER_PASSPHRASE).".yellow()
                     );
-                    if passphrase.is_none() && std::env::var("LIFEOS_LEDGER_PASSPHRASE").is_err() {
-                        println!(
-                            "{}",
-                            "Warning: using default local passphrase fallback (set --passphrase or LIFEOS_LEDGER_PASSPHRASE).".yellow()
-                        );
-                    }
-                } else {
-                    let body = export_resp.text().await.unwrap_or_default();
-                    anyhow::bail!("Failed to export encrypted ledger: {}", body);
                 }
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to fetch ledger: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            Ok(())
+        Err(e) => {
+            if e.to_string().contains("is lifeosd running") {
+                print_daemon_down();
+                Ok(())
+            } else {
+                anyhow::bail!("Failed to fetch ledger: {}", e);
+            }
         }
     }
 }
@@ -568,15 +525,8 @@ async fn cmd_autonomy(cmd: IntentAutonomyCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_autonomy_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/runtime/autonomy", daemon_url()))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/runtime/autonomy").await {
+        Ok(body) => {
             println!("{}", "Autonomy session status".bold().blue());
             println!("  active: {}", body["active"].as_bool().unwrap_or(false));
             println!(
@@ -593,35 +543,26 @@ async fn cmd_autonomy_status() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get Autonomy status: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to get Autonomy status: {}", e),
     }
 }
 
 async fn cmd_autonomy_start(pin: &str, ttl: u32, actor: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/autonomy", daemon_url()))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/autonomy",
+        &serde_json::json!({
             "pin": pin,
             "ttl_minutes": ttl,
             "actor": actor,
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!("{}", "Autonomy session started".green().bold());
             println!(
                 "  expires_at: {}",
@@ -638,65 +579,42 @@ async fn cmd_autonomy_start(pin: &str, ttl: u32, actor: &str) -> anyhow::Result<
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to start Autonomy session: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to start Autonomy session: {}", e),
     }
 }
 
 async fn cmd_autonomy_stop(actor: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/autonomy/stop", daemon_url()))
-        .json(&serde_json::json!({
-            "actor": actor
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/autonomy/stop",
+        &serde_json::json!({ "actor": actor }),
+    )
+    .await
+    {
+        Ok(_) => {
             println!("{}", "Autonomy session stopped".green().bold());
             println!("  actor: {}", actor.cyan());
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to stop Autonomy session: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to stop Autonomy session: {}", e),
     }
 }
 
 async fn cmd_autonomy_kill_switch(actor: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/runtime/autonomy/kill-switch",
-            daemon_url()
-        ))
-        .json(&serde_json::json!({
-            "actor": actor
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/autonomy/kill-switch",
+        &serde_json::json!({ "actor": actor }),
+    )
+    .await
+    {
+        Ok(_) => {
             println!("{}", "Autonomy kill-switch triggered".yellow().bold());
             println!("  actor: {}", actor.cyan());
             println!(
@@ -705,36 +623,22 @@ async fn cmd_autonomy_kill_switch(actor: &str) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to trigger Autonomy kill-switch: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to trigger Autonomy kill-switch: {}", e),
     }
 }
 
 async fn cmd_shield_scan(input: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/runtime/prompt-shield/scan",
-            daemon_url()
-        ))
-        .json(&serde_json::json!({
-            "input": input,
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/prompt-shield/scan",
+        &serde_json::json!({ "input": input }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!("{}", "Prompt Shield scan".bold().blue());
             println!("  blocked: {}", body["blocked"].as_bool().unwrap_or(false));
             println!("  score: {:.2}", body["score"].as_f64().unwrap_or(0.0_f64));
@@ -749,33 +653,18 @@ async fn cmd_shield_scan(input: &str) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to scan prompt shield: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to scan prompt shield: {}", e),
     }
 }
 
 async fn cmd_workspace_awareness() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/runtime/workspace-awareness",
-            daemon_url()
-        ))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/runtime/workspace-awareness").await
+    {
+        Ok(body) => {
             println!("{}", "Workspace awareness".bold().blue());
             println!(
                 "  desktop: {}",
@@ -797,17 +686,11 @@ async fn cmd_workspace_awareness() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get workspace awareness: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to get workspace awareness: {}", e),
     }
 }
 
@@ -821,15 +704,8 @@ async fn cmd_resources(cmd: IntentResourcesCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_resources_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/runtime/resources", daemon_url()))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/runtime/resources").await {
+        Ok(body) => {
             println!("{}", "Runtime resources".bold().blue());
             println!(
                 "  profile: {}",
@@ -856,34 +732,25 @@ async fn cmd_resources_status() -> anyhow::Result<()> {
             println!("  backend_order: {}", order.cyan());
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to read runtime resources: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to read runtime resources: {}", e),
     }
 }
 
 async fn cmd_resources_set(profile: &str, actor: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/resources", daemon_url()))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/resources",
+        &serde_json::json!({
             "profile": profile,
             "actor": actor,
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!("{}", "Runtime resource profile updated".green().bold());
             println!(
                 "  profile: {}",
@@ -895,17 +762,11 @@ async fn cmd_resources_set(profile: &str, actor: &str) -> anyhow::Result<()> {
             println!("  actor: {}", actor.cyan());
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to set runtime resources: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to set runtime resources: {}", e),
     }
 }
 
@@ -921,14 +782,8 @@ async fn cmd_always_on(cmd: IntentAlwaysOnCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_always_on_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/runtime/always-on", daemon_url()))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/runtime/always-on").await {
+        Ok(body) => {
             println!("{}", "Always-on micro-model runtime".bold().blue());
             println!("  enabled: {}", body["enabled"].as_bool().unwrap_or(false));
             println!(
@@ -950,34 +805,26 @@ async fn cmd_always_on_status() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get always-on status: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to get always-on status: {}", e),
     }
 }
 
 async fn cmd_always_on_set(enabled: bool, wake_word: &str, actor: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/always-on", daemon_url()))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/always-on",
+        &serde_json::json!({
             "enabled": enabled,
             "wake_word": wake_word,
             "actor": actor,
-        }))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!(
                 "{}",
                 if enabled {
@@ -996,33 +843,22 @@ async fn cmd_always_on_set(enabled: bool, wake_word: &str, actor: &str) -> anyho
             println!("  actor: {}", actor.cyan());
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to update always-on runtime: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to update always-on runtime: {}", e),
     }
 }
 
 async fn cmd_always_on_classify(input: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/runtime/always-on/classify",
-            daemon_url()
-        ))
-        .json(&serde_json::json!({ "input": input }))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/always-on/classify",
+        &serde_json::json!({ "input": input }),
+    )
+    .await
+    {
+        Ok(body) => {
             let cls = &body["classification"];
             println!("{}", "Always-on classification".bold().blue());
             println!("  label: {}", cls["label"].as_str().unwrap_or("-").cyan());
@@ -1036,17 +872,11 @@ async fn cmd_always_on_classify(input: &str) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to classify always-on signal: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to classify always-on signal: {}", e),
     }
 }
 
@@ -1072,14 +902,8 @@ async fn cmd_sensory(cmd: IntentSensoryCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_sensory_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/runtime/sensory", daemon_url()))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/runtime/sensory").await {
+        Ok(body) => {
             println!("{}", "Sensory runtime".bold().blue());
             println!("  enabled: {}", body["enabled"].as_bool().unwrap_or(false));
             println!("  running: {}", body["running"].as_bool().unwrap_or(false));
@@ -1107,17 +931,11 @@ async fn cmd_sensory_status() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get sensory status: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to get sensory status: {}", e),
     }
 }
 
@@ -1129,22 +947,20 @@ async fn cmd_sensory_set(
     interval: u64,
     actor: &str,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/sensory", daemon_url()))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/sensory",
+        &serde_json::json!({
             "enabled": enabled,
             "audio_enabled": audio,
             "screen_enabled": screen,
             "camera_enabled": camera,
             "capture_interval_seconds": interval,
             "actor": actor,
-        }))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!(
                 "{}",
                 if enabled {
@@ -1174,17 +990,11 @@ async fn cmd_sensory_set(
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to update sensory runtime: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to update sensory runtime: {}", e),
     }
 }
 
@@ -1193,19 +1003,17 @@ async fn cmd_sensory_snapshot(
     model: Option<&str>,
     include_screen: bool,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/sensory/snapshot", daemon_url()))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/sensory/snapshot",
+        &serde_json::json!({
             "include_screen": include_screen,
             "audio_file": audio_file,
             "model": model,
-        }))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!("{}", "Sensory snapshot".bold().blue());
             println!(
                 "  screen_path: {}",
@@ -1220,33 +1028,25 @@ async fn cmd_sensory_snapshot(
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to capture sensory snapshot: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to capture sensory snapshot: {}", e),
     }
 }
 
 async fn cmd_model_route(priority: &str, preferred_model: Option<&str>) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/model-routing", daemon_url()))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/model-routing",
+        &serde_json::json!({
             "priority": priority,
             "preferred_model": preferred_model,
-        }))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             let decision = &body["decision"];
             println!("{}", "Model routing decision".bold().blue());
             println!(
@@ -1272,17 +1072,11 @@ async fn cmd_model_route(priority: &str, preferred_model: Option<&str>) -> anyho
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to route model: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to route model: {}", e),
     }
 }
 
@@ -1297,14 +1091,8 @@ async fn cmd_defense(cmd: IntentDefenseCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_defense_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/runtime/self-defense", daemon_url()))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/runtime/self-defense").await {
+        Ok(body) => {
             println!("{}", "Self-defense status".bold().blue());
             println!(
                 "  situational_awareness: {}",
@@ -1329,36 +1117,25 @@ async fn cmd_defense_status() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get self-defense status: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to get self-defense status: {}", e),
     }
 }
 
 async fn cmd_defense_repair(auto_rollback: bool, actor: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/runtime/self-defense/repair",
-            daemon_url()
-        ))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/self-defense/repair",
+        &serde_json::json!({
             "auto_rollback": auto_rollback,
             "actor": actor,
-        }))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!("{}", "Self-defense repair executed".green().bold());
             if let Some(actions) = body["repair"]["actions_taken"].as_array() {
                 if !actions.is_empty() {
@@ -1371,17 +1148,11 @@ async fn cmd_defense_repair(auto_rollback: bool, actor: &str) -> anyhow::Result<
             println!("  actor: {}", actor.cyan());
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to run self-defense repair: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to run self-defense repair: {}", e),
     }
 }
 
@@ -1397,14 +1168,8 @@ async fn cmd_heartbeat(cmd: IntentHeartbeatCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_heartbeat_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/runtime/heartbeat", daemon_url()))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/runtime/heartbeat").await {
+        Ok(body) => {
             println!("{}", "Heartbeat runtime".bold().blue());
             println!("  enabled: {}", body["enabled"].as_bool().unwrap_or(false));
             println!(
@@ -1421,17 +1186,11 @@ async fn cmd_heartbeat_status() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get heartbeat status: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to get heartbeat status: {}", e),
     }
 }
 
@@ -1440,19 +1199,17 @@ async fn cmd_heartbeat_set(
     interval_seconds: Option<u64>,
     actor: &str,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/heartbeat", daemon_url()))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/heartbeat",
+        &serde_json::json!({
             "enabled": enabled,
             "interval_seconds": interval_seconds,
             "actor": actor,
-        }))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!(
                 "{}",
                 if enabled {
@@ -1470,32 +1227,22 @@ async fn cmd_heartbeat_set(
             println!("  actor: {}", actor.cyan());
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to update heartbeat runtime: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to update heartbeat runtime: {}", e),
     }
 }
 
 async fn cmd_heartbeat_tick(actor: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/heartbeat/tick", daemon_url()))
-        .json(&serde_json::json!({
-            "actor": actor,
-        }))
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/runtime/heartbeat/tick",
+        &serde_json::json!({ "actor": actor }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!("{}", "Heartbeat tick executed".green().bold());
             println!(
                 "  awareness: {}",
@@ -1511,30 +1258,19 @@ async fn cmd_heartbeat_tick(actor: &str) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to run heartbeat tick: {}", body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        // This arm replaces the old pattern — the next few lines from the old code end at a print!
+        // sentinel that we now remove:
+        Err(e) => anyhow::bail!("Failed to run heartbeat tick: {}", e),
     }
 }
 
 async fn cmd_mode_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/runtime/mode", daemon_url()))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/runtime/mode").await {
+        Ok(body) => {
             println!("{}", "Runtime execution mode".bold().blue());
             println!(
                 "  mode: {}",
@@ -1542,50 +1278,31 @@ async fn cmd_mode_status() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get runtime mode: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to get runtime mode: {}", e),
     }
 }
 
 async fn cmd_mode_set(mode: &str, actor: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/mode", daemon_url()))
-        .json(&serde_json::json!({
-            "mode": mode,
-            "actor": actor,
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    let payload = serde_json::json!({
+        "mode": mode,
+        "actor": actor,
+    });
+    match daemon_client::post_json::<_, serde_json::Value>("/api/v1/runtime/mode", &payload).await {
+        Ok(body) => {
             println!("{}", "Runtime execution mode updated".green().bold());
             println!("  mode: {}", body["mode"].as_str().unwrap_or(mode).cyan());
             println!("  actor: {}", actor.cyan());
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to set runtime mode: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to set runtime mode: {}", e),
     }
 }
 
@@ -1594,20 +1311,18 @@ async fn cmd_orchestrate(
     specialists: &[String],
     approve: bool,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/orchestrator/team-run", daemon_url()))
-        .json(&serde_json::json!({
-            "objective": objective,
-            "specialists": specialists,
-            "approved": approve,
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    let payload = serde_json::json!({
+        "objective": objective,
+        "specialists": specialists,
+        "approved": approve,
+    });
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/orchestrator/team-run",
+        &payload,
+    )
+    .await
+    {
+        Ok(body) => {
             let run = &body["run"];
             println!("{}", "Team orchestration started".green().bold());
             println!(
@@ -1631,34 +1346,21 @@ async fn cmd_orchestrate(
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to orchestrate team run: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to orchestrate team run: {}", e),
     }
 }
 
 async fn cmd_team_runs(limit: usize) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/orchestrator/team-runs?limit={}",
-            daemon_url(),
-            limit.clamp(1, 200)
-        ))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    let path = format!(
+        "/api/v1/orchestrator/team-runs?limit={}",
+        limit.clamp(1, 200)
+    );
+    match daemon_client::get_json::<serde_json::Value>(&path).await {
+        Ok(body) => {
             println!("{}", "Team orchestrations".bold().blue());
             if let Some(runs) = body["runs"].as_array() {
                 if runs.is_empty() {
@@ -1676,16 +1378,10 @@ async fn cmd_team_runs(limit: usize) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to list team runs: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
+        Err(e) if e.to_string().contains("is lifeosd running") => {
+            print_daemon_down();
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to list team runs: {}", e),
     }
 }

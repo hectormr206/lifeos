@@ -161,19 +161,7 @@ pub async fn execute(cmd: VoiceCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/audio/stt/status",
-            daemon_client::daemon_url()
-        ))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get STT status: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/audio/stt/status").await?;
     println!("{}", "STT daemon status".bold().blue());
     println!("  running: {}", body["running"].as_bool().unwrap_or(false));
     println!(
@@ -191,19 +179,7 @@ async fn cmd_status() -> anyhow::Result<()> {
 }
 
 async fn cmd_pipeline_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/sensory/status",
-            daemon_client::daemon_url()
-        ))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get sensory status: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/sensory/status").await?;
     println!("{}", "Sensory pipeline".bold().blue());
     println!(
         "  axi_state: {}",
@@ -418,19 +394,7 @@ async fn cmd_doctor() -> anyhow::Result<()> {
 }
 
 async fn fetch_pipeline_status() -> anyhow::Result<serde_json::Value> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/sensory/status",
-            daemon_client::daemon_url()
-        ))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get sensory status: {}", body);
-    }
-    Ok(resp.json().await?)
+    daemon_client::get_json("/api/v1/sensory/status").await
 }
 
 async fn run_pactl(args: &[&str]) -> anyhow::Result<String> {
@@ -506,61 +470,32 @@ fn render_available_routes(routes: &str, is_source: bool) -> String {
 }
 
 async fn cmd_start(enable: bool) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/audio/stt/start",
-            daemon_client::daemon_url()
-        ))
-        .json(&serde_json::json!({
-            "enable": enable
-        }))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to start STT daemon: {}", body);
-    }
+    let body: serde_json::Value = daemon_client::post_json(
+        "/api/v1/audio/stt/start",
+        &serde_json::json!({ "enable": enable }),
+    )
+    .await?;
+    let _ = body;
     println!("{}", "STT daemon start requested".green().bold());
     println!("  enable_on_boot: {}", enable);
     Ok(())
 }
 
 async fn cmd_stop() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/audio/stt/stop",
-            daemon_client::daemon_url()
-        ))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to stop STT daemon: {}", body);
-    }
+    daemon_client::post_empty::<serde_json::Value>("/api/v1/audio/stt/stop").await?;
     println!("{}", "STT daemon stop requested".green().bold());
     Ok(())
 }
 
 async fn cmd_transcribe(file: &str, model: Option<&str>) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/audio/stt/transcribe",
-            daemon_client::daemon_url()
-        ))
-        .json(&serde_json::json!({
+    let body: serde_json::Value = daemon_client::post_json(
+        "/api/v1/audio/stt/transcribe",
+        &serde_json::json!({
             "file": file,
             "model": model,
-        }))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to transcribe audio: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+        }),
+    )
+    .await?;
     println!("{}", "STT transcription".bold().blue());
     println!("{}", body["text"].as_str().unwrap_or("").trim());
     Ok(())
@@ -572,25 +507,16 @@ async fn cmd_speak(
     voice_model: Option<&str>,
     playback: bool,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/sensory/tts/speak",
-            daemon_client::daemon_url()
-        ))
-        .json(&serde_json::json!({
+    let body: serde_json::Value = daemon_client::post_json(
+        "/api/v1/sensory/tts/speak",
+        &serde_json::json!({
             "text": text,
             "language": language,
             "voice_model": voice_model,
             "playback": playback,
-        }))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to synthesize TTS: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+        }),
+    )
+    .await?;
     println!("{}", "TTS preview".bold().blue());
     println!(
         "  text: {}",
@@ -617,13 +543,9 @@ async fn cmd_session(
     voice_model: Option<&str>,
     playback: bool,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/sensory/voice/session",
-            daemon_client::daemon_url()
-        ))
-        .json(&serde_json::json!({
+    let body: serde_json::Value = daemon_client::post_json(
+        "/api/v1/sensory/voice/session",
+        &serde_json::json!({
             "prompt": prompt,
             "audio_file": audio_file,
             "include_screen": include_screen,
@@ -631,14 +553,9 @@ async fn cmd_session(
             "language": language,
             "voice_model": voice_model,
             "playback": playback,
-        }))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to run voice loop: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+        }),
+    )
+    .await?;
     let loop_body = &body["voice_loop"];
     println!("{}", "Voice loop".bold().blue());
     println!(
@@ -672,27 +589,18 @@ async fn cmd_describe_screen(
     voice_model: Option<&str>,
     speak: bool,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/sensory/vision/describe",
-            daemon_client::daemon_url()
-        ))
-        .json(&serde_json::json!({
+    let body: serde_json::Value = daemon_client::post_json(
+        "/api/v1/sensory/vision/describe",
+        &serde_json::json!({
             "source": source,
             "capture_screen": source.is_none(),
             "speak": speak,
             "question": question,
             "language": language,
             "voice_model": voice_model,
-        }))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to describe screen: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+        }),
+    )
+    .await?;
     let vision = &body["vision"];
     println!("{}", "Screen description".bold().blue());
     println!(
@@ -711,19 +619,8 @@ async fn cmd_describe_screen(
 }
 
 async fn cmd_interrupt() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/sensory/voice/interrupt",
-            daemon_client::daemon_url()
-        ))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to interrupt voice session: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value =
+        daemon_client::post_empty("/api/v1/sensory/voice/interrupt").await?;
     println!("{}", "Voice interrupt".bold().yellow());
     println!(
         "  interrupted: {}",
@@ -733,24 +630,11 @@ async fn cmd_interrupt() -> anyhow::Result<()> {
 }
 
 async fn cmd_presence(refresh: bool) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let req = if refresh {
-        client.post(format!(
-            "{}/api/v1/sensory/presence",
-            daemon_client::daemon_url()
-        ))
+    let body: serde_json::Value = if refresh {
+        daemon_client::post_empty("/api/v1/sensory/presence").await?
     } else {
-        client.get(format!(
-            "{}/api/v1/sensory/presence",
-            daemon_client::daemon_url()
-        ))
+        daemon_client::get_json("/api/v1/sensory/presence").await?
     };
-    let resp = req.send().await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get presence status: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
     let presence = if refresh { &body["presence"] } else { &body };
     println!("{}", "Presence status".bold().blue());
     println!(
@@ -771,16 +655,7 @@ async fn cmd_presence(refresh: bool) -> anyhow::Result<()> {
 }
 
 async fn cmd_speakers_list() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/speakers", daemon_client::daemon_url()))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to list speakers: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/speakers").await?;
     let count = body["count"].as_u64().unwrap_or(0);
     println!("{} ({} perfiles)", "Speaker profiles".bold().blue(), count);
     let empty = vec![];
@@ -817,40 +692,17 @@ async fn cmd_speakers_list() -> anyhow::Result<()> {
 }
 
 async fn cmd_speakers_name(id: &str, name: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/speakers/{}/name",
-            daemon_client::daemon_url(),
-            id
-        ))
-        .json(&serde_json::json!({ "name": name }))
-        .send()
-        .await?;
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        anyhow::bail!("Failed to name speaker ({}): {}", status, body);
-    }
+    daemon_client::post_json::<_, serde_json::Value>(
+        &format!("/api/v1/speakers/{}/name", id),
+        &serde_json::json!({ "name": name }),
+    )
+    .await?;
     println!("{} {} → {}", "✓".green(), id.dimmed(), name.green().bold());
     Ok(())
 }
 
 async fn cmd_speakers_delete(id: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .delete(format!(
-            "{}/api/v1/speakers/{}",
-            daemon_client::daemon_url(),
-            id
-        ))
-        .send()
-        .await?;
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        anyhow::bail!("Failed to delete speaker ({}): {}", status, body);
-    }
+    daemon_client::delete_json::<serde_json::Value>(&format!("/api/v1/speakers/{}", id)).await?;
     println!("{} deleted: {}", "✓".green(), id.dimmed());
     Ok(())
 }

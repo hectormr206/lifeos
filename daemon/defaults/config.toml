@@ -8,7 +8,10 @@ gpu_layers = 99
 reasoning_budget = 0
 
 [api]
-bind = "127.0.0.1:8081"
+# Phase 8b: dual-listener. UDS socket for CLI/daemon clients (SO_PEERCRED auth).
+# TCP bind for browser dashboard (PublishPort=127.0.0.1:8081:8081 in Quadlet).
+socket = "/run/lifeos/lifeosd.sock"
+bind = "0.0.0.0:8081"
 
 [privacy]
 level = "careful"

@@ -147,26 +147,14 @@ async fn cmd_run(path: &str, approve: bool) -> anyhow::Result<()> {
     let manifest = load_manifest(path)?;
     validate_manifest(&manifest)?;
 
-    let client = daemon_client::authenticated_client();
-    let response = client
-        .post(format!(
-            "{}/api/v1/orchestrator/team-run",
-            daemon_client::daemon_url()
-        ))
-        .json(&serde_json::json!({
-            "objective": manifest.objective,
-            "specialists": manifest.specialists,
-            "approved": approve,
-        }))
-        .send()
-        .await?;
+    let payload = serde_json::json!({
+        "objective": manifest.objective,
+        "specialists": manifest.specialists,
+        "approved": approve,
+    });
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/orchestrator/team-run", &payload).await?;
 
-    if !response.status().is_success() {
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Workflow run failed: {}", body);
-    }
-
-    let body: serde_json::Value = response.json().await?;
     println!("{}", "Workflow executed".green().bold());
     println!(
         "  run_id: {}",

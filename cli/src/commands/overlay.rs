@@ -134,81 +134,38 @@ pub async fn execute(args: OverlayCommands) -> anyhow::Result<()> {
 
 async fn show_overlay() -> anyhow::Result<()> {
     println!("{}", "Opening AI overlay...".bold().blue());
-
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/show", daemon_client::daemon_url());
-
-    let response = client.post(url).send().await?;
-
-    if response.status().is_success() {
-        println!("{}", "Overlay opened".green());
-    } else {
-        let status = response.status();
-        anyhow::bail!("Failed to open overlay (status: {})", status);
-    }
-
+    daemon_client::post_empty::<serde_json::Value>("/api/v1/overlay/show").await?;
+    println!("{}", "Overlay opened".green());
     Ok(())
 }
 
 async fn hide_overlay() -> anyhow::Result<()> {
     println!("{}", "Hiding AI overlay...".bold().blue());
-
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/hide", daemon_client::daemon_url());
-
-    let response = client.post(url).send().await?;
-
-    if response.status().is_success() {
-        println!("{}", "Overlay hidden".green());
-    } else {
-        let status = response.status();
-        anyhow::bail!("Failed to hide overlay (status: {})", status);
-    }
-
+    daemon_client::post_empty::<serde_json::Value>("/api/v1/overlay/hide").await?;
+    println!("{}", "Overlay hidden".green());
     Ok(())
 }
 
 async fn toggle_overlay() -> anyhow::Result<()> {
     println!("{}", "Toggling AI overlay...".bold().blue());
-
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/toggle", daemon_client::daemon_url());
-
-    let response = client.post(url).send().await?;
-
-    if response.status().is_success() {
-        println!("{}", "Overlay toggled".green());
-    } else {
-        let status = response.status();
-        anyhow::bail!("Failed to toggle overlay (status: {})", status);
-    }
-
+    daemon_client::post_empty::<serde_json::Value>("/api/v1/overlay/toggle").await?;
+    println!("{}", "Overlay toggled".green());
     Ok(())
 }
 
 async fn chat(prompt: &str) -> anyhow::Result<()> {
     println!("{} {}", "Message:".bold().green(), prompt.cyan());
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/chat", daemon_client::daemon_url());
-
     let payload = serde_json::json!({
         "message": prompt,
         "include_screen": true
     });
 
-    let response = client.post(url).json(&payload).send().await?;
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/overlay/chat", &payload).await?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to send message (status: {})", status);
-    }
-
-    // Parse response
-    if let Ok(body) = response.json::<serde_json::Value>().await {
-        if let Some(response) = body.get("response") {
-            println!("\n{}", response.as_str().unwrap_or("No response"));
-        }
+    if let Some(response) = body.get("response") {
+        println!("\n{}", response.as_str().unwrap_or("No response"));
     }
 
     Ok(())
@@ -217,26 +174,15 @@ async fn chat(prompt: &str) -> anyhow::Result<()> {
 async fn screenshot() -> anyhow::Result<()> {
     println!("{}", "Capturing screen for AI context...".bold().blue());
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/screenshot", daemon_client::daemon_url());
+    let body: serde_json::Value = daemon_client::post_empty("/api/v1/overlay/screenshot").await?;
 
-    let response = client.post(url).send().await?;
-
-    if response.status().is_success() {
-        println!("{}", "Screen captured".green());
-
-        if let Ok(body) = response.json::<serde_json::Value>().await {
-            if let Some(path) = body.get("path") {
-                println!(
-                    "  {}: {}",
-                    "Saved to:".dimmed(),
-                    path.as_str().unwrap_or("unknown")
-                );
-            }
-        }
-    } else {
-        let status = response.status();
-        anyhow::bail!("Failed to capture screen (status: {})", status);
+    println!("{}", "Screen captured".green());
+    if let Some(path) = body.get("path") {
+        println!(
+            "  {}: {}",
+            "Saved to:".dimmed(),
+            path.as_str().unwrap_or("unknown")
+        );
     }
 
     Ok(())
@@ -244,63 +190,24 @@ async fn screenshot() -> anyhow::Result<()> {
 
 async fn clear_chat() -> anyhow::Result<()> {
     println!("{}", "Clearing overlay chat history...".bold().yellow());
-
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/clear", daemon_client::daemon_url());
-
-    let response = client.post(url).send().await?;
-
-    if response.status().is_success() {
-        println!("{}", "Chat history cleared".green());
-    } else {
-        let status = response.status();
-        anyhow::bail!("Failed to clear chat (status: {})", status);
-    }
-
+    daemon_client::post_empty::<serde_json::Value>("/api/v1/overlay/clear").await?;
+    println!("{}", "Chat history cleared".green());
     Ok(())
 }
 
 async fn export_chat(path: &str) -> anyhow::Result<()> {
     println!("{} {}", "Exporting chat to:".bold().blue(), path.cyan());
-
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/export", daemon_client::daemon_url());
-
-    let payload = serde_json::json!({
-        "path": path
-    });
-
-    let response = client.post(url).json(&payload).send().await?;
-
-    if response.status().is_success() {
-        println!("{}", "Chat exported".green());
-    } else {
-        let status = response.status();
-        anyhow::bail!("Failed to export chat (status: {})", status);
-    }
-
+    let payload = serde_json::json!({ "path": path });
+    daemon_client::post_json::<_, serde_json::Value>("/api/v1/overlay/export", &payload).await?;
+    println!("{}", "Chat exported".green());
     Ok(())
 }
 
 async fn import_chat(path: &str) -> anyhow::Result<()> {
     println!("{} {}", "Importing chat from:".bold().blue(), path.cyan());
-
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/import", daemon_client::daemon_url());
-
-    let payload = serde_json::json!({
-        "path": path
-    });
-
-    let response = client.post(url).json(&payload).send().await?;
-
-    if response.status().is_success() {
-        println!("{}", "Chat imported".green());
-    } else {
-        let status = response.status();
-        anyhow::bail!("Failed to import chat (status: {})", status);
-    }
-
+    let payload = serde_json::json!({ "path": path });
+    daemon_client::post_json::<_, serde_json::Value>("/api/v1/overlay/import", &payload).await?;
+    println!("{}", "Chat imported".green());
     Ok(())
 }
 
@@ -308,52 +215,42 @@ async fn show_status() -> anyhow::Result<()> {
     println!("{}", "Overlay Status".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/status", daemon_client::daemon_url());
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/overlay/status").await?;
 
-    let response = client.get(url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to get status (status: {})", status);
+    if let Some(visible) = body.get("visible") {
+        let status_str = if visible.as_bool().unwrap_or(false) {
+            format!("{}", "Visible".green())
+        } else {
+            format!("{}", "Hidden".dimmed())
+        };
+        println!("  Status: {}", status_str);
     }
 
-    if let Ok(body) = response.json::<serde_json::Value>().await {
-        if let Some(visible) = body.get("visible") {
-            let status_str = if visible.as_bool().unwrap_or(false) {
-                format!("{}", "Visible".green())
-            } else {
-                format!("{}", "Hidden".dimmed())
-            };
-            println!("  Status: {}", status_str);
+    if let Some(stats) = body.get("stats") {
+        if let Some(total) = stats.get("total_messages") {
+            println!("  Messages: {}", total);
         }
-
-        if let Some(stats) = body.get("stats") {
-            if let Some(total) = stats.get("total_messages") {
-                println!("  Messages: {}", total);
-            }
-            if let Some(shortcut) = stats.get("shortcut") {
-                println!("  Shortcut: {}", shortcut.as_str().unwrap_or("Super+space"));
-            }
-            if let Some(theme) = stats.get("theme") {
-                println!("  Theme: {}", theme);
-            }
+        if let Some(shortcut) = stats.get("shortcut") {
+            println!("  Shortcut: {}", shortcut.as_str().unwrap_or("Super+space"));
         }
+        if let Some(theme) = stats.get("theme") {
+            println!("  Theme: {}", theme);
+        }
+    }
 
-        if let Some(history) = body.get("chat_history") {
-            if let Some(msgs) = history.as_array() {
-                println!();
-                println!("{}", "Recent Messages:".bold());
-                for msg in msgs.iter().take(5) {
-                    if let Some(role) = msg.get("role") {
-                        if let Some(content) = msg.get("content") {
-                            let role_display = match role.as_str() {
-                                Some("user") => "You".green(),
-                                Some("assistant") => "AI".cyan(),
-                                _ => "System".dimmed(),
-                            };
-                            println!("  {}: {}", role_display, content.as_str().unwrap_or(""));
-                        }
+    if let Some(history) = body.get("chat_history") {
+        if let Some(msgs) = history.as_array() {
+            println!();
+            println!("{}", "Recent Messages:".bold());
+            for msg in msgs.iter().take(5) {
+                if let Some(role) = msg.get("role") {
+                    if let Some(content) = msg.get("content") {
+                        let role_display = match role.as_str() {
+                            Some("user") => "You".green(),
+                            Some("assistant") => "AI".cyan(),
+                            _ => "System".dimmed(),
+                        };
+                        println!("  {}: {}", role_display, content.as_str().unwrap_or(""));
                     }
                 }
             }
@@ -371,17 +268,8 @@ async fn show_models() -> anyhow::Result<()> {
     println!("{}", "Overlay Model Selector".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/models", daemon_client::daemon_url());
-    let response = client.get(url).send().await?;
-    if !response.status().is_success() {
-        anyhow::bail!(
-            "Failed to load overlay models (status: {})",
-            response.status()
-        );
-    }
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/overlay/models").await?;
 
-    let body = response.json::<serde_json::Value>().await?;
     println!(
         "  Catalog: {} ({})",
         body["catalog_version"].as_str().unwrap_or("-").cyan(),
@@ -568,22 +456,12 @@ async fn show_models() -> anyhow::Result<()> {
 }
 
 async fn model_select(model: &str, restart: bool) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/overlay/models/select",
-        daemon_client::daemon_url()
-    );
     let payload = serde_json::json!({
         "model": model,
         "restart": restart
     });
-    let response = client.post(url).json(&payload).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to select model (status: {}): {}", status, body);
-    }
-    let body = response.json::<serde_json::Value>().await?;
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/overlay/models/select", &payload).await?;
     println!(
         "{}",
         body["message"].as_str().unwrap_or("Model selected").green()
@@ -592,20 +470,13 @@ async fn model_select(model: &str, restart: bool) -> anyhow::Result<()> {
 }
 
 async fn model_pull(model: &str, force: bool, restart: bool) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/models/pull", daemon_client::daemon_url());
     let payload = serde_json::json!({
         "model": model,
         "force": force,
         "restart": restart
     });
-    let response = client.post(url).json(&payload).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to pull model (status: {}): {}", status, body);
-    }
-    let body = response.json::<serde_json::Value>().await?;
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/overlay/models/pull", &payload).await?;
     println!(
         "{}",
         body["message"].as_str().unwrap_or("Model pulled").green()
@@ -619,24 +490,14 @@ async fn model_remove(
     select_fallback: bool,
     restart: bool,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/overlay/models/remove",
-        daemon_client::daemon_url()
-    );
     let payload = serde_json::json!({
         "model": model,
         "remove_companion": remove_companion,
         "select_fallback": select_fallback,
         "restart": restart
     });
-    let response = client.post(url).json(&payload).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to remove model (status: {}): {}", status, body);
-    }
-    let body = response.json::<serde_json::Value>().await?;
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/overlay/models/remove", &payload).await?;
     println!(
         "{}",
         body["message"].as_str().unwrap_or("Model removed").yellow()
@@ -645,18 +506,9 @@ async fn model_remove(
 }
 
 async fn model_pin(model: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/models/pin", daemon_client::daemon_url());
-    let payload = serde_json::json!({
-        "model": model
-    });
-    let response = client.post(url).json(&payload).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to pin model (status: {}): {}", status, body);
-    }
-    let body = response.json::<serde_json::Value>().await?;
+    let payload = serde_json::json!({ "model": model });
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/overlay/models/pin", &payload).await?;
     println!(
         "{}",
         body["message"].as_str().unwrap_or("Model pinned").green()
@@ -665,21 +517,9 @@ async fn model_pin(model: &str) -> anyhow::Result<()> {
 }
 
 async fn model_unpin(model: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/overlay/models/unpin",
-        daemon_client::daemon_url()
-    );
-    let payload = serde_json::json!({
-        "model": model
-    });
-    let response = client.post(url).json(&payload).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to unpin model (status: {}): {}", status, body);
-    }
-    let body = response.json::<serde_json::Value>().await?;
+    let payload = serde_json::json!({ "model": model });
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/overlay/models/unpin", &payload).await?;
     println!(
         "{}",
         body["message"].as_str().unwrap_or("Model unpinned").green()
@@ -688,23 +528,13 @@ async fn model_unpin(model: &str) -> anyhow::Result<()> {
 }
 
 async fn model_cleanup(dry_run: bool, remove_companion: bool, restart: bool) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/overlay/models/cleanup",
-        daemon_client::daemon_url()
-    );
     let payload = serde_json::json!({
         "dry_run": dry_run,
         "remove_companion": remove_companion,
         "restart": restart
     });
-    let response = client.post(url).json(&payload).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to cleanup models (status: {}): {}", status, body);
-    }
-    let body = response.json::<serde_json::Value>().await?;
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/overlay/models/cleanup", &payload).await?;
     println!(
         "{}",
         body["message"]
@@ -746,25 +576,9 @@ fn format_bytes_human(bytes: u64) -> String {
 }
 
 async fn models_export(path: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/overlay/models/export",
-        daemon_client::daemon_url()
-    );
-    let payload = serde_json::json!({
-        "path": path
-    });
-    let response = client.post(url).json(&payload).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "Failed to export model inventory (status: {}): {}",
-            status,
-            body
-        );
-    }
-    let body = response.json::<serde_json::Value>().await?;
+    let payload = serde_json::json!({ "path": path });
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/overlay/models/export", &payload).await?;
     println!(
         "{}",
         body["message"]
@@ -776,26 +590,12 @@ async fn models_export(path: &str) -> anyhow::Result<()> {
 }
 
 async fn models_import(path: &str, adopt_pinning: bool) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/overlay/models/import",
-        daemon_client::daemon_url()
-    );
     let payload = serde_json::json!({
         "path": path,
         "adopt_pinning": adopt_pinning
     });
-    let response = client.post(url).json(&payload).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "Failed to import model inventory (status: {}): {}",
-            status,
-            body
-        );
-    }
-    let body = response.json::<serde_json::Value>().await?;
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/overlay/models/import", &payload).await?;
     println!(
         "{}",
         body["message"]
@@ -842,25 +642,14 @@ async fn configure(
         return Ok(());
     }
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/overlay/config", daemon_client::daemon_url());
+    // Build raw JSON payload manually since config_changes are pre-formatted fragments
+    let payload_str = format!("{{{}}}", config_changes.join(", "));
+    let payload: serde_json::Value = serde_json::from_str(&payload_str)?;
 
-    let payload = format!("{{{}}}", config_changes.join(", "));
+    daemon_client::post_json::<_, serde_json::Value>("/api/v1/overlay/config", &payload).await?;
 
-    let response = client
-        .post(url)
-        .header("Content-Type", "application/json")
-        .body(payload)
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        println!();
-        println!("{}", "Configuration updated".green());
-    } else {
-        let status = response.status();
-        anyhow::bail!("Failed to update config (status: {})", status);
-    }
+    println!();
+    println!("{}", "Configuration updated".green());
 
     Ok(())
 }

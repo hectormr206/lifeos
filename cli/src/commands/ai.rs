@@ -475,22 +475,12 @@ async fn do_action(action: &str) -> anyhow::Result<()> {
         action.cyan()
     );
 
-    let client = daemon_client::authenticated_client();
-    let base_url = daemon_client::daemon_url();
+    let plan_json = daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/intents/plan",
+        &serde_json::json!({ "description": action }),
+    )
+    .await?;
 
-    let plan_resp = client
-        .post(format!("{}/api/v1/intents/plan", base_url))
-        .json(&serde_json::json!({ "description": action }))
-        .send()
-        .await?;
-
-    if !plan_resp.status().is_success() {
-        let status = plan_resp.status();
-        let body = plan_resp.text().await.unwrap_or_default();
-        anyhow::bail!("Could not plan intent ({}): {}", status, body);
-    }
-
-    let plan_json: serde_json::Value = plan_resp.json().await?;
     let intent = &plan_json["intent"];
     let intent_id = intent["intent_id"].as_str().unwrap_or_default();
     let risk = intent["risk"].as_str().unwrap_or("unknown");
@@ -502,7 +492,7 @@ async fn do_action(action: &str) -> anyhow::Result<()> {
     println!("  {} {}", "Intent ID:".dimmed(), intent_id.cyan());
     println!("  {} {}", "Risk:".dimmed(), risk);
 
-    let execution_mode = fetch_runtime_mode(&client, &base_url).await;
+    let execution_mode = fetch_runtime_mode().await;
     println!(
         "  {} {}",
         "Execution mode:".dimmed(),
@@ -538,22 +528,14 @@ async fn do_action(action: &str) -> anyhow::Result<()> {
         }
     }
 
-    let apply_resp = client
-        .post(format!("{}/api/v1/intents/apply", base_url))
-        .json(&serde_json::json!({
+    let apply_json = daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/intents/apply",
+        &serde_json::json!({
             "intent_id": intent_id,
             "approved": approved
-        }))
-        .send()
-        .await?;
-
-    if !apply_resp.status().is_success() {
-        let status = apply_resp.status();
-        let body = apply_resp.text().await.unwrap_or_default();
-        anyhow::bail!("Could not apply intent ({}): {}", status, body);
-    }
-
-    let apply_json: serde_json::Value = apply_resp.json().await?;
+        }),
+    )
+    .await?;
     let status = apply_json["intent"]["status"]
         .as_str()
         .unwrap_or("unknown")
@@ -577,24 +559,14 @@ async fn do_action(action: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn fetch_runtime_mode(client: &reqwest::Client, base_url: &str) -> RuntimeExecutionMode {
-    let response = client
-        .get(format!("{}/api/v1/runtime/mode", base_url))
-        .send()
-        .await;
-
-    let Ok(resp) = response else {
-        return RuntimeExecutionMode::Interactive;
-    };
-    if !resp.status().is_success() {
-        return RuntimeExecutionMode::Interactive;
+async fn fetch_runtime_mode() -> RuntimeExecutionMode {
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/runtime/mode").await {
+        Ok(body) => {
+            let mode = body["mode"].as_str().unwrap_or("interactive");
+            RuntimeExecutionMode::from_str(mode)
+        }
+        Err(_) => RuntimeExecutionMode::Interactive,
     }
-
-    let Ok(body) = resp.json::<serde_json::Value>().await else {
-        return RuntimeExecutionMode::Interactive;
-    };
-    let mode = body["mode"].as_str().unwrap_or("interactive");
-    RuntimeExecutionMode::from_str(mode)
 }
 
 async fn list_models(all: bool) -> anyhow::Result<()> {
@@ -1034,17 +1006,9 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
         }
     }
 
-    let sensory_status = match daemon_client::authenticated_client()
-        .get(format!(
-            "{}/api/v1/sensory/status",
-            daemon_client::daemon_url()
-        ))
-        .send()
+    let sensory_status = daemon_client::get_json::<serde_json::Value>("/api/v1/sensory/status")
         .await
-    {
-        Ok(resp) if resp.status().is_success() => resp.json::<serde_json::Value>().await.ok(),
-        _ => None,
-    };
+        .ok();
 
     if let Some(sensory) = sensory_status {
         println!();
@@ -1289,15 +1253,9 @@ struct DaemonAiGameGuardStatus {
 }
 
 async fn fetch_daemon_ai_status() -> Option<DaemonAiStatus> {
-    let response = daemon_client::authenticated_client()
-        .get(format!("{}/api/v1/ai/status", daemon_client::daemon_url()))
-        .send()
+    daemon_client::get_json::<DaemonAiStatus>("/api/v1/ai/status")
         .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    response.json::<DaemonAiStatus>().await.ok()
+        .ok()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1502,28 +1460,17 @@ async fn benchmark_sensory(
     screen_source: Option<&str>,
     repeats: u32,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!(
-            "{}/api/v1/sensory/benchmark",
-            daemon_client::daemon_url()
-        ))
-        .json(&serde_json::json!({
+    let body = daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/sensory/benchmark",
+        &serde_json::json!({
             "audio_file": audio_file,
             "prompt": prompt,
             "include_screen": include_screen,
             "screen_source": screen_source,
             "repeats": repeats,
-        }))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to run sensory benchmark: {}", body);
-    }
-
-    let body: serde_json::Value = resp.json().await?;
+        }),
+    )
+    .await?;
     println!("{}", "LifeOS Sensory Bench".bold().blue());
     println!(
         "  avg voice loop: {} ms",
@@ -1757,20 +1704,17 @@ async fn ocr_screen(
     capture_screen: bool,
     language: Option<&str>,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let response = client
-        .post(format!("{}/api/v1/vision/ocr", daemon_client::daemon_url()))
-        .json(&serde_json::json!({
+    match daemon_client::post_json::<_, serde_json::Value>(
+        "/api/v1/vision/ocr",
+        &serde_json::json!({
             "source": source,
             "capture_screen": capture_screen,
             "language": language,
-        }))
-        .send()
-        .await;
-
-    match response {
-        Ok(resp) if resp.status().is_success() => {
-            let body: serde_json::Value = resp.json().await?;
+        }),
+    )
+    .await
+    {
+        Ok(body) => {
             println!("{}", "Vision OCR result".bold().blue());
             println!(
                 "  source: {}",
@@ -1784,18 +1728,14 @@ async fn ocr_screen(
             println!("{}", body["text"].as_str().unwrap_or("").trim());
             Ok(())
         }
-        Ok(resp) => {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("OCR request failed ({}): {}", status, body);
-        }
-        Err(_) => {
+        Err(e) if e.to_string().contains("is lifeosd running") => {
             println!(
                 "{}",
                 "Cannot connect to lifeosd. Is the daemon running?".red()
             );
             Ok(())
         }
+        Err(e) => anyhow::bail!("OCR request failed: {}", e),
     }
 }
 

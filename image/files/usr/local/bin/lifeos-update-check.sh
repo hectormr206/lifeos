@@ -121,14 +121,20 @@ if command -v notify-send >/dev/null 2>&1; then
     fi
 fi
 
-# Also notify via Axi REST API if daemon is running
-if curl -sf -H "x-bootstrap-token: $(cat /var/lib/lifeos/bootstrap-token 2>/dev/null || echo none)" \
-    http://127.0.0.1:8081/api/v1/health >/dev/null 2>&1; then
+# Also notify via Axi REST API if daemon is running.
+# Phase 8b: daemon API via Unix-domain socket (SO_PEERCRED auth).
+_api_socket="${LIFEOS_API_SOCKET:-/run/lifeos/lifeosd.sock}"
+_token=$(cat /var/lib/lifeos/bootstrap-token 2>/dev/null || echo none)
+if curl -sf \
+    --unix-socket "${_api_socket}" \
+    -H "x-bootstrap-token: ${_token}" \
+    "http://localhost/api/v1/health" >/dev/null 2>&1; then
     curl -sf -X POST \
+        --unix-socket "${_api_socket}" \
         -H "Content-Type: application/json" \
-        -H "x-bootstrap-token: $(cat /var/lib/lifeos/bootstrap-token 2>/dev/null || echo none)" \
+        -H "x-bootstrap-token: ${_token}" \
         -d "{\"message\": \"$BODY\", \"severity\": \"info\"}" \
-        http://127.0.0.1:8081/api/v1/notifications 2>/dev/null || true
+        "http://localhost/api/v1/notifications" 2>/dev/null || true
 fi
 
 date -Iseconds > "$STATE_FILE"

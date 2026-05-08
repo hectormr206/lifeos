@@ -1,8 +1,9 @@
 #!/bin/bash
 # scripts/test-live.sh — Integration tests against running daemon
+# Phase 8b: daemon API via Unix-domain socket (SO_PEERCRED auth).
 set -euo pipefail
 
-API="http://127.0.0.1:8081"
+LIFEOS_API_SOCKET="${LIFEOS_API_SOCKET:-/run/lifeos/lifeosd.sock}"
 TOKEN_FILE="/run/lifeos/bootstrap.token"
 
 if [ ! -f "$TOKEN_FILE" ]; then
@@ -17,7 +18,8 @@ check() {
     local desc="$1" method="$2" path="$3" expected_status="$4"
     local status
     status=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" \
-        -H "x-bootstrap-token: $TOKEN" "$API$path" 2>/dev/null || echo "000")
+        --unix-socket "${LIFEOS_API_SOCKET}" \
+        -H "x-bootstrap-token: $TOKEN" "http://localhost${path}" 2>/dev/null || echo "000")
     if [ "$status" = "$expected_status" ]; then
         echo "  OK: $desc ($status)"
     else
@@ -36,8 +38,10 @@ check "Game guard status" GET "/api/v1/game-guard/status" "200"
 check "Messaging channels" GET "/api/v1/messaging/channels" "200"
 check "Supervisor metrics" GET "/api/v1/supervisor/metrics" "200"
 
-# Test unauthorized (no token)
-NOAUTH=$(curl -s -o /dev/null -w "%{http_code}" "$API/api/v1/system/info" 2>/dev/null || echo "000")
+# Test unauthorized (no token) — connect via socket, omit token header
+NOAUTH=$(curl -s -o /dev/null -w "%{http_code}" \
+    --unix-socket "${LIFEOS_API_SOCKET}" \
+    "http://localhost/api/v1/system/info" 2>/dev/null || echo "000")
 if [ "$NOAUTH" = "401" ] || [ "$NOAUTH" = "403" ]; then
     echo "  OK: Auth enforcement works ($NOAUTH without token)"
 else

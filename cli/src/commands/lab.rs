@@ -1,4 +1,4 @@
-use crate::config;
+use crate::daemon_client;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::Colorize;
@@ -148,9 +148,7 @@ pub async fn execute(args: LabArgs) -> Result<()> {
 }
 
 async fn execute_status(json: bool) -> Result<()> {
-    let client = DaemonClient::new().await?;
-
-    let response: LabStatusResponse = client.get("/api/v1/lab/status").await?;
+    let response = daemon_client::get_json::<LabStatusResponse>("/api/v1/lab/status").await?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&response)?);
@@ -196,8 +194,6 @@ fn print_status_report(status: &LabStatusResponse) {
 }
 
 async fn execute_start(experiment_type: String, hypothesis: String) -> Result<()> {
-    let client = DaemonClient::new().await?;
-
     let request = StartExperimentRequest {
         experiment_type,
         hypothesis,
@@ -205,7 +201,9 @@ async fn execute_start(experiment_type: String, hypothesis: String) -> Result<()
 
     println!("Starting experiment...");
 
-    let response: StartExperimentResponse = client.post("/api/v1/lab/experiment", &request).await?;
+    let response =
+        daemon_client::post_json::<_, StartExperimentResponse>("/api/v1/lab/experiment", &request)
+            .await?;
 
     println!();
     println!("{}", "✓ Experiment started".green().bold());
@@ -217,19 +215,14 @@ async fn execute_start(experiment_type: String, hypothesis: String) -> Result<()
 }
 
 async fn execute_canary(experiment_id: String) -> Result<()> {
-    let client = DaemonClient::new().await?;
-
     println!(
         "Starting canary phase for experiment {}...",
         experiment_id.cyan()
     );
 
-    let _: serde_json::Value = client
-        .post(
-            &format!("/api/v1/lab/experiment/{}/canary", experiment_id),
-            &(),
-        )
-        .await?;
+    let _: serde_json::Value =
+        daemon_client::post_empty(&format!("/api/v1/lab/experiment/{}/canary", experiment_id))
+            .await?;
 
     println!("{}", "✓ Canary phase started".green().bold());
     println!("  The system will monitor metrics for the configured duration.");
@@ -238,16 +231,11 @@ async fn execute_canary(experiment_id: String) -> Result<()> {
 }
 
 async fn execute_promote(experiment_id: String) -> Result<()> {
-    let client = DaemonClient::new().await?;
-
     println!("Promoting experiment {}...", experiment_id.cyan());
 
-    let _: serde_json::Value = client
-        .post(
-            &format!("/api/v1/lab/experiment/{}/promote", experiment_id),
-            &(),
-        )
-        .await?;
+    let _: serde_json::Value =
+        daemon_client::post_empty(&format!("/api/v1/lab/experiment/{}/promote", experiment_id))
+            .await?;
 
     println!("{}", "✓ Experiment promoted successfully".green().bold());
     println!("  Changes have been applied permanently.");
@@ -256,19 +244,16 @@ async fn execute_promote(experiment_id: String) -> Result<()> {
 }
 
 async fn execute_rollback(experiment_id: String, reason: Option<String>) -> Result<()> {
-    let client = DaemonClient::new().await?;
-
     let reason_text = reason.unwrap_or_else(|| "Manual rollback".to_string());
 
     println!("Rolling back experiment {}...", experiment_id.cyan());
     println!("  Reason: {}", reason_text);
 
-    let _: serde_json::Value = client
-        .post(
-            &format!("/api/v1/lab/experiment/{}/rollback", experiment_id),
-            &serde_json::json!({ "reason": reason_text }),
-        )
-        .await?;
+    let _: serde_json::Value = daemon_client::post_json(
+        &format!("/api/v1/lab/experiment/{}/rollback", experiment_id),
+        &serde_json::json!({ "reason": reason_text }),
+    )
+    .await?;
 
     println!("{}", "✓ Experiment rolled back".yellow().bold());
     println!("  All changes have been reverted.");
@@ -277,11 +262,11 @@ async fn execute_rollback(experiment_id: String, reason: Option<String>) -> Resu
 }
 
 async fn execute_report(experiment_id: String, json: bool) -> Result<()> {
-    let client = DaemonClient::new().await?;
-
-    let response: ExperimentReportResponse = client
-        .get(&format!("/api/v1/lab/experiment/{}/report", experiment_id))
-        .await?;
+    let response = daemon_client::get_json::<ExperimentReportResponse>(&format!(
+        "/api/v1/lab/experiment/{}/report",
+        experiment_id
+    ))
+    .await?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&response)?);
@@ -341,11 +326,9 @@ fn print_experiment_report(report: &ExperimentReportResponse) {
 }
 
 async fn execute_history(json: bool, limit: usize) -> Result<()> {
-    let client = DaemonClient::new().await?;
-
-    let response: HistoryResponse = client
-        .get(&format!("/api/v1/lab/history?limit={}", limit))
-        .await?;
+    let response =
+        daemon_client::get_json::<HistoryResponse>(&format!("/api/v1/lab/history?limit={}", limit))
+            .await?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&response)?);
@@ -405,104 +388,4 @@ fn colorize_risk_level(level: &str) -> colored::ColoredString {
         "critical" => level.red(),
         _ => level.normal(),
     }
-}
-
-struct DaemonClient {
-    base_url: String,
-    token: Option<String>,
-}
-
-impl DaemonClient {
-    async fn new() -> Result<Self> {
-        let _config = config::load_config().ok();
-
-        let mut token = None;
-        for token_path in bootstrap_token_candidates() {
-            if token_path.exists() {
-                token = Some(tokio::fs::read_to_string(&token_path).await?);
-                break;
-            }
-        }
-
-        let base_url =
-            std::env::var("LIFEOS_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
-
-        Ok(Self { base_url, token })
-    }
-
-    async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
-        let mut req = reqwest::Client::new().get(format!("{}{}", self.base_url, path));
-
-        if let Some(ref token) = self.token {
-            req = req.header("X-Bootstrap-Token", token);
-        }
-
-        let response = req.send().await?;
-
-        if !response.status().is_success() {
-            let error = response.text().await?;
-            anyhow::bail!("API error: {}", error);
-        }
-
-        let data = response.json().await?;
-        Ok(data)
-    }
-
-    async fn post<T: Serialize, R: for<'de> Deserialize<'de>>(
-        &self,
-        path: &str,
-        body: &T,
-    ) -> Result<R> {
-        let mut req = reqwest::Client::new().post(format!("{}{}", self.base_url, path));
-
-        if let Some(ref token) = self.token {
-            req = req.header("X-Bootstrap-Token", token);
-        }
-
-        let response = req.json(body).send().await?;
-
-        if !response.status().is_success() {
-            let error = response.text().await?;
-            anyhow::bail!("API error: {}", error);
-        }
-
-        let data = response.json().await?;
-        Ok(data)
-    }
-}
-
-fn bootstrap_token_candidates() -> Vec<std::path::PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Ok(runtime_dir) = std::env::var("LIFEOS_RUNTIME_DIR") {
-        let runtime_dir = runtime_dir.trim();
-        if !runtime_dir.is_empty() {
-            candidates.push(std::path::Path::new(runtime_dir).join("bootstrap.token"));
-        }
-    }
-
-    if let Ok(xdg_runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        let xdg_runtime_dir = xdg_runtime_dir.trim();
-        if !xdg_runtime_dir.is_empty() {
-            candidates.push(
-                std::path::Path::new(xdg_runtime_dir)
-                    .join("lifeos")
-                    .join("bootstrap.token"),
-            );
-        }
-    }
-
-    if let Ok(home) = std::env::var("HOME") {
-        let home = home.trim();
-        if !home.is_empty() {
-            candidates.push(
-                std::path::Path::new(home)
-                    .join(".local/state/lifeos/runtime")
-                    .join("bootstrap.token"),
-            );
-        }
-    }
-
-    candidates.push(std::path::Path::new("/run/lifeos").join("bootstrap.token"));
-    candidates
 }

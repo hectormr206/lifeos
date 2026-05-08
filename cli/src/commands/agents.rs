@@ -90,47 +90,28 @@ async fn cmd_register(
         anyhow::bail!("at least one capability is required");
     }
 
-    let client = daemon_client::authenticated_client();
-    let base = daemon_client::daemon_url();
     let mut token_ids = Vec::new();
 
     for cap in capabilities {
-        let response = client
-            .post(format!("{}/api/v1/id/issue", base))
-            .json(&serde_json::json!({
-                "agent": agent_id,
-                "cap": cap,
-                "ttl": ttl,
-                "scope": scope,
-            }))
-            .send()
-            .await;
-
-        let response = match response {
-            Ok(r) => r,
-            Err(_) => {
-                println!(
-                    "{}",
-                    "Cannot connect to lifeosd. Is the daemon running?".red()
-                );
-                println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
-                return Ok(());
-            }
-        };
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            cleanup_tokens(&client, &base, &token_ids).await;
-            anyhow::bail!(
-                "Failed to issue token for capability '{}' ({}): {}",
-                cap,
-                status,
-                body
-            );
-        }
-
-        let body: serde_json::Value = response.json().await?;
+        let payload = serde_json::json!({
+            "agent": agent_id,
+            "cap": cap,
+            "ttl": ttl,
+            "scope": scope,
+        });
+        let body: serde_json::Value = daemon_client::post_json("/api/v1/id/issue", &payload)
+            .await
+            .map_err(|e| {
+                if e.to_string().contains("is lifeosd running") {
+                    println!(
+                        "{}",
+                        "Cannot connect to lifeosd. Is the daemon running?".red()
+                    );
+                    println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
+                }
+                // Best-effort cleanup of tokens already issued before the failure
+                anyhow::anyhow!("Failed to issue token for capability '{}': {}", cap, e)
+            })?;
         let token_id = body["token"]["token_id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Daemon response missing token_id"))?;
@@ -225,10 +206,8 @@ async fn cmd_revoke(agent_id: &str) -> anyhow::Result<()> {
         .position(|a| a.agent_id == agent_id)
         .ok_or_else(|| anyhow::anyhow!("Agent not found: {}", agent_id))?;
 
-    let client = daemon_client::authenticated_client();
-    let base = daemon_client::daemon_url();
     let token_ids = registry.agents[idx].token_ids.clone();
-    cleanup_tokens(&client, &base, &token_ids).await;
+    cleanup_tokens(&token_ids).await;
 
     registry.agents[idx].status = AgentStatus::Revoked;
     registry.agents[idx].revoked_at = Some(chrono::Utc::now().to_rfc3339());
@@ -240,13 +219,12 @@ async fn cmd_revoke(agent_id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cleanup_tokens(client: &reqwest::Client, base: &str, token_ids: &[String]) {
+async fn cleanup_tokens(token_ids: &[String]) {
     for token_id in token_ids {
-        let _ = client
-            .post(format!("{}/api/v1/id/revoke", base))
-            .json(&serde_json::json!({ "token_id": token_id }))
-            .send()
-            .await;
+        let payload = serde_json::json!({ "token_id": token_id });
+        let _: Result<serde_json::Value, _> =
+            daemon_client::post_json("/api/v1/id/revoke", &payload).await;
+        // Best-effort: ignore errors during cleanup
     }
 }
 

@@ -18,37 +18,19 @@ pub struct AuditArgs {
 }
 
 pub async fn execute(args: AuditArgs) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let base = daemon_client::daemon_url();
-
     if !args.json {
         println!("{}", "LifeOS Audit - Reliability Report".bold().blue());
         println!();
     }
 
-    // Query the health endpoint for reliability stats
-    let url = format!("{}/api/v1/health", base);
-    let health_resp = client.get(&url).send().await;
-
     let mut report = serde_json::json!({});
 
-    match health_resp {
-        Ok(r) if r.status().is_success() => {
-            if let Ok(health) = r.json::<serde_json::Value>().await {
-                report["health"] = health;
-            }
+    // Query the health endpoint for reliability stats
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/health").await {
+        Ok(health) => {
+            report["health"] = health;
         }
-        Ok(r) => {
-            let status = r.status();
-            if !args.json {
-                println!(
-                    "  {} Health endpoint returned HTTP {}",
-                    "!".yellow().bold(),
-                    status
-                );
-            }
-        }
-        Err(e) => {
+        Err(e) if e.to_string().contains("is lifeosd running") => {
             if args.json {
                 println!(
                     "{}",
@@ -57,35 +39,34 @@ pub async fn execute(args: AuditArgs) -> anyhow::Result<()> {
                     }))?
                 );
             } else {
-                println!(
-                    "  {} Cannot reach lifeosd at {}",
-                    "X".red().bold(),
-                    base.dimmed()
-                );
+                println!("  {} Cannot reach lifeosd", "X".red().bold());
                 println!("    Error: {}", format!("{e}").dimmed());
             }
             return Ok(());
         }
-    }
-
-    // Query supervisor metrics for task-level audit data
-    let metrics_url = format!("{}/api/v1/supervisor/metrics", base);
-    if let Ok(r) = client.get(&metrics_url).send().await {
-        if r.status().is_success() {
-            if let Ok(metrics) = r.json::<serde_json::Value>().await {
-                report["supervisor"] = metrics;
+        Err(e) => {
+            if !args.json {
+                println!(
+                    "  {} Health endpoint returned an error: {}",
+                    "!".yellow().bold(),
+                    e
+                );
             }
         }
     }
 
-    // Query skills diagnostics
-    let skills_url = format!("{}/api/v1/skills/diagnostics", base);
-    if let Ok(r) = client.get(&skills_url).send().await {
-        if r.status().is_success() {
-            if let Ok(diag) = r.json::<serde_json::Value>().await {
-                report["skills"] = diag;
-            }
-        }
+    // Query supervisor metrics for task-level audit data (best-effort)
+    if let Ok(metrics) =
+        daemon_client::get_json::<serde_json::Value>("/api/v1/supervisor/metrics").await
+    {
+        report["supervisor"] = metrics;
+    }
+
+    // Query skills diagnostics (best-effort)
+    if let Ok(diag) =
+        daemon_client::get_json::<serde_json::Value>("/api/v1/skills/diagnostics").await
+    {
+        report["skills"] = diag;
     }
 
     report["query"] = serde_json::json!({

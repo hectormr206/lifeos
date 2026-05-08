@@ -113,10 +113,6 @@ pub async fn execute(cmd: MemoryCommands) -> anyhow::Result<()> {
     }
 }
 
-fn daemon_url() -> String {
-    daemon_client::daemon_url()
-}
-
 async fn cmd_add(
     content: Option<&str>,
     file: Option<&str>,
@@ -136,26 +132,16 @@ async fn cmd_add(
         anyhow::bail!("Provide content inline or with --file");
     }
 
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/memory/entries", daemon_url()))
-        .json(&serde_json::json!({
-            "kind": kind,
-            "scope": scope,
-            "tags": tags,
-            "source": source,
-            "importance": importance,
-            "content": content,
-        }))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to add memory entry: {}", body);
-    }
-
-    let body: serde_json::Value = resp.json().await?;
+    let payload = serde_json::json!({
+        "kind": kind,
+        "scope": scope,
+        "tags": tags,
+        "source": source,
+        "importance": importance,
+        "content": content,
+    });
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/memory/entries", &payload).await?;
     let entry = &body["entry"];
     println!("{}", "Memory entry saved".green().bold());
     println!("  id: {}", entry["entry_id"].as_str().unwrap_or("?").cyan());
@@ -165,28 +151,17 @@ async fn cmd_add(
 }
 
 async fn cmd_list(limit: usize, scope: Option<&str>, tag: Option<&str>) -> anyhow::Result<()> {
-    let mut url = format!(
-        "{}/api/v1/memory/entries?limit={}",
-        daemon_url(),
-        limit.max(1)
-    );
+    let mut path = format!("/api/v1/memory/entries?limit={}", limit.max(1));
     if let Some(scope) = scope {
-        url.push_str("&scope=");
-        url.push_str(scope);
+        path.push_str("&scope=");
+        path.push_str(scope);
     }
     if let Some(tag) = tag {
-        url.push_str("&tag=");
-        url.push_str(tag);
+        path.push_str("&tag=");
+        path.push_str(tag);
     }
 
-    let client = daemon_client::authenticated_client();
-    let resp = client.get(url).send().await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to list memory entries: {}", body);
-    }
-
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = daemon_client::get_json(&path).await?;
     println!("{}", "Memory entries".bold().blue());
     if let Some(entries) = body["entries"].as_array() {
         if entries.is_empty() {
@@ -217,26 +192,18 @@ async fn cmd_search(
     scope: Option<&str>,
     mode: &str,
 ) -> anyhow::Result<()> {
-    let mut url = format!(
-        "{}/api/v1/memory/search?q={}&limit={}&mode={}",
-        daemon_url(),
+    let mut path = format!(
+        "/api/v1/memory/search?q={}&limit={}&mode={}",
         query,
         limit.max(1),
         mode
     );
     if let Some(scope) = scope {
-        url.push_str("&scope=");
-        url.push_str(scope);
+        path.push_str("&scope=");
+        path.push_str(scope);
     }
 
-    let client = daemon_client::authenticated_client();
-    let resp = client.get(url).send().await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to search memory entries: {}", body);
-    }
-
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = daemon_client::get_json(&path).await?;
     println!("{}", "Memory search".bold().blue());
     if let Some(results) = body["results"].as_array() {
         if results.is_empty() {
@@ -255,21 +222,8 @@ async fn cmd_search(
 }
 
 async fn cmd_delete(entry_id: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .delete(format!(
-            "{}/api/v1/memory/entries/{}",
-            daemon_url(),
-            entry_id
-        ))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to delete memory entry: {}", body);
-    }
-
-    let body: serde_json::Value = resp.json().await?;
+    let path = format!("/api/v1/memory/entries/{}", entry_id);
+    let body: serde_json::Value = daemon_client::delete_json(&path).await?;
     if body["deleted"].as_bool().unwrap_or(false) {
         println!("{}", "Memory entry deleted".green().bold());
     } else {
@@ -280,17 +234,7 @@ async fn cmd_delete(entry_id: &str) -> anyhow::Result<()> {
 }
 
 async fn cmd_stats() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/memory/stats", daemon_url()))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to fetch memory stats: {}", body);
-    }
-
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/memory/stats").await?;
     println!("{}", "Memory stats".bold().blue());
     println!(
         "  total_entries: {}",
@@ -316,40 +260,19 @@ async fn cmd_stats() -> anyhow::Result<()> {
 }
 
 async fn cmd_mcp(query: &str, limit: usize) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/memory/mcp/context", daemon_url()))
-        .json(&serde_json::json!({
-            "query": query,
-            "limit": limit.max(1),
-        }))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to build MCP memory context: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+    let payload = serde_json::json!({
+        "query": query,
+        "limit": limit.max(1),
+    });
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/memory/mcp/context", &payload).await?;
     println!("{}", serde_json::to_string_pretty(&body)?);
     Ok(())
 }
 
 async fn cmd_graph(limit: usize, output: Option<&str>) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/memory/graph?limit={}",
-            daemon_url(),
-            limit.max(1)
-        ))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to build memory graph: {}", body);
-    }
-    let body: serde_json::Value = resp.json().await?;
+    let path = format!("/api/v1/memory/graph?limit={}", limit.max(1));
+    let body: serde_json::Value = daemon_client::get_json(&path).await?;
     let rendered = serde_json::to_string_pretty(&body)?;
 
     if let Some(path) = output {

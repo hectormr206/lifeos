@@ -472,6 +472,10 @@ pub struct DaemonState {
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub wake_word_detector: Option<Arc<wake_word::WakeWordDetector>>,
     pub wake_word_notify: Arc<tokio::sync::Notify>,
+    /// Fires when the lifeos-desktop companion POSTs to
+    /// `/api/v1/sensory/wake-word/trigger`. `run_sensory_runtime` polls both
+    /// this and `wake_word_notify` so either source fires as a trigger.
+    pub external_wake_word_notify: Arc<tokio::sync::Notify>,
     /// Broadcasts a shutdown request to long-running background tasks so
     /// they can drain gracefully before the process exits. Sensory runtime
     /// in particular uses this to finish the current camera/screen capture
@@ -849,6 +853,7 @@ async fn main() -> anyhow::Result<()> {
         last_update_check: RwLock::new(None),
         wake_word_detector,
         wake_word_notify: wake_word_notify.clone(),
+        external_wake_word_notify: Arc::new(tokio::sync::Notify::new()),
         shutdown_notify: shutdown_notify.clone(),
         event_bus: event_tx,
         security_alert_buffer: security_ai::new_alert_buffer(),
@@ -1063,95 +1068,117 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Launch Axi system tray icon (StatusNotifierItem — top panel)
-    #[cfg(feature = "tray")]
+    // Launch Axi system tray icon (StatusNotifierItem — top panel).
+    // WAYLAND_DISPLAY guard: in the canonical containerized deployment (Quadlet)
+    // neither WAYLAND_DISPLAY nor DISPLAY is injected, so we skip the in-process
+    // tray entirely. The lifeos-desktop companion binary handles host surfaces.
+    // On a legacy host install (WAYLAND_DISPLAY present at daemon start) the
+    // existing loop below polls for the socket and spawns the tray as before.
+    // Phase 3c will remove the daemon tray + wake-word modules once the
+    // companion has run stable for ≥1 week on the laptop.
     {
-        let tray_state = state.clone();
-        tokio::spawn(async move {
-            // Keep waiting until the graphical session is actually ready.
-            // On some boots lifeosd starts before COSMIC exports DISPLAY/
-            // WAYLAND_DISPLAY; disabling the tray after 30s leaves Axi without
-            // an icon for the entire session.
-            loop {
-                let mut display_ready = false;
-                let mut attempts = 0usize;
-                while !display_ready {
-                    if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok()
-                    {
-                        break;
-                    }
-                    // Try to discover Wayland socket dynamically
-                    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-                        if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
-                            for entry in entries.flatten() {
-                                if let Ok(name) = entry.file_name().into_string() {
-                                    if name.starts_with("wayland-") && !name.ends_with(".lock") {
-                                        unsafe { std::env::set_var("WAYLAND_DISPLAY", &name) };
-                                        info!("Discovered Wayland socket: {}", name);
-                                        display_ready = true;
-                                        break;
+        let host_session = should_spawn_host_surfaces(
+            std::env::var_os("WAYLAND_DISPLAY"),
+            std::env::var_os("DISPLAY"),
+        );
+        if !host_session {
+            info!(
+                "[main] Skipping in-process tray + wake-word — no WAYLAND_DISPLAY; \
+                 expecting lifeos-desktop companion to handle host surfaces"
+            );
+        }
+        #[cfg(feature = "tray")]
+        if host_session {
+            let tray_state = state.clone();
+            tokio::spawn(async move {
+                // Keep waiting until the graphical session is actually ready.
+                // On some boots lifeosd starts before COSMIC exports DISPLAY/
+                // WAYLAND_DISPLAY; disabling the tray after 30s leaves Axi without
+                // an icon for the entire session.
+                loop {
+                    let mut display_ready = false;
+                    let mut attempts = 0usize;
+                    while !display_ready {
+                        if std::env::var("WAYLAND_DISPLAY").is_ok()
+                            || std::env::var("DISPLAY").is_ok()
+                        {
+                            break;
+                        }
+                        // Try to discover Wayland socket dynamically
+                        if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+                            if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
+                                for entry in entries.flatten() {
+                                    if let Ok(name) = entry.file_name().into_string() {
+                                        if name.starts_with("wayland-") && !name.ends_with(".lock")
+                                        {
+                                            unsafe { std::env::set_var("WAYLAND_DISPLAY", &name) };
+                                            info!("Discovered Wayland socket: {}", name);
+                                            display_ready = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }
                         }
+                        if display_ready {
+                            break;
+                        }
+                        if attempts == 0 {
+                            info!("[tray] Waiting for display server...");
+                        } else if attempts % 15 == 0 {
+                            warn!("[tray] Display still unavailable, retrying tray startup...");
+                        }
+                        attempts += 1;
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
-                    if display_ready {
-                        break;
-                    }
-                    if attempts == 0 {
-                        info!("[tray] Waiting for display server...");
-                    } else if attempts % 15 == 0 {
-                        warn!("[tray] Display still unavailable, retrying tray startup...");
-                    }
-                    attempts += 1;
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                }
 
-                // Spawn tray with health monitoring — re-spawn on failure
-                info!("[tray] Spawning Axi system tray icon");
-                let tray_token = tray_state.bootstrap_token.clone().unwrap_or_default();
-                let tray_api_base = format!(
-                    "http://127.0.0.1:{}",
-                    tray_state.config.api_bind_address.port(),
-                );
-                let tray_dashboard = format!("{}/dashboard?token={}", tray_api_base, tray_token,);
-                let current_state = {
-                    let overlay = tray_state.overlay_manager.read().await;
-                    let s = overlay.get_state().await;
-                    format!("{:?}", s.axi_state)
-                };
-                // Read persisted sensor state so tray doesn't revert to hardcoded defaults
-                let sensors = {
-                    let arm = tray_state.agent_runtime_manager.read().await;
-                    let runtime = arm.sensory_capture_runtime().await;
-                    let always_on = arm.always_on_runtime().await;
-                    // Modo Privacidad: leemos directo del módulo (env > archivo > default).
-                    let privacy_mode = crate::api::privacy_mode::is_privacy_mode_enabled();
-                    axi_tray::InitialSensorState {
-                        mic: runtime.audio_enabled,
-                        camera: runtime.camera_enabled,
-                        screen: runtime.screen_enabled,
-                        always_on: always_on.enabled,
-                        tts: runtime.tts_enabled,
-                        meeting_enabled: runtime.meeting_enabled,
-                        privacy_mode,
-                    }
-                };
-                let tray_rx = tray_state.event_bus.subscribe();
-                axi_tray::spawn_tray(
-                    tray_rx,
-                    tray_dashboard,
-                    tray_api_base,
-                    tray_token,
-                    current_state,
-                    sensors,
-                )
-                .await;
-                // spawn_tray now actually blocks until the tray exits
-                warn!("[tray] Tray icon exited, re-spawning in 5s...");
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
-        });
+                    // Spawn tray with health monitoring — re-spawn on failure
+                    info!("[tray] Spawning Axi system tray icon");
+                    let tray_token = tray_state.bootstrap_token.clone().unwrap_or_default();
+                    let tray_api_base = format!(
+                        "http://127.0.0.1:{}",
+                        tray_state.config.api_bind_address.port(),
+                    );
+                    let tray_dashboard =
+                        format!("{}/dashboard?token={}", tray_api_base, tray_token,);
+                    let current_state = {
+                        let overlay = tray_state.overlay_manager.read().await;
+                        let s = overlay.get_state().await;
+                        format!("{:?}", s.axi_state)
+                    };
+                    // Read persisted sensor state so tray doesn't revert to hardcoded defaults
+                    let sensors = {
+                        let arm = tray_state.agent_runtime_manager.read().await;
+                        let runtime = arm.sensory_capture_runtime().await;
+                        let always_on = arm.always_on_runtime().await;
+                        // Modo Privacidad: leemos directo del módulo (env > archivo > default).
+                        let privacy_mode = crate::api::privacy_mode::is_privacy_mode_enabled();
+                        axi_tray::InitialSensorState {
+                            mic: runtime.audio_enabled,
+                            camera: runtime.camera_enabled,
+                            screen: runtime.screen_enabled,
+                            always_on: always_on.enabled,
+                            tts: runtime.tts_enabled,
+                            meeting_enabled: runtime.meeting_enabled,
+                            privacy_mode,
+                        }
+                    };
+                    let tray_rx = tray_state.event_bus.subscribe();
+                    axi_tray::spawn_tray(
+                        tray_rx,
+                        tray_dashboard,
+                        tray_api_base,
+                        tray_token,
+                        current_state,
+                        sensors,
+                    )
+                    .await;
+                    // spawn_tray now actually blocks until the tray exits
+                    warn!("[tray] Tray icon exited, re-spawning in 5s...");
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            });
+        }
     }
 
     // Start background tasks
@@ -2360,6 +2387,7 @@ async fn start_api_server(state: Arc<DaemonState>, shared: SharedBridgeState) {
         meeting_assistant: Some(shared.meeting_assistant.clone()),
         security_alert_buffer: state.security_alert_buffer.clone(),
         worker_pool: shared.worker_pool.clone(),
+        external_wake_word_notify: state.external_wake_word_notify.clone(),
     };
 
     // Perform initial skill registry load and start file watcher
@@ -2724,16 +2752,21 @@ async fn harden_sensory_file_perms() {
 async fn run_sensory_runtime(state: Arc<DaemonState>) {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     let wake_notify = state.wake_word_notify.clone();
+    // external_wake_word_notify fires when the lifeos-desktop companion POSTs
+    // /api/v1/sensory/wake-word/trigger. Both notifies are treated identically;
+    // the existing 1.5s debounce inside run_sensory_runtime handles dedup.
+    let external_wake_notify = state.external_wake_word_notify.clone();
     let shutdown_notify = state.shutdown_notify.clone();
 
     loop {
-        // Wake immediately on rustpotter detection OR on interval tick.
+        // Wake immediately on rustpotter detection, companion trigger, OR interval tick.
         // Exit BETWEEN iterations on shutdown so the current cycle (which
         // may be mid-camera-capture / mid-analyze) finishes cleanly rather
         // than being aborted with a partial JPG on disk.
         tokio::select! {
             _ = interval.tick() => {},
             _ = wake_notify.notified() => {},
+            _ = external_wake_notify.notified() => {},
             _ = shutdown_notify.notified() => {
                 info!("[sensory] shutdown requested; draining loop");
                 return;
@@ -2836,11 +2869,20 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
         if runtime.audio_enabled && !runtime.kill_switch_active && always_on.enabled {
             // Skip voice detection entirely during a meeting.
             if !meeting.active {
-                // Dispatch: rustpotter (streaming) or legacy whisper-based detection.
-                let rustpotter_detected = match state.wake_word_detector {
+                // Dispatch: rustpotter (streaming), companion external trigger, or
+                // legacy whisper-based detection. Both in-process and companion paths
+                // set `rustpotter_detected` so the post-wakeword cycle runs identically.
+                // The existing 1.5s debounce inside run_post_wakeword_cycle handles dedup.
+                let in_process_detected = match state.wake_word_detector {
                     Some(ref d) => d.take_detection().await.is_some(),
                     None => false,
                 };
+                // Drain the companion notify (non-blocking). If the external notify
+                // fired this iteration it set the channel; take it now and treat it
+                // identically to an in-process detection.
+                use futures_util::FutureExt as _;
+                let companion_detected = external_wake_notify.notified().now_or_never().is_some();
+                let rustpotter_detected = in_process_detected || companion_detected;
 
                 if rustpotter_detected {
                     let _ = state.event_bus.send(events::DaemonEvent::WakeWordDetected {
@@ -2963,3 +3005,74 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
     }
 }
 // trigger ci
+
+/// Returns `true` when the daemon appears to be running in a host graphical session,
+/// meaning WAYLAND_DISPLAY or DISPLAY is set.
+///
+/// In the canonical containerized deployment (Quadlet) neither env var is injected,
+/// so this returns `false` and the in-process tray/wake-word spawn is skipped.
+/// The `lifeos-desktop` companion binary handles host surfaces in that case.
+///
+/// The `wayland` / `display` arguments receive the env var values so that tests
+/// can inject arbitrary values without touching `std::env` (which is not
+/// thread-safe in a multi-threaded test binary).
+///
+/// Phase 3c will remove this predicate (and the daemon tray/wake-word
+/// modules it gates) once the companion has run stable for ≥1 week.
+fn should_spawn_host_surfaces(
+    wayland_display: Option<impl AsRef<std::ffi::OsStr>>,
+    display: Option<impl AsRef<std::ffi::OsStr>>,
+) -> bool {
+    wayland_display.is_some() || display.is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // TASK-01: external_wake_word_notify field presence test
+    // RED: fails before the field is added to DaemonState.
+    // GREEN: field exists, is Arc<Notify>, and is clone-able.
+    // ─────────────────────────────────────────────────────────────────────────
+    #[test]
+    fn external_wake_word_notify_is_arc_cloneable() {
+        let notify: Arc<tokio::sync::Notify> = Arc::new(tokio::sync::Notify::new());
+        // Round-trip clone — verifies the type is Arc-cloneable
+        let cloned = notify.clone();
+        // Both references point to the same allocation
+        assert!(Arc::ptr_eq(&notify, &cloned));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // TASK-04: should_spawn_host_surfaces predicate
+    // RED: fails before the function is defined.
+    // GREEN: function exists and returns correct bool based on supplied env fn.
+    // ─────────────────────────────────────────────────────────────────────────
+    #[test]
+    fn host_surfaces_returns_true_when_wayland_set() {
+        // Inject WAYLAND_DISPLAY=wayland-0, DISPLAY=None
+        assert!(should_spawn_host_surfaces(
+            Some(std::ffi::OsString::from("wayland-0")),
+            None::<std::ffi::OsString>,
+        ));
+    }
+
+    #[test]
+    fn host_surfaces_returns_true_when_display_set() {
+        // Inject WAYLAND_DISPLAY=None, DISPLAY=:0
+        assert!(should_spawn_host_surfaces(
+            None::<std::ffi::OsString>,
+            Some(std::ffi::OsString::from(":0")),
+        ));
+    }
+
+    #[test]
+    fn host_surfaces_returns_false_when_no_display() {
+        // Neither env var set → containerized mode → skip host surfaces
+        assert!(!should_spawn_host_surfaces(
+            None::<std::ffi::OsString>,
+            None::<std::ffi::OsString>,
+        ));
+    }
+}

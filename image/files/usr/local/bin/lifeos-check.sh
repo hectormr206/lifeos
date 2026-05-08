@@ -390,11 +390,13 @@ if [[ -z "$TOKEN" ]]; then
 fi
 if [[ -n "$TOKEN" ]]; then
     ok "Bootstrap token: presente"
-    HEALTH=$(curl -sf -H "x-bootstrap-token: $TOKEN" http://127.0.0.1:8081/api/v1/health 2>/dev/null)
+    # Phase 8b: daemon API via Unix-domain socket (SO_PEERCRED auth).
+    _api_socket="${LIFEOS_API_SOCKET:-/run/lifeos/lifeosd.sock}"
+    HEALTH=$(curl -sf --unix-socket "${_api_socket}" -H "x-bootstrap-token: $TOKEN" "http://localhost/api/v1/health" 2>/dev/null)
     if [[ -n "$HEALTH" ]]; then
         ok "Health API: responde"
     else
-        warn "Health API: no responde en :8081"
+        warn "Health API: no responde en ${_api_socket}"
     fi
 else
     warn "Bootstrap token: no disponible (necesita sudo)"

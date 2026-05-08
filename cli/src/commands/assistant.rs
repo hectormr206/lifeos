@@ -29,19 +29,9 @@ async fn cmd_status() -> anyhow::Result<()> {
     let launcher_path = launcher_desktop_path();
     let launcher_ok = launcher_path.exists();
 
-    let client = daemon_client::authenticated_client();
-    let shortcut_resp = client
-        .get(format!(
-            "{}/api/v1/shortcuts/list",
-            daemon_client::daemon_url()
-        ))
-        .send()
-        .await;
-
-    let shortcut_ok = match shortcut_resp {
-        Ok(resp) if resp.status().is_success() => {
-            let body: serde_json::Value = resp.json().await.unwrap_or_default();
-            body["shortcuts"]
+    let shortcut_ok =
+        match daemon_client::get_json::<serde_json::Value>("/api/v1/shortcuts/list").await {
+            Ok(body) => body["shortcuts"]
                 .as_array()
                 .map(|items| {
                     items.iter().any(|item| {
@@ -51,10 +41,9 @@ async fn cmd_status() -> anyhow::Result<()> {
                             .unwrap_or(false)
                     })
                 })
-                .unwrap_or(false)
-        }
-        _ => false,
-    };
+                .unwrap_or(false),
+            _ => false,
+        };
 
     println!("{}", "Assistant access channels".bold().blue());
     println!("  terminal: {}", "life assistant ask \"...\"".cyan());
@@ -100,67 +89,39 @@ StartupNotify=true
 }
 
 async fn cmd_ask(prompt: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let response = client
-        .post(format!("{}/api/v1/ai/chat", daemon_client::daemon_url()))
-        .json(&serde_json::json!({
-            "message": prompt,
-            "stream": false
-        }))
-        .send()
-        .await;
-
-    let response = match response {
-        Ok(resp) => resp,
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
-            return Ok(());
-        }
-    };
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Assistant ask failed ({}): {}", status, body);
-    }
-    let body: serde_json::Value = response.json().await?;
+    let payload = serde_json::json!({
+        "message": prompt,
+        "stream": false
+    });
+    let body: serde_json::Value = daemon_client::post_json("/api/v1/ai/chat", &payload)
+        .await
+        .inspect_err(|e| {
+            if e.to_string().contains("is lifeosd running") {
+                println!(
+                    "{}",
+                    "Cannot connect to lifeosd. Is the daemon running?".red()
+                );
+                println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
+            }
+        })?;
     println!("{}", "Assistant response".bold().blue());
     println!("{}", body["response"].as_str().unwrap_or(""));
     Ok(())
 }
 
 async fn cmd_open() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let response = client
-        .post(format!(
-            "{}/api/v1/overlay/show",
-            daemon_client::daemon_url()
-        ))
-        .send()
-        .await;
-
-    match response {
-        Ok(resp) if resp.status().is_success() => {
-            println!("{}", "Assistant overlay opened".green().bold());
-            Ok(())
-        }
-        Ok(resp) => {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to open assistant overlay ({}): {}", status, body)
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            Ok(())
-        }
-    }
+    daemon_client::post_empty::<serde_json::Value>("/api/v1/overlay/show")
+        .await
+        .inspect_err(|e| {
+            if e.to_string().contains("is lifeosd running") {
+                println!(
+                    "{}",
+                    "Cannot connect to lifeosd. Is the daemon running?".red()
+                );
+            }
+        })?;
+    println!("{}", "Assistant overlay opened".green().bold());
+    Ok(())
 }
 
 fn launcher_desktop_path() -> PathBuf {

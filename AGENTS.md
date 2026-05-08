@@ -8,6 +8,7 @@ AI-native Linux distribution (Fedora bootc + COSMIC Desktop). Three Rust crates:
 |-------|--------|---------|
 | `cli/` | `life` | CLI for user interaction |
 | `daemon/` | `lifeosd` | User-session daemon: REST API, AI, SimpleX, supervisor |
+| `desktop/` | `lifeos-desktop` | Per-user companion: system tray + wake-word listener |
 | `tests/` | — | Integration tests |
 
 Plus: `image/` (OS container), `scripts/` (automation), `docs/` (documentation).
@@ -44,7 +45,7 @@ Prefer the lightest process that still preserves enough context for future maint
 
 | Service | Address | Notes |
 |---------|---------|-------|
-| `lifeosd` REST API | `127.0.0.1:8081` | Auth: `x-bootstrap-token` header |
+| `lifeosd` REST API | UDS `/run/lifeos/lifeosd.sock` (machine clients) + TCP `127.0.0.1:8081` (browser) | Auth: SO_PEERCRED on UDS; `x-bootstrap-token` on TCP |
 | `llama-server` | `127.0.0.1:8082` | Local LLM inference (llama.cpp) |
 | `lifeos-tts` | `127.0.0.1:8084` | TTS: Kokoro-82M (Apache 2.0), 50+ voices. See [`docs/operations/tts.md`](docs/operations/tts.md) |
 | `llama-embeddings` | `127.0.0.1:8083` | Semantic embeddings (nomic-embed-text-v1.5 via llama.cpp) |

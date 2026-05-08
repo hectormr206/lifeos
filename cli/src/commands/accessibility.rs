@@ -22,17 +22,7 @@ async fn run_audit() -> anyhow::Result<()> {
     println!("{}", "WCAG 2.2 AA Accessibility Audit".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/accessibility/audit", daemon_client::daemon_url());
-
-    let response = client.get(url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to run accessibility audit (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/accessibility/audit").await?;
 
     if let Some(results) = body.get("results").and_then(|r| r.as_array()) {
         for theme_result in results {
@@ -98,20 +88,8 @@ async fn show_status() -> anyhow::Result<()> {
     println!("{}", "Accessibility Settings".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!(
-        "{}/api/v1/accessibility/settings",
-        daemon_client::daemon_url()
-    );
-
-    let response = client.get(url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to get accessibility settings (status: {})", status);
-    }
-
-    let settings: serde_json::Value = response.json().await?;
+    let settings: serde_json::Value =
+        daemon_client::get_json("/api/v1/accessibility/settings").await?;
 
     let high_contrast = settings
         .get("high_contrast")
