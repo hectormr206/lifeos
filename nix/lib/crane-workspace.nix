@@ -14,6 +14,10 @@
  * #[folder = "..."]) cannot safely reuse cargoArtifacts across different
  * Nix sandbox instances. mkBinFresh bypasses cargoArtifacts for those crates.
  *
+ * Note on doCheck: cargo tests require test fixtures that are not committed
+ * to the repo (e.g. daemon/tests/security/agentic_red_team_corpus.json).
+ * The unit tests run in CI (not Nix sandbox). Set doCheck = false globally.
+ *
  * Satisfies: REQ-2.1, REQ-2.2
  */
 { pkgs, crane }:
@@ -55,6 +59,10 @@ let
     # Per-binary derivations override pname.
     pname = "lifeos-workspace";
     version = "0.0.0";
+
+    # Unit tests require fixtures not present in the Nix source (e.g.,
+    # daemon/tests/security/agentic_red_team_corpus.json) — CI runs those.
+    doCheck = false;
 
     nativeBuildInputs = with pkgs; [
       pkg-config
