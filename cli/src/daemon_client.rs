@@ -588,14 +588,20 @@ mod tests {
     async fn cli_reports_actionable_error_when_socket_missing() {
         use std::sync::Mutex;
         static ENV_LOCK: Mutex<()> = Mutex::new(());
-        let _guard = ENV_LOCK.lock().unwrap();
 
-        // Point LIFEOS_API_SOCKET at a path that cannot exist
+        // Hold the lock only for the env-var setup; drop before awaiting
+        // so we don't hold a sync MutexGuard across await (clippy::await_holding_lock).
         let dir = TempDir::new().unwrap();
         let nonexistent = dir.path().join("no-such.sock");
-        unsafe { std::env::set_var("LIFEOS_API_SOCKET", nonexistent.to_str().unwrap()) };
+        {
+            let _guard = ENV_LOCK.lock().unwrap();
+            unsafe { std::env::set_var("LIFEOS_API_SOCKET", nonexistent.to_str().unwrap()) };
+        }
         let result = get_json::<serde_json::Value>("/api/v1/health").await;
-        unsafe { std::env::remove_var("LIFEOS_API_SOCKET") };
+        {
+            let _guard = ENV_LOCK.lock().unwrap();
+            unsafe { std::env::remove_var("LIFEOS_API_SOCKET") };
+        }
 
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();

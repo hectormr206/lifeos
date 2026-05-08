@@ -13948,8 +13948,6 @@ mod tests {
     // Replacements: tcp_dashboard_* tests below verify host_origin_guard;
     // peercred_* tests above verify the UDS SO_PEERCRED gate.
 
-    use std::net::SocketAddr;
-
     // ── Phase 8b UDS+SO_PEERCRED tests ──────────────────────────────────
 
     // Task 1.1 [RED] → UdsConnectInfo unit tests. These fail to COMPILE
