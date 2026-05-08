@@ -162,14 +162,17 @@ in
         MemoryMax = "1G";
       };
 
-      # Post-start health gate: fail fast if TCP API doesn't accept within 10s.
-      # Uses TCP (port 8081) instead of UDS to avoid SO_PEERCRED UID gate issues.
-      # The UDS gate only allows configured UIDs; postStart runs as the service
-      # user (UID 970) which may not match LIFEOS_API_UID if set by the operator.
-      # TCP health is equivalent — the daemon must have started the API server.
+      # Post-start health gate: wait up to 60s for the TCP API to accept requests.
+      # - Uses TCP (not UDS) to avoid SO_PEERCRED UID gate issues (UID 970 is not
+      #   in the allowlist by default — postStart runs as the service user).
+      # - Passes the bootstrap token via x-bootstrap-token header because
+      #   /api/v1/* routes require it (require_bootstrap_token middleware).
+      # - LIFEOS_BOOTSTRAP_TOKEN is available because EnvironmentFile is loaded
+      #   before postStart executes.
       postStart = ''
-        for i in $(seq 1 10); do
+        for i in $(seq 1 60); do
           if ${pkgs.curl}/bin/curl -sf \
+              -H "x-bootstrap-token: $LIFEOS_BOOTSTRAP_TOKEN" \
               http://127.0.0.1:${toString cfg.tcpPort}/api/v1/health \
               --max-time 2 \
               > /dev/null 2>&1; then
@@ -177,7 +180,7 @@ in
           fi
           sleep 1
         done
-        echo "lifeosd: health check failed after 10s"
+        echo "lifeosd: health check failed after 60s"
         exit 1
       '';
     };
