@@ -1,0 +1,13 @@
+# Phase 3b anti-regression enforcement.
+#
+# `unwrap_used` denies `.unwrap()` on Result/Option in production code.
+# Tests can opt out per-function with `#[allow(clippy::unwrap_used)]` if
+# the failure is genuinely unrecoverable in a test context.
+#
+# `disallowed-methods` blocks `std::process::exit`: shutting down the
+# companion bypasses the SIGTERM teardown path that drains the JoinSet
+# and aborts the tray's D-Bus loop. Use `Err(anyhow!(...))` from `main`
+# or `cancel_token.cancel()` instead.
+disallowed-methods = [
+    { path = "std::process::exit", reason = "use Err(anyhow!) from main or cancel_token.cancel() — process::exit bypasses SIGTERM teardown" },
+]

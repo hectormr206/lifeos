@@ -67,6 +67,10 @@ LifeOS System Quadlets (post-Phase-3/7/8 — canonical)
 │   ├── lifeos-nvidia-signed-modules.service system Nvidia kernel modules
 │   └── nvidia-persistenced.service        system  GPU context persistence
 │
+├── Per-user Companion
+│   └── lifeos-desktop.service             user    System tray + wake-word companion (runs under
+│                                                  graphical-session.target via lifeos-desktop binary)
+│
 └── Display Manager
     └── cosmic-greeter.service             system  COSMIC login screen
 

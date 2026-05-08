@@ -1,0 +1,58 @@
+[package]
+name = "lifeos-desktop"
+version.workspace = true
+edition = "2021"
+description = "LifeOS desktop companion — system tray + wake-word relay"
+authors = ["Héctor Martínez <hector@hectormr.com>"]
+license = "Apache-2.0"
+homepage = "https://hectormr.com"
+repository = "https://github.com/hectormr206/lifeos"
+
+[[bin]]
+name = "lifeos-desktop"
+path = "src/main.rs"
+
+[features]
+default = ["tray"]
+tray = ["ksni"]
+wake-word = ["rustpotter"]
+
+[dependencies]
+# Workspace deps
+anyhow = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+# Logging — consistent with daemon/cli (env_logger + log, not tracing)
+log = "0.4"
+env_logger = "0.11"
+
+# HTTP client for daemon API
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# System tray (StatusNotifierItem via D-Bus)
+# Pinned to 0.2.2 to match the daemon's resolved Cargo.lock version.
+ksni = { version = "=0.2.2", optional = true }
+
+# Cancellation + structured task management
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# Mutex without unwrap (parking_lot::Mutex::lock() is infallible)
+parking_lot = "0.12"
+
+# Wake-word detection (optional — same crate the daemon uses)
+rustpotter = { version = "3", optional = true, default-features = false }
+half = { version = "=2.4.1", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+# Phase 3b anti-regression enforcement (paired with desktop/clippy.toml).
+# `unwrap_used` denies `.unwrap()` on Result/Option in production code; tests
+# can opt out per-function with `#[allow(clippy::unwrap_used)]` if the
+# failure is genuinely unrecoverable in a test context.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"

@@ -1,0 +1,29 @@
+[Unit]
+Description=LifeOS desktop companion (tray + wake-word)
+Documentation=https://github.com/lifeos/lifeos/blob/main/docs/architecture/quadlet-architecture.md
+After=graphical-session.target
+# Intentionally NO PartOf=, NO Requires= — daemon is system-scope (Quadlet),
+# companion is user-scope. The companion handles its own retry-until-ready
+# against the bootstrap socket; coupling here would be incorrect.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/lifeos-desktop
+Restart=on-failure
+RestartSec=2s
+# Environment="LIFEOS_DESKTOP_POLL_SECS=30"   # uncomment to reduce latency (min=2, max=300)
+# Environment="RUST_LOG=info"
+
+# Hardening (user-scope, less aggressive than system services)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+# /run/user/%U covers the session D-Bus socket ($XDG_RUNTIME_DIR/bus)
+# and the PipeWire socket ($XDG_RUNTIME_DIR/pipewire-0).
+ReadWritePaths=/run/user/%U
+MemoryMax=256M
+Environment=RUST_LOG=info,lifeos_desktop=debug
+
+[Install]
+WantedBy=default.target
