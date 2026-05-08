@@ -95,10 +95,17 @@ cosmic-protocols = { version = "0.2", optional = true, default-features = false,
 cosmic-client-toolkit = { version = "0.2", optional = true }
 wayland-client = { version = "0.31", optional = true }
 
+# hyper 1.x + hyper-util + tower: promoted to direct deps for serve_uds_loop
+# (hyper::server::conn::http1::Builder) and CLI UDS transport (Phase 8b).
+# Versions pinned to match the single version in Cargo.lock (axum 0.7's choice).
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto"] }
+tower = { version = "0.5", features = ["util"] }
+
 [dev-dependencies]
 # tower 0.5 dev-dep for ServiceExt::oneshot; matches axum 0.7's transitive
 # tower 0.5 choice (verified single version in Cargo.lock). Used by the
-# require_loopback_peer middleware tests in api/mod.rs.
+# host_origin_guard middleware tests in api/mod.rs.
 tower = { version = "0.5", features = ["util"] }
 http = "1"
 
