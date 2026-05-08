@@ -83,15 +83,24 @@ echo "==============================================="
 echo " LifeOS Runtime Security Regression Suite"
 echo "==============================================="
 
+# Phase 8b dual listener: daemon now binds BOTH a UDS at LIFEOS_API_SOCKET
+# and the TCP api_bind_address. In CI we point the UDS at a per-test tmpdir
+# path so we don't need /run/lifeos/ (which only exists at runtime via
+# tmpfiles.d). The TCP listener is what the security tests actually probe.
+TMP_API_SOCKET="${TMP_RUNTIME}/lifeosd.sock"
+
 cat >"${TMP_DAEMON_CONFIG}" <<EOF
 api_bind_address = "127.0.0.1:${PORT}"
 EOF
+# UDS path resolved at runtime via LIFEOS_API_SOCKET env var (api/mod.rs::uds_api_socket_path).
+# Pointing at TMP_RUNTIME so the test does not depend on /run/lifeos/ existing.
 
 echo "Starting daemon in isolated runtime..."
 (
     cd "${PROJECT_ROOT}/daemon"
     LIFEOS_RUNTIME_DIR="${TMP_RUNTIME}" \
     LIFEOS_DAEMON_CONFIG="${TMP_DAEMON_CONFIG}" \
+    LIFEOS_API_SOCKET="${TMP_API_SOCKET}" \
     HOME="${TMP_HOME}" \
     RUST_LOG=error \
     "${DAEMON_BIN}" >/tmp/lifeosd-security-tests.log 2>&1

@@ -102,6 +102,8 @@ mod inner {
 
     #[cfg(test)]
     mod tests {
+        // Tests legitimately panic on unreachable Err/None to fail the test.
+        #![allow(clippy::unwrap_used, clippy::expect_used)]
         use super::*;
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;

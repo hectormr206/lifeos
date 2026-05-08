@@ -104,6 +104,8 @@ pub async fn probe_health_until_ready(client: &DaemonClient, max_wait: Duration)
 
 #[cfg(test)]
 mod tests {
+    // Tests legitimately panic on unreachable Err/None to fail the test.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixListener;
