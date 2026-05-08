@@ -162,13 +162,15 @@ in
         MemoryMax = "1G";
       };
 
-      # Post-start health gate: fail fast if UDS doesn't accept within 10s.
-      # This prevents the service from reporting active before it's ready.
+      # Post-start health gate: fail fast if TCP API doesn't accept within 10s.
+      # Uses TCP (port 8081) instead of UDS to avoid SO_PEERCRED UID gate issues.
+      # The UDS gate only allows configured UIDs; postStart runs as the service
+      # user (UID 970) which may not match LIFEOS_API_UID if set by the operator.
+      # TCP health is equivalent — the daemon must have started the API server.
       postStart = ''
         for i in $(seq 1 10); do
           if ${pkgs.curl}/bin/curl -sf \
-              --unix-socket ${cfg.socketPath} \
-              http://localhost/api/v1/health \
+              http://127.0.0.1:${toString cfg.tcpPort}/api/v1/health \
               --max-time 2 \
               > /dev/null 2>&1; then
             exit 0
