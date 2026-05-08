@@ -13,7 +13,11 @@
  */
 { pkgs, crane }:
 let
-  craneLib = crane.mkLib pkgs;
+  # crane parameter is already the result of crane.mkLib pkgs (called from flake.nix).
+  # Override the toolchain with the pinned channel from rust-toolchain.toml so
+  # the entire workspace compiles with the exact same rustc as cargo.
+  rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ../../rust-toolchain.toml;
+  craneLib = crane.overrideToolchain rustToolchain;
 
   # Single source filter covering the entire workspace.
   # Excludes: docs/, image/, containers/, nix/, lifeos-site/, target/.
@@ -45,7 +49,6 @@ let
     nativeBuildInputs = with pkgs; [
       pkg-config
       cmake
-      rustPackages.rustc
     ];
 
     buildInputs = with pkgs; [
@@ -56,9 +59,6 @@ let
       glib
       dbus
     ];
-
-    # Runtime toolchain override: use the pinned channel from rust-toolchain.toml
-    RUST_TOOLCHAIN = pkgs.rust-bin.fromRustupToolchainFile ../../rust-toolchain.toml;
   };
 
   # ONE cargoArtifacts — built once per Cargo.lock revision, shared by all binaries.
