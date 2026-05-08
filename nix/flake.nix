@@ -158,6 +158,10 @@
           # lifeosd integration test (RED written first in T-A1-1)
           lifeosd-vm-test = import ./tests/lifeosd-vm-test.nix {
             inherit pkgs;
+            # Pass crane-built packages explicitly — nixosTest node pkgs
+            # does not inherit the lifeos overlay from the flake.
+            lifeosdPackage = pkgs.lifeosd;
+            sqliteVecPackage = pkgs.sqlite-vec;
           };
         }
       );

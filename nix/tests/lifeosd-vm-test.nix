@@ -7,9 +7,12 @@
  * Run (after flake is wired):
  *   nix build .#checks.x86_64-linux.lifeosd-vm-test
  *
+ * Packages are passed via specialArgs so the node config receives the
+ * crane-built derivations (not nixpkgs defaults, which don't have lifeosd).
+ *
  * Satisfies: REQ-3.1, REQ-3.2, REQ-3.4, SCENARIO-1
  */
-{ pkgs, ... }:
+{ pkgs, lifeosdPackage, sqliteVecPackage }:
 pkgs.testers.nixosTest {
   name = "lifeosd-module";
 
@@ -21,10 +24,9 @@ pkgs.testers.nixosTest {
 
     services.lifeos.lifeosd = {
       enable = true;
-      # pkgs.lifeosd and pkgs.sqlite-vec are injected via the overlay in
-      # the flake's mkPkgs (or via overlays passed to nixosTest pkgs).
-      package = pkgs.lifeosd;
-      sqliteVecPackage = pkgs.sqlite-vec;
+      # Packages passed explicitly — node pkgs don't include the lifeos overlay.
+      package = lifeosdPackage;
+      sqliteVecPackage = sqliteVecPackage;
       bootstrapTokenFile = pkgs.writeText "bootstrap-token" ''
         LIFEOS_BOOTSTRAP_TOKEN=test-token-insecure
       '';
