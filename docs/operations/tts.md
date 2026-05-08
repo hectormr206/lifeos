@@ -11,7 +11,7 @@ multiple languages.
 As of 0.8.26 the engine runs as a **systemd Quadlet** (`lifeos-tts.service`)
 generated from `/etc/containers/systemd/lifeos-tts.container`. The Quadlet
 pulls `ghcr.io/hectormr206/lifeos-tts:stable` and exposes the same local
-HTTP API on `127.0.0.1:8084` via `Network=host` — clients (lifeosd) keep
+HTTP API on `127.0.0.1:8084` via `PublishPort=127.0.0.1:8084:8084` on `lifeos-net.network` — clients (lifeosd) keep
 working unchanged. This is Phase 1 of the architecture pivot
 (`docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md`).
 

@@ -50,23 +50,8 @@ async fn execute_trust_mode(cmd: TrustModeCommands) -> anyhow::Result<()> {
     }
 }
 
-fn daemon_url() -> String {
-    daemon_client::daemon_url()
-}
-
 async fn trust_mode_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!("{}/api/v1/runtime/trust-mode", daemon_url()))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to query trust mode: {}", body);
-    }
-
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/runtime/trust-mode").await?;
     println!("{}", "Trust Mode".bold().blue());
     println!(
         "  enabled: {}",
@@ -96,22 +81,14 @@ async fn trust_mode_enable(actor: &str, bundle_path: &str, sig_path: &str) -> an
     let signature = std::fs::read_to_string(sig_path)
         .map_err(|e| anyhow::anyhow!("Failed to read signature '{}': {}", sig_path, e))?;
 
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/trust-mode", daemon_url()))
-        .json(&serde_json::json!({
-            "enabled": true,
-            "actor": actor,
-            "consent_bundle": bundle,
-            "signature": signature,
-        }))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to enable trust mode: {}", body);
-    }
+    let payload = serde_json::json!({
+        "enabled": true,
+        "actor": actor,
+        "consent_bundle": bundle,
+        "signature": signature,
+    });
+    let _: serde_json::Value =
+        daemon_client::post_json("/api/v1/runtime/trust-mode", &payload).await?;
 
     println!("{}", "Trust mode enabled".green().bold());
     println!("  actor: {}", actor.cyan());
@@ -121,20 +98,12 @@ async fn trust_mode_enable(actor: &str, bundle_path: &str, sig_path: &str) -> an
 }
 
 async fn trust_mode_disable(actor: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/runtime/trust-mode", daemon_url()))
-        .json(&serde_json::json!({
-            "enabled": false,
-            "actor": actor,
-        }))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to disable trust mode: {}", body);
-    }
+    let payload = serde_json::json!({
+        "enabled": false,
+        "actor": actor,
+    });
+    let _: serde_json::Value =
+        daemon_client::post_json("/api/v1/runtime/trust-mode", &payload).await?;
 
     println!("{}", "Trust mode disabled".yellow().bold());
     println!("  actor: {}", actor.cyan());

@@ -33,9 +33,10 @@ sudo bash scripts/build-iso.sh
 |-------|--------|-------|----------|
 | `cli/` | `life` | `cli/src/main.rs` | `commands/`, `config/`, `daemon_client.rs` |
 | `daemon/` | `lifeosd` | `daemon/src/main.rs` | `api/`, `axi_tools.rs` (shared agentic chat), `llm_router.rs`, `supervisor.rs` |
+| `desktop/` | `lifeos-desktop` | `desktop/src/main.rs` | `tray.rs`, `wake_word.rs` (stub), `bootstrap.rs`, `daemon_client.rs` |
 | `image/` | ISO | `image/Containerfile` | `image/files/` (systemd units, scripts, configs) |
 
-- **Daemon API:** Axum REST on `127.0.0.1:8081` + WebSocket at `/ws`. Auth: `x-bootstrap-token` header
+- **Daemon API:** Dual listener — UDS at `/run/lifeos/lifeosd.sock` (SO_PEERCRED auth, machine clients) + TCP `127.0.0.1:8081` (browser/dashboard only). Auth: SO_PEERCRED on UDS; `x-bootstrap-token` header on TCP. WebSocket at `/ws`. See [`docs/architecture/quadlet-architecture.md`](docs/architecture/quadlet-architecture.md).
 - **AI runtime:** llama-server on `:8082`, Qwen3.5-4B default, 13+ LLM providers via `llm_router.rs`
 - **TTS:** `lifeos-tts.service` (Kokoro-82M, Apache 2.0) on `127.0.0.1:8084`. HTTP API: `GET /health`, `GET /voices`, `POST /tts`. Integration: `sensory_pipeline.rs::synthesize_with_kokoro_http()`. Docs: [`docs/operations/tts.md`](docs/operations/tts.md)
 - **Embeddings:** `llama-embeddings.service` (nomic-embed-text-v1.5) on `127.0.0.1:8083`. Shared with `ai.rs::get_embedding()`.

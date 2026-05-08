@@ -11,7 +11,6 @@ use anyhow::Result;
 use clap::Subcommand;
 use colored::Colorize;
 use log::{error, info, warn};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::daemon_client;
@@ -168,51 +167,36 @@ struct ExplanationResponse {
     pub timestamp: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct ApiError {
-    pub error: String,
-    pub message: String,
-}
-
-// ==================== HELPER FUNCTIONS ====================
-
-fn get_api_url() -> String {
-    daemon_client::daemon_url()
-}
-
 // ==================== COMMAND IMPLEMENTATIONS ====================
 
 pub async fn execute_followalong_command(cmd: FollowAlongCommands) -> Result<()> {
-    let client = daemon_client::authenticated_client();
-    let api_url = get_api_url();
-
     match cmd {
         FollowAlongCommands::Status { json } => {
-            show_status(&client, &api_url, json).await?;
+            show_status(json).await?;
         }
         FollowAlongCommands::Enable { disable } => {
-            set_enabled(&client, &api_url, !disable).await?;
+            set_enabled(!disable).await?;
         }
         FollowAlongCommands::Consent { revoke } => {
-            set_consent(&client, &api_url, !revoke).await?;
+            set_consent(!revoke).await?;
         }
         FollowAlongCommands::Context { json } => {
-            show_context(&client, &api_url, json).await?;
+            show_context(json).await?;
         }
         FollowAlongCommands::Stats { json } => {
-            show_stats(&client, &api_url, json).await?;
+            show_stats(json).await?;
         }
         FollowAlongCommands::Summary { json } => {
-            generate_summary(&client, &api_url, json).await?;
+            generate_summary(json).await?;
         }
         FollowAlongCommands::Translate { language, json } => {
-            translate_summary(&client, &api_url, &language, json).await?;
+            translate_summary(&language, json).await?;
         }
         FollowAlongCommands::Explain { question, json } => {
-            explain_activity(&client, &api_url, &question, json).await?;
+            explain_activity(&question, json).await?;
         }
         FollowAlongCommands::Clear { force } => {
-            clear_events(&client, &api_url, force).await?;
+            clear_events(force).await?;
         }
         FollowAlongCommands::Config {
             auto_summarize,
@@ -220,61 +204,50 @@ pub async fn execute_followalong_command(cmd: FollowAlongCommands) -> Result<()>
             auto_explain,
             interval,
         } => {
-            set_config(
-                &client,
-                &api_url,
-                auto_summarize,
-                auto_translate,
-                auto_explain,
-                interval,
-            )
-            .await?;
+            set_config(auto_summarize, auto_translate, auto_explain, interval).await?;
         }
     }
 
     Ok(())
 }
 
-async fn show_status(client: &Client, api_url: &str, json: bool) -> Result<()> {
-    let url = format!("{}/api/v1/followalong/config", api_url);
-    let response = client.get(&url).send().await?;
-
-    if response.status().is_success() {
-        let config: FollowAlongConfigResponse = response.json().await?;
-        if json {
-            println!("{}", serde_json::to_string_pretty(&config)?);
-        } else {
-            println!("FollowAlong Status:");
-            println!("  Enabled: {}", if config.enabled { "Yes" } else { "No" });
-            println!("  Consent: {}", config.consent_status);
-            println!(
-                "  Auto Summarize: {}",
-                if config.auto_summarize { "Yes" } else { "No" }
-            );
-            println!(
-                "  Auto Translate: {}",
-                if config.auto_translate { "Yes" } else { "No" }
-            );
-            println!(
-                "  Auto Explain: {}",
-                if config.auto_explain { "Yes" } else { "No" }
-            );
-            println!(
-                "  Summary Interval: {} seconds",
-                config.summary_interval_seconds
-            );
-            println!("  Max Events Buffer: {}", config.max_events_buffer);
+async fn show_status(json: bool) -> Result<()> {
+    match daemon_client::get_json::<FollowAlongConfigResponse>("/api/v1/followalong/config").await {
+        Ok(config) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&config)?);
+            } else {
+                println!("FollowAlong Status:");
+                println!("  Enabled: {}", if config.enabled { "Yes" } else { "No" });
+                println!("  Consent: {}", config.consent_status);
+                println!(
+                    "  Auto Summarize: {}",
+                    if config.auto_summarize { "Yes" } else { "No" }
+                );
+                println!(
+                    "  Auto Translate: {}",
+                    if config.auto_translate { "Yes" } else { "No" }
+                );
+                println!(
+                    "  Auto Explain: {}",
+                    if config.auto_explain { "Yes" } else { "No" }
+                );
+                println!(
+                    "  Summary Interval: {} seconds",
+                    config.summary_interval_seconds
+                );
+                println!("  Max Events Buffer: {}", config.max_events_buffer);
+            }
         }
-    } else {
-        error!("Failed to get FollowAlong status: {}", response.status());
+        Err(e) => {
+            error!("Failed to get FollowAlong status: {}", e);
+        }
     }
 
     Ok(())
 }
 
-async fn set_enabled(client: &Client, api_url: &str, enabled: bool) -> Result<()> {
-    let url = format!("{}/api/v1/followalong/config", api_url);
-
+async fn set_enabled(enabled: bool) -> Result<()> {
     #[derive(Serialize)]
     struct SetConfigRequest {
         enabled: bool,
@@ -282,31 +255,20 @@ async fn set_enabled(client: &Client, api_url: &str, enabled: bool) -> Result<()
 
     let body = SetConfigRequest { enabled };
 
-    let response = client.post(&url).json(&body).send().await?;
+    daemon_client::post_json::<_, serde_json::Value>("/api/v1/followalong/config", &body).await?;
 
-    if response.status().is_success() {
-        if enabled {
-            info!("FollowAlong enabled");
-            println!("{}", "FollowAlong enabled".green());
-        } else {
-            info!("FollowAlong disabled");
-            println!("{}", "FollowAlong disabled".yellow());
-        }
+    if enabled {
+        info!("FollowAlong enabled");
+        println!("{}", "FollowAlong enabled".green());
     } else {
-        let error: ApiError = response.json().await?;
-        error!(
-            "Failed to set enabled status: {} - {}",
-            error.error, error.message
-        );
-        anyhow::bail!("Failed to set FollowAlong state: {}", error.message);
+        info!("FollowAlong disabled");
+        println!("{}", "FollowAlong disabled".yellow());
     }
 
     Ok(())
 }
 
-async fn set_consent(client: &Client, api_url: &str, granted: bool) -> Result<()> {
-    let url = format!("{}/api/v1/followalong/consent", api_url);
-
+async fn set_consent(granted: bool) -> Result<()> {
     #[derive(Serialize)]
     struct ConsentRequest {
         granted: bool,
@@ -314,133 +276,117 @@ async fn set_consent(client: &Client, api_url: &str, granted: bool) -> Result<()
 
     let body = ConsentRequest { granted };
 
-    let response = client.post(&url).json(&body).send().await?;
+    daemon_client::post_json::<_, serde_json::Value>("/api/v1/followalong/consent", &body).await?;
 
-    if response.status().is_success() {
-        if granted {
-            info!("FollowAlong consent granted - monitoring will start");
-            println!("{}", "FollowAlong consent granted".green());
-        } else {
-            info!("FollowAlong consent revoked - monitoring will stop");
-            println!("{}", "FollowAlong consent revoked".yellow());
-        }
+    if granted {
+        info!("FollowAlong consent granted - monitoring will start");
+        println!("{}", "FollowAlong consent granted".green());
     } else {
-        let error: ApiError = response.json().await?;
-        error!("Failed to set consent: {} - {}", error.error, error.message);
-        anyhow::bail!("Failed to update FollowAlong consent: {}", error.message);
+        info!("FollowAlong consent revoked - monitoring will stop");
+        println!("{}", "FollowAlong consent revoked".yellow());
     }
 
     Ok(())
 }
 
-async fn show_context(client: &Client, api_url: &str, json: bool) -> Result<()> {
-    let url = format!("{}/api/v1/followalong/context", api_url);
-    let response = client.get(&url).send().await?;
-
-    if response.status().is_success() {
-        let context: ContextStateResponse = response.json().await?;
-        if json {
-            println!("{}", serde_json::to_string_pretty(&context)?);
-        } else {
-            println!("Current Context:");
-            if let Some(app) = &context.current_application {
-                println!("  Application: {}", app);
+async fn show_context(json: bool) -> Result<()> {
+    match daemon_client::get_json::<ContextStateResponse>("/api/v1/followalong/context").await {
+        Ok(context) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&context)?);
             } else {
-                println!("  Application: (not detected)");
-            }
-            if let Some(window) = &context.current_window {
-                println!("  Window: {}", window);
-            } else {
-                println!("  Window: (not detected)");
-            }
-            if let Some(pattern) = &context.active_pattern {
-                println!("  Active Pattern: {}", pattern);
-            } else {
-                println!("  Active Pattern: (none)");
-            }
-            println!(
-                "  Session Duration: {} minutes",
-                context.session_duration_minutes
-            );
-            if let Some(last) = &context.last_event {
-                println!("  Last Event: {}", last);
-            } else {
-                println!("  Last Event: (none)");
+                println!("Current Context:");
+                if let Some(app) = &context.current_application {
+                    println!("  Application: {}", app);
+                } else {
+                    println!("  Application: (not detected)");
+                }
+                if let Some(window) = &context.current_window {
+                    println!("  Window: {}", window);
+                } else {
+                    println!("  Window: (not detected)");
+                }
+                if let Some(pattern) = &context.active_pattern {
+                    println!("  Active Pattern: {}", pattern);
+                } else {
+                    println!("  Active Pattern: (none)");
+                }
+                println!(
+                    "  Session Duration: {} minutes",
+                    context.session_duration_minutes
+                );
+                if let Some(last) = &context.last_event {
+                    println!("  Last Event: {}", last);
+                } else {
+                    println!("  Last Event: (none)");
+                }
             }
         }
-    } else {
-        error!("Failed to get context: {}", response.status());
+        Err(e) => {
+            error!("Failed to get context: {}", e);
+        }
     }
 
     Ok(())
 }
 
-async fn show_stats(client: &Client, api_url: &str, json: bool) -> Result<()> {
-    let url = format!("{}/api/v1/followalong/stats", api_url);
-    let response = client.get(&url).send().await?;
-
-    if response.status().is_success() {
-        let stats: EventStatsResponse = response.json().await?;
-        if json {
-            println!("{}", serde_json::to_string_pretty(&stats)?);
-        } else {
-            println!("Event Statistics:");
-            println!("  Total Events: {}", stats.total_events);
-            if let Some(app) = &stats.current_application {
-                println!("  Current Application: {}", app);
-            }
-            if let Some(window) = &stats.current_window {
-                println!("  Current Window: {}", window);
-            }
-            println!(
-                "  Session Duration: {} minutes",
-                stats.session_duration_minutes
-            );
-            println!("\nEvent Breakdown:");
-            for event in &stats.event_counts {
-                println!("  - {}: {}", event.event_type, event.count);
+async fn show_stats(json: bool) -> Result<()> {
+    match daemon_client::get_json::<EventStatsResponse>("/api/v1/followalong/stats").await {
+        Ok(stats) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                println!("Event Statistics:");
+                println!("  Total Events: {}", stats.total_events);
+                if let Some(app) = &stats.current_application {
+                    println!("  Current Application: {}", app);
+                }
+                if let Some(window) = &stats.current_window {
+                    println!("  Current Window: {}", window);
+                }
+                println!(
+                    "  Session Duration: {} minutes",
+                    stats.session_duration_minutes
+                );
+                println!("\nEvent Breakdown:");
+                for event in &stats.event_counts {
+                    println!("  - {}: {}", event.event_type, event.count);
+                }
             }
         }
-    } else {
-        error!("Failed to get stats: {}", response.status());
+        Err(e) => {
+            error!("Failed to get stats: {}", e);
+        }
     }
 
     Ok(())
 }
 
-async fn generate_summary(client: &Client, api_url: &str, json: bool) -> Result<()> {
-    let url = format!("{}/api/v1/followalong/summary", api_url);
-    let response = client.post(&url).send().await?;
-
-    if response.status().is_success() {
-        let summary: SummaryResponse = response.json().await?;
-        if json {
-            println!("{}", serde_json::to_string_pretty(&summary)?);
-        } else {
-            println!("Activity Summary");
-            println!("Generated at: {}", summary.timestamp);
-            println!("Events included: {}", summary.event_count);
-            println!(
-                "Session duration: {} minutes",
-                summary.session_duration_minutes
-            );
-            println!("\n{}", summary.summary);
+async fn generate_summary(json: bool) -> Result<()> {
+    match daemon_client::post_empty::<SummaryResponse>("/api/v1/followalong/summary").await {
+        Ok(summary) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("Activity Summary");
+                println!("Generated at: {}", summary.timestamp);
+                println!("Events included: {}", summary.event_count);
+                println!(
+                    "Session duration: {} minutes",
+                    summary.session_duration_minutes
+                );
+                println!("\n{}", summary.summary);
+            }
         }
-    } else {
-        error!("Failed to generate summary: {}", response.status());
+        Err(e) => {
+            error!("Failed to generate summary: {}", e);
+        }
     }
 
     Ok(())
 }
 
-async fn translate_summary(
-    client: &Client,
-    api_url: &str,
-    language: &str,
-    json: bool,
-) -> Result<()> {
-    let url = format!("{}/api/v1/followalong/translate", api_url);
-
+async fn translate_summary(language: &str, json: bool) -> Result<()> {
     #[derive(Serialize)]
     struct TranslateRequest {
         target_language: String,
@@ -450,32 +396,27 @@ async fn translate_summary(
         target_language: language.to_string(),
     };
 
-    let response = client.post(&url).json(&body).send().await?;
-
-    if response.status().is_success() {
-        let summary: SummaryResponse = response.json().await?;
-        if json {
-            println!("{}", serde_json::to_string_pretty(&summary)?);
-        } else {
-            println!("Translated Summary ({})", language);
-            println!("Generated at: {}", summary.timestamp);
-            println!("\n{}", summary.summary);
+    match daemon_client::post_json::<_, SummaryResponse>("/api/v1/followalong/translate", &body)
+        .await
+    {
+        Ok(summary) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("Translated Summary ({})", language);
+                println!("Generated at: {}", summary.timestamp);
+                println!("\n{}", summary.summary);
+            }
         }
-    } else {
-        error!("Failed to translate summary: {}", response.status());
+        Err(e) => {
+            error!("Failed to translate summary: {}", e);
+        }
     }
 
     Ok(())
 }
 
-async fn explain_activity(
-    client: &Client,
-    api_url: &str,
-    question: &str,
-    json: bool,
-) -> Result<()> {
-    let url = format!("{}/api/v1/followalong/explain", api_url);
-
+async fn explain_activity(question: &str, json: bool) -> Result<()> {
     #[derive(Serialize)]
     struct ExplainRequest {
         question: String,
@@ -485,26 +426,28 @@ async fn explain_activity(
         question: question.to_string(),
     };
 
-    let response = client.post(&url).json(&body).send().await?;
-
-    if response.status().is_success() {
-        let explanation: ExplanationResponse = response.json().await?;
-        if json {
-            println!("{}", serde_json::to_string_pretty(&explanation)?);
-        } else {
-            println!("Activity Explanation");
-            println!("Question: {}", explanation.question);
-            println!("Generated at: {}", explanation.timestamp);
-            println!("\n{}", explanation.explanation);
+    match daemon_client::post_json::<_, ExplanationResponse>("/api/v1/followalong/explain", &body)
+        .await
+    {
+        Ok(explanation) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&explanation)?);
+            } else {
+                println!("Activity Explanation");
+                println!("Question: {}", explanation.question);
+                println!("Generated at: {}", explanation.timestamp);
+                println!("\n{}", explanation.explanation);
+            }
         }
-    } else {
-        error!("Failed to explain activity: {}", response.status());
+        Err(e) => {
+            error!("Failed to explain activity: {}", e);
+        }
     }
 
     Ok(())
 }
 
-async fn clear_events(client: &Client, api_url: &str, force: bool) -> Result<()> {
+async fn clear_events(force: bool) -> Result<()> {
     if !force {
         warn!("Clearing events will remove all recorded activity");
         print!("Continue? [y/N]: ");
@@ -518,28 +461,24 @@ async fn clear_events(client: &Client, api_url: &str, force: bool) -> Result<()>
         }
     }
 
-    let url = format!("{}/api/v1/followalong/clear", api_url);
-    let response = client.post(&url).send().await?;
-
-    if response.status().is_success() {
-        info!("Events cleared successfully");
-    } else {
-        error!("Failed to clear events: {}", response.status());
+    match daemon_client::post_empty::<serde_json::Value>("/api/v1/followalong/clear").await {
+        Ok(_) => {
+            info!("Events cleared successfully");
+        }
+        Err(e) => {
+            error!("Failed to clear events: {}", e);
+        }
     }
 
     Ok(())
 }
 
 async fn set_config(
-    client: &Client,
-    api_url: &str,
     auto_summarize: Option<bool>,
     auto_translate: Option<bool>,
     auto_explain: Option<bool>,
     interval: Option<u64>,
 ) -> Result<()> {
-    let url = format!("{}/api/v1/followalong/config", api_url);
-
     #[derive(Serialize)]
     struct ConfigRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -559,16 +498,15 @@ async fn set_config(
         summary_interval_seconds: interval,
     };
 
-    let response = client.post(&url).json(&body).send().await?;
-
-    if response.status().is_success() {
-        info!("FollowAlong configuration updated");
-    } else {
-        let error: ApiError = response.json().await?;
-        error!(
-            "Failed to update config: {} - {}",
-            error.error, error.message
-        );
+    match daemon_client::post_json::<_, serde_json::Value>("/api/v1/followalong/config", &body)
+        .await
+    {
+        Ok(_) => {
+            info!("FollowAlong configuration updated");
+        }
+        Err(e) => {
+            error!("Failed to update config: {}", e);
+        }
     }
 
     Ok(())

@@ -40,145 +40,104 @@ pub async fn execute(args: IdCommands) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn daemon_url() -> String {
-    daemon_client::daemon_url()
-}
-
 async fn cmd_issue(agent: &str, cap: &str, ttl: u32, scope: Option<&str>) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/id/issue", daemon_url()))
-        .json(&serde_json::json!({
-            "agent": agent,
-            "cap": cap,
-            "ttl": ttl,
-            "scope": scope,
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
-            let token = &body["token"];
-            println!("{}", "Capability token issued".green().bold());
-            println!(
-                "  Token ID: {}",
-                token["token_id"].as_str().unwrap_or("?").cyan()
-            );
-            println!("  Subject:  {}", token["subject"].as_str().unwrap_or("?"));
-            println!(
-                "  Expires:  {}",
-                token["expires_at"].as_str().unwrap_or("?").dimmed()
-            );
-            println!(
-                "  Token:    {}",
-                token["token"].as_str().unwrap_or("?").yellow()
-            );
-            Ok(())
-        }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to issue token: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            Ok(())
-        }
-    }
+    let payload = serde_json::json!({
+        "agent": agent,
+        "cap": cap,
+        "ttl": ttl,
+        "scope": scope,
+    });
+    let body: serde_json::Value = daemon_client::post_json("/api/v1/id/issue", &payload)
+        .await
+        .inspect_err(|e| {
+            if e.to_string().contains("is lifeosd running") {
+                println!(
+                    "{}",
+                    "Cannot connect to lifeosd. Is the daemon running?".red()
+                );
+            }
+        })?;
+    let token = &body["token"];
+    println!("{}", "Capability token issued".green().bold());
+    println!(
+        "  Token ID: {}",
+        token["token_id"].as_str().unwrap_or("?").cyan()
+    );
+    println!("  Subject:  {}", token["subject"].as_str().unwrap_or("?"));
+    println!(
+        "  Expires:  {}",
+        token["expires_at"].as_str().unwrap_or("?").dimmed()
+    );
+    println!(
+        "  Token:    {}",
+        token["token"].as_str().unwrap_or("?").yellow()
+    );
+    Ok(())
 }
 
 async fn cmd_list(active: bool) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/id/list?active={}",
-            daemon_url(),
-            if active { "true" } else { "false" }
-        ))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
-            println!("{}", "Identity tokens".bold().blue());
-            println!();
-            if let Some(tokens) = body["tokens"].as_array() {
-                if tokens.is_empty() {
-                    println!("  {}", "No tokens found.".dimmed());
-                } else {
-                    for token in tokens {
-                        let revoked = token["revoked"].as_bool().unwrap_or(false);
-                        let status = if revoked {
-                            "revoked".red()
-                        } else {
-                            "active".green()
-                        };
-                        println!(
-                            "  {} [{}] {}",
-                            token["token_id"].as_str().unwrap_or("?").cyan(),
-                            status,
-                            token["subject"].as_str().unwrap_or("?")
-                        );
-                        println!(
-                            "    cap={} exp={}",
-                            token["capabilities"]
-                                .as_array()
-                                .map(|caps| caps
-                                    .iter()
-                                    .filter_map(|c| c.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(","))
-                                .unwrap_or_else(|| "?".to_string()),
-                            token["expires_at"].as_str().unwrap_or("?").dimmed()
-                        );
-                    }
-                }
-            }
-            Ok(())
-        }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to list tokens: {}", body);
-        }
-        Err(_) => {
+    let path = format!(
+        "/api/v1/id/list?active={}",
+        if active { "true" } else { "false" }
+    );
+    let body: serde_json::Value = daemon_client::get_json(&path).await.inspect_err(|e| {
+        if e.to_string().contains("is lifeosd running") {
             println!(
                 "{}",
                 "Cannot connect to lifeosd. Is the daemon running?".red()
             );
-            Ok(())
+        }
+    })?;
+    println!("{}", "Identity tokens".bold().blue());
+    println!();
+    if let Some(tokens) = body["tokens"].as_array() {
+        if tokens.is_empty() {
+            println!("  {}", "No tokens found.".dimmed());
+        } else {
+            for token in tokens {
+                let revoked = token["revoked"].as_bool().unwrap_or(false);
+                let status = if revoked {
+                    "revoked".red()
+                } else {
+                    "active".green()
+                };
+                println!(
+                    "  {} [{}] {}",
+                    token["token_id"].as_str().unwrap_or("?").cyan(),
+                    status,
+                    token["subject"].as_str().unwrap_or("?")
+                );
+                println!(
+                    "    cap={} exp={}",
+                    token["capabilities"]
+                        .as_array()
+                        .map(|caps| caps
+                            .iter()
+                            .filter_map(|c| c.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","))
+                        .unwrap_or_else(|| "?".to_string()),
+                    token["expires_at"].as_str().unwrap_or("?").dimmed()
+                );
+            }
         }
     }
+    Ok(())
 }
 
 async fn cmd_revoke(token_id: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/id/revoke", daemon_url()))
-        .json(&serde_json::json!({ "token_id": token_id }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            println!("{}", "Token revoked".green().bold());
-            println!("  Token ID: {}", token_id.cyan());
-            Ok(())
-        }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to revoke token: {}", body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            Ok(())
-        }
-    }
+    let payload = serde_json::json!({ "token_id": token_id });
+    let _: serde_json::Value = daemon_client::post_json("/api/v1/id/revoke", &payload)
+        .await
+        .inspect_err(|e| {
+            if e.to_string().contains("is lifeosd running") {
+                println!(
+                    "{}",
+                    "Cannot connect to lifeosd. Is the daemon running?".red()
+                );
+            }
+        })?;
+    println!("{}", "Token revoked".green().bold());
+    println!("  Token ID: {}", token_id.cyan());
+    Ok(())
 }

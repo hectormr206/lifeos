@@ -7,7 +7,14 @@
 # It is as simple as possible so it cannot break.
 set -euo pipefail
 
-API="http://127.0.0.1:8081"
+# Phase 8b: UDS transport. All daemon API calls go through the
+# Unix-domain socket so they are authenticated by SO_PEERCRED at
+# accept time. curl --unix-socket does not need a real host name;
+# "http://localhost/" is a placeholder — the socket path is what
+# connects. The env var allows override in tests.
+LIFEOS_API_SOCKET="${LIFEOS_API_SOCKET:-/run/lifeos/lifeosd.sock}"
+# Legacy TCP variable removed — kept as a comment for rollback reference:
+# API="http://127.0.0.1:8081"
 CHECK_INTERVAL=30
 FAIL_COUNT=0
 MAX_LOG_LINES=100
@@ -101,9 +108,10 @@ check_health() {
     fi
     local status
     status=$(curl -s -o /dev/null -w "%{http_code}" \
+        --unix-socket "${LIFEOS_API_SOCKET}" \
         --max-time 5 \
         -H "x-bootstrap-token: ${token}" \
-        "$API/api/v1/health" 2>/dev/null || echo "000")
+        "http://localhost/api/v1/health" 2>/dev/null || echo "000")
     echo "$status"
 }
 

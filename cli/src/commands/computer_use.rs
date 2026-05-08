@@ -87,34 +87,17 @@ pub async fn execute(cmd: ComputerUseCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_status() -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let response = client
-        .get(format!(
-            "{}/api/v1/computer-use/status",
-            daemon_client::daemon_url()
-        ))
-        .send()
-        .await;
-
-    let response = match response {
-        Ok(r) => r,
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
-            return Ok(());
-        }
-    };
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to read computer-use status ({}): {}", status, body);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/computer-use/status")
+        .await
+        .inspect_err(|e| {
+            if e.to_string().contains("is lifeosd running") {
+                println!(
+                    "{}",
+                    "Cannot connect to lifeosd. Is the daemon running?".red()
+                );
+                println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
+            }
+        })?;
     println!("{}", "Computer Use status".bold().blue());
     println!(
         "  available: {}",
@@ -141,40 +124,17 @@ async fn cmd_status() -> anyhow::Result<()> {
 }
 
 async fn cmd_action(action_name: &str, payload: serde_json::Value) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let response = client
-        .post(format!(
-            "{}/api/v1/computer-use/action",
-            daemon_client::daemon_url()
-        ))
-        .json(&payload)
-        .send()
-        .await;
-
-    let response = match response {
-        Ok(r) => r,
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
-            return Ok(());
-        }
-    };
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "Computer-use action '{}' failed ({}): {}",
-            action_name,
-            status,
-            body
-        );
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value = daemon_client::post_json("/api/v1/computer-use/action", &payload)
+        .await
+        .inspect_err(|e| {
+            if e.to_string().contains("is lifeosd running") {
+                println!(
+                    "{}",
+                    "Cannot connect to lifeosd. Is the daemon running?".red()
+                );
+                println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
+            }
+        })?;
     let result = &body["result"];
     let success = result["success"].as_bool().unwrap_or(false);
     let dry_run = result["dry_run"].as_bool().unwrap_or(false);

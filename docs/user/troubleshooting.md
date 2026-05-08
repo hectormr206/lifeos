@@ -7,7 +7,7 @@
 life doctor                      # Diagnostico rapido de salud
 systemctl --user status lifeosd   # El daemon principal corre como user service
 sudo systemctl status llama-server  # Runtime canonico del modelo local
-curl http://127.0.0.1:8081/api/v1/health  # Estado agregado de salud
+curl --unix-socket /run/lifeos/lifeosd.sock http://localhost/api/v1/health  # Estado agregado de salud
 journalctl --user -u lifeosd --since "10 min ago"  # Logs recientes del daemon
 ```
 
@@ -46,20 +46,20 @@ Esto pasa cuando el daemon crasheo 3+ veces seguidas. Axi deja de hacer cambios 
 **Para salir:**
 - Escribe "exit safe mode" en SimpleX o en el dashboard
 - O: `life safe-mode status`
-- O: `curl -X POST http://127.0.0.1:8081/api/v1/safe-mode/exit`
+- O: `curl --unix-socket /run/lifeos/lifeosd.sock -X POST http://localhost/api/v1/safe-mode/exit`
 
 ## El dashboard no abre
 
 ```bash
 life doctor
-curl http://127.0.0.1:8081/api/v1/health  # La API responde?
+curl --unix-socket /run/lifeos/lifeosd.sock http://localhost/api/v1/health  # La API responde?
 ```
 
 Si no responde, reinicia el daemon: `systemctl --user restart lifeosd`
 
 ## La API de health reporta base de datos corrupta
 
-Si `curl http://127.0.0.1:8081/api/v1/health` o los logs reportan un error de integridad en alguna base de datos:
+Si `curl --unix-socket /run/lifeos/lifeosd.sock http://localhost/api/v1/health` o los logs reportan un error de integridad en alguna base de datos:
 
 ```bash
 life doctor
@@ -75,7 +75,7 @@ systemctl --user restart lifeosd
 
 ## Espacio en disco bajo
 
-Si `curl http://127.0.0.1:8081/api/v1/health` o los logs reportan espacio bajo:
+Si `curl --unix-socket /run/lifeos/lifeosd.sock http://localhost/api/v1/health` o los logs reportan espacio bajo:
 
 ```bash
 life doctor

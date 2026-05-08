@@ -29,18 +29,7 @@ async fn show_status() -> anyhow::Result<()> {
     println!("{}", "Battery Status".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/battery/status", daemon_client::daemon_url());
-
-    let response = client.get(&url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to get battery status ({}): {}", status, body);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/battery/status").await?;
 
     let health = body
         .get("health")
@@ -94,20 +83,9 @@ async fn set_threshold(value: u8) -> anyhow::Result<()> {
     );
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/battery/threshold", daemon_client::daemon_url());
-
-    let response = client
-        .post(&url)
-        .json(&serde_json::json!({ "threshold": value }))
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to set threshold ({}): {}", status, body);
-    }
+    let payload = serde_json::json!({ "threshold": value });
+    let _: serde_json::Value =
+        daemon_client::post_json("/api/v1/battery/threshold", &payload).await?;
 
     println!(
         "  Charge threshold set to {}",
@@ -125,20 +103,9 @@ async fn fullcharge() -> anyhow::Result<()> {
     );
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/battery/threshold", daemon_client::daemon_url());
-
-    let response = client
-        .post(&url)
-        .json(&serde_json::json!({ "threshold": 100, "temporary": true }))
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to enable full charge ({}): {}", status, body);
-    }
+    let payload = serde_json::json!({ "threshold": 100, "temporary": true });
+    let _: serde_json::Value =
+        daemon_client::post_json("/api/v1/battery/threshold", &payload).await?;
 
     println!(
         "  {}",

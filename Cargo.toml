@@ -2,12 +2,13 @@
 members = [
     "cli",
     "daemon",
+    "desktop",
     "tests",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.8.41"
+version = "0.8.42"
 
 [workspace.metadata.lifeos]
 codename = "Axolotl"
