@@ -18,6 +18,10 @@ Before=lifeos-lifeosd.service
 
 [Container]
 Image=ghcr.io/hectormr206/lifeos-llama-embeddings:stable
+# Phase 6 — auto-update: podman-auto-update.timer (daily) compares the
+# registry digest for the pinned tag and rolling-restarts the service if
+# it changed.
+AutoUpdate=registry
 ContainerName=lifeos-llama-embeddings
 HostName=lifeos-llama-embeddings
 
