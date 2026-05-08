@@ -228,4 +228,4 @@ Verificá que `podman tag` se ejecutó en la **root** containers-storage del lap
 
 - **Capa 4** (image guardian) — pendiente para Fase 1 cuando exista el primer Quadlet `lifeos-*`.
 - **Cosign signing** de cada container individual — extender `project_pending_image_signing_cosign`.
-- **Migración a red podman privada `lifeos-net`** — Fase 6 del PRD, para reemplazar `Network=host`.
+- **Migración a red podman privada `lifeos-net`** — Fase 6 del PRD, para reemplazar `Network=host`. COMPLETO para `lifeos-lifeosd` (Phase 8b). Los contenedores TTS/embeddings/llama-server ya usan `lifeos-net.network`. Pendiente: migración de URLs internas de 127.0.0.1 a nombres DNS de contenedor.

@@ -438,10 +438,6 @@ fn cmd_mcp_export(output: Option<&str>, trust: Option<&str>) -> anyhow::Result<(
 }
 
 async fn cmd_doctor(json: bool) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let base = daemon_client::daemon_url();
-    let url = format!("{}/api/v1/skills/diagnostics", base);
-
     if !json {
         println!(
             "{}",
@@ -450,13 +446,8 @@ async fn cmd_doctor(json: bool) -> anyhow::Result<()> {
         println!();
     }
 
-    match client.get(&url).send().await {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r
-                .json()
-                .await
-                .unwrap_or_else(|_| serde_json::json!({"diagnostics": {}}));
-
+    match daemon_client::get_json::<serde_json::Value>("/api/v1/skills/diagnostics").await {
+        Ok(body) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&body)?);
             } else {
@@ -478,19 +469,6 @@ async fn cmd_doctor(json: bool) -> anyhow::Result<()> {
                 );
             }
         }
-        Ok(r) => {
-            let status = r.status();
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "error": format!("Daemon returned HTTP {}", status),
-                    }))?
-                );
-            } else {
-                println!("  {} Daemon returned HTTP {}", "!".yellow().bold(), status);
-            }
-        }
         Err(e) => {
             if json {
                 println!(
@@ -500,11 +478,7 @@ async fn cmd_doctor(json: bool) -> anyhow::Result<()> {
                     }))?
                 );
             } else {
-                println!(
-                    "  {} Cannot reach lifeosd at {}",
-                    "X".red().bold(),
-                    base.dimmed()
-                );
+                println!("  {} Cannot reach lifeosd", "X".red().bold());
                 println!("    Error: {}", format!("{e}").dimmed());
             }
         }

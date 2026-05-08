@@ -100,17 +100,24 @@ Boot order:
 4. `lifeos-lifeosd` waits for all of the above (Wants= soft, After= hard) so memory recall + chat path are ready when the daemon boots.
 5. Host-side `lifeosd-desktop` (Phase 3b) waits for `lifeos-lifeosd` HTTP API to respond.
 
-## Phase 6 — hardening (partially shipped, partially blocked)
+## Phase 6 — hardening (6.1 shipped via Phase 8b; 6.2–6.3 pending)
 
-### 6.1 — Network=host → podman bridge `lifeos-net` (partial — `lifeos-lifeosd` STAYS on host)
+### 6.1 — Network=host → podman bridge `lifeos-net` (COMPLETE — Phase 8b shipped)
 
-> **Status (2026-05-06 update):** The sibling containers (`lifeos-tts`, `lifeos-llama-server`, `lifeos-llama-embeddings`, `lifeos-simplex-bridge`) run on `lifeos-net.network` with `PublishPort=127.0.0.1:80xx:80xx` exposing their loopback ports back to the host. **`lifeos-lifeosd` stays on `Network=host`** — the bridge migration was attempted in Phase 8b and reverted after empirical validation showed netavark SNATs the source IP of PublishPort traffic to the bridge gateway (10.89.0.1), making every legitimate dashboard / sentinel / `life` CLI request 403 at the daemon's peer-loopback gate.
+> **Status (2026-05-07 update):** All containers, including `lifeos-lifeosd`, now run on `lifeos-net.network`. The blocker was the daemon's `require_loopback_peer` middleware: netavark SNATs PublishPort traffic to the bridge gateway (10.89.0.1), so every host-side client (dashboard, sentinel, `life` CLI) was 403'd. The fix shipped in Phase 8b R9+:
 >
-> Concrete numbers from the validation run on rootful podman 5.8.2 + netavark 1.17.2 + Fedora 44 (2026-05-06): a Python echo container on `Network=lifeos-net.network` with `PublishPort=127.0.0.1:8888:8888` reported `peer=10.89.0.1` for a `curl http://127.0.0.1:8888/` from host loopback. Accepting `10.89.0.1` as loopback-equivalent is unsafe because that IP is the gateway every sibling container shares — it is the exact lateral-compromise surface the round-3 JD identified. The clean fix is migrating the daemon's HTTP listener to a Unix-domain socket bind-mounted from the host and using `SO_PEERCRED` to authenticate locally; until that work lands (tracked as a follow-up PR), `lifeos-lifeosd` runs on `Network=host` like the pre-pivot topology.
+> 1. **UDS listener** — daemon binds `/run/lifeos/lifeosd.sock` (host path, bind-mounted via `Volume=/run/lifeos:/run/lifeos:z`). Machine clients (`life` CLI, shell scripts) connect via `--unix-socket`. Auth is kernel-asserted via `SO_PEERCRED` (UID whitelist: 0 + `LIFEOS_API_UID`, default 1000). No IP-based loopback check.
+> 2. **TCP listener** — daemon binds `0.0.0.0:8081` inside the container; Quadlet exposes it as `PublishPort=127.0.0.1:8081:8081` (host-loopback only). Used by the browser dashboard. Auth: `Host`/`Origin` header guard (`host_origin_guard` middleware) + `x-bootstrap-token` for protected routes.
+> 3. **`require_loopback_peer` deleted** — removed from all route layers. Replaced by SO_PEERCRED on the UDS path and header guards on the TCP path.
 >
-> What stays from Phase 8b in code (no rollback): `daemon/src/endpoints.rs` URL resolver (OnceLock-cached, with `sanitize_url` validation, `LIFEOS_TTS_SERVER_URL` deprecation warning), the `require_loopback_peer` axum middleware applied to `/metrics`, `/api/security/alerts`, `/dashboard`, `/meetings-files`, `/swagger-ui`, `/api-docs/openapi.json`, `/dashboard/bootstrap`, `/ws`, `/api/v1/events/stream`, the `is_loopback_ip()` helper with IPv4-mapped IPv6 support, and 12 unit tests for the security-critical paths. With `Network=host` the daemon's bind address is `127.0.0.1:8081` and every peer is a real host-loopback peer, so the middleware passes through transparently. When the Unix-socket migration lands, the middleware swaps to a `ConnectInfo<UdsConnectInfo>` extractor and the same logic applies.
-
-The historical Phase 1 choice of `Network=host` was kept for `lifeos-lifeosd` for the same reason it was originally chosen: zero URL changes from the existing setup. The trade-off is reduced container-to-container isolation for the daemon's outbound HTTP calls — accepted because the alternative (the bridge) is currently broken by the SNAT behavior above.
+> The `lifeos-lifeosd.container` Quadlet now reads:
+> ```ini
+> Network=lifeos-net.network
+> PublishPort=127.0.0.1:8081:8081
+> Environment=LIFEOS_API_SOCKET=/run/lifeos/lifeosd.sock
+> Environment=LIFEOS_API_UID=1000
+> Volume=/run/lifeos:/run/lifeos:z
+> ```
 
 Phase 6 originally proposed migrating every container to a private podman bridge:
 
@@ -134,16 +141,16 @@ Each container then:
 `PublishPort` keeps each service reachable from the host on the same `127.0.0.1:<port>` so external clients (browsers hitting the dashboard, host-side `lifeosd-desktop`) keep working without changes. Internal container-to-container traffic flows over the private bridge with DNS:
 
 ```diff
- // daemon/src/llm_router.rs (when Phase 6 lands)
+ // daemon/src/llm_router.rs (pending — sibling URL migration deferred)
 -LIFEOS_LLAMA_SERVER_URL=http://127.0.0.1:8082
 +LIFEOS_LLAMA_SERVER_URL=http://lifeos-llama-server:8082
 ```
 
 This adds a layer of defense: a compromised container on `lifeos-net` cannot reach a host service that the network policy doesn't allow.
 
-### 6.2 — Auto-update via `AutoUpdate=registry`
+### 6.2 — Auto-update via `AutoUpdate=registry` ✅ SHIPPED
 
-Today container images are pinned to `:stable` and operator-pulled. Phase 6 enables podman's auto-update for `:stable` images:
+All five Quadlets carry `AutoUpdate=registry` in their `[Container]` section:
 
 ```ini
 [Container]
@@ -151,13 +158,7 @@ Image=ghcr.io/hectormr206/lifeos-tts:stable
 AutoUpdate=registry
 ```
 
-Plus the systemd timer (ships with podman):
-
-```bash
-systemctl enable --now podman-auto-update.timer
-```
-
-The timer (default daily) pulls each `:stable` image and restarts containers whose image digest changed. Combined with cosign verification (next section), this gives unattended security updates with verifiable provenance.
+`podman-auto-update.timer` is enabled by the bootc image (symlinked into `timers.target.wants/` from `image/Containerfile`). It fires daily, pulls each `:stable` image, compares digests, and rolling-restarts containers whose digest changed. Combined with cosign verification (next section), this gives unattended updates with verifiable provenance.
 
 **Caveat:** auto-update has gone wrong before in other systems. We mitigate by:
 - Pinning to `:stable` (operator-promoted, never `:latest`)
@@ -232,6 +233,57 @@ Three legitimate reasons to NOT containerize a piece of LifeOS:
 3. **Wake-word detection.** Needs continuous PipeWire input. Probably stays as a host user-service that talks to `lifeos-lifeosd` over HTTP.
 
 Everything else: container.
+
+## Per-user companion (Phase 3b)
+
+The `lifeos-desktop` binary is the canonical example of a host user-service that is NOT a container. It runs under `graphical-session.target` as the logged-in user and bridges the containerized daemon with desktop integration surfaces.
+
+### Why not a container?
+
+Session D-Bus, Wayland, and PipeWire are user-scoped resources. Containers that need them require `--net=host`, `--ipc=host`, and socket bind-mounts — at which point the container boundary provides no isolation benefit. `lifeos-desktop` ships as a small host binary instead.
+
+### Bootstrap flow
+
+1. **Wait for socket** — polls `/run/lifeos/lifeos-bootstrap.sock` with 500ms backoff (cap 30s). The socket is created by `lifeos-lifeosd` (Quadlet, system-scope) at startup and hands out a per-boot bearer token.
+2. **Read token** — connects via `tokio::net::UnixStream`, reads one line. UID is verified via SO_PEERCRED on the daemon side; non-1000 UIDs receive `FORBIDDEN`.
+3. **Probe health** — `GET /api/v1/health` with `x-bootstrap-token` header, retries on connect-error / non-2xx, cap 30s.
+4. **Spawn surfaces** — tray icon (ksni, session D-Bus) and wake-word listener start under a `CancellationToken + JoinSet` supervisor.
+
+### Transport
+
+The daemon exposes two listeners:
+- **UDS** `/run/lifeos/lifeosd.sock` — SO_PEERCRED auth, for system-scope machine clients (CLI, root scripts).
+- **TCP** `127.0.0.1:8081` — `x-bootstrap-token` auth, for browser/dashboard and `lifeos-desktop`.
+
+The companion uses TCP + bootstrap-token. It does NOT touch the UDS socket.
+
+### Polling loop
+
+Every 30 s (override: `LIFEOS_DESKTOP_POLL_SECS`):
+- `GET /api/v1/system/status` → tray menu refresh
+- `GET /api/v1/ai/status` → tray icon color / label
+
+The poll interval is a temporary tradeoff. Once `/ws` WebSocket broadcast is implemented (post-3b), the companion will subscribe to push events and use polling only as a fallback.
+
+### WAYLAND_DISPLAY guard in daemon
+
+When `lifeos-lifeosd` runs inside a Quadlet container, `WAYLAND_DISPLAY` and `DISPLAY` are both absent. The daemon checks for these environment variables at startup and skips spawning its own legacy in-process tray icon and wake-word detector when neither is set. This prevents the daemon from registering a D-Bus `StatusNotifierItem` inside the container (where no compositor exists), and leaves the surface entirely to `lifeos-desktop` on the host.
+
+### Wake-word stub (Phase 3b)
+
+The `desktop/src/wake_word.rs` module is a stub. It logs an `ERROR` noting PipeWire integration is deferred, then idles until cancelled. The daemon's in-process rustpotter detector (only active when `WAYLAND_DISPLAY` IS set — legacy host installs) covers the gap. Phase 3c will implement the full PipeWire capture loop and remove the daemon's in-process detector entirely.
+
+Wake-word detections flow:
+```
+lifeos-desktop (host, user-scope)
+  → POST /api/v1/sensory/wake-word/trigger (TCP + bearer token)
+    → daemon notifies Arc<Notify> (external_wake_word_notify)
+      → run_sensory_runtime select! fires wake-word pipeline
+```
+
+### systemd unit
+
+Installed at `/usr/lib/systemd/user/lifeos-desktop.service`. Auto-enabled globally via symlink in `/usr/lib/systemd/user/default.target.wants/` and per-user via `/etc/skel/.config/systemd/user/default.target.wants/`. `Restart=on-failure` with the companion's own retry logic handles daemon restarts cleanly.
 
 ## Further reading
 

@@ -26,6 +26,10 @@ Before=lifeos-lifeosd.service
 
 [Container]
 Image=ghcr.io/hectormr206/lifeos-tts:stable
+# Phase 6 — auto-update: podman-auto-update.timer (daily) compares the
+# registry digest for the pinned tag and rolling-restarts the service if
+# it changed. Requires `:tag` (not `@sha256`) to compare digests.
+AutoUpdate=registry
 ContainerName=lifeos-tts
 HostName=lifeos-tts
 

@@ -51,34 +51,21 @@ pub async fn execute(cmd: AdaptersCommands) -> anyhow::Result<()> {
 }
 
 async fn run_adapter(name: &str, prompt: &str) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/ai/chat", daemon_client::daemon_url()))
-        .json(&serde_json::json!({
-            "message": prompt,
-            "stream": false
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
-            println!("{}", format!("AI adapter: {}", name).bold().blue());
-            println!("{}", body["response"].as_str().unwrap_or("").trim());
-            Ok(())
-        }
-        Ok(r) => {
-            let status = r.status();
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Adapter '{}' failed ({}): {}", name, status, body);
-        }
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            Ok(())
-        }
-    }
+    let payload = serde_json::json!({
+        "message": prompt,
+        "stream": false
+    });
+    let body: serde_json::Value = daemon_client::post_json("/api/v1/ai/chat", &payload)
+        .await
+        .inspect_err(|e| {
+            if e.to_string().contains("is lifeosd running") {
+                println!(
+                    "{}",
+                    "Cannot connect to lifeosd. Is the daemon running?".red()
+                );
+            }
+        })?;
+    println!("{}", format!("AI adapter: {}", name).bold().blue());
+    println!("{}", body["response"].as_str().unwrap_or("").trim());
+    Ok(())
 }

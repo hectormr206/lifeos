@@ -44,31 +44,21 @@ pub async fn execute(cmd: WorkspaceCommands) -> anyhow::Result<()> {
     }
 }
 
-fn daemon_url() -> String {
-    daemon_client::daemon_url()
-}
-
 async fn cmd_run(
     intent_id: &str,
     command: Option<&str>,
     isolation: &str,
     approve: bool,
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .post(format!("{}/api/v1/workspace/run", daemon_url()))
-        .json(&serde_json::json!({
-            "intent_id": intent_id,
-            "command": command,
-            "isolation": isolation,
-            "approved": approve,
-        }))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    let payload = serde_json::json!({
+        "intent_id": intent_id,
+        "command": command,
+        "isolation": isolation,
+        "approved": approve,
+    });
+    match daemon_client::post_json::<_, serde_json::Value>("/api/v1/workspace/run", &payload).await
+    {
+        Ok(body) => {
             let run = &body["run"];
             println!("{}", "Workspace run completed".green().bold());
             println!(
@@ -120,8 +110,13 @@ async fn cmd_run(
             }
             Ok(())
         }
-        Ok(r) if r.status().as_u16() == 409 => {
-            let body = r.text().await.unwrap_or_default();
+        Err(e) if e.to_string().contains("HTTP 409") => {
+            // Extract body from error message: "daemon returned HTTP 409: {body}"
+            let msg = e.to_string();
+            let body = msg
+                .split_once("HTTP 409: ")
+                .map(|x| x.1)
+                .unwrap_or("approval required");
             println!("{}", "Workspace run blocked".yellow().bold());
             println!("  {}", body);
             println!();
@@ -131,35 +126,22 @@ async fn cmd_run(
             );
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to run workspace: {}", body);
-        }
-        Err(_) => {
+        Err(e) if e.to_string().contains("is lifeosd running") => {
             println!(
                 "{}",
                 "Cannot connect to lifeosd. Is the daemon running?".red()
             );
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to run workspace: {}", e),
     }
 }
 
 async fn cmd_list(limit: usize) -> anyhow::Result<()> {
     let limit = limit.clamp(1, 200);
-    let client = daemon_client::authenticated_client();
-    let resp = client
-        .get(format!(
-            "{}/api/v1/workspace/runs?limit={}",
-            daemon_url(),
-            limit
-        ))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let body: serde_json::Value = r.json().await?;
+    let path = format!("/api/v1/workspace/runs?limit={}", limit);
+    match daemon_client::get_json::<serde_json::Value>(&path).await {
+        Ok(body) => {
             println!("{}", "Workspace runs".bold().blue());
             println!();
 
@@ -185,16 +167,13 @@ async fn cmd_list(limit: usize) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to list workspace runs: {}", body);
-        }
-        Err(_) => {
+        Err(e) if e.to_string().contains("is lifeosd running") => {
             println!(
                 "{}",
                 "Cannot connect to lifeosd. Is the daemon running?".red()
             );
             Ok(())
         }
+        Err(e) => anyhow::bail!("Failed to list workspace runs: {}", e),
     }
 }

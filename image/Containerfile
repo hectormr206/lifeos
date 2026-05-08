@@ -94,6 +94,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY cli/Cargo.toml cli/
 COPY daemon/Cargo.toml daemon/
+COPY desktop/Cargo.toml desktop/
 COPY tests/Cargo.toml tests/
 COPY tests/integration tests/integration/
 
@@ -103,6 +104,7 @@ COPY cli/assets cli/assets/
 COPY daemon/src daemon/src/
 COPY daemon/defaults daemon/defaults/
 COPY daemon/static daemon/static/
+COPY desktop/src desktop/src/
 
 # Copy contracts for model catalog (needed by CLI include_str!)
 COPY contracts/ contracts/
@@ -114,8 +116,9 @@ COPY contracts/ contracts/
 # of bootc cuts ~10 minutes of CI per host image and removes ~150 MB of
 # linker-time artifacts from the layer cache.
 RUN set -eux && \
-    cargo build --release --locked -p life && \
+    cargo build --release --locked -p life -p lifeos-desktop && \
     install -D -m 0755 /build/target/release/life /out/life && \
+    install -D -m 0755 /build/target/release/lifeos-desktop /out/lifeos-desktop && \
     rm -rf /build/target /root/.cargo/registry /root/.cargo/git
 # Note: lifeos-train-wakeword binary build removed from bootc — wake-word
 # personalization is a niche one-off training step (see comment in Stage
@@ -1132,7 +1135,10 @@ COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-over
 # generator synthesizes lifeos-lifeosd.service at boot. The Quadlet binds
 # /var/lib/lifeos for state (lifeos-state-migrate.service copies the user's
 # old ~/.local/share/lifeos data on first boot). UI features (tray, wake-
-# word) return as small companion binaries in a follow-up PR.
+# word) ship as the lifeos-desktop companion binary (Phase 3b).
+
+# Phase 3b: desktop companion — user-scope systemd unit
+COPY image/files/etc/systemd/user/lifeos-desktop.service /usr/lib/systemd/user/lifeos-desktop.service
 
 # Habilitar servicios via symlinks
 RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
@@ -1172,6 +1178,11 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-image-guardian.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-image-guardian.service && \
     ln -sf /usr/lib/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-update-stage.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-stage.timer && \
+    # Phase 6 — Podman auto-update timer fires daily; reads AutoUpdate=registry
+    # from each Quadlet, pulls newer digest for the pinned :stable tag, and
+    # rolling-restarts the service if it changed. Ships disabled by default
+    # in podman; we enable it here.
+    ln -sf /usr/lib/systemd/system/podman-auto-update.timer /usr/lib/systemd/system/timers.target.wants/podman-auto-update.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
     ln -sf /usr/lib/systemd/system/lifeos-cosmic-greeter-branding.service /usr/lib/systemd/system/graphical.target.wants/lifeos-cosmic-greeter-branding.service && \
     ln -sf /usr/lib/systemd/system/bluetooth.service      /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \
@@ -1190,6 +1201,16 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
             ln -sf "/usr/lib/systemd/system/${unit}" "/usr/lib/systemd/system/sockets.target.wants/${unit}"; \
         fi; \
     done && \
+    # Phase 3b: enable lifeos-desktop for all users.
+    # /usr/lib/systemd/user/default.target.wants/ enables it system-wide for
+    # every user account (equivalent to `systemctl --user --global enable`).
+    # /etc/skel ensures new users get the symlink in their homedir if the
+    # system-wide path isn't honoured by their particular login manager.
+    ln -sf /usr/lib/systemd/user/lifeos-desktop.service \
+       /usr/lib/systemd/user/default.target.wants/lifeos-desktop.service && \
+    mkdir -p /etc/skel/.config/systemd/user/default.target.wants && \
+    ln -sf /usr/lib/systemd/user/lifeos-desktop.service \
+       /etc/skel/.config/systemd/user/default.target.wants/lifeos-desktop.service && \
     true  # removed stale lifeisd typo symlink
 
 # --- Update policy: no surprise reboot ---
@@ -1202,6 +1223,9 @@ RUN mkdir -p /etc/systemd/system && \
 # Keep app binaries and dashboard late in the Dockerfile because they change
 # more often than the large OS/model layers above.
 COPY --from=builder /out/life /usr/bin/life
+# Phase 3b: desktop companion binary — tray icon + wake-word listener for
+# the user session. Runs as a user-scope service (lifeos-desktop.service).
+COPY --from=builder /out/lifeos-desktop /usr/bin/lifeos-desktop
 # Phase 3: lifeosd binary removed from bootc — runs as a Quadlet from
 # ghcr.io/hectormr206/lifeos-lifeosd:stable. The container ships with
 # --features "dbus,http-api,messaging" (HTTP API, memory, agentic chat,
@@ -1220,7 +1244,7 @@ COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-au
 # daemon's Axum ServeDir reads from inside the container, not from the host.
 # Keeping a duplicate copy on the host was dead weight (~344 KB).
 
-RUN chmod +x /usr/bin/life /usr/local/bin/cargo-audit && \
+RUN chmod +x /usr/bin/life /usr/bin/lifeos-desktop /usr/local/bin/cargo-audit && \
     ln -sf /usr/bin/life /usr/local/bin/life
 
 # --- Runtime metadata that changes on almost every build ---
@@ -1440,6 +1464,11 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /usr/share/themes/LifeOS-HighContrast/index.theme || fail "LifeOS-HighContrast/index.theme"; \
     test -f /usr/share/themes/LifeOS-HighContrast/gtk-4.0/gtk.css || fail "LifeOS-HighContrast/gtk.css"; \
     test -x /usr/local/bin/lifeos-first-boot.sh || fail "/usr/local/bin/lifeos-first-boot.sh"; \
+    # Phase 3b: desktop companion
+    test -x /usr/bin/lifeos-desktop || fail "lifeos-desktop binary"; \
+    test -f /usr/lib/systemd/user/lifeos-desktop.service || fail "lifeos-desktop user unit"; \
+    test -L /usr/lib/systemd/user/default.target.wants/lifeos-desktop.service || fail "lifeos-desktop global enable symlink"; \
+    test -L /etc/skel/.config/systemd/user/default.target.wants/lifeos-desktop.service || fail "lifeos-desktop /etc/skel symlink"; \
     test -x /usr/local/bin/lifeos-ai-setup.sh || fail "/usr/local/bin/lifeos-ai-setup.sh"; \
     test -x /usr/local/bin/lifeos-stt-setup.sh || fail "/usr/local/bin/lifeos-stt-setup.sh"; \
     test -x /usr/local/bin/llama-server-health-check.sh || fail "/usr/local/bin/llama-server-health-check.sh"; \
@@ -1492,6 +1521,7 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -L /usr/lib/systemd/system/timers.target.wants/fstrim.timer || fail "fstrim.timer symlink"; \
     test -x /usr/local/bin/lifeos-flatpak-update.sh || fail "lifeos-flatpak-update.sh"; \
     test -L /usr/lib/systemd/system/timers.target.wants/lifeos-flatpak-update.timer || fail "lifeos-flatpak-update.timer symlink"; \
+    test -L /usr/lib/systemd/system/timers.target.wants/podman-auto-update.timer || fail "podman-auto-update.timer symlink (Phase 6)"; \
     test -x /usr/local/bin/lifeos-flatpak-nvidia-sync.sh || fail "lifeos-flatpak-nvidia-sync.sh"; \
     test -f /usr/lib/systemd/system/lifeos-power-profile.service || fail "lifeos-power-profile.service"; \
     test -f /usr/lib/systemd/system/lifeos-powertune.service || fail "lifeos-powertune.service"; \

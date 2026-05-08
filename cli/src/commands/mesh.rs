@@ -139,23 +139,13 @@ async fn cmd_delegate(node_id: &str, capability: &str, ttl: u32) -> anyhow::Resu
         anyhow::bail!("Node is not active: {}", node_id);
     }
 
-    let client = daemon_client::authenticated_client();
-    let response = client
-        .post(format!("{}/api/v1/id/issue", daemon_client::daemon_url()))
-        .json(&serde_json::json!({
-            "agent": format!("mesh-{}", node_id),
-            "capability": capability,
-            "ttl_minutes": ttl,
-            "scope": format!("scope://mesh/{}", node_id),
-        }))
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to delegate token: {}", body);
-    }
-    let body: serde_json::Value = response.json().await?;
+    let payload = serde_json::json!({
+        "agent": format!("mesh-{}", node_id),
+        "capability": capability,
+        "ttl_minutes": ttl,
+        "scope": format!("scope://mesh/{}", node_id),
+    });
+    let body: serde_json::Value = daemon_client::post_json("/api/v1/id/issue", &payload).await?;
     let token_id = body["token"]["token_id"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Daemon response missing token_id"))?;
@@ -180,12 +170,10 @@ async fn cmd_revoke(node_id: &str) -> anyhow::Result<()> {
     let token_id = registry.nodes[node_idx].token_id.clone();
 
     if let Some(token_id) = token_id {
-        let client = daemon_client::authenticated_client();
-        let _ = client
-            .post(format!("{}/api/v1/id/revoke", daemon_client::daemon_url()))
-            .json(&serde_json::json!({ "token_id": token_id }))
-            .send()
-            .await;
+        let payload = serde_json::json!({ "token_id": token_id });
+        let _: Result<serde_json::Value, _> =
+            daemon_client::post_json("/api/v1/id/revoke", &payload).await;
+        // Best-effort: don't fail the revoke even if daemon is unreachable
     }
 
     registry.nodes[node_idx].status = "revoked".to_string();

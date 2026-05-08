@@ -49,13 +49,19 @@ notify_axi() {
     local severity="${2:-info}"
     local token=""
     token=$(cat "$BOOTSTRAP_TOKEN_FILE" 2>/dev/null || echo none)
-    if curl -sf -H "x-bootstrap-token: $token" \
-        http://127.0.0.1:8081/api/v1/health >/dev/null 2>&1; then
+    # Phase 8b: daemon API via Unix-domain socket (SO_PEERCRED auth).
+    local api_socket
+    api_socket="${LIFEOS_API_SOCKET:-/run/lifeos/lifeosd.sock}"
+    if curl -sf \
+        --unix-socket "${api_socket}" \
+        -H "x-bootstrap-token: $token" \
+        "http://localhost/api/v1/health" >/dev/null 2>&1; then
         curl -sf -X POST \
+            --unix-socket "${api_socket}" \
             -H "Content-Type: application/json" \
             -H "x-bootstrap-token: $token" \
             -d "{\"message\": \"$message\", \"severity\": \"$severity\"}" \
-            http://127.0.0.1:8081/api/v1/notifications 2>/dev/null || true
+            "http://localhost/api/v1/notifications" 2>/dev/null || true
     fi
 }
 

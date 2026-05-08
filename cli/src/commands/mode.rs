@@ -52,17 +52,7 @@ async fn show_mode() -> anyhow::Result<()> {
     println!("{}", "Current Experience Mode".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/mode/current", daemon_client::daemon_url());
-
-    let response = client.get(url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to get current mode (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/mode/current").await?;
 
     let mode = body
         .get("mode")
@@ -104,21 +94,8 @@ async fn set_mode(mode: &str) -> anyhow::Result<()> {
     println!("{} {}", "Setting mode to:".bold().blue(), mode.cyan());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/mode/set", daemon_client::daemon_url());
-
-    let payload = serde_json::json!({
-        "mode": mode
-    });
-
-    let response = client.post(url).json(&payload).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to set mode (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let payload = serde_json::json!({ "mode": mode });
+    let body: serde_json::Value = daemon_client::post_json("/api/v1/mode/set", &payload).await?;
 
     println!("{}", "Mode applied successfully".green().bold());
 
@@ -156,17 +133,7 @@ async fn list_modes() -> anyhow::Result<()> {
     println!("{}", "Available Experience Modes".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/mode/list", daemon_client::daemon_url());
-
-    let response = client.get(url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to list modes (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/mode/list").await?;
 
     if let Some(modes) = body.get("modes").and_then(|m| m.as_array()) {
         for mode in modes {
@@ -195,22 +162,9 @@ async fn compare_modes(mode1: &str, mode2: &str) -> anyhow::Result<()> {
     println!("{}", "Comparing Experience Modes".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/mode/compare", daemon_client::daemon_url());
-
-    let payload = serde_json::json!({
-        "mode1": mode1,
-        "mode2": mode2
-    });
-
-    let response = client.post(url).json(&payload).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to compare modes (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let payload = serde_json::json!({ "mode1": mode1, "mode2": mode2 });
+    let body: serde_json::Value =
+        daemon_client::post_json("/api/v1/mode/compare", &payload).await?;
 
     let m1 = body
         .get("mode1_display")
@@ -246,17 +200,7 @@ async fn show_features() -> anyhow::Result<()> {
     println!("{}", "Features in Current Mode".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/mode/features", daemon_client::daemon_url());
-
-    let response = client.get(url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to get features (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value = daemon_client::get_json("/api/v1/mode/features").await?;
 
     let mut categories: std::collections::HashMap<String, Vec<(&str, &str, &str, bool)>> =
         std::collections::HashMap::new();
@@ -319,21 +263,8 @@ async fn test_feature(feature: &str) -> anyhow::Result<()> {
     println!("{} {}", "Testing feature:".bold().blue(), feature.cyan());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/mode/test", daemon_client::daemon_url());
-
-    let payload = serde_json::json!({
-        "feature": feature
-    });
-
-    let response = client.post(url).json(&payload).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to test feature (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let payload = serde_json::json!({ "feature": feature });
+    let body: serde_json::Value = daemon_client::post_json("/api/v1/mode/test", &payload).await?;
 
     let enabled = body
         .get("available")
@@ -368,22 +299,12 @@ async fn show_mode_info(mode: Option<&str>) -> anyhow::Result<()> {
     println!("{}", "Experience Mode Information".bold().blue());
     println!();
 
-    let client = daemon_client::authenticated_client();
-    let base = daemon_client::daemon_url();
-    let url = if mode_target == "current" {
-        format!("{}/api/v1/mode/current", base)
+    let path = if mode_target == "current" {
+        "/api/v1/mode/current".to_string()
     } else {
-        format!("{}/api/v1/mode/info?mode={}", base, mode_target)
+        format!("/api/v1/mode/info?mode={}", mode_target)
     };
-
-    let response = client.get(&url).send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Failed to get mode info (status: {})", status);
-    }
-
-    let body: serde_json::Value = response.json().await?;
+    let body: serde_json::Value = daemon_client::get_json(&path).await?;
 
     let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("");
     let display_name = body

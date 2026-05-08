@@ -67,80 +67,35 @@ async fn apply_preset(
     description: &str,
     rules: &[PresetRule],
 ) -> anyhow::Result<()> {
-    let client = daemon_client::authenticated_client();
-    let base = daemon_client::daemon_url();
-
-    let create_profile = client
-        .post(format!("{}/api/v1/context/profile", base))
-        .json(&serde_json::json!({
-            "name": context,
-            "description": description,
-            "priority": 3,
-        }))
-        .send()
-        .await;
-
-    let create_profile = match create_profile {
-        Ok(resp) => resp,
-        Err(_) => {
-            println!(
-                "{}",
-                "Cannot connect to lifeosd. Is the daemon running?".red()
-            );
-            println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
-            return Ok(());
-        }
-    };
-
-    if !create_profile.status().is_success() {
-        let status = create_profile.status();
-        let body = create_profile.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "Failed to prepare '{}' preset profile ({}): {}",
-            context,
-            status,
-            body
-        );
-    }
+    let create_payload = serde_json::json!({
+        "name": context,
+        "description": description,
+        "priority": 3,
+    });
+    let _: serde_json::Value = daemon_client::post_json("/api/v1/context/profile", &create_payload)
+        .await
+        .inspect_err(|e| {
+            if e.to_string().contains("is lifeosd running") {
+                println!(
+                    "{}",
+                    "Cannot connect to lifeosd. Is the daemon running?".red()
+                );
+                println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
+            }
+        })?;
 
     for rule in rules {
-        let response = client
-            .post(format!("{}/api/v1/context/profile/{}/rule", base, context))
-            .json(&serde_json::json!({
-                "rule_type": rule.rule_type,
-                "value": rule.value,
-            }))
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Failed to apply '{}' rule for preset '{}': {} ({})",
-                rule.rule_type,
-                context,
-                status,
-                body
-            );
-        }
+        let rule_payload = serde_json::json!({
+            "rule_type": rule.rule_type,
+            "value": rule.value,
+        });
+        let path = format!("/api/v1/context/profile/{}/rule", context);
+        let _: serde_json::Value = daemon_client::post_json(&path, &rule_payload).await?;
     }
 
-    let set_context = client
-        .post(format!("{}/api/v1/context/set", base))
-        .json(&serde_json::json!({ "context": context }))
-        .send()
-        .await?;
-
-    if !set_context.status().is_success() {
-        let status = set_context.status();
-        let body = set_context.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "Failed to activate '{}' preset context: {} ({})",
-            context,
-            status,
-            body
-        );
-    }
+    let set_payload = serde_json::json!({ "context": context });
+    let _: serde_json::Value =
+        daemon_client::post_json("/api/v1/context/set", &set_payload).await?;
 
     println!(
         "{} {}",
