@@ -10,7 +10,7 @@
  * Satisfies: REQ-3.1, REQ-3.2, REQ-3.4, SCENARIO-1
  */
 { pkgs, ... }:
-pkgs.nixosTest {
+pkgs.testers.nixosTest {
   name = "lifeosd-module";
 
   nodes.machine = { config, pkgs, ... }: {
