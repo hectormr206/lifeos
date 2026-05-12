@@ -2,6 +2,7 @@
 # Verification: bash -n PKGBUILD && makepkg -s --noconfirm --syncdeps
 #
 # T21 — config-only package: Quadlet templates, tmpfiles.d, sysusers.d, helpers.
+# T25 — CDI refresh system units (lifeos-cdi-refresh.path/.service) + lifeos-cdi-setup helper.
 # No Rust build step. arch=any (pure config/scripts).
 #
 # Post-install creates /var/lib/lifeos and /run/lifeos via tmpfiles.d,
@@ -58,6 +59,17 @@ package() {
     install -Dm755 "$src/helpers/lifeos-quadlet-install" \
         "$pkgdir/usr/bin/lifeos-quadlet-install"
 
+    # CDI setup helper (T24): guides user through one-time nvidia-ctk invocation.
+    install -Dm755 "$src/helpers/lifeos-cdi-setup" \
+        "$pkgdir/usr/bin/lifeos-cdi-setup"
+
+    # CDI refresh system units (T23): auto-regenerate /etc/cdi/nvidia.yaml
+    # on driver/kernel updates. System-scope (require root to write /etc/cdi/).
+    install -Dm644 "$src/systemd/lifeos-cdi-refresh.path" \
+        "$pkgdir/usr/lib/systemd/system/lifeos-cdi-refresh.path"
+    install -Dm644 "$src/systemd/lifeos-cdi-refresh.service" \
+        "$pkgdir/usr/lib/systemd/system/lifeos-cdi-refresh.service"
+
     # License
     install -Dm644 "$srcdir/lifeos/LICENSE" \
         "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
@@ -81,17 +93,26 @@ post_install() {
             && echo "lifeos-containers: added $real_user to the lifeos group (re-login to apply)"
     fi
 
+    # Enable CDI refresh path watcher (system-scope; runs as root via pacman context).
+    # ConditionPathExists in the unit makes it a no-op when nvidia-ctk is absent.
+    systemctl enable --now lifeos-cdi-refresh.path \
+        && echo "lifeos-containers: CDI refresh watcher enabled (lifeos-cdi-refresh.path)" \
+        || echo "lifeos-containers: warning — could not enable lifeos-cdi-refresh.path (non-fatal)"
+
     echo ""
     echo "lifeos-containers installed. Next step:"
-    echo "  Run 'life init' to configure Quadlet symlinks and enable services."
+    echo "  Run 'lifeos-cdi-setup' to check NVIDIA CDI spec status, then 'life init'."
     echo "  Or manually: lifeos-quadlet-install --user && systemctl --user daemon-reload"
 }
 
 post_upgrade() {
     # Re-run tmpfiles on upgrade in case new directories were added.
     systemd-tmpfiles --create lifeos.conf || true
-    # Reload Quadlet generator if running.
+    # Reload unit files to pick up any changes to CDI refresh units.
     systemctl daemon-reload 2>/dev/null || true
+    # Re-enable CDI path watcher in case it was added or changed in this upgrade.
+    systemctl enable --now lifeos-cdi-refresh.path 2>/dev/null \
+        || echo "lifeos-containers: warning — could not enable lifeos-cdi-refresh.path (non-fatal)"
 }
 
 post_remove() {

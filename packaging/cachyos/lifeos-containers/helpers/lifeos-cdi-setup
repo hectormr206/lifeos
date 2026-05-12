@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# lifeos-cdi-setup — interactive CDI setup helper for LifeOS
+#
+# T24: Checks whether /etc/cdi/nvidia.yaml exists. If present and non-empty,
+# confirms the setup is complete and exits 0. If absent, prints the exact
+# sudo command the user must run and what to expect afterward.
+#
+# Why a helper instead of running nvidia-ctk directly?
+#   `life init` runs as the user (no sudo). This script documents the one step
+#   that requires root. It does NOT execute sudo itself — the user runs the
+#   printed command in their terminal.
+#
+# Idempotent: running this script multiple times is always safe.
+#
+# Usage:
+#   lifeos-cdi-setup            # interactive check + instructions
+#   lifeos-cdi-setup --check    # exits 0 if CDI spec present, 1 if absent (for scripting)
+#
+# Called by `life init` step 2 (prerequisite check) when /etc/cdi/nvidia.yaml
+# is absent, to surface the exact remediation command.
+#
+# Exit codes: 0 = CDI spec present (ready), 1 = CDI spec absent (action required), 2 = usage error
+
+set -euo pipefail
+
+CDI_SPEC="/etc/cdi/nvidia.yaml"
+
+usage() {
+    printf "Usage: lifeos-cdi-setup [--check]\n" >&2
+    exit 2
+}
+
+cdi_present() {
+    [[ -f "$CDI_SPEC" && -s "$CDI_SPEC" ]]
+}
+
+check_mode() {
+    if cdi_present; then
+        exit 0
+    else
+        exit 1
+    fi
+}
+
+interactive_mode() {
+    printf "lifeos-cdi-setup: NVIDIA CDI spec check\n"
+    printf "========================================\n\n"
+
+    if cdi_present; then
+        printf "CDI spec found: %s\n" "$CDI_SPEC"
+        printf "\n"
+
+        # Show what devices are registered (nvidia-ctk may not be installed yet, guard it).
+        if command -v nvidia-ctk > /dev/null 2>&1; then
+            printf "Registered CDI devices:\n"
+            nvidia-ctk cdi list 2>/dev/null || printf "  (none detected — spec may be stale)\n"
+        fi
+
+        printf "\nStatus: READY. Rootless Quadlets can use --device nvidia.com/gpu=all.\n"
+        exit 0
+    fi
+
+    # CDI spec absent — print actionable instructions.
+    printf "CDI spec NOT found at: %s\n\n" "$CDI_SPEC"
+    printf "You must generate the NVIDIA CDI spec before running 'life init'.\n"
+    printf "This is a one-time step that requires root. Run:\n\n"
+    printf "    sudo nvidia-ctk cdi generate --output=%s\n\n" "$CDI_SPEC"
+    printf "What to expect:\n"
+    printf "  - The command scans your NVIDIA driver installation.\n"
+    printf "  - It writes a YAML spec mapping GPU devices and libraries.\n"
+    printf "  - The file is read by podman/rootless containers to inject GPU access.\n"
+    printf "  - Takes 1–5 seconds. No reboot required.\n\n"
+    printf "After running the above command, verify it worked:\n\n"
+    printf "    ls -lh %s          # must exist, non-empty\n" "$CDI_SPEC"
+    printf "    nvidia-ctk cdi list        # should list nvidia.com/gpu=0\n\n"
+    printf "Then re-run 'life init' to continue setup.\n\n"
+
+    printf "Note: future NVIDIA driver updates will automatically regenerate\n"
+    printf "the spec via the lifeos-cdi-refresh.path systemd unit (system-scope).\n"
+
+    exit 1
+}
+
+# Argument parsing.
+case "${1:-}" in
+    "")        interactive_mode ;;
+    --check)   check_mode ;;
+    *)         usage ;;
+esac
