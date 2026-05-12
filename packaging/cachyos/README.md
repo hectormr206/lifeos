@@ -17,11 +17,33 @@ see [docs/operations/runtime-install.md](../../docs/operations/runtime-install.m
 | `lifeos-containers` | Quadlet templates, tmpfiles, sysusers, install helper | any |
 | `lifeos-runtime` | Meta-package — depends on all four above | any |
 
+## Quick Install (Recommended)
+
+The fastest path is the one-shot installer that handles dependency order, dry-run preview, and pre-flight checks:
+
+```bash
+cd packaging/cachyos
+
+# Preview what would happen
+bash install.sh --check
+
+# Real install (will prompt for sudo for each makepkg -si)
+bash install.sh
+```
+
+The installer:
+- Verifies you are on an Arch-based host (CachyOS, Arch, Manjaro, EndeavourOS).
+- Checks that `base-devel` + Rust + GTK4 + the rest of the build deps are present.
+- Runs `makepkg -si` for each of the 5 packages in dependency order.
+- Reports per-package success/failure and exits non-zero if anything failed.
+
+If you prefer manual control, follow the **Build Order** / **Install Order** sections below.
+
 ## Build Prerequisites
 
 ```bash
 # Required on the build machine:
-sudo pacman -S --needed rust cargo clang pkg-config gtk4 libadwaita dbus pipewire wayland openssl sqlite
+sudo pacman -S --needed base-devel rust cargo clang pkg-config gtk4 libadwaita dbus pipewire wayland openssl sqlite
 ```
 
 ## Build Order
