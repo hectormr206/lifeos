@@ -60,6 +60,7 @@ sudo bash scripts/build-iso.sh
 | New feature in daemon | `docs/user/user-guide.md` + `README.md` feature list |
 | New CLI command | `docs/user/user-guide.md` |
 | Containerfile (new package/service) | `docs/user/installation.md` if user-visible |
+| CachyOS PKGBUILD or `life init` flow | `docs/operations/runtime-install.md` (canonical CachyOS guide) |
 | SimpleX bridge | `docs/operations/simplex-features.md` |
 | Security config | `docs/user/installation.md` Security Defaults section |
 | Architecture change | `docs/architecture/` relevant file |
@@ -88,6 +89,7 @@ Instead of reading everything, use `docs/README.md` as index:
 
 | Topic | Doc |
 |-------|-----|
-| Workstation bootstrap (dev sudo policy, RUST_LOG dropin, sentinel) | `docs/operations/developer-bootstrap.md` |
+| **CachyOS install (nuevos usuarios, referencia canónica)** | `docs/operations/runtime-install.md` |
+| Workstation bootstrap (dev sudo policy, RUST_LOG dropin, CachyOS workflow) | `docs/operations/developer-bootstrap.md` |
 | Update check/stage/apply cycle | `docs/operations/update-flow.md` |
 | Contributor quickstart | `docs/contributor/bootstrap-dev.md` |
