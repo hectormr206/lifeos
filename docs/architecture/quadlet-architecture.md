@@ -285,6 +285,64 @@ lifeos-desktop (host, user-scope)
 
 Installed at `/usr/lib/systemd/user/lifeos-desktop.service`. Auto-enabled globally via symlink in `/usr/lib/systemd/user/default.target.wants/` and per-user via `/etc/skel/.config/systemd/user/default.target.wants/`. `Restart=on-failure` with the companion's own retry logic handles daemon restarts cleanly.
 
+## Arquitectura user-scope en CachyOS
+
+En el perfil de host CachyOS (Fase 3), **todos los Quadlets corren en
+user-scope** (`systemd --user`), a diferencia del path de bootc legacy donde
+los Quadlets eran system-scope. Este cambio elimina la necesidad de reglas
+polkit y permite a un usuario no privilegiado gestionar el runtime completo.
+
+### Por qué funciona el user-scope con GPU CDI
+
+Rootless podman + CDI funciona en CachyOS dado que:
+
+1. `/dev/nvidia*` tiene modo 666 por defecto (driver NVIDIA estándar en Arch)
+2. `/etc/cdi/nvidia.yaml` es legible por cualquier usuario tras el
+   `nvidia-ctk cdi generate` inicial
+3. CachyOS usa cgroup v2 con el controlador `devices` delegado a los usuarios
+   (comportamiento default con systemd 254+)
+4. El Quadlet `AddDevice=nvidia.com/gpu=all` funciona igual rootless que
+   rootful con podman 5.x
+
+### Instalador de Quadlets user-scope
+
+Los Quadlets fuente se instalan en `/usr/share/lifeos/quadlets/*.container`
+por el paquete `lifeos-containers`. El helper `lifeos-quadlet-install --user`
+crea `~/.config/containers/systemd/` y crea un symlink por cada `.container`.
+Los symlinks garantizan que las actualizaciones de `pacman -U` propagen los
+cambios sin re-ejecutar el helper.
+
+`life init` invoca este helper automáticamente si los symlinks no existen
+todavía.
+
+### Game Guard en user-scope (sin polkit)
+
+El Game Guard en `daemon/src/ai_runtime_profile.rs` usa
+`systemctl --user restart lifeos-llama-server.service` para hacer el swap de
+perfil de modelo. Como todos los Quadlets corren en user-scope, esta llamada
+no requiere polkit ni wrappers de sudo. El código ya maneja ambos scopes
+(`LlamaServiceScope::User` en `ai_runtime_profile.rs:59`) y selecciona
+user-scope cuando el unit existe como servicio de usuario.
+
+### Dual-scope en el código del daemon
+
+`daemon/src/ai_runtime_profile.rs` expone `LlamaServiceScope::{System, User}`
+(línea 59). La función `ensure_llama_service_runtime_env_files()` (línea 1107)
+detecta el scope probando si existe el unit de usuario primero.
+`systemctl_command(scope)` (línea 1190) inyecta `--user` cuando corresponde.
+No se necesitaron cambios al código del daemon para soportar user-scope —
+ya estaba implementado.
+
+### Diferencia respecto al path bootc legacy
+
+| Aspecto | CachyOS (Fase 3) | bootc legacy |
+|---------|-----------------|-------------|
+| Scope de Quadlets | user-scope | system-scope |
+| Gestión polkit | no necesaria | `org.freedesktop.systemd1` rule |
+| Instalador de Quadlets | `lifeos-quadlet-install --user` | Containerfile |
+| CDI | rootless OK con dev 666 | rootful, sin restricciones |
+| Game Guard restart | `systemctl --user` directo | requería wrapper |
+
 ## Further reading
 
 - PRD: [`docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md`](../strategy/prd-architecture-pivot-lean-bootc-quadlet.md)
