@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Args;
+use colored::Colorize;
 use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
@@ -18,8 +19,53 @@ pub struct HostInitArgs {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub async fn execute(_args: HostInitArgs) -> Result<i32> {
-    unimplemented!("host_init: not implemented yet")
+pub async fn execute(args: HostInitArgs) -> Result<i32> {
+    let mut report = Report::new();
+
+    eprintln!("{}", "[1/5] Detecting distro...".bold());
+    if let Err(e) = step_detect_distro(&mut report) {
+        eprintln!("  {} {}", "✗".red(), e);
+        report.print(args.json);
+        return Ok(report.exit_code());
+    }
+    eprintln!("  {} distro: {}", "✓".green(), report.distro.as_deref().unwrap_or("?").cyan());
+
+    eprintln!("{}", "[2/5] Checking prerequisites...".bold());
+    if let Err(e) = step_check_prereqs(&mut report) {
+        eprintln!("  {} {}", "✗".red(), e);
+        report.print(args.json);
+        return Ok(report.exit_code());
+    }
+    eprintln!("  {} all prerequisites present", "✓".green());
+
+    eprintln!("{}", "[3/5] Verifying filesystem paths...".bold());
+    if let Err(e) = step_verify_filesystem(&mut report) {
+        eprintln!("  {} {}", "✗".red(), e);
+        report.print(args.json);
+        return Ok(report.exit_code());
+    }
+    eprintln!("  {} /var/lib/lifeos and /run/lifeos present", "✓".green());
+
+    eprintln!("{}", "[4/5] Enabling services...".bold());
+    if let Err(e) = step_enable_services(&args, &mut report).await {
+        eprintln!("  {} {}", "✗".red(), e);
+        report.print(args.json);
+        return Ok(report.exit_code());
+    }
+    eprintln!("  {} services enabled", "✓".green());
+
+    eprintln!("{}", "[5/5] Running health checks...".bold());
+    step_health_fanout(&args, &mut report).await?;
+
+    if report.exit_code() == 0 {
+        eprintln!("  {} all healthy", "✓".green());
+        println!("Dashboard: http://127.0.0.1:8081/dashboard");
+    } else if report.exit_code() == 1 {
+        eprintln!("  {} partial — see details above", "⚠".yellow());
+    }
+
+    report.print(args.json);
+    Ok(report.exit_code())
 }
 
 // ── Report types ──────────────────────────────────────────────────────────────
@@ -84,8 +130,53 @@ impl Report {
         }
     }
 
-    pub fn print(&self, _json: bool) {
-        unimplemented!("print: not implemented yet")
+    /// Print the report. JSON goes to stdout; plain text status goes to stderr.
+    pub fn print(&self, json: bool) {
+        if json {
+            // JSON output to stdout (no ANSI codes)
+            match serde_json::to_string_pretty(self) {
+                Ok(s) => println!("{}", s),
+                Err(e) => eprintln!("failed to serialize report: {}", e),
+            }
+            return;
+        }
+
+        // Plain text — summary table to stderr
+        eprintln!();
+        eprintln!("{}", "LifeOS host init — summary".bold());
+        eprintln!("{}", "─".repeat(40).dimmed());
+
+        let distro_str = self
+            .distro
+            .as_deref()
+            .unwrap_or("unknown");
+        eprintln!(
+            "  Distro:      {}",
+            distro_str.cyan()
+        );
+
+        let prereqs_ok = self.prerequisites.podman.is_some()
+            && self.prerequisites.nvidia_smi
+            && self.prerequisites.nvidia_ctk.is_some()
+            && self.prerequisites.cdi_spec;
+        let prereq_mark = if prereqs_ok { "OK".green() } else { "FAIL".red() };
+        eprintln!("  Prerequisites: {}", prereq_mark);
+
+        let fs_ok = self.filesystem.var_lib_lifeos && self.filesystem.run_lifeos;
+        let fs_mark = if fs_ok { "OK".green() } else { "FAIL".red() };
+        eprintln!("  Filesystem:  {}", fs_mark);
+
+        let svc_ok = self.services.lifeosd.healthy;
+        let svc_mark = if svc_ok { "OK".green() } else { "FAIL".red() };
+        eprintln!("  lifeosd:     {}", svc_mark);
+
+        eprintln!("{}", "─".repeat(40).dimmed());
+        match self.exit_code {
+            0 => eprintln!("  {} All services healthy.", "✓".green()),
+            1 => eprintln!("  {} Partial — some services unhealthy.", "⚠".yellow()),
+            _ => eprintln!("  {} Prerequisites or filesystem issue.", "✗".red()),
+        }
+        eprintln!();
     }
 }
 
