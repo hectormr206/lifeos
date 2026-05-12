@@ -85,11 +85,112 @@ Generate the Container Device Interface spec so rootless Quadlets can access the
 sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
 ```
 
-Verify:
+The `lifeos-cdi-setup` helper (installed with `lifeos-containers`) checks this for you
+and prints the exact command with expected output if the spec is missing:
+
+```bash
+lifeos-cdi-setup
+```
+
+Verify manually:
 
 ```bash
 ls /etc/cdi/nvidia.yaml        # file must exist and be non-empty
 nvidia-ctk cdi list            # lists detected devices (e.g. nvidia.com/gpu=0)
+```
+
+After generating the spec, future NVIDIA driver updates will automatically trigger
+a regeneration via the `lifeos-cdi-refresh.path` systemd unit (enabled by the
+`lifeos-containers` post-install hook).
+
+## Rootless CDI Verification
+
+After the CDI spec is generated and `life init` has completed, verify that rootless
+Podman containers can actually reach the GPU.
+
+### 1. Sanity checks
+
+Check that the container runtime backend and cgroup version are correct
+(rootless GPU requires cgroup v2):
+
+```bash
+podman info --format '{{.Host.NetworkBackend}}'
+# Expected: netavark (or pasta for rootless — either is fine)
+
+podman info --format '{{.Host.CgroupVersion}}'
+# Expected: v2
+```
+
+CachyOS ships with cgroup v2 by default since kernel 5.19. If you see `v1`, reboot
+with `systemd.unified_cgroup_hierarchy=1` kernel parameter or upgrade your kernel.
+
+### 2. GPU device permissions
+
+Rootless CDI requires `/dev/nvidia*` to be readable by the user. Check:
+
+```bash
+ls -la /dev/nvidia* /dev/nvidiactl /dev/nvidia-uvm 2>/dev/null
+```
+
+Expected mode: `crw-rw-rw-` (0666) or at minimum `crw-rw----` with the user in
+the `video` and `render` groups.
+
+If permissions are 0660 and you see "Permission denied" errors in containers:
+
+```bash
+# Add yourself to video and render groups (requires re-login to take effect)
+sudo usermod -aG video,render "$USER"
+
+# Or set permissive mode on the current session (not persistent):
+sudo chmod 0666 /dev/nvidia* /dev/nvidiactl /dev/nvidia-uvm
+```
+
+For a persistent fix without changing your groups, add a udev rule:
+
+```bash
+sudo tee /etc/udev/rules.d/70-nvidia-cdi.rules <<'EOF'
+KERNEL=="nvidia*", MODE="0666"
+KERNEL=="nvidiactl", MODE="0666"
+KERNEL=="nvidia-uvm", MODE="0666"
+EOF
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+### 3. Rootless GPU probe
+
+Run the official CUDA probe container rootless with CDI device injection:
+
+```bash
+podman run --rm \
+  --device nvidia.com/gpu=all \
+  docker.io/nvidia/cuda:12.0.0-base-ubi9 \
+  nvidia-smi
+```
+
+Expected output: the standard `nvidia-smi` table showing your GPU name, driver
+version, CUDA version, and memory. Example:
+
+```
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 550.54.14   Driver Version: 550.54.14   CUDA Version: 12.4      |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+|   0  NVIDIA GeForce ...  Off  | 00000000:01:00.0  On |                  N/A |
+```
+
+If `podman run` fails with `nvidia.com/gpu=all: no such device`:
+
+1. Verify the CDI spec exists: `ls /etc/cdi/nvidia.yaml`
+2. Verify devices are listed: `nvidia-ctk cdi list`
+3. Regenerate if stale: `sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`
+4. Confirm podman reads CDI: `podman run --rm --device nvidia.com/gpu=all --log-level debug ... 2>&1 | grep -i cdi`
+
+If the probe hangs or the container starts but `nvidia-smi` prints no GPUs, check
+that `nvidia-persistenced` is not holding an exclusive lock:
+
+```bash
+systemctl status nvidia-persistenced
+# If active and causing issues: sudo systemctl stop nvidia-persistenced
 ```
 
 ## First Run
