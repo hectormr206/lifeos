@@ -164,3 +164,115 @@ produces no filesystem changes and prints an `already up-to-date` line for each 
 # Safe to run any time — will no-op if nothing changed
 sudo bash scripts/lifeos-dev-bootstrap.sh --with-sentinel
 ```
+
+---
+
+## Desarrollo en CachyOS (host nativo, sin bootc)
+
+A partir de Fase 3, el host de referencia del maintainer es **CachyOS**.
+El flujo de desarrollo sobre CachyOS difiere en algunos puntos respecto al
+workflow de bootc documentado arriba.
+
+### Prerequisitos de Arch que no están en Fedora
+
+```bash
+# Herramientas de build base
+sudo pacman -S base-devel git rustup
+
+# Inicializar rustup (si no está configurado)
+rustup default stable
+rustup component add clippy rustfmt
+
+# Podman rootless (sin docker group)
+sudo pacman -S podman fuse-overlayfs slirp4netns
+```
+
+> En CachyOS **no** existe el grupo `docker`. Podman corre rootless de forma
+> nativa — no hay que agregar el usuario a ningún grupo especial.
+
+### Ejecutar tests con podman en Arch
+
+Los tests de integración que prueban Quadlets o contenedores corren igual que
+en Fedora, pero algunas sutilezas de Arch requieren atención:
+
+```bash
+# Asegurar que el socket de podman user esté activo
+systemctl --user start podman.socket
+
+# Correr todos los tests del daemon
+cargo test -p lifeosd
+
+# Test individual
+cargo test -p lifeosd test_name
+```
+
+Si un test falla con `permission denied on /run/user/1000/podman/podman.sock`,
+verificá que `podman.socket` esté activo:
+
+```bash
+systemctl --user status podman.socket
+```
+
+### Compilar con las features exactas de CI
+
+El CI compila con las mismas features en todos los perfiles. En CachyOS hay
+que asegurarse de tener las dependencias nativas correspondientes:
+
+```bash
+# Dependencias de sistema para todas las features
+sudo pacman -S dbus pipewire gtk4 libadwaita openssl sqlite
+
+# Build con el conjunto exacto de features del CI
+cargo build --manifest-path daemon/Cargo.toml \
+  --features "dbus,http-api,ui-overlay,wake-word,messaging"
+
+# Clippy con el mismo conjunto
+cargo clippy --manifest-path daemon/Cargo.toml \
+  --features "dbus,http-api,ui-overlay,wake-word,messaging" \
+  -- -D warnings
+```
+
+### Iterar sobre el daemon sin instalar el paquete
+
+Para desarrollo rápido, corrés `lifeosd` directamente desde el target de cargo:
+
+```bash
+# Terminal 1: build + run del daemon en modo debug
+RUST_LOG=debug cargo run --manifest-path daemon/Cargo.toml
+
+# Terminal 2: verificar que responde
+curl -s http://127.0.0.1:8081/api/v1/health
+```
+
+Los Quadlets de contenedores (llama-server, TTS, etc.) pueden estar corriendo
+como servicios de usuario normales en paralelo — el daemon en modo dev los
+detecta por TCP igual que en producción.
+
+### Variables de entorno útiles para desarrollo
+
+```bash
+# Usar directorio de datos local en vez de /var/lib/lifeos
+export LIFEOS_DATA_DIR="$HOME/.local/share/lifeos-dev"
+
+# Activar logging detallado por módulo
+export RUST_LOG="lifeosd=debug,lifeosd::axi_tools=trace"
+
+# Limpiar estado entre sesiones de prueba
+rm -rf "$LIFEOS_DATA_DIR" && mkdir -p "$LIFEOS_DATA_DIR"
+```
+
+### Rollback en CachyOS (sin bootc)
+
+No hay `bootc rollback` en el workflow nativo. En su lugar, git y pacman
+son el mecanismo de reversión:
+
+```bash
+# Revertir a la versión instalada desde el paquete
+sudo pacman -U ~/.cache/paru/lifeos-daemon-*.pkg.tar.zst
+
+# O compilar un commit específico y remplazar el binario
+git checkout <commit_anterior>
+cargo build --release --manifest-path daemon/Cargo.toml
+sudo install -m 755 target/release/lifeosd /usr/bin/lifeosd
+systemctl --user restart lifeosd.service
+```
