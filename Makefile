@@ -5,7 +5,8 @@
         lint lint-cli lint-daemon fmt fmt-check audit audit-workspace audit-cli audit-daemon \
         docker docker-build docker-build-release docker-build-dev \
         docker-lint docker-push clean install dev-setup help \
-        check-daemon-prereqs phase3-hardening phase45-lifecycle truth-alignment
+        check-daemon-prereqs phase3-hardening phase45-lifecycle truth-alignment \
+        validate-cachyos
 
 # =============================================================================
 # Default Target
@@ -81,6 +82,12 @@ phase45-lifecycle:
 truth-alignment:
 	@echo "🛡️  Running truth alignment guardrails..."
 	bash verify-truth-alignment.sh
+
+## Run CachyOS V1 acceptance validation harness (REQ-B1 through REQ-B5)
+## Pass ARGS to forward flags: make validate-cachyos ARGS="--json"
+validate-cachyos:
+	@echo "Running CachyOS validation harness..."
+	bash scripts/validate-cachyos.sh $(ARGS)
 
 ## Run all tests with coverage
 test-coverage:
@@ -353,5 +360,6 @@ help:
 	@echo "  clean-all    Deep clean (includes registry cache)"
 	@echo ""
 	@echo "Other Targets:"
-	@echo "  ci           Run all CI checks"
-	@echo "  help         Show this help message"
+	@echo "  ci                  Run all CI checks"
+	@echo "  validate-cachyos    Run CachyOS V1 acceptance harness (REQ-B1..B5)"
+	@echo "  help                Show this help message"
