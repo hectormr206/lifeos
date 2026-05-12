@@ -13,6 +13,7 @@ pub mod doctor;
 pub mod first_boot;
 pub mod focus;
 pub mod followalong;
+pub mod host_init;
 pub mod id;
 pub mod init;
 pub mod intents;
