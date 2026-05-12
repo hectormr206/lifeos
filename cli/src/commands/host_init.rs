@@ -832,8 +832,7 @@ ID_LIKE="arch"
         let token_file = dir.join("bootstrap.token");
         fs::write(&token_file, "from-file").unwrap();
 
-        let resolved =
-            resolve_bootstrap_token_from(Some("from-env".to_string()), &[dir.clone()]);
+        let resolved = resolve_bootstrap_token_from(Some("from-env".to_string()), &[dir.clone()]);
         assert_eq!(resolved.as_deref(), Some("from-env"));
     }
 
