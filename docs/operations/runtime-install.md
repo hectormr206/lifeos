@@ -658,3 +658,67 @@ sudo pacman -Rsn lifeos-runtime lifeos-containers lifeos-desktop lifeos-daemon l
 # 4. Limpiar estado (opcional)
 rm -rf /var/lib/lifeos ~/.config/lifeos
 ```
+
+---
+
+## 9. Actualización
+
+`life host update` actualiza el runtime desde el código fuente del repositorio.
+Es el camino de actualización para instalaciones CachyOS nativas (via `makepkg`),
+a diferencia de `life update` que gestiona actualizaciones OTA por imagen bootc.
+
+### ¿Qué hace?
+
+1. **Pre-flight**: verifica árbol git limpio y rama `main`.
+2. **Git pull**: `git fetch origin --quiet` + `git pull --ff-only origin main`.
+   Si el SHA antes y después son iguales, sale con "ya estás al día".
+3. **Detección de paquetes**: diff entre el SHA anterior y el nuevo. Cualquier
+   archivo bajo `cli/`, `daemon/`, `desktop/`, `containers/`, o
+   `packaging/cachyos/<pkg>/` marca el paquete correspondiente para rebuild.
+   `lifeos-runtime` siempre se incluye cuando hay algún cambio.
+4. **Rebuild en orden de dependencias**:
+   ```
+   lifeos-cli → lifeos-daemon → lifeos-desktop → lifeos-containers → lifeos-runtime
+   ```
+   Para cada paquete ejecuta:
+   ```bash
+   cd <repo>/packaging/cachyos/<pkgname>
+   makepkg -si --noconfirm
+   ```
+   `makepkg -si` pide contraseña sudo para instalar — el usuario la provee
+   interactivamente igual que en la instalación inicial.
+5. **Restart de servicios** (solo los afectados):
+   - `lifeos-daemon` → `systemctl --user restart lifeosd.service`
+   - `lifeos-desktop` → `systemctl --user restart lifeos-desktop.service`
+   - `lifeos-containers` → reinicia los 4 Quadlets de contenedores
+6. **Health fanout**: verifica puertos y servicios, igual que `life init`.
+
+### Uso
+
+```bash
+# Actualización completa
+life host update
+
+# Dry run — muestra qué se reconstruiría sin hacerlo
+life host update --check
+
+# Salida JSON (para automatización)
+life host update --json
+
+# Override del directorio del repo
+life host update --repo /ruta/al/repo/lifeos
+```
+
+### Variables de entorno
+
+| Variable | Default | Descripción |
+|----------|---------|-------------|
+| `LIFEOS_REPO_DIR` | `~/dev/lifeos` | Directorio raíz del repo de LifeOS |
+
+### Códigos de salida
+
+| Código | Significado |
+|--------|-------------|
+| `0` | Éxito o no-op (ya al día) |
+| `1` | Fallo parcial (algún paquete no compiló o servicio no reinició) |
+| `2` | Pre-flight fallido (árbol sucio, rama incorrecta, repo no encontrado) |
