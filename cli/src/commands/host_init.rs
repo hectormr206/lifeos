@@ -213,8 +213,74 @@ pub fn verify_filesystem_at(
     Ok(())
 }
 
-pub async fn step_enable_services(_args: &HostInitArgs, _report: &mut Report) -> Result<()> {
-    unimplemented!("step_enable_services: not implemented")
+/// Container service names to manage (in order).
+const CONTAINER_SERVICES: &[&str] = &[
+    "lifeos-llama-server.service",
+    "lifeos-llama-embeddings.service",
+    "lifeos-tts.service",
+    "lifeos-simplex-bridge.service",
+];
+
+/// Check if a user unit is already enabled.
+pub fn unit_is_enabled(unit: &str) -> bool {
+    std::process::Command::new("systemctl")
+        .args(["--user", "is-enabled", unit])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Enable and start a single user unit idempotently.
+pub fn enable_user_unit(unit: &str) -> Result<()> {
+    let status = std::process::Command::new("systemctl")
+        .args(["--user", "enable", "--now", unit])
+        .status()
+        .map_err(|e| anyhow::anyhow!("systemctl failed for {}: {}", unit, e))?;
+
+    if !status.success() {
+        anyhow::bail!("systemctl --user enable --now {} failed", unit);
+    }
+    Ok(())
+}
+
+/// Run `systemctl --user daemon-reload`.
+pub fn daemon_reload() -> Result<()> {
+    let status = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status()
+        .map_err(|e| anyhow::anyhow!("daemon-reload failed: {}", e))?;
+
+    if !status.success() {
+        anyhow::bail!("systemctl --user daemon-reload failed");
+    }
+    Ok(())
+}
+
+pub async fn step_enable_services(args: &HostInitArgs, report: &mut Report) -> Result<()> {
+    // Always reload first so Quadlet changes are picked up
+    if let Err(e) = daemon_reload() {
+        eprintln!("  [services] warning: daemon-reload: {}", e);
+    }
+
+    // Enable lifeosd
+    if let Err(e) = enable_user_unit("lifeosd.service") {
+        eprintln!("  [services] lifeosd.service: {}", e);
+        report.services.lifeosd.state = "failed".to_string();
+        report.set_exit_code(2);
+        anyhow::bail!("lifeosd.service failed to enable: {}", e);
+    }
+    report.services.lifeosd.state = "enabled".to_string();
+
+    if !args.no_containers {
+        for unit in CONTAINER_SERVICES {
+            if let Err(e) = enable_user_unit(unit) {
+                eprintln!("  [services] {}: {}", unit, e);
+                report.set_exit_code(1);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn step_health_fanout(_args: &HostInitArgs, _report: &mut Report) -> Result<()> {
