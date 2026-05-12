@@ -90,8 +90,24 @@ impl Report {
 
 // ── Step stubs ────────────────────────────────────────────────────────────────
 
-pub fn step_detect_distro(_report: &mut Report) -> Result<()> {
-    unimplemented!("step_detect_distro: not implemented")
+pub fn step_detect_distro(report: &mut Report) -> Result<()> {
+    let content = std::fs::read_to_string("/etc/os-release")
+        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+        .unwrap_or_default();
+
+    match parse_os_release_arch(&content) {
+        Some(distro_id) => {
+            report.distro = Some(distro_id);
+            Ok(())
+        }
+        None => {
+            report.set_exit_code(2);
+            anyhow::bail!(
+                "unsupported distro — supported distros: CachyOS (Arch-based). \
+                 Run on a CachyOS or Arch Linux host."
+            )
+        }
+    }
 }
 
 pub fn step_check_prereqs(_report: &mut Report) -> Result<()> {
@@ -114,8 +130,36 @@ pub async fn step_health_fanout(_args: &HostInitArgs, _report: &mut Report) -> R
 
 /// Parse /etc/os-release content (string) and check if distro is Arch-based.
 /// Returns `Some(distro_id)` when supported, `None` when unsupported.
+///
+/// Accepted: ID=arch, ID=cachyos, or ID_LIKE containing "arch".
 pub fn parse_os_release_arch(content: &str) -> Option<String> {
-    unimplemented!("parse_os_release_arch: not implemented")
+    let mut id: Option<String> = None;
+    let mut id_like: Option<String> = None;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("ID=") {
+            id = Some(val.trim_matches('"').to_lowercase());
+        } else if let Some(val) = line.strip_prefix("ID_LIKE=") {
+            id_like = Some(val.trim_matches('"').to_lowercase());
+        }
+    }
+
+    // Accept ID=arch or ID=cachyos directly
+    if let Some(ref distro_id) = id {
+        if distro_id == "arch" || distro_id == "cachyos" {
+            return Some(distro_id.clone());
+        }
+    }
+
+    // Accept anything with ID_LIKE containing "arch" (EndeavourOS, Manjaro, etc.)
+    if let Some(ref like) = id_like {
+        if like.split_whitespace().any(|s| s == "arch") {
+            return id.or(Some("arch".to_string()));
+        }
+    }
+
+    None
 }
 
 /// Run `which <cmd>` and return true if found.
