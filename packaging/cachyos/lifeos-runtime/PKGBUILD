@@ -1,0 +1,57 @@
+# Maintainer: Héctor Martínez <hectormartinezresendiz@gmail.com>
+# Verification: bash -n PKGBUILD && makepkg -s --noconfirm --syncdeps
+#
+# T22 — meta-package that pulls in the full LifeOS runtime stack.
+# Empty build() and package() — all work is done by declared dependencies.
+#
+# Install order matters; pacman resolves it automatically via the depends= list.
+# For manual install: install each package in dependency order (see README.md).
+
+pkgname=lifeos-runtime
+pkgdesc="LifeOS full runtime stack (meta-package — installs all LifeOS components)"
+pkgver=0.8.42
+pkgrel=1
+arch=('any')
+url="https://github.com/hectormr206/lifeos"
+license=('LGPL-2.1-only')
+depends=(
+    'lifeos-cli'
+    'lifeos-daemon'
+    'lifeos-desktop'
+    'lifeos-containers'
+    'podman'
+    'nvidia-utils'
+    'nvidia-container-toolkit'
+)
+optdepends=(
+    'nvidia-container-toolkit-bin: alternative if AUR nvidia-container-toolkit build fails'
+)
+source=("lifeos::git+https://github.com/hectormr206/lifeos.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    grep '^version' "$srcdir/lifeos/Cargo.toml" \
+        | head -1 \
+        | sed 's/.*"\(.*\)".*/\1/'
+}
+
+build() {
+    : # Meta-package — no build.
+}
+
+package() {
+    # License only.
+    install -Dm644 "$srcdir/lifeos/LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+post_install() {
+    echo ""
+    echo "lifeos-runtime installed."
+    echo "Complete setup by running: life init"
+    echo ""
+    echo "If this is your first install, also run:"
+    echo "  sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"
+    echo ""
+    echo "See: packaging/cachyos/README.md for full instructions."
+}
