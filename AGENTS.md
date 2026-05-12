@@ -2,7 +2,7 @@
 
 ## What is LifeOS?
 
-AI-native Linux distribution (Fedora bootc + COSMIC Desktop). Three Rust crates:
+LifeOS is a personal AI runtime / operating-system layer over Linux, not a replacement distro. CachyOS is the current reference host for validation; Fedora bootc and NixOS work are legacy/transitional paths. Three Rust crates:
 
 | Crate | Binary | Purpose |
 |-------|--------|---------|
@@ -11,7 +11,7 @@ AI-native Linux distribution (Fedora bootc + COSMIC Desktop). Three Rust crates:
 | `desktop/` | `lifeos-desktop` | Per-user companion: system tray + wake-word listener |
 | `tests/` | — | Integration tests |
 
-Plus: `image/` (OS container), `scripts/` (automation), `docs/` (documentation).
+Plus: `image/` (legacy/prototype OS container), `nix/` (transitional packaging/VM work), `scripts/` (automation), `docs/` (documentation).
 
 ## Build & Test (essential commands)
 
@@ -28,7 +28,7 @@ cargo fmt --manifest-path daemon/Cargo.toml       # Format
 1. **No orphaned modules** — register in `main.rs`, wire to SimpleX/API/event bus/supervisor
 2. **Use `anyhow::Result`** for all fallible functions
 3. **Run `cargo fmt` + `clippy`** before committing
-4. **`/usr` is read-only** at runtime (bootc immutable) — state goes to `/var/` or `/home/`
+4. **Host paths vary by profile** — legacy bootc keeps `/usr` read-only; runtime state should still prefer `/var/` or `/home/`
 5. **Auth required** — all API routes need `x-bootstrap-token` header
 
 ## Contribution Workflow Policy

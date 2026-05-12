@@ -1,8 +1,10 @@
 # LifeOS Installation Guide
 
+> **Transition notice — runtime pivot in progress.** LifeOS is moving from a Fedora bootc distro prototype to a personal AI runtime / operating-system layer over Linux. This guide still documents the bootc installation path because the runtime installer is not finalized yet; an early draft of the new direction lives in [`docs/operations/runtime-install.md`](../operations/runtime-install.md). Use this guide if you are installing or operating the legacy bootc image today; expect it to be retired as the canonical entry point once the runtime install path is ready.
+
 This guide covers installing LifeOS on bare metal or virtual machines.
 
-LifeOS is an immutable, AI-native Linux distribution built on Fedora bootc. It ships with **COSMIC Desktop**, a modern Wayland-native desktop environment developed by System76 (the team behind Pop!\_OS), designed for speed, composability, and a clean user experience.
+The Fedora bootc image documented here shipped with **COSMIC Desktop**, a modern Wayland-native desktop environment developed by System76 (the team behind Pop!\_OS), designed for speed, composability, and a clean user experience.
 
 ## Table of Contents
 

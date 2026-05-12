@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-LifeOS — AI-native Linux distribution on Fedora bootc (immutable). Rust CLI (`life`) + user-session daemon (`lifeosd`) + bootc OS image.
+LifeOS — personal AI runtime / operating-system layer over Linux. Rust CLI (`life`) + user-session daemon (`lifeosd`) + desktop companion (`lifeos-desktop`). Fedora bootc and NixOS work are legacy/transitional paths after the runtime pivot.
 
 **Language:** Rust 2021. Documentation in Spanish, code in English.
 

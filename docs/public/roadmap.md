@@ -1,12 +1,14 @@
 # LifeOS Public Roadmap
 
-Last updated: `2026-04-01`
+Last updated: `2026-05-11`
 
-LifeOS is an AI-native Linux distribution focused on:
+LifeOS is the personal operating system for your digital life: a local-first AI runtime over Linux focused on:
 
 - local-first intelligence
 - privacy by default
 - sovereign personal computing
+
+LifeOS runs over the Linux host you choose. CachyOS is the current reference host for validation, not the product identity; Fedora bootc and NixOS work are legacy/transitional paths after the runtime pivot.
 
 This roadmap is the public, readable version of where the project stands today and where it is going next.
 
@@ -37,12 +39,13 @@ LifeOS is still early. The goal here is not to pretend the system is finished, b
 
 These are the areas we are actively pushing forward right now.
 
-### 1. Stabilize the public beta foundation
+### 1. Stabilize the public runtime foundation
 
 We are making the real system more dependable on real hardware:
 
-- install and first-boot reliability
-- update and rollback confidence
+- local runtime onboarding
+- host validation on the reference machine
+- memory, SimpleX, and Axi continuity
 - runtime consistency
 - host validation of features that already exist in repo
 

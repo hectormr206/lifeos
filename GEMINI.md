@@ -1,6 +1,6 @@
 # GEMINI.md — LifeOS Context
 
-LifeOS — AI-native Linux distribution on Fedora bootc. Rust CLI (`life`) + daemon (`lifeosd`) + COSMIC Desktop.
+LifeOS — personal AI runtime / operating-system layer over Linux. Rust CLI (`life`) + daemon (`lifeosd`) + desktop companion (`lifeos-desktop`). CachyOS is the current reference host; Fedora bootc and NixOS are legacy/transitional paths after the runtime pivot.
 
 ## Build & Test
 
@@ -16,7 +16,7 @@ cargo test -p lifeosd test_name   # Single test
 
 - **Rust 2021**, `anyhow` for errors, `tokio` async runtime
 - **Formatting:** `cargo fmt` before commit, clippy with `-D warnings`
-- **Immutability:** `/usr` is read-only. State goes to `/var/`, `/etc/`, `/home/`
+- **Host paths:** legacy bootc keeps `/usr` read-only; runtime state should still prefer `/var/`, `/etc/`, or `/home/`
 - **No dead code:** Every new module must be wired to SimpleX/API/event bus/supervisor
 - **AI:** Local `llama-server` on `:8082` (Qwen3.5-4B). LLM router with 13+ providers
 
