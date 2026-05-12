@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use serde::Serialize;
 use std::path::Path;
+use std::path::PathBuf;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -110,8 +111,61 @@ pub fn step_detect_distro(report: &mut Report) -> Result<()> {
     }
 }
 
-pub fn step_check_prereqs(_report: &mut Report) -> Result<()> {
-    unimplemented!("step_check_prereqs: not implemented")
+pub fn step_check_prereqs(report: &mut Report) -> Result<()> {
+    let mut missing: Vec<String> = Vec::new();
+
+    // podman --version
+    match probe_version("podman", &["--version"]) {
+        Some(ver) => {
+            report.prerequisites.podman = Some(ver);
+        }
+        None => {
+            missing.push(
+                "podman not found — install with: sudo pacman -S podman".to_string(),
+            );
+        }
+    }
+
+    // nvidia-smi
+    if which_available("nvidia-smi") {
+        report.prerequisites.nvidia_smi = true;
+    } else {
+        missing.push(
+            "nvidia-smi not found — install NVIDIA drivers: sudo pacman -S nvidia-dkms nvidia-utils".to_string(),
+        );
+    }
+
+    // nvidia-ctk --version
+    match probe_version("nvidia-ctk", &["--version"]) {
+        Some(ver) => {
+            report.prerequisites.nvidia_ctk = Some(ver);
+        }
+        None => {
+            missing.push(
+                "nvidia-ctk not found — install with: paru -S nvidia-container-toolkit".to_string(),
+            );
+        }
+    }
+
+    // /etc/cdi/nvidia.yaml
+    if Path::new("/etc/cdi/nvidia.yaml").exists() {
+        report.prerequisites.cdi_spec = true;
+    } else {
+        missing.push(
+            "CDI spec missing — run: sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"
+                .to_string(),
+        );
+    }
+
+    if !missing.is_empty() {
+        for msg in &missing {
+            eprintln!("  [prereq] {}", msg);
+        }
+        report.set_exit_code(2);
+        anyhow::bail!("prerequisites missing: {}", missing.join("; "))
+    }
+
+    Ok(())
 }
 
 pub fn step_verify_filesystem(_report: &mut Report) -> Result<()> {
@@ -162,14 +216,27 @@ pub fn parse_os_release_arch(content: &str) -> Option<String> {
     None
 }
 
-/// Run `which <cmd>` and return true if found.
+/// Run `which <cmd>` and return true if found in PATH.
 pub fn which_available(cmd: &str) -> bool {
-    unimplemented!("which_available: not implemented")
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
-/// Run a command and capture the first line of stdout as a version string.
+/// Run a command and capture the first non-empty stdout line as a version string.
 pub fn probe_version(cmd: &str, args: &[&str]) -> Option<String> {
-    unimplemented!("probe_version: not implemented")
+    let output = std::process::Command::new(cmd).args(args).output().ok()?;
+    if !output.status.success() && output.stdout.is_empty() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
