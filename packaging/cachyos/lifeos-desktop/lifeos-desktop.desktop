@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=LifeOS Desktop
+Comment=LifeOS desktop companion — system tray, wake-word listener, and overlay
+Exec=/usr/bin/lifeos-desktop
+Icon=lifeos-desktop
+Categories=Utility;
+Keywords=lifeos;ai;tray;wakeword;
+# Run silently in background — no window on launch.
+NoDisplay=false
+# Autostart on login for users who enable the service.
+# XDG autostart is handled via the .desktop file presence in
+# /etc/xdg/autostart/ if desired; this file targets Applications menu.
+StartupNotify=false
+Terminal=false

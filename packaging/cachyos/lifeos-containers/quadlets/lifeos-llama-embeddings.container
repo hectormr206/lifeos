@@ -1,0 +1,57 @@
+# lifeos-llama-embeddings.container — user-scope Quadlet for CachyOS packaging
+#
+# T19: Adapted from containers/lifeos-llama-embeddings/ for rootless user-scope.
+# Installed to /usr/share/lifeos/quadlets/ by lifeos-containers PKGBUILD.
+# Linked into ~/.config/containers/systemd/ by lifeos-quadlet-install --user.
+#
+# Verification (after install + daemon-reload):
+#   systemctl --user status lifeos-llama-embeddings.service
+#   curl -s http://127.0.0.1:8083/health
+#
+# Port: 8083 (lifeosd uses http://127.0.0.1:8083 for semantic embeddings).
+# No GPU required — embeddings run CPU-only.
+
+[Unit]
+Description=LifeOS Semantic Embeddings Server (nomic-embed-text, user-scope)
+Documentation=https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/hectormr206/lifeos-llama-embeddings:stable
+AutoUpdate=registry
+ContainerName=lifeos-llama-embeddings
+HostName=lifeos-llama-embeddings
+
+PublishPort=127.0.0.1:8083:8083
+
+# Models bind mount — read-only (nomic-embed-text-v1.5.f16.gguf ~262 MB).
+# ':z' shared MCS label allows multiple containers to read the same dir.
+Volume=/var/lib/lifeos/models:/models:ro,z
+
+# Env file provides LIFEOS_EMBED_MODEL (model filename).
+Volume=/etc/lifeos/llama-embeddings.env:/etc/lifeos/llama-embeddings.env:ro,z
+
+Exec=/usr/sbin/llama-server \
+    --model /models/${LIFEOS_EMBED_MODEL} \
+    --alias lifeos-embeddings \
+    --host 0.0.0.0 \
+    --port 8083 \
+    --ctx-size 2048 \
+    --threads 2 \
+    --batch-size 256 \
+    --ubatch-size 64 \
+    --embeddings \
+    --pooling mean
+
+[Service]
+EnvironmentFile=-/etc/lifeos/llama-embeddings.env
+
+Restart=always
+RestartSec=5s
+TimeoutStartSec=60s
+MemoryMax=1280M
+CPUQuota=200%
+
+[Install]
+WantedBy=default.target

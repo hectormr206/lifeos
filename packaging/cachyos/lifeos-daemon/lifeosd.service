@@ -1,0 +1,43 @@
+# lifeosd.service — user-scope systemd unit for LifeOS daemon
+#
+# Install path: /usr/lib/systemd/user/lifeosd.service
+# Enable via:   systemctl --user enable --now lifeosd.service
+#               (life init handles this automatically)
+#
+# Verification: systemd-analyze verify lifeosd.service
+#               systemctl --user status lifeosd.service
+
+[Unit]
+Description=LifeOS AI Daemon (lifeosd)
+Documentation=https://github.com/hectormr206/lifeos
+# Container services must be ready before the daemon starts probing them.
+# Quadlet-generated names (user-scope): lifeos-llama-server.service etc.
+After=network-online.target lifeos-llama-server.service lifeos-llama-embeddings.service lifeos-tts.service
+Wants=network-online.target lifeos-llama-server.service lifeos-llama-embeddings.service lifeos-tts.service
+# SimpleX bridge is optional — don't block daemon start on it.
+Wants=lifeos-simplex-bridge.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/lifeosd
+
+# Data directory: shared with lifeos-containers package (tmpfiles.d creates it).
+# If the user is not in the lifeos group the daemon falls back to
+# ${XDG_DATA_HOME:-~/.local/share}/lifeos per existing env-var logic.
+Environment=LIFEOS_DATA_DIR=/var/lib/lifeos
+
+# Restart policy: restart on crash, but not on clean exit (ExecStop or
+# SIGTERM-clean). 5s delay avoids restart storms if the daemon exits fast
+# (e.g., missing config).
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+
+# Logging: forward to journal (default for user units).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeosd
+
+[Install]
+WantedBy=default.target

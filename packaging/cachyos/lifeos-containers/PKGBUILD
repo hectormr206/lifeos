@@ -1,0 +1,101 @@
+# Maintainer: Héctor Martínez <hectormartinezresendiz@gmail.com>
+# Verification: bash -n PKGBUILD && makepkg -s --noconfirm --syncdeps
+#
+# T21 — config-only package: Quadlet templates, tmpfiles.d, sysusers.d, helpers.
+# No Rust build step. arch=any (pure config/scripts).
+#
+# Post-install creates /var/lib/lifeos and /run/lifeos via tmpfiles.d,
+# and creates the lifeos system user via sysusers.d.
+# Does NOT enable any user-scope units — that is life init's job.
+
+pkgname=lifeos-containers
+pkgdesc="LifeOS container Quadlets, tmpfiles, sysusers, and install helpers"
+pkgver=0.8.42
+pkgrel=1
+arch=('any')
+url="https://github.com/hectormr206/lifeos"
+license=('LGPL-2.1-only')
+depends=(
+    'podman>=4.4'
+    'systemd>=240'
+)
+optdepends=(
+    'nvidia-container-toolkit>=1.16.0: GPU CDI passthrough for llama-server'
+    'nvidia-container-toolkit-bin: alternative AUR binary if build fails'
+)
+source=("lifeos::git+https://github.com/hectormr206/lifeos.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    grep '^version' "$srcdir/lifeos/Cargo.toml" \
+        | head -1 \
+        | sed 's/.*"\(.*\)".*/\1/'
+}
+
+build() {
+    : # No build step — pure config package.
+}
+
+package() {
+    local src="$srcdir/lifeos/packaging/cachyos/lifeos-containers"
+
+    # Quadlet template files — installed system-wide.
+    # Users link them into ~/.config/containers/systemd/ via lifeos-quadlet-install --user.
+    install -dm755 "$pkgdir/usr/share/lifeos/quadlets"
+    for f in "$src/quadlets/"*.container; do
+        install -Dm644 "$f" "$pkgdir/usr/share/lifeos/quadlets/$(basename "$f")"
+    done
+
+    # tmpfiles.d — creates /var/lib/lifeos and /run/lifeos at boot.
+    install -Dm644 "$src/tmpfiles.d/lifeos.conf" \
+        "$pkgdir/usr/lib/tmpfiles.d/lifeos.conf"
+
+    # sysusers.d — creates the lifeos system user.
+    install -Dm644 "$src/sysusers.d/lifeos.conf" \
+        "$pkgdir/usr/lib/sysusers.d/lifeos.conf"
+
+    # Helper scripts — both executable.
+    install -Dm755 "$src/helpers/lifeos-quadlet-install" \
+        "$pkgdir/usr/bin/lifeos-quadlet-install"
+
+    # License
+    install -Dm644 "$srcdir/lifeos/LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$srcdir/lifeos/NOTICE" \
+        "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}
+
+post_install() {
+    # Create system user (idempotent — sysusers skips if user exists).
+    systemd-sysusers lifeos.conf
+
+    # Create directory tree (idempotent — tmpfiles skips existing dirs).
+    systemd-tmpfiles --create lifeos.conf
+
+    # Add the installing user to the lifeos group so they can read
+    # /var/lib/lifeos (memory.db, models) without sudo.
+    # SUDO_USER is set when pacman is invoked via sudo (typical for CachyOS).
+    local real_user="${SUDO_USER:-}"
+    if [[ -n "$real_user" ]]; then
+        usermod -aG lifeos "$real_user" \
+            && echo "lifeos-containers: added $real_user to the lifeos group (re-login to apply)"
+    fi
+
+    echo ""
+    echo "lifeos-containers installed. Next step:"
+    echo "  Run 'life init' to configure Quadlet symlinks and enable services."
+    echo "  Or manually: lifeos-quadlet-install --user && systemctl --user daemon-reload"
+}
+
+post_upgrade() {
+    # Re-run tmpfiles on upgrade in case new directories were added.
+    systemd-tmpfiles --create lifeos.conf || true
+    # Reload Quadlet generator if running.
+    systemctl daemon-reload 2>/dev/null || true
+}
+
+post_remove() {
+    echo "lifeos-containers removed."
+    echo "Run 'lifeos-quadlet-install --uninstall' to remove user Quadlet symlinks."
+    echo "Run 'sudo userdel lifeos' to remove the system user if no longer needed."
+}

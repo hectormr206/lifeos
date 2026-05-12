@@ -1,0 +1,71 @@
+# Maintainer: Héctor Martínez <hectormartinezresendiz@gmail.com>
+# Verification: bash -n PKGBUILD && makepkg -s --noconfirm --syncdeps
+#   After install: systemctl --user daemon-reload
+#                  systemctl --user status lifeosd.service
+#
+# T15 — packages `lifeosd` daemon binary and its user-scope systemd unit.
+# Feature flags match the CI matrix exactly (see .github/workflows/).
+
+pkgname=lifeos-daemon
+pkgdesc="LifeOS daemon (lifeosd) — local AI runtime, memory, and API server"
+pkgver=0.8.42
+pkgrel=1
+arch=('x86_64')
+url="https://github.com/hectormr206/lifeos"
+license=('LGPL-2.1-only')
+depends=(
+    'dbus'
+    'pipewire'
+    'wayland'
+    'openssl'
+    'sqlite'
+    'gtk4'
+    'libadwaita'
+    'gcc-libs'
+)
+makedepends=('rust' 'cargo' 'clang' 'pkg-config')
+optdepends=(
+    'lifeos-containers: AI container runtime (llama-server, TTS, embeddings, SimpleX bridge)'
+)
+options=(!lto)
+source=("lifeos::git+https://github.com/hectormr206/lifeos.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    grep '^version' "$srcdir/lifeos/Cargo.toml" \
+        | head -1 \
+        | sed 's/.*"\(.*\)".*/\1/'
+}
+
+build() {
+    cd "$srcdir/lifeos"
+
+    export CARGO_HOME="$srcdir/.cargo"
+    export RUSTFLAGS="-C opt-level=3"
+    # Features must match CI exactly. See CLAUDE.md:
+    #   cargo clippy -p lifeosd --all-features — uses dbus,http-api,ui-overlay,wake-word,messaging
+    CARGO_PROFILE_RELEASE_LTO=thin \
+        cargo build \
+            --release \
+            --frozen \
+            --manifest-path daemon/Cargo.toml \
+            --features "dbus,http-api,ui-overlay,wake-word,messaging"
+}
+
+package() {
+    cd "$srcdir/lifeos"
+
+    # Binary
+    install -Dm755 "target/release/lifeosd" \
+        "$pkgdir/usr/bin/lifeosd"
+
+    # User systemd unit (managed by life init, not enabled here)
+    install -Dm644 "packaging/cachyos/lifeos-daemon/lifeosd.service" \
+        "$pkgdir/usr/lib/systemd/user/lifeosd.service"
+
+    # License
+    install -Dm644 "LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "NOTICE" \
+        "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}
