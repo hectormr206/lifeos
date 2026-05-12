@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# lifeos-quadlet-install — install or remove LifeOS Quadlet symlinks for the current user
+#
+# T20: Idempotent helper that symlinks Quadlet source files from
+#   /usr/share/lifeos/quadlets/*.container
+# into the user-scope Quadlet directory:
+#   ~/.config/containers/systemd/
+#
+# Usage:
+#   lifeos-quadlet-install --user       # install/refresh symlinks (idempotent)
+#   lifeos-quadlet-install --uninstall  # remove symlinks only
+#
+# Called automatically by `life init` during first-run setup.
+#
+# Verification:
+#   lifeos-quadlet-install --user
+#   ls -la ~/.config/containers/systemd/lifeos-*.container
+#   systemctl --user daemon-reload
+#   systemctl --user list-unit-files 'lifeos-*'
+#
+# Exit codes: 0 = success, 1 = usage error, 2 = environment error
+
+set -euo pipefail
+
+QUADLET_SRC="/usr/share/lifeos/quadlets"
+QUADLET_DST="${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"
+
+usage() {
+    echo "Usage: lifeos-quadlet-install --user | --uninstall" >&2
+    exit 1
+}
+
+err() {
+    echo "error: $*" >&2
+    exit 2
+}
+
+install_user() {
+    # Verify source directory exists (package must be installed).
+    [[ -d "$QUADLET_SRC" ]] \
+        || err "Quadlet sources not found at $QUADLET_SRC — is lifeos-containers installed?"
+
+    # Create destination directory if absent.
+    mkdir -p "$QUADLET_DST"
+
+    local installed=0
+    local skipped=0
+    local updated=0
+
+    for src_file in "$QUADLET_SRC"/*.container; do
+        [[ -e "$src_file" ]] || continue  # glob expansion failed (no files)
+        local name
+        name="$(basename "$src_file")"
+        local dst_file="$QUADLET_DST/$name"
+
+        if [[ -L "$dst_file" ]]; then
+            local current_target
+            current_target="$(readlink "$dst_file")"
+            if [[ "$current_target" == "$src_file" ]]; then
+                # Symlink already correct — idempotent skip.
+                (( skipped++ )) || true
+                continue
+            else
+                # Symlink points elsewhere — update it.
+                ln -sf "$src_file" "$dst_file"
+                echo "updated: $dst_file -> $src_file"
+                (( updated++ )) || true
+            fi
+        elif [[ -e "$dst_file" ]]; then
+            # Real file exists — refuse to overwrite, warn user.
+            echo "warning: $dst_file exists as a regular file, skipping (remove manually to use packaged Quadlet)" >&2
+            (( skipped++ )) || true
+        else
+            # Fresh symlink.
+            ln -s "$src_file" "$dst_file"
+            echo "installed: $dst_file -> $src_file"
+            (( installed++ )) || true
+        fi
+    done
+
+    echo "lifeos-quadlet-install: $installed installed, $updated updated, $skipped skipped"
+    echo "Run: systemctl --user daemon-reload"
+}
+
+uninstall_user() {
+    if [[ ! -d "$QUADLET_DST" ]]; then
+        echo "lifeos-quadlet-install: nothing to uninstall ($QUADLET_DST not found)"
+        return 0
+    fi
+
+    local removed=0
+
+    for dst_file in "$QUADLET_DST"/lifeos-*.container; do
+        [[ -L "$dst_file" ]] || continue  # skip real files — we only remove our symlinks
+        local target
+        target="$(readlink "$dst_file")"
+        # Only remove symlinks that point back into our source directory.
+        if [[ "$target" == "$QUADLET_SRC"* ]]; then
+            rm "$dst_file"
+            echo "removed: $dst_file"
+            (( removed++ )) || true
+        fi
+    done
+
+    echo "lifeos-quadlet-install: $removed symlinks removed"
+    echo "Run: systemctl --user daemon-reload"
+}
+
+# Argument parsing.
+[[ $# -eq 1 ]] || usage
+
+case "$1" in
+    --user)       install_user ;;
+    --uninstall)  uninstall_user ;;
+    *)            usage ;;
+esac
