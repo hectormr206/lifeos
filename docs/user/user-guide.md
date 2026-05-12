@@ -1,8 +1,59 @@
 # LifeOS User Guide (Phase 2)
 
-## Quick Start
+## Instalación nativa en CachyOS — `life init`
 
-1. Check system health:
+Si instalaste LifeOS desde los PKGBUILDs de `packaging/cachyos/`, el primer paso
+es inicializar el runtime en el host:
+
+```bash
+life init
+# o equivalente:
+life host init
+```
+
+El comando realiza en orden:
+
+1. **Detección de distro** — verifica que el host sea Arch-based (CachyOS o Arch Linux).
+2. **Prereqs** — valida `podman`, `nvidia-smi`, `nvidia-ctk` y `/etc/cdi/nvidia.yaml`.
+   Si algo falta, imprime el comando exacto para instalarlo y termina con código 2.
+3. **Filesystem** — verifica que existan `/var/lib/lifeos/` y `/run/lifeos/`.
+   Si faltan, imprime `sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lifeos.conf`.
+4. **Servicios** — habilita `lifeosd.service` y (salvo `--no-containers`) los cuatro
+   servicios Quadlet con `systemctl --user enable --now`. Idempotente: no deshabilita
+   lo que ya está habilitado.
+5. **Health checks** — probes TCP en paralelo (`tokio::join!`) a los puertos 8082, 8083,
+   8084 y `systemctl --user is-active` para simplex-bridge. Deadline global de 30 s.
+
+### Códigos de salida
+
+| Código | Significado |
+|--------|-------------|
+| 0 | Todos los servicios saludables. Imprime URL del dashboard. |
+| 1 | Parcial — prereqs OK pero algún health check falló. |
+| 2 | Prereq ausente o filesystem no configurado — acción requerida. |
+
+### Flags
+
+| Flag | Efecto |
+|------|--------|
+| `--no-containers` | Solo administra `lifeosd.service`; omite los Quadlets de contenedores. |
+| `--json` | Emite JSON estructurado a stdout (útil para scripting). |
+
+### Re-ejecución idempotente
+
+`life init` puede ejecutarse N veces. En cada ejecución re-valida el estado actual y
+re-imprime la URL del dashboard sin cambiar unidades ya habilitadas.
+
+### Compatibilidad hacia atrás
+
+El anterior `life init` (config bootstrap) sigue disponible como `life config-init`
+(comando oculto). No hay ruptura de flujos existentes.
+
+Para más detalles sobre instalación, ver `docs/operations/runtime-install.md`.
+
+---
+
+## Quick Start
 
 ```bash
 life check

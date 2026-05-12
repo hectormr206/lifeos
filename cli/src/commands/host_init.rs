@@ -28,7 +28,11 @@ pub async fn execute(args: HostInitArgs) -> Result<i32> {
         report.print(args.json);
         return Ok(report.exit_code());
     }
-    eprintln!("  {} distro: {}", "✓".green(), report.distro.as_deref().unwrap_or("?").cyan());
+    eprintln!(
+        "  {} distro: {}",
+        "✓".green(),
+        report.distro.as_deref().unwrap_or("?").cyan()
+    );
 
     eprintln!("{}", "[2/5] Checking prerequisites...".bold());
     if let Err(e) = step_check_prereqs(&mut report) {
@@ -146,20 +150,18 @@ impl Report {
         eprintln!("{}", "LifeOS host init — summary".bold());
         eprintln!("{}", "─".repeat(40).dimmed());
 
-        let distro_str = self
-            .distro
-            .as_deref()
-            .unwrap_or("unknown");
-        eprintln!(
-            "  Distro:      {}",
-            distro_str.cyan()
-        );
+        let distro_str = self.distro.as_deref().unwrap_or("unknown");
+        eprintln!("  Distro:      {}", distro_str.cyan());
 
         let prereqs_ok = self.prerequisites.podman.is_some()
             && self.prerequisites.nvidia_smi
             && self.prerequisites.nvidia_ctk.is_some()
             && self.prerequisites.cdi_spec;
-        let prereq_mark = if prereqs_ok { "OK".green() } else { "FAIL".red() };
+        let prereq_mark = if prereqs_ok {
+            "OK".green()
+        } else {
+            "FAIL".red()
+        };
         eprintln!("  Prerequisites: {}", prereq_mark);
 
         let fs_ok = self.filesystem.var_lib_lifeos && self.filesystem.run_lifeos;
@@ -211,9 +213,7 @@ pub fn step_check_prereqs(report: &mut Report) -> Result<()> {
             report.prerequisites.podman = Some(ver);
         }
         None => {
-            missing.push(
-                "podman not found — install with: sudo pacman -S podman".to_string(),
-            );
+            missing.push("podman not found — install with: sudo pacman -S podman".to_string());
         }
     }
 
@@ -291,9 +291,7 @@ pub fn verify_filesystem_at(
         for path in &missing {
             eprintln!("  [fs] missing: {}", path.display());
         }
-        eprintln!(
-            "  [fs] fix: sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lifeos.conf"
-        );
+        eprintln!("  [fs] fix: sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lifeos.conf");
         report.set_exit_code(2);
         anyhow::bail!(
             "filesystem paths missing: {}. Run: sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lifeos.conf",
@@ -353,35 +351,32 @@ pub async fn step_enable_services(args: &HostInitArgs, report: &mut Report) -> R
         eprintln!("  [services] warning: daemon-reload: {}", e);
     }
 
-    // Enable lifeosd
-    if let Err(e) = enable_user_unit("lifeosd.service") {
-        eprintln!("  [services] lifeosd.service: {}", e);
-        report.services.lifeosd.state = "failed".to_string();
-        report.set_exit_code(2);
-        anyhow::bail!("lifeosd.service failed to enable: {}", e);
+    // Enable lifeosd (check first — idempotent, skip enable if already enabled)
+    let lifeosd_already = unit_is_enabled("lifeosd.service");
+    if !lifeosd_already {
+        if let Err(e) = enable_user_unit("lifeosd.service") {
+            eprintln!("  [services] lifeosd.service: {}", e);
+            report.services.lifeosd.state = "failed".to_string();
+            report.set_exit_code(2);
+            anyhow::bail!("lifeosd.service failed to enable: {}", e);
+        }
     }
     report.services.lifeosd.state = "enabled".to_string();
 
     if !args.no_containers {
         for unit in CONTAINER_SERVICES {
-            if let Err(e) = enable_user_unit(unit) {
-                eprintln!("  [services] {}: {}", unit, e);
-                report.set_exit_code(1);
+            // Enable only if not already enabled (idempotent)
+            if !unit_is_enabled(unit) {
+                if let Err(e) = enable_user_unit(unit) {
+                    eprintln!("  [services] {}: {}", unit, e);
+                    report.set_exit_code(1);
+                }
             }
         }
     }
 
     Ok(())
 }
-
-/// Service port configuration for TCP probes.
-/// Ports: dashboard 8081, llama-server 8082, embeddings 8083, tts 8084.
-/// simplex-bridge uses systemctl is-active (no TCP endpoint).
-const SERVICE_PORTS: &[(&str, u16)] = &[
-    ("lifeos-llama-server", 8082),
-    ("lifeos-llama-embeddings", 8083),
-    ("lifeos-tts", 8084),
-];
 
 /// Probe a TCP port with a 5-second connect timeout.
 /// Returns true if the port accepts a connection.
@@ -418,7 +413,9 @@ pub async fn step_health_fanout(args: &HostInitArgs, report: &mut Report) -> Res
         } else {
             report.services.lifeosd.state = "unhealthy".to_string();
             report.set_exit_code(1);
-            eprintln!("  [health] lifeosd: UNHEALTHY — check: journalctl --user -u lifeosd.service");
+            eprintln!(
+                "  [health] lifeosd: UNHEALTHY — check: journalctl --user -u lifeosd.service"
+            );
         }
 
         if !args.no_containers {
@@ -431,16 +428,32 @@ pub async fn step_health_fanout(args: &HostInitArgs, report: &mut Report) -> Res
             );
 
             report.services.llama_server.healthy = llama_ok;
-            report.services.llama_server.state = if llama_ok { "active".to_string() } else { "unhealthy".to_string() };
+            report.services.llama_server.state = if llama_ok {
+                "active".to_string()
+            } else {
+                "unhealthy".to_string()
+            };
 
             report.services.llama_embeddings.healthy = emb_ok;
-            report.services.llama_embeddings.state = if emb_ok { "active".to_string() } else { "unhealthy".to_string() };
+            report.services.llama_embeddings.state = if emb_ok {
+                "active".to_string()
+            } else {
+                "unhealthy".to_string()
+            };
 
             report.services.tts.healthy = tts_ok;
-            report.services.tts.state = if tts_ok { "active".to_string() } else { "unhealthy".to_string() };
+            report.services.tts.state = if tts_ok {
+                "active".to_string()
+            } else {
+                "unhealthy".to_string()
+            };
 
             report.services.simplex_bridge.healthy = simplex_ok;
-            report.services.simplex_bridge.state = if simplex_ok { "active".to_string() } else { "inactive".to_string() };
+            report.services.simplex_bridge.state = if simplex_ok {
+                "active".to_string()
+            } else {
+                "inactive".to_string()
+            };
 
             for (name, ok, port) in [
                 ("lifeos-llama-server", llama_ok, 8082u16),
@@ -480,13 +493,10 @@ pub async fn probe_http_health(url: &str) -> bool {
     use tokio::time::{timeout, Duration};
 
     let client = reqwest::Client::new();
-    timeout(
-        Duration::from_secs(5),
-        client.get(url).send(),
-    )
-    .await
-    .map(|r| r.map(|resp| resp.status().is_success()).unwrap_or(false))
-    .unwrap_or(false)
+    timeout(Duration::from_secs(5), client.get(url).send())
+        .await
+        .map(|r| r.map(|resp| resp.status().is_success()).unwrap_or(false))
+        .unwrap_or(false)
 }
 
 // ── Helpers (testable) ────────────────────────────────────────────────────────
@@ -641,10 +651,7 @@ BUILD_ID=rolling
         let tmp = TempDir::new().unwrap();
         let fake_cdi = tmp.path().join("nvidia.yaml");
         // Do NOT create the file — it must be absent
-        assert!(
-            !fake_cdi.exists(),
-            "CDI spec must be absent for this test"
-        );
+        assert!(!fake_cdi.exists(), "CDI spec must be absent for this test");
 
         let cdi_exists = fake_cdi.exists();
         assert!(!cdi_exists, "CDI spec should be reported as missing");
