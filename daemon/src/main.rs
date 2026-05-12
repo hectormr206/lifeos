@@ -24,6 +24,7 @@ mod agent_runtime;
 mod ai;
 mod ai_runtime_profile;
 mod api;
+mod arch_detection;
 mod async_workers;
 mod atspi_layer;
 mod audio_frontend;

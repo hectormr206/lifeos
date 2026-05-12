@@ -7,6 +7,7 @@ use log::info;
 #[allow(unused_imports)]
 use log::warn;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -745,15 +746,17 @@ async fn check_network_security() -> Option<ProactiveAlert> {
 // SELinux status check
 // ---------------------------------------------------------------------------
 
-async fn check_selinux_status() -> Option<ProactiveAlert> {
-    let output = tokio::process::Command::new("getenforce")
-        .output()
-        .await
-        .ok()?;
-
-    let status = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_lowercase();
+/// Inner helper: maps a `getenforce` status string to a proactive alert.
+///
+/// Accepts a custom `arch_release_path` so tests can inject a temp file
+/// without touching the real `/etc/arch-release`.
+/// Returns `None` on Arch-based hosts (not_applicable — SELinux is not used
+/// by Arch/CachyOS) to suppress false-positive alerts.
+fn selinux_alert_for_status(status: &str, arch_release_path: &Path) -> Option<ProactiveAlert> {
+    // Arch-based systems do not use SELinux — suppress any alert.
+    if crate::arch_detection::is_arch_based_at(arch_release_path) {
+        return None;
+    }
 
     if status == "disabled" {
         return Some(ProactiveAlert {
@@ -774,6 +777,19 @@ async fn check_selinux_status() -> Option<ProactiveAlert> {
     }
 
     None
+}
+
+async fn check_selinux_status() -> Option<ProactiveAlert> {
+    let output = tokio::process::Command::new("getenforce")
+        .output()
+        .await
+        .ok()?;
+
+    let status = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_lowercase();
+
+    selinux_alert_for_status(&status, Path::new("/etc/arch-release"))
 }
 
 // ---------------------------------------------------------------------------
@@ -840,5 +856,47 @@ async fn check_audio_volume() -> Option<ProactiveAlert> {
         })
     } else {
         None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_selinux_check_not_applicable_on_arch() {
+        // When a fake /etc/arch-release exists the helper must return None
+        // (not_applicable) regardless of getenforce output.
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let result = selinux_alert_for_status("disabled", tmp.path());
+        assert!(
+            result.is_none(),
+            "Arch host must suppress SELinux disabled alert"
+        );
+    }
+
+    #[test]
+    fn test_selinux_check_triggers_on_non_arch() {
+        // On a non-Arch host with SELinux disabled an alert IS expected.
+        let absent = std::path::Path::new("/tmp/nonexistent-arch-release-test-lifeos");
+        let result = selinux_alert_for_status("disabled", absent);
+        assert!(
+            result.is_some(),
+            "Non-Arch host must emit SELinux disabled alert"
+        );
+    }
+
+    #[test]
+    fn test_selinux_check_permissive_not_applicable_on_arch() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let result = selinux_alert_for_status("permissive", tmp.path());
+        assert!(
+            result.is_none(),
+            "Arch host must suppress SELinux permissive alert"
+        );
     }
 }
