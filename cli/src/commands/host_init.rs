@@ -864,8 +864,7 @@ ID_LIKE="arch"
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().to_path_buf();
         fs::write(dir.join("bootstrap.token"), "from-file").unwrap();
-        let resolved =
-            resolve_bootstrap_token_from(Some("   ".to_string()), &[dir]);
+        let resolved = resolve_bootstrap_token_from(Some("   ".to_string()), &[dir]);
         assert_eq!(resolved.as_deref(), Some("from-file"));
     }
 }
