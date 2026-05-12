@@ -2,6 +2,13 @@
 //!
 //! Used to suppress Fedora/RPM-specific security checks (SELinux, rpm -V)
 //! that produce false-positive alerts on Arch-based systems (CachyOS, plain Arch).
+//!
+//! # REQ-B3 verification (T05)
+//!
+//! `memory_plane.rs:157` confirms `CREATE TABLE IF NOT EXISTS health_facts (...)`.
+//! The table name matches the spec contract. `health_fact_add` writes via
+//! `INSERT INTO health_facts` (line 9535) and reads via `list_health_facts()`
+//! (line 9568). No migration or rename needed.
 
 use std::path::Path;
 
