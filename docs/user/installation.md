@@ -1,6 +1,10 @@
 # LifeOS Installation Guide
 
-> **Transition notice — runtime pivot in progress.** LifeOS is moving from a Fedora bootc distro prototype to a personal AI runtime / operating-system layer over Linux. This guide still documents the bootc installation path because the runtime installer is not finalized yet; an early draft of the new direction lives in [`docs/operations/runtime-install.md`](../operations/runtime-install.md). Use this guide if you are installing or operating the legacy bootc image today; expect it to be retired as the canonical entry point once the runtime install path is ready.
+> **Instalando en CachyOS?** La guía completa y canónica para el runtime nativo (PKGBUILDs, `life init`, NVIDIA CDI, validación V1) está en
+> [`docs/operations/runtime-install.md`](../operations/runtime-install.md).
+> Esa guía reemplaza a esta para cualquier instalación nueva en el host de referencia CachyOS.
+>
+> **Legacy bootc:** esta guía documenta el path de instalación con imagen Fedora bootc. Seguí leyendo si estás operando esa imagen legacy hoy. El path bootc es transitional/prototype y no es la dirección canónica del runtime v1.
 
 This guide covers installing LifeOS on bare metal or virtual machines.
 
