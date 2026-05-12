@@ -979,4 +979,24 @@ mod tests {
         let daemon = SecurityAiDaemon::new();
         let _alerts = daemon.check_system_integrity().await;
     }
+
+    #[test]
+    fn test_rpm_check_not_applicable_on_arch() {
+        // On Arch-based hosts rpm-V check must return empty (not_applicable).
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let alerts = rpm_integrity_alerts_for_arch(tmp.path());
+        assert!(
+            alerts.is_empty(),
+            "Arch host must produce no rpm-V alerts (not_applicable)"
+        );
+    }
+
+    #[test]
+    fn test_rpm_check_runs_on_non_arch() {
+        // On non-Arch hosts the function runs (may or may not produce alerts —
+        // rpm might not be installed in CI, so we just verify it does not panic).
+        let absent = std::path::Path::new("/tmp/nonexistent-arch-release-test-lifeos");
+        let _alerts = rpm_integrity_alerts_for_arch(absent);
+        // test passes as long as we reach here without panic.
+    }
 }
