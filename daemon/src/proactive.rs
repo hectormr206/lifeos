@@ -842,3 +842,45 @@ async fn check_audio_volume() -> Option<ProactiveAlert> {
         None
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_selinux_check_not_applicable_on_arch() {
+        // When a fake /etc/arch-release exists the helper must return None
+        // (not_applicable) regardless of getenforce output.
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let result = selinux_alert_for_status("disabled", tmp.path());
+        assert!(
+            result.is_none(),
+            "Arch host must suppress SELinux disabled alert"
+        );
+    }
+
+    #[test]
+    fn test_selinux_check_triggers_on_non_arch() {
+        // On a non-Arch host with SELinux disabled an alert IS expected.
+        let absent = std::path::Path::new("/tmp/nonexistent-arch-release-test-lifeos");
+        let result = selinux_alert_for_status("disabled", absent);
+        assert!(
+            result.is_some(),
+            "Non-Arch host must emit SELinux disabled alert"
+        );
+    }
+
+    #[test]
+    fn test_selinux_check_permissive_not_applicable_on_arch() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let result = selinux_alert_for_status("permissive", tmp.path());
+        assert!(
+            result.is_none(),
+            "Arch host must suppress SELinux permissive alert"
+        );
+    }
+}
