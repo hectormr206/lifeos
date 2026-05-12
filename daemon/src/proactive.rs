@@ -7,6 +7,7 @@ use log::info;
 #[allow(unused_imports)]
 use log::warn;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -745,15 +746,17 @@ async fn check_network_security() -> Option<ProactiveAlert> {
 // SELinux status check
 // ---------------------------------------------------------------------------
 
-async fn check_selinux_status() -> Option<ProactiveAlert> {
-    let output = tokio::process::Command::new("getenforce")
-        .output()
-        .await
-        .ok()?;
-
-    let status = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_lowercase();
+/// Inner helper: maps a `getenforce` status string to a proactive alert.
+///
+/// Accepts a custom `arch_release_path` so tests can inject a temp file
+/// without touching the real `/etc/arch-release`.
+/// Returns `None` on Arch-based hosts (not_applicable — SELinux is not used
+/// by Arch/CachyOS) to suppress false-positive alerts.
+fn selinux_alert_for_status(status: &str, arch_release_path: &Path) -> Option<ProactiveAlert> {
+    // Arch-based systems do not use SELinux — suppress any alert.
+    if crate::arch_detection::is_arch_based_at(arch_release_path) {
+        return None;
+    }
 
     if status == "disabled" {
         return Some(ProactiveAlert {
@@ -774,6 +777,19 @@ async fn check_selinux_status() -> Option<ProactiveAlert> {
     }
 
     None
+}
+
+async fn check_selinux_status() -> Option<ProactiveAlert> {
+    let output = tokio::process::Command::new("getenforce")
+        .output()
+        .await
+        .ok()?;
+
+    let status = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_lowercase();
+
+    selinux_alert_for_status(&status, Path::new("/etc/arch-release"))
 }
 
 // ---------------------------------------------------------------------------
