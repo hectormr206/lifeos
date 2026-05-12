@@ -35,6 +35,7 @@ pub mod store;
 pub mod sync;
 pub mod telemetry;
 pub mod theme;
+pub mod uninstall;
 pub mod update;
 pub mod visual_comfort;
 pub mod voice;
