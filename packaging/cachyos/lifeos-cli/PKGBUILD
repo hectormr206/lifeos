@@ -1,0 +1,57 @@
+# Maintainer: Héctor Martínez <hectormartinezresendiz@gmail.com>
+# Verification: bash -n PKGBUILD && makepkg -s --noconfirm --syncdeps
+#
+# T14 — packages the `life` CLI binary from cli/Cargo.toml.
+# pkgver() reads from the workspace Cargo.toml so all LifeOS packages
+# share a single version source.
+
+pkgname=lifeos-cli
+pkgdesc="LifeOS CLI — life(1) command for host init, health checks, and daemon control"
+pkgver=0.8.42
+pkgrel=1
+epoch=
+arch=('x86_64')
+url="https://github.com/hectormr206/lifeos"
+license=('LGPL-2.1-only')
+depends=('openssl' 'sqlite' 'gcc-libs' 'dbus')
+makedepends=('rust' 'cargo')
+provides=('life')
+conflicts=()
+options=(!lto)
+source=("lifeos::git+https://github.com/hectormr206/lifeos.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    # Authoritative version lives in the workspace Cargo.toml.
+    grep '^version' "$srcdir/lifeos/Cargo.toml" \
+        | head -1 \
+        | sed 's/.*"\(.*\)".*/\1/'
+}
+
+build() {
+    cd "$srcdir/lifeos"
+
+    export CARGO_HOME="$srcdir/.cargo"
+    export RUSTFLAGS="-C opt-level=3"
+    # --frozen: respect Cargo.lock exactly (reproducible builds).
+    # --manifest-path: build only the `life` CLI crate, not the full workspace.
+    CARGO_PROFILE_RELEASE_LTO=thin \
+        cargo build \
+            --release \
+            --frozen \
+            --manifest-path cli/Cargo.toml
+}
+
+package() {
+    cd "$srcdir/lifeos"
+
+    # Binary
+    install -Dm755 "target/release/life" \
+        "$pkgdir/usr/bin/life"
+
+    # License
+    install -Dm644 "LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "NOTICE" \
+        "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}
