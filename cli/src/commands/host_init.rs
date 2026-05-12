@@ -63,7 +63,17 @@ pub async fn execute(args: HostInitArgs) -> Result<i32> {
 
     if report.exit_code() == 0 {
         eprintln!("  {} all healthy", "✓".green());
-        println!("Dashboard: http://127.0.0.1:8081/dashboard");
+        let token = resolve_bootstrap_token();
+        let url = format_dashboard_url(token.as_deref());
+        println!("Dashboard: {}", url);
+        if token.is_none() {
+            eprintln!(
+                "  {} bootstrap token not found — set {} or read it from {}",
+                "⚠".yellow(),
+                "LIFEOS_BOOTSTRAP_TOKEN".bold(),
+                "$XDG_RUNTIME_DIR/lifeos/bootstrap.token".bold(),
+            );
+        }
     } else if report.exit_code() == 1 {
         eprintln!("  {} partial — see details above", "⚠".yellow());
     }
@@ -558,6 +568,60 @@ pub fn probe_version(cmd: &str, args: &[&str]) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Resolve the daemon bootstrap token, mirroring the precedence used by
+/// `scripts/validate-cachyos.sh` and the daemon's runtime dir candidates:
+/// 1. `LIFEOS_BOOTSTRAP_TOKEN` env var
+/// 2. `$XDG_RUNTIME_DIR/lifeos/bootstrap.token`
+/// 3. `$HOME/.local/state/lifeos/runtime/bootstrap.token`
+/// 4. `/run/lifeos/bootstrap.token`
+pub fn resolve_bootstrap_token_from(
+    env_value: Option<String>,
+    candidate_dirs: &[PathBuf],
+) -> Option<String> {
+    if let Some(v) = env_value {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    for dir in candidate_dirs {
+        let token_file = dir.join("bootstrap.token");
+        if let Ok(content) = std::fs::read_to_string(&token_file) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Real-environment wrapper: resolves the bootstrap token using current env + standard paths.
+pub fn resolve_bootstrap_token() -> Option<String> {
+    let env_value = std::env::var("LIFEOS_BOOTSTRAP_TOKEN").ok();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        candidates.push(PathBuf::from(xdg).join("lifeos"));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(home).join(".local/state/lifeos/runtime"));
+    }
+    candidates.push(PathBuf::from("/run/lifeos"));
+    resolve_bootstrap_token_from(env_value, &candidates)
+}
+
+/// Format the dashboard URL with the bootstrap token appended when available.
+/// When `token` is `None`, omit the query string — the daemon will reject the
+/// browser request and the user will know to set `LIFEOS_BOOTSTRAP_TOKEN`.
+pub fn format_dashboard_url(token: Option<&str>) -> String {
+    match token {
+        Some(t) if !t.is_empty() => {
+            format!("http://127.0.0.1:8081/dashboard?token={}", t)
+        }
+        _ => "http://127.0.0.1:8081/dashboard".to_string(),
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // T06 — RED: full test scaffold (7 tests, all must FAIL at this commit)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -739,5 +803,67 @@ ID_LIKE="arch"
             result.is_none(),
             "Empty os-release should return None (unsupported)"
         );
+    }
+
+    // ── REQ-A4 dashboard URL: bootstrap token must be included ────────────────
+
+    #[test]
+    fn test_format_dashboard_url_with_token_includes_query_param() {
+        let url = format_dashboard_url(Some("abc123"));
+        assert_eq!(url, "http://127.0.0.1:8081/dashboard?token=abc123");
+    }
+
+    #[test]
+    fn test_format_dashboard_url_without_token_omits_query() {
+        let url = format_dashboard_url(None);
+        assert_eq!(url, "http://127.0.0.1:8081/dashboard");
+    }
+
+    #[test]
+    fn test_format_dashboard_url_with_empty_token_omits_query() {
+        let url = format_dashboard_url(Some(""));
+        assert_eq!(url, "http://127.0.0.1:8081/dashboard");
+    }
+
+    #[test]
+    fn test_resolve_bootstrap_token_prefers_env() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let token_file = dir.join("bootstrap.token");
+        fs::write(&token_file, "from-file").unwrap();
+
+        let resolved = resolve_bootstrap_token_from(Some("from-env".to_string()), &[dir.clone()]);
+        assert_eq!(resolved.as_deref(), Some("from-env"));
+    }
+
+    #[test]
+    fn test_resolve_bootstrap_token_reads_from_first_candidate() {
+        let tmp = TempDir::new().unwrap();
+        let dir_a = tmp.path().join("a");
+        let dir_b = tmp.path().join("b");
+        fs::create_dir_all(&dir_a).unwrap();
+        fs::create_dir_all(&dir_b).unwrap();
+        // Only b has the token
+        fs::write(dir_b.join("bootstrap.token"), "from-b\n").unwrap();
+
+        let resolved = resolve_bootstrap_token_from(None, &[dir_a, dir_b]);
+        assert_eq!(resolved.as_deref(), Some("from-b"));
+    }
+
+    #[test]
+    fn test_resolve_bootstrap_token_returns_none_when_absent() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let resolved = resolve_bootstrap_token_from(None, &[dir]);
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn test_resolve_bootstrap_token_ignores_empty_env() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(dir.join("bootstrap.token"), "from-file").unwrap();
+        let resolved = resolve_bootstrap_token_from(Some("   ".to_string()), &[dir]);
+        assert_eq!(resolved.as_deref(), Some("from-file"));
     }
 }

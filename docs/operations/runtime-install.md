@@ -490,6 +490,48 @@ automáticamente que está en un host Arch-based y marca esos checks como
 `no aplica` en lugar de emitir alertas. Si ves estas advertencias en la
 versión instalada, actualizá al build más reciente.
 
+### 6.5 — `life init` imprime la URL del dashboard sin `?token=…`
+
+**Síntoma:** Al final de un `life init` exitoso, ves:
+
+```
+Dashboard: http://127.0.0.1:8081/dashboard
+⚠ bootstrap token not found — set LIFEOS_BOOTSTRAP_TOKEN or read it from
+  $XDG_RUNTIME_DIR/lifeos/bootstrap.token
+```
+
+Abrir esa URL en el browser devuelve `401 Unauthorized` — el daemon exige el
+token de bootstrap para servir `/dashboard` y `/api/v1/*`.
+
+**Causa:** `life init` resuelve el token en este orden:
+
+1. Variable de entorno `LIFEOS_BOOTSTRAP_TOKEN`
+2. `$XDG_RUNTIME_DIR/lifeos/bootstrap.token`
+3. `$HOME/.local/state/lifeos/runtime/bootstrap.token`
+4. `/run/lifeos/bootstrap.token`
+
+Si ninguno está disponible (primer arranque antes de que el daemon escriba
+el archivo, o sesión sin `XDG_RUNTIME_DIR` exportado), `life init` imprime
+la URL sin token y avisa.
+
+**Solución:**
+
+```bash
+# Esperá a que el daemon escriba el token (suele tardar < 1s)
+ls -la "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lifeos/bootstrap.token"
+
+# Leelo y armá la URL completa:
+TOKEN="$(< "${XDG_RUNTIME_DIR}/lifeos/bootstrap.token")"
+echo "http://127.0.0.1:8081/dashboard?token=${TOKEN}"
+```
+
+O exportá la variable antes de re-ejecutar `life init`:
+
+```bash
+export LIFEOS_BOOTSTRAP_TOKEN="$(< "${XDG_RUNTIME_DIR}/lifeos/bootstrap.token")"
+life init
+```
+
 ---
 
 ## 7. Respaldo de `memory.db`
