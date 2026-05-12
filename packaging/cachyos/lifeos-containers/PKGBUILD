@@ -55,9 +55,12 @@ package() {
     install -Dm644 "$src/sysusers.d/lifeos.conf" \
         "$pkgdir/usr/lib/sysusers.d/lifeos.conf"
 
-    # Helper scripts — both executable.
+    # Helper scripts — executable.
     install -Dm755 "$src/helpers/lifeos-quadlet-install" \
         "$pkgdir/usr/bin/lifeos-quadlet-install"
+
+    install -Dm755 "$src/helpers/lifeos-quadlet-uninstall" \
+        "$pkgdir/usr/bin/lifeos-quadlet-uninstall"
 
     # CDI setup helper (T24): guides user through one-time nvidia-ctk invocation.
     install -Dm755 "$src/helpers/lifeos-cdi-setup" \

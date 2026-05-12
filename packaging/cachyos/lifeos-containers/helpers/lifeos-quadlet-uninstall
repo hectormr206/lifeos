@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# lifeos-quadlet-uninstall — remove LifeOS Quadlet files for the current user
+#
+# Symmetric counterpart to lifeos-quadlet-install.
+# Removes the 4 LifeOS container Quadlet files from the user-scope Quadlet dir:
+#   ${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd/
+#
+# Usage:
+#   lifeos-quadlet-uninstall
+#
+# Called automatically by `life uninstall` during runtime removal.
+#
+# Idempotent — running twice is a no-op the second time (missing files skipped).
+# Only removes files matching lifeos-*.container in the destination directory.
+#
+# Verification:
+#   lifeos-quadlet-uninstall
+#   ls -la ~/.config/containers/systemd/lifeos-*.container  # must be gone
+#   systemctl --user daemon-reload
+#   systemctl --user list-unit-files 'lifeos-*'             # must show nothing
+#
+# Exit codes: 0 = success (including no-op), 1 = partial (some files failed)
+
+set -euo pipefail
+IFS=$'\n\t'
+
+QUADLET_DST="${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"
+
+# The 4 canonical LifeOS Quadlet filenames.
+QUADLET_FILES=(
+    "lifeos-llama-server.container"
+    "lifeos-llama-embeddings.container"
+    "lifeos-tts.container"
+    "lifeos-simplex-bridge.container"
+)
+
+main() {
+    if [[ ! -d "$QUADLET_DST" ]]; then
+        echo "lifeos-quadlet-uninstall: nothing to remove ($QUADLET_DST not found)"
+        exit 0
+    fi
+
+    local removed=0
+    local not_present=0
+    local failed=0
+
+    for name in "${QUADLET_FILES[@]}"; do
+        local dst_file="$QUADLET_DST/$name"
+
+        if [[ ! -e "$dst_file" && ! -L "$dst_file" ]]; then
+            echo "not present: $dst_file"
+            (( not_present++ )) || true
+            continue
+        fi
+
+        if rm -f "$dst_file"; then
+            echo "removed: $dst_file"
+            (( removed++ )) || true
+        else
+            echo "error: could not remove $dst_file" >&2
+            (( failed++ )) || true
+        fi
+    done
+
+    echo "lifeos-quadlet-uninstall: ${removed} removed, ${not_present} not present"
+
+    if (( removed > 0 || not_present > 0 )); then
+        echo "Running: systemctl --user daemon-reload"
+        systemctl --user daemon-reload || true
+    fi
+
+    if (( failed > 0 )); then
+        exit 1
+    fi
+
+    exit 0
+}
+
+main "$@"

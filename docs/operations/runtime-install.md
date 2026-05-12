@@ -18,7 +18,7 @@ en CachyOS con GPU NVIDIA.
 5. [Validación V1](#5-validación-v1)
 6. [Troubleshooting](#6-troubleshooting)
 7. [Respaldo de `memory.db`](#7-respaldo-de-memorydb)
-8. [Desinstalar LifeOS](#8-desinstalar-lifeos)
+8. [Desinstalación](#8-desinstalación)
 
 ---
 
@@ -557,37 +557,104 @@ cp "$DB_PATH" "$HOME/lifeos-memory-$(date +%Y%m%d).db"
 
 ---
 
-## 8. Desinstalar LifeOS
+## 8. Desinstalación
 
-### Detener y deshabilitar servicios
+Usá `life uninstall` para remover el runtime de forma guiada e idempotente.
+El comando detiene servicios, elimina los Quadlets del usuario, imprime el
+comando de pacman para ejecutar manualmente, y te pregunta si querés borrar
+los datos persistentes.
+
+### Uso básico
 
 ```bash
-systemctl --user disable --now lifeosd.service \
+life uninstall
+```
+
+Salida esperada (flujo interactivo):
+
+```
+[1/4] Stopping services...
+  ✓ stopped lifeosd.service
+  ✓ stopped lifeos-llama-server.service
+  ⊘ lifeos-desktop.service not installed
+  ...
+[2/4] Removing Quadlet files...
+  ✓ Quadlet files removed
+[3/4] Package removal...
+  → Run this command manually to remove all LifeOS packages:
+sudo pacman -Rsn lifeos-runtime lifeos-containers lifeos-desktop lifeos-daemon lifeos-cli
+[4/4] State directory...
+  ¿Borrar también /var/lib/lifeos/ (memoria persistente, configs, vitales)? [y/N]
+  > N
+  ✓ /var/lib/lifeos/ preserved (use --purge to delete)
+```
+
+### Flags disponibles
+
+| Flag | Efecto |
+|------|--------|
+| `--purge` | Borra `/var/lib/lifeos/` sin preguntar (elimina memoria + configs) |
+| `--keep-data` | Preserva `/var/lib/lifeos/` sin preguntar |
+| `--with-pacman` | Ejecuta `pacman -Rsn` automáticamente (requiere sudo) |
+| `--json` | Salida machine-readable en JSON |
+
+`--purge` y `--keep-data` son mutuamente excluyentes. Si se pasan juntos,
+el comando sale con código 2.
+
+### Política de datos persistentes
+
+Por defecto, `life uninstall` **preserva** `/var/lib/lifeos/` para evitar
+pérdida accidental de `memory.db` (historial de Axi, hechos de salud,
+configuración). El directorio sobrevive a la desinstalación de paquetes.
+
+Para eliminar todo incluyendo los datos:
+
+```bash
+life uninstall --purge
+```
+
+> **Atención:** `--purge` borra `memory.db` de forma permanente.
+> Hacé un respaldo antes si querés conservar el historial de Axi
+> (ver §7 Respaldo de `memory.db`).
+
+### Modo JSON
+
+```bash
+life uninstall --keep-data --json
+```
+
+La salida incluye un objeto con campos: `services`, `quadlets_removed`,
+`pacman_command`, `pacman_executed`, `state_decision`, `state_removed`,
+`exit_code`.
+
+### Códigos de salida
+
+| Código | Significado |
+|--------|-------------|
+| 0 | Éxito completo |
+| 1 | Parcial — algunos servicios no pudieron detenerse, limpieza continuó |
+| 2 | Abortado — flags inválidas o error de argumento |
+
+### Desinstalación manual (fallback)
+
+Si `life uninstall` no está disponible (paquete ya removido), podés hacerlo
+manualmente paso a paso:
+
+```bash
+# 1. Detener servicios
+systemctl --user stop lifeosd.service \
   lifeos-llama-server.service lifeos-llama-embeddings.service \
   lifeos-tts.service lifeos-simplex-bridge.service
-```
 
-### Remover symlinks de Quadlet
-
-```bash
-lifeos-quadlet-install --uninstall
+# 2. Remover Quadlets
+lifeos-quadlet-uninstall
+# o manualmente:
+rm -f ~/.config/containers/systemd/lifeos-*.container
 systemctl --user daemon-reload
+
+# 3. Remover paquetes
+sudo pacman -Rsn lifeos-runtime lifeos-containers lifeos-desktop lifeos-daemon lifeos-cli
+
+# 4. Limpiar estado (opcional)
+rm -rf /var/lib/lifeos ~/.config/lifeos
 ```
-
-### Desinstalar paquetes
-
-```bash
-sudo pacman -Rns lifeos-runtime lifeos-cli lifeos-daemon lifeos-desktop lifeos-containers
-```
-
-### Limpiar estado (opcional — esto borra memoria y configuración)
-
-```bash
-rm -rf /var/lib/lifeos
-rm -rf /run/lifeos
-rm -rf ~/.config/lifeos
-rm -rf ~/.config/containers/systemd/lifeos-*.container
-```
-
-> **Atención:** `rm -rf /var/lib/lifeos` borra `memory.db` de forma
-> permanente. Hacé un respaldo antes si querés conservar el historial de Axi.
