@@ -1,0 +1,64 @@
+# Maintainer: Héctor Martínez <hectormartinezresendiz@gmail.com>
+# Verification: bash -n PKGBUILD && makepkg -s --noconfirm --syncdeps
+#   After install: systemctl --user status lifeos-desktop.service
+#                  desktop-file-validate /usr/share/applications/lifeos-desktop.desktop
+
+pkgname=lifeos-desktop
+pkgdesc="LifeOS desktop companion (system tray, wake-word listener, overlay)"
+pkgver=0.8.42
+pkgrel=1
+arch=('x86_64')
+url="https://github.com/hectormr206/lifeos"
+license=('LGPL-2.1-only')
+depends=(
+    'gtk4'
+    'libadwaita'
+    'wayland'
+    'dbus'
+    'gcc-libs'
+)
+makedepends=('rust' 'cargo' 'clang' 'pkg-config' 'gtk4')
+options=(!lto)
+source=("lifeos::git+https://github.com/hectormr206/lifeos.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    grep '^version' "$srcdir/lifeos/Cargo.toml" \
+        | head -1 \
+        | sed 's/.*"\(.*\)".*/\1/'
+}
+
+build() {
+    cd "$srcdir/lifeos"
+
+    export CARGO_HOME="$srcdir/.cargo"
+    export RUSTFLAGS="-C opt-level=3"
+    CARGO_PROFILE_RELEASE_LTO=thin \
+        cargo build \
+            --release \
+            --frozen \
+            --manifest-path desktop/Cargo.toml \
+            --features "tray"
+}
+
+package() {
+    cd "$srcdir/lifeos"
+
+    # Binary
+    install -Dm755 "target/release/lifeos-desktop" \
+        "$pkgdir/usr/bin/lifeos-desktop"
+
+    # User systemd unit
+    install -Dm644 "packaging/cachyos/lifeos-desktop/lifeos-desktop.service" \
+        "$pkgdir/usr/lib/systemd/user/lifeos-desktop.service"
+
+    # XDG desktop entry (autostart)
+    install -Dm644 "packaging/cachyos/lifeos-desktop/lifeos-desktop.desktop" \
+        "$pkgdir/usr/share/applications/lifeos-desktop.desktop"
+
+    # License
+    install -Dm644 "LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "NOTICE" \
+        "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}

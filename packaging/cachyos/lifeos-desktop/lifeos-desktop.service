@@ -1,0 +1,31 @@
+# lifeos-desktop.service — user-scope systemd unit for LifeOS desktop companion
+#
+# Install path: /usr/lib/systemd/user/lifeos-desktop.service
+# Enable via:   systemctl --user enable --now lifeos-desktop.service
+#               (optional — the .desktop autostart entry handles graphical sessions)
+#
+# Verification: systemd-analyze verify lifeos-desktop.service
+#               systemctl --user status lifeos-desktop.service
+
+[Unit]
+Description=LifeOS Desktop Companion (tray, wake-word, overlay)
+Documentation=https://github.com/hectormr206/lifeos
+# Desktop session services — only start when a graphical session is available.
+After=graphical-session.target lifeosd.service
+Wants=lifeosd.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/lifeos-desktop
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeos-desktop
+
+[Install]
+WantedBy=graphical-session.target
