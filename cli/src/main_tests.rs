@@ -17,20 +17,42 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parses_init_with_force_flag() {
-        let cli = Cli::parse_from(["life", "init", "--force"]);
+    fn test_cli_parses_init_with_no_containers_flag() {
+        // `life init` now dispatches to host_init; `--no-containers` is the HostInitArgs flag
+        let cli = Cli::parse_from(["life", "init", "--no-containers"]);
         match cli.command.expect("Expected command") {
-            Commands::Init(args) => assert!(args.force),
+            Commands::Init(args) => assert!(args.no_containers),
             _ => panic!("Expected Init command"),
         }
     }
 
     #[test]
-    fn test_cli_parses_init_with_profile() {
-        let cli = Cli::parse_from(["life", "init", "--profile", "developer"]);
+    fn test_cli_parses_init_with_json_flag() {
+        // `life init --json` emits machine-readable output
+        let cli = Cli::parse_from(["life", "init", "--json"]);
         match cli.command.expect("Expected command") {
-            Commands::Init(args) => assert_eq!(args.profile.as_deref(), Some("developer")),
+            Commands::Init(args) => assert!(args.json),
             _ => panic!("Expected Init command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_host_init_subcommand() {
+        // `life host init` — canonical path
+        let cli = Cli::parse_from(["life", "host", "init"]);
+        match cli.command.expect("Expected command") {
+            Commands::Host(HostCommands::Init(_)) => (),
+            _ => panic!("Expected Host Init command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_init_legacy() {
+        // `life config-init` — legacy config bootstrap hidden subcommand
+        let cli = Cli::parse_from(["life", "config-init"]);
+        match cli.command.expect("Expected command") {
+            Commands::ConfigInit(_) => (),
+            _ => panic!("Expected ConfigInit command"),
         }
     }
 

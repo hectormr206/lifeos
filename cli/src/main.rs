@@ -11,7 +11,7 @@ mod system;
 mod main_tests;
 
 use commands::{
-    audit::AuditArgs, doctor::DoctorArgs, first_boot::FirstBootArgs, init::InitArgs,
+    audit::AuditArgs, doctor::DoctorArgs, first_boot::FirstBootArgs, host_init::HostInitArgs,
     status::StatusArgs, update::UpdateArgs,
 };
 
@@ -32,10 +32,28 @@ struct Cli {
     command: Option<Commands>,
 }
 
+/// Subcommands under `life host` (OS-level host management)
+#[derive(Subcommand)]
+enum HostCommands {
+    /// Initialize LifeOS on the host: distro detection, prerequisites, services, health checks
+    Init(HostInitArgs),
+}
+
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize LifeOS configuration and directories
-    Init(InitArgs),
+    /// Initialize LifeOS on the host (alias for `life host init`)
+    ///
+    /// Performs distro detection, prerequisite validation, service startup,
+    /// and parallel health checks. Idempotent — safe to re-run.
+    ///
+    /// [deprecated config-only init moved to `life init --config`]
+    Init(HostInitArgs),
+    /// Host-level management commands (CachyOS native install)
+    #[clap(subcommand)]
+    Host(HostCommands),
+    /// Initialize LifeOS configuration and directories (legacy config bootstrap)
+    #[clap(hide = true, name = "config-init")]
+    ConfigInit(commands::init::InitArgs),
     /// Run first-boot wizard
     FirstBoot(FirstBootArgs),
     /// Show system status
@@ -204,7 +222,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Handle regular commands
     match cli.command {
-        Some(Commands::Init(args)) => commands::init::execute(args).await,
+        Some(Commands::Init(args)) => {
+            // `life init` dispatches to host_init (REQ-A1: primary user-visible command)
+            std::process::exit(commands::host_init::execute(args).await? as i32);
+        }
+        Some(Commands::Host(HostCommands::Init(args))) => {
+            // `life host init` — canonical subcommand path
+            std::process::exit(commands::host_init::execute(args).await? as i32);
+        }
+        Some(Commands::ConfigInit(args)) => commands::init::execute(args).await,
         Some(Commands::FirstBoot(args)) => commands::first_boot::execute(args).await,
         Some(Commands::Status(args)) => commands::status::execute(args).await,
         Some(Commands::Update(args)) => commands::update::execute(args).await,
