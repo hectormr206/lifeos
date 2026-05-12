@@ -5,6 +5,15 @@ on:
     # Run at 00:00 UTC every day
     - cron: '0 0 * * *'
   workflow_dispatch:
+    inputs:
+      legacy_bootc_image:
+        description: 'Also run the legacy bootc image build/push job'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 env:
   CARGO_TERM_COLOR: always
@@ -66,10 +75,11 @@ jobs:
           cd ../daemon && cargo doc --no-deps --locked
 
   # ============================================================================
-  # Nightly Container Build
+  # Manual Legacy Bootc Container Build
   # ============================================================================
   nightly-container:
-    name: Nightly Container Build
+    name: Legacy Bootc Container Build
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.legacy_bootc_image == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

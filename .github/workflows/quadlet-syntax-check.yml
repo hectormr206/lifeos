@@ -1,8 +1,8 @@
 name: Quadlet Syntax Check
 
 # Runs the systemd Quadlet generator (`/usr/libexec/podman/quadlet --dryrun`)
-# against every .container file under containers/. Catches the exact class
-# of bug that broke Phase 1 boot in 0.8.27 — ExecStartPre placed in
+# against runtime and legacy .container files. Catches the exact class
+# of bug that broke the old boot path in 0.8.27 — ExecStartPre placed in
 # [Container] instead of [Service]. The generator returns non-zero on any
 # unsupported key, missing required directive, or malformed section header.
 #
@@ -53,7 +53,7 @@ jobs:
           # them in one pass.
           stage=$(mktemp -d)
           find containers -name '*.container' -exec cp {} "$stage/" \;
-          # Also include any .container shipped in image/files (paranoid).
+          # Also include any legacy .container shipped in image/files.
           find image/files/etc/containers/systemd -name '*.container' -exec cp {} "$stage/" \; 2>/dev/null || true
 
           out=$("$QUADLET" --dryrun --user "$stage" 2>&1) || true

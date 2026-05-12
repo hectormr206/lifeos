@@ -1,13 +1,6 @@
-name: Release Channels
+name: Legacy Bootc Release Channels
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
-  schedule:
-    - cron: '0 4 * * 1'
   workflow_dispatch:
     inputs:
       channel:
@@ -19,6 +12,9 @@ on:
           - stable
           - candidate
           - edge
+
+# Manual-only legacy/prototype bootc image channel publication. Kept auditable
+# after the runtime pivot, but no longer runs on push, tag, or schedule.
 
 concurrency:
   group: release-channels-${{ github.ref_name }}
@@ -68,32 +64,11 @@ jobs:
       
       - id: set-channel
         run: |
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            echo "channel=stable" >> $GITHUB_OUTPUT
-            echo "tag=stable" >> $GITHUB_OUTPUT
-            VERSION=$(date +%Y.%m.%d)
-            echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "channel=stable" >> $GITHUB_OUTPUT
-            TAG="${GITHUB_REF#refs/tags/}"
-            echo "tag=${TAG}" >> $GITHUB_OUTPUT
-            echo "version=${TAG#v}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "channel=edge" >> $GITHUB_OUTPUT
-            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-            echo "tag=edge-$(date +%Y%m%d)-${SHORT_SHA}" >> $GITHUB_OUTPUT
-            echo "version=edge-$(date +%Y%m%d)-${SHORT_SHA}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            CHANNEL="${{ github.event.inputs.channel }}"
-            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-            echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
-            echo "tag=${CHANNEL}-$(date +%Y%m%d)-${SHORT_SHA}" >> $GITHUB_OUTPUT
-            echo "version=${CHANNEL}-$(date +%Y%m%d)-${SHORT_SHA}" >> $GITHUB_OUTPUT
-          else
-            echo "channel=skip" >> $GITHUB_OUTPUT
-            echo "tag=skip" >> $GITHUB_OUTPUT
-            echo "version=skip" >> $GITHUB_OUTPUT
-          fi
+          CHANNEL="${{ github.event.inputs.channel }}"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
+          echo "tag=${CHANNEL}-$(date +%Y%m%d)-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "version=${CHANNEL}-$(date +%Y%m%d)-${SHORT_SHA}" >> $GITHUB_OUTPUT
       
       - name: Channel info
         run: |
@@ -101,16 +76,6 @@ jobs:
           echo "Tag: ${{ steps.set-channel.outputs.tag }}"
           echo "Version: ${{ steps.set-channel.outputs.version }}"
           echo "Package semver: ${{ steps.package-version.outputs.version }}"
-
-      - name: Validate release tag matches package semver
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-          PACKAGE_VERSION="${{ steps.package-version.outputs.version }}"
-          if [[ "${TAG_VERSION}" != "${PACKAGE_VERSION}" ]]; then
-            echo "::error::Tag version ${TAG_VERSION} does not match workspace package version ${PACKAGE_VERSION}"
-            exit 1
-          fi
 
   build-and-push:
     needs: determine-channel

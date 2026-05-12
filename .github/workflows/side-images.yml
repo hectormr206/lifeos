@@ -1,13 +1,13 @@
 name: Side Container Images
 
-# Builds and pushes the per-service Quadlet container images that the bootc
-# host image references at runtime (lifeos-tts, lifeos-llama-embeddings,
+# Builds and pushes per-service runtime container images used by LifeOS
+# services (lifeos-tts, lifeos-llama-embeddings,
 # lifeos-lifeosd, lifeos-llama-server, lifeos-simplex-bridge).
 #
-# These are the "lean" containers introduced by the architecture pivot
-# (PRD: docs/strategy/prd-architecture-pivot-lean-bootc-quadlet.md). They
-# decouple service deploys from the monolithic bootc image — bumping a
-# voice model or daemon binary no longer requires a 14 GB image refresh.
+# These images support the runtime direction and also preserve useful pieces
+# from the earlier lean-bootc Quadlet work. They decouple service deploys from
+# any monolithic host image — bumping a voice model or daemon binary should not
+# require a full OS image refresh.
 #
 # Trigger semantics:
 #   - push to main + per-image path filter → rebuild only the changed image.
@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       build-llama-server:
-        description: 'Also build lifeos-llama-server (CUDA, ~30-45 min). Phase 4 active on fc44 — runtime UNBLOCKED.'
+        description: 'Also build lifeos-llama-server (CUDA, ~30-45 min). Runtime service image path.'
         required: false
         default: 'true'
         type: choice
@@ -38,7 +38,7 @@ on:
           - 'false'
           - 'true'
   schedule:
-    # Weekly Monday 05:00 UTC, after the bootc image cron at 04:00.
+    # Weekly Monday 05:00 UTC to catch upstream base image CVEs.
     - cron: '0 5 * * 1'
 
 concurrency:
@@ -111,9 +111,8 @@ jobs:
   build-llama-server:
     # CUDA compile is ~30-45 min (slightly longer than the previous Vulkan
     # build because nvcc compiles per-arch device code for sm_75..sm_120).
-    # Now that Phase 4 GPU passthrough is live
-    # on fc44, the build runs on every push to containers/**, the weekly
-    # cron, and on workflow_dispatch (default 'true'). Set the dispatch
+    # The build runs on every push to containers/**, the weekly cron, and on
+    # workflow_dispatch (default 'true'). Set the dispatch
     # input to 'false' if you need to skip the long compile for an
     # unrelated container-only change.
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.build-llama-server == 'true'
