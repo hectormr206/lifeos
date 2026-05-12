@@ -12,7 +12,7 @@ mod main_tests;
 
 use commands::{
     audit::AuditArgs, doctor::DoctorArgs, first_boot::FirstBootArgs, host_init::HostInitArgs,
-    status::StatusArgs, update::UpdateArgs,
+    status::StatusArgs, uninstall::UninstallArgs, update::UpdateArgs,
 };
 
 #[derive(Parser)]
@@ -51,6 +51,8 @@ enum Commands {
     /// Host-level management commands (CachyOS native install)
     #[clap(subcommand)]
     Host(HostCommands),
+    /// Uninstall LifeOS runtime from the host
+    Uninstall(UninstallArgs),
     /// Initialize LifeOS configuration and directories (legacy config bootstrap)
     #[clap(hide = true, name = "config-init")]
     ConfigInit(commands::init::InitArgs),
@@ -229,6 +231,9 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Host(HostCommands::Init(args))) => {
             // `life host init` — canonical subcommand path
             std::process::exit(commands::host_init::execute(args).await? as i32);
+        }
+        Some(Commands::Uninstall(args)) => {
+            std::process::exit(commands::uninstall::execute(args).await? as i32);
         }
         Some(Commands::ConfigInit(args)) => commands::init::execute(args).await,
         Some(Commands::FirstBoot(args)) => commands::first_boot::execute(args).await,
