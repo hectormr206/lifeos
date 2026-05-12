@@ -168,8 +168,49 @@ pub fn step_check_prereqs(report: &mut Report) -> Result<()> {
     Ok(())
 }
 
-pub fn step_verify_filesystem(_report: &mut Report) -> Result<()> {
-    unimplemented!("step_verify_filesystem: not implemented")
+pub fn step_verify_filesystem(report: &mut Report) -> Result<()> {
+    verify_filesystem_at(
+        report,
+        Path::new("/var/lib/lifeos"),
+        Path::new("/run/lifeos"),
+    )
+}
+
+/// Testable inner function that accepts custom paths.
+pub fn verify_filesystem_at(
+    report: &mut Report,
+    var_lib_lifeos: &Path,
+    run_lifeos: &Path,
+) -> Result<()> {
+    let mut missing: Vec<PathBuf> = Vec::new();
+
+    if var_lib_lifeos.exists() {
+        report.filesystem.var_lib_lifeos = true;
+    } else {
+        missing.push(var_lib_lifeos.to_path_buf());
+    }
+
+    if run_lifeos.exists() {
+        report.filesystem.run_lifeos = true;
+    } else {
+        missing.push(run_lifeos.to_path_buf());
+    }
+
+    if !missing.is_empty() {
+        for path in &missing {
+            eprintln!("  [fs] missing: {}", path.display());
+        }
+        eprintln!(
+            "  [fs] fix: sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lifeos.conf"
+        );
+        report.set_exit_code(2);
+        anyhow::bail!(
+            "filesystem paths missing: {}. Run: sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lifeos.conf",
+            missing.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+        )
+    }
+
+    Ok(())
 }
 
 pub async fn step_enable_services(_args: &HostInitArgs, _report: &mut Report) -> Result<()> {
@@ -351,8 +392,12 @@ BUILD_ID=rolling
         fs::create_dir_all(&var_lib).unwrap();
         fs::create_dir_all(&run_lifeos).unwrap();
 
-        assert!(var_lib.exists(), "/var/lib/lifeos equivalent must exist");
-        assert!(run_lifeos.exists(), "/run/lifeos equivalent must exist");
+        let mut report = Report::new();
+        let result = verify_filesystem_at(&mut report, &var_lib, &run_lifeos);
+        assert!(result.is_ok(), "Both paths present — should pass");
+        assert!(report.filesystem.var_lib_lifeos);
+        assert!(report.filesystem.run_lifeos);
+        assert_eq!(report.exit_code(), 0);
     }
 
     // ── T06.7: Missing /run/lifeos → print corrective command ─────────────────
@@ -365,13 +410,14 @@ BUILD_ID=rolling
         // run_lifeos NOT created
 
         let run_lifeos = tmp.path().join("run_lifeos");
+        let mut report = Report::new();
+        let result = verify_filesystem_at(&mut report, &var_lib, &run_lifeos);
+        assert!(result.is_err(), "Missing /run/lifeos should return Err");
+        assert_eq!(report.exit_code(), 2, "Exit code must be 2");
         assert!(
-            !run_lifeos.exists(),
-            "/run/lifeos equivalent must be absent for this test"
+            result.unwrap_err().to_string().contains("systemd-tmpfiles"),
+            "Error message must include the corrective command"
         );
-
-        let both_present = var_lib.exists() && run_lifeos.exists();
-        assert!(!both_present, "Should detect missing /run/lifeos");
     }
 
     // ── T06.8: Idempotent re-run ──────────────────────────────────────────────
