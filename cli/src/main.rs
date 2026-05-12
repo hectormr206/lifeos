@@ -12,7 +12,7 @@ mod main_tests;
 
 use commands::{
     audit::AuditArgs, doctor::DoctorArgs, first_boot::FirstBootArgs, host_init::HostInitArgs,
-    status::StatusArgs, uninstall::UninstallArgs, update::UpdateArgs,
+    host_update::HostUpdateArgs, status::StatusArgs, uninstall::UninstallArgs, update::UpdateArgs,
 };
 
 #[derive(Parser)]
@@ -37,6 +37,8 @@ struct Cli {
 enum HostCommands {
     /// Initialize LifeOS on the host: distro detection, prerequisites, services, health checks
     Init(HostInitArgs),
+    /// Update LifeOS from source (CachyOS native install): git pull + makepkg + service restart
+    Update(HostUpdateArgs),
 }
 
 #[derive(Subcommand)]
@@ -231,6 +233,10 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Host(HostCommands::Init(args))) => {
             // `life host init` — canonical subcommand path
             std::process::exit(commands::host_init::execute(args).await? as i32);
+        }
+        Some(Commands::Host(HostCommands::Update(args))) => {
+            // `life host update` — CachyOS native source-based update
+            std::process::exit(commands::host_update::execute(args).await? as i32);
         }
         Some(Commands::Uninstall(args)) => {
             std::process::exit(commands::uninstall::execute(args).await? as i32);
