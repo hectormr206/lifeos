@@ -73,7 +73,8 @@ docs/archive/           ← Deprecated docs (historical only)
 
 | Topic | Doc |
 |-------|-----|
-| Workstation bootstrap (dev sudo policy, RUST_LOG dropin, sentinel) | [`docs/operations/developer-bootstrap.md`](docs/operations/developer-bootstrap.md) |
+| **CachyOS install — guía canónica para nuevos usuarios** | [`docs/operations/runtime-install.md`](docs/operations/runtime-install.md) |
+| Workstation bootstrap (dev sudo policy, RUST_LOG dropin, CachyOS workflow) | [`docs/operations/developer-bootstrap.md`](docs/operations/developer-bootstrap.md) |
 | Update check/stage/apply cycle | [`docs/operations/update-flow.md`](docs/operations/update-flow.md) |
 | Contributor quickstart | [`docs/contributor/bootstrap-dev.md`](docs/contributor/bootstrap-dev.md) |
 

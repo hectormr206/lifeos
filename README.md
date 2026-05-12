@@ -22,7 +22,11 @@ LifeOS is built in Mexico and developed in the open for users, contributors, and
 
 ## What Makes LifeOS Different
 
-> **Note on `validated on host` badges below.** The current `validated on host` labels refer to validation on the prior Fedora bootc image, which was the canonical product path before the runtime pivot. CachyOS reference-host re-validation is part of PRD Phase 3 and is not yet complete. Treat these badges as historical evidence that the capability worked on a real machine, not as a current cross-distro guarantee.
+> **V1 tool set (Fase 3):** los cinco tools de aceptación V1 — `memory_save`, `memory_search`, `web_search`, `vital_record`, `health_fact_add` — mantienen el badge `integrated in repo` hasta que se complete la validación de aceptación en hardware CachyOS real. El harness de validación existe en `scripts/validate-cachyos.sh`; los resultados de hardware real actualizarán estos badges a `validated on host (CachyOS)`.
+>
+> **GPU Game Guard:** actualmente con badge `validated on host` (validado en bootc legacy). El badge pasa a `experimental` si la validación en hardware CachyOS (REQ-B5) no puede confirmarse. Ver procedimiento manual en [`docs/operations/runtime-install.md §5.5`](docs/operations/runtime-install.md#55--b5-gpu-game-guard).
+>
+> **Note on `validated on host` badges below.** The legacy `validated on host` labels refer to validation on the prior Fedora bootc image. CachyOS reference-host re-validation is part of PRD Phase 3 — the harness is in `scripts/validate-cachyos.sh`. Treat current badges as historical evidence until hardware re-validation is complete.
 
 - **Personal runtime layer** - LifeOS focuses on memory, agents, local tools, communication surfaces, and background jobs over Linux instead of owning the kernel, driver, package, and desktop base
 - **Local AI first** (`validated on host`) - local inference via llama.cpp is part of the current runtime path on a real Linux host
@@ -48,7 +52,7 @@ LifeOS is built in Mexico and developed in the open for users, contributors, and
 
 ## Runtime Quick Start
 
-The current canonical developer path is the Rust runtime: `lifeosd`, the `life` CLI, the desktop companion, Axi tools, memory, and local APIs. Host packaging is in progress around the runtime pivot; see the first runtime onboarding guide in [`docs/operations/runtime-install.md`](docs/operations/runtime-install.md).
+The current canonical developer path is the Rust runtime: `lifeosd`, the `life` CLI, the desktop companion, Axi tools, memory, and local APIs. For the full CachyOS install guide (PKGBUILDs, `life init`, NVIDIA CDI, V1 validation), see [`docs/operations/runtime-install.md`](docs/operations/runtime-install.md).
 
 ```bash
 make build      # Build CLI + daemon (Rust)
