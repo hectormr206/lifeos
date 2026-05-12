@@ -1,0 +1,50 @@
+# lifeos-simplex-bridge.container — user-scope Quadlet for CachyOS packaging
+#
+# T19: Adapted from containers/lifeos-simplex-bridge/ for rootless user-scope.
+# Installed to /usr/share/lifeos/quadlets/ by lifeos-containers PKGBUILD.
+# Linked into ~/.config/containers/systemd/ by lifeos-quadlet-install --user.
+#
+# Verification (after install + daemon-reload):
+#   systemctl --user status lifeos-simplex-bridge.service
+#   systemctl --user is-active lifeos-simplex-bridge.service
+#   (no TCP health check — use is-active as per life init REQ-A6)
+#
+# Port: 5226 (WebSocket — lifeosd uses ws://127.0.0.1:5226 for SimpleX messaging).
+# State: /var/lib/lifeos/simplex — SQLite DBs that survive container recreation.
+# If not yet paired: run the pairing command shown in life init output.
+
+[Unit]
+Description=LifeOS SimpleX Chat Bot (Axi private messaging, user-scope)
+Documentation=https://github.com/simplex-chat/simplex-chat
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/hectormr206/lifeos-simplex-bridge:stable
+AutoUpdate=registry
+ContainerName=lifeos-simplex-bridge
+HostName=lifeos-simplex-bridge
+
+PublishPort=127.0.0.1:5226:5226
+
+# Persistent state: SQLite contact DBs, message vault, account keys.
+# ':z' shared MCS label — avoids locking out other consumers of /var/lib/lifeos.
+Volume=/var/lib/lifeos/simplex:/var/lib/lifeos/simplex:z
+
+# CA bundle for outbound TLS to SMP relays. Plain :ro avoids relabeling
+# the host CA trust store (which would break TLS for other host services).
+Volume=/etc/ssl/certs:/etc/ssl/certs:ro
+
+[Service]
+# Provision /var/lib/lifeos/simplex before starting (idempotent).
+ExecStartPre=/usr/bin/install -d -m 0700 /var/lib/lifeos/simplex
+
+# Restart with longer backoff — SimpleX needs time to flush WAL on SIGTERM.
+Restart=always
+RestartSec=10s
+TimeoutStartSec=30s
+MemoryMax=512M
+CPUQuota=100%
+
+[Install]
+WantedBy=default.target
