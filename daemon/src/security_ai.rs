@@ -535,98 +535,38 @@ impl SecurityAiDaemon {
     pub async fn check_system_integrity(&self) -> Vec<SecurityAlert> {
         let mut alerts = Vec::new();
 
-        // --- rpm -V for critical packages ---
-        let critical_packages = [
-            "coreutils",
-            "systemd",
-            "openssh-server",
-            "shadow-utils",
-            "sudo",
-        ];
-        for pkg in &critical_packages {
-            let output = Command::new("rpm").args(["-V", pkg]).output();
-            match output {
+        // --- rpm -V for critical packages (suppressed on Arch-based hosts) ---
+        alerts.extend(rpm_integrity_alerts_for_arch(std::path::Path::new(
+            "/etc/arch-release",
+        )));
+
+        // --- SELinux status (suppressed on Arch-based hosts — not_applicable) ---
+        if !crate::arch_detection::is_arch_based() {
+            let selinux_output = Command::new("getenforce").output();
+            match selinux_output {
                 Ok(out) => {
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-
-                    // rpm -V returns non-zero if files differ; stdout lists changes.
-                    if !out.status.success() && !stdout.trim().is_empty() {
-                        // Filter to REAL integrity violations. rpm -V reports a
-                        // 9-column flag string: S.5.....T. where each position
-                        // means {S}ize, {M}ode, {5}digest, {D}evice, {L}ink,
-                        // {U}ser, {G}roup, {T}ime, ca{P}abilities. On bootc
-                        // systems ostree rewrites mtimes on deploy so every
-                        // package shows "T"-only changes — that's benign noise.
-                        // Config files marked `c` (e.g. /etc/sudoers) are
-                        // expected to be edited locally so mode/digest diffs
-                        // on them are also not security events.
-                        // Real violations for a SECURITY monitor are:
-                        //   - digest (5) diff on a non-config file, OR
-                        //   - mode (M) diff on a non-config file
-                        // Everything else is either expected customization or
-                        // bootc-specific mtime rewrites.
-                        let real_changes: Vec<String> = stdout
-                            .lines()
-                            .filter(|line| !line.trim().is_empty())
-                            .filter(|line| is_real_rpm_integrity_violation(line))
-                            .map(|l| l.to_string())
-                            .collect();
-
-                        if !real_changes.is_empty() {
-                            alerts.push(SecurityAlert {
-                                id: Uuid::new_v4().to_string(),
-                                severity: AlertSeverity::Emergency,
-                                alert_type: AlertType::IntegrityViolation,
-                                description: format!(
-                                    "Package '{}' has modified files ({} real changes)",
-                                    pkg,
-                                    real_changes.len()
-                                ),
-                                process_name: None,
-                                process_pid: None,
-                                remote_addr: None,
-                                evidence: real_changes,
-                                action_taken: String::new(),
-                                timestamp: Utc::now(),
-                            });
-                        }
-                    }
-
-                    // Package not installed is not a security issue, just skip.
-                    if stderr.contains("is not installed") {
-                        continue;
+                    let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if status == "Permissive" || status == "Disabled" {
+                        alerts.push(SecurityAlert {
+                            id: Uuid::new_v4().to_string(),
+                            severity: AlertSeverity::Critical,
+                            alert_type: AlertType::IntegrityViolation,
+                            description: format!(
+                                "SELinux is {} -- system hardening degraded",
+                                status
+                            ),
+                            process_name: None,
+                            process_pid: None,
+                            remote_addr: None,
+                            evidence: vec![format!("getenforce returned: {}", status)],
+                            action_taken: String::new(),
+                            timestamp: Utc::now(),
+                        });
                     }
                 }
                 Err(_) => {
-                    // rpm not available — skip.
-                    continue;
+                    // getenforce not available — non-SELinux system.
                 }
-            }
-        }
-
-        // --- SELinux status ---
-        let selinux_output = Command::new("getenforce").output();
-        match selinux_output {
-            Ok(out) => {
-                let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if status == "Permissive" || status == "Disabled" {
-                    alerts.push(SecurityAlert {
-                        id: Uuid::new_v4().to_string(),
-                        severity: AlertSeverity::Critical,
-                        alert_type: AlertType::IntegrityViolation,
-                        description: format!("SELinux is {} -- system hardening degraded", status),
-                        process_name: None,
-                        process_pid: None,
-                        remote_addr: None,
-                        evidence: vec![format!("getenforce returned: {}", status)],
-                        action_taken: String::new(),
-                        timestamp: Utc::now(),
-                    });
-                }
-            }
-            Err(_) => {
-                // getenforce not available — non-SELinux system.
             }
         }
 
@@ -661,6 +601,75 @@ impl SecurityAiDaemon {
 // ---------------------------------------------------------------------------
 // Helper functions (module-private)
 // ---------------------------------------------------------------------------
+
+/// Run rpm -V integrity checks for a fixed set of critical packages.
+///
+/// Accepts a custom `arch_release_path` for test injection.
+/// Returns an empty `Vec` on Arch-based hosts (not_applicable — rpm is not
+/// present on Arch/CachyOS so these checks always produce false-positives).
+fn rpm_integrity_alerts_for_arch(arch_release_path: &std::path::Path) -> Vec<SecurityAlert> {
+    // Arch-based systems do not have rpm — suppress to avoid false-positives.
+    if crate::arch_detection::is_arch_based_at(arch_release_path) {
+        return Vec::new();
+    }
+
+    let critical_packages = [
+        "coreutils",
+        "systemd",
+        "openssh-server",
+        "shadow-utils",
+        "sudo",
+    ];
+
+    let mut alerts = Vec::new();
+    for pkg in &critical_packages {
+        let output = Command::new("rpm").args(["-V", pkg]).output();
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+
+                if !out.status.success() && !stdout.trim().is_empty() {
+                    let real_changes: Vec<String> = stdout
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .filter(|line| is_real_rpm_integrity_violation(line))
+                        .map(|l| l.to_string())
+                        .collect();
+
+                    if !real_changes.is_empty() {
+                        alerts.push(SecurityAlert {
+                            id: Uuid::new_v4().to_string(),
+                            severity: AlertSeverity::Emergency,
+                            alert_type: AlertType::IntegrityViolation,
+                            description: format!(
+                                "Package '{}' has modified files ({} real changes)",
+                                pkg,
+                                real_changes.len()
+                            ),
+                            process_name: None,
+                            process_pid: None,
+                            remote_addr: None,
+                            evidence: real_changes,
+                            action_taken: String::new(),
+                            timestamp: Utc::now(),
+                        });
+                    }
+                }
+
+                // Package not installed is not a security issue, just skip.
+                if stderr.contains("is not installed") {
+                    continue;
+                }
+            }
+            Err(_) => {
+                // rpm not available — skip.
+                continue;
+            }
+        }
+    }
+    alerts
+}
 
 /// Read process name from /proc/<pid>/status.
 fn read_proc_name(pid: u32) -> Option<String> {
