@@ -1,0 +1,32 @@
+# lifeos-cdi-refresh.service — regenerate /etc/cdi/nvidia.yaml after a
+# driver or kernel module update.
+#
+# Triggered by lifeos-cdi-refresh.path (watches /usr/lib/modules).
+# Runs as root (system-scope) because /etc/cdi/ is root-owned.
+#
+# Idempotent: nvidia-ctk cdi generate --output overwrites any existing file,
+# leaving a valid spec even if the driver version hasn't changed.
+#
+# Security note: nvidia-ctk is installed by nvidia-container-toolkit (AUR).
+# ConditionPathExists guards ensure the unit is a no-op when that package
+# is absent, so the path watcher can be enabled unconditionally.
+
+[Unit]
+Description=Regenerate NVIDIA CDI spec after driver update
+Documentation=https://github.com/hectormr206/lifeos/blob/main/packaging/cachyos/README.md
+After=local-fs.target
+ConditionPathExists=/usr/bin/nvidia-ctk
+ConditionPathExists=/usr/bin/nvidia-smi
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+# Log outcome clearly for journalctl -u lifeos-cdi-refresh.service
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeos-cdi-refresh
+# No persistent state — restart from scratch each time.
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

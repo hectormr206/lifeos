@@ -1,0 +1,32 @@
+# lifeos-cdi-refresh.path — watch for NVIDIA driver/kernel updates and
+# trigger CDI spec regeneration automatically.
+#
+# Watches /usr/lib/modules: this directory mtime changes when any kernel
+# module package (nvidia-dkms, nvidia-utils) is installed or upgraded via
+# pacman, because pacman writes depmod output files there.
+#
+# Why /usr/lib/modules and not /usr/lib/modprobe.d/nvidia.conf?
+#   /usr/lib/modules is guaranteed to change on every kernel + driver update
+#   (depmod creates per-kernel subdirs). /usr/lib/modprobe.d/nvidia.conf only
+#   changes if modprobe config changes — driver updates alone won't touch it.
+#
+# System-scope: CDI spec lives at /etc/cdi/nvidia.yaml (root-owned).
+# The companion .service runs as root to write there.
+#
+# Enabled by: lifeos-containers post_install() via systemctl enable --now.
+
+[Unit]
+Description=Watch for NVIDIA driver updates to refresh CDI spec
+Documentation=https://github.com/hectormr206/lifeos/blob/main/packaging/cachyos/README.md
+ConditionPathExists=/usr/bin/nvidia-ctk
+
+[Path]
+PathChanged=/usr/lib/modules
+Unit=lifeos-cdi-refresh.service
+# Debounce: wait 10s after last change before triggering, to let pacman
+# finish installing all driver-related packages in the same transaction.
+TriggerLimitIntervalSec=30s
+TriggerLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target
