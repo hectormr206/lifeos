@@ -22,6 +22,8 @@ LifeOS is built in Mexico and developed in the open for users, contributors, and
 
 ## What Makes LifeOS Different
 
+> **Note on `validated on host` badges below.** The current `validated on host` labels refer to validation on the prior Fedora bootc image, which was the canonical product path before the runtime pivot. CachyOS reference-host re-validation is part of PRD Phase 3 and is not yet complete. Treat these badges as historical evidence that the capability worked on a real machine, not as a current cross-distro guarantee.
+
 - **Personal runtime layer** - LifeOS focuses on memory, agents, local tools, communication surfaces, and background jobs over Linux instead of owning the kernel, driver, package, and desktop base
 - **Local AI first** (`validated on host`) - local inference via llama.cpp is part of the current runtime path on a real Linux host
 - **Encrypted local memory foundations** (`integrated in repo`) - encrypted memory is a core design pillar, with public docs kept conservative about what is fully validated end-to-end today
