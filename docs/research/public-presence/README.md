@@ -325,11 +325,11 @@ Short 3-step roadmap, not giant roadmap dump.
 
 **Subheadline**
 
-`LifeOS is an AI-native Linux distribution where your assistant runs on your own machine, remembers locally, and helps across your desktop without sending your life to the cloud.`
+`LifeOS is the personal operating system for your digital life: a local-first AI runtime over Linux where your assistant runs on your own machine, remembers locally, and helps across your desktop without sending your life to the cloud.`
 
 Safer variant if you want tighter truth alignment:
 
-`LifeOS is an AI-native Linux distribution exploring a local-first assistant that runs on your own machine, keeps core data local, and is being hardened across desktop control and remote interaction.`
+`LifeOS is a personal AI runtime over Linux exploring a local-first assistant that runs on your own machine, keeps core data local, and is being hardened across desktop control and remote interaction.`
 
 **Primary CTA**
 

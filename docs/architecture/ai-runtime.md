@@ -1985,7 +1985,7 @@ LifeOS ya tiene captura sensorial (vision, audio, presencia) pero NO persiste lo
 
 - [ ] **Discord server:** Canales: general, dev, feedback, showcase, español, english
 - [ ] **Reddit:** Posts en r/linux, r/LocalLLaMA, r/rust, r/selfhosted, r/COSMIC
-- [ ] **Hacker News:** "Show HN: LifeOS — AI-native Linux distribution built in Rust"
+- [ ] **Hacker News:** "Show HN: LifeOS — a personal AI runtime for Linux built in Rust"
 - [ ] **Twitter/X:** Cuenta @LifeOS_dev — posts diarios con tips, progress, screenshots
 - [ ] **YouTube canal:** Videos semanales: tutoriales, updates, behind-the-scenes
 - [ ] **Telegram grupo:** Para usuarios de LifeOS en español

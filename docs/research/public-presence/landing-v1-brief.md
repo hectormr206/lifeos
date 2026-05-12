@@ -229,7 +229,7 @@ Un bloque muy claro:
 
 **Subheadline**
 
-`LifeOS is an AI-native Linux distribution exploring a local-first assistant that runs on your own machine, keeps core data local, and is being hardened across desktop control and remote interaction.`
+`LifeOS is a personal AI runtime over Linux exploring a local-first assistant that runs on your own machine, keeps core data local, and is being hardened across desktop control and remote interaction.`
 
 **Primary CTA**
 
