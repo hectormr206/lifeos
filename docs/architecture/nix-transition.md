@@ -1,5 +1,7 @@
 # NixOS Transition — Architecture
 
+> **Historical / transitional after the runtime pivot.** LifeOS is now positioned as a personal AI runtime / operating-system layer over Linux, not as a NixOS migration or replacement distro. This document remains useful as architecture history and packaging research, but it is not the current canonical product direction.
+
 ## Why NixOS
 
 LifeOS is transitioning from Fedora bootc + Podman Quadlets to pure NixOS

@@ -1,5 +1,7 @@
 # Building LifeOS with Nix (Phase A — VM only)
 
+> **Historical / transitional after the runtime pivot.** LifeOS is now positioned as a personal AI runtime / operating-system layer over Linux, not as a NixOS migration or replacement distro. Use this guide as build/VM/package research, not as the canonical product quickstart.
+
 ## Overview
 
 LifeOS is transitioning from Fedora bootc + Podman Quadlets to a pure NixOS
