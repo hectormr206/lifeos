@@ -1,11 +1,10 @@
-name: Docker Build and Push
+name: Legacy Bootc Image Build and Push
 
 on:
-  push:
-    tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+
+# Legacy/prototype Fedora bootc image build. Manual-only after the LifeOS
+# Runtime pivot; current runtime validation happens in Rust/runtime workflows.
 
 env:
   REGISTRY: ghcr.io
@@ -14,7 +13,7 @@ env:
 
 jobs:
   build-and-push:
-    name: Build and Push Image
+    name: Build and Push Legacy Bootc Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
