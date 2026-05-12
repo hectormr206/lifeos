@@ -283,8 +283,119 @@ pub async fn step_enable_services(args: &HostInitArgs, report: &mut Report) -> R
     Ok(())
 }
 
-pub async fn step_health_fanout(_args: &HostInitArgs, _report: &mut Report) -> Result<()> {
-    unimplemented!("step_health_fanout: not implemented")
+/// Service port configuration for TCP probes.
+/// Ports: dashboard 8081, llama-server 8082, embeddings 8083, tts 8084.
+/// simplex-bridge uses systemctl is-active (no TCP endpoint).
+const SERVICE_PORTS: &[(&str, u16)] = &[
+    ("lifeos-llama-server", 8082),
+    ("lifeos-llama-embeddings", 8083),
+    ("lifeos-tts", 8084),
+];
+
+/// Probe a TCP port with a 5-second connect timeout.
+/// Returns true if the port accepts a connection.
+pub async fn probe_tcp_port(host: &str, port: u16) -> bool {
+    use tokio::net::TcpStream;
+    use tokio::time::{timeout, Duration};
+
+    let addr = format!("{}:{}", host, port);
+    timeout(Duration::from_secs(5), TcpStream::connect(&addr))
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false)
+}
+
+/// Check a systemd user unit's active state.
+pub fn unit_is_active(unit: &str) -> bool {
+    std::process::Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", unit])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+pub async fn step_health_fanout(args: &HostInitArgs, report: &mut Report) -> Result<()> {
+    use tokio::time::{timeout, Duration};
+
+    // Overall 30-second deadline
+    let fanout = async {
+        // Dashboard health check via HTTP
+        let dashboard_healthy = probe_http_health("http://127.0.0.1:8081/api/v1/health").await;
+        report.services.lifeosd.healthy = dashboard_healthy;
+        if dashboard_healthy {
+            report.services.lifeosd.state = "active".to_string();
+        } else {
+            report.services.lifeosd.state = "unhealthy".to_string();
+            report.set_exit_code(1);
+            eprintln!("  [health] lifeosd: UNHEALTHY — check: journalctl --user -u lifeosd.service");
+        }
+
+        if !args.no_containers {
+            // Parallel TCP probes for container services
+            let (llama_ok, emb_ok, tts_ok, simplex_ok) = tokio::join!(
+                probe_tcp_port("127.0.0.1", 8082),
+                probe_tcp_port("127.0.0.1", 8083),
+                probe_tcp_port("127.0.0.1", 8084),
+                async { unit_is_active("lifeos-simplex-bridge.service") }
+            );
+
+            report.services.llama_server.healthy = llama_ok;
+            report.services.llama_server.state = if llama_ok { "active".to_string() } else { "unhealthy".to_string() };
+
+            report.services.llama_embeddings.healthy = emb_ok;
+            report.services.llama_embeddings.state = if emb_ok { "active".to_string() } else { "unhealthy".to_string() };
+
+            report.services.tts.healthy = tts_ok;
+            report.services.tts.state = if tts_ok { "active".to_string() } else { "unhealthy".to_string() };
+
+            report.services.simplex_bridge.healthy = simplex_ok;
+            report.services.simplex_bridge.state = if simplex_ok { "active".to_string() } else { "inactive".to_string() };
+
+            for (name, ok, port) in [
+                ("lifeos-llama-server", llama_ok, 8082u16),
+                ("lifeos-llama-embeddings", emb_ok, 8083),
+                ("lifeos-tts", tts_ok, 8084),
+            ] {
+                if !ok {
+                    eprintln!(
+                        "  [health] {}: UNHEALTHY (port {} not reachable)",
+                        name, port
+                    );
+                    report.set_exit_code(1);
+                }
+            }
+
+            if !simplex_ok {
+                eprintln!("  [health] lifeos-simplex-bridge: INACTIVE");
+                report.set_exit_code(1);
+            }
+        }
+    };
+
+    // Apply 30-second overall deadline
+    if timeout(Duration::from_secs(30), fanout).await.is_err() {
+        report.set_exit_code(1);
+        eprintln!(
+            "  [health] lifeosd did not become healthy within 30s — \
+             check: journalctl --user -u lifeosd.service"
+        );
+    }
+
+    Ok(())
+}
+
+/// HTTP GET to a health endpoint; returns true if status is 200.
+pub async fn probe_http_health(url: &str) -> bool {
+    use tokio::time::{timeout, Duration};
+
+    let client = reqwest::Client::new();
+    timeout(
+        Duration::from_secs(5),
+        client.get(url).send(),
+    )
+    .await
+    .map(|r| r.map(|resp| resp.status().is_success()).unwrap_or(false))
+    .unwrap_or(false)
 }
 
 // ── Helpers (testable) ────────────────────────────────────────────────────────
