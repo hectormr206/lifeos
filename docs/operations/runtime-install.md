@@ -527,7 +527,38 @@ automáticamente que está en un host Arch-based y marca esos checks como
 `no aplica` en lugar de emitir alertas. Si ves estas advertencias en la
 versión instalada, actualizá al build más reciente.
 
-### 6.6 — `life init` imprime la URL del dashboard sin `?token=…`
+### 6.6 — `lifeos-llama-server.service` no arranca, fallback shadows Quadlet
+
+**Síntoma:** El journal muestra:
+
+```
+[ai_runtime] system llama-server cannot load runtime envs, falling back to user service
+[ai_runtime] prepared user fallback for lifeos-llama-server.service at ~/.config/systemd/user/...
+```
+
+Y `systemctl --user status lifeos-llama-server.service` muestra:
+
+```
+Loaded: loaded (/home/.../config/systemd/user/lifeos-llama-server.service)
+Active: inactive (dead)
+Condition: ConditionPathExists=/etc/lifeos/llama-server.env was not met
+```
+
+**Causa (resuelto en versiones recientes):** el módulo `ai_runtime_profile.rs` escribía un service file regular en `~/.config/systemd/user/` que **ensombrecía** la unit generada por el Quadlet (mismo nombre). Era código legacy del mundo bootc cuando llama-server era binario nativo. En user-scope/Quadlet, esa lógica nunca debería correr.
+
+**Solución temporal (versiones viejas):**
+
+```bash
+systemctl --user stop lifeosd
+rm ~/.config/systemd/user/lifeos-llama-server.service
+systemctl --user daemon-reload
+systemctl --user start lifeos-llama-server.service  # ahora hits el Quadlet
+systemctl --user start lifeosd
+```
+
+**Solución permanente:** actualizar al build más reciente — el daemon ahora detecta si existe un Quadlet del mismo nombre y *omite* la creación del fallback legacy.
+
+### 6.7 — `life init` imprime la URL del dashboard sin `?token=…`
 
 **Síntoma:** Al final de un `life init` exitoso, ves:
 
