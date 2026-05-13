@@ -33,10 +33,12 @@ build() {
 
     export CARGO_HOME="$srcdir/.cargo"
     export RUSTFLAGS="-C opt-level=3"
+    # --locked: respect Cargo.lock exactly (reproducible builds), but allow
+    # cargo to fetch crates from crates.io (we don't vendor deps).
     CARGO_PROFILE_RELEASE_LTO=thin \
         cargo build \
             --release \
-            --frozen \
+            --locked \
             --manifest-path desktop/Cargo.toml \
             --features "tray"
 }
