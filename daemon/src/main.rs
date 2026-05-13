@@ -146,6 +146,15 @@ pub struct DaemonConfig {
     pub enable_auto_updates: bool,
     pub enable_api: bool,
     pub api_bind_address: SocketAddr,
+    /// Master opt-in gate for voice / microphone capture.
+    /// Default **false** — no mic is grabbed on first install without consent.
+    /// Set to `true` in daemon.toml or via `LIFEOS_ENABLE_VOICE=1`.
+    pub voice_enabled: bool,
+    /// Gate for proactive desktop notifications (notify-send / notify-rust).
+    /// Checks keep running and feed the dashboard; only the desktop pop-up is
+    /// gated here. Default **false**. Set to `true` via daemon.toml or
+    /// `LIFEOS_DESKTOP_NOTIFICATIONS=1`.
+    pub proactive_notifications_enabled: bool,
 }
 
 impl Default for DaemonConfig {
@@ -158,6 +167,8 @@ impl Default for DaemonConfig {
             enable_auto_updates: true,
             enable_api: true,
             api_bind_address: "127.0.0.1:8081".parse().unwrap(),
+            voice_enabled: false,
+            proactive_notifications_enabled: false,
         }
     }
 }
@@ -1236,21 +1247,31 @@ async fn main() -> anyhow::Result<()> {
                 Some(&proactive_state.calendar),
             )
             .await;
+            // Privacy default: proactive desktop notifications are OFF by default.
+            // Alerts still accumulate in the in-memory ring (api/security/alerts)
+            // for the dashboard panel — only the desktop pop-up is gated here.
+            let desktop_notif_enabled = proactive_state.config.proactive_notifications_enabled;
             for alert in &alerts {
                 warn!("Proactive alert [{:?}]: {}", alert.severity, alert.message);
-                // Send as notification via event bus
-                let _ = proactive_state
-                    .event_bus
-                    .send(events::DaemonEvent::Notification {
-                        priority: match alert.severity {
-                            proactive::AlertSeverity::Critical => "critical".into(),
-                            proactive::AlertSeverity::Warning => "warning".into(),
-                            proactive::AlertSeverity::Info => "info".into(),
-                        },
-                        message: alert.message.clone(),
-                    });
+                // Send as desktop notification only when the user has opted in.
+                if proactive::should_dispatch_notification(
+                    alert.severity,
+                    desktop_notif_enabled,
+                    None,
+                ) {
+                    let _ = proactive_state
+                        .event_bus
+                        .send(events::DaemonEvent::Notification {
+                            priority: match alert.severity {
+                                proactive::AlertSeverity::Critical => "critical".into(),
+                                proactive::AlertSeverity::Warning => "warning".into(),
+                                proactive::AlertSeverity::Info => "info".into(),
+                            },
+                            message: alert.message.clone(),
+                        });
+                }
             }
-            // AQ.3 — Proactive personalization suggestions
+            // AQ.3 — Proactive personalization suggestions (also gated by opt-in)
             {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
                 let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
@@ -1263,6 +1284,9 @@ async fn main() -> anyhow::Result<()> {
                     .len();
                 let suggestions = crate::user_model::generate_suggestions(&model, hour, pending);
                 for s in &suggestions {
+                    if !desktop_notif_enabled {
+                        continue;
+                    }
                     let _ = proactive_state
                         .event_bus
                         .send(events::DaemonEvent::Notification {
@@ -2451,6 +2475,17 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
 
         let api_bind = env_bind.unwrap_or(toml_bind);
 
+        let env_voice = std::env::var("LIFEOS_ENABLE_VOICE").ok();
+        let env_notif = std::env::var("LIFEOS_DESKTOP_NOTIFICATIONS").ok();
+        let voice_enabled = crate::sensory_pipeline::voice_enabled_from_env(
+            env_voice.as_deref(),
+            Some(config.voice_enabled),
+        );
+        let proactive_notifications_enabled = crate::proactive::should_dispatch_notification(
+            crate::proactive::AlertSeverity::Info,
+            config.proactive_notifications_enabled,
+            env_notif.as_deref(),
+        );
         return Ok(DaemonConfig {
             health_check_interval: Duration::from_secs(config.health_check_interval_secs),
             update_check_interval: Duration::from_secs(config.update_check_interval_secs),
@@ -2461,6 +2496,8 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
             enable_auto_updates: config.enable_auto_updates,
             enable_api: config.enable_api,
             api_bind_address: api_bind,
+            voice_enabled,
+            proactive_notifications_enabled,
         });
     }
 
@@ -2468,6 +2505,18 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
     if let Some(addr) = env_bind {
         cfg.api_bind_address = addr;
     }
+    // Apply env var overrides even when no config file is present.
+    cfg.voice_enabled = crate::sensory_pipeline::voice_enabled_from_env(
+        std::env::var("LIFEOS_ENABLE_VOICE").ok().as_deref(),
+        None,
+    );
+    cfg.proactive_notifications_enabled = crate::proactive::should_dispatch_notification(
+        crate::proactive::AlertSeverity::Info,
+        false,
+        std::env::var("LIFEOS_DESKTOP_NOTIFICATIONS")
+            .ok()
+            .as_deref(),
+    );
     Ok(cfg)
 }
 
@@ -2488,6 +2537,12 @@ struct DaemonConfigFile {
     enable_api: bool,
     #[serde(default = "default_api_bind")]
     api_bind_address: String,
+    /// Opt-in gate for voice/microphone. Default false.
+    #[serde(default)]
+    voice_enabled: bool,
+    /// Opt-in gate for proactive desktop notifications. Default false.
+    #[serde(default)]
+    proactive_notifications_enabled: bool,
 }
 
 fn default_health_interval() -> u64 {
@@ -2790,17 +2845,31 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
 
         let runtime = agent_runtime_manager.sensory_capture_runtime().await;
         let always_on = agent_runtime_manager.always_on_runtime().await;
+
+        // Privacy default: voice capture is OFF unless explicitly opted in.
+        // The gate is evaluated every iteration so live config changes propagate.
+        let effective_audio_enabled = state.config.voice_enabled && runtime.audio_enabled;
+        let effective_always_on_active = state.config.voice_enabled && always_on.enabled;
+        if !state.config.voice_enabled {
+            // Log at debug level — the message is expected and would flood the journal
+            // at info. Operators who want to confirm the gate is active can use
+            // RUST_LOG=lifeosd=debug or check `/api/v1/sensory/gate-audit`.
+            debug!(
+                "[voice] disabled by default — enable via dashboard or set LIFEOS_ENABLE_VOICE=1"
+            );
+        }
+
         if let Err(e) = sensory_manager
             .sync_runtime(
                 SensoryRuntimeSync {
-                    audio_enabled: runtime.audio_enabled,
+                    audio_enabled: effective_audio_enabled,
                     screen_enabled: runtime.screen_enabled,
                     camera_enabled: runtime.camera_enabled,
                     tts_enabled: runtime.tts_enabled,
                     meeting_enabled: runtime.meeting_enabled,
                     kill_switch_active: runtime.kill_switch_active,
                     capture_interval_seconds: runtime.capture_interval_seconds,
-                    always_on_active: always_on.enabled,
+                    always_on_active: effective_always_on_active,
                     wake_word: Some(always_on.wake_word.as_str()),
                 },
                 &overlay_manager,
@@ -2867,7 +2936,7 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
             }
         }
 
-        if runtime.audio_enabled && !runtime.kill_switch_active && always_on.enabled {
+        if effective_audio_enabled && !runtime.kill_switch_active && effective_always_on_active {
             // Skip voice detection entirely during a meeting.
             if !meeting.active {
                 // Dispatch: rustpotter (streaming), companion external trigger, or

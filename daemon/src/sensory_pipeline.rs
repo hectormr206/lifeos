@@ -152,6 +152,22 @@ const STT_STREAM_TIMEOUT_MS: u64 = 8_500;
 const STT_STREAM_STABLE_MS: u64 = 1_250;
 const STT_STREAM_MIN_LISTEN_MS: u64 = 900;
 
+/// Determine whether the voice/audio pipeline should be enabled.
+///
+/// Priority: `LIFEOS_ENABLE_VOICE` env var (wins over everything) →
+/// explicit config value → default **false** (off, privacy-safe).
+///
+/// `env_value`  — raw value of `LIFEOS_ENABLE_VOICE`, or `None` if absent.
+/// `config_value` — persisted config flag, or `None` if not yet set.
+///
+/// Returns `true` only when the effective value is "1".
+pub(crate) fn voice_enabled_from_env(env_value: Option<&str>, config_value: Option<bool>) -> bool {
+    if let Some(v) = env_value {
+        return v.trim() == "1";
+    }
+    config_value.unwrap_or(false)
+}
+
 /// Read the VAD RMS threshold from environment, calibration cache, or default.
 ///
 /// Priority: env var → cached calibration → hardcoded default.
@@ -9440,5 +9456,32 @@ Drafting the description:
         let (url, voices) = apply_probe_outcome(&prior, ProbeOutcome::Throttled);
         assert!(url.is_none());
         assert!(voices.is_empty());
+    }
+
+    // ── Privacy defaults: voice_enabled_from_env ───────────────────────────
+
+    #[test]
+    fn test_voice_disabled_by_default() {
+        // Empty env + no config value → false (off by default, privacy-safe)
+        assert!(!voice_enabled_from_env(None, None));
+    }
+
+    #[test]
+    fn test_voice_enabled_via_env() {
+        // LIFEOS_ENABLE_VOICE=1 wins regardless of config
+        assert!(voice_enabled_from_env(Some("1"), None));
+        assert!(voice_enabled_from_env(Some("1"), Some(false)));
+    }
+
+    #[test]
+    fn test_voice_enabled_via_config() {
+        // config=Some(true), env absent → true
+        assert!(voice_enabled_from_env(None, Some(true)));
+    }
+
+    #[test]
+    fn test_voice_env_overrides_config_false() {
+        // env="0" beats config=Some(true) → false
+        assert!(!voice_enabled_from_env(Some("0"), Some(true)));
     }
 }
