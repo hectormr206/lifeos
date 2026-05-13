@@ -2710,4 +2710,85 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
         assert!(content.contains("--n-gpu-layers ${LIFEOS_AI_GPU_LAYERS}"));
         assert!(content.contains("Environment=__NV_PRIME_RENDER_OFFLOAD=1"));
     }
+
+    // --- Quadlet detection tests (RED → GREEN → REFACTOR) ---
+
+    #[test]
+    fn test_is_quadlet_generated_with_quadlet_path_returns_true() {
+        let output = "# /run/user/1000/systemd/generator/lifeos-llama-server.service\n[Unit]\n...";
+        assert!(is_quadlet_generated(output));
+    }
+
+    #[test]
+    fn test_is_quadlet_generated_with_user_config_returns_false() {
+        let output = "# /home/user/.config/systemd/user/lifeos-llama-server.service\n[Unit]\n...";
+        assert!(!is_quadlet_generated(output));
+    }
+
+    #[test]
+    fn test_is_quadlet_generated_empty_input_returns_false() {
+        assert!(!is_quadlet_generated(""));
+    }
+
+    #[test]
+    fn test_is_quadlet_generated_with_random_text_returns_false() {
+        assert!(!is_quadlet_generated("some random text without the generator path"));
+    }
+
+    #[test]
+    fn test_fallback_skipped_when_quadlet_detected() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let unit_path = tmp.path().join("lifeos-llama-server.service");
+        let content = "content";
+        let mut daemon_reload_called = false;
+
+        let result = ensure_user_llama_service_inner(
+            &unit_path,
+            content,
+            || true, // quadlet detected
+            &mut daemon_reload_called,
+        );
+
+        assert!(result.is_ok());
+        assert!(!unit_path.exists(), "file must NOT be written when quadlet detected");
+        assert!(!daemon_reload_called, "daemon-reload must NOT be called when quadlet detected");
+    }
+
+    #[test]
+    fn test_fallback_proceeds_when_no_quadlet() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let unit_path = tmp.path().join("lifeos-llama-server.service");
+        let content = "content";
+        let mut daemon_reload_called = false;
+
+        let result = ensure_user_llama_service_inner(
+            &unit_path,
+            content,
+            || false, // no quadlet
+            &mut daemon_reload_called,
+        );
+
+        assert!(result.is_ok());
+        assert!(unit_path.exists(), "fallback file must be written when no quadlet");
+        assert!(daemon_reload_called, "daemon-reload must be called when file was created");
+    }
+
+    #[test]
+    fn test_no_daemon_reload_when_file_unchanged() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let unit_path = tmp.path().join("lifeos-llama-server.service");
+        let content = "content";
+
+        // First write — file is new, daemon-reload should fire.
+        let mut daemon_reload_called = false;
+        ensure_user_llama_service_inner(&unit_path, content, || false, &mut daemon_reload_called)
+            .expect("first write");
+        assert!(daemon_reload_called, "daemon-reload must fire on first write");
+
+        // Second write — same content, daemon-reload must NOT fire again.
+        let mut daemon_reload_called2 = false;
+        ensure_user_llama_service_inner(&unit_path, content, || false, &mut daemon_reload_called2)
+            .expect("second write");
+        assert!(!daemon_reload_called2, "daemon-reload must NOT fire when content is unchanged");
+    }
 }
