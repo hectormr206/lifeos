@@ -44,10 +44,12 @@ build() {
     export RUSTFLAGS="-C opt-level=3"
     # Features must match CI exactly. See CLAUDE.md:
     #   cargo clippy -p lifeosd --all-features — uses dbus,http-api,ui-overlay,wake-word,messaging
+    # --locked: respect Cargo.lock exactly (reproducible builds), but allow
+    # cargo to fetch crates from crates.io (we don't vendor deps).
     CARGO_PROFILE_RELEASE_LTO=thin \
         cargo build \
             --release \
-            --frozen \
+            --locked \
             --manifest-path daemon/Cargo.toml \
             --features "dbus,http-api,ui-overlay,wake-word,messaging"
 }
