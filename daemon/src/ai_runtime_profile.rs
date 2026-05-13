@@ -1286,7 +1286,12 @@ fn ensure_user_llama_service() -> Result<()> {
     let unit_path = llama_user_unit_path()?;
     let content = llama_user_service_content();
     let mut daemon_reload_called = false;
-    ensure_user_llama_service_inner(&unit_path, &content, quadlet_unit_is_active, &mut daemon_reload_called)?;
+    ensure_user_llama_service_inner(
+        &unit_path,
+        &content,
+        quadlet_unit_is_active,
+        &mut daemon_reload_called,
+    )?;
 
     if daemon_reload_called {
         let status = systemctl_command(LlamaServiceScope::User)
@@ -2797,7 +2802,9 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
 
     #[test]
     fn test_is_quadlet_generated_with_random_text_returns_false() {
-        assert!(!is_quadlet_generated("some random text without the generator path"));
+        assert!(!is_quadlet_generated(
+            "some random text without the generator path"
+        ));
     }
 
     #[test]
@@ -2815,8 +2822,14 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
         );
 
         assert!(result.is_ok());
-        assert!(!unit_path.exists(), "file must NOT be written when quadlet detected");
-        assert!(!daemon_reload_called, "daemon-reload must NOT be called when quadlet detected");
+        assert!(
+            !unit_path.exists(),
+            "file must NOT be written when quadlet detected"
+        );
+        assert!(
+            !daemon_reload_called,
+            "daemon-reload must NOT be called when quadlet detected"
+        );
     }
 
     #[test]
@@ -2834,8 +2847,14 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
         );
 
         assert!(result.is_ok());
-        assert!(unit_path.exists(), "fallback file must be written when no quadlet");
-        assert!(daemon_reload_called, "daemon-reload must be called when file was created");
+        assert!(
+            unit_path.exists(),
+            "fallback file must be written when no quadlet"
+        );
+        assert!(
+            daemon_reload_called,
+            "daemon-reload must be called when file was created"
+        );
     }
 
     #[test]
@@ -2848,12 +2867,18 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
         let mut daemon_reload_called = false;
         ensure_user_llama_service_inner(&unit_path, content, || false, &mut daemon_reload_called)
             .expect("first write");
-        assert!(daemon_reload_called, "daemon-reload must fire on first write");
+        assert!(
+            daemon_reload_called,
+            "daemon-reload must fire on first write"
+        );
 
         // Second write — same content, daemon-reload must NOT fire again.
         let mut daemon_reload_called2 = false;
         ensure_user_llama_service_inner(&unit_path, content, || false, &mut daemon_reload_called2)
             .expect("second write");
-        assert!(!daemon_reload_called2, "daemon-reload must NOT fire when content is unchanged");
+        assert!(
+            !daemon_reload_called2,
+            "daemon-reload must NOT fire when content is unchanged"
+        );
     }
 }
