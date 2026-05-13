@@ -12610,13 +12610,60 @@ pub(crate) async fn serve_uds_gate_connection(
     Ok(true)
 }
 
+/// Returns `true` when the daemon is running in user-scope (not as root).
+///
+/// System-scope daemons run as root (`my_uid == 0`). User-scope daemons run
+/// as a regular user and are the legitimate owners of sockets they created,
+/// so the ownership check for stale-socket removal must use the daemon's own
+/// UID instead of requiring root.
+fn is_user_scope(my_uid: u32) -> bool {
+    my_uid != 0
+}
+
+/// Decide whether a stale socket file may be safely removed.
+///
+/// Returns `Ok(true)` when removal is safe (ownership matches), or `Err` with
+/// a human-readable reason when the file must NOT be removed (potential
+/// socket-substitution attack or misconfiguration).
+///
+/// Policy:
+/// - System-scope (`my_uid == 0`): require `file_uid == 0` (root-owned).
+/// - User-scope (`my_uid != 0`): require `file_uid == my_uid` (self-owned).
+fn should_remove_existing_socket(my_uid: u32, file_uid: u32) -> Result<bool, String> {
+    if is_user_scope(my_uid) {
+        if file_uid == my_uid {
+            Ok(true)
+        } else {
+            Err(format!(
+                "socket is owned by uid={file_uid} (expected uid={my_uid}); refusing to remove"
+            ))
+        }
+    } else {
+        // System-scope: only root-owned sockets are safe to remove.
+        if file_uid == 0 {
+            Ok(true)
+        } else {
+            Err(format!(
+                "socket is owned by uid={file_uid} (expected root); refusing to remove"
+            ))
+        }
+    }
+}
+
 /// Bind the UDS API socket, handling stale-socket cleanup.
 /// Mirrors `uds_handout::bind()` pattern (stat → verify socket → remove → bind).
 /// Sets file mode to 0660 (more restrictive than handout's 0666 because the
 /// API socket grants full daemon control, not just token dispensing).
+///
+/// Ownership check is scope-aware: in system-scope (uid=0) the existing socket
+/// must be root-owned; in user-scope (uid!=0) the existing socket must be owned
+/// by the current user. This allows the daemon to restart cleanly after a crash
+/// when running as a non-root user (e.g. CachyOS first-install).
 fn bind_uds_api_socket(path: &std::path::Path) -> anyhow::Result<tokio::net::UnixListener> {
     use anyhow::Context;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let my_uid = unsafe { libc::getuid() };
 
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         let mode = meta.mode();
@@ -12628,14 +12675,9 @@ fn bind_uds_api_socket(path: &std::path::Path) -> anyhow::Result<tokio::net::Uni
                 mode & libc::S_IFMT
             );
         }
-        // Only remove if owned by root (daemon effective uid).
-        if meta.uid() != 0 {
-            anyhow::bail!(
-                "{} is owned by uid={} (expected root); refusing to remove",
-                path.display(),
-                meta.uid()
-            );
-        }
+        should_remove_existing_socket(my_uid, meta.uid()).map_err(|reason| {
+            anyhow::anyhow!("UDS bind failed at {} ({})", path.display(), reason)
+        })?;
         std::fs::remove_file(path)
             .with_context(|| format!("remove stale socket {}", path.display()))?;
     }
@@ -14193,6 +14235,91 @@ mod tests {
             err_msg.contains("lifeosd.sock"),
             "error must include socket path, got: {err_msg}"
         );
+    }
+
+    // ── fix/uds-ownership-user-scope: ownership helper tests ─────────────
+
+    // RED: is_user_scope — non-root returns true.
+    #[test]
+    fn test_is_user_scope_returns_true_for_non_root() {
+        assert!(is_user_scope(1000));
+    }
+
+    // RED: is_user_scope — root returns false.
+    #[test]
+    fn test_is_user_scope_returns_false_for_root() {
+        assert!(!is_user_scope(0));
+    }
+
+    // RED: user-scope, socket owned by self → Ok(true).
+    #[test]
+    fn test_should_remove_existing_socket_user_scope_self_owned_ok() {
+        let result = should_remove_existing_socket(1000, 1000);
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        assert!(result.unwrap());
+    }
+
+    // RED: user-scope, socket owned by different user → Err.
+    #[test]
+    fn test_should_remove_existing_socket_user_scope_other_user_rejected() {
+        let result = should_remove_existing_socket(1000, 1001);
+        assert!(
+            result.is_err(),
+            "expected Err when different user owns socket"
+        );
+    }
+
+    // RED: user-scope, socket owned by root → Err.
+    #[test]
+    fn test_should_remove_existing_socket_user_scope_root_owned_rejected() {
+        let result = should_remove_existing_socket(1000, 0);
+        assert!(
+            result.is_err(),
+            "expected Err when root owns socket in user-scope"
+        );
+    }
+
+    // RED: system-scope, socket owned by root → Ok(true).
+    #[test]
+    fn test_should_remove_existing_socket_system_scope_root_owned_ok() {
+        let result = should_remove_existing_socket(0, 0);
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        assert!(result.unwrap());
+    }
+
+    // RED: system-scope, socket owned by user → Err.
+    #[test]
+    fn test_should_remove_existing_socket_system_scope_user_owned_rejected() {
+        let result = should_remove_existing_socket(0, 1000);
+        assert!(
+            result.is_err(),
+            "expected Err when user owns socket in system-scope"
+        );
+    }
+
+    // RED: bind_uds_api_socket removes a stale socket owned by the current user
+    // in user-scope. Creates a tempfile socket, calls bind, verifies it rebinds.
+    #[tokio::test]
+    async fn bind_uds_api_socket_removes_stale_user_owned_socket_in_user_scope() {
+        let our_uid = unsafe { libc::getuid() };
+        if our_uid == 0 {
+            // Running as root → this test targets user-scope only; skip.
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stale.sock");
+
+        // First bind creates the socket owned by us.
+        let _l1 = bind_uds_api_socket(&path).expect("first bind must succeed");
+        assert!(path.exists(), "socket must exist after first bind");
+
+        // Drop _l1 so the fd is released, then attempt second bind.
+        drop(_l1);
+
+        // Second bind must succeed despite the stale socket.
+        let _l2 =
+            bind_uds_api_socket(&path).expect("second bind must succeed (stale socket removal)");
+        assert!(path.exists(), "socket must exist after second bind");
     }
 
     // ── Phase 8b Phase 3: TCP host/origin guard tests ────────────────────
