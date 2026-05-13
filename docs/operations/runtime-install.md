@@ -191,20 +191,10 @@ actualizaciones de kernel o driver.
 ## 4. Primera ejecución — `life init`
 
 `life init` realiza la inicialización completa del runtime: detecta el sistema
-operativo, valida los requisitos previos, crea los directorios de estado, activa
-los servicios de systemd --user, e inicia los contenedores Quadlet.
-
-### Instalar los Quadlets de usuario
-
-Antes de ejecutar `life init`, instalá los symlinks de Quadlet en el scope del
-usuario:
-
-```bash
-lifeos-quadlet-install --user
-```
-
-Este helper crea `~/.config/containers/systemd/` y enlaza cada archivo
-`.container` desde `/usr/share/lifeos/quadlets/`.
+operativo, valida los requisitos previos, verifica la pertenencia al grupo
+`lifeos`, despliega los Quadlets de usuario automáticamente, crea los
+directorios de estado, activa los servicios de systemd --user, e inicia los
+contenedores Quadlet.
 
 ### Ejecutar `life init`
 
@@ -215,22 +205,26 @@ life init
 ### Salida esperada (flujo exitoso)
 
 ```
-[1/5] Detectando sistema operativo... OK (CachyOS)
-[2/5] Validando requisitos previos...
+[1/7] Detectando sistema operativo... OK (CachyOS)
+[2/7] Validando requisitos previos...
   podman 5.3.1              OK
   nvidia-smi (driver 560.x) OK
   nvidia-ctk 1.16.2         OK
   /etc/cdi/nvidia.yaml      OK
-[3/5] Verificando sistema de archivos...
+[3/7] Verificando pertenencia al grupo...
+  ✓ group membership OK
+[4/7] Desplegando Quadlets...
+  ✓ Quadlets deployed   ← o "already-present" si ya estaban instalados
+[5/7] Verificando sistema de archivos...
   /var/lib/lifeos/          OK
   /run/lifeos/              OK
-[4/5] Activando servicios...
+[6/7] Activando servicios...
   lifeosd.service           habilitado + activo
   lifeos-llama-server       habilitado + activo
   lifeos-llama-embeddings   habilitado + activo
   lifeos-tts                habilitado + activo
   lifeos-simplex-bridge     habilitado + activo (sin cuenta SimpleX aún)
-[5/5] Verificando salud (TCP fan-out)...
+[7/7] Verificando salud (TCP fan-out)...
   lifeosd     :8081  HEALTHY
   llama-server :8082  HEALTHY
   embeddings  :8083  HEALTHY
@@ -417,7 +411,28 @@ Si el AUR build falla, usar la variante binaria:
 paru -S nvidia-container-toolkit-bin
 ```
 
-### 6.2 — `/run/lifeos/` o `/var/lib/lifeos/` faltante
+### 6.2 — Usuario no está en el grupo `lifeos`
+
+**Síntoma:** `life init` sale con código 2 y:
+
+```
+✗ user not in 'lifeos' group — /var/lib/lifeos/ requires it
+  Fix: sudo usermod -aG lifeos $USER  (then logout/login)
+```
+
+**Causa:** El daemon escribe estado en `/var/lib/lifeos/` que tiene permisos
+`drwxrwx--- lifeos:lifeos`. El usuario necesita pertenecer al grupo `lifeos`.
+
+**Solución:**
+
+```bash
+sudo usermod -aG lifeos $USER
+# Luego hacé logout/login (o newgrp lifeos para la sesión actual)
+```
+
+Después volvé a ejecutar `life init`.
+
+### 6.3 — `/run/lifeos/` o `/var/lib/lifeos/` faltante
 
 **Síntoma:** `life init` imprime:
 
@@ -436,17 +451,7 @@ de post-install).
 sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lifeos.conf
 ```
 
-Luego verificá permisos:
-
-```bash
-ls -la /var/lib/lifeos /run/lifeos
-# /var/lib/lifeos debe ser modo 0775, grupo lifeos
-# Si tu usuario no está en el grupo lifeos:
-sudo usermod -aG lifeos $USER
-# Luego hacé logout/login para que tome efecto
-```
-
-### 6.3 — `lifeosd` no responde en 30 segundos
+### 6.4 — `lifeosd` no responde en 30 segundos
 
 **Síntoma:** `life init` sale con código 1 y:
 
@@ -477,7 +482,7 @@ systemctl --user restart lifeosd.service
 systemctl --user is-active lifeosd.service
 ```
 
-### 6.4 — Advertencias de SELinux o `rpm -V` en el journal
+### 6.5 — Advertencias de SELinux o `rpm -V` en el journal
 
 **Síntoma:** El journal de `lifeosd` muestra alertas sobre SELinux o `rpm -V`.
 
@@ -490,7 +495,7 @@ automáticamente que está en un host Arch-based y marca esos checks como
 `no aplica` en lugar de emitir alertas. Si ves estas advertencias en la
 versión instalada, actualizá al build más reciente.
 
-### 6.5 — `life init` imprime la URL del dashboard sin `?token=…`
+### 6.6 — `life init` imprime la URL del dashboard sin `?token=…`
 
 **Síntoma:** Al final de un `life init` exitoso, ves:
 
