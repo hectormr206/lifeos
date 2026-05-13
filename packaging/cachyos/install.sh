@@ -67,9 +67,15 @@ Usage:
   install.sh [OPTIONS]
 
 Options:
-  --check       Print what would be done without invoking makepkg
-  --no-deps     Skip the pre-flight build-deps check
+  --check       Dry-run: print what would be installed/built; no changes
+  --no-deps     Skip the pre-flight build-deps check + auto-install
   -h, --help    Show this message
+
+Behavior:
+  Pre-flight auto-installs any missing build dependencies via
+  `sudo pacman -S --needed --noconfirm`. The user is prompted for sudo
+  password once at the start; the rest runs unattended (makepkg will
+  also use sudo internally, but the cached credential covers it).
 
 Build order (dependency-aware):
   1. lifeos-containers (creates system user + tmpfiles)
@@ -89,21 +95,39 @@ is_arch_based() {
     grep -qE '^(ID|ID_LIKE)=.*(arch|cachyos)' /etc/os-release
 }
 
-check_build_deps() {
-    local missing=()
+missing_build_deps() {
     local pkg
     for pkg in "${BUILD_DEPS[@]}"; do
         if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
-            missing+=("$pkg")
+            printf '%s\n' "$pkg"
         fi
     done
-    if (( ${#missing[@]} > 0 )); then
-        log_warn "Missing build dependencies: ${missing[*]}"
-        log_warn "Install them with: sudo pacman -S --needed ${missing[*]}"
+}
+
+install_missing_deps() {
+    # Reads space-separated package list. Auto-installs via pacman.
+    local -a missing=("$@")
+    if (( ${#missing[@]} == 0 )); then
+        log_ok "build dependencies present"
+        return 0
+    fi
+
+    log_warn "Missing build dependencies: ${missing[*]}"
+
+    if (( DRY_RUN == 1 )); then
+        printf '  (dry-run) sudo pacman -S --needed --noconfirm %s\n' "${missing[*]}"
+        return 0
+    fi
+
+    log_step "Auto-installing missing dependencies (you may be prompted for sudo password)"
+    if sudo pacman -S --needed --noconfirm "${missing[@]}"; then
+        log_ok "build dependencies installed"
+        return 0
+    else
+        log_err "Failed to install: ${missing[*]}"
+        log_err "Try manually: sudo pacman -S --needed ${missing[*]}"
         return 1
     fi
-    log_ok "build dependencies present"
-    return 0
 }
 
 install_package() {
@@ -170,9 +194,11 @@ fi
 log_ok "makepkg available"
 
 if (( SKIP_DEPS_CHECK == 0 )); then
-    if ! check_build_deps; then
-        log_err "Pre-flight failed — install the missing dependencies and re-run."
-        log_err "Or run with --no-deps to skip this check (at your own risk)."
+    # Capture missing deps as a real array (newline-separated stdout → array).
+    mapfile -t MISSING < <(missing_build_deps)
+    if ! install_missing_deps "${MISSING[@]}"; then
+        log_err "Pre-flight failed — could not auto-install build dependencies."
+        log_err "Re-run after fixing, or use --no-deps to skip this check."
         exit 2
     fi
 fi

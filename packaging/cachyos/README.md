@@ -33,9 +33,11 @@ bash install.sh
 
 The installer:
 - Verifies you are on an Arch-based host (CachyOS, Arch, Manjaro, EndeavourOS).
-- Checks that `base-devel` + Rust + GTK4 + the rest of the build deps are present.
+- Checks build dependencies (`base-devel`, Rust, GTK4, etc.) and **auto-installs any that are missing** via `sudo pacman -S --needed --noconfirm`. You are prompted for sudo password once at the start; the rest runs unattended.
 - Runs `makepkg -si` for each of the 5 packages in dependency order.
 - Reports per-package success/failure and exits non-zero if anything failed.
+
+Pass `--no-deps` to skip the dependency auto-install if you want to manage build deps manually.
 
 If you prefer manual control, follow the **Build Order** / **Install Order** sections below.
 
