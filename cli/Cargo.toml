@@ -29,6 +29,7 @@ dialoguer = "0.11"
 shellexpand = "3"
 libc = "0.2"
 sha2 = "0.10"
+indicatif = "0.17"
 num_cpus = "1.16"
 fastrand = "2"
 # hyper-util promoted to direct dep for UDS transport (Phase 8b).

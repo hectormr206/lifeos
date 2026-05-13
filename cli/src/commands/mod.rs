@@ -22,6 +22,7 @@ pub mod lab;
 pub mod memory;
 pub mod mesh;
 pub mod mode;
+pub mod model;
 pub mod onboarding;
 pub mod overlay;
 pub mod permissions;

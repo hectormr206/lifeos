@@ -285,6 +285,27 @@ Environment=LIFEOS_ENABLE_VOICE=1
 Environment=LIFEOS_DESKTOP_NOTIFICATIONS=1
 ```
 
+### Descargar el modelo de lenguaje
+
+`life init` activa el contenedor `lifeos-llama-server`, pero **no descarga el
+modelo automáticamente**. El contenedor crasheará hasta que el modelo esté
+presente en `/var/lib/lifeos/models/`. Descargalo antes de chatear con Axi:
+
+```bash
+life model download              # Qwen3.5-4B (~2.5 GB, requiere GPU 4 GB+ VRAM)
+life model download --size 9b   # opcional — Qwen3.5-9B para GPUs 8 GB+ VRAM
+```
+
+El comando verifica si el archivo ya existe y omite la descarga si está presente
+(`--force` para forzar re-descarga). Una barra de progreso muestra el avance.
+Usar `--no-progress` o `--json` para salida machine-readable.
+
+Para listar los modelos descargados:
+
+```bash
+life model list
+```
+
 ---
 
 ## 5. Validación V1
