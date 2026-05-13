@@ -532,6 +532,28 @@ export LIFEOS_BOOTSTRAP_TOKEN="$(< "${XDG_RUNTIME_DIR}/lifeos/bootstrap.token")"
 life init
 ```
 
+### 6.6 — `lifeosd` no arranca después de restart: "UDS bind failed ... refusing to remove"
+
+**Síntoma:** El journal de `lifeosd` muestra:
+
+```
+ERROR lifeosd::api] UDS bind failed at /run/lifeos/lifeosd.sock
+(/run/lifeos/lifeosd.sock is owned by uid=1000 (expected root); refusing to remove);
+daemon will not start
+```
+
+**Causa (resuelto en versiones recientes):** verificación de propiedad del socket era system-scope only. El daemon en user-scope se creó el socket previo como tu usuario, pero la siguiente instancia rechazaba removerlo porque "esperaba root". Bug clásico de cuando LifeOS migró de system-scope (bootc) a user-scope (runtime pivot).
+
+**Solución temporal (si seguís en una versión vieja):**
+
+```bash
+systemctl --user stop lifeosd
+rm -f /run/lifeos/lifeosd.sock
+systemctl --user start lifeosd
+```
+
+**Solución permanente:** actualizar al build más reciente — la verificación ahora distingue user-scope (acepta socket propio) vs system-scope (mantiene la check anti-substitution).
+
 ---
 
 ## 7. Respaldo de `memory.db`

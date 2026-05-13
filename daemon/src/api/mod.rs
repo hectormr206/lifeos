@@ -14256,7 +14256,7 @@ mod tests {
     fn test_should_remove_existing_socket_user_scope_self_owned_ok() {
         let result = should_remove_existing_socket(1000, 1000);
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     // RED: user-scope, socket owned by different user → Err.
@@ -14284,7 +14284,7 @@ mod tests {
     fn test_should_remove_existing_socket_system_scope_root_owned_ok() {
         let result = should_remove_existing_socket(0, 0);
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     // RED: system-scope, socket owned by user → Err.
