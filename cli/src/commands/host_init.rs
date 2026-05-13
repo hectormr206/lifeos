@@ -22,7 +22,7 @@ pub struct HostInitArgs {
 pub async fn execute(args: HostInitArgs) -> Result<i32> {
     let mut report = Report::new();
 
-    eprintln!("{}", "[1/5] Detecting distro...".bold());
+    eprintln!("{}", "[1/7] Detecting distro...".bold());
     if let Err(e) = step_detect_distro(&mut report) {
         eprintln!("  {} {}", "✗".red(), e);
         report.print(args.json);
@@ -34,7 +34,7 @@ pub async fn execute(args: HostInitArgs) -> Result<i32> {
         report.distro.as_deref().unwrap_or("?").cyan()
     );
 
-    eprintln!("{}", "[2/5] Checking prerequisites...".bold());
+    eprintln!("{}", "[2/7] Checking prerequisites...".bold());
     if let Err(e) = step_check_prereqs(&mut report) {
         eprintln!("  {} {}", "✗".red(), e);
         report.print(args.json);
@@ -42,7 +42,23 @@ pub async fn execute(args: HostInitArgs) -> Result<i32> {
     }
     eprintln!("  {} all prerequisites present", "✓".green());
 
-    eprintln!("{}", "[3/5] Verifying filesystem paths...".bold());
+    eprintln!("{}", "[3/7] Checking group membership...".bold());
+    if let Err(e) = step_check_group(&mut report) {
+        eprintln!("  {} {}", "✗".red(), e);
+        report.print(args.json);
+        return Ok(report.exit_code());
+    }
+    eprintln!("  {} group membership OK", "✓".green());
+
+    eprintln!("{}", "[4/7] Deploying Quadlets...".bold());
+    if let Err(e) = step_deploy_quadlets(&mut report) {
+        eprintln!("  {} {}", "✗".red(), e);
+        report.print(args.json);
+        return Ok(report.exit_code());
+    }
+    eprintln!("  {} Quadlets ready", "✓".green());
+
+    eprintln!("{}", "[5/7] Verifying filesystem paths...".bold());
     if let Err(e) = step_verify_filesystem(&mut report) {
         eprintln!("  {} {}", "✗".red(), e);
         report.print(args.json);
@@ -50,7 +66,7 @@ pub async fn execute(args: HostInitArgs) -> Result<i32> {
     }
     eprintln!("  {} /var/lib/lifeos and /run/lifeos present", "✓".green());
 
-    eprintln!("{}", "[4/5] Enabling services...".bold());
+    eprintln!("{}", "[6/7] Enabling services...".bold());
     if let Err(e) = step_enable_services(&args, &mut report).await {
         eprintln!("  {} {}", "✗".red(), e);
         report.print(args.json);
@@ -58,7 +74,7 @@ pub async fn execute(args: HostInitArgs) -> Result<i32> {
     }
     eprintln!("  {} services enabled", "✓".green());
 
-    eprintln!("{}", "[5/5] Running health checks...".bold());
+    eprintln!("{}", "[7/7] Running health checks...".bold());
     step_health_fanout(&args, &mut report).await?;
 
     if report.exit_code() == 0 {
@@ -89,6 +105,7 @@ pub struct Report {
     pub version: String,
     pub distro: Option<String>,
     pub prerequisites: Prerequisites,
+    pub quadlets: QuadletsReport,
     pub filesystem: Filesystem,
     pub services: Services,
     pub exit_code: i32,
@@ -100,6 +117,33 @@ pub struct Prerequisites {
     pub nvidia_smi: bool,
     pub nvidia_ctk: Option<String>,
     pub cdi_spec: bool,
+    pub lifeos_group_member: LifeosGroupStatus,
+}
+
+/// JSON-serializable group membership status.
+#[derive(Debug, Serialize, Default, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LifeosGroupStatus {
+    #[default]
+    Unknown,
+    True,
+    False,
+    GroupNotFound,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct QuadletsReport {
+    /// `true` = just deployed, `false` = skipped (already present or helper missing).
+    pub quadlets_deployed: bool,
+    /// Human-readable status: "deployed" | "already-present" | "helper-missing" | "error: <msg>".
+    pub status: String,
+}
+
+/// Decision returned by the pure helper [`quadlet_deployment_decision`].
+#[derive(Debug, PartialEq)]
+pub enum QuadletDecision {
+    Deploy,
+    Skip { reason: String },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -610,6 +654,206 @@ pub fn resolve_bootstrap_token() -> Option<String> {
     resolve_bootstrap_token_from(env_value, &candidates)
 }
 
+// ── Quadlet deployment helpers ────────────────────────────────────────────────
+
+/// Pure decision function: given whether the helper binary is present and
+/// whether Quadlets are already deployed, return the appropriate action.
+pub fn quadlet_deployment_decision(
+    helper_present: bool,
+    already_deployed: bool,
+) -> QuadletDecision {
+    if !helper_present {
+        return QuadletDecision::Skip {
+            reason: "helper not installed".to_string(),
+        };
+    }
+    if already_deployed {
+        return QuadletDecision::Skip {
+            reason: "already deployed".to_string(),
+        };
+    }
+    QuadletDecision::Deploy
+}
+
+/// Check whether `~/.config/containers/systemd/lifeos-*.container` exists.
+pub fn quadlets_already_deployed() -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let quadlet_dir = home.join(".config/containers/systemd");
+    // Any file matching lifeos-*.container means quadlets are present
+    std::fs::read_dir(&quadlet_dir)
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                let name = e.file_name();
+                let s = name.to_string_lossy();
+                s.starts_with("lifeos-") && s.ends_with(".container")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Real step: detect helper + deployment state and act.
+///
+/// Invariant: if the helper is missing, warn and continue (don't fail).
+pub fn step_deploy_quadlets(report: &mut Report) -> Result<()> {
+    let helper_present = which_available("lifeos-quadlet-install");
+    let already_deployed = quadlets_already_deployed();
+    step_deploy_quadlets_with(report, helper_present, already_deployed)
+}
+
+/// Testable inner function that accepts injected state flags.
+pub fn step_deploy_quadlets_with(
+    report: &mut Report,
+    helper_present: bool,
+    already_deployed: bool,
+) -> Result<()> {
+    match quadlet_deployment_decision(helper_present, already_deployed) {
+        QuadletDecision::Skip { ref reason } if reason.contains("helper not installed") => {
+            eprintln!(
+                "  [quadlets] {} lifeos-quadlet-install not found — skipping auto-deploy",
+                "⚠".yellow()
+            );
+            report.quadlets.quadlets_deployed = false;
+            report.quadlets.status = "helper-missing".to_string();
+        }
+        QuadletDecision::Skip { .. } => {
+            eprintln!("  [quadlets] {} Quadlets already deployed", "✓".green());
+            report.quadlets.quadlets_deployed = false;
+            report.quadlets.status = "already-present".to_string();
+        }
+        QuadletDecision::Deploy => {
+            eprintln!("  [quadlets] deploying via lifeos-quadlet-install --user …");
+            let install_status = std::process::Command::new("lifeos-quadlet-install")
+                .arg("--user")
+                .status();
+            match install_status {
+                Ok(s) if s.success() => {
+                    // daemon-reload so systemd picks up the new unit files
+                    if let Err(e) = daemon_reload() {
+                        eprintln!(
+                            "  [quadlets] {} daemon-reload after install: {}",
+                            "⚠".yellow(),
+                            e
+                        );
+                    }
+                    eprintln!("  [quadlets] {} Quadlets deployed", "✓".green());
+                    report.quadlets.quadlets_deployed = true;
+                    report.quadlets.status = "deployed".to_string();
+                }
+                Ok(s) => {
+                    let msg = format!("lifeos-quadlet-install --user exited with {}", s);
+                    eprintln!("  [quadlets] {} {}", "✗".red(), msg);
+                    report.quadlets.quadlets_deployed = false;
+                    report.quadlets.status = format!("error: {}", msg);
+                    // Don't hard-fail — continue; service enable will surface the error
+                }
+                Err(e) => {
+                    let msg = format!("failed to run lifeos-quadlet-install: {}", e);
+                    eprintln!("  [quadlets] {} {}", "✗".red(), msg);
+                    report.quadlets.quadlets_deployed = false;
+                    report.quadlets.status = format!("error: {}", msg);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ── Group membership helpers ──────────────────────────────────────────────────
+
+/// Pure helper: true if "lifeos" is in the provided group list.
+pub fn user_is_in_lifeos_group(user_groups: &[String]) -> bool {
+    user_groups.iter().any(|g| g == "lifeos")
+}
+
+/// Resolve current user's group names by reading `/etc/group` and comparing
+/// against the user's supplementary group IDs (via `libc::getgroups`).
+pub fn current_user_groups() -> Vec<String> {
+    // 1. Get current process's group IDs
+    let gids: Vec<u32> = {
+        let mut buf = vec![0u32; 64];
+        loop {
+            let n = unsafe {
+                libc::getgroups(
+                    buf.len() as libc::c_int,
+                    buf.as_mut_ptr() as *mut libc::gid_t,
+                )
+            };
+            if n < 0 {
+                return vec![];
+            }
+            let n = n as usize;
+            if n <= buf.len() {
+                buf.truncate(n);
+                break buf.to_vec();
+            }
+            buf.resize(buf.len() * 2, 0);
+        }
+    };
+
+    // 2. Parse /etc/group and collect names whose gid matches
+    let content = match std::fs::read_to_string("/etc/group") {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    content
+        .lines()
+        .filter_map(|line| {
+            // format: name:password:gid:members
+            let mut parts = line.splitn(4, ':');
+            let name = parts.next()?.to_string();
+            parts.next(); // password
+            let gid: u32 = parts.next()?.parse().ok()?;
+            if gids.contains(&gid) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Check that the current user is in the `lifeos` group (if it exists).
+/// Returns `Err` with exit code 2 if the group exists but user is not in it.
+pub fn step_check_group(report: &mut Report) -> Result<()> {
+    // Check whether the "lifeos" group exists in /etc/group
+    let group_content = match std::fs::read_to_string("/etc/group") {
+        Ok(c) => c,
+        Err(_) => {
+            // Cannot read /etc/group — skip check, don't fail
+            report.prerequisites.lifeos_group_member = LifeosGroupStatus::GroupNotFound;
+            return Ok(());
+        }
+    };
+
+    let lifeos_group_exists = group_content
+        .lines()
+        .any(|l| l.split(':').next().map(|n| n == "lifeos").unwrap_or(false));
+
+    if !lifeos_group_exists {
+        eprintln!(
+            "  [groups] {} 'lifeos' group not found — pre-Phase-3 install? skipping check",
+            "⚠".yellow()
+        );
+        report.prerequisites.lifeos_group_member = LifeosGroupStatus::GroupNotFound;
+        return Ok(());
+    }
+
+    let user_groups = current_user_groups();
+    if user_is_in_lifeos_group(&user_groups) {
+        report.prerequisites.lifeos_group_member = LifeosGroupStatus::True;
+        Ok(())
+    } else {
+        report.prerequisites.lifeos_group_member = LifeosGroupStatus::False;
+        report.set_exit_code(2);
+        anyhow::bail!(
+            "user not in 'lifeos' group — /var/lib/lifeos/ requires it\n  Fix: sudo usermod -aG lifeos $USER  (then logout/login)"
+        )
+    }
+}
+
 /// Format the dashboard URL with the bootstrap token appended when available.
 /// When `token` is `None`, omit the query string — the daemon will reject the
 /// browser request and the user will know to set `LIFEOS_BOOTSTRAP_TOKEN`.
@@ -631,6 +875,140 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ── NEW: Quadlet deployment decision ─────────────────────────────────────
+
+    #[test]
+    fn test_quadlet_decision_helper_missing() {
+        let decision = quadlet_deployment_decision(false, false);
+        assert!(
+            matches!(decision, QuadletDecision::Skip { .. }),
+            "Helper missing should produce Skip"
+        );
+        if let QuadletDecision::Skip { reason } = decision {
+            assert!(
+                reason.contains("helper not installed"),
+                "Skip reason should mention 'helper not installed', got: '{}'",
+                reason
+            );
+        }
+    }
+
+    #[test]
+    fn test_quadlet_decision_already_deployed() {
+        let decision = quadlet_deployment_decision(true, true);
+        assert!(
+            matches!(decision, QuadletDecision::Skip { .. }),
+            "Already deployed should produce Skip"
+        );
+        if let QuadletDecision::Skip { reason } = decision {
+            assert!(
+                reason.contains("already deployed"),
+                "Skip reason should mention 'already deployed', got: '{}'",
+                reason
+            );
+        }
+    }
+
+    #[test]
+    fn test_quadlet_decision_deploy_needed() {
+        let decision = quadlet_deployment_decision(true, false);
+        assert!(
+            matches!(decision, QuadletDecision::Deploy),
+            "Helper present + not deployed should produce Deploy"
+        );
+    }
+
+    // ── NEW: lifeos group membership ─────────────────────────────────────────
+
+    #[test]
+    fn test_user_in_lifeos_group_when_present() {
+        let groups = vec![
+            "wheel".to_string(),
+            "lifeos".to_string(),
+            "audio".to_string(),
+        ];
+        assert!(
+            user_is_in_lifeos_group(&groups),
+            "User with 'lifeos' in groups should return true"
+        );
+    }
+
+    #[test]
+    fn test_user_not_in_lifeos_group() {
+        let groups = vec!["wheel".to_string(), "audio".to_string()];
+        assert!(
+            !user_is_in_lifeos_group(&groups),
+            "User without 'lifeos' in groups should return false"
+        );
+    }
+
+    #[test]
+    fn test_user_not_in_lifeos_group_empty_list() {
+        let groups: Vec<String> = vec![];
+        assert!(
+            !user_is_in_lifeos_group(&groups),
+            "Empty group list should return false"
+        );
+    }
+
+    // ── TRIANGULATION: quadlet decision ─────────────────────────────────────
+
+    #[test]
+    fn test_quadlet_decision_helper_missing_even_when_deployed() {
+        // helper absent overrides deployed state — still skip
+        let decision = quadlet_deployment_decision(false, true);
+        assert!(
+            matches!(decision, QuadletDecision::Skip { .. }),
+            "Helper missing + already deployed should still produce Skip"
+        );
+        if let QuadletDecision::Skip { reason } = decision {
+            assert!(
+                reason.contains("helper not installed"),
+                "Reason must be 'helper not installed' (not 'already deployed'), got: '{}'",
+                reason
+            );
+        }
+    }
+
+    // ── TRIANGULATION: group membership ─────────────────────────────────────
+
+    #[test]
+    fn test_user_in_lifeos_group_only_lifeos() {
+        // Edge: single group that happens to be lifeos
+        let groups = vec!["lifeos".to_string()];
+        assert!(user_is_in_lifeos_group(&groups));
+    }
+
+    #[test]
+    fn test_user_in_lifeos_group_case_sensitive() {
+        // "LIFEOS" must NOT match — group names are case-sensitive on Linux
+        let groups = vec!["LIFEOS".to_string(), "wheel".to_string()];
+        assert!(
+            !user_is_in_lifeos_group(&groups),
+            "Group name comparison must be case-sensitive"
+        );
+    }
+
+    // ── NEW: integration-ish — helper missing + group OK still proceeds ───────
+
+    #[test]
+    fn test_quadlet_deploy_step_no_helper_does_not_fail() {
+        // Simulate: helper not found, quadlets not deployed
+        // Expected: step returns Ok (warn and continue)
+        let mut report = Report::new();
+        // We call the testable step with overrides: no helper, not deployed
+        let result = step_deploy_quadlets_with(
+            &mut report,
+            false, // helper_present
+            false, // already_deployed
+        );
+        assert!(
+            result.is_ok(),
+            "Missing helper should warn but not fail: {:?}",
+            result
+        );
+    }
 
     // ── T06.1: Distro detection — supported (CachyOS) ─────────────────────────
 
