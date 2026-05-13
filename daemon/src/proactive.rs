@@ -863,6 +863,25 @@ async fn check_audio_volume() -> Option<ProactiveAlert> {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Determine whether a proactive alert should be dispatched as a desktop notification.
+///
+/// Rules (in priority order):
+/// 1. If `LIFEOS_DESKTOP_NOTIFICATIONS=1` env var is set → always dispatch.
+/// 2. Else, follow `config_enabled` (default **false**, privacy-safe).
+///
+/// The checks themselves KEEP RUNNING regardless — only the desktop dispatch is gated.
+/// `env_override` is the raw value of `LIFEOS_DESKTOP_NOTIFICATIONS`, or `None` if absent.
+pub fn should_dispatch_notification(
+    _severity: AlertSeverity,
+    config_enabled: bool,
+    env_override: Option<&str>,
+) -> bool {
+    if let Some(v) = env_override {
+        return v.trim() == "1";
+    }
+    config_enabled
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -898,5 +917,53 @@ mod tests {
             result.is_none(),
             "Arch host must suppress SELinux permissive alert"
         );
+    }
+
+    // ── Privacy defaults: should_dispatch_notification ─────────────────────
+
+    #[test]
+    fn test_notify_disabled_by_default() {
+        // Critical alert + config=false + no env → must NOT dispatch
+        assert!(!should_dispatch_notification(
+            AlertSeverity::Critical,
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_notify_enabled_via_config() {
+        // config=true, no env override → dispatches (all severities)
+        assert!(should_dispatch_notification(
+            AlertSeverity::Info,
+            true,
+            None
+        ));
+        assert!(should_dispatch_notification(
+            AlertSeverity::Warning,
+            true,
+            None
+        ));
+        assert!(should_dispatch_notification(
+            AlertSeverity::Critical,
+            true,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_notify_env_override() {
+        // env="1" beats config=false → dispatches
+        assert!(should_dispatch_notification(
+            AlertSeverity::Critical,
+            false,
+            Some("1")
+        ));
+        // env="0" beats config=true → does NOT dispatch
+        assert!(!should_dispatch_notification(
+            AlertSeverity::Critical,
+            true,
+            Some("0")
+        ));
     }
 }

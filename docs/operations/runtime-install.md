@@ -259,6 +259,38 @@ Si ejecutás `life init` en un sistema ya inicializado, re-valida el estado y
 re-imprime la URL del dashboard. No deshabilita ni reinicia servicios que ya
 estén corriendo.
 
+### Defaults de privacidad en primera instalación
+
+LifeOS no captura el micrófono ni dispara notificaciones de escritorio sin tu
+consentimiento explícito. En la primera ejecución, ambas funciones están **OFF
+por defecto**.
+
+| Feature | Default | Cómo activar |
+|---------|---------|--------------|
+| Captura de voz / wake word | **OFF** | Dashboard → Sistema → Voz, o `LIFEOS_ENABLE_VOICE=1` en `/etc/lifeos/daemon.toml` (`voice_enabled = true`) |
+| Notificaciones de escritorio | **OFF** | Dashboard → Sistema → Notificaciones, o `LIFEOS_DESKTOP_NOTIFICATIONS=1` (`proactive_notifications_enabled = true`) |
+
+Las comprobaciones de salud del sistema (disco, RAM, temperatura, etc.) **siguen
+corriendo** en segundo plano y sus alertas son visibles en el panel del
+dashboard (`/api/v1/security/alerts`). Lo único que se suprime con estos
+defaults es el pop-up de escritorio (`notify-send`).
+
+Para activar ambas funciones permanentemente, editá `/etc/lifeos/daemon.toml`:
+
+```toml
+voice_enabled = true
+proactive_notifications_enabled = true
+```
+
+O via variables de entorno al iniciar el servicio:
+
+```ini
+# /etc/systemd/system/lifeosd.service.d/override.conf
+[Service]
+Environment=LIFEOS_ENABLE_VOICE=1
+Environment=LIFEOS_DESKTOP_NOTIFICATIONS=1
+```
+
 ---
 
 ## 5. Validación V1
