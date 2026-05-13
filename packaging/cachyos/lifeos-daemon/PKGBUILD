@@ -65,6 +65,18 @@ package() {
     install -Dm644 "packaging/cachyos/lifeos-daemon/lifeosd.service" \
         "$pkgdir/usr/lib/systemd/user/lifeosd.service"
 
+    # Dashboard static files served by the daemon's HTTP API at /dashboard.
+    # The unit file sets LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard to
+    # point ServeDir at this path. Without this, /dashboard returns HTTP 404
+    # because the daemon's default relative path resolves to the cwd of the
+    # systemd-spawned process (usually $HOME, where these files don't exist).
+    install -Dm644 "daemon/static/dashboard/index.html" \
+        "$pkgdir/usr/share/lifeos/dashboard/index.html"
+    install -Dm644 "daemon/static/dashboard/app.js" \
+        "$pkgdir/usr/share/lifeos/dashboard/app.js"
+    install -Dm644 "daemon/static/dashboard/style.css" \
+        "$pkgdir/usr/share/lifeos/dashboard/style.css"
+
     # License
     install -Dm644 "LICENSE" \
         "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

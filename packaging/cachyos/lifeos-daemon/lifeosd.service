@@ -10,12 +10,16 @@
 [Unit]
 Description=LifeOS AI Daemon (lifeosd)
 Documentation=https://github.com/hectormr206/lifeos
-# Container services must be ready before the daemon starts probing them.
-# Quadlet-generated names (user-scope): lifeos-llama-server.service etc.
-After=network-online.target lifeos-llama-server.service lifeos-llama-embeddings.service lifeos-tts.service
-Wants=network-online.target lifeos-llama-server.service lifeos-llama-embeddings.service lifeos-tts.service
-# SimpleX bridge is optional — don't block daemon start on it.
-Wants=lifeos-simplex-bridge.service
+# Only depend on network. We do NOT use After= for container services because:
+#   1. Quadlet-generated services are WantedBy=default.target — adding
+#      After= for them creates an ordering cycle with lifeosd which is also
+#      WantedBy=default.target. systemd resolves it by DROPPING lifeosd
+#      and the daemon never starts (real bug observed in v0.8.42 install).
+#   2. lifeosd already health-checks container endpoints at runtime and
+#      degrades gracefully when they're not available, so blocking startup
+#      is over-engineering.
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -25,6 +29,11 @@ ExecStart=/usr/bin/lifeosd
 # If the user is not in the lifeos group the daemon falls back to
 # ${XDG_DATA_HOME:-~/.local/share}/lifeos per existing env-var logic.
 Environment=LIFEOS_DATA_DIR=/var/lib/lifeos
+
+# Dashboard static files: packaged by lifeos-daemon at /usr/share/lifeos/dashboard/.
+# Without this, the daemon's tower-http::ServeDir falls back to a relative
+# path ("daemon/static/dashboard") that doesn't exist when started by systemd.
+Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard
 
 # Restart policy: restart on crash, but not on clean exit (ExecStop or
 # SIGTERM-clean). 5s delay avoids restart storms if the daemon exits fast
