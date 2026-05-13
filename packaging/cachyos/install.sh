@@ -32,6 +32,8 @@ PACKAGES=(
 )
 
 # Build deps that every PKGBUILD assumes are present on the host.
+# These are installed in one pacman batch BEFORE makepkg starts, so the
+# user sees the full picture up front instead of pacman prompting mid-build.
 BUILD_DEPS=(
     base-devel
     rust
@@ -46,6 +48,26 @@ BUILD_DEPS=(
     openssl
     sqlite
 )
+
+# Runtime deps that LifeOS needs to actually FUNCTION after install
+# (declared as `depends=` in the PKGBUILDs, but installing them here means
+# pacman doesn't need to resolve them again during makepkg -i).
+RUNTIME_DEPS=(
+    podman
+)
+
+# Conditional deps appended at runtime based on hardware detection
+# (e.g. nvidia-container-toolkit when an NVIDIA GPU is present).
+CONDITIONAL_DEPS=()
+
+has_nvidia_gpu() {
+    # Cheap signal — lspci or /proc/driver/nvidia. Avoid running nvidia-smi
+    # since the driver might not yet be loaded on a fresh boot.
+    if command -v lspci >/dev/null 2>&1 && lspci | grep -qi 'NVIDIA'; then
+        return 0
+    fi
+    [[ -d /proc/driver/nvidia ]]
+}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -97,7 +119,8 @@ is_arch_based() {
 
 missing_build_deps() {
     local pkg
-    for pkg in "${BUILD_DEPS[@]}"; do
+    local -a all_deps=("${BUILD_DEPS[@]}" "${RUNTIME_DEPS[@]}" "${CONDITIONAL_DEPS[@]}")
+    for pkg in "${all_deps[@]}"; do
         if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
             printf '%s\n' "$pkg"
         fi
@@ -192,6 +215,14 @@ if ! command -v makepkg >/dev/null 2>&1; then
     exit 2
 fi
 log_ok "makepkg available"
+
+# Hardware detection → optional deps
+if has_nvidia_gpu; then
+    log_ok "NVIDIA GPU detected — adding nvidia-container-toolkit to deps"
+    CONDITIONAL_DEPS+=(nvidia-container-toolkit)
+else
+    log_ok "No NVIDIA GPU detected — skipping nvidia-container-toolkit"
+fi
 
 if (( SKIP_DEPS_CHECK == 0 )); then
     # Capture missing deps as a real array (newline-separated stdout → array).
