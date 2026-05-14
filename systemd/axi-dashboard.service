@@ -1,0 +1,15 @@
+[Unit]
+Description=Axi local dashboard (FastAPI + uvicorn)
+After=graphical-session.target axi-voice.service
+PartOf=graphical-session.target
+Wants=axi-voice.service
+
+[Service]
+Type=simple
+ExecStart=%h/LifeOS/axi/.venv/bin/python -m axi.dashboard
+Restart=on-failure
+RestartSec=3
+# Listen only on localhost — never expose the dashboard to the network.
+
+[Install]
+WantedBy=default.target

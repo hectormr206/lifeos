@@ -1,0 +1,113 @@
+{% extends "_base.html" %}
+{% block nav_memory %}active{% endblock %}
+{% block title %}Memoria · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="memoryPage()" x-init="load()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Memoria de largo plazo</h1>
+    <input x-model.debounce.300ms="query"
+           @input="filter()"
+           class="panel2 px-3 py-2 text-sm"
+           placeholder="Buscar en memoria…"
+           style="min-width: 280px">
+  </div>
+
+  <div class="flex gap-2 flex-wrap text-sm">
+    <button class="btn" :class="domain === null ? 'btn-primary' : ''" @click="setDomain(null)">Todo (<span x-text="totalCount"></span>)</button>
+    <template x-for="d in domains" :key="d.name">
+      <button class="btn" :class="domain === d.name ? 'btn-primary' : ''" @click="setDomain(d.name)">
+        <span x-text="d.name"></span>
+        (<span x-text="d.count"></span>)
+      </button>
+    </template>
+  </div>
+
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando memoria…</div>
+  </template>
+
+  <template x-if="!loading && filtered.length === 0">
+    <div class="panel p-12 text-center">
+      <div class="muted">Sin resultados.</div>
+      <div class="text-sm muted mt-2" x-show="query">Probá otra búsqueda.</div>
+      <div class="text-sm muted mt-2" x-show="!query && facts.length === 0">
+        Habla con Axi vía Meta+Shift+Espacio. Los hechos se extraen automáticamente.
+      </div>
+    </div>
+  </template>
+
+  <div class="grid gap-2" x-show="filtered.length > 0">
+    <template x-for="f in filtered" :key="f.id">
+      <div class="panel p-4">
+        <div class="font-medium" x-text="f.label"></div>
+        <div class="text-xs muted mt-2 flex flex-wrap gap-3">
+          <span x-text="f.created"></span>
+          <span x-show="f.domain">· <span x-text="f.domain"></span></span>
+          <span x-show="f.data?.category">· <span x-text="f.data.category"></span></span>
+          <span x-show="f.created_tz && f.created_tz !== currentTz" class="muted">· originalmente en <span x-text="f.created_tz"></span></span>
+        </div>
+        <template x-if="f.data?.detail">
+          <div class="text-sm mt-2 muted" x-text="f.data.detail"></div>
+        </template>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function memoryPage() {
+  return {
+    facts: [],
+    filtered: [],
+    domains: [],
+    domain: null,
+    query: '',
+    loading: true,
+    totalCount: 0,
+    currentTz: 'America/Mexico_City',
+    async load() {
+      const [factsR, cfgR] = await Promise.all([
+        fetch('/api/facts?limit=500'),
+        fetch('/api/config'),
+      ]);
+      this.facts = factsR.ok ? await factsR.json() : [];
+      if (cfgR.ok) {
+        const cfg = await cfgR.json();
+        this.currentTz = cfg.timezone || 'America/Mexico_City';
+      }
+      this.totalCount = this.facts.length;
+      // Compute domain breakdown
+      const buckets = {};
+      for (const f of this.facts) {
+        const d = f.domain || '(sin dominio)';
+        buckets[d] = (buckets[d] || 0) + 1;
+      }
+      this.domains = Object.entries(buckets)
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count);
+      this.loading = false;
+      this.filter();
+    },
+    setDomain(d) {
+      this.domain = d;
+      this.filter();
+    },
+    filter() {
+      let f = this.facts;
+      if (this.domain !== null) {
+        f = f.filter(x => (x.domain || '(sin dominio)') === this.domain);
+      }
+      if (this.query.trim()) {
+        const q = this.query.toLowerCase();
+        f = f.filter(x =>
+          (x.label || '').toLowerCase().includes(q) ||
+          (x.data?.detail || '').toLowerCase().includes(q)
+        );
+      }
+      this.filtered = f;
+    },
+  };
+}
+</script>
+{% endblock %}

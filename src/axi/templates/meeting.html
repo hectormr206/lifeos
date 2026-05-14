@@ -1,0 +1,154 @@
+{% extends "_base.html" %}
+{% block nav_meetings %}active{% endblock %}
+{% block title %}Reunión #{{ meeting_id }} · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="meetingDetail({{ meeting_id }})" x-init="init()" x-destroy="destroy()">
+  <a href="/meetings" class="text-sm muted">← Volver a reuniones</a>
+
+  <template x-if="meeting">
+    <div class="space-y-6">
+      <h1 class="text-2xl font-semibold">Reunión #<span x-text="meeting.id"></span></h1>
+
+      <div class="panel p-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+        <div><div class="muted text-xs">Inicio</div><div x-text="meeting.start"></div></div>
+        <div><div class="muted text-xs">Fin</div><div x-text="meeting.end || '—'"></div></div>
+        <div><div class="muted text-xs">Duración</div><div x-text="formatDuration(meeting.duration_s)"></div></div>
+      </div>
+
+      <template x-if="speakers && speakers.length > 0">
+        <section class="panel p-4">
+          <div class="text-sm muted mb-3">Participantes detectados (renombralos para identificar)</div>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            <template x-for="sp in speakers" :key="sp.id">
+              <div class="panel2 p-3 flex items-center gap-3">
+                <span class="state-dot" style="background: var(--blue)"></span>
+                <input
+                  :value="sp.name"
+                  @change="renameSpeaker(sp.id, $event.target.value, sp.name)"
+                  class="bg-transparent flex-1 px-2 py-1 text-sm"
+                  style="border: 1px solid var(--border); border-radius: 0.25rem"
+                />
+                <span class="muted text-xs" x-text="sp.segment_count + ' segs'"></span>
+              </div>
+            </template>
+          </div>
+          <div class="muted text-xs mt-3">
+            💡 Renombrá una persona y el cambio se aplica a TODOS los meetings donde Axi
+            reconozca esa voz. Para futuras reuniones, la misma persona aparecerá ya con su nombre.
+          </div>
+        </section>
+      </template>
+
+      <template x-if="meeting.summary">
+        <section class="panel p-6">
+          <div class="text-sm muted mb-3">Reporte ejecutivo</div>
+          <div class="md" x-html="renderMarkdown(meeting.summary)"></div>
+        </section>
+      </template>
+
+      <template x-if="timeline && timeline.length > 0">
+        <section class="panel p-4">
+          <div class="text-sm muted mb-3">Línea de tiempo (transcripción + capturas)</div>
+          <div class="space-y-2 max-h-[70vh] overflow-y-auto text-sm">
+            <template x-for="item in timeline" :key="item.kind + '-' + item.start_ms + '-' + (item.channel || item.filename)">
+              <div>
+                <template x-if="item.kind === 'segment'">
+                  <div class="panel2 p-3">
+                    <div class="flex justify-between text-xs muted mb-1">
+                      <span x-text="item.speaker_label || (item.channel === 'mic' ? 'Héctor' : 'Reunión')"></span>
+                      <span x-text="formatMs(item.start_ms) + ' → ' + formatMs(item.end_ms)"></span>
+                    </div>
+                    <div x-text="item.text"></div>
+                  </div>
+                </template>
+                <template x-if="item.kind === 'screen'">
+                  <div class="panel2 p-2 inline-block">
+                    <div class="text-xs muted mb-1" x-text="'📷 ' + formatMs(item.start_ms)"></div>
+                    <a :href="'/api/meetings/' + meeting.id + '/screen/' + item.filename" target="_blank">
+                      <img :src="'/api/meetings/' + meeting.id + '/screen/' + item.filename"
+                           class="rounded border max-h-64" style="border-color: var(--border)" loading="lazy">
+                    </a>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </section>
+      </template>
+    </div>
+  </template>
+
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando reunión…</div>
+  </template>
+</div>
+
+<script>
+function meetingDetail(id) {
+  return {
+    id: id,
+    meeting: null,
+    speakers: [],
+    loading: true,
+    timer: null,
+    timeline: [],
+    async load() {
+      const [mR, spR] = await Promise.all([
+        fetch('/api/meetings/' + this.id),
+        fetch('/api/meetings/' + this.id + '/speakers').catch(() => null),
+      ]);
+      this.meeting = mR.ok ? await mR.json() : null;
+      this.speakers = (spR && spR.ok) ? await spR.json() : [];
+      this.loading = false;
+      this.timeline = this.buildTimeline();
+      if (this.meeting && this.meeting.status === 'done' && this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+    },
+    buildTimeline() {
+      if (!this.meeting) return [];
+      const items = [];
+      for (const seg of (this.meeting.segments || [])) {
+        items.push({ kind: 'segment', start_ms: seg.start_ms, ...seg });
+      }
+      for (const sc of (this.meeting.screens || [])) {
+        items.push({ kind: 'screen', start_ms: sc.start_ms, filename: sc.filename });
+      }
+      items.sort((a, b) => a.start_ms - b.start_ms);
+      return items;
+    },
+    async renameSpeaker(speakerId, newName, oldName) {
+      newName = (newName || '').trim();
+      if (!newName || newName === oldName) return;
+      const r = await fetch('/api/speakers/' + speakerId + '/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      });
+      if (r.ok) { this.load(); }
+    },
+    init() {
+      this.load();
+      this.timer = setInterval(() => this.load(), 3000);
+    },
+    destroy() {
+      if (this.timer) clearInterval(this.timer);
+    },
+  };
+}
+function formatDuration(s) {
+  if (!s && s !== 0) return '—';
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+  return h + 'h ' + m + 'm';
+}
+function formatMs(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  return m + ':' + String(s % 60).padStart(2, '0');
+}
+</script>
+{% endblock %}

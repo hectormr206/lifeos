@@ -1,0 +1,17 @@
+[Unit]
+Description=Axi tray icon — KDE status indicator for the voice daemon
+After=graphical-session.target axi-voice.service
+PartOf=graphical-session.target
+# Wants= (not Requires=) so the tray survives when axi-voice is intentionally
+# stopped (e.g. interpreter mode). The tray will show 'unknown' state during
+# the gap, which is the correct UI feedback.
+Wants=axi-voice.service
+
+[Service]
+Type=simple
+ExecStart=%h/LifeOS/axi/.venv/bin/python -m axi.tray
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Global-shortcut entry point. Sends `toggle` to the running daemon.
+exec "$HOME/LifeOS/axi/.venv/bin/python" -m axi.axictl toggle

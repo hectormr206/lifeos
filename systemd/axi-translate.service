@@ -1,0 +1,17 @@
+[Unit]
+Description=Axi interpreter mode (EN→ES real-time translation)
+After=graphical-session.target sound.target
+PartOf=graphical-session.target
+# Note: the activation script (axi-translate-on) handles stopping axi-voice
+# explicitly so we can also restore it cleanly on deactivation. A
+# `Conflicts=axi-voice.service` directive here would also tear down
+# axi-tray via its dependency on axi-voice — not what we want.
+
+[Service]
+Type=simple
+ExecStart=%h/LifeOS/axi/.venv/bin/python -m axi.translate
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

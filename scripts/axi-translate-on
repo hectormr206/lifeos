@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Activate interpreter mode:
+#   1. Stop axi-voice (releases the Whisper instance + ~2 GB VRAM)
+#   2. Ensure llama-server runs on GPU (Qwen via Whisper translator)
+#   3. Start axi-translate
+#
+# VRAM budget (RTX 5070 Ti 12 GB):
+#   Whisper large-v3-turbo on GPU: ~1.6 GB
+#   Qwen3.6-35B-A3B MoE on GPU:    ~7.8 GB
+#   CUDA contexts + buffers:       ~1.5 GB
+#   Total:                         ~10.9 GB  (~1 GB margin)
+#
+# Reversal: `axi-translate-off` returns to the normal axi-voice stack.
+
+set -u
+
+echo "[axi-translate-on] stopping axi-voice…"
+systemctl --user stop axi-voice.service || true
+
+echo "[axi-translate-on] ensuring llama-server is on GPU…"
+# Clean up any CPU-mode drop-in from earlier runs.
+rm -f ~/.config/systemd/user/llama-server.service.d/cpu-exec.conf
+rm -f ~/.config/systemd/user/llama-server.service.d/cpu-override.conf
+rmdir ~/.config/systemd/user/llama-server.service.d 2>/dev/null || true
+systemctl --user daemon-reload
+systemctl --user restart llama-server.service
+
+echo "[axi-translate-on] waiting for llama-server /health…"
+for i in $(seq 1 30); do
+    if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; then
+        echo "[axi-translate-on] llama-server ready"
+        break
+    fi
+    sleep 1
+done
+
+echo "[axi-translate-on] (re)starting axi-translate…"
+# Use restart, not start: if a previous run is stuck (e.g. its Whisper
+# worker thread OOM-crashed while the main thread kept the service in
+# 'active' state), `start` would no-op. `restart` guarantees a fresh process.
+systemctl --user restart axi-translate.service
+
+echo "[axi-translate-on] activo. Pone tu video/podcast en inglés."
+echo "Para volver al modo normal:  axi-translate-off"

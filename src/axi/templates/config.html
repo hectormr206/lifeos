@@ -1,0 +1,140 @@
+{% extends "_base.html" %}
+{% block nav_config %}active{% endblock %}
+{% block title %}Config · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="configPage()" x-init="load()">
+  <h1 class="text-2xl font-semibold">Configuración</h1>
+
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando…</div>
+  </template>
+
+  <template x-if="!loading">
+    <div class="space-y-4">
+      <div class="panel p-6 space-y-4">
+        <div>
+          <label class="block text-sm muted mb-1">Zona horaria</label>
+          <select x-model="cfg.timezone" class="panel2 px-3 py-2 w-full">
+            <option>America/Mexico_City</option>
+            <option>America/Tijuana</option>
+            <option>America/Cancun</option>
+            <option>America/Bogota</option>
+            <option>America/Buenos_Aires</option>
+            <option>America/Santiago</option>
+            <option>America/New_York</option>
+            <option>America/Los_Angeles</option>
+            <option>Europe/Madrid</option>
+            <option>Europe/London</option>
+            <option>Asia/Tokyo</option>
+            <option>UTC</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm muted mb-1">Idioma</label>
+          <input x-model="cfg.language" class="panel2 px-3 py-2 w-full" />
+        </div>
+
+        <div>
+          <label class="block text-sm muted mb-1">Nombre del usuario</label>
+          <input x-model="cfg.user_name" class="panel2 px-3 py-2 w-full" />
+        </div>
+
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" x-model="cfg.tts_enabled" />
+          <span>TTS habilitado (Piper habla las respuestas)</span>
+        </label>
+
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" x-model="cfg.vision_enabled" />
+          <span>Visión habilitada (capturas para el brain)</span>
+        </label>
+
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" x-model="cfg.fact_extraction_enabled" />
+          <span>Extracción automática de hechos (memoria de largo plazo)</span>
+        </label>
+      </div>
+
+      <div class="panel p-6 space-y-4">
+        <h2 class="font-semibold">Meeting mode</h2>
+
+        <div>
+          <label class="block text-sm muted mb-1">Umbral RMS de silencio (skip chunks bajo esto)</label>
+          <input type="number" step="0.001" x-model.number="cfg.meeting_silence_rms" class="panel2 px-3 py-2 w-full" />
+        </div>
+
+        <div>
+          <label class="block text-sm muted mb-1">Tamaño de ventana del resumen jerárquico (minutos)</label>
+          <input type="number" min="1" x-model.number="cfg.meeting_window_minutes" class="panel2 px-3 py-2 w-full" />
+        </div>
+
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" x-model="cfg.meeting_keep_raw_audio" />
+          <span>Conservar audio raw después de transcribir</span>
+        </label>
+
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" x-model="cfg.meeting_incremental_transcribe" />
+          <span>Transcripción incremental durante la grabación</span>
+        </label>
+      </div>
+
+      <div class="flex justify-end gap-3">
+        <button class="btn" @click="load()">Cancelar</button>
+        <button class="btn btn-primary" @click="save()" :disabled="saving">
+          <span x-show="!saving">Guardar</span>
+          <span x-show="saving">Guardando…</span>
+        </button>
+      </div>
+
+      <template x-if="message">
+        <div class="panel p-3 text-sm"
+             :style="messageError ? 'border-color: var(--red); color: var(--red)' : 'border-color: var(--green); color: var(--green)'"
+             x-text="message"></div>
+      </template>
+    </div>
+  </template>
+</div>
+
+<script>
+function configPage() {
+  return {
+    cfg: {},
+    loading: true,
+    saving: false,
+    message: '',
+    messageError: false,
+    async load() {
+      this.loading = true;
+      this.message = '';
+      const r = await fetch('/api/config');
+      this.cfg = r.ok ? await r.json() : {};
+      this.loading = false;
+    },
+    async save() {
+      this.saving = true;
+      try {
+        const r = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.cfg),
+        });
+        if (r.ok) {
+          this.message = 'Guardado. Algunos cambios requieren reiniciar el daemon.';
+          this.messageError = false;
+        } else {
+          this.message = 'Error: ' + r.status;
+          this.messageError = true;
+        }
+      } catch (e) {
+        this.message = 'Error de red: ' + e;
+        this.messageError = true;
+      }
+      this.saving = false;
+    },
+  };
+}
+</script>
+{% endblock %}

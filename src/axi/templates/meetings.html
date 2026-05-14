@@ -1,0 +1,77 @@
+{% extends "_base.html" %}
+{% block nav_meetings %}active{% endblock %}
+{% block title %}Reuniones · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="meetingsPage()" x-init="init()" x-destroy="destroy()">
+  <h1 class="text-2xl font-semibold">Reuniones</h1>
+
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando…</div>
+  </template>
+
+  <template x-if="!loading && meetings.length === 0">
+    <div class="panel p-12 text-center">
+      <div class="muted">No hay reuniones grabadas todavía.</div>
+      <div class="text-sm muted mt-2">
+        Click izquierdo en la bolita de Axi → "Iniciar grabación de reunión".
+      </div>
+    </div>
+  </template>
+
+  <div class="grid gap-3" x-show="meetings.length > 0">
+    <template x-for="m in meetings" :key="m.id">
+      <a :href="'/meetings/' + m.id" class="panel p-4 hover:bg-opacity-50 transition" style="text-decoration:none; color:inherit">
+        <div class="flex justify-between items-baseline">
+          <div>
+            <div class="font-semibold">Reunión #<span x-text="m.id"></span></div>
+            <div class="muted text-sm" x-text="m.start"></div>
+          </div>
+          <div class="text-right">
+            <div class="text-sm" x-text="formatDuration(m.duration_s)"></div>
+            <div class="text-xs"
+                 :style="m.status === 'done' ? 'color: var(--green)' : (m.status === 'recording' ? 'color: var(--purple)' : 'color: var(--amber)')"
+                 x-text="m.status"></div>
+          </div>
+        </div>
+        <div class="text-xs muted mt-2 flex gap-3">
+          <span x-show="m.has_summary">📝 con resumen</span>
+          <span x-show="m.has_transcript">📜 con transcript</span>
+          <span x-text="'fuente: ' + m.source"></span>
+        </div>
+      </a>
+    </template>
+  </div>
+</div>
+
+<script>
+function meetingsPage() {
+  return {
+    meetings: [],
+    loading: true,
+    timer: null,
+    async load() {
+      const r = await fetch('/api/meetings');
+      this.meetings = r.ok ? await r.json() : [];
+      this.loading = false;
+    },
+    init() {
+      this.load();
+      // Auto-refresh every 3 s so the status badge transitions
+      // recording → processing → done without a manual reload.
+      this.timer = setInterval(() => this.load(), 3000);
+    },
+    destroy() {
+      if (this.timer) clearInterval(this.timer);
+    },
+  };
+}
+function formatDuration(s) {
+  if (!s && s !== 0) return '—';
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+  return h + 'h ' + m + 'm';
+}
+</script>
+{% endblock %}

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Axi Dashboard{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@14.1.3/marked.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    :root {
+      --bg: #0e1116; --panel: #161b22; --panel2: #1c2129;
+      --border: #2a2f37; --text: #e6edf3; --muted: #8b95a4;
+      --pink: #cc66ff; --green: #22cc55; --amber: #ffaa33;
+      --blue: #33aaff; --purple: #aa33ff; --red: #ee3333;
+    }
+    html, body { background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 0.75rem; }
+    .panel2 { background: var(--panel2); border: 1px solid var(--border); border-radius: 0.5rem; }
+    .muted { color: var(--muted); }
+    .nav-link { padding: 0.5rem 1rem; border-radius: 0.5rem; }
+    .nav-link.active { background: var(--panel2); color: var(--pink); }
+    .nav-link:hover { background: var(--panel2); }
+    .state-dot { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 50%; vertical-align: middle; }
+    .state-idle { background: #8888aa; }
+    .state-recording { background: var(--green); }
+    .state-transcribing { background: var(--amber); }
+    .state-thinking { background: var(--blue); }
+    .state-speaking { background: #ff55aa; }
+    .state-meeting { background: var(--purple); }
+    .state-unknown { background: #666; }
+    .btn { padding: 0.5rem 1rem; border-radius: 0.5rem; background: var(--panel2); border: 1px solid var(--border); transition: background 0.15s; cursor: pointer; outline: none; }
+    .btn:hover { background: #252b35; }
+    .btn:focus { outline: none; }
+    .btn:focus-visible { box-shadow: 0 0 0 2px rgba(204,102,255,0.4); }
+    .btn-primary { background: rgba(204,102,255,0.15); border-color: var(--pink); color: var(--pink); }
+    .btn-primary:hover { background: rgba(204,102,255,0.25); }
+    /* Remove the persistent blue focus halo Chromium leaves on buttons after click */
+    button:focus, a:focus { outline: none; }
+    input:focus, select:focus, textarea:focus { outline: 2px solid var(--pink); outline-offset: 1px; }
+    .pulse { animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } }
+    /* Markdown rendering inside .md (meeting summaries, notes, etc.). Kept
+       simple — matches the panel typography rather than fighting it. */
+    .md h1, .md h2, .md h3 { font-weight: 600; color: var(--text); margin-top: 1rem; margin-bottom: 0.5rem; }
+    .md h1 { font-size: 1.5rem; }
+    .md h2 { font-size: 1.15rem; color: var(--pink); border-bottom: 1px solid var(--border); padding-bottom: 0.25rem; }
+    .md h3 { font-size: 1rem; color: var(--muted); }
+    .md p { margin: 0.5rem 0; line-height: 1.5; }
+    .md ul, .md ol { margin: 0.5rem 0 0.5rem 1.25rem; line-height: 1.5; }
+    .md ul { list-style: disc; }
+    .md ol { list-style: decimal; }
+    .md li { margin: 0.15rem 0; }
+    .md li input[type="checkbox"] { margin-right: 0.4rem; transform: translateY(2px); }
+    .md code { background: var(--panel2); padding: 0.1rem 0.35rem; border-radius: 0.25rem; font-size: 0.85em; }
+    .md pre { background: var(--panel2); padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; font-size: 0.85em; }
+    .md pre code { background: transparent; padding: 0; }
+    .md blockquote { border-left: 3px solid var(--border); padding-left: 0.75rem; color: var(--muted); margin: 0.5rem 0; }
+    .md hr { border: 0; border-top: 1px solid var(--border); margin: 1rem 0; }
+    .md strong { color: var(--text); }
+    .md a { color: var(--blue); text-decoration: underline; }
+    .md table { border-collapse: collapse; margin: 0.5rem 0; }
+    .md th, .md td { border: 1px solid var(--border); padding: 0.35rem 0.6rem; }
+    .md th { background: var(--panel2); }
+  </style>
+</head>
+<body class="min-h-screen">
+  <header class="border-b" style="border-color: var(--border); background: var(--panel)">
+    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="state-dot" :class="'state-' + ($store.snap?.state || 'unknown')" x-data></span>
+        <span class="font-semibold text-lg">Axi</span>
+        <span class="muted text-sm" x-data x-text="$store.snap?.now?.time || '—'">—</span>
+      </div>
+      <nav class="flex gap-1 text-sm">
+        <a href="/" class="nav-link {% block nav_home %}{% endblock %}">Home</a>
+        <a href="/memory" class="nav-link {% block nav_memory %}{% endblock %}">Memoria</a>
+        <a href="/meetings" class="nav-link {% block nav_meetings %}{% endblock %}">Reuniones</a>
+        <a href="/graph" class="nav-link {% block nav_graph %}{% endblock %}">Grafo</a>
+        <a href="/config" class="nav-link {% block nav_config %}{% endblock %}">Config</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-6" x-data="dashboardStore()">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    // Global Alpine store used by header + page-specific data sections.
+    // refresh() runs on a 1s interval; if the daemon is briefly unreachable
+    // (restart, etc.) the last good snapshot stays visible — no flicker.
+    document.addEventListener('alpine:init', () => {
+      Alpine.store('snap', null);
+    });
+
+    // Markdown → HTML helper. Used by meeting summaries, fact details, etc.
+    // GitHub-flavored markdown (task lists, tables) is enabled. Marked
+    // escapes raw HTML inputs by default, so LLM output cannot inject scripts.
+    function renderMarkdown(text) {
+      if (!text) return '';
+      try {
+        return marked.parse(text, { gfm: true, breaks: true });
+      } catch (e) {
+        return text;
+      }
+    }
+
+    function dashboardStore() {
+      return {
+        async refresh() {
+          try {
+            const r = await fetch('/api/snapshot');
+            if (r.ok) Alpine.store('snap', await r.json());
+          } catch (e) { /* keep last good snapshot */ }
+        },
+        async cmd(name) {
+          await fetch('/api/cmd/' + name, { method: 'POST' });
+          this.refresh();
+        },
+        init() {
+          this.refresh();
+          setInterval(() => this.refresh(), 1000);
+        },
+      };
+    }
+  </script>
+</body>
+</html>

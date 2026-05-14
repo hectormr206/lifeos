@@ -1,0 +1,14 @@
+[Unit]
+Description=Axi voice daemon (LifeOS)
+After=graphical-session.target sound.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/LifeOS/axi/.venv/bin/python -m axi.daemon
+Restart=on-failure
+RestartSec=3
+# Inherit XDG_RUNTIME_DIR / DBUS / WAYLAND env from the user session.
+
+[Install]
+WantedBy=default.target

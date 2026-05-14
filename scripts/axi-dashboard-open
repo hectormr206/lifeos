@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Launch the Axi Dashboard in Chrome app-mode with a stable WM_CLASS so KDE
+# can match the window to the .desktop entry and show the Axi icon instead
+# of the generic Chromium globe.
+if command -v google-chrome-stable >/dev/null 2>&1; then
+    BROWSER=google-chrome-stable
+elif command -v google-chrome >/dev/null 2>&1; then
+    BROWSER=google-chrome
+elif command -v chromium >/dev/null 2>&1; then
+    BROWSER=chromium
+else
+    echo "axi-dashboard-open: no Chrome/Chromium binary found" >&2
+    exit 127
+fi
+
+exec "$BROWSER" \
+    --app=http://127.0.0.1:8081 \
+    --class=axi-dashboard \
+    --user-data-dir="$HOME/.cache/axi-dashboard-profile" \
+    --no-first-run \
+    --no-default-browser-check

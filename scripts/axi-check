@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Run the full safety net before declaring a code change "done".
+#
+#   1. Import smoke test  — catches syntax / indentation crashes
+#   2. pytest             — verifies module-level invariants
+#   3. axi-doctor         — verifies the live system is healthy
+#
+# Exit 0 only when all three pass. Designed to be the one command an
+# editor runs before saying "ready". Cheap (~5 s on a warm system).
+
+set -u
+cd "$HOME/LifeOS/axi"
+
+PY="$HOME/LifeOS/axi/.venv/bin/python"
+GREEN=$'\033[32m'
+RED=$'\033[31m'
+RESET=$'\033[0m'
+DIM=$'\033[2m'
+
+pass() { printf "%s✓%s %s\n" "$GREEN" "$RESET" "$1"; }
+fail() { printf "%s✗%s %s %s%s%s\n" "$RED" "$RESET" "$1" "$DIM" "$2" "$RESET"; }
+
+OVERALL=0
+
+printf "%s[1/3] import smoke test%s\n" "$DIM" "$RESET"
+IMPORT_OUT=$("$PY" -c "
+import importlib, sys
+mods = ['axi.config','axi.store','axi.memory','axi.brain','axi.clean',
+        'axi.extractor','axi.vision','axi.recorder','axi.transcriber',
+        'axi.output','axi.speak','axi.tray','axi.daemon','axi.axictl']
+bad = []
+for m in mods:
+    try: importlib.import_module(m)
+    except Exception as e: bad.append((m, f'{type(e).__name__}: {e}'))
+if bad:
+    for m, err in bad: print(f'FAIL {m}: {err}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1)
+if [ $? -eq 0 ]; then
+    pass "imports ($(printf %s "$IMPORT_OUT" | wc -l | tr -d ' ') módulos)"
+else
+    fail "imports" "$IMPORT_OUT"
+    OVERALL=1
+fi
+
+printf "\n%s[2/3] pytest%s\n" "$DIM" "$RESET"
+if "$PY" -m pytest tests/ -q --no-header --tb=line 2>&1 | tail -8; then
+    pass "pytest"
+else
+    fail "pytest" "ver salida arriba"
+    OVERALL=1
+fi
+
+printf "\n%s[3/3] axi-doctor%s\n" "$DIM" "$RESET"
+if "$PY" -m axi.doctor; then
+    pass "doctor"
+else
+    fail "doctor" "ver detalle arriba"
+    OVERALL=1
+fi
+
+echo
+if [ "$OVERALL" -eq 0 ]; then
+    printf "%sTODO OK ✓%s — sistema sano, cambio listo\n" "$GREEN" "$RESET"
+else
+    printf "%sFALLAS DETECTADAS ✗%s — revisar antes de declarar listo\n" "$RED" "$RESET"
+fi
+exit "$OVERALL"

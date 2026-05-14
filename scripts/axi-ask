@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Global-shortcut entry point for asking Axi a question (uses LLM brain).
+exec "$HOME/LifeOS/axi/.venv/bin/python" -m axi.axictl ask
