@@ -10,6 +10,7 @@ mod system;
 #[cfg(test)]
 mod main_tests;
 
+use commands::model::ModelCommands;
 use commands::{
     audit::AuditArgs, doctor::DoctorArgs, first_boot::FirstBootArgs, host_init::HostInitArgs,
     host_update::HostUpdateArgs, status::StatusArgs, uninstall::UninstallArgs, update::UpdateArgs,
@@ -53,6 +54,9 @@ enum Commands {
     /// Host-level management commands (CachyOS native install)
     #[clap(subcommand)]
     Host(HostCommands),
+    /// LLM model management (download, list)
+    #[clap(subcommand)]
+    Model(ModelCommands),
     /// Uninstall LifeOS runtime from the host
     Uninstall(UninstallArgs),
     /// Initialize LifeOS configuration and directories (legacy config bootstrap)
@@ -238,6 +242,7 @@ async fn main() -> anyhow::Result<()> {
             // `life host update` — CachyOS native source-based update
             std::process::exit(commands::host_update::execute(args).await? as i32);
         }
+        Some(Commands::Model(cmd)) => commands::model::execute(cmd).await,
         Some(Commands::Uninstall(args)) => {
             std::process::exit(commands::uninstall::execute(args).await? as i32);
         }
