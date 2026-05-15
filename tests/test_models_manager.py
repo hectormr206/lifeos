@@ -29,11 +29,14 @@ def test_catalog_has_at_least_five_entries():
     entries = models_catalog.catalog()
     assert len(entries) >= 5
     ids = {e.id for e in entries}
+    # Kept from the legacy catalog.
     assert "qwen36-35b-a3b" in ids
-    assert "qwen25-vl-7b" in ids
-    assert "qwen3-8b" in ids
-    assert "qwen3-4b" in ids
-    assert "gemma3-4b-it" in ids
+    # 2026 refresh — multimodal-only roster.
+    assert "qwen3-vl-30b-a3b" in ids
+    assert "qwen3-vl-8b" in ids
+    assert "qwen3-vl-4b" in ids
+    assert "gemma4-e4b-it" in ids
+    assert "gemma4-e2b-it" in ids
 
 
 def test_catalog_ids_unique():
@@ -42,7 +45,7 @@ def test_catalog_ids_unique():
 
 
 def test_by_id_returns_entry_or_none():
-    assert models_catalog.by_id("qwen3-4b") is not None
+    assert models_catalog.by_id("qwen3-vl-4b") is not None
     assert models_catalog.by_id("does-not-exist") is None
 
 
@@ -56,7 +59,7 @@ def test_legacy_entry_path_uses_historical_dir(isolated_state):
 
 
 def test_is_installed_true_when_all_files_present(isolated_state):
-    entry = models_catalog.by_id("qwen3-4b")
+    entry = models_catalog.by_id("qwen3-vl-4b")
     for f in entry.files:
         path = models_manager.expected_path(entry, f)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,12 +68,12 @@ def test_is_installed_true_when_all_files_present(isolated_state):
 
 
 def test_is_installed_false_when_files_missing(isolated_state):
-    entry = models_catalog.by_id("qwen3-4b")
+    entry = models_catalog.by_id("qwen3-vl-4b")
     assert not models_manager.is_installed(entry)
 
 
 def test_is_installed_false_when_only_some_present(isolated_state):
-    entry = models_catalog.by_id("gemma3-4b-it")
+    entry = models_catalog.by_id("gemma4-e4b-it")
     # Create only the gguf, not the mmproj.
     f = entry.files[0]
     p = models_manager.expected_path(entry, f)
@@ -80,7 +83,7 @@ def test_is_installed_false_when_only_some_present(isolated_state):
 
 
 def test_write_active_round_trips(isolated_state):
-    entry = models_catalog.by_id("qwen3-4b")
+    entry = models_catalog.by_id("qwen3-vl-4b")
     # Pretend files exist so set_active wouldn't refuse — but here we call
     # write_active directly which has no install-check.
     models_manager.write_active(entry)
@@ -93,9 +96,9 @@ def test_write_active_round_trips(isolated_state):
 
 
 def test_get_active_id_reads_back(isolated_state):
-    entry = models_catalog.by_id("qwen3-8b")
+    entry = models_catalog.by_id("qwen3-vl-8b")
     models_manager.write_active(entry)
-    assert models_manager.get_active_id() == "qwen3-8b"
+    assert models_manager.get_active_id() == "qwen3-vl-8b"
 
 
 def test_get_active_id_returns_none_when_unset(isolated_state):
@@ -106,7 +109,7 @@ def test_download_writes_files_to_per_entry_dir(isolated_state, monkeypatch):
     """download() should hit hf_hub_download for each catalog file and end
     with the bundle marked installed. No network — hf_hub_download is mocked.
     """
-    entry = models_catalog.by_id("qwen3-4b")
+    entry = models_catalog.by_id("qwen3-vl-4b")
     dest = models_manager.model_dir(entry)
 
     def fake_hf_download(repo_id, filename, local_dir, token=None, **kw):
@@ -131,7 +134,7 @@ def test_download_writes_files_to_per_entry_dir(isolated_state, monkeypatch):
 
 
 def test_download_skips_already_present_files(isolated_state, monkeypatch):
-    entry = models_catalog.by_id("qwen3-4b")
+    entry = models_catalog.by_id("qwen3-vl-4b")
     for f in entry.files:
         p = models_manager.expected_path(entry, f)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -165,13 +168,13 @@ def test_legacy_download_when_missing_raises(isolated_state):
 
 
 def test_set_active_refuses_uninstalled(isolated_state):
-    entry = models_catalog.by_id("qwen3-4b")
+    entry = models_catalog.by_id("qwen3-vl-4b")
     with pytest.raises(FileNotFoundError):
         models_manager.set_active(entry, restart=False, wait_health=False)
 
 
 def test_set_active_writes_json_without_restart(isolated_state):
-    entry = models_catalog.by_id("qwen3-4b")
+    entry = models_catalog.by_id("qwen3-vl-4b")
     for f in entry.files:
         p = models_manager.expected_path(entry, f)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -182,16 +185,16 @@ def test_set_active_writes_json_without_restart(isolated_state):
 
 
 def test_catalog_status_marks_active(isolated_state):
-    entry = models_catalog.by_id("qwen3-4b")
+    entry = models_catalog.by_id("qwen3-vl-4b")
     for f in entry.files:
         p = models_manager.expected_path(entry, f)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b"x")
     models_manager.write_active(entry)
     rows = {s.entry.id: s for s in models_manager.catalog_status()}
-    assert rows["qwen3-4b"].is_active is True
-    assert rows["qwen3-4b"].installed is True
-    assert rows["qwen3-8b"].is_active is False
+    assert rows["qwen3-vl-4b"].is_active is True
+    assert rows["qwen3-vl-4b"].installed is True
+    assert rows["qwen3-vl-8b"].is_active is False
 
 
 def test_wait_for_llama_health_times_out_fast(monkeypatch):

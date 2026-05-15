@@ -5,7 +5,10 @@ MoE with `--cpu-moe` offload (the current 35B-A3B pattern). Entries are
 GGUF-only; mmproj companions are listed alongside the main weights when the
 model supports vision.
 
-The catalog is intentionally short and human-maintained. Each entry has been
+Refreshed 2026-05-15 to drop legacy 2024/2025 models (Qwen2.5-VL, Qwen3
+text-only, Gemma 3) and standardize on current multimodal releases:
+Qwen3-VL family (Oct 2025+), Gemma 4 family (April 2026) and
+NVIDIA Nemotron-3 Nano Omni (late 2025+). Every entry below has been
 verified against the upstream HuggingFace repo via
 `huggingface_hub.list_repo_files` at authoring time; if you add a new entry,
 do the same verification and update the docstring.
@@ -64,9 +67,11 @@ class ModelEntry:
         return None
 
 
-# Standard llama-server tuning shared by GPU-resident models on the 13900HX +
-# RTX 5070 Ti hardware. Kept as a constant so individual entries are short.
+# Standard llama-server tuning shared by GPU-resident (dense) models on the
+# 13900HX + RTX 5070 Ti hardware. Kept as a constant so individual entries
+# are short.
 _GPU_DEFAULT_ARGS: tuple[str, ...] = (
+    "--jinja",
     "--reasoning-format", "auto",
     "--cache-type-k", "q8_0",
     "--cache-type-v", "q8_0",
@@ -79,6 +84,29 @@ _GPU_DEFAULT_ARGS: tuple[str, ...] = (
     "--top-p", "0.95",
     "--top-k", "20",
     "-np", "1",
+)
+
+
+# Shared MoE tuning (CPU experts + GPU attention via --cpu-moe). Mirrors
+# the qwen3.6 production layout for the smaller A3B / A4B MoE entries that
+# don't need the ultra-aggressive batching of qwen3.6.
+_MOE_DEFAULT_ARGS: tuple[str, ...] = (
+    "--cpu-moe",
+    "--jinja",
+    "--reasoning-format", "auto",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "-fa", "on",
+    "-b", "4096",
+    "-ub", "2048",
+    "-t", "8",
+    "-tb", "16",
+    "--temp", "0.7",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "-np", "1",
+    "--no-mmap",
+    "--mlock",
 )
 
 
@@ -118,6 +146,9 @@ _QWEN36_ARGS: tuple[str, ...] = (
 
 
 CATALOG: tuple[ModelEntry, ...] = (
+    # ------------------------------------------------------------------ #
+    # Production default — keep first.                                   #
+    # ------------------------------------------------------------------ #
     ModelEntry(
         id="qwen36-35b-a3b",
         name="Qwen3.6 35B-A3B (vision)",
@@ -148,104 +179,220 @@ CATALOG: tuple[ModelEntry, ...] = (
         vram_estimate_gb=8.0,
         notes="Local files — preloaded; no HF download required.",
     ),
+
+    # ------------------------------------------------------------------ #
+    # MoE multimodal entries (--cpu-moe, ~7–8 GB VRAM).                  #
+    # ------------------------------------------------------------------ #
     ModelEntry(
-        id="qwen25-vl-7b",
-        name="Qwen2.5-VL 7B (vision)",
+        id="qwen3-vl-30b-a3b",
+        name="Qwen3-VL 30B-A3B (vision)",
         family="Qwen",
-        params="7B",
+        params="30B-A3B",
         features=("vision", "tools"),
         description=(
-            "Compact vision-language model. Q4_K_M quant fits fully on GPU "
-            "with ~5–6 GB VRAM. Good for chat + screen-understanding when "
-            "the 35B is overkill."
+            "Qwen3-VL Instruct MoE (Oct 2025+). 30B total / 3B active, "
+            "hybrid CPU-experts + GPU-attention via --cpu-moe. Strong "
+            "vision + tool use; ideal A/B contra Qwen3.6 cuando querés un "
+            "VLM más reciente y un poco más liviano."
         ),
         files=(
             ModelFile(
-                repo_id="unsloth/Qwen2.5-VL-7B-Instruct-GGUF",
-                filename="Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+                repo_id="Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF",
+                filename="Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf",
                 kind="gguf",
             ),
             ModelFile(
-                repo_id="unsloth/Qwen2.5-VL-7B-Instruct-GGUF",
+                repo_id="Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF",
+                filename="mmproj-Qwen3VL-30B-A3B-Instruct-F16.gguf",
+                kind="mmproj",
+            ),
+        ),
+        ctx=32768,
+        ngl=999,
+        extra_args=_MOE_DEFAULT_ARGS + ("-a", "Qwen3-VL-30B-A3B"),
+        vram_estimate_gb=8.0,
+    ),
+    ModelEntry(
+        id="nemotron3-nano-omni-30b-a3b",
+        name="Nemotron-3 Nano Omni 30B-A3B (omni)",
+        family="Nemotron",
+        params="30B-A3B",
+        features=("vision", "tools"),
+        description=(
+            "NVIDIA Nemotron-3 Nano Omni Reasoning, MoE 30B/3B active. "
+            "Omnimodal (visión + audio + texto) con razonamiento; corre "
+            "vía --cpu-moe en 12 GB. El soporte de audio en llama.cpp "
+            "todavía está madurando — la entrada queda como vision+tools "
+            "hasta que upstream estabilice."
+        ),
+        files=(
+            ModelFile(
+                repo_id="lmstudio-community/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF",
+                filename="Nemotron-3-Nano-Omni-30B-A3B-Reasoning-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+            ModelFile(
+                repo_id="lmstudio-community/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF",
+                filename="mmproj-Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16.gguf",
+                kind="mmproj",
+            ),
+        ),
+        ctx=32768,
+        ngl=999,
+        extra_args=_MOE_DEFAULT_ARGS + ("-a", "Nemotron-3-Nano-Omni-30B-A3B"),
+        vram_estimate_gb=8.0,
+        notes=(
+            "Reasoning mode — usa --reasoning-format auto. Algunos quants "
+            "tienen issues con llama.cpp recientes; verificar la build "
+            "antes de activarlo en prod."
+        ),
+    ),
+    ModelEntry(
+        id="gemma4-26b-a4b-it",
+        name="Gemma 4 26B-A4B IT (vision)",
+        family="Gemma",
+        params="26B-A4B",
+        features=("vision", "tools"),
+        description=(
+            "Google Gemma 4 Instruct MoE (April 2026). 26B total / 4B "
+            "active, corre vía --cpu-moe. Vision con mmproj BF16 (los "
+            "quants del mmproj tienen un bug conocido — usar SIEMPRE BF16)."
+        ),
+        files=(
+            ModelFile(
+                repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
+                filename="gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+            ModelFile(
+                repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
                 filename="mmproj-BF16.gguf",
                 kind="mmproj",
             ),
         ),
-        ctx=16384,
+        ctx=32768,
         ngl=999,
-        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen2.5-VL-7B"),
+        extra_args=_MOE_DEFAULT_ARGS + ("-a", "gemma-4-26B-A4B-it"),
+        vram_estimate_gb=8.5,
+        notes="mmproj DEBE ser BF16 — los quants del projector están rotos en upstream.",
+    ),
+
+    # ------------------------------------------------------------------ #
+    # Dense multimodal entries (full GPU residency).                     #
+    # ------------------------------------------------------------------ #
+    ModelEntry(
+        id="qwen3-vl-8b",
+        name="Qwen3-VL 8B (vision)",
+        family="Qwen",
+        params="8B",
+        features=("vision", "tools"),
+        description=(
+            "Qwen3-VL Instruct denso 8B (Oct 2025+). Q4_K_M entra entero "
+            "en GPU (~5–6 GB VRAM). Buen balance calidad/latencia cuando "
+            "el 30B-A3B es overkill."
+        ),
+        files=(
+            ModelFile(
+                repo_id="Qwen/Qwen3-VL-8B-Instruct-GGUF",
+                filename="Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+            ModelFile(
+                repo_id="Qwen/Qwen3-VL-8B-Instruct-GGUF",
+                filename="mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+                kind="mmproj",
+            ),
+        ),
+        ctx=32768,
+        ngl=999,
+        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3-VL-8B"),
         vram_estimate_gb=6.0,
     ),
     ModelEntry(
-        id="qwen3-8b",
-        name="Qwen3 8B (text)",
+        id="qwen3-vl-4b",
+        name="Qwen3-VL 4B (vision)",
         family="Qwen",
-        params="8B",
-        features=("tools",),
-        description=(
-            "Text-only Qwen3 8B with strong tool-use. Q4_K_M ~5 GB VRAM, "
-            "full-GPU. No vision."
-        ),
-        files=(
-            ModelFile(
-                repo_id="unsloth/Qwen3-8B-GGUF",
-                filename="Qwen3-8B-Q4_K_M.gguf",
-                kind="gguf",
-            ),
-        ),
-        ctx=32768,
-        ngl=999,
-        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3-8B"),
-        vram_estimate_gb=5.5,
-    ),
-    ModelEntry(
-        id="qwen3-4b",
-        name="Qwen3 4B (text)",
-        family="Qwen",
-        params="4B",
-        features=("tools",),
-        description=(
-            "Lightest text-only Qwen3. Q5_K_M ~3 GB VRAM, plenty of headroom "
-            "for Whisper + translate alongside."
-        ),
-        files=(
-            ModelFile(
-                repo_id="unsloth/Qwen3-4B-GGUF",
-                filename="Qwen3-4B-Q5_K_M.gguf",
-                kind="gguf",
-            ),
-        ),
-        ctx=32768,
-        ngl=999,
-        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3-4B"),
-        vram_estimate_gb=3.5,
-    ),
-    ModelEntry(
-        id="gemma3-4b-it",
-        name="Gemma3 4B IT (vision)",
-        family="Gemma",
         params="4B",
         features=("vision", "tools"),
         description=(
-            "Gemma3 4B Instruct with vision (mmproj). Q4_K_M ~3–4 GB VRAM. "
-            "Different prompt style than Qwen — useful as an A/B."
+            "Qwen3-VL Instruct denso 4B. Q4_K_M ~3 GB VRAM — deja "
+            "headroom para Whisper + translate corriendo en paralelo."
         ),
         files=(
             ModelFile(
-                repo_id="unsloth/gemma-3-4b-it-GGUF",
-                filename="gemma-3-4b-it-Q4_K_M.gguf",
+                repo_id="Qwen/Qwen3-VL-4B-Instruct-GGUF",
+                filename="Qwen3VL-4B-Instruct-Q4_K_M.gguf",
                 kind="gguf",
             ),
             ModelFile(
-                repo_id="unsloth/gemma-3-4b-it-GGUF",
+                repo_id="Qwen/Qwen3-VL-4B-Instruct-GGUF",
+                filename="mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+                kind="mmproj",
+            ),
+        ),
+        ctx=32768,
+        ngl=999,
+        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3-VL-4B"),
+        vram_estimate_gb=3.5,
+    ),
+    ModelEntry(
+        id="gemma4-e4b-it",
+        name="Gemma 4 E4B IT (vision)",
+        family="Gemma",
+        params="E4B",
+        features=("vision", "tools"),
+        description=(
+            "Google Gemma 4 E4B Instruct (April 2026). Denso ~4 GB VRAM "
+            "en Q4_K_M, multimodal (visión hoy, audio cuando llama.cpp "
+            "lo soporte). Prompt style Gemma — buena pareja para A/B "
+            "frente a Qwen3-VL."
+        ),
+        files=(
+            ModelFile(
+                repo_id="unsloth/gemma-4-E4B-it-GGUF",
+                filename="gemma-4-E4B-it-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+            ModelFile(
+                repo_id="unsloth/gemma-4-E4B-it-GGUF",
                 filename="mmproj-BF16.gguf",
                 kind="mmproj",
             ),
         ),
-        ctx=16384,
+        ctx=32768,
         ngl=999,
-        extra_args=_GPU_DEFAULT_ARGS + ("-a", "gemma-3-4b-it"),
-        vram_estimate_gb=4.0,
+        extra_args=_GPU_DEFAULT_ARGS + ("-a", "gemma-4-E4B-it"),
+        vram_estimate_gb=4.5,
+        notes="mmproj DEBE ser BF16 — los quants del projector están rotos en upstream.",
+    ),
+    ModelEntry(
+        id="gemma4-e2b-it",
+        name="Gemma 4 E2B IT (vision)",
+        family="Gemma",
+        params="E2B",
+        features=("vision", "tools"),
+        description=(
+            "Google Gemma 4 E2B Instruct, el más chico del catálogo. "
+            "Q4_K_M ~2.5 GB VRAM — ideal cuando necesitás VLM corriendo "
+            "junto a otros servicios o en sesiones largas."
+        ),
+        files=(
+            ModelFile(
+                repo_id="unsloth/gemma-4-E2B-it-GGUF",
+                filename="gemma-4-E2B-it-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+            ModelFile(
+                repo_id="unsloth/gemma-4-E2B-it-GGUF",
+                filename="mmproj-BF16.gguf",
+                kind="mmproj",
+            ),
+        ),
+        ctx=32768,
+        ngl=999,
+        extra_args=_GPU_DEFAULT_ARGS + ("-a", "gemma-4-E2B-it"),
+        vram_estimate_gb=2.8,
+        notes="mmproj DEBE ser BF16 — los quants del projector están rotos en upstream.",
     ),
 )
 
