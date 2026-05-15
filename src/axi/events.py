@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import logging
 import queue
+import shutil
+import subprocess
 import threading
 import time
 from collections import deque
@@ -45,6 +47,51 @@ _write_queue: queue.Queue = queue.Queue()
 _worker_thread: threading.Thread | None = None
 _worker_lock = threading.Lock()
 _insert_count = 0
+
+# P2.5 — libnotify rate-limit. Keyed by (source, level), value = last fire ts.
+_NOTIFY_RATE_LIMIT_S = 300  # 5 minutes
+_last_notified: dict[tuple[str, str], float] = {}
+_notify_lock = threading.Lock()
+
+
+def _maybe_notify(source: str, level: str, message: str) -> None:
+    """Fire `notify-send` for critical/error events, rate-limited per (source, level).
+
+    Honors `notify_send_enabled` kill switch. Swallows all exceptions — desktop
+    notifications must NEVER crash the event log.
+    """
+    if level not in ("critical", "error"):
+        return
+    try:
+        from axi import config  # lazy
+        if not bool(config.get("notify_send_enabled", True)):
+            return
+    except Exception:  # noqa: BLE001
+        return
+    binary = shutil.which("notify-send")
+    if not binary:
+        return
+    key = (source, level)
+    now = time.time()
+    with _notify_lock:
+        last = _last_notified.get(key, 0.0)
+        if now - last < _NOTIFY_RATE_LIMIT_S:
+            return
+        _last_notified[key] = now
+    urgency = "critical" if level == "critical" else "normal"
+    try:
+        subprocess.Popen(
+            [binary, "-a", "Axi", "-u", urgency, f"Axi · {source}", message],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("notify-send failed: %s", e)
+
+
+def _reset_notify_for_tests() -> None:
+    with _notify_lock:
+        _last_notified.clear()
 
 
 # ─────────────────────────── background worker ──────────────────────────
@@ -138,6 +185,11 @@ def log_event(
             "data_json": data_json,
         })
         _ensure_worker()
+        # P2.5 — fire libnotify for critical/error. Best-effort, rate-limited.
+        try:
+            _maybe_notify(entry["source"], level, entry["message"])
+        except Exception as e:  # noqa: BLE001
+            log.warning("notify hook swallowed: %s", e)
     except Exception as e:  # noqa: BLE001 — events must never crash callers
         log.warning("log_event swallowed exception: %s", e)
 
