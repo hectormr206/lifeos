@@ -59,7 +59,29 @@ _IMPERATIVES = (
     "sal", "salir", "salí",
 )
 
-_PREFIX_RE = re.compile(r"^\s*axi\s*[,:.\-\s]+\s*(?P<rest>.+)$", re.IGNORECASE | re.DOTALL)
+# Trigger word at the start. We accept several Whisper-misheard variants
+# of "axi" because Whisper interprets non-Spanish "Axi" as the nearest
+# Spanish word that sounds similar: "así", "asi", "asís", "axí", "axis",
+# "ax", "achi", "hachi", "hatxi". They all share the phoneme /a-ks-i/ or
+# /a-s-i/. By matching variants here, we capture commands the user
+# pronounced as "Axi" even when Whisper writes them as "Así".
+_TRIGGER = r"(?:axi|así|asi|axí|asís|axis|hachi|achi|hatxi|ax|hace|hacé|haz|asx)"
+_PREFIX_RE = re.compile(
+    rf"^\s*{_TRIGGER}\s*[,:.\-\s]+\s*(?P<rest>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Short-form patterns that bypass the imperative-verb gate. These are
+# extremely specific commands ("modo X") that users say without a verb.
+# Each must be unambiguous on its own — "modo juego" can ONLY mean game_on.
+_SHORT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^modo\s+juego\b", re.IGNORECASE), "game_on"),
+    (re.compile(r"^modo\s+normal\b", re.IGNORECASE), "game_off"),
+    (re.compile(r"^modo\s+int[eé]rprete\b", re.IGNORECASE), "translate_on"),
+    (re.compile(r"^dashboard\b", re.IGNORECASE), "open_dashboard"),
+    (re.compile(r"^tablero\b", re.IGNORECASE), "open_dashboard"),
+    (re.compile(r"^reuni[oó]n\b", re.IGNORECASE), "meeting_start"),
+)
 
 # Regex → intent mapping. Each entry says: when the post-prefix text matches
 # this regex, this is the intent. Order matters — first match wins.
@@ -132,6 +154,13 @@ def classify(text: str, *, brain_ask: Callable[..., str] | None = None) -> tuple
     rest = _strip_prefix(text)
     if rest is None:
         return None
+
+    # Short-forms bypass the imperative gate ("axi, modo juego" has no verb
+    # but is unambiguous). Try these first.
+    for pattern, name in _SHORT_FORMS:
+        if pattern.search(rest):
+            return name, {}
+
     if not _has_imperative_prefix(rest):
         return None
 
