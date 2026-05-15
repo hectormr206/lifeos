@@ -19,15 +19,21 @@ def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_conn", None)
     store.init_db()
     yield
-    # Drain any background brain-metric writer threads so they don't outlive
-    # the temp DB they were writing to (P0.2).
+    # Drain background writer threads (events + brain-metric) so they don't
+    # outlive the temp DB they were writing to.
     import threading
     import time as _time
+    from axi import events as _events
+    # Wait for events queue to drain.
+    _events._flush_for_tests(timeout=1.0)
     deadline = _time.time() + 1.0
     while _time.time() < deadline:
         active = [t for t in threading.enumerate()
-                  if t.name == "axi-brain-metric" and t.is_alive()]
+                  if t.name in ("axi-brain-metric", "axi-events-writer") and t.is_alive()
+                  and t.name == "axi-brain-metric"]
         if not active:
             break
         _time.sleep(0.02)
+    # Reset events ring/state so spillover from prior test doesn't pollute.
+    _events._reset_for_tests()
     store.close()
