@@ -131,6 +131,14 @@ FIELDS: tuple[ConfigField, ...] = (
         "brain_metrics_enabled", "boolean", True,
         "If false, brain call latency/cost metrics are not recorded (P0.2 kill switch).",
     ),
+    ConfigField(
+        "digest_brain_enabled", "boolean", False,
+        "If true, daily digest endpoint generates a brain summary paragraph (P1.3).",
+    ),
+    ConfigField(
+        "notify_send_enabled", "boolean", True,
+        "If true, critical/error events fire libnotify desktop notifications (P2.5).",
+    ),
     # ─────── meeting mode tuning ───────
     ConfigField(
         "meeting_silence_rms", "number", 0.015,

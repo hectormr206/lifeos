@@ -36,10 +36,13 @@ def test_schema_covers_all_22_keys():
         "tray_poll_ms", "meeting_chunk_seconds", "dashboard_poll_ms",
         # P0.2 added one kill switch.
         "brain_metrics_enabled",
+        # P1.3 + P2.5 kill switches.
+        "digest_brain_enabled",
+        "notify_send_enabled",
     }
     assert expected.issubset(names)
-    # 22 P0.4 baseline + 1 P0.2 = 23.
-    assert len(names) == 23
+    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) = 25.
+    assert len(names) == 25
 
 
 def test_to_json_schema_has_all_keys():

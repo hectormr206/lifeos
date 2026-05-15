@@ -143,6 +143,56 @@
       </div>
     </section>
 
+    <!-- ─── daily digest (P1.3) ─── -->
+    <section class="panel p-4" x-data="dailyDigest()" x-init="load(); setInterval(load, 5*60*1000)">
+      <div class="flex justify-between items-baseline mb-3">
+        <div class="font-semibold">Hoy <span class="muted text-xs" x-text="digest?.date || ''"></span></div>
+        <div class="muted text-xs">resumen del día</div>
+      </div>
+      <template x-if="!digest">
+        <div class="muted text-sm py-4">Sin datos todavía.</div>
+      </template>
+      <template x-if="digest">
+        <div>
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+            <div class="panel2 p-3">
+              <div class="muted text-xs">Conversaciones</div>
+              <div class="text-xl font-mono" x-text="digest.conversations_count"></div>
+            </div>
+            <div class="panel2 p-3">
+              <div class="muted text-xs">Reuniones</div>
+              <div class="text-xl font-mono" x-text="digest.meetings_count"></div>
+            </div>
+            <div class="panel2 p-3">
+              <div class="muted text-xs">Hechos nuevos</div>
+              <div class="text-xl font-mono" x-text="digest.facts_added_count"></div>
+            </div>
+            <div class="panel2 p-3">
+              <div class="muted text-xs">Errores</div>
+              <div class="text-xl font-mono" :style="digest.events_error_count > 0 ? 'color: var(--amber)' : ''" x-text="digest.events_error_count"></div>
+            </div>
+            <div class="panel2 p-3">
+              <div class="muted text-xs">Críticos</div>
+              <div class="text-xl font-mono" :style="digest.events_critical_count > 0 ? 'color: var(--red)' : ''" x-text="digest.events_critical_count"></div>
+            </div>
+          </div>
+          <template x-if="digest.generated_summary">
+            <div class="md mt-3" x-html="renderMarkdown(digest.generated_summary)"></div>
+          </template>
+          <template x-if="digest.top_facts && digest.top_facts.length > 0">
+            <div class="mt-3 text-sm">
+              <div class="muted text-xs mb-1">Hechos de hoy</div>
+              <ul class="list-disc ml-5 space-y-0.5">
+                <template x-for="f in digest.top_facts" :key="f.id">
+                  <li x-text="f.label"></li>
+                </template>
+              </ul>
+            </div>
+          </template>
+        </div>
+      </template>
+    </section>
+
     <!-- ─── brain metrics (P0.2) ─── -->
     <section class="panel p-4" x-data="brainMetrics()" x-init="load(); setInterval(load, 15000)">
       <div class="flex justify-between items-baseline mb-3">
@@ -244,6 +294,18 @@ function brainMetrics() {
       } catch (e) {
         // silent — panel just shows "no data"
       }
+    }
+  };
+}
+
+function dailyDigest() {
+  return {
+    digest: null,
+    async load() {
+      try {
+        const r = await fetch('/api/digest/today');
+        if (r.ok) this.digest = await r.json();
+      } catch (e) { /* keep last */ }
     }
   };
 }

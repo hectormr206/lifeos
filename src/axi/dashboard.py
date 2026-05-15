@@ -680,6 +680,18 @@ def api_events_mark_read():
     return {"ok": True}
 
 
+# ────────── daily digest (P1.3) ──────────
+
+@app.get("/api/digest/today")
+def api_digest_today():
+    from axi import digest
+    try:
+        return digest.build_today()
+    except Exception as e:  # noqa: BLE001
+        log.warning("digest build failed: %s", e)
+        raise HTTPException(500, "digest failed")
+
+
 # ────────── brain metrics (P0.2) ──────────
 
 def _percentile(values: list[int], pct: float) -> int | None:
