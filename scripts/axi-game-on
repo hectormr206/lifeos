@@ -1,68 +1,49 @@
 #!/usr/bin/env bash
-# Game Guard: relocate models from GPU to CPU/RAM so games get all the
-# VRAM. Axi stays functional (voice commands, brain answers) — just
-# slower. Reverse with `axi-game-off`.
+# Game Guard (total): free ALL GPU VRAM for demanding games by stopping
+# every axi service that holds a CUDA context. Unlike a "CPU-relocate"
+# approach, this also reclaims the ~2.4 GB of CUDA context overhead that
+# stays loaded as long as a CUDA-using process lives. Reverse with
+# `axi-game-off`.
 #
-# What moves:
-#   llama-server (Qwen)   GPU → CPU (-ngl 0). Frees ~7.8 GB VRAM.
-#   axi-voice (Whisper)   GPU → CPU (int8). Frees ~2.2 GB VRAM.
-#   axi-translate         Stopped if active (interpreter mode is
-#                         incompatible with gaming anyway).
+# Tradeoff: Axi is OFFLINE during gaming. You cannot talk to it, brain
+# does not answer, voice does not work. Use this when you need 100% of
+# VRAM for the game (RE Requiem, Cyberpunk RT, etc.).
 #
-# Total VRAM reclaimed: ~10 GB. The tray icon stays alive throughout.
+# VRAM freed on the RTX 5070 Ti (12 GB):
+#   axi-translate (if active): ~2.3 GB
+#   axi-voice (Whisper):       ~2.2 GB
+#   llama-server (Qwen):       ~7.8 GB
+#   Total reclaimed:           ~10–12 GB (effectively all of it).
+#
+# The tray icon stays alive (Wants=, not Requires=).
 
 set -u
 
-DROPIN_DIR_LLAMA=~/.config/systemd/user/llama-server.service.d
-DROPIN_DIR_VOICE=~/.config/systemd/user/axi-voice.service.d
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/axi"
 MARKER="$STATE_DIR/game-mode.lock"
 mkdir -p "$STATE_DIR"
 touch "$MARKER"
 
+# Clean any CPU-mode drop-ins from prior runs / interpreter mode so the
+# next axi-game-off restart restores the normal GPU configuration.
+rm -f ~/.config/systemd/user/llama-server.service.d/cpu-exec.conf
+rm -f ~/.config/systemd/user/llama-server.service.d/cpu-override.conf
+rm -f ~/.config/systemd/user/axi-voice.service.d/cpu-env.conf
+rmdir ~/.config/systemd/user/llama-server.service.d 2>/dev/null || true
+rmdir ~/.config/systemd/user/axi-voice.service.d 2>/dev/null || true
+systemctl --user daemon-reload
+
 echo "[axi-game-on] stopping axi-translate (if active)…"
 systemctl --user stop axi-translate.service 2>/dev/null || true
 
-echo "[axi-game-on] moving llama-server to CPU (-ngl 0)…"
-mkdir -p "$DROPIN_DIR_LLAMA"
-cat > "$DROPIN_DIR_LLAMA/cpu-exec.conf" <<'EOF'
-[Service]
-ExecStart=
-ExecStart=/usr/bin/llama-server \
-  -m %h/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
-  --mmproj %h/LifeOS/models/Qwen3.6-35B-A3B/mmproj-BF16.gguf \
-  -ngl 0 \
-  --jinja \
-  -c 32768 \
-  --reasoning-format auto \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
-  -t 24 \
-  -tb 24 \
-  --temp 0.6 \
-  --top-p 0.95 \
-  --top-k 20 \
-  --host 127.0.0.1 \
-  --port 8080 \
-  -np 1 \
-  --no-mmap \
-  -a Qwen3.6-35B-A3B
-EOF
+echo "[axi-game-on] stopping axi-voice (releases Whisper + CUDA ctx)…"
+systemctl --user stop axi-voice.service 2>/dev/null || true
 
-echo "[axi-game-on] moving axi-voice (Whisper) to CPU…"
-mkdir -p "$DROPIN_DIR_VOICE"
-cat > "$DROPIN_DIR_VOICE/cpu-env.conf" <<'EOF'
-[Service]
-Environment="AXI_WHISPER_DEVICE=cpu"
-Environment="AXI_WHISPER_COMPUTE_TYPE=int8"
-EOF
+echo "[axi-game-on] stopping llama-server (releases Qwen + CUDA ctx)…"
+systemctl --user stop llama-server.service 2>/dev/null || true
 
-systemctl --user daemon-reload
-systemctl --user restart llama-server.service
-systemctl --user restart axi-voice.service
-
-# Give CUDA a moment to release.
-sleep 2
+# Give the kernel a moment to actually release the GPU memory.
+sleep 1
 
 if command -v nvidia-smi >/dev/null 2>&1; then
     USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)
@@ -70,6 +51,6 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     echo "[axi-game-on] GPU VRAM: ${USED} / ${TOTAL} MiB usado"
 fi
 
-echo "[axi-game-on] modo juego ACTIVO."
-echo "  Axi sigue funcional pero más lento (voz + Qwen en CPU)."
-echo "  Para volver a GPU: axi-game-off"
+echo "[axi-game-on] MODO JUEGO TOTAL activo — toda la VRAM es tuya."
+echo "  Axi está OFFLINE durante el juego (no responde voz ni cerebro)."
+echo "  Para volver:  axi-game-off"

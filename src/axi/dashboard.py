@@ -137,6 +137,118 @@ def _ram_snapshot() -> dict[str, Any]:
         return {"used": 0, "total": 0, "pct": 0}
 
 
+def _friendly_from_cmdline(cmdline: str) -> str | None:
+    """Map a process cmdline to a friendly axi-related model label.
+    Returns None for processes we don't care about."""
+    if "llama-server" in cmdline:
+        return "Qwen 35B"
+    if "axi.translate" in cmdline:
+        return "Translate"
+    if "axi.daemon" in cmdline:
+        return "Voice (Whisper)"
+    if "axi.tray" in cmdline:
+        return "Tray"
+    if "axi.dashboard" in cmdline:
+        return "Dashboard"
+    if "ydotoold" in cmdline:
+        return "ydotoold"
+    return None
+
+
+def _read_proc_cmdline(pid: int) -> str:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (FileNotFoundError, PermissionError, OSError):
+        return ""
+    return raw.replace(b"\0", b" ").decode("utf-8", errors="replace").strip()
+
+
+def _read_proc_rss_mb(pid: int) -> int:
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    return round(int(parts[1]) / 1024)  # KB → MB
+    except (FileNotFoundError, PermissionError, OSError, ValueError):
+        pass
+    return 0
+
+
+def _models_snapshot() -> dict[str, Any]:
+    """Per-process model placement: GPU (VRAM) and RAM (RSS), with the
+    derived 'mode' label (Normal / Interpreter / Game / Stopped) so the
+    UI can show a single chip with the current state.
+    """
+    # Processes currently consuming GPU memory (via nvidia-smi).
+    gpu_procs: list[dict[str, Any]] = []
+    gpu_pids: set[int] = set()
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi",
+             "--query-compute-apps=pid,process_name,used_memory",
+             "--format=csv,noheader,nounits"],
+            text=True, timeout=3,
+        )
+        for line in out.strip().splitlines():
+            if not line.strip():
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 3:
+                continue
+            try:
+                pid = int(parts[0])
+                vram_mb = int(parts[2])
+            except ValueError:
+                continue
+            cmdline = _read_proc_cmdline(pid)
+            friendly = _friendly_from_cmdline(cmdline) or parts[1]
+            gpu_procs.append({"pid": pid, "name": friendly, "vram_mb": vram_mb})
+            gpu_pids.add(pid)
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # RAM: scan /proc for known axi processes. Skip ones already in GPU
+    # list (they have RAM too but the interesting placement is GPU).
+    ram_procs: list[dict[str, Any]] = []
+    try:
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid in gpu_pids:
+                continue
+            cmdline = _read_proc_cmdline(pid)
+            if not cmdline:
+                continue
+            friendly = _friendly_from_cmdline(cmdline)
+            if not friendly:
+                continue
+            rss = _read_proc_rss_mb(pid)
+            ram_procs.append({"pid": pid, "name": friendly, "rss_mb": rss})
+    except OSError:
+        pass
+
+    # Mode derivation.
+    state_root = Path(
+        os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+    )
+    if (state_root / "axi/game-mode.lock").exists():
+        mode = "Modo juego"
+    elif _service_state("axi-translate.service") == "active":
+        mode = "Intérprete"
+    elif _service_state("axi-voice.service") == "active":
+        mode = "Normal"
+    else:
+        mode = "Detenido"
+
+    return {
+        "mode": mode,
+        "gpu": sorted(gpu_procs, key=lambda p: -p["vram_mb"]),
+        "ram": sorted(ram_procs, key=lambda p: -p["rss_mb"]),
+    }
+
+
 def _cpu_pct() -> float:
     """Single-call CPU%: sample /proc/stat twice 100ms apart."""
     def _read():
@@ -264,6 +376,7 @@ def snapshot():
         "vram": _vram_snapshot(),
         "ram": _ram_snapshot(),
         "cpu_pct": _cpu_pct(),
+        "models": _models_snapshot(),
         "memory": {
             "conversation_turns": store.conversation_count(),
             "facts_count": _fact_count(),

@@ -1,25 +1,23 @@
 #!/usr/bin/env bash
 # Restore the GPU-backed axi stack after a gaming session.
+# Starts llama-server (Qwen, GPU) and axi-voice (Whisper, GPU).
 
 set -u
 
-DROPIN_DIR_LLAMA=~/.config/systemd/user/llama-server.service.d
-DROPIN_DIR_VOICE=~/.config/systemd/user/axi-voice.service.d
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/axi"
 MARKER="$STATE_DIR/game-mode.lock"
 rm -f "$MARKER"
 
-echo "[axi-game-off] removing CPU drop-ins…"
-rm -f "$DROPIN_DIR_LLAMA"/cpu-exec.conf
-rm -f "$DROPIN_DIR_LLAMA"/cpu-override.conf
-rmdir "$DROPIN_DIR_LLAMA" 2>/dev/null || true
-rm -f "$DROPIN_DIR_VOICE"/cpu-env.conf
-rmdir "$DROPIN_DIR_VOICE" 2>/dev/null || true
-
+# Safety: ensure no leftover CPU drop-in is biasing the restart.
+rm -f ~/.config/systemd/user/llama-server.service.d/cpu-exec.conf
+rm -f ~/.config/systemd/user/llama-server.service.d/cpu-override.conf
+rm -f ~/.config/systemd/user/axi-voice.service.d/cpu-env.conf
+rmdir ~/.config/systemd/user/llama-server.service.d 2>/dev/null || true
+rmdir ~/.config/systemd/user/axi-voice.service.d 2>/dev/null || true
 systemctl --user daemon-reload
 
-echo "[axi-game-off] restarting llama-server (back to GPU)…"
-systemctl --user restart llama-server.service
+echo "[axi-game-off] starting llama-server (Qwen → GPU)…"
+systemctl --user start llama-server.service || true
 
 echo "[axi-game-off] waiting for llama-server /health…"
 for i in $(seq 1 30); do
@@ -30,8 +28,8 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-echo "[axi-game-off] restarting axi-voice (Whisper back to GPU)…"
-systemctl --user restart axi-voice.service
+echo "[axi-game-off] starting axi-voice (Whisper → GPU)…"
+systemctl --user start axi-voice.service || true
 
 if command -v nvidia-smi >/dev/null 2>&1; then
     sleep 2
@@ -40,4 +38,4 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     echo "[axi-game-off] GPU VRAM: ${USED} / ${TOTAL} MiB usado"
 fi
 
-echo "[axi-game-off] axi restaurado a velocidad GPU normal."
+echo "[axi-game-off] axi restaurado."

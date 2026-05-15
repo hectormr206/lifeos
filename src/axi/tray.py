@@ -167,6 +167,11 @@ class AxiTray(QtCore.QObject):
         self.mi_meeting = menu.addAction("Reunión: —")
         self.mi_meeting.setEnabled(False)
 
+        # Compact "where are the models living?" line. Refreshed on
+        # menu open (axi-check is too slow, this uses cached values).
+        self.mi_models = menu.addAction("Modelos: …")
+        self.mi_models.setEnabled(False)
+
         menu.addSeparator()
 
         # ── dashboard ─────────────────────────────────────
@@ -185,7 +190,10 @@ class AxiTray(QtCore.QObject):
         act_look = menu.addAction("📷  Preguntar con cámara")
         act_look.triggered.connect(lambda: _send_cmd("look"))
 
-        self.mi_meeting_toggle = menu.addAction("🎙  Iniciar grabación de reunión")
+        # Use 🎤 (standard microphone) instead of 🎙 (studio mic). The
+        # studio mic glyph renders narrower in most fonts and the menu
+        # row looked offset compared to the other icons.
+        self.mi_meeting_toggle = menu.addAction("🎤  Iniciar grabación de reunión")
         self.mi_meeting_toggle.triggered.connect(self._on_meeting_toggle_click)
 
         self.mi_translate_toggle = menu.addAction("🌐  Iniciar modo intérprete EN→ES")
@@ -224,13 +232,64 @@ class AxiTray(QtCore.QObject):
 
     # ───────────────── dynamic refresher ─────────────────
 
+    def _models_summary(self) -> tuple[str, str]:
+        """Return (compact, multiline) descriptions of where each axi model
+        is currently living. Compact goes in the tooltip + menu header,
+        multiline goes in the tooltip for hover. Both pull from the
+        dashboard's /api/snapshot to reuse its model snapshot logic.
+        """
+        try:
+            import urllib.request, json  # noqa: PLC0415
+            with urllib.request.urlopen(
+                "http://127.0.0.1:8081/api/snapshot", timeout=1.5,
+            ) as r:
+                snap = json.loads(r.read())
+        except Exception:  # noqa: BLE001
+            return ("modelos: ?", "Dashboard no responde")
+        models = snap.get("models", {})
+        mode = models.get("mode", "?")
+        gpu = models.get("gpu", []) or []
+        ram = models.get("ram", []) or []
+        gpu_total = sum(p.get("vram_mb", 0) for p in gpu)
+        gpu_total_gb = snap.get("vram", {}).get("total_mb", 0) / 1024.0
+
+        def _fmt_size(mb: int) -> str:
+            return f"{mb/1024:.1f}GB" if mb >= 1024 else f"{mb}MB"
+
+        # Compact one-liner: "modo Normal · GPU 9.7/12 GB · Qwen+Whisper"
+        gpu_names = ", ".join(p["name"] for p in gpu) or "—"
+        compact = (
+            f"modo {mode} · GPU {gpu_total/1024:.1f}/{gpu_total_gb:.0f} GB · {gpu_names}"
+        )
+
+        # Multiline for the tooltip.
+        lines = [f"Modo: {mode}"]
+        lines.append("")
+        lines.append("GPU (VRAM):")
+        if gpu:
+            for p in gpu:
+                lines.append(f"  • {p['name']}: {_fmt_size(p['vram_mb'])}")
+        else:
+            lines.append("  (sin modelos en GPU)")
+        lines.append("")
+        lines.append("RAM:")
+        if ram:
+            for p in ram:
+                lines.append(f"  • {p['name']}: {_fmt_size(p['rss_mb'])}")
+        else:
+            lines.append("  (sin procesos axi)")
+        return (compact, "\n".join(lines))
+
     def _refresh_menu(self) -> None:
         state = self.current_state
         self.mi_state.setText(f"Estado: {STATE_LABELS.get(state, state)}")
+        compact, tooltip = self._models_summary()
+        self.mi_models.setText(compact)
+        self.tray.setToolTip(f"Axi · {STATE_LABELS.get(state, state)}\n\n{tooltip}")
         if state == "meeting":
             self.mi_meeting_toggle.setText("⏹  Detener grabación de reunión")
         else:
-            self.mi_meeting_toggle.setText("🎙  Iniciar grabación de reunión")
+            self.mi_meeting_toggle.setText("🎤  Iniciar grabación de reunión")
         translate_active = self._translate_active()
         if translate_active:
             self.mi_translate_toggle.setText("⏹  Detener modo intérprete")
