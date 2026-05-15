@@ -230,7 +230,22 @@ class Daemon:
         system = SYSTEM_PROMPT
         if facts:
             system = SYSTEM_PROMPT + "\n\nLo que sabes de Héctor (memoria largo plazo):\n- " + "\n- ".join(facts)
-        answer = self.brain_ask(question, system=system, image_b64=screenshot, history=history)
+        # P1.5 — opportunistic OCR. When the screen capture carries text
+        # the brain can't easily "read" from the image (small fonts, dense
+        # UI), prepend the OCR transcription so the answer is grounded in
+        # what's actually written on screen. No-op when ocr_enabled=False
+        # or when tesseract / pytesseract aren't installed.
+        ocr_question = question
+        if screenshot and config.get("ocr_enabled", True):
+            try:
+                from axi.vision import ocr_from_b64  # noqa: PLC0415
+                ocr_text = ocr_from_b64(screenshot)
+            except Exception as e:  # noqa: BLE001
+                log.warning("ocr_from_b64 failed: %s", e)
+                ocr_text = None
+            if ocr_text and len(ocr_text) > 20:
+                ocr_question = f"Texto en pantalla:\n{ocr_text}\n\n{question}"
+        answer = self.brain_ask(ocr_question, system=system, image_b64=screenshot, history=history)
         log.info("answer: %s (vision=%s, history=%d, facts=%d)", answer, bool(screenshot), len(history) // 2, len(facts))
         _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
 

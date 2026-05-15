@@ -120,6 +120,11 @@ FIELDS: tuple[ConfigField, ...] = (
         "If false, screen captures are not attached to brain calls.",
     ),
     ConfigField(
+        "ocr_enabled", "boolean", True,
+        "If true, OCR text from screen captures is prepended to the prompt "
+        "when tesseract + pytesseract are available (P1.5 kill switch).",
+    ),
+    ConfigField(
         "fact_extraction_enabled", "boolean", True,
         "If false, long-term memory extraction is skipped.",
     ),

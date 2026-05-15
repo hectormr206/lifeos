@@ -63,3 +63,62 @@ def capture_active_window_b64() -> str | None:
     if not data:
         return None
     return base64.b64encode(data).decode("ascii")
+
+
+# ─────────────────────────── P1.5 — screen OCR ──────────────────────────
+
+def _ocr_image(png_bytes: bytes) -> str | None:
+    """OCR via tesseract if available. Returns None silently if not.
+
+    Strategy:
+      1. If the `tesseract` binary is missing on $PATH → return None
+         (no error, no event — user just hasn't installed it).
+      2. If `pytesseract` or PIL aren't importable → same.
+      3. Try Spanish+English (the user's normal screen content). If the
+         es+eng language pack isn't installed Tesseract raises; fall back
+         to the default language to keep some OCR output flowing.
+      4. Any unexpected error → log a warning event and return None;
+         OCR is opportunistic, never a hard dependency for capture.
+    """
+    import shutil  # noqa: PLC0415
+    if not shutil.which("tesseract"):
+        return None
+    try:
+        import io  # noqa: PLC0415
+        import pytesseract  # noqa: PLC0415
+        from PIL import Image  # noqa: PLC0415
+    except ImportError:
+        return None
+    try:
+        img = Image.open(io.BytesIO(png_bytes))
+        try:
+            return pytesseract.image_to_string(img, lang="es+eng", timeout=10) or None
+        except pytesseract.TesseractError:
+            return pytesseract.image_to_string(img, timeout=10) or None
+    except Exception as e:  # noqa: BLE001
+        try:
+            from axi import events  # noqa: PLC0415
+            events.log_warning("vision.ocr", f"OCR failed: {e}")
+        except Exception:  # noqa: BLE001
+            log.warning("OCR failed: %s", e)
+        return None
+
+
+def ocr_from_b64(image_b64: str) -> str | None:
+    """Decode a base64 PNG and run OCR on it (P1.5).
+
+    Returns None when OCR is unavailable, the input is malformed, or
+    the OCR result is effectively empty. Callers should treat the
+    string as opportunistic context, not a guaranteed signal.
+    """
+    if not image_b64:
+        return None
+    try:
+        png_bytes = base64.b64decode(image_b64)
+    except (ValueError, TypeError):
+        return None
+    text = _ocr_image(png_bytes)
+    if not text:
+        return None
+    text = text.strip()
+    return text or None
