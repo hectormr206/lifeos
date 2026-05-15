@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 from axi import config
 from axi.brain import ask as brain_ask
@@ -31,6 +32,25 @@ from axi.vision import capture_active_window_b64
 from axi.recorder import SAMPLE_RATE, Recorder
 from axi.transcriber import Transcriber
 
+
+# ───────── default DI helpers ─────────
+# These thin wrappers preserve current behavior while giving tests a
+# constructor seam (FakeBrainAsk, FakeVisionCapture, FakeEyesCapture).
+def _default_brain_ask(*args, **kwargs) -> str:
+    return brain_ask(*args, **kwargs)
+
+
+def _default_vision_capture() -> str | None:
+    return capture_active_window_b64()
+
+
+def _default_eyes_capture() -> tuple[str | None, str]:
+    return webcam_capture_b64()
+
+
+def _default_meeting_factory(*, transcribe_fn, brain_ask_fn) -> MeetingSession:
+    return MeetingSession(transcribe_fn=transcribe_fn, brain_ask_fn=brain_ask_fn)
+
 SOCK_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", str(Path.home() / ".local/state"))) / "axi" / "voice.sock"
 MIN_SAMPLES = int(SAMPLE_RATE * 0.3)  # ignore <300ms blips
 # Below this RMS the buffer is effectively silence and Whisper will hallucinate
@@ -42,11 +62,29 @@ log = logging.getLogger("axi.daemon")
 
 
 class Daemon:
-    def __init__(self) -> None:
-        self.recorder = Recorder()
-        log.info("loading Whisper model…")
-        self.transcriber = Transcriber()
-        log.info("model warm; ready")
+    def __init__(
+        self,
+        *,
+        recorder: Recorder | None = None,
+        transcriber: Transcriber | None = None,
+        memory: ConversationMemory | None = None,
+        brain_ask: Callable | None = None,
+        vision_capture: Callable | None = None,
+        eyes_capture: Callable | None = None,
+        meeting_factory: Callable | None = None,
+    ) -> None:
+        # Lazy real construction only when the caller didn't inject. Tests
+        # inject fakes; production passes nothing and gets identical behavior.
+        if recorder is not None:
+            self.recorder = recorder
+        else:
+            self.recorder = Recorder()
+        if transcriber is not None:
+            self.transcriber = transcriber
+        else:
+            log.info("loading Whisper model…")
+            self.transcriber = Transcriber()
+            log.info("model warm; ready")
         # Single Whisper instance shared between short-form dictation and
         # long-form meeting transcription. Calls are serialized via a lock
         # so neither side corrupts the model's internal state.
@@ -61,8 +99,14 @@ class Daemon:
         self.meeting: MeetingSession | None = None
         # Persistent conversational memory for the `ask` flow. Dictation
         # (toggle) does not write here — it is one-way speech-to-text.
-        self.memory = ConversationMemory()
+        self.memory = memory if memory is not None else ConversationMemory()
         log.info("conversation memory: %d turns loaded", self.memory.turn_count())
+        # Injectable adapters around module-level functions. Defaults wrap
+        # the real implementations so production behavior is unchanged.
+        self.brain_ask = brain_ask or _default_brain_ask
+        self.vision_capture = vision_capture or _default_vision_capture
+        self.eyes_capture = eyes_capture or _default_eyes_capture
+        self.meeting_factory = meeting_factory or _default_meeting_factory
 
     def _set_state(self, state: str) -> None:
         with self._state_lock:
@@ -95,7 +139,7 @@ class Daemon:
     def _start_look(self) -> str:
         # Try the webcam BEFORE recording so the user knows immediately if
         # the camera is held by Meet/Zoom and Axi cannot see.
-        b64, status = webcam_capture_b64()
+        b64, status = self.eyes_capture()
         if status.startswith("busy:"):
             who = status.split(":", 1)[1] or "otra app"
             notify(
@@ -124,7 +168,7 @@ class Daemon:
         # intent is anchored to whatever they were looking at when they
         # triggered the shortcut. Any focus shift during dictation should
         # not change which view Axi reasons about.
-        self._pending_screenshot = capture_active_window_b64()
+        self._pending_screenshot = self.vision_capture()
         screenshot_note = "📸 +" if self._pending_screenshot else ""
         source = self.recorder.start()
         self._set_state("recording")
@@ -172,7 +216,7 @@ class Daemon:
         system = SYSTEM_PROMPT
         if facts:
             system = SYSTEM_PROMPT + "\n\nLo que sabes de Héctor (memoria largo plazo):\n- " + "\n- ".join(facts)
-        answer = brain_ask(question, system=system, image_b64=screenshot, history=history)
+        answer = self.brain_ask(question, system=system, image_b64=screenshot, history=history)
         log.info("answer: %s (vision=%s, history=%d, facts=%d)", answer, bool(screenshot), len(history) // 2, len(facts))
         _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
 
@@ -288,9 +332,9 @@ class Daemon:
             # Hand the daemon's warm Whisper transcriber + the brain client to
             # the meeting session so it can transcribe incrementally during
             # recording and build a hierarchical summary at the end.
-            self.meeting = MeetingSession(
+            self.meeting = self.meeting_factory(
                 transcribe_fn=self._safe_transcribe,
-                brain_ask_fn=brain_ask,
+                brain_ask_fn=self.brain_ask,
             )
             mid = self.meeting.start()
             notify(
@@ -331,7 +375,7 @@ class Daemon:
                     def __init__(_self, fn): _self.fn = fn
                     def transcribe(_self, audio): return _self.fn(audio)
                 try:
-                    process_meeting(mid, _Wrap(self._safe_transcribe), brain_ask, session=session_for_processing)
+                    process_meeting(mid, _Wrap(self._safe_transcribe), self.brain_ask, session=session_for_processing)
                     notify("Axi", f"✓ Reunión #{mid} lista (resumen disponible)", timeout_ms=6000)
                 except Exception as e:  # noqa: BLE001
                     log.exception("post-processing failed")
