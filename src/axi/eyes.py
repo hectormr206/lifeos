@@ -20,6 +20,15 @@ from pathlib import Path
 
 log = logging.getLogger("axi.eyes")
 
+
+def _log_capture_error(msg: str) -> None:
+    """Surface camera capture failures to the dashboard event log (PRD §9.4)."""
+    try:
+        from axi import events  # noqa: PLC0415
+        events.log_error("eyes", msg)
+    except Exception:  # noqa: BLE001
+        pass
+
 WEBCAM_DEV = "/dev/video0"
 CAPTURE_WIDTH = 1280
 CAPTURE_HEIGHT = 720
@@ -55,6 +64,7 @@ def _camera_busy() -> tuple[bool, str]:
 def _ffmpeg_capture(out_path: Path) -> bool:
     if shutil.which("ffmpeg") is None:
         log.warning("ffmpeg not in PATH")
+        _log_capture_error("ffmpeg not in PATH")
         return False
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
@@ -70,9 +80,12 @@ def _ffmpeg_capture(out_path: Path) -> bool:
         proc = subprocess.run(cmd, capture_output=True, timeout=8)
     except (subprocess.TimeoutExpired, OSError) as e:
         log.warning("ffmpeg failed: %s", e)
+        _log_capture_error(f"ffmpeg failed: {e}")
         return False
     if proc.returncode != 0:
-        log.warning("ffmpeg rc=%d stderr=%s", proc.returncode, proc.stderr.decode(errors="replace")[:200])
+        err = proc.stderr.decode(errors="replace")[:200]
+        log.warning("ffmpeg rc=%d stderr=%s", proc.returncode, err)
+        _log_capture_error(f"ffmpeg rc={proc.returncode}: {err}")
         return False
     return out_path.exists() and out_path.stat().st_size > 0
 

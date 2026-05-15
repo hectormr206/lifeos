@@ -226,6 +226,19 @@ CREATE TABLE IF NOT EXISTS reminders (
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_ts ON reminders(ts);
 
+-- ────────────────────────── events (P0.1) ─────────────────────────
+
+CREATE TABLE IF NOT EXISTS events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts        REAL NOT NULL,
+  source    TEXT NOT NULL,
+  level     TEXT NOT NULL,
+  message   TEXT NOT NULL,
+  data_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts    ON events(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_events_level ON events(level);
+
 -- ─────────────────── schema version (migrations later) ──────────────
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -411,6 +424,35 @@ def _fts_text(data: dict[str, Any]) -> str:
             parts.append(str(v))
     walk(data)
     return " ".join(parts)
+
+
+# ─────────────────────────── events (P0.1) ─────────────────────────────
+
+def insert_event(
+    ts: float,
+    source: str,
+    level: str,
+    message: str,
+    data_json: str | None,
+) -> None:
+    """Persist a single event row. Used by `axi.events` background worker."""
+    with _tx() as c:
+        c.execute(
+            "INSERT INTO events(ts, source, level, message, data_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (ts, source, level, message, data_json),
+        )
+
+
+def trim_events(keep: int = 5000) -> None:
+    """Keep only the most recent `keep` event rows (delete older)."""
+    with _tx() as c:
+        c.execute(
+            "DELETE FROM events WHERE id NOT IN ("
+            "  SELECT id FROM events ORDER BY ts DESC LIMIT ?"
+            ")",
+            (keep,),
+        )
 
 
 def close() -> None:

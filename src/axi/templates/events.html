@@ -1,0 +1,95 @@
+{% extends "_base.html" %}
+{% block nav_events %}active{% endblock %}
+{% block title %}Eventos · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="eventsPage()" x-init="load()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Eventos del sistema</h1>
+    <div class="flex gap-2 items-center text-sm">
+      <label class="muted">Nivel</label>
+      <select x-model="level" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option value="">Todos</option>
+        <option value="info">info</option>
+        <option value="warning">warning</option>
+        <option value="error">error</option>
+        <option value="critical">critical</option>
+      </select>
+      <button class="btn" @click="load()">Refrescar</button>
+      <button class="btn btn-primary" @click="markRead()">Marcar leídos</button>
+    </div>
+  </div>
+
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando eventos…</div>
+  </template>
+
+  <template x-if="!loading && rows.length === 0">
+    <div class="panel p-12 text-center muted">Sin eventos.</div>
+  </template>
+
+  <div class="grid gap-2" x-show="rows.length > 0">
+    <template x-for="ev in rows" :key="ev.ts + ':' + ev.source + ':' + ev.message">
+      <div class="panel p-3 flex items-start gap-3"
+           :class="ev.unread && ev.level === 'critical' ? 'ring-1 ring-red-500/40' : ''">
+        <span class="text-xs px-2 py-0.5 rounded-full panel2 uppercase tracking-wider"
+              :style="levelStyle(ev.level)"
+              x-text="ev.level"></span>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm">
+            <span class="font-medium" x-text="ev.source"></span>
+            <span class="muted">·</span>
+            <span x-text="ev.message"></span>
+          </div>
+          <div class="text-xs muted mt-1" x-text="fmtTs(ev.ts)"></div>
+          <template x-if="ev.data">
+            <pre class="text-xs muted mt-2 panel2 p-2 overflow-x-auto"
+                 x-text="JSON.stringify(ev.data, null, 2)"></pre>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function eventsPage() {
+  return {
+    rows: [],
+    level: '',
+    loading: true,
+    async load() {
+      this.loading = true;
+      const url = '/api/events?limit=100' + (this.level ? '&level=' + this.level : '');
+      const r = await fetch(url);
+      if (r.ok) {
+        const data = await r.json();
+        this.rows = data.events || [];
+      } else {
+        this.rows = [];
+      }
+      this.loading = false;
+    },
+    async markRead() {
+      await fetch('/api/events/mark-read', { method: 'POST' });
+      this.load();
+    },
+    fmtTs(ts) {
+      try {
+        const d = new Date(ts * 1000);
+        return d.toLocaleString();
+      } catch (e) { return String(ts); }
+    },
+    levelStyle(level) {
+      const colors = {
+        info: 'color: var(--blue); border-color: var(--blue);',
+        warning: 'color: var(--amber); border-color: var(--amber);',
+        error: 'color: var(--red); border-color: var(--red);',
+        critical: 'color: white; background: var(--red); border-color: var(--red);',
+      };
+      return colors[level] || '';
+    },
+  };
+}
+</script>
+{% endblock %}

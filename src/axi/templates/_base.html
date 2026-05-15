@@ -30,6 +30,7 @@
     .state-speaking { background: #ff55aa; }
     .state-meeting { background: var(--purple); }
     .state-unknown { background: #666; }
+    .event-critical-dot { background: var(--red); box-shadow: 0 0 0 2px rgba(238,51,51,0.35); cursor: pointer; }
     .btn { padding: 0.5rem 1rem; border-radius: 0.5rem; background: var(--panel2); border: 1px solid var(--border); transition: background 0.15s; cursor: pointer; outline: none; }
     .btn:hover { background: #252b35; }
     .btn:focus { outline: none; }
@@ -70,6 +71,12 @@
     <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
         <span class="state-dot" :class="'state-' + ($store.snap?.state || 'unknown')" x-data></span>
+        <a href="/events"
+           x-data
+           x-show="($store.snap?.unread_critical_events || 0) > 0"
+           x-cloak
+           class="state-dot event-critical-dot pulse"
+           :title="'Eventos críticos sin leer: ' + ($store.snap?.unread_critical_events || 0)"></a>
         <span class="font-semibold text-lg">Axi</span>
         <span class="muted text-sm" x-data x-text="$store.snap?.now?.time || '—'">—</span>
       </div>
@@ -163,6 +170,7 @@
       <nav class="flex gap-1 text-sm">
         <a href="/" class="nav-link {% block nav_home %}{% endblock %}">Home</a>
         <a href="/memory" class="nav-link {% block nav_memory %}{% endblock %}">Memoria</a>
+        <a href="/events" class="nav-link {% block nav_events %}{% endblock %}">Eventos</a>
         <a href="/meetings" class="nav-link {% block nav_meetings %}{% endblock %}">Reuniones</a>
         <a href="/graph" class="nav-link {% block nav_graph %}{% endblock %}">Grafo</a>
         <a href="/config" class="nav-link {% block nav_config %}{% endblock %}">Config</a>

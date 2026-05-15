@@ -17,6 +17,19 @@ from pathlib import Path
 log = logging.getLogger("axi.vision")
 
 
+def _log_capture_error(msg: str, active_only: bool) -> None:
+    """Surface capture failures to the dashboard event log (PRD §9.4).
+    Lazy import to avoid circular deps and never crash the caller."""
+    try:
+        from axi import events  # noqa: PLC0415
+        events.log_error(
+            "vision",
+            f"capture failed ({'active' if active_only else 'full'}): {msg}",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _spectacle_capture(active_only: bool) -> bytes | None:
     if shutil.which("spectacle") is None:
         return None
@@ -27,11 +40,14 @@ def _spectacle_capture(active_only: bool) -> bytes | None:
         args.append("-a" if active_only else "-f")
         proc = subprocess.run(args, capture_output=True, timeout=5, check=False)
         if proc.returncode != 0:
-            log.warning("spectacle returned %d: %s", proc.returncode, proc.stderr.decode(errors="replace")[:200])
+            err = proc.stderr.decode(errors="replace")[:200]
+            log.warning("spectacle returned %d: %s", proc.returncode, err)
+            _log_capture_error(f"spectacle returned {proc.returncode}: {err}", active_only)
             return None
         return out_path.read_bytes() if out_path.exists() and out_path.stat().st_size > 0 else None
     except (subprocess.TimeoutExpired, OSError) as e:
         log.warning("spectacle failed: %s", e)
+        _log_capture_error(f"spectacle failed: {e}", active_only)
         return None
     finally:
         out_path.unlink(missing_ok=True)

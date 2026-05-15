@@ -42,7 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
-from axi import config, store
+from axi import config, events, store
 
 log = logging.getLogger("axi.dashboard")
 
@@ -383,6 +383,7 @@ def snapshot():
         },
         "recent_conversations": _recent_conversations(10),
         "recent_facts": _recent_facts(20),
+        "unread_critical_events": events.unread_critical_count(),
     }
 
 
@@ -630,6 +631,31 @@ async def write_config(request: Request):
     )
     config._cache = None  # noqa: SLF001 — invalidate
     return {"ok": True, "config": current}
+
+
+# ────────── events (P0.1) ──────────
+
+@app.get("/events", response_class=HTMLResponse)
+def events_page(request: Request):
+    return templates.TemplateResponse(request, "events.html", {})
+
+
+@app.get("/api/events")
+def api_events(limit: int = 50, level: str | None = None):
+    if level and level not in events.EVENT_LEVELS:
+        raise HTTPException(400, f"unknown level: {level}")
+    if limit < 1 or limit > 500:
+        raise HTTPException(400, "limit must be 1..500")
+    return {
+        "events": events.recent_events(limit=limit, level=level),
+        "unread_critical": events.unread_critical_count(),
+    }
+
+
+@app.post("/api/events/mark-read")
+def api_events_mark_read():
+    events.mark_all_read()
+    return {"ok": True}
 
 
 # ────────── graph ──────────
