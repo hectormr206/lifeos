@@ -6,6 +6,37 @@
 <div class="space-y-6" x-data="meetingsPage()" x-init="init()" x-destroy="destroy()">
   <h1 class="text-2xl font-semibold">Reuniones</h1>
 
+  <div class="panel p-3">
+    <input
+      type="text"
+      placeholder="Buscar en reuniones (FTS5)…"
+      class="w-full bg-transparent px-2 py-1 text-sm"
+      style="border: 1px solid var(--border); border-radius: 0.4rem;"
+      x-model="searchQuery"
+      @input.debounce.300ms="runSearch()"
+    >
+    <template x-if="searchResults.length > 0">
+      <div class="mt-3 space-y-2">
+        <div class="muted text-xs" x-text="searchResults.length + ' resultados'"></div>
+        <template x-for="r in searchResults" :key="r.meeting_id + ':' + r.start_ms">
+          <a class="block panel2 p-3 hover:brightness-110"
+             style="text-decoration:none; color:inherit"
+             :href="'/meetings/' + r.meeting_id + '#t=' + r.start_ms">
+            <div class="text-xs muted mb-1">
+              Reunión #<span x-text="r.meeting_id"></span>
+              <span x-show="r.speaker"> · <span x-text="r.speaker"></span></span>
+              · <span x-text="Math.floor(r.start_ms / 60000) + 'm ' + Math.floor((r.start_ms % 60000) / 1000) + 's'"></span>
+            </div>
+            <div class="text-sm" x-html="r.snippet"></div>
+          </a>
+        </template>
+      </div>
+    </template>
+    <template x-if="searchQuery && !searching && searchResults.length === 0">
+      <div class="muted text-xs mt-2">Sin resultados.</div>
+    </template>
+  </div>
+
   <template x-if="loading">
     <div class="muted py-12 text-center">Cargando…</div>
   </template>
@@ -50,6 +81,19 @@ function meetingsPage() {
     meetings: [],
     loading: true,
     timer: null,
+    searchQuery: '',
+    searchResults: [],
+    searching: false,
+    async runSearch() {
+      const q = this.searchQuery.trim();
+      if (!q) { this.searchResults = []; return; }
+      this.searching = true;
+      try {
+        const r = await fetch('/api/meetings/search?q=' + encodeURIComponent(q));
+        this.searchResults = r.ok ? await r.json() : [];
+      } catch (e) { this.searchResults = []; }
+      finally { this.searching = false; }
+    },
     async load() {
       const r = await fetch('/api/meetings');
       this.meetings = r.ok ? await r.json() : [];

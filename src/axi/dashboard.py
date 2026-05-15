@@ -466,6 +466,24 @@ def meeting_page(request: Request, mid: int):
     return templates.TemplateResponse(request, "meeting.html", {"meeting_id": mid})
 
 
+@app.get("/api/meetings/search")
+def api_meetings_search(q: str = "", limit: int = 20):
+    """Full-text search across meeting segments (P1.1).
+
+    NOTE: declared BEFORE `/api/meetings/{mid}` so FastAPI matches the
+    literal path first; otherwise `search` would be parsed as a meeting id.
+    """
+    if limit < 1 or limit > 100:
+        raise HTTPException(400, "limit must be 1..100")
+    if not q or not q.strip():
+        return []
+    try:
+        return store.search_meeting_segments(q.strip(), limit=limit)
+    except Exception as e:  # noqa: BLE001
+        log.warning("meeting search failed: %s", e)
+        return []
+
+
 @app.get("/api/meetings/{mid}")
 def meeting_detail(mid: int):
     c = store._connect()  # noqa: SLF001
@@ -831,12 +849,37 @@ def graph_data(limit: int = 200):
 
 # ────────────────────────── entry point ───────────────────────────────
 
+def _maybe_migrate_meeting_fts() -> None:
+    """One-shot migration: rebuild the meeting FTS index for existing meetings.
+
+    Marker file ensures we only do this once. Reindex failures are logged but
+    never crash startup.
+    """
+    state_root = Path(
+        os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+    ) / "axi"
+    marker = state_root / "meeting_fts_migrated.lock"
+    if marker.exists():
+        return
+    try:
+        n = store.reindex_all_meetings()
+        state_root.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(int(time.time())))
+        log.info("meeting FTS migration done: %d meetings reindexed", n)
+    except Exception as e:  # noqa: BLE001
+        try:
+            events.log_error("dashboard", f"meeting FTS migration failed: {e}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     store.init_db()
+    _maybe_migrate_meeting_fts()
     log.info("axi-dashboard ready at http://%s:%d", DASHBOARD_HOST, DASHBOARD_PORT)
     uvicorn.run(app, host=DASHBOARD_HOST, port=DASHBOARD_PORT, log_level="warning")
     return 0

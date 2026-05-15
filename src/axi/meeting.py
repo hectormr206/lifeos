@@ -758,6 +758,14 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
         )
     log.info("meeting %d done: %d segments, summary %d chars", meeting_id, len(segments), len(summary))
 
+    # P1.1 — rebuild FTS index for this meeting so /api/meetings/search can find it.
+    try:
+        n_fts = store.reindex_meeting_segments(meeting_id)
+        log.info("meeting %d FTS reindexed: %d rows", meeting_id, n_fts)
+    except Exception as e:  # noqa: BLE001
+        from axi import events as _ev
+        _ev.log_error("meeting", f"FTS reindex failed for meeting {meeting_id}: {e}")
+
     # Optional disk reclaim — off by default to play safe.
     if not config.get("meeting_keep_raw_audio", True):
         for wav in data_dir.glob("*.wav"):

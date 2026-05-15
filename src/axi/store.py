@@ -226,6 +226,17 @@ CREATE TABLE IF NOT EXISTS reminders (
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_ts ON reminders(ts);
 
+-- ───────────────── meeting segments FTS (P1.1) ─────────────────────
+
+CREATE VIRTUAL TABLE IF NOT EXISTS meeting_segments_fts USING fts5(
+  meeting_id UNINDEXED,
+  speaker,
+  text,
+  start_ms UNINDEXED,
+  screenshot_path UNINDEXED,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+
 -- ────────────────────────── events (P0.1) ─────────────────────────
 
 CREATE TABLE IF NOT EXISTS events (
@@ -528,6 +539,107 @@ def trim_brain_metrics(keep: int = 5000) -> None:
             ")",
             (keep,),
         )
+
+
+# ─────────────────── meeting FTS (P1.1) ────────────────────────────────
+
+def init_meeting_fts() -> None:
+    """Ensure FTS5 virtual table exists. Already created by init_db() but
+    callable separately for explicit migrations."""
+    c = _connect()
+    c.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS meeting_segments_fts USING fts5("
+        "  meeting_id UNINDEXED, speaker, text, start_ms UNINDEXED, "
+        "  screenshot_path UNINDEXED, "
+        "  tokenize='unicode61 remove_diacritics 2'"
+        ")"
+    )
+
+
+def _nearest_screenshot(c: sqlite3.Connection, meeting_id: int, start_ms: int) -> str | None:
+    """Return the filename of the screenshot closest to start_ms for the meeting."""
+    row = c.execute(
+        "SELECT filename FROM meeting_screenshots WHERE meeting_id = ? "
+        "ORDER BY ABS(start_ms - ?) ASC LIMIT 1",
+        (meeting_id, start_ms),
+    ).fetchone()
+    return row["filename"] if row else None
+
+
+def reindex_meeting_segments(meeting_id: int) -> int:
+    """Wipe + reinsert FTS rows for a single meeting. Returns count inserted."""
+    init_meeting_fts()
+    with _tx() as c:
+        c.execute(
+            "DELETE FROM meeting_segments_fts WHERE meeting_id = ?",
+            (meeting_id,),
+        )
+        rows = c.execute(
+            "SELECT meeting_id, speaker_label, text, start_ms "
+            "FROM meeting_segments WHERE meeting_id = ? AND text IS NOT NULL",
+            (meeting_id,),
+        ).fetchall()
+        n = 0
+        for r in rows:
+            shot = _nearest_screenshot(c, meeting_id, int(r["start_ms"]))
+            c.execute(
+                "INSERT INTO meeting_segments_fts("
+                "  meeting_id, speaker, text, start_ms, screenshot_path"
+                ") VALUES (?, ?, ?, ?, ?)",
+                (
+                    meeting_id,
+                    r["speaker_label"] or "",
+                    r["text"] or "",
+                    int(r["start_ms"]),
+                    shot or "",
+                ),
+            )
+            n += 1
+    return n
+
+
+def reindex_all_meetings() -> int:
+    """Re-index every meeting. Returns number of meetings touched."""
+    init_meeting_fts()
+    c = _connect()
+    rows = c.execute("SELECT id FROM meetings ORDER BY id").fetchall()
+    for r in rows:
+        try:
+            reindex_meeting_segments(int(r["id"]))
+        except Exception:  # noqa: BLE001
+            # Per-meeting failures should not block the whole migration.
+            continue
+    return len(rows)
+
+
+def search_meeting_segments(query: str, limit: int = 20) -> list[dict[str, Any]]:
+    """FTS5 search across meeting segments. Empty query → empty list."""
+    if not query or not query.strip():
+        return []
+    init_meeting_fts()
+    c = _connect()
+    try:
+        rows = c.execute(
+            "SELECT meeting_id, speaker, start_ms, screenshot_path, "
+            "       snippet(meeting_segments_fts, 2, '<b>', '</b>', '…', 16) AS snippet "
+            "FROM meeting_segments_fts "
+            "WHERE meeting_segments_fts MATCH ? "
+            "ORDER BY rank LIMIT ?",
+            (query, limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # Malformed FTS query (e.g. unmatched quote). Return empty rather than 500.
+        return []
+    out = []
+    for r in rows:
+        out.append({
+            "meeting_id": int(r["meeting_id"]),
+            "speaker": r["speaker"] or None,
+            "snippet": r["snippet"],
+            "start_ms": int(r["start_ms"]),
+            "screenshot_path": r["screenshot_path"] or None,
+        })
+    return out
 
 
 def close() -> None:
