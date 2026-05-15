@@ -295,20 +295,15 @@ class AxiTray(QtCore.QObject):
             pass
 
     def _game_mode_active(self) -> bool:
-        """Game mode ON = llama-server stopped (no model in VRAM). The
-        cheapest signal we have; checking axi-voice would also work but
-        llama-server is the largest VRAM consumer and the clearest signal.
+        """Game mode is signalled by a marker file written by axi-game-on
+        and removed by axi-game-off. A marker (instead of inspecting the
+        llama-server drop-in) avoids confusion with interpreter mode,
+        which also drops llama-server to CPU but for a different reason.
         """
-        try:
-            r = subprocess.run(
-                ["systemctl", "--user", "is-active", "llama-server.service"],
-                capture_output=True, text=True, timeout=2,
-            )
-            # 'active' → axi running normally. Anything else (inactive,
-            # failed) while the tray is alive → we're in game mode.
-            return r.stdout.strip() != "active"
-        except (subprocess.TimeoutExpired, OSError):
-            return False
+        marker = Path(
+            os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+        ) / "axi/game-mode.lock"
+        return marker.exists()
 
     def _on_game_toggle_click(self) -> None:
         script = "axi-game-off" if self._game_mode_active() else "axi-game-on"

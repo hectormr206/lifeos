@@ -42,7 +42,16 @@ class Transcriber:
         model_name: str = MODEL_NAME,
         initial_prompt: str = DEFAULT_INITIAL_PROMPT,
     ) -> None:
-        self.model = WhisperModel(model_name, device="cuda", compute_type="float16")
+        # Device + compute_type are env-configurable so Game Guard can swap
+        # us to CPU (frees VRAM for games) without killing axi-voice. On
+        # CPU, float16 isn't supported by ctranslate2 — use int8 instead.
+        import os  # noqa: PLC0415
+        device = os.environ.get("AXI_WHISPER_DEVICE", "cuda")
+        compute = os.environ.get(
+            "AXI_WHISPER_COMPUTE_TYPE",
+            "int8" if device == "cpu" else "float16",
+        )
+        self.model = WhisperModel(model_name, device=device, compute_type=compute)
         self.initial_prompt = initial_prompt
 
     def transcribe(self, audio: np.ndarray) -> tuple[str, str, float]:
