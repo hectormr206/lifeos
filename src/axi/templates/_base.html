@@ -79,6 +79,18 @@
            :title="'Eventos críticos sin leer: ' + ($store.snap?.unread_critical_events || 0)"></a>
         <span class="font-semibold text-lg">Axi</span>
         <span class="muted text-sm" x-data x-text="$store.snap?.now?.time || '—'">—</span>
+        <!-- P2.4 — Whisper restart-pending pill. Shown when the user changed
+             whisper_model_name / whisper_beam_size / whisper_initial_prompt
+             from /config; reminds them to restart the daemon via the tray. -->
+        <a href="/config"
+           x-data
+           x-show="$store.snap?.whisper_restart_pending"
+           x-cloak
+           class="px-2 py-0.5 rounded-full text-xs font-medium"
+           style="background: rgba(255,170,51,0.15); color: var(--amber); border: 1px solid var(--amber);"
+           title="Click en la bandeja → Reiniciar daemon para aplicar cambios de Whisper">
+          🔄 Reinicio pendiente
+        </a>
       </div>
 
       <!-- Model placement widget. Compact chip in the header bar; click

@@ -53,6 +53,22 @@ def _default_meeting_factory(*, transcribe_fn, brain_ask_fn) -> MeetingSession:
 
 SOCK_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", str(Path.home() / ".local/state"))) / "axi" / "voice.sock"
 
+# P2.4 — Whisper restart-pending marker. Daemon clears it on startup; the
+# dashboard creates it when a user changes a Whisper config field. Keeping
+# the path here (vs importing from dashboard) avoids dragging FastAPI into
+# the daemon at import time.
+_WHISPER_RESTART_MARKER = Path(
+    os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+) / "axi" / "whisper_restart_pending.lock"
+
+
+def _clear_whisper_restart_marker() -> None:
+    """Remove the restart-pending marker if it exists. Never raises."""
+    try:
+        _WHISPER_RESTART_MARKER.unlink(missing_ok=True)
+    except OSError as e:
+        log.warning("could not clear whisper restart marker: %s", e)
+
 # Known-good defaults. Live values come from `config.get(...)` so the user
 # can tune them from the dashboard without code edits; the literal below is
 # the fallback when the config file is missing or the key is corrupted.
@@ -87,6 +103,12 @@ class Daemon:
         eyes_capture: Callable | None = None,
         meeting_factory: Callable | None = None,
     ) -> None:
+        # P2.4 — once the daemon is starting we're about to load Whisper with
+        # the latest config values, so any "restart pending" notice is stale.
+        # Clear it before anything else so a crash later doesn't leave the
+        # marker hanging around for the user to wonder about.
+        _clear_whisper_restart_marker()
+
         # Lazy real construction only when the caller didn't inject. Tests
         # inject fakes; production passes nothing and gets identical behavior.
         if recorder is not None:

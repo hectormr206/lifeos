@@ -390,6 +390,7 @@ def snapshot():
         "recent_conversations": _recent_conversations(10),
         "recent_facts": _recent_facts(20),
         "unread_critical_events": events.unread_critical_count(),
+        "whisper_restart_pending": _whisper_restart_pending(),
     }
 
 
@@ -657,7 +658,8 @@ async def write_config(request: Request):
         raise HTTPException(400, "body must be JSON object")
     # Merge with on-disk to allow partial POSTs (the form only sends
     # editable fields). Then validate the full merged dict before writing.
-    merged = dict(config._load())  # noqa: SLF001
+    old = dict(config._load())  # noqa: SLF001
+    merged = dict(old)
     merged.update(body)
     try:
         validated = config.save(merged)
@@ -670,7 +672,69 @@ async def write_config(request: Request):
                 "value": repr(e.value),
             },
         )
+    # P2.4 — Whisper params apply only on next daemon start. Touch the
+    # restart-pending marker when any of the watched keys changed; the
+    # dashboard reads the marker into the snapshot and shows a yellow pill
+    # so the user knows to click "Reiniciar daemon" in the tray.
+    _maybe_mark_whisper_restart_pending(old, validated)
     return {"ok": True, "config": validated}
+
+
+# P2.4 — restart-pending marker. Persistent file under XDG_STATE_HOME so a
+# dashboard restart does not lose the pending state. Daemon startup removes
+# the marker (it's stale once the new config has been picked up).
+_WHISPER_RESTART_KEYS = (
+    "whisper_model_name",
+    "whisper_beam_size",
+    "whisper_initial_prompt",
+)
+
+
+def _whisper_restart_marker_path() -> Path:
+    return Path(
+        os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+    ) / "axi" / "whisper_restart_pending.lock"
+
+
+def _maybe_mark_whisper_restart_pending(
+    old: dict[str, Any], new: dict[str, Any]
+) -> bool:
+    """Touch the marker when any Whisper-relevant key changed.
+
+    Returns True iff the marker was just created/updated. Never raises —
+    config writes must not fail because of a marker I/O hiccup.
+    """
+    try:
+        changed = [
+            k for k in _WHISPER_RESTART_KEYS if old.get(k) != new.get(k)
+        ]
+        if not changed:
+            return False
+        path = _whisper_restart_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({
+                "ts": time.time(),
+                "changed": changed,
+            }),
+            encoding="utf-8",
+        )
+        try:
+            events.log_info(
+                "config",
+                "whisper restart pending",
+                data={"changed": changed},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not mark whisper restart pending: %s", e)
+        return False
+
+
+def _whisper_restart_pending() -> bool:
+    return _whisper_restart_marker_path().exists()
 
 
 # ────────── events (P0.1) ──────────
