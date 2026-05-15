@@ -10,6 +10,21 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _no_real_notifications(monkeypatch):
+    """Guarantee that NO test ever fires a real desktop notification.
+
+    Without this guard, any test that calls `events.log_critical/log_error`
+    without mocking `subprocess.Popen` and `shutil.which` shells out to
+    `notify-send` for real — the user sees spammy notifications every time
+    pytest runs. Tests that need to assert notify behavior already patch
+    these explicitly; this fixture is just the safety net for everyone else.
+    """
+    from axi import events
+    monkeypatch.setattr(events.shutil, "which", lambda _b: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def fresh_db(tmp_path, monkeypatch):
     """Point the store at a per-test temp DB and reset its global state."""
     from axi import store
