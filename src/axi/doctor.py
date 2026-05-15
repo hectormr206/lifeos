@@ -167,6 +167,45 @@ def check_db(r: Result) -> None:
         r.fail("SQLite", f"{type(e).__name__}: {e}")
 
 
+def _check_audio_devices(r: Result) -> None:
+    """Enumerate input audio devices via sounddevice (PRD P2.2).
+
+    Reports the default input device + sample rate and the total input
+    count. Fails when no input devices are visible (audio stack down) or
+    when sounddevice itself can't be imported.
+    """
+    print("\naudio inputs (sounddevice)")
+    try:
+        import sounddevice as sd  # noqa: PLC0415
+    except Exception as e:  # noqa: BLE001
+        r.fail("sounddevice", f"import failed: {type(e).__name__}: {e}")
+        return
+    try:
+        devices = sd.query_devices()
+    except Exception as e:  # noqa: BLE001
+        r.fail("sounddevice.query_devices", f"{type(e).__name__}: {e}")
+        return
+    inputs = [d for d in devices if int(d.get("max_input_channels", 0)) > 0]
+    if not inputs:
+        r.fail("audio inputs", "no input devices visible")
+        return
+    # Default input — sd.default.device is (input_idx, output_idx) or a
+    # single value. Wrap in try because some backends omit it entirely.
+    default_name = "?"
+    default_sr = "?"
+    try:
+        default = sd.default.device
+        idx = default[0] if isinstance(default, (list, tuple)) else default
+        if isinstance(idx, int) and 0 <= idx < len(devices):
+            d = devices[idx]
+            default_name = d.get("name", "?")
+            default_sr = f"{int(d.get('default_samplerate', 0))} Hz"
+    except Exception:  # noqa: BLE001
+        pass
+    r.ok("default input", f"{default_name} @ {default_sr}")
+    r.ok("input count", f"{len(inputs)} device(s)")
+
+
 def check_files(r: Result) -> None:
     print("\nmodelos en disco")
     for p in REQUIRED_FILES:
@@ -186,6 +225,7 @@ def main() -> int:
     check_llama_server(r)
     check_ydotool(r)
     check_db(r)
+    _check_audio_devices(r)
     check_files(r)
     print()
     if r.failures:
