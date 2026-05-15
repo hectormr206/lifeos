@@ -216,7 +216,7 @@
         },
         init() {
           this.refresh();
-          setInterval(() => this.refresh(), 1000);
+          setInterval(() => this.refresh(), {{ dashboard_poll_ms() }});
         },
       };
     }

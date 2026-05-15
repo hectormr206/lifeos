@@ -52,11 +52,25 @@ def _default_meeting_factory(*, transcribe_fn, brain_ask_fn) -> MeetingSession:
     return MeetingSession(transcribe_fn=transcribe_fn, brain_ask_fn=brain_ask_fn)
 
 SOCK_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", str(Path.home() / ".local/state"))) / "axi" / "voice.sock"
-MIN_SAMPLES = int(SAMPLE_RATE * 0.3)  # ignore <300ms blips
-# Below this RMS the buffer is effectively silence and Whisper will hallucinate
-# common YouTube training-data filler ("Gracias por ver el video", "Thanks for
-# watching"). Gate on it BEFORE inference.
-SILENCE_RMS_THRESHOLD = 0.002
+
+# Known-good defaults. Live values come from `config.get(...)` so the user
+# can tune them from the dashboard without code edits; the literal below is
+# the fallback when the config file is missing or the key is corrupted.
+DEFAULT_MIN_RECORD_SAMPLES_MS = 300
+DEFAULT_SILENCE_RMS_THRESHOLD = 0.002
+
+
+def _min_record_samples() -> int:
+    """Minimum sample count for a recording to be worth transcribing."""
+    from axi.config import get  # lazy — avoids import cycle at module load
+    ms = int(get("min_record_samples_ms", DEFAULT_MIN_RECORD_SAMPLES_MS))
+    return int(SAMPLE_RATE * ms / 1000)
+
+
+def _silence_rms_threshold() -> float:
+    """RMS gate below which Whisper would just hallucinate filler text."""
+    from axi.config import get
+    return float(get("silence_rms_threshold", DEFAULT_SILENCE_RMS_THRESHOLD))
 
 log = logging.getLogger("axi.daemon")
 
@@ -178,13 +192,13 @@ class Daemon:
     def _stop_and_ask(self) -> str:
         self._set_state("transcribing")
         audio = self.recorder.stop()
-        if audio is None or len(audio) < MIN_SAMPLES:
+        if audio is None or len(audio) < _min_record_samples():
             self._set_state("idle")
             notify("Axi", "Pregunta muy corta", icon="dialog-warning", timeout_ms=2000)
             return "too-short"
         import numpy as _np
         rms = float(_np.sqrt(_np.mean(audio**2)))
-        if rms < SILENCE_RMS_THRESHOLD:
+        if rms < _silence_rms_threshold():
             self._set_state("idle")
             log.info("ask silence gate: rms=%.5f", rms)
             notify("Axi", "No oí pregunta", icon="dialog-warning", timeout_ms=2000)
@@ -271,15 +285,17 @@ class Daemon:
             self.meeting.register_dictation(self._dictation_start_ts, time.time())
             self._dictation_start_ts = None
         audio = self.recorder.stop()
-        if audio is None or len(audio) < MIN_SAMPLES:
+        min_samples = _min_record_samples()
+        if audio is None or len(audio) < min_samples:
             self._set_state("idle")
             notify("Axi", "Grabación muy corta", icon="dialog-warning", timeout_ms=2000)
             return "too-short"
         import numpy as _np
         rms = float(_np.sqrt(_np.mean(audio**2)))
-        if rms < SILENCE_RMS_THRESHOLD:
+        threshold = _silence_rms_threshold()
+        if rms < threshold:
             self._set_state("idle")
-            log.info("silence gate triggered: rms=%.5f < %.5f", rms, SILENCE_RMS_THRESHOLD)
+            log.info("silence gate triggered: rms=%.5f < %.5f", rms, threshold)
             notify("Axi", "No oí nada (silencio)", icon="dialog-warning", timeout_ms=2000)
             return "silence"
 

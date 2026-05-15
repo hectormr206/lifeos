@@ -40,16 +40,30 @@ from axi.mic import pick_best as pick_best_mic
 log = logging.getLogger("axi.meeting")
 
 DATA_ROOT = Path.home() / "LifeOS/data/meetings"
-CHUNK_SECONDS = 60
+# These are now overridable via config (P0.4). Literals remain as known-good
+# fallbacks for when the config file is missing or the key is corrupted.
+DEFAULT_CHUNK_SECONDS = 60
 # Capture screen every 2 s — meetings often involve fast-moving screen shares
 # (Excel cell edits, code review, slide annotations) where 30 s missed too
 # much. The phash dedup below means most of those 2-second checks become
 # zero-cost (no disk write) when the screen hasn't actually changed.
-SCREEN_INTERVAL_S = 2
+DEFAULT_SCREEN_INTERVAL_S = 2
 # Hamming distance threshold on 64-bit perceptual hashes. <= this means the
 # image is "basically the same" as the last saved one and we skip the write.
 # 5 catches typical compression/AA noise; 10+ would risk merging real changes.
-SCREEN_DEDUP_HAMMING = 5
+DEFAULT_SCREEN_DEDUP_HAMMING = 5
+
+
+def _chunk_seconds() -> int:
+    return int(config.get("meeting_chunk_seconds", DEFAULT_CHUNK_SECONDS))
+
+
+def _screen_interval_s() -> int:
+    return int(config.get("meeting_screen_interval_s", DEFAULT_SCREEN_INTERVAL_S))
+
+
+def _screen_dedup_hamming() -> int:
+    return int(config.get("meeting_screen_dedup_hamming", DEFAULT_SCREEN_DEDUP_HAMMING))
 SAMPLE_RATE = 16_000
 TRANSCRIBE_FN_DEFAULT: Callable[[np.ndarray], tuple[str, str, float]] | None = None
 BRAIN_ASK_FN_DEFAULT: Callable[..., str] | None = None
@@ -282,7 +296,7 @@ class MeetingSession:
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-f", "pulse", "-i", source,
             "-ac", "1", "-ar", str(SAMPLE_RATE),
-            "-f", "segment", "-segment_time", str(CHUNK_SECONDS),
+            "-f", "segment", "-segment_time", str(_chunk_seconds()),
             "-reset_timestamps", "1",
             pattern,
         ]
@@ -312,7 +326,7 @@ class MeetingSession:
                     is_dup = (
                         phash is not None
                         and self._last_phash is not None
-                        and _hamming(phash, self._last_phash) <= SCREEN_DEDUP_HAMMING
+                        and _hamming(phash, self._last_phash) <= _screen_dedup_hamming()
                     )
                     if is_dup:
                         tmp.unlink(missing_ok=True)
@@ -338,7 +352,7 @@ class MeetingSession:
                                 log.warning("could not persist screen row: %s", e)
             except (subprocess.TimeoutExpired, OSError) as e:
                 log.warning("screen capture failed: %s", e)
-            self._screen_stop.wait(SCREEN_INTERVAL_S)
+            self._screen_stop.wait(_screen_interval_s())
 
     # ────────────────── incremental transcription ──────────────────
 
@@ -383,7 +397,7 @@ class MeetingSession:
         # Exclude mic chunks that overlap with Héctor dictating to Axi — those
         # are not part of the meeting conversation.
         idx_for_overlap = int(chunk.stem.split("-")[-1])
-        chunk_start_ts = self.start_time + idx_for_overlap * CHUNK_SECONDS
+        chunk_start_ts = self.start_time + idx_for_overlap * _chunk_seconds()
         chunk_end_ts = chunk_start_ts + len(data) / sr
         if channel == "mic" and self.chunk_overlaps_dictation(chunk_start_ts, chunk_end_ts):
             log.info("mic chunk %s overlaps dictation window, skipping for meeting", chunk.name)
@@ -401,7 +415,7 @@ class MeetingSession:
             return
         text = clean_segment_text(text)
         idx = int(chunk.stem.split("-")[-1])
-        start_ms = idx * CHUNK_SECONDS * 1000
+        start_ms = idx * _chunk_seconds() * 1000
         end_ms = start_ms + int(len(data) / sr * 1000)
         speaker = "Héctor" if channel == "mic" else None
         with store._tx() as txc:  # noqa: SLF001
@@ -683,7 +697,7 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
             # Exclude mic chunks overlapping Héctor's dictations to Axi.
             if channel == "mic" and session is not None:
                 idx = int(chunk.stem.split("-")[-1])
-                chunk_start_ts = meeting_start_ts + idx * CHUNK_SECONDS
+                chunk_start_ts = meeting_start_ts + idx * _chunk_seconds()
                 chunk_end_ts = chunk_start_ts + len(data) / sr
                 if session.chunk_overlaps_dictation(chunk_start_ts, chunk_end_ts):
                     log.info("excluding %s (dictation overlap)", chunk.name)
@@ -694,7 +708,7 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
                 continue
             text = clean_segment_text(text)
             idx = int(chunk.stem.split("-")[-1])
-            start_ms = idx * CHUNK_SECONDS * 1000
+            start_ms = idx * _chunk_seconds() * 1000
             end_ms = start_ms + int(len(data) / sr * 1000)
             speaker = "Héctor" if channel == "mic" else None
             with store._tx() as txc:  # noqa: SLF001

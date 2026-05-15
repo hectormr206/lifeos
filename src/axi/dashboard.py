@@ -61,6 +61,12 @@ STATIC_DIR = PROJECT_ROOT / "static"
 app = FastAPI(title="Axi Dashboard", docs_url=None, redoc_url=None)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Expose live config values to every template (P0.4). The callable runs on
+# each render so a config change is picked up without restarting the
+# dashboard process.
+templates.env.globals["dashboard_poll_ms"] = lambda: int(
+    config.get("dashboard_poll_ms", 1000)
+)
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -618,19 +624,35 @@ def read_config():
     return dict(config._load())  # noqa: SLF001
 
 
+@app.get("/api/config/schema")
+def read_config_schema():
+    """JSON Schema describing every known config field (P0.4)."""
+    from axi import config_schema
+    return config_schema.to_json_schema()
+
+
 @app.post("/api/config")
 async def write_config(request: Request):
+    from axi import config_schema
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(400, "body must be JSON object")
-    current = dict(config._load())  # noqa: SLF001
-    current.update(body)
-    config.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    config.CONFIG_PATH.write_text(
-        json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    config._cache = None  # noqa: SLF001 — invalidate
-    return {"ok": True, "config": current}
+    # Merge with on-disk to allow partial POSTs (the form only sends
+    # editable fields). Then validate the full merged dict before writing.
+    merged = dict(config._load())  # noqa: SLF001
+    merged.update(body)
+    try:
+        validated = config.save(merged)
+    except config_schema.ConfigError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": e.reason,
+                "field": e.field,
+                "value": repr(e.value),
+            },
+        )
+    return {"ok": True, "config": validated}
 
 
 # ────────── events (P0.1) ──────────

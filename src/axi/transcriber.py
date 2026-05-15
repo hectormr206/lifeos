@@ -26,7 +26,9 @@ from axi import _cuda_preload  # noqa: F401  — must precede faster_whisper
 import numpy as np
 from faster_whisper import WhisperModel
 
-MODEL_NAME = "large-v3-turbo"
+DEFAULT_MODEL_NAME = "large-v3-turbo"
+# Back-compat alias — some callers import MODEL_NAME directly.
+MODEL_NAME = DEFAULT_MODEL_NAME
 
 DEFAULT_INITIAL_PROMPT = (
     "Transcripción en español de dictado técnico y conversación natural. "
@@ -35,13 +37,24 @@ DEFAULT_INITIAL_PROMPT = (
     "código, framework, PR, branch, commit, debug, log, repo, endpoint."
 )
 
+DEFAULT_BEAM_SIZE = 5
+
 
 class Transcriber:
     def __init__(
         self,
-        model_name: str = MODEL_NAME,
-        initial_prompt: str = DEFAULT_INITIAL_PROMPT,
+        model_name: str | None = None,
+        initial_prompt: str | None = None,
     ) -> None:
+        # Resolve config-overridable values at construction time. Whisper
+        # is loaded once at daemon startup; changes take effect on restart
+        # (the dashboard surfaces a "Reinicio pendiente" affordance).
+        from axi.config import get  # noqa: PLC0415 — lazy import
+        if model_name is None:
+            model_name = str(get("whisper_model_name", DEFAULT_MODEL_NAME))
+        if initial_prompt is None:
+            initial_prompt = str(get("whisper_initial_prompt", DEFAULT_INITIAL_PROMPT))
+        self.beam_size = int(get("whisper_beam_size", DEFAULT_BEAM_SIZE))
         # Device + compute_type are env-configurable so Game Guard can swap
         # us to CPU (frees VRAM for games) without killing axi-voice. On
         # CPU, float16 isn't supported by ctranslate2 — use int8 instead.
@@ -58,7 +71,7 @@ class Transcriber:
         segments, info = self.model.transcribe(
             audio,
             language="es",  # see module docstring — auto-detect fails on short noisy chunks
-            beam_size=5,
+            beam_size=self.beam_size,
             initial_prompt=self.initial_prompt,
             condition_on_previous_text=False,
             no_speech_threshold=0.8,

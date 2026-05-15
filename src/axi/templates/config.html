@@ -5,6 +5,10 @@
 {% block content %}
 <div class="space-y-6" x-data="configPage()" x-init="load()">
   <h1 class="text-2xl font-semibold">Configuración</h1>
+  <p class="muted text-sm">
+    Los campos se generan desde el JSON Schema en <code>/api/config/schema</code>.
+    Algunos cambios (Whisper, tray) requieren reiniciar el daemon.
+  </p>
 
   <template x-if="loading">
     <div class="muted py-12 text-center">Cargando…</div>
@@ -13,72 +17,52 @@
   <template x-if="!loading">
     <div class="space-y-4">
       <div class="panel p-6 space-y-4">
-        <div>
-          <label class="block text-sm muted mb-1">Zona horaria</label>
-          <select x-model="cfg.timezone" class="panel2 px-3 py-2 w-full">
-            <option>America/Mexico_City</option>
-            <option>America/Tijuana</option>
-            <option>America/Cancun</option>
-            <option>America/Bogota</option>
-            <option>America/Buenos_Aires</option>
-            <option>America/Santiago</option>
-            <option>America/New_York</option>
-            <option>America/Los_Angeles</option>
-            <option>Europe/Madrid</option>
-            <option>Europe/London</option>
-            <option>Asia/Tokyo</option>
-            <option>UTC</option>
-          </select>
-        </div>
+        <template x-for="key in fieldOrder" :key="key">
+          <div>
+            <label class="block text-sm muted mb-1">
+              <code x-text="key"></code>
+              <span class="ml-2" x-text="schema.properties[key].description || ''"></span>
+            </label>
 
-        <div>
-          <label class="block text-sm muted mb-1">Idioma</label>
-          <input x-model="cfg.language" class="panel2 px-3 py-2 w-full" />
-        </div>
+            <!-- Boolean -->
+            <template x-if="schema.properties[key].type === 'boolean'">
+              <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" x-model="cfg[key]" />
+                <span class="text-sm muted" x-text="cfg[key] ? 'habilitado' : 'deshabilitado'"></span>
+              </label>
+            </template>
 
-        <div>
-          <label class="block text-sm muted mb-1">Nombre del usuario</label>
-          <input x-model="cfg.user_name" class="panel2 px-3 py-2 w-full" />
-        </div>
+            <!-- Enum -->
+            <template x-if="schema.properties[key].enum">
+              <select x-model="cfg[key]" class="panel2 px-3 py-2 w-full">
+                <template x-for="opt in schema.properties[key].enum" :key="opt">
+                  <option x-text="opt" :value="opt"></option>
+                </template>
+              </select>
+            </template>
 
-        <label class="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" x-model="cfg.tts_enabled" />
-          <span>TTS habilitado (Piper habla las respuestas)</span>
-        </label>
+            <!-- Integer / Number -->
+            <template x-if="(schema.properties[key].type === 'integer' || schema.properties[key].type === 'number') && !schema.properties[key].enum">
+              <input type="number"
+                     x-model.number="cfg[key]"
+                     :step="schema.properties[key].type === 'integer' ? 1 : 'any'"
+                     :min="schema.properties[key].minimum"
+                     :max="schema.properties[key].maximum"
+                     class="panel2 px-3 py-2 w-full" />
+            </template>
 
-        <label class="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" x-model="cfg.vision_enabled" />
-          <span>Visión habilitada (capturas para el brain)</span>
-        </label>
+            <!-- String -->
+            <template x-if="schema.properties[key].type === 'string' && !schema.properties[key].enum">
+              <input type="text" x-model="cfg[key]" class="panel2 px-3 py-2 w-full" />
+            </template>
 
-        <label class="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" x-model="cfg.fact_extraction_enabled" />
-          <span>Extracción automática de hechos (memoria de largo plazo)</span>
-        </label>
-      </div>
-
-      <div class="panel p-6 space-y-4">
-        <h2 class="font-semibold">Meeting mode</h2>
-
-        <div>
-          <label class="block text-sm muted mb-1">Umbral RMS de silencio (skip chunks bajo esto)</label>
-          <input type="number" step="0.001" x-model.number="cfg.meeting_silence_rms" class="panel2 px-3 py-2 w-full" />
-        </div>
-
-        <div>
-          <label class="block text-sm muted mb-1">Tamaño de ventana del resumen jerárquico (minutos)</label>
-          <input type="number" min="1" x-model.number="cfg.meeting_window_minutes" class="panel2 px-3 py-2 w-full" />
-        </div>
-
-        <label class="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" x-model="cfg.meeting_keep_raw_audio" />
-          <span>Conservar audio raw después de transcribir</span>
-        </label>
-
-        <label class="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" x-model="cfg.meeting_incremental_transcribe" />
-          <span>Transcripción incremental durante la grabación</span>
-        </label>
+            <div class="text-xs muted mt-1"
+                 x-show="schema.properties[key].minimum !== undefined || schema.properties[key].maximum !== undefined">
+              <span x-show="schema.properties[key].minimum !== undefined">min: <span x-text="schema.properties[key].minimum"></span></span>
+              <span x-show="schema.properties[key].maximum !== undefined" class="ml-2">max: <span x-text="schema.properties[key].maximum"></span></span>
+            </div>
+          </div>
+        </template>
       </div>
 
       <div class="flex justify-end gap-3">
@@ -91,8 +75,15 @@
 
       <template x-if="message">
         <div class="panel p-3 text-sm"
-             :style="messageError ? 'border-color: var(--red); color: var(--red)' : 'border-color: var(--green); color: var(--green)'"
-             x-text="message"></div>
+             :style="messageError ? 'border-color: var(--red); color: var(--red)' : 'border-color: var(--green); color: var(--green)'">
+          <span x-text="message"></span>
+          <template x-if="fieldError">
+            <div class="mt-1">
+              campo: <code x-text="fieldError"></code>
+              · valor: <code x-text="valueError"></code>
+            </div>
+          </template>
+        </div>
       </template>
     </div>
   </template>
@@ -102,19 +93,32 @@
 function configPage() {
   return {
     cfg: {},
+    schema: { properties: {} },
+    fieldOrder: [],
     loading: true,
     saving: false,
     message: '',
     messageError: false,
+    fieldError: '',
+    valueError: '',
     async load() {
       this.loading = true;
       this.message = '';
-      const r = await fetch('/api/config');
-      this.cfg = r.ok ? await r.json() : {};
+      this.fieldError = '';
+      this.valueError = '';
+      const [cfgRes, schemaRes] = await Promise.all([
+        fetch('/api/config'),
+        fetch('/api/config/schema'),
+      ]);
+      this.cfg = cfgRes.ok ? await cfgRes.json() : {};
+      this.schema = schemaRes.ok ? await schemaRes.json() : { properties: {} };
+      this.fieldOrder = Object.keys(this.schema.properties || {});
       this.loading = false;
     },
     async save() {
       this.saving = true;
+      this.fieldError = '';
+      this.valueError = '';
       try {
         const r = await fetch('/api/config', {
           method: 'POST',
@@ -125,7 +129,11 @@ function configPage() {
           this.message = 'Guardado. Algunos cambios requieren reiniciar el daemon.';
           this.messageError = false;
         } else {
-          this.message = 'Error: ' + r.status;
+          const body = await r.json().catch(() => ({}));
+          const detail = body.detail || {};
+          this.message = 'Error de validación: ' + (detail.error || r.status);
+          this.fieldError = detail.field || '';
+          this.valueError = detail.value || '';
           this.messageError = true;
         }
       } catch (e) {

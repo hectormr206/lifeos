@@ -32,7 +32,17 @@ from PySide6 import QtCore, QtGui, QtWidgets
 SOCK_PATH = Path(
     os.environ.get("XDG_RUNTIME_DIR", str(Path.home() / ".local/state"))
 ) / "axi" / "voice.sock"
-POLL_MS = 500
+DEFAULT_POLL_MS = 500
+
+
+def _poll_ms() -> int:
+    """Live tray-poll interval (ms), read from config on each call."""
+    from axi.config import get  # noqa: PLC0415 — lazy
+    return int(get("tray_poll_ms", DEFAULT_POLL_MS))
+
+
+# Back-compat alias for any external import.
+POLL_MS = DEFAULT_POLL_MS
 DASHBOARD_URL = "http://127.0.0.1:8081"
 LAST_TXT_PATH = Path(
     os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
@@ -150,7 +160,7 @@ class AxiTray(QtCore.QObject):
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(POLL_MS)
+        self.timer.start(_poll_ms())
 
     # ───────────────── menu construction ─────────────────
 
