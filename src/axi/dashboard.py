@@ -680,6 +680,62 @@ def api_events_mark_read():
     return {"ok": True}
 
 
+# ────────── conversations (P1.4) ──────────
+
+@app.get("/conversations", response_class=HTMLResponse)
+def conversations_page(request: Request):
+    return templates.TemplateResponse(request, "conversations.html", {})
+
+
+@app.get("/api/conversations")
+def api_conversations(
+    since_ts: float | None = None,
+    before_ts: float | None = None,
+    limit: int = 50,
+):
+    if limit < 1 or limit > 500:
+        raise HTTPException(400, "limit must be 1..500")
+    c = store._connect()  # noqa: SLF001
+    where = []
+    args: list[Any] = []
+    if since_ts is not None:
+        where.append("c.ts >= ?")
+        args.append(since_ts)
+    if before_ts is not None:
+        where.append("c.ts < ?")
+        args.append(before_ts)
+    sql = (
+        "SELECT c.id, c.ts, c.user_text, c.axi_text, c.session_id, c.node_id "
+        "FROM conversations c"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY c.ts DESC LIMIT ?"
+    args.append(limit)
+    rows = c.execute(sql, args).fetchall()
+    # Gather fact ids per conversation node via edges (from_id = node_id).
+    out = []
+    for r in rows:
+        fact_ids: list[int] = []
+        if r["node_id"] is not None:
+            edges = c.execute(
+                "SELECT e.to_id FROM edges e "
+                "JOIN nodes n ON n.id = e.to_id "
+                "WHERE e.from_id = ? AND n.kind = 'fact'",
+                (r["node_id"],),
+            ).fetchall()
+            fact_ids = [int(e["to_id"]) for e in edges]
+        out.append({
+            "id": r["id"],
+            "ts": r["ts"],
+            "user_text": r["user_text"],
+            "axi_text": r["axi_text"],
+            "session_id": r["session_id"],
+            "fact_ids": fact_ids,
+        })
+    return out
+
+
 # ────────── daily digest (P1.3) ──────────
 
 @app.get("/api/digest/today")
