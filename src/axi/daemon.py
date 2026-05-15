@@ -326,6 +326,44 @@ class Daemon:
         text = clean_text(raw)
         log.info("raw:     %s", raw)
         log.info("cleaned: %s", text)
+
+        # P1.2 — voice command palette. If the utterance is a recognized
+        # imperative ("axi, abre el dashboard"), execute the action and
+        # SKIP typing. Otherwise fall through to the normal dictation flow.
+        if config.get("intents_enabled", True):
+            try:
+                from axi import events as _events, intents as _intents  # noqa: PLC0415
+                brain_fallback = self.brain_ask if config.get(
+                    "intents_brain_fallback_enabled", False
+                ) else None
+                intent_result = _intents.classify(text, brain_ask=brain_fallback)
+            except Exception as e:  # noqa: BLE001
+                log.warning("intent classify raised: %s", e)
+                intent_result = None
+            if intent_result:
+                intent_name, params = intent_result
+                try:
+                    _events.log_info(
+                        "intents", f"matched {intent_name!r}",
+                        data={"text": text, "params": params},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    _intents.INTENT_HANDLERS[intent_name](self)
+                    notify("Axi", f"Acción ejecutada: {intent_name}",
+                           transient=True, timeout_ms=2500)
+                    self._set_state("idle")
+                    return f"intent:{intent_name}"
+                except Exception as e:  # noqa: BLE001
+                    try:
+                        _events.log_error(
+                            "intents", f"handler {intent_name} failed: {e}",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    # fall through to dictation
+
         last_path = save_last(text)
         clip = to_clipboard(text)
         typed = type_to_focused(text)

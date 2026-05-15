@@ -144,6 +144,17 @@ FIELDS: tuple[ConfigField, ...] = (
         "notify_send_enabled", "boolean", True,
         "If true, critical/error events fire libnotify desktop notifications (P2.5).",
     ),
+    ConfigField(
+        "intents_enabled", "boolean", True,
+        "If true, dictated utterances starting with 'axi …' are matched against "
+        "the voice command palette before being typed (P1.2 kill switch).",
+    ),
+    ConfigField(
+        "intents_brain_fallback_enabled", "boolean", False,
+        "If true, an utterance that passes the prefix+verb gates but matches no "
+        "regex intent is sent to the brain (2 s timeout) for classification. "
+        "Off by default to keep the dictation path zero-cost (P1.2).",
+    ),
     # ─────── meeting mode tuning ───────
     ConfigField(
         "meeting_silence_rms", "number", 0.015,

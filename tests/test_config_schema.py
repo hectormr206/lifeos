@@ -43,10 +43,13 @@ def test_schema_covers_all_22_keys():
         "disk_min_gb_free",
         # P1.5 OCR kill switch.
         "ocr_enabled",
+        # P1.2 voice command palette.
+        "intents_enabled",
+        "intents_brain_fallback_enabled",
     }
     assert expected.issubset(names)
-    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) + 1 (P2.3) + 1 (P1.5) = 27.
-    assert len(names) == 27
+    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) + 1 (P2.3) + 1 (P1.5) + 2 (P1.2) = 29.
+    assert len(names) == 29
 
 
 def test_to_json_schema_has_all_keys():
