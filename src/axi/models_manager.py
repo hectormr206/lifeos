@@ -23,6 +23,13 @@ from pathlib import Path
 from typing import Callable
 
 from axi.models_catalog import CATALOG, ModelEntry, ModelFile, by_id, catalog
+from axi.model_params_schema import (
+    SCHEMA,
+    ParamSpec,
+    by_key as _spec_by_key,
+    is_applicable,
+    validate_value,
+)
 
 log = logging.getLogger("axi.models")
 
@@ -93,27 +100,214 @@ def get_active_id() -> str | None:
     return data.get("id") if data else None
 
 
-def _entry_to_active_dict(entry: ModelEntry) -> dict:
+def _entry_to_active_dict(entry: ModelEntry, overrides: dict | None = None) -> dict:
+    """Build the active_model.json payload for `entry`.
+
+    With `overrides=None` or an empty dict for this entry, the payload is
+    BYTE-IDENTICAL to the historical behavior (entry.extra_args verbatim,
+    entry.ctx/entry.ngl). With overrides present, we apply them on top of
+    the baseline via `merge_extra_args`.
+    """
     paths = expected_paths(entry)
+    entry_overrides = (overrides or {}).get(entry.id, {}) if overrides else {}
+    if entry_overrides:
+        ctx_val = int(entry_overrides.get("ctx", entry.ctx))
+        ngl_val = int(entry_overrides.get("ngl", entry.ngl))
+        merged_args = merge_extra_args(entry, entry_overrides)
+    else:
+        ctx_val = entry.ctx
+        ngl_val = entry.ngl
+        merged_args = list(entry.extra_args)
     out = {
         "id": entry.id,
         "gguf": str(paths["gguf"]),
-        "ctx": entry.ctx,
-        "ngl": entry.ngl,
-        "extra_args": list(entry.extra_args),
+        "ctx": ctx_val,
+        "ngl": ngl_val,
+        "extra_args": merged_args,
     }
     if "mmproj" in paths:
         out["mmproj"] = str(paths["mmproj"])
     return out
 
 
-def write_active(entry: ModelEntry) -> Path:
+# ────────────────────────── overrides + params ─────────────────────
+
+
+def overrides_path() -> Path:
+    return _state_dir() / "model_overrides.json"
+
+
+def load_overrides() -> dict[str, dict]:
+    p = overrides_path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        if not isinstance(data, dict):
+            return {}
+        # Only keep dict-of-dict shape; ignore anything stale.
+        return {k: v for k, v in data.items() if isinstance(v, dict)}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_overrides(overrides: dict[str, dict]) -> Path:
+    p = overrides_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(overrides, indent=2, sort_keys=True))
+    tmp.replace(p)
+    return p
+
+
+def effective_params(entry: ModelEntry, overrides: dict | None = None) -> dict:
+    """Resolve the effective value of every applicable knob for `entry`.
+
+    Order (lowest → highest priority):
+      1. ParamSpec.default
+      2. entry.param_defaults (if present)
+      3. overrides[entry.id]
+    """
+    out: dict = {}
+    entry_param_defaults = getattr(entry, "param_defaults", {}) or {}
+    entry_overrides = (overrides or {}).get(entry.id, {}) if overrides else {}
+    for spec in SCHEMA:
+        if not is_applicable(spec, entry):
+            continue
+        if spec.key == "ctx":
+            value: object = entry.ctx
+        elif spec.key == "ngl":
+            value = entry.ngl
+        else:
+            value = spec.default
+        if spec.key in entry_param_defaults:
+            value = entry_param_defaults[spec.key]
+        if spec.key in entry_overrides:
+            value = entry_overrides[spec.key]
+        out[spec.key] = value
+    return out
+
+
+def _spec_consumes_token(spec: ParamSpec, token: str) -> bool:
+    """True if `token` could be the flag/start-of-flag claimed by spec."""
+    return token in spec.cli_flags
+
+
+def _strip_managed_flags(
+    args: list[str], specs_to_strip: list[ParamSpec]
+) -> list[str]:
+    """Remove every token claimed by any spec in `specs_to_strip`.
+
+    Value-flags (pattern contains "{value}") consume 2 tokens.
+    Multi-token bool patterns like "-fa on" consume 2 tokens.
+    Single-token bool flags (e.g. "--cpu-moe") consume 1 token.
+    """
+    # Build a map: claimed-flag-token -> how many tokens to drop.
+    drop_count: dict[str, int] = {}
+    for spec in specs_to_strip:
+        if not spec.extra_args_pattern or not spec.cli_flags:
+            continue
+        pattern = spec.extra_args_pattern
+        if "{value}" in pattern:
+            consume = 2
+        else:
+            # Bool flag. May be single-token ("--mlock") or multi-token
+            # ("-fa on"). Count tokens in the pattern.
+            consume = len(pattern.split())
+        for flag in spec.cli_flags:
+            drop_count[flag] = consume
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in drop_count:
+            i += drop_count[tok]
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
+def _render_param(spec: ParamSpec, value: object) -> list[str]:
+    """Render a single param's CLI tokens for the merged args list."""
+    if not spec.extra_args_pattern:
+        return []
+    if spec.kind == "bool":
+        return spec.extra_args_pattern.split() if bool(value) else []
+    if "{value}" in spec.extra_args_pattern:
+        flag, _, _ = spec.extra_args_pattern.partition(" {value}")
+        return [flag, str(value)]
+    # Single-token flag without {value}; only emit if truthy.
+    return [spec.extra_args_pattern] if value else []
+
+
+def merge_extra_args(entry: ModelEntry, entry_overrides: dict) -> list[str]:
+    """Apply overrides to `entry.extra_args` and return the merged list.
+
+    Strategy: for every overridden knob that maps to CLI tokens, strip its
+    flag (and value, if any) from the baseline, then append the rendered
+    override at the end. This keeps all UNTOUCHED baseline flags exactly
+    as they were (preserving order, sentinel flags like "-a Qwen3.6-…",
+    "-Cr 0-15", etc), so the byte-identical guarantee holds for any flag
+    we do not manage.
+    """
+    if not entry_overrides:
+        return list(entry.extra_args)
+    touched_specs: list[ParamSpec] = []
+    for key in entry_overrides:
+        spec = _spec_by_key(key)
+        if spec is None:
+            continue
+        if spec.extra_args_pattern is None:
+            continue  # ctx/ngl handled at top-level
+        if not is_applicable(spec, entry):
+            continue
+        touched_specs.append(spec)
+    stripped = _strip_managed_flags(list(entry.extra_args), touched_specs)
+    appended: list[str] = []
+    for spec in touched_specs:
+        try:
+            value = validate_value(spec, entry_overrides[spec.key])
+        except ValueError:
+            continue  # invalid → fall back to baseline (already stripped)
+        appended.extend(_render_param(spec, value))
+    return stripped + appended
+
+
+def build_extra_args(entry: ModelEntry, effective: dict) -> list[str]:
+    """Render the full set of effective params to a CLI args list.
+
+    Used by tests and the UI preview to show what would be passed to
+    llama-server if every applicable knob were set by the user. Does NOT
+    preserve baseline-only flags (sentinels, -Cr, -a, etc.) — that is the
+    job of `merge_extra_args`, which is what set_active actually uses.
+    """
+    out: list[str] = []
+    for spec in SCHEMA:
+        if not is_applicable(spec, entry):
+            continue
+        if spec.extra_args_pattern is None:
+            continue
+        if spec.key not in effective:
+            continue
+        out.extend(_render_param(spec, effective[spec.key]))
+    return out
+
+
+def write_active(entry: ModelEntry, overrides: dict | None = None) -> Path:
     """Write active_model.json atomically (tmp + rename) so a partial write
-    can never poison the wrapper. Does NOT restart llama-server."""
+    can never poison the wrapper. Does NOT restart llama-server.
+
+    When `overrides` is None we still load the on-disk overrides file so
+    activating an entry from any code path picks up the user's tweaks.
+    Pass `overrides={}` explicitly to force a baseline (no-overrides) write.
+    """
+    if overrides is None:
+        overrides = load_overrides()
     p = active_model_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(_entry_to_active_dict(entry), indent=2))
+    tmp.write_text(json.dumps(_entry_to_active_dict(entry, overrides), indent=2))
     tmp.replace(p)
     return p
 
@@ -283,16 +477,22 @@ __all__ = [
     "CATALOG",
     "CatalogStatus",
     "active_model_path",
+    "build_extra_args",
     "by_id",
     "catalog",
     "catalog_status",
     "download",
+    "effective_params",
     "expected_paths",
     "get_active_id",
     "is_installed",
+    "load_overrides",
+    "merge_extra_args",
     "model_dir",
     "models_dir",
+    "overrides_path",
     "read_active",
+    "save_overrides",
     "set_active",
     "wait_for_llama_health",
     "write_active",

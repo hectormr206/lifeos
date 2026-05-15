@@ -48,7 +48,13 @@
             </div>
           </div>
 
-          <div class="text-right min-w-[12rem]">
+          <div class="text-right min-w-[12rem] flex flex-col items-end gap-2">
+            <button
+              class="btn"
+              @click="toggleEditor(m.id)"
+              :disabled="!m.installed"
+              x-text="editorOpen === m.id ? '▴ Cerrar' : '⚙ Configurar'"
+            ></button>
             <template x-if="m.is_active">
               <div class="flex flex-col items-end gap-1">
                 <span class="px-3 py-1 rounded-full text-sm font-medium" style="background: rgba(34,204,85,0.15); color: var(--green); border: 1px solid var(--green);">
@@ -93,6 +99,72 @@
             </template>
           </div>
         </div>
+
+        <template x-if="editorOpen === m.id">
+          <div class="mt-4 pt-4 border-t" style="border-color: var(--panel2);">
+            <template x-if="editorLoading">
+              <div class="muted text-sm">Cargando parámetros…</div>
+            </template>
+            <template x-if="!editorLoading && editorData">
+              <div class="space-y-4">
+                <template x-for="group in groupedSchema()" :key="group.name">
+                  <div>
+                    <div class="text-xs uppercase tracking-wide muted mb-2" x-text="group.name"></div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <template x-for="row in group.rows" :key="row.key">
+                        <div class="flex flex-col gap-1 panel2 p-2 rounded">
+                          <label class="flex items-center justify-between text-xs">
+                            <span class="font-medium" x-text="row.label"></span>
+                            <span class="muted" x-text="row.key"></span>
+                          </label>
+                          <template x-if="row.kind === 'bool'">
+                            <label class="flex items-center gap-2 text-sm">
+                              <input type="checkbox" x-model="formValues[row.key]" />
+                              <span x-text="formValues[row.key] ? 'on' : 'off'"></span>
+                            </label>
+                          </template>
+                          <template x-if="row.kind === 'int' || row.kind === 'float'">
+                            <input
+                              type="number"
+                              class="panel p-1 rounded text-sm"
+                              :min="row.min" :max="row.max" :step="row.step"
+                              x-model.number="formValues[row.key]"
+                            />
+                          </template>
+                          <template x-if="row.kind === 'enum'">
+                            <select class="panel p-1 rounded text-sm" x-model="formValues[row.key]">
+                              <template x-for="c in row.choices" :key="c">
+                                <option :value="c" x-text="c"></option>
+                              </template>
+                            </select>
+                          </template>
+                          <div class="muted text-xs" x-text="row.description"></div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+
+                <div class="flex items-center gap-2 flex-wrap">
+                  <button class="btn btn-primary"
+                          :disabled="editorBusy"
+                          @click="applyOverrides(m.id)"
+                          x-text="editorBusy ? 'Aplicando…' : 'Aplicar'"></button>
+                  <button class="btn"
+                          :disabled="editorBusy"
+                          @click="resetOverrides(m.id)">Restaurar predeterminados</button>
+                  <span class="muted text-xs" x-text="editorMessage"></span>
+                </div>
+
+                <div>
+                  <div class="text-xs uppercase tracking-wide muted mb-1">Args resultantes</div>
+                  <pre class="panel2 p-2 rounded text-xs overflow-x-auto"
+                       x-text="(editorData.extra_args_preview || []).join(' ')"></pre>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
       </div>
     </template>
   </div>
@@ -110,6 +182,121 @@
       message: '',
       _slowTimer: null,
       _fastTimer: null,
+      editorOpen: null,
+      editorLoading: false,
+      editorData: null,
+      editorBusy: false,
+      editorMessage: '',
+      formValues: {},
+      async toggleEditor(id) {
+        if (this.editorOpen === id) {
+          this.editorOpen = null;
+          this.editorData = null;
+          return;
+        }
+        this.editorOpen = id;
+        await this.reloadEditor(id);
+      },
+      async reloadEditor(id) {
+        this.editorLoading = true;
+        this.editorData = null;
+        this.editorMessage = '';
+        try {
+          const r = await fetch('/api/models/' + id + '/params');
+          if (r.ok) {
+            this.editorData = await r.json();
+            this.formValues = { ...this.editorData.effective };
+          } else {
+            this.editorMessage = 'Error cargando parámetros: ' + r.status;
+          }
+        } finally {
+          this.editorLoading = false;
+        }
+      },
+      groupedSchema() {
+        if (!this.editorData) return [];
+        const groups = {};
+        const order = [];
+        for (const row of this.editorData.schema) {
+          if (!row.applicable) continue;
+          const g = row.group || 'Otros';
+          if (!(g in groups)) { groups[g] = []; order.push(g); }
+          groups[g].push(row);
+        }
+        return order.map(name => ({ name, rows: groups[name] }));
+      },
+      _diffOverrides() {
+        // Only send fields that differ from the schema/entry baseline.
+        // The server validates and stores; effective merges with entry
+        // defaults so we never need to round-trip untouched values.
+        if (!this.editorData) return {};
+        const out = {};
+        const baseline = this.editorData.effective;
+        // baseline already has entry.param_defaults applied; but the
+        // user wants their tweaks to persist regardless of baseline
+        // changes, so we save every applicable field they touched. To
+        // keep this simple and explicit, save anything that differs from
+        // the schema-row's `default`.
+        for (const row of this.editorData.schema) {
+          if (!row.applicable) continue;
+          const cur = this.formValues[row.key];
+          if (cur === undefined || cur === null || cur === '') continue;
+          if (cur !== baseline[row.key]) {
+            out[row.key] = cur;
+            continue;
+          }
+          // Preserve previously saved overrides even if user didn't touch.
+          if (this.editorData.overrides && row.key in this.editorData.overrides) {
+            out[row.key] = cur;
+          }
+        }
+        return out;
+      },
+      async applyOverrides(id) {
+        this.editorBusy = true;
+        this.editorMessage = 'Guardando…';
+        try {
+          const overrides = this._diffOverrides();
+          const r = await fetch('/api/models/' + id + '/params', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ overrides }),
+          });
+          if (r.ok) {
+            const body = await r.json();
+            this.editorMessage = body.restarted
+              ? 'Aplicado · llama-server reiniciado'
+              : 'Aplicado (se usará en la próxima activación)';
+            await this.reloadEditor(id);
+            this.refresh();
+          } else {
+            const t = await r.text();
+            this.editorMessage = 'Error ' + r.status + ': ' + t;
+          }
+        } finally {
+          this.editorBusy = false;
+        }
+      },
+      async resetOverrides(id) {
+        this.editorBusy = true;
+        this.editorMessage = 'Reseteando…';
+        try {
+          const r = await fetch('/api/models/' + id + '/params', { method: 'DELETE' });
+          if (r.ok) {
+            const body = await r.json();
+            this.editorMessage = body.restarted
+              ? 'Reset aplicado · llama-server reiniciado'
+              : 'Reset aplicado';
+            await this.reloadEditor(id);
+            this.refresh();
+          } else {
+            const t = await r.text();
+            this.editorMessage = 'Error ' + r.status + ': ' + t;
+          }
+        } finally {
+          this.editorBusy = false;
+        }
+      },
       featureStyle(f) {
         const m = {
           vision:  'background: rgba(170,51,255,0.15); color: var(--purple);',

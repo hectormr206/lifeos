@@ -44,6 +44,7 @@ import uvicorn
 
 from axi import config, events, store
 from axi import models_manager
+from axi import model_params_schema
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1055,6 +1056,136 @@ def api_model_activate(model_id: str):
     if not ok:
         raise HTTPException(status_code=503, detail="llama-server did not become healthy")
     return {"ok": True, "active": entry.id}
+
+
+# ────────────────────────── per-model params editor ────────────────
+
+
+def _params_payload(entry) -> dict[str, Any]:
+    """Build the GET /api/models/{id}/params response."""
+    overrides_all = models_manager.load_overrides()
+    effective = models_manager.effective_params(entry, overrides_all)
+    schema_rows = []
+    for spec in model_params_schema.SCHEMA:
+        schema_rows.append({
+            "key": spec.key,
+            "label": spec.label,
+            "kind": spec.kind,
+            "default": spec.default,
+            "min": spec.min,
+            "max": spec.max,
+            "step": spec.step,
+            "choices": list(spec.choices) if spec.choices else None,
+            "description": spec.description,
+            "group": spec.group,
+            "applicable": model_params_schema.is_applicable(spec, entry),
+        })
+    entry_overrides = overrides_all.get(entry.id, {})
+    extra_args_preview = models_manager._entry_to_active_dict(
+        entry, overrides_all
+    )["extra_args"]
+    return {
+        "id": entry.id,
+        "schema": schema_rows,
+        "effective": effective,
+        "overrides": entry_overrides,
+        "extra_args_preview": extra_args_preview,
+    }
+
+
+@app.get("/api/models/{model_id}/params")
+def api_model_params_get(model_id: str) -> dict[str, Any]:
+    entry = models_manager.by_id(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="unknown model id")
+    return _params_payload(entry)
+
+
+@app.put("/api/models/{model_id}/params")
+async def api_model_params_put(model_id: str, request: Request):
+    entry = models_manager.by_id(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="unknown model id")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    raw_overrides = body.get("overrides") if isinstance(body, dict) else None
+    if not isinstance(raw_overrides, dict):
+        raise HTTPException(status_code=400, detail="missing 'overrides' object")
+
+    cleaned: dict[str, Any] = {}
+    errors: list[str] = []
+    for key, value in raw_overrides.items():
+        spec = model_params_schema.by_key(key)
+        if spec is None:
+            errors.append(f"unknown key: {key}")
+            continue
+        if not model_params_schema.is_applicable(spec, entry):
+            errors.append(f"{key} not applicable to {entry.id}")
+            continue
+        try:
+            cleaned[key] = model_params_schema.validate_value(spec, value)
+        except ValueError as e:
+            errors.append(str(e))
+    if errors:
+        raise HTTPException(status_code=400, detail={"errors": errors})
+
+    all_overrides = models_manager.load_overrides()
+    if cleaned:
+        all_overrides[entry.id] = cleaned
+    else:
+        all_overrides.pop(entry.id, None)
+    models_manager.save_overrides(all_overrides)
+
+    response: dict[str, Any] = {"ok": True, "overrides": cleaned}
+
+    # If this entry is currently active, push the changes through to
+    # llama-server. Otherwise the new overrides will apply on next activate.
+    if models_manager.get_active_id() == entry.id:
+        try:
+            ok = models_manager.set_active(entry)
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(
+                status_code=503, detail=f"systemctl restart failed: {e}"
+            )
+        response["restarted"] = True
+        if not ok:
+            raise HTTPException(
+                status_code=503,
+                detail="llama-server did not become healthy after restart",
+            )
+    else:
+        response["restarted"] = False
+    return response
+
+
+@app.delete("/api/models/{model_id}/params")
+def api_model_params_delete(model_id: str):
+    entry = models_manager.by_id(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="unknown model id")
+    all_overrides = models_manager.load_overrides()
+    had = entry.id in all_overrides
+    all_overrides.pop(entry.id, None)
+    models_manager.save_overrides(all_overrides)
+    response: dict[str, Any] = {"ok": True, "had_overrides": had}
+    if had and models_manager.get_active_id() == entry.id:
+        try:
+            ok = models_manager.set_active(entry)
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(
+                status_code=503, detail=f"systemctl restart failed: {e}"
+            )
+        response["restarted"] = True
+        if not ok:
+            raise HTTPException(
+                status_code=503,
+                detail="llama-server did not become healthy after restart",
+            )
+    else:
+        response["restarted"] = False
+    return response
 
 
 # ────────────────────────── entry point ───────────────────────────────

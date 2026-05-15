@@ -55,6 +55,14 @@ class ModelEntry:
     extra_args: tuple[str, ...]
     vram_estimate_gb: float
     notes: str = ""
+    # Per-model overrides of `model_params_schema.SCHEMA` defaults. Used
+    # by the params editor (`/models` page) to seed the form. Catalog
+    # entries do NOT have to set this — the schema default applies if
+    # absent. Importantly, this field does NOT affect what
+    # `set_active(entry)` writes when there are no on-disk overrides for
+    # this entry — `entry.extra_args` is still the byte-identical source
+    # of truth in that case.
+    param_defaults: dict = field(default_factory=dict)
 
     @property
     def gguf_file(self) -> ModelFile:
@@ -182,6 +190,22 @@ CATALOG: tuple[ModelEntry, ...] = (
         extra_args=_QWEN36_ARGS,
         vram_estimate_gb=8.0,
         notes="Local files — preloaded; no HF download required.",
+        param_defaults={
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "repeat_penalty": 1.0,
+            "threads": 8,
+            "threads_batch": 16,
+            "flash_attention": True,
+            "cpu_moe": True,
+            "cache_type_k": "q8_0",
+            "cache_type_v": "q8_0",
+            "reasoning_format": "auto",
+            "mlock": True,
+            "image_min_tokens": 1024,
+        },
     ),
 
     # ------------------------------------------------------------------ #
