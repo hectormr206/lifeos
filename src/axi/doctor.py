@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -167,6 +168,38 @@ def check_db(r: Result) -> None:
         r.fail("SQLite", f"{type(e).__name__}: {e}")
 
 
+def _check_disk_space(r: Result) -> None:
+    """Verify enough free space exists where meetings are written (P2.3).
+
+    Threshold from config `disk_min_gb_free` (default 2 GB). Checks the
+    meetings DATA_ROOT (or its parent if it doesn't exist yet).
+    """
+    print("\ndisk space (meetings)")
+    try:
+        from axi.config import get  # noqa: PLC0415
+        from axi.meeting import DATA_ROOT  # noqa: PLC0415
+    except Exception as e:  # noqa: BLE001
+        r.fail("disk space", f"import failed: {type(e).__name__}: {e}")
+        return
+    min_gb = int(get("disk_min_gb_free", 2))
+    target = DATA_ROOT if DATA_ROOT.exists() else DATA_ROOT.parent
+    # Walk up until we find an existing directory — `shutil.disk_usage`
+    # raises FileNotFoundError otherwise.
+    while not target.exists() and target != target.parent:
+        target = target.parent
+    try:
+        usage = shutil.disk_usage(target)
+    except OSError as e:
+        r.fail("disk space", f"{target}: {e}")
+        return
+    free_gb = usage.free / (1024 ** 3)
+    detail = f"{free_gb:.1f} GB free at {target} (min {min_gb} GB)"
+    if free_gb < min_gb:
+        r.fail("disk space", detail)
+    else:
+        r.ok("disk space", detail)
+
+
 def _check_audio_devices(r: Result) -> None:
     """Enumerate input audio devices via sounddevice (PRD P2.2).
 
@@ -226,6 +259,7 @@ def main() -> int:
     check_ydotool(r)
     check_db(r)
     _check_audio_devices(r)
+    _check_disk_space(r)
     check_files(r)
     print()
     if r.failures:

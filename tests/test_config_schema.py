@@ -39,10 +39,12 @@ def test_schema_covers_all_22_keys():
         # P1.3 + P2.5 kill switches.
         "digest_brain_enabled",
         "notify_send_enabled",
+        # P2.3 disk guard.
+        "disk_min_gb_free",
     }
     assert expected.issubset(names)
-    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) = 25.
-    assert len(names) == 25
+    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) + 1 (P2.3) = 26.
+    assert len(names) == 26
 
 
 def test_to_json_schema_has_all_keys():

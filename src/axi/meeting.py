@@ -64,6 +64,53 @@ def _screen_interval_s() -> int:
 
 def _screen_dedup_hamming() -> int:
     return int(config.get("meeting_screen_dedup_hamming", DEFAULT_SCREEN_DEDUP_HAMMING))
+
+
+DEFAULT_DISK_MIN_GB_FREE = 2
+
+
+class MeetingDiskFullError(RuntimeError):
+    """Raised when free disk space at DATA_ROOT is below `disk_min_gb_free`."""
+
+
+def _check_disk_space_before_meeting() -> None:
+    """Refuse to start a meeting when free space is below the configured floor.
+
+    Raises MeetingDiskFullError with a human-readable reason. Also emits a
+    `meeting_disk_full` error event so the dashboard surfaces it. The check
+    walks up to the nearest existing parent so a fresh install (no DATA_ROOT
+    yet) doesn't trip on FileNotFoundError.
+    """
+    min_gb = int(config.get("disk_min_gb_free", DEFAULT_DISK_MIN_GB_FREE))
+    target = DATA_ROOT if DATA_ROOT.exists() else DATA_ROOT.parent
+    while not target.exists() and target != target.parent:
+        target = target.parent
+    try:
+        usage = shutil.disk_usage(target)
+    except OSError as e:
+        # Treat an unreadable disk as a hard fail — better to refuse than
+        # to start a recording that can't be flushed.
+        msg = f"cannot stat {target}: {e}"
+        _emit_disk_full_event(msg, free_gb=None, min_gb=min_gb)
+        raise MeetingDiskFullError(msg) from e
+    free_gb = usage.free / (1024 ** 3)
+    if free_gb < min_gb:
+        msg = f"only {free_gb:.1f} GB free at {target} (min {min_gb} GB)"
+        _emit_disk_full_event(msg, free_gb=free_gb, min_gb=min_gb)
+        raise MeetingDiskFullError(msg)
+
+
+def _emit_disk_full_event(msg: str, free_gb: float | None, min_gb: int) -> None:
+    """Best-effort event log; never raises."""
+    try:
+        from axi import events  # noqa: PLC0415
+        events.log_error(
+            "meeting_disk_full",
+            msg,
+            {"free_gb": free_gb, "min_gb": min_gb},
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("meeting_disk_full: %s", msg)
 SAMPLE_RATE = 16_000
 TRANSCRIBE_FN_DEFAULT: Callable[[np.ndarray], tuple[str, str, float]] | None = None
 BRAIN_ASK_FN_DEFAULT: Callable[..., str] | None = None
@@ -430,7 +477,13 @@ class MeetingSession:
 
     def start(self) -> int:
         """Spawn captures, the inhibitor, the screen and transcribe threads;
-        create the DB row; return meeting_id."""
+        create the DB row; return meeting_id.
+
+        Raises MeetingDiskFullError if free disk is below the configured
+        minimum — caller (daemon) catches it and returns a failure string
+        without crashing.
+        """
+        _check_disk_space_before_meeting()
         self._start_inhibitor()
         self.mic_proc = self._ffmpeg_capture(self.mic_source, "mic")
         self.system_proc = self._ffmpeg_capture(self.system_monitor, "system")

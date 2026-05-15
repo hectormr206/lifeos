@@ -178,6 +178,13 @@ FIELDS: tuple[ConfigField, ...] = (
         "Hamming distance threshold to dedupe near-identical screenshots.",
         minimum=0, maximum=32,
     ),
+    # ─────── disk guards (P2.3) ───────
+    ConfigField(
+        "disk_min_gb_free", "integer", 2,
+        "Minimum free disk space (GB) required before starting a meeting "
+        "and reported by axi-check.",
+        minimum=1, maximum=100,
+    ),
     # ─────── daemon voice gate ───────
     ConfigField(
         "silence_rms_threshold", "number", 0.002,

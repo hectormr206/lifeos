@@ -7,7 +7,7 @@ import types
 import pytest
 
 from axi import doctor
-from axi.doctor import Result, _check_audio_devices
+from axi.doctor import Result, _check_audio_devices, _check_disk_space
 
 
 # ─────────────────────────── P2.2 — audio ───────────────────────────
@@ -48,6 +48,29 @@ def test_audio_check_ok_with_at_least_one_input(monkeypatch):
     r = Result()
     _check_audio_devices(r)
     assert r.failures == []
+
+
+def _fake_disk_usage(free_gb: float):
+    """Return a callable mimicking shutil.disk_usage's return value."""
+    import collections
+    DU = collections.namedtuple("DU", "total used free")
+    total = 100 * (1024 ** 3)
+    free = int(free_gb * (1024 ** 3))
+    return lambda _path: DU(total=total, used=total - free, free=free)
+
+
+def test_disk_check_passes_with_plenty_of_space(monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "disk_usage", _fake_disk_usage(10.0))
+    r = Result()
+    _check_disk_space(r)
+    assert r.failures == []
+
+
+def test_disk_check_fails_when_below_threshold(monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "disk_usage", _fake_disk_usage(1.0))
+    r = Result()
+    _check_disk_space(r)
+    assert any("disk space" in name for name, _ in r.failures)
 
 
 def test_audio_check_fails_when_sounddevice_missing(monkeypatch):
