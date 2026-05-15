@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Restore the normal axi stack after a gaming session: brings llama-server
+# (Qwen) and axi-voice (Whisper) back online on the GPU.
+
+set -u
+
+echo "[axi-game-off] starting llama-server…"
+systemctl --user start llama-server.service || true
+
+echo "[axi-game-off] waiting for llama-server /health…"
+for i in $(seq 1 30); do
+    if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; then
+        echo "[axi-game-off] llama-server ready"
+        break
+    fi
+    sleep 1
+done
+
+echo "[axi-game-off] starting axi-voice…"
+systemctl --user start axi-voice.service || true
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+    sleep 2
+    USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)
+    TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits)
+    echo "[axi-game-off] GPU VRAM: ${USED} / ${TOTAL} MiB usado"
+fi
+
+echo "[axi-game-off] axi restaurado."

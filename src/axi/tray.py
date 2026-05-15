@@ -191,6 +191,9 @@ class AxiTray(QtCore.QObject):
         self.mi_translate_toggle = menu.addAction("🌐  Iniciar modo intérprete EN→ES")
         self.mi_translate_toggle.triggered.connect(self._on_translate_toggle_click)
 
+        self.mi_game_toggle = menu.addAction("🎮  Activar modo juego (liberar VRAM)")
+        self.mi_game_toggle.triggered.connect(self._on_game_toggle_click)
+
         menu.addSeparator()
 
         # ── memory / history ──────────────────────────────
@@ -233,6 +236,11 @@ class AxiTray(QtCore.QObject):
             self.mi_translate_toggle.setText("⏹  Detener modo intérprete")
         else:
             self.mi_translate_toggle.setText("🌐  Iniciar modo intérprete EN→ES")
+        game_active = self._game_mode_active()
+        if game_active:
+            self.mi_game_toggle.setText("⏹  Restaurar axi (salir modo juego)")
+        else:
+            self.mi_game_toggle.setText("🎮  Activar modo juego (liberar VRAM)")
         meeting_info = _send_cmd("meeting_status")
         if meeting_info == "idle":
             self.mi_meeting.setText("Reunión: no hay grabación activa")
@@ -276,6 +284,34 @@ class AxiTray(QtCore.QObject):
 
     def _on_translate_toggle_click(self) -> None:
         script = "axi-translate-off" if self._translate_active() else "axi-translate-on"
+        path = Path.home() / f"LifeOS/axi/scripts/{script}"
+        try:
+            subprocess.Popen(
+                [str(path)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            pass
+
+    def _game_mode_active(self) -> bool:
+        """Game mode ON = llama-server stopped (no model in VRAM). The
+        cheapest signal we have; checking axi-voice would also work but
+        llama-server is the largest VRAM consumer and the clearest signal.
+        """
+        try:
+            r = subprocess.run(
+                ["systemctl", "--user", "is-active", "llama-server.service"],
+                capture_output=True, text=True, timeout=2,
+            )
+            # 'active' → axi running normally. Anything else (inactive,
+            # failed) while the tray is alive → we're in game mode.
+            return r.stdout.strip() != "active"
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+
+    def _on_game_toggle_click(self) -> None:
+        script = "axi-game-off" if self._game_mode_active() else "axi-game-on"
         path = Path.home() / f"LifeOS/axi/scripts/{script}"
         try:
             subprocess.Popen(

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Game Guard: free ALL GPU VRAM by stopping every axi service that loads
+# models into the GPU. Use before launching a game. Reverse with
+# `axi-game-off`. The tray icon stays alive throughout (Wants= dependency
+# on axi-voice, not Requires=).
+#
+# VRAM freed on the RTX 5070 Ti (12 GB):
+#   axi-translate (if active): ~2.3 GB (Whisper turbo)
+#   axi-voice:                  ~2.2 GB (Whisper turbo)
+#   llama-server (Qwen):        ~7.8 GB
+#   Total reclaimed:           ~10-12 GB
+
+set -u
+
+echo "[axi-game-on] stopping axi-translate (if active)…"
+systemctl --user stop axi-translate.service 2>/dev/null || true
+
+echo "[axi-game-on] stopping axi-voice (releases Whisper)…"
+systemctl --user stop axi-voice.service 2>/dev/null || true
+
+echo "[axi-game-on] stopping llama-server (releases Qwen)…"
+systemctl --user stop llama-server.service 2>/dev/null || true
+
+# Give CUDA a moment to actually release the memory.
+sleep 1
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+    USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)
+    TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits)
+    echo "[axi-game-on] GPU VRAM: ${USED} / ${TOTAL} MiB usado"
+fi
+
+echo "[axi-game-on] modo juego ACTIVO — la GPU es tuya."
+echo "Para restaurar axi:  axi-game-off"
