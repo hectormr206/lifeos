@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# axi-llama-launch — single ExecStart entry point for llama-server.service.
+#
+# Reads the active model description from $XDG_STATE_HOME/axi/active_model.json
+# (creates it with the historical Qwen3.6-35B-A3B defaults if missing — so a
+# fresh install behaves byte-identical to the pre-selector configuration),
+# then execs /usr/bin/llama-server with the assembled argv.
+#
+# Usage:
+#   axi-llama-launch          # honor cfg["ngl"] (GPU mode)
+#   axi-llama-launch --cpu    # force ngl=0 (game-guard CPU fallback)
+#
+# The Python heredoc keeps JSON parsing robust without depending on jq.
+
+set -u
+CPU_MODE=0
+if [ "${1:-}" = "--cpu" ]; then CPU_MODE=1; fi
+exec python3 - "$CPU_MODE" <<'PY'
+import json, os, sys
+cpu_mode = sys.argv[1] == "1"
+state_root = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
+state = os.path.join(state_root, "axi", "active_model.json")
+
+# Default = exact current production args for Qwen3.6-35B-A3B (so dropping
+# this script in front of llama-server.service is a no-op the first time).
+HOME = os.path.expanduser("~")
+DEFAULT = {
+  "id": "qwen36-35b-a3b",
+  "gguf": HOME + "/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf",
+  "mmproj": HOME + "/LifeOS/models/Qwen3.6-35B-A3B/mmproj-BF16.gguf",
+  "ctx": 32768,
+  "ngl": 999,
+  "extra_args": [
+    "--cpu-moe",
+    "--prio", "3",
+    "--prio-batch", "3",
+    "--poll", "100",
+    "--poll-batch", "1",
+    "-Cr", "0-15",
+    "-Crb", "0-15",
+    "--cpu-strict", "1",
+    "--cpu-strict-batch", "1",
+    "--reasoning-format", "auto",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "-fa", "on",
+    "-b", "8192",
+    "-ub", "4096",
+    "-t", "8",
+    "-tb", "16",
+    "--temp", "0.6",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--presence-penalty", "0.0",
+    "--repeat-penalty", "1.0",
+    "-np", "1",
+    "--no-mmap",
+    "--mlock",
+    "--image-min-tokens", "1024",
+    "-a", "Qwen3.6-35B-A3B"
+  ]
+}
+
+if not os.path.exists(state):
+    os.makedirs(os.path.dirname(state), exist_ok=True)
+    with open(state, "w") as f:
+        json.dump(DEFAULT, f, indent=2)
+
+with open(state) as f:
+    cfg = json.load(f)
+
+ngl = 0 if cpu_mode else int(cfg.get("ngl", 999))
+
+args = ["/usr/bin/llama-server", "-m", cfg["gguf"]]
+if cfg.get("mmproj"):
+    args += ["--mmproj", cfg["mmproj"]]
+args += [
+    "-ngl", str(ngl),
+    "--jinja",
+    "-c", str(cfg.get("ctx", 32768)),
+    "--host", "127.0.0.1",
+    "--port", "8080",
+]
+args += list(cfg.get("extra_args", []))
+
+# AXI_DRY_RUN=1 prints the would-be command and exits (used by tests + smoke).
+if os.environ.get("AXI_DRY_RUN") == "1":
+    print(" ".join(args))
+    sys.exit(0)
+
+os.execvp(args[0], args)
+PY

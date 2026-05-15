@@ -1,0 +1,205 @@
+"""Tests for axi.models_manager and the catalog.
+
+These run offline — no real HF traffic and no systemctl invocation.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from axi import models_catalog, models_manager
+
+
+@pytest.fixture
+def isolated_state(tmp_path, monkeypatch):
+    """Redirect XDG_STATE_HOME + models_dir() to per-test temp paths so the
+    real ~/.local/state/axi/active_model.json is never touched."""
+    state_root = tmp_path / "state"
+    models_root = tmp_path / "models"
+    state_root.mkdir()
+    models_root.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_root))
+    monkeypatch.setattr(models_manager, "models_dir", lambda: models_root)
+    return state_root, models_root
+
+
+def test_catalog_has_at_least_five_entries():
+    entries = models_catalog.catalog()
+    assert len(entries) >= 5
+    ids = {e.id for e in entries}
+    assert "qwen36-35b-a3b" in ids
+    assert "qwen25-vl-7b" in ids
+    assert "qwen3-8b" in ids
+    assert "qwen3-4b" in ids
+    assert "gemma3-4b-it" in ids
+
+
+def test_catalog_ids_unique():
+    ids = [e.id for e in models_catalog.catalog()]
+    assert len(ids) == len(set(ids))
+
+
+def test_by_id_returns_entry_or_none():
+    assert models_catalog.by_id("qwen3-4b") is not None
+    assert models_catalog.by_id("does-not-exist") is None
+
+
+def test_legacy_entry_path_uses_historical_dir(isolated_state):
+    _, models_root = isolated_state
+    legacy = models_catalog.by_id("qwen36-35b-a3b")
+    # Even with our patched models_dir(), the legacy entry must live under
+    # the historical directory name so we don't lose the 22GB local file.
+    paths = models_manager.expected_paths(legacy)
+    assert "Qwen3.6-35B-A3B" in str(paths["gguf"])
+
+
+def test_is_installed_true_when_all_files_present(isolated_state):
+    entry = models_catalog.by_id("qwen3-4b")
+    for f in entry.files:
+        path = models_manager.expected_path(entry, f)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"dummy")
+    assert models_manager.is_installed(entry)
+
+
+def test_is_installed_false_when_files_missing(isolated_state):
+    entry = models_catalog.by_id("qwen3-4b")
+    assert not models_manager.is_installed(entry)
+
+
+def test_is_installed_false_when_only_some_present(isolated_state):
+    entry = models_catalog.by_id("gemma3-4b-it")
+    # Create only the gguf, not the mmproj.
+    f = entry.files[0]
+    p = models_manager.expected_path(entry, f)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"x")
+    assert not models_manager.is_installed(entry)
+
+
+def test_write_active_round_trips(isolated_state):
+    entry = models_catalog.by_id("qwen3-4b")
+    # Pretend files exist so set_active wouldn't refuse — but here we call
+    # write_active directly which has no install-check.
+    models_manager.write_active(entry)
+    data = json.loads(models_manager.active_model_path().read_text())
+    assert data["id"] == entry.id
+    assert data["ctx"] == entry.ctx
+    assert data["ngl"] == entry.ngl
+    assert data["gguf"].endswith(entry.gguf_file.local_name)
+    assert isinstance(data["extra_args"], list)
+
+
+def test_get_active_id_reads_back(isolated_state):
+    entry = models_catalog.by_id("qwen3-8b")
+    models_manager.write_active(entry)
+    assert models_manager.get_active_id() == "qwen3-8b"
+
+
+def test_get_active_id_returns_none_when_unset(isolated_state):
+    assert models_manager.get_active_id() is None
+
+
+def test_download_writes_files_to_per_entry_dir(isolated_state, monkeypatch):
+    """download() should hit hf_hub_download for each catalog file and end
+    with the bundle marked installed. No network — hf_hub_download is mocked.
+    """
+    entry = models_catalog.by_id("qwen3-4b")
+    dest = models_manager.model_dir(entry)
+
+    def fake_hf_download(repo_id, filename, local_dir, token=None, **kw):
+        path = Path(local_dir) / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"weights-bytes-" + filename.encode())
+        return str(path)
+
+    monkeypatch.setattr(
+        "huggingface_hub.hf_hub_download",
+        fake_hf_download,
+    )
+
+    progress_calls = []
+    models_manager.download(entry, progress_cb=lambda i, t, p: progress_calls.append((i, t, p)))
+
+    assert models_manager.is_installed(entry)
+    for f in entry.files:
+        assert (dest / f.local_name).read_bytes().startswith(b"weights-bytes-")
+    # progress_cb was invoked at least once per file.
+    assert len(progress_calls) >= len(entry.files)
+
+
+def test_download_skips_already_present_files(isolated_state, monkeypatch):
+    entry = models_catalog.by_id("qwen3-4b")
+    for f in entry.files:
+        p = models_manager.expected_path(entry, f)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"already-here")
+
+    calls = []
+
+    def fake_hf_download(**kw):
+        calls.append(kw)
+        raise AssertionError("should not have been called")
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fake_hf_download)
+    models_manager.download(entry)
+    assert calls == []
+
+
+def test_legacy_download_when_present_is_noop(isolated_state):
+    legacy = models_catalog.by_id("qwen36-35b-a3b")
+    for f in legacy.files:
+        p = models_manager.expected_path(legacy, f)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    # Should NOT try to download — files are local-only.
+    models_manager.download(legacy)
+
+
+def test_legacy_download_when_missing_raises(isolated_state):
+    legacy = models_catalog.by_id("qwen36-35b-a3b")
+    with pytest.raises(FileNotFoundError):
+        models_manager.download(legacy)
+
+
+def test_set_active_refuses_uninstalled(isolated_state):
+    entry = models_catalog.by_id("qwen3-4b")
+    with pytest.raises(FileNotFoundError):
+        models_manager.set_active(entry, restart=False, wait_health=False)
+
+
+def test_set_active_writes_json_without_restart(isolated_state):
+    entry = models_catalog.by_id("qwen3-4b")
+    for f in entry.files:
+        p = models_manager.expected_path(entry, f)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    ok = models_manager.set_active(entry, restart=False, wait_health=False)
+    assert ok is True
+    assert models_manager.get_active_id() == entry.id
+
+
+def test_catalog_status_marks_active(isolated_state):
+    entry = models_catalog.by_id("qwen3-4b")
+    for f in entry.files:
+        p = models_manager.expected_path(entry, f)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    models_manager.write_active(entry)
+    rows = {s.entry.id: s for s in models_manager.catalog_status()}
+    assert rows["qwen3-4b"].is_active is True
+    assert rows["qwen3-4b"].installed is True
+    assert rows["qwen3-8b"].is_active is False
+
+
+def test_wait_for_llama_health_times_out_fast(monkeypatch):
+    # Point at a port nothing is listening on; ensure timeout returns False
+    # quickly (well under the 60s default).
+    import time
+    start = time.time()
+    ok = models_manager.wait_for_llama_health(timeout=1.5, url="http://127.0.0.1:1/health")
+    elapsed = time.time() - start
+    assert ok is False
+    assert elapsed < 5.0

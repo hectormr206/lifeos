@@ -43,6 +43,7 @@ from fastapi.templating import Jinja2Templates
 import uvicorn
 
 from axi import config, events, store
+from axi import models_manager
 
 log = logging.getLogger("axi.dashboard")
 
@@ -909,6 +910,151 @@ def graph_data(limit: int = 200):
         if r["from_id"] in node_ids and r["to_id"] in node_ids
     ]
     return {"nodes": nodes, "edges": edges}
+
+
+# ────────────────────────── model selector ────────────────────────────
+#
+# Endpoints under /api/models drive the catalog page (templates/models.html).
+# Downloads run in a background thread; progress is exposed via a small
+# in-process dict keyed by entry id. Activation calls into models_manager,
+# which writes active_model.json and restarts llama-server.service.
+
+import threading as _models_threading  # noqa: E402 — local import keeps top clean
+
+_models_progress: dict[str, dict[str, Any]] = {}
+_models_lock = _models_threading.Lock()
+
+
+def _set_model_progress(model_id: str, **fields: Any) -> None:
+    with _models_lock:
+        cur = _models_progress.get(model_id, {
+            "state": "idle",
+            "percent": 0.0,
+            "file_index": 0,
+            "total_files": 0,
+            "error": None,
+        })
+        cur.update(fields)
+        _models_progress[model_id] = cur
+
+
+def _get_model_progress(model_id: str) -> dict[str, Any]:
+    with _models_lock:
+        return dict(_models_progress.get(model_id, {
+            "state": "idle",
+            "percent": 0.0,
+            "file_index": 0,
+            "total_files": 0,
+            "error": None,
+        }))
+
+
+def _download_worker(model_id: str) -> None:
+    entry = models_manager.by_id(model_id)
+    if entry is None:
+        _set_model_progress(model_id, state="error", error="unknown id")
+        return
+
+    def cb(idx: int, total: int, pct: float) -> None:
+        # Combine per-file progress into an overall % across the bundle.
+        overall = ((idx - 1) + pct / 100.0) / total * 100.0 if total else 0.0
+        overall = max(0.0, min(100.0, overall))
+        _set_model_progress(
+            model_id,
+            state="downloading",
+            file_index=idx,
+            total_files=total,
+            percent=round(overall, 1),
+        )
+
+    _set_model_progress(
+        model_id,
+        state="downloading",
+        file_index=0,
+        total_files=len(entry.files),
+        percent=0.0,
+        error=None,
+    )
+    try:
+        models_manager.download(entry, progress_cb=cb)
+        _set_model_progress(model_id, state="installed", percent=100.0)
+    except Exception as e:  # noqa: BLE001
+        log.exception("download failed for %s", model_id)
+        _set_model_progress(model_id, state="error", error=str(e))
+
+
+@app.get("/models", response_class=HTMLResponse)
+def models_page(request: Request):
+    return templates.TemplateResponse(request, "models.html", {})
+
+
+@app.get("/api/models")
+def api_models() -> list[dict[str, Any]]:
+    rows = []
+    for status in models_manager.catalog_status():
+        d = status.to_dict()
+        prog = _get_model_progress(d["id"])
+        # If we have an in-flight progress entry, overlay it so the UI can
+        # tell "downloading" vs "installed but not active".
+        if prog["state"] == "downloading":
+            d["download_state"] = "downloading"
+            d["download_percent"] = prog["percent"]
+        elif prog["state"] == "error":
+            d["download_state"] = "error"
+            d["download_error"] = prog["error"]
+        else:
+            d["download_state"] = "idle"
+        rows.append(d)
+    return rows
+
+
+@app.get("/api/models/active")
+def api_models_active() -> dict[str, Any]:
+    return {"id": models_manager.get_active_id()}
+
+
+@app.get("/api/models/{model_id}/progress")
+def api_model_progress(model_id: str) -> dict[str, Any]:
+    if models_manager.by_id(model_id) is None:
+        raise HTTPException(status_code=404, detail="unknown model id")
+    return _get_model_progress(model_id)
+
+
+@app.post("/api/models/{model_id}/download")
+def api_model_download(model_id: str):
+    entry = models_manager.by_id(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="unknown model id")
+    cur = _get_model_progress(model_id)
+    if cur["state"] == "downloading":
+        return JSONResponse({"started": False, "reason": "already in progress"}, status_code=202)
+    if models_manager.is_installed(entry):
+        _set_model_progress(model_id, state="installed", percent=100.0)
+        return JSONResponse({"started": False, "reason": "already installed"}, status_code=200)
+    t = _models_threading.Thread(
+        target=_download_worker,
+        args=(model_id,),
+        name=f"axi-model-dl-{model_id}",
+        daemon=True,
+    )
+    t.start()
+    return JSONResponse({"started": True}, status_code=202)
+
+
+@app.post("/api/models/{model_id}/activate")
+def api_model_activate(model_id: str):
+    entry = models_manager.by_id(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="unknown model id")
+    if not models_manager.is_installed(entry):
+        raise HTTPException(status_code=409, detail="model not installed")
+    try:
+        ok = models_manager.set_active(entry)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=503, detail=f"systemctl restart failed: {e}")
+    if not ok:
+        raise HTTPException(status_code=503, detail="llama-server did not become healthy")
+    return {"ok": True, "active": entry.id}
 
 
 # ────────────────────────── entry point ───────────────────────────────

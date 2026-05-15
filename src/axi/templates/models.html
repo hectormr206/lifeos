@@ -1,0 +1,173 @@
+{% extends "_base.html" %}
+{% block nav_models %}active{% endblock %}
+{% block title %}Modelos · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="modelsPage()" x-init="init()">
+  <div class="flex items-baseline justify-between">
+    <h1 class="text-2xl font-semibold">Modelos</h1>
+    <div class="muted text-sm">
+      <span x-text="rows.length"></span> entradas · VRAM disponible: 12 GB
+    </div>
+  </div>
+
+  <div class="panel p-3 muted text-sm">
+    Catálogo curado para el RTX 5070 Ti (12 GB). Cada modelo cabe entero en
+    GPU o usa offload MoE como el Qwen3.6 actual. Activar reinicia
+    <code>llama-server</code> con los argumentos del modelo seleccionado.
+  </div>
+
+  <template x-if="rows.length === 0">
+    <div class="panel p-12 text-center muted">Cargando catálogo…</div>
+  </template>
+
+  <div class="space-y-3">
+    <template x-for="m in rows" :key="m.id">
+      <div class="panel p-4">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center flex-wrap gap-2 mb-1">
+              <span class="font-semibold text-lg" x-text="m.name"></span>
+              <span class="px-2 py-0.5 text-xs rounded-full panel2" x-text="m.family"></span>
+              <span class="px-2 py-0.5 text-xs rounded-full panel2" x-text="m.params"></span>
+              <template x-for="f in m.features" :key="f">
+                <span
+                  class="px-2 py-0.5 text-xs rounded-full"
+                  :style="featureStyle(f)"
+                  x-text="f"
+                ></span>
+              </template>
+            </div>
+            <div class="muted text-sm mb-2" x-text="m.description"></div>
+            <div class="text-xs muted flex flex-wrap gap-3">
+              <span>ctx: <span x-text="m.ctx.toLocaleString()"></span></span>
+              <span>VRAM≈ <span x-text="m.vram_estimate_gb"></span> GB</span>
+              <template x-if="m.notes">
+                <span class="text-amber" style="color: var(--amber)" x-text="m.notes"></span>
+              </template>
+            </div>
+          </div>
+
+          <div class="text-right min-w-[12rem]">
+            <template x-if="m.is_active">
+              <div class="flex flex-col items-end gap-1">
+                <span class="px-3 py-1 rounded-full text-sm font-medium" style="background: rgba(34,204,85,0.15); color: var(--green); border: 1px solid var(--green);">
+                  ✓ Activo
+                </span>
+                <span class="muted text-xs">Sirviendo en :8080</span>
+              </div>
+            </template>
+
+            <template x-if="!m.is_active && m.installed && m.download_state !== 'downloading'">
+              <div class="flex flex-col items-end gap-1">
+                <span class="muted text-xs">Instalado</span>
+                <button
+                  class="btn btn-primary"
+                  :disabled="activating === m.id"
+                  @click="activate(m.id)"
+                  x-text="activating === m.id ? 'Activando…' : 'Activar'"
+                ></button>
+              </div>
+            </template>
+
+            <template x-if="!m.installed && m.download_state !== 'downloading' && m.download_state !== 'error'">
+              <button class="btn" @click="download(m.id)">⬇ Descargar</button>
+            </template>
+
+            <template x-if="m.download_state === 'downloading'">
+              <div class="w-44">
+                <div class="muted text-xs mb-1">
+                  Descargando… <span x-text="(m.download_percent || 0).toFixed(0)"></span>%
+                </div>
+                <div class="h-1.5 rounded-full panel2 overflow-hidden">
+                  <div class="h-full" style="background: var(--pink)" :style="'width: ' + (m.download_percent || 0) + '%'"></div>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="m.download_state === 'error'">
+              <div class="flex flex-col items-end gap-1">
+                <span class="text-xs" style="color: var(--red)" x-text="m.download_error || 'error'"></span>
+                <button class="btn" @click="download(m.id)">Reintentar</button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <template x-if="message">
+    <div class="panel p-3 text-sm" x-text="message"></div>
+  </template>
+</div>
+
+<script>
+  function modelsPage() {
+    return {
+      rows: [],
+      activating: null,
+      message: '',
+      _slowTimer: null,
+      _fastTimer: null,
+      featureStyle(f) {
+        const m = {
+          vision:  'background: rgba(170,51,255,0.15); color: var(--purple);',
+          tools:   'background: rgba(51,170,255,0.15); color: var(--blue);',
+          current: 'background: rgba(204,102,255,0.15); color: var(--pink);',
+        };
+        return m[f] || 'background: var(--panel2); color: var(--muted);';
+      },
+      async refresh() {
+        try {
+          const r = await fetch('/api/models');
+          if (r.ok) {
+            this.rows = await r.json();
+            const any = this.rows.some(m => m.download_state === 'downloading');
+            this._ensureTimers(any);
+          }
+        } catch (e) { /* keep last good list */ }
+      },
+      _ensureTimers(downloading) {
+        if (downloading && !this._fastTimer) {
+          this._fastTimer = setInterval(() => this.refresh(), 1000);
+        }
+        if (!downloading && this._fastTimer) {
+          clearInterval(this._fastTimer);
+          this._fastTimer = null;
+        }
+      },
+      async download(id) {
+        this.message = 'Iniciando descarga…';
+        const r = await fetch('/api/models/' + id + '/download', { method: 'POST' });
+        if (r.ok || r.status === 202) {
+          this.message = 'Descarga iniciada en segundo plano.';
+          this.refresh();
+        } else {
+          this.message = 'Error: ' + r.status;
+        }
+      },
+      async activate(id) {
+        this.activating = id;
+        this.message = 'Reiniciando llama-server con el nuevo modelo…';
+        try {
+          const r = await fetch('/api/models/' + id + '/activate', { method: 'POST' });
+          if (r.ok) {
+            this.message = 'Modelo activo: ' + id;
+          } else {
+            const txt = await r.text();
+            this.message = 'Activación falló (' + r.status + '): ' + txt;
+          }
+        } finally {
+          this.activating = null;
+          this.refresh();
+        }
+      },
+      init() {
+        this.refresh();
+        this._slowTimer = setInterval(() => this.refresh(), 10000);
+      },
+    };
+  }
+</script>
+{% endblock %}
