@@ -32,9 +32,11 @@ MODEL_NAME = DEFAULT_MODEL_NAME
 
 DEFAULT_INITIAL_PROMPT = (
     "Transcripción en español de dictado técnico y conversación natural. "
+    "El asistente se llama Axi (se escribe con X, no con S; pronunciación 'a-csi'). "
+    "Cuando Héctor le habla, suele empezar con 'Axi, ...'. "
     "Incluye términos en inglés como Python, daemon, terminal, clipboard, "
     "Whisper, GPU, systemd, KDE, PipeWire, Piper, Kokoro, XTTS, prompt, "
-    "código, framework, PR, branch, commit, debug, log, repo, endpoint."
+    "código, framework, PR, branch, commit, debug, log, repo, endpoint, Axi."
 )
 
 DEFAULT_BEAM_SIZE = 5
