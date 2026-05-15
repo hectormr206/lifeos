@@ -46,10 +46,12 @@ def test_schema_covers_all_22_keys():
         # P1.2 voice command palette.
         "intents_enabled",
         "intents_brain_fallback_enabled",
+        # P2.1 diarization V2 (pyannote).
+        "diarization_v2_enabled",
     }
     assert expected.issubset(names)
-    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) + 1 (P2.3) + 1 (P1.5) + 2 (P1.2) = 29.
-    assert len(names) == 29
+    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) + 1 (P2.3) + 1 (P1.5) + 2 (P1.2) + 1 (P2.1) = 30.
+    assert len(names) == 30
 
 
 def test_to_json_schema_has_all_keys():

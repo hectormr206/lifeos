@@ -194,6 +194,13 @@ FIELDS: tuple[ConfigField, ...] = (
         "Hamming distance threshold to dedupe near-identical screenshots.",
         minimum=0, maximum=32,
     ),
+    # ─────── diarization (P2.1) ───────
+    ConfigField(
+        "diarization_v2_enabled", "boolean", False,
+        "If true, meeting diarization uses pyannote.audio 3.1 instead of the "
+        "V0 Resemblyzer pipeline. Opt-in because pyannote pulls ~600 MB of "
+        "deps and runs on CPU (Blackwell sm_120 has no torch kernels yet).",
+    ),
     # ─────── disk guards (P2.3) ───────
     ConfigField(
         "disk_min_gb_free", "integer", 2,
