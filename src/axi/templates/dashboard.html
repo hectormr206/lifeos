@@ -143,6 +143,42 @@
       </div>
     </section>
 
+    <!-- ─── brain metrics (P0.2) ─── -->
+    <section class="panel p-4" x-data="brainMetrics()" x-init="load(); setInterval(load, 15000)">
+      <div class="flex justify-between items-baseline mb-3">
+        <div class="font-semibold">Llamadas al cerebro (24 h)</div>
+        <div class="muted text-xs">latencia p50/p95 · errores</div>
+      </div>
+      <template x-if="!summary || summary.count === 0">
+        <div class="muted text-sm py-4">Aún no hay métricas registradas.</div>
+      </template>
+      <template x-if="summary && summary.count > 0">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <div class="panel2 p-3">
+            <div class="muted text-xs">Llamadas</div>
+            <div class="text-xl font-mono" x-text="summary.count"></div>
+          </div>
+          <div class="panel2 p-3">
+            <div class="muted text-xs">p50 latencia</div>
+            <div class="text-xl font-mono"><span x-text="summary.p50_latency_ms ?? '—'"></span> <span class="muted text-xs">ms</span></div>
+          </div>
+          <div class="panel2 p-3">
+            <div class="muted text-xs">p95 latencia</div>
+            <div class="text-xl font-mono"><span x-text="summary.p95_latency_ms ?? '—'"></span> <span class="muted text-xs">ms</span></div>
+          </div>
+          <div class="panel2 p-3">
+            <div class="muted text-xs">Errores</div>
+            <div class="text-xl font-mono" :style="summary.errors > 0 ? 'color: var(--red)' : ''" x-text="summary.errors"></div>
+          </div>
+        </div>
+      </template>
+      <template x-if="chartPoints">
+        <svg class="mt-3 w-full" :viewBox="'0 0 ' + chartW + ' ' + chartH" preserveAspectRatio="none" style="height:60px; background: var(--panel2); border-radius: 6px;">
+          <polyline fill="none" stroke="var(--pink)" stroke-width="1.5" :points="chartPoints"></polyline>
+        </svg>
+      </template>
+    </section>
+
   </div>
 </template>
 
@@ -177,6 +213,39 @@ function formatDuration(s) {
   if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
   const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
   return h + 'h ' + m + 'm';
+}
+
+function brainMetrics() {
+  return {
+    summary: null,
+    chartPoints: '',
+    chartW: 300,
+    chartH: 60,
+    async load() {
+      try {
+        const r = await fetch('/api/metrics/brain?limit=100&since_minutes=1440');
+        if (!r.ok) return;
+        const data = await r.json();
+        this.summary = data.summary;
+        // Build polyline of last 30 latencies (oldest left → newest right).
+        const recent = data.metrics.slice(0, 30).reverse();
+        if (recent.length < 2) { this.chartPoints = ''; return; }
+        const lats = recent.map(m => m.latency_ms || 0);
+        const max = Math.max(...lats, 1);
+        const min = Math.min(...lats);
+        const range = Math.max(1, max - min);
+        const w = this.chartW, h = this.chartH, pad = 4;
+        const pts = lats.map((v, i) => {
+          const x = pad + (i * (w - 2*pad)) / (lats.length - 1);
+          const y = h - pad - ((v - min) * (h - 2*pad)) / range;
+          return x.toFixed(1) + ',' + y.toFixed(1);
+        });
+        this.chartPoints = pts.join(' ');
+      } catch (e) {
+        // silent — panel just shows "no data"
+      }
+    }
+  };
 }
 
 function fmtBytes(b) {

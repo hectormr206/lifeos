@@ -680,6 +680,40 @@ def api_events_mark_read():
     return {"ok": True}
 
 
+# ────────── brain metrics (P0.2) ──────────
+
+def _percentile(values: list[int], pct: float) -> int | None:
+    """Inclusive nearest-rank percentile. Returns None for empty input."""
+    if not values:
+        return None
+    s = sorted(values)
+    k = max(0, min(len(s) - 1, int(round((pct / 100.0) * (len(s) - 1)))))
+    return int(s[k])
+
+
+@app.get("/api/metrics/brain")
+def api_brain_metrics(limit: int = 100, since_minutes: int | None = None):
+    if limit < 1 or limit > 5000:
+        raise HTTPException(400, "limit must be 1..5000")
+    since_ts = (time.time() - since_minutes * 60) if since_minutes else None
+    metrics = store.recent_brain_metrics(limit=limit, since_ts=since_ts)
+    latencies = [m["latency_ms"] for m in metrics if m.get("latency_ms") is not None]
+    errors = sum(1 for m in metrics if not m.get("ok"))
+    total_tokens_sum = sum(
+        m["total_tokens"] for m in metrics if isinstance(m.get("total_tokens"), int)
+    )
+    return {
+        "metrics": metrics,
+        "summary": {
+            "count": len(metrics),
+            "p50_latency_ms": _percentile(latencies, 50),
+            "p95_latency_ms": _percentile(latencies, 95),
+            "errors": errors,
+            "total_tokens_sum": total_tokens_sum,
+        },
+    }
+
+
 # ────────── graph ──────────
 
 @app.get("/graph", response_class=HTMLResponse)

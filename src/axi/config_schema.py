@@ -127,6 +127,10 @@ FIELDS: tuple[ConfigField, ...] = (
         "events_enabled", "boolean", True,
         "If false, structured event logging is a no-op (P0.1 kill switch).",
     ),
+    ConfigField(
+        "brain_metrics_enabled", "boolean", True,
+        "If false, brain call latency/cost metrics are not recorded (P0.2 kill switch).",
+    ),
     # ─────── meeting mode tuning ───────
     ConfigField(
         "meeting_silence_rms", "number", 0.015,

@@ -34,10 +34,12 @@ def test_schema_covers_all_22_keys():
         "meeting_screen_interval_s", "meeting_screen_dedup_hamming",
         "whisper_model_name", "whisper_beam_size", "whisper_initial_prompt",
         "tray_poll_ms", "meeting_chunk_seconds", "dashboard_poll_ms",
+        # P0.2 added one kill switch.
+        "brain_metrics_enabled",
     }
     assert expected.issubset(names)
-    # 22 total (12 + 10)
-    assert len(names) == 22
+    # 22 P0.4 baseline + 1 P0.2 = 23.
+    assert len(names) == 23
 
 
 def test_to_json_schema_has_all_keys():

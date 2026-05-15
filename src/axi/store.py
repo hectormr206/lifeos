@@ -239,6 +239,21 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_ts    ON events(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_events_level ON events(level);
 
+-- ───────────────────── brain metrics (P0.2) ───────────────────────
+
+CREATE TABLE IF NOT EXISTS brain_metrics (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts                REAL NOT NULL,
+  latency_ms        INTEGER NOT NULL,
+  model             TEXT,
+  prompt_tokens     INTEGER,
+  completion_tokens INTEGER,
+  total_tokens      INTEGER,
+  ok                INTEGER NOT NULL DEFAULT 1,
+  error             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_brain_metrics_ts ON brain_metrics(ts DESC);
+
 -- ─────────────────── schema version (migrations later) ──────────────
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -450,6 +465,66 @@ def trim_events(keep: int = 5000) -> None:
         c.execute(
             "DELETE FROM events WHERE id NOT IN ("
             "  SELECT id FROM events ORDER BY ts DESC LIMIT ?"
+            ")",
+            (keep,),
+        )
+
+
+# ─────────────────────── brain metrics (P0.2) ──────────────────────────
+
+def insert_brain_metric(
+    ts: float,
+    latency_ms: int,
+    model: str | None,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    total_tokens: int | None,
+    ok: int,
+    error: str | None,
+) -> None:
+    """Persist one brain call metric row. Called from a background thread."""
+    with _tx() as c:
+        c.execute(
+            "INSERT INTO brain_metrics("
+            "  ts, latency_ms, model, prompt_tokens, completion_tokens, "
+            "  total_tokens, ok, error"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, latency_ms, model, prompt_tokens, completion_tokens,
+             total_tokens, ok, error),
+        )
+
+
+def recent_brain_metrics(
+    limit: int = 100,
+    since_ts: float | None = None,
+) -> list[dict[str, Any]]:
+    """Most recent brain metrics as dicts, newest first."""
+    c = _connect()
+    if since_ts is not None:
+        rows = c.execute(
+            "SELECT id, ts, latency_ms, model, prompt_tokens, completion_tokens, "
+            "       total_tokens, ok, error "
+            "FROM brain_metrics WHERE ts >= ? "
+            "ORDER BY ts DESC LIMIT ?",
+            (since_ts, limit),
+        ).fetchall()
+    else:
+        rows = c.execute(
+            "SELECT id, ts, latency_ms, model, prompt_tokens, completion_tokens, "
+            "       total_tokens, ok, error "
+            "FROM brain_metrics "
+            "ORDER BY ts DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def trim_brain_metrics(keep: int = 5000) -> None:
+    """Keep only the most recent `keep` brain metric rows."""
+    with _tx() as c:
+        c.execute(
+            "DELETE FROM brain_metrics WHERE id NOT IN ("
+            "  SELECT id FROM brain_metrics ORDER BY ts DESC LIMIT ?"
             ")",
             (keep,),
         )
