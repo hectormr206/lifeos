@@ -79,9 +79,9 @@
 </head>
 <body class="min-h-screen">
   <header class="border-b sticky top-0 z-40" style="border-color: var(--border); background: var(--panel)" x-data="{ navOpen: false }">
-    <div class="max-w-7xl mx-auto px-3 md:px-6 py-2 md:py-3 flex items-center justify-between gap-2 md:gap-4">
-      <div class="flex items-center gap-2 md:gap-3 min-w-0">
-        <span class="state-dot" :class="'state-' + ($store.snap?.state || 'unknown')" x-data></span>
+    <div class="max-w-7xl mx-auto px-3 md:px-6 py-3 md:py-4 flex items-center justify-between gap-2 md:gap-4">
+      <div class="flex items-center gap-2 md:gap-3 flex-shrink-0">
+        <span class="state-dot flex-shrink-0" :class="'state-' + ($store.snap?.state || 'unknown')" x-data></span>
         <a href="/events"
            x-data
            x-show="($store.snap?.unread_critical_events || 0) > 0"
@@ -239,13 +239,16 @@
       </button>
     </div>
 
-    <!-- Mobile drawer -->
+    <!-- Mobile drawer — fixed overlay so it works even on pages that have
+         body{overflow:hidden} (e.g. /chat). Anchored full-width below the
+         header, max-height with internal scroll so 9 items fit on small
+         screens. Backdrop tap closes. -->
     <div
       x-show="navOpen"
       x-cloak
       x-transition.opacity
-      class="md:hidden border-t"
-      style="border-color: var(--border); background: var(--panel)"
+      class="md:hidden fixed inset-x-0 z-50 border-t shadow-2xl"
+      style="border-color: var(--border); background: var(--panel); top: 3.5rem; max-height: calc(100dvh - 3.5rem); overflow-y: auto;"
       @click.outside="navOpen = false"
     >
       <nav class="flex flex-col text-base">
