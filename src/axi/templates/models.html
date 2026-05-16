@@ -86,7 +86,7 @@
                   Descargando… <span x-text="(m.download_percent || 0).toFixed(0)"></span>%
                 </div>
                 <div class="h-1.5 rounded-full panel2 overflow-hidden">
-                  <div class="h-full" style="background: var(--pink)" :style="'width: ' + (m.download_percent || 0) + '%'"></div>
+                  <div class="h-full transition-all duration-500" :style="'background: var(--pink); width: ' + (m.download_percent || 0) + '%'"></div>
                 </div>
               </div>
             </template>
