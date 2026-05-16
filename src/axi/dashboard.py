@@ -1196,6 +1196,95 @@ def api_model_params_delete(model_id: str):
     return response
 
 
+# ────────────────────────── chat (P-chat) ─────────────────────────────
+#
+# In-dashboard text chat. Shares the same ConversationMemory as the daemon
+# (voice path) so a question typed here can follow a question spoken via
+# Meta+Shift+Espacio. Persistence goes through the same store.
+
+# Module-level singleton so we don't pay the init_db()/log overhead on every
+# request. It's a thin facade over SQLite — safe to share across threads.
+_chat_memory: Any = None
+_chat_memory_lock: Any = None
+
+
+def _get_chat_memory():
+    """Lazy-load the shared ConversationMemory instance."""
+    global _chat_memory, _chat_memory_lock
+    if _chat_memory_lock is None:
+        import threading as _t
+        _chat_memory_lock = _t.Lock()
+    with _chat_memory_lock:
+        if _chat_memory is None:
+            from axi.memory import ConversationMemory
+            _chat_memory = ConversationMemory()
+        return _chat_memory
+
+
+@app.get("/chat", response_class=HTMLResponse)
+def chat_page(request: Request):
+    return templates.TemplateResponse(request, "chat.html", {})
+
+
+@app.post("/api/chat/ask")
+async def api_chat_ask(request: Request):
+    if not bool(config.get("chat_enabled", True)):
+        raise HTTPException(503, "chat is disabled (chat_enabled=false)")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    if len(text) > 8000:
+        raise HTTPException(400, "text too long (max 8000 chars)")
+
+    from axi import brain
+    mem = _get_chat_memory()
+    history = mem.messages()
+    start = time.monotonic()
+    try:
+        answer = brain.ask(text, history=history)
+    except Exception as e:  # noqa: BLE001
+        log.exception("chat ask failed")
+        try:
+            events.log_error("chat", f"brain.ask failed: {e}")
+        except Exception:  # noqa: BLE001
+            pass
+        raise HTTPException(502, f"brain error: {e}")
+    latency_ms = round((time.monotonic() - start) * 1000)
+    try:
+        mem.add(text, answer)
+    except Exception as e:  # noqa: BLE001
+        log.warning("chat memory.add failed: %s", e)
+    return {"answer": answer, "latency_ms": latency_ms}
+
+
+@app.get("/api/chat/history")
+def api_chat_history(limit: int = 50):
+    if limit < 1 or limit > 500:
+        raise HTTPException(400, "limit must be 1..500")
+    c = store._connect()  # noqa: SLF001
+    rows = c.execute(
+        "SELECT id, ts, user_text, axi_text FROM conversations "
+        "ORDER BY ts DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    # Oldest first for natural chat rendering.
+    return [
+        {
+            "id": r["id"],
+            "ts": r["ts"],
+            "user_text": r["user_text"],
+            "axi_text": r["axi_text"],
+        }
+        for r in reversed(rows)
+    ]
+
+
 # ────────────────────────── entry point ───────────────────────────────
 
 def _maybe_migrate_meeting_fts() -> None:

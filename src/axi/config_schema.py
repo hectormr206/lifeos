@@ -244,6 +244,11 @@ FIELDS: tuple[ConfigField, ...] = (
         "Dashboard auto-refresh interval (ms).",
         minimum=200, maximum=10000,
     ),
+    # ─────── chat ───────
+    ConfigField(
+        "chat_enabled", "boolean", True,
+        "If false, the in-dashboard text chat endpoints return 503 (P-chat kill switch).",
+    ),
 )
 
 

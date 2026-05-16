@@ -1,0 +1,199 @@
+{% extends "_base.html" %}
+{% block title %}Chat — Axi{% endblock %}
+{% block nav_chat %}active{% endblock %}
+
+{% block content %}
+<div
+  x-data="chatApp()"
+  x-init="init()"
+  class="flex flex-col"
+  style="height: calc(100dvh - 8rem); min-height: 24rem;"
+>
+  <!-- Header strip -->
+  <div class="flex items-baseline justify-between mb-3">
+    <div class="font-semibold text-base md:text-lg">💬 Chat con Axi</div>
+    <div class="muted text-xs">
+      <span x-show="lastLatencyMs !== null" x-cloak>
+        última respuesta: <span x-text="lastLatencyMs"></span> ms
+      </span>
+    </div>
+  </div>
+
+  <!-- Conversation thread -->
+  <div
+    x-ref="thread"
+    class="flex-1 overflow-y-auto panel p-3 md:p-4 space-y-3"
+  >
+    <template x-if="loading && messages.length === 0">
+      <div class="muted text-sm text-center py-8">Cargando historial…</div>
+    </template>
+    <template x-if="!loading && messages.length === 0">
+      <div class="muted text-sm text-center py-8">
+        Hablale a Axi. Comparte el mismo recuerdo que la voz, así que puedes
+        seguir conversaciones empezadas con Meta+Shift+Espacio.
+      </div>
+    </template>
+
+    <template x-for="(m, idx) in messages" :key="m.id + ':' + m.role">
+      <div :class="m.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
+        <div
+          class="max-w-[85%] md:max-w-[75%] px-3 py-2 rounded-2xl text-sm md:text-base"
+          :style="m.role === 'user'
+            ? 'background: rgba(204,102,255,0.18); border: 1px solid rgba(204,102,255,0.4);'
+            : 'background: var(--panel2); border: 1px solid var(--border);'"
+        >
+          <template x-if="m.role === 'axi'">
+            <div class="md" x-html="renderMarkdown(m.text)"></div>
+          </template>
+          <template x-if="m.role === 'user'">
+            <div style="white-space: pre-wrap" x-text="m.text"></div>
+          </template>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="pending">
+      <div class="flex justify-start">
+        <div
+          class="px-3 py-2 rounded-2xl text-sm muted pulse"
+          style="background: var(--panel2); border: 1px solid var(--border);"
+        >
+          Axi escribiendo…
+        </div>
+      </div>
+    </template>
+    <template x-if="error">
+      <div
+        class="text-sm px-3 py-2 rounded-lg"
+        style="background: rgba(238,51,51,0.1); color: var(--red); border: 1px solid var(--red)"
+        x-text="error"
+      ></div>
+    </template>
+  </div>
+
+  <!-- Input area (sticky bottom of the column) -->
+  <div class="mt-3 panel p-2 md:p-3">
+    <form @submit.prevent="send()" class="flex gap-2 items-end">
+      <textarea
+        x-ref="input"
+        x-model="draft"
+        @keydown.enter.prevent="onEnter($event)"
+        @input="autogrow()"
+        rows="1"
+        placeholder="Escribe a Axi… (Enter = enviar · Shift+Enter = salto de línea)"
+        class="flex-1 panel2 px-3 py-2 text-sm md:text-base resize-none"
+        style="border-radius: 0.5rem; max-height: 12rem; min-height: 2.5rem;"
+        :disabled="pending"
+      ></textarea>
+      <button
+        type="submit"
+        class="btn btn-primary self-stretch px-4"
+        style="min-height: 2.75rem; min-width: 3.5rem;"
+        :disabled="pending || !draft.trim()"
+      >
+        <span x-show="!pending">Enviar</span>
+        <span x-show="pending" x-cloak>…</span>
+      </button>
+    </form>
+  </div>
+</div>
+
+<script>
+function chatApp() {
+  return {
+    messages: [],   // {id, role: 'user'|'axi', text}
+    draft: '',
+    pending: false,
+    loading: true,
+    error: null,
+    lastLatencyMs: null,
+
+    async init() {
+      await this.loadHistory();
+      this.scrollToBottom();
+    },
+
+    async loadHistory() {
+      this.loading = true;
+      try {
+        const r = await fetch('/api/chat/history?limit=50');
+        if (!r.ok) throw new Error('history ' + r.status);
+        const rows = await r.json();
+        const out = [];
+        for (const row of rows) {
+          out.push({ id: 'h' + row.id + 'u', role: 'user', text: row.user_text });
+          out.push({ id: 'h' + row.id + 'a', role: 'axi', text: row.axi_text });
+        }
+        this.messages = out;
+      } catch (e) {
+        // Silent — empty state is fine
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    onEnter(ev) {
+      if (ev.shiftKey) {
+        // Insert newline manually since we prevented default.
+        const ta = this.$refs.input;
+        const start = ta.selectionStart, end = ta.selectionEnd;
+        this.draft = this.draft.slice(0, start) + '\n' + this.draft.slice(end);
+        this.$nextTick(() => {
+          ta.selectionStart = ta.selectionEnd = start + 1;
+          this.autogrow();
+        });
+        return;
+      }
+      this.send();
+    },
+
+    autogrow() {
+      const ta = this.$refs.input;
+      if (!ta) return;
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, 6 * 24 + 16) + 'px';
+    },
+
+    async send() {
+      const text = this.draft.trim();
+      if (!text || this.pending) return;
+      this.error = null;
+      const tempId = 'p' + Date.now();
+      this.messages.push({ id: tempId + 'u', role: 'user', text });
+      this.draft = '';
+      this.$nextTick(() => { this.autogrow(); this.scrollToBottom(); });
+      this.pending = true;
+      try {
+        const r = await fetch('/api/chat/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!r.ok) {
+          const detail = await r.text();
+          throw new Error('HTTP ' + r.status + ': ' + detail);
+        }
+        const data = await r.json();
+        this.lastLatencyMs = data.latency_ms;
+        this.messages.push({ id: tempId + 'a', role: 'axi', text: data.answer });
+        // Refresh the header model/state chip so VRAM updates after the call.
+        try {
+          const store = Alpine.$data(document.querySelector('main'));
+          if (store && store.refresh) store.refresh();
+        } catch (e) { /* not fatal */ }
+      } catch (e) {
+        this.error = 'No pude obtener respuesta: ' + e.message;
+      } finally {
+        this.pending = false;
+        this.$nextTick(() => this.scrollToBottom());
+      }
+    },
+
+    scrollToBottom() {
+      const el = this.$refs.thread;
+      if (el) el.scrollTop = el.scrollHeight;
+    },
+  };
+}
+</script>
+{% endblock %}

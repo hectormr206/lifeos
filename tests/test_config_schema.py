@@ -48,10 +48,13 @@ def test_schema_covers_all_22_keys():
         "intents_brain_fallback_enabled",
         # P2.1 diarization V2 (pyannote).
         "diarization_v2_enabled",
+        # P-chat in-dashboard chat kill switch.
+        "chat_enabled",
     }
     assert expected.issubset(names)
-    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) + 1 (P2.3) + 1 (P1.5) + 2 (P1.2) + 1 (P2.1) = 30.
-    assert len(names) == 30
+    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) + 1 (P2.3) + 1 (P1.5)
+    # + 2 (P1.2) + 1 (P2.1) + 1 (P-chat) = 31.
+    assert len(names) == 31
 
 
 def test_to_json_schema_has_all_keys():
