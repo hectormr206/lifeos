@@ -7,16 +7,17 @@
      EXACTO el resto. Solo el hilo de mensajes hace scroll. El input queda
      pegado al fondo. -->
 <style>
-  /* Cancelar el padding vertical de <main> sólo en /chat para que el
-     área del chat llegue limpia al borde inferior del viewport. */
-  main { padding-top: 0 !important; padding-bottom: 0 !important; }
+  /* En /chat queremos un margen visible arriba del título (para que no
+     toque la barra del header) y SIN padding inferior — el input queda
+     pegado al borde de abajo del viewport. */
+  main { padding-top: 0.75rem !important; padding-bottom: 0 !important; }
   body { overflow: hidden !important; }
 </style>
 <div
   x-data="chatApp()"
   x-init="init()"
   class="flex flex-col"
-  style="height: calc(100dvh - 3.75rem); min-height: 24rem;"
+  style="height: calc(100dvh - 5.5rem); min-height: 24rem;"
 >
   <!-- Header strip -->
   <div class="flex items-baseline justify-between mb-3">
