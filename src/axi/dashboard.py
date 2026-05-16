@@ -1336,6 +1336,27 @@ def api_chat_history(limit: int = 50):
     ]
 
 
+# ────────────────────────── PWA assets ────────────────────────────────
+
+
+@app.get("/manifest.webmanifest")
+def manifest_root():
+    """Serve the manifest at /manifest.webmanifest too (some installers look here)."""
+    path = STATIC_DIR / "manifest.webmanifest"
+    if not path.exists():
+        raise HTTPException(404, "manifest not found")
+    return FileResponse(path, media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def sw_root():
+    """Serve the SW at the root so it can control the whole origin."""
+    path = STATIC_DIR / "sw.js"
+    if not path.exists():
+        raise HTTPException(404, "sw not found")
+    return FileResponse(path, media_type="application/javascript")
+
+
 # ────────────────────────── entry point ───────────────────────────────
 
 def _maybe_migrate_meeting_fts() -> None:

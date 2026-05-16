@@ -2,8 +2,18 @@
 <html lang="es" class="dark">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>{% block title %}Axi Dashboard{% endblock %}</title>
+  <!-- PWA: manifest + theme color + apple-touch-icon. Service worker is
+       registered at the bottom; it makes the page installable on Chrome. -->
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#cc66ff">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/static/axi-192.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/axi-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="/static/axi-512.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@14.1.3/marked.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -67,9 +77,9 @@
   </style>
 </head>
 <body class="min-h-screen">
-  <header class="border-b" style="border-color: var(--border); background: var(--panel)">
-    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
-      <div class="flex items-center gap-3">
+  <header class="border-b sticky top-0 z-40" style="border-color: var(--border); background: var(--panel)" x-data="{ navOpen: false }">
+    <div class="max-w-7xl mx-auto px-3 md:px-6 py-2 md:py-3 flex items-center justify-between gap-2 md:gap-4">
+      <div class="flex items-center gap-2 md:gap-3 min-w-0">
         <span class="state-dot" :class="'state-' + ($store.snap?.state || 'unknown')" x-data></span>
         <a href="/events"
            x-data
@@ -96,7 +106,7 @@
            x-data
            x-show="$store.snap?.dashboard_restart_pending"
            x-cloak
-           class="px-2 py-0.5 rounded-full text-xs font-medium"
+           class="hidden sm:inline px-2 py-0.5 rounded-full text-xs font-medium"
            style="background: rgba(51,170,255,0.15); color: var(--blue); border: 1px solid var(--blue);"
            title="Cambiaste el host/puerto del dashboard. Ejecuta: systemctl --user restart axi-dashboard.service">
           🔁 Reinicio dashboard
@@ -104,8 +114,10 @@
       </div>
 
       <!-- Model placement widget. Compact chip in the header bar; click
-           to expand a popover showing per-process VRAM/RAM placement. -->
-      <div x-data="{ open: false }" class="relative">
+           to expand a popover showing per-process VRAM/RAM placement.
+           Hidden below md — replaced with a mobile-friendly version inside
+           the hamburger drawer. -->
+      <div x-data="{ open: false }" class="relative hidden md:block">
         <button
           @click="open = !open"
           class="flex items-center gap-2 px-3 py-1.5 rounded-lg panel2 text-sm hover:brightness-110 transition"
@@ -189,7 +201,8 @@
         </div>
       </div>
 
-      <nav class="flex gap-1 text-sm">
+      <!-- Desktop nav -->
+      <nav class="hidden md:flex gap-1 text-sm">
         <a href="/" class="nav-link {% block nav_home %}{% endblock %}">Home</a>
         <a href="/chat" class="nav-link {% block nav_chat %}{% endblock %}">💬 Chat</a>
         <a href="/conversations" class="nav-link {% block nav_conversations %}{% endblock %}">Conversaciones</a>
@@ -200,10 +213,48 @@
         <a href="/graph" class="nav-link {% block nav_graph %}{% endblock %}">Grafo</a>
         <a href="/config" class="nav-link {% block nav_config %}{% endblock %}">Config</a>
       </nav>
+
+      <!-- Mobile hamburger -->
+      <button
+        type="button"
+        @click="navOpen = !navOpen"
+        class="md:hidden p-2 rounded-lg panel2 text-base"
+        aria-label="Abrir menú"
+        style="min-width: 2.75rem; min-height: 2.75rem;"
+      >
+        <span x-show="!navOpen">☰</span>
+        <span x-show="navOpen" x-cloak>✕</span>
+      </button>
+    </div>
+
+    <!-- Mobile drawer -->
+    <div
+      x-show="navOpen"
+      x-cloak
+      x-transition.opacity
+      class="md:hidden border-t"
+      style="border-color: var(--border); background: var(--panel)"
+      @click.outside="navOpen = false"
+    >
+      <nav class="flex flex-col text-base">
+        <a href="/" class="px-4 py-3 nav-link">Home</a>
+        <a href="/chat" class="px-4 py-3 nav-link">💬 Chat</a>
+        <a href="/conversations" class="px-4 py-3 nav-link">Conversaciones</a>
+        <a href="/events" class="px-4 py-3 nav-link">Eventos</a>
+        <a href="/memory" class="px-4 py-3 nav-link">Memoria</a>
+        <a href="/models" class="px-4 py-3 nav-link">🧠 Modelos</a>
+        <a href="/meetings" class="px-4 py-3 nav-link">Reuniones</a>
+        <a href="/graph" class="px-4 py-3 nav-link">Grafo</a>
+        <a href="/config" class="px-4 py-3 nav-link">Config</a>
+        <div class="px-4 py-3 border-t flex items-center justify-between text-xs muted" style="border-color: var(--border)">
+          <span>modo: <span x-data x-text="$store.snap?.models?.mode || '—'"></span></span>
+          <span>VRAM <span x-data x-text="(($store.snap?.vram?.used_mb ?? 0) / 1024).toFixed(1) + '/' + (($store.snap?.vram?.total_mb ?? 0) / 1024).toFixed(0) + ' GB'"></span></span>
+        </div>
+      </nav>
     </div>
   </header>
 
-  <main class="max-w-7xl mx-auto px-6 py-6" x-data="dashboardStore()">
+  <main class="max-w-7xl mx-auto px-3 md:px-6 py-3 md:py-6" x-data="dashboardStore()">
     {% block content %}{% endblock %}
   </main>
 
@@ -214,6 +265,14 @@
     document.addEventListener('alpine:init', () => {
       Alpine.store('snap', null);
     });
+
+    // PWA: register the service worker. The SW is intentionally minimal —
+    // it does no caching; Chrome only needs a registered SW to show "Install".
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/static/sw.js').catch(() => {/* offline ok */});
+      });
+    }
 
     // Markdown → HTML helper. Used by meeting summaries, fact details, etc.
     // GitHub-flavored markdown (task lists, tables) is enabled. Marked

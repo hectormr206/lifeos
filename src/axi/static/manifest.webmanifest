@@ -1,0 +1,16 @@
+{
+  "name": "Axi",
+  "short_name": "Axi",
+  "description": "Tu asistente personal de IA local-first",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1116",
+  "theme_color": "#cc66ff",
+  "icons": [
+    {"src": "/static/axi-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/static/axi-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "/static/axi-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

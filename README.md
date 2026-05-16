@@ -18,7 +18,7 @@ Axi escucha por el micrófono, ve tu pantalla y tu cámara, traduce videos en ti
 | 🎙️ **Reuniones** | Grabación dual (mic + sistema) · transcripción incremental · diarización (Resemblyzer / pyannote) · resúmenes generados por Qwen |
 | 🧩 **Memoria** | SQLite + FTS5 · historial de conversaciones · extracción de hechos · timezone-aware |
 | 🎮 **Game Guard** | Libera 12 GB de VRAM con un click; restaura al volver |
-| 📊 **Dashboard** | FastAPI + Alpine.js · event log · brain metrics · daily digest · meeting search |
+| 📊 **Dashboard** | FastAPI + Alpine.js · event log · brain metrics · daily digest · meeting search · chat con Axi · PWA instalable |
 | 🔔 **Tray KDE** | Estado live · comandos rápidos · tooltip de ubicación de modelos |
 
 ---
@@ -100,7 +100,7 @@ Por defecto el dashboard escucha sólo en `127.0.0.1:8081`. Si querés llegar de
    - `"dashboard_host": "100.x.x.x"` — usá la IP específica de tu interfaz de VPN (Tailscale CGNAT 100.x.x.x es lo recomendable).
    - `"dashboard_host": "0.0.0.0"` — sólo si confías plenamente en *todas* las redes a las que se conecta la laptop. Expone el dashboard a cualquier interfaz local: no hay auth, no hay TLS.
 2. `systemctl --user restart axi-dashboard.service`
-3. Desde el celular, abrí `http://<ip-vpn>:8081`.
+3. Desde el celular, abrí `http://<ip-vpn>:8081`. Chrome ofrece "Instalar app" (PWA).
 
 El dashboard avisa con un pill azul `🔁 Reinicio dashboard` cuando se cambia el bind.
 
