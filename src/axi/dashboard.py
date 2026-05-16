@@ -56,6 +56,10 @@ LLAMA_HEALTH = "http://127.0.0.1:8080/health"
 DASHBOARD_HOST = "127.0.0.1"
 DASHBOARD_PORT = 8081
 
+# Keys that, when changed in /api/config, mark the dashboard as needing a restart
+# (uvicorn is bound once at process start; new host/port only apply on restart).
+_DASHBOARD_RESTART_KEYS = ("dashboard_host", "dashboard_port")
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 STATIC_DIR = PROJECT_ROOT / "static"
@@ -393,6 +397,7 @@ def snapshot():
         "recent_facts": _recent_facts(20),
         "unread_critical_events": events.unread_critical_count(),
         "whisper_restart_pending": _whisper_restart_pending(),
+        "dashboard_restart_pending": _dashboard_restart_pending(),
     }
 
 
@@ -679,7 +684,53 @@ async def write_config(request: Request):
     # dashboard reads the marker into the snapshot and shows a yellow pill
     # so the user knows to click "Reiniciar daemon" in the tray.
     _maybe_mark_whisper_restart_pending(old, validated)
+    _maybe_mark_dashboard_restart_pending(old, validated)
     return {"ok": True, "config": validated}
+
+
+def _dashboard_restart_marker_path() -> Path:
+    return Path(
+        os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+    ) / "axi" / "dashboard_restart_pending.lock"
+
+
+def _maybe_mark_dashboard_restart_pending(
+    old: dict[str, Any], new: dict[str, Any]
+) -> bool:
+    """Touch the dashboard restart marker when host/port change.
+
+    The uvicorn process binds host:port once at startup, so a config change
+    needs an explicit dashboard restart to take effect. The marker drives a
+    yellow pill in the header so the user knows.
+    """
+    try:
+        changed = [
+            k for k in _DASHBOARD_RESTART_KEYS if old.get(k) != new.get(k)
+        ]
+        if not changed:
+            return False
+        path = _dashboard_restart_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"ts": time.time(), "changed": changed}),
+            encoding="utf-8",
+        )
+        try:
+            events.log_info(
+                "config",
+                "dashboard restart pending",
+                data={"changed": changed},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not mark dashboard restart pending: %s", e)
+        return False
+
+
+def _dashboard_restart_pending() -> bool:
+    return _dashboard_restart_marker_path().exists()
 
 
 # P2.4 — restart-pending marker. Persistent file under XDG_STATE_HOME so a
@@ -1318,8 +1369,23 @@ def main() -> int:
     )
     store.init_db()
     _maybe_migrate_meeting_fts()
-    log.info("axi-dashboard ready at http://%s:%d", DASHBOARD_HOST, DASHBOARD_PORT)
-    uvicorn.run(app, host=DASHBOARD_HOST, port=DASHBOARD_PORT, log_level="warning")
+    # Read bind config at startup (not import-time) so changes via /config
+    # take effect on the NEXT restart, not silently fail. The defaults match
+    # the long-standing constants so behavior is byte-identical when unset.
+    host = str(config.get("dashboard_host", DASHBOARD_HOST) or DASHBOARD_HOST)
+    try:
+        port = int(config.get("dashboard_port", DASHBOARD_PORT))
+    except (TypeError, ValueError):
+        port = DASHBOARD_PORT
+    # Clear the restart-pending marker — we just picked up the new values.
+    try:
+        marker = _dashboard_restart_marker_path()
+        if marker.exists():
+            marker.unlink()
+    except Exception:  # noqa: BLE001
+        pass
+    log.info("axi-dashboard ready at http://%s:%d", host, port)
+    uvicorn.run(app, host=host, port=port, log_level="warning")
     return 0
 
 

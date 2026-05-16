@@ -91,6 +91,16 @@
            title="Click en la bandeja → Reiniciar daemon para aplicar cambios de Whisper">
           🔄 Reinicio pendiente
         </a>
+        <!-- P-vpn — dashboard restart-pending pill when host/port change. -->
+        <a href="/config"
+           x-data
+           x-show="$store.snap?.dashboard_restart_pending"
+           x-cloak
+           class="px-2 py-0.5 rounded-full text-xs font-medium"
+           style="background: rgba(51,170,255,0.15); color: var(--blue); border: 1px solid var(--blue);"
+           title="Cambiaste el host/puerto del dashboard. Ejecuta: systemctl --user restart axi-dashboard.service">
+          🔁 Reinicio dashboard
+        </a>
       </div>
 
       <!-- Model placement widget. Compact chip in the header bar; click

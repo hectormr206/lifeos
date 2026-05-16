@@ -249,6 +249,18 @@ FIELDS: tuple[ConfigField, ...] = (
         "chat_enabled", "boolean", True,
         "If false, the in-dashboard text chat endpoints return 503 (P-chat kill switch).",
     ),
+    # ─────── dashboard bind ───────
+    ConfigField(
+        "dashboard_host", "string", "127.0.0.1",
+        "IP en la que escucha el dashboard. 127.0.0.1 = solo local. "
+        "0.0.0.0 = todas las interfaces (necesario para acceder desde la VPN). "
+        "Reinicio del dashboard requerido.",
+    ),
+    ConfigField(
+        "dashboard_port", "integer", 8081,
+        "Puerto del dashboard. Reinicio del dashboard requerido.",
+        minimum=1024, maximum=65535,
+    ),
 )
 
 
