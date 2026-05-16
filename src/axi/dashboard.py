@@ -368,6 +368,26 @@ def home(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", {})
 
 
+@app.get("/axi-rootCA.crt")
+def serve_root_ca() -> FileResponse:
+    """Serve the mkcert root CA so trusted devices (e.g. the user's phone
+    over the VPN) can install it and trust the dashboard's self-signed
+    cert. Returns 404 if mkcert isn't installed or the CA isn't found.
+    The file is the public CA cert — safe to expose over the VPN."""
+    candidates = [
+        Path.home() / ".local/share/mkcert/rootCA.pem",
+        Path.home() / ".local/share/mkcert/rootCA-key.pem",  # NEVER serve this
+    ]
+    ca_path = Path.home() / ".local/share/mkcert" / "rootCA.pem"
+    if not ca_path.exists():
+        raise HTTPException(404, detail="rootCA.pem not found — run mkcert -install")
+    return FileResponse(
+        path=ca_path,
+        media_type="application/x-x509-ca-cert",
+        filename="axi-rootCA.crt",
+    )
+
+
 @app.get("/api/snapshot")
 def snapshot():
     state = _daemon_cmd("status") or "unknown"
