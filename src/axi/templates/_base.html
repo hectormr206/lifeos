@@ -25,6 +25,7 @@
       --blue: #33aaff; --purple: #aa33ff; --red: #ee3333;
     }
     html, body { background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    body { overflow-x: hidden; }  /* never show horizontal scrollbar at viewport level */
     [x-cloak] { display: none !important; }
     .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 0.75rem; }
     .panel2 { background: var(--panel2); border: 1px solid var(--border); border-radius: 0.5rem; }
@@ -115,12 +116,12 @@
 
       <!-- Model placement widget. Compact chip in the header bar; click
            to expand a popover showing per-process VRAM/RAM placement.
-           Hidden below md — replaced with a mobile-friendly version inside
-           the hamburger drawer. -->
-      <div x-data="{ open: false }" class="relative hidden md:block">
+           Hidden below xl — at md-lg the chip + 9-item nav don't fit on one
+           row, so we hide it. Mobile drawer + xl viewport keep their copies. -->
+      <div x-data="{ open: false }" class="relative hidden xl:block">
         <button
           @click="open = !open"
-          class="flex items-center gap-2 px-3 py-1.5 rounded-lg panel2 text-sm hover:brightness-110 transition"
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg panel2 text-sm hover:brightness-110 transition whitespace-nowrap"
           x-data
         >
           <span class="muted">modo</span>
@@ -201,17 +202,28 @@
         </div>
       </div>
 
-      <!-- Desktop nav -->
-      <nav class="hidden md:flex gap-1 text-sm">
-        <a href="/" class="nav-link {% block nav_home %}{% endblock %}">Home</a>
-        <a href="/chat" class="nav-link {% block nav_chat %}{% endblock %}">💬 Chat</a>
-        <a href="/conversations" class="nav-link {% block nav_conversations %}{% endblock %}">Conversaciones</a>
-        <a href="/events" class="nav-link {% block nav_events %}{% endblock %}">Eventos</a>
-        <a href="/memory" class="nav-link {% block nav_memory %}{% endblock %}">Memoria</a>
-        <a href="/models" class="nav-link {% block nav_models %}{% endblock %}">🧠 Modelos</a>
-        <a href="/meetings" class="nav-link {% block nav_meetings %}{% endblock %}">Reuniones</a>
-        <a href="/graph" class="nav-link {% block nav_graph %}{% endblock %}">Grafo</a>
-        <a href="/config" class="nav-link {% block nav_config %}{% endblock %}">Config</a>
+      <!-- Mini VRAM pill for md–lg (where the full chip is hidden). Acts
+           as a compact at-a-glance indicator and links to /models. -->
+      <a href="/models"
+         class="hidden md:inline-flex xl:hidden items-center gap-1.5 px-2.5 py-1 rounded-lg panel2 text-xs whitespace-nowrap hover:brightness-110 transition"
+         x-data
+         :title="'modo ' + ($store.snap?.models?.mode || '?') + ' · click para abrir /models'">
+        <span class="muted">VRAM</span>
+        <span class="font-medium tabular-nums"
+              x-text="(($store.snap?.vram?.used_mb ?? 0) / 1024).toFixed(1) + '/' + (($store.snap?.vram?.total_mb ?? 0) / 1024).toFixed(0)">—</span>
+      </a>
+
+      <!-- Desktop nav. Compact spacing on md, comfortable on lg+. -->
+      <nav class="hidden md:flex items-center gap-0 lg:gap-1 text-xs lg:text-sm whitespace-nowrap">
+        <a href="/" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_home %}{% endblock %}">Home</a>
+        <a href="/chat" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_chat %}{% endblock %}">💬 Chat</a>
+        <a href="/conversations" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_conversations %}{% endblock %}">Conversaciones</a>
+        <a href="/events" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_events %}{% endblock %}">Eventos</a>
+        <a href="/memory" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_memory %}{% endblock %}">Memoria</a>
+        <a href="/models" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_models %}{% endblock %}">🧠 Modelos</a>
+        <a href="/meetings" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_meetings %}{% endblock %}">Reuniones</a>
+        <a href="/graph" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_graph %}{% endblock %}">Grafo</a>
+        <a href="/config" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_config %}{% endblock %}">Config</a>
       </nav>
 
       <!-- Mobile hamburger -->
