@@ -1528,8 +1528,30 @@ def main() -> int:
             marker.unlink()
     except Exception:  # noqa: BLE001
         pass
-    log.info("axi-dashboard ready at http://%s:%d", host, port)
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    # Optional TLS: when both cert and key exist on disk, serve HTTPS
+    # instead of HTTP. mkcert generates these — typically at
+    # ~/.local/state/axi/tls/10.66.66.2+2.pem (+key). Needed for the PWA
+    # install banner to appear in Chrome on Android (HTTPS requirement).
+    tls_dir = Path(
+        os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+    ) / "axi" / "tls"
+    cert_file = None
+    key_file = None
+    if tls_dir.is_dir():
+        # Pick the first *-key.pem / matching .pem pair we find.
+        for key in sorted(tls_dir.glob("*-key.pem")):
+            cert = key.with_name(key.name.replace("-key.pem", ".pem"))
+            if cert.exists():
+                cert_file = str(cert)
+                key_file = str(key)
+                break
+    scheme = "https" if (cert_file and key_file) else "http"
+    log.info("axi-dashboard ready at %s://%s:%d", scheme, host, port)
+    if cert_file and key_file:
+        uvicorn.run(app, host=host, port=port, log_level="warning",
+                    ssl_certfile=cert_file, ssl_keyfile=key_file)
+    else:
+        uvicorn.run(app, host=host, port=port, log_level="warning")
     return 0
 
 
