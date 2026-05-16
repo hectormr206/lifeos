@@ -478,6 +478,66 @@ class Daemon:
             log.exception("could not stop meeting")
             return f"failed:{e}"
 
+    def transcribe_path(self, path: str) -> str:
+        """Decode an arbitrary audio file (webm/opus, wav, mp3, …) to 16k mono
+        PCM via ffmpeg, then run Whisper on the resulting waveform.
+
+        Returns `"text:<utterance>"` on success or `"error:<reason>"` on
+        failure. The caller (dashboard) deletes the temp file regardless.
+        """
+        if not path:
+            return "error:empty path"
+        p = Path(path)
+        if not p.is_file():
+            return f"error:file not found: {p}"
+        if p.stat().st_size == 0:
+            return "error:empty audio file"
+        # Reject paths outside the expected chat-audio dir to avoid the
+        # daemon being tricked into decoding arbitrary files. This is a
+        # defense-in-depth check — the socket is already user-only (0600).
+        allowed = Path(
+            os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+        ) / "axi" / "chat-audio"
+        try:
+            p.resolve().relative_to(allowed.resolve())
+        except (ValueError, OSError):
+            return f"error:path outside chat-audio dir: {p}"
+        import shutil as _sh  # noqa: PLC0415
+        if _sh.which("ffmpeg") is None:
+            return "error:ffmpeg not installed"
+        # Decode to 16 kHz mono signed 16-bit little-endian PCM, write to
+        # stdout. Whisper's expected input is float32 in [-1, 1] — we scale
+        # in numpy after reading.
+        import subprocess as _sp  # noqa: PLC0415
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(p),
+            "-ac", "1", "-ar", str(SAMPLE_RATE),
+            "-f", "s16le", "-",
+        ]
+        try:
+            proc = _sp.run(cmd, capture_output=True, timeout=30, check=False)
+        except (_sp.TimeoutExpired, OSError) as e:
+            return f"error:ffmpeg failed: {e}"
+        if proc.returncode != 0 or not proc.stdout:
+            err = proc.stderr.decode(errors="replace")[:200] if proc.stderr else "no output"
+            return f"error:ffmpeg rc={proc.returncode}: {err}"
+        import numpy as _np  # noqa: PLC0415
+        try:
+            pcm = _np.frombuffer(proc.stdout, dtype=_np.int16)
+            audio = (pcm.astype(_np.float32) / 32768.0).copy()
+        except Exception as e:  # noqa: BLE001
+            return f"error:could not parse PCM: {e}"
+        if audio.size < _min_record_samples():
+            return "error:audio too short"
+        try:
+            text, _lang, _prob = self._safe_transcribe(audio)
+        except Exception as e:  # noqa: BLE001
+            log.warning("transcribe_path whisper failed: %s", e)
+            return f"error:whisper failed: {e}"
+        cleaned = clean_text(text) if text else ""
+        return f"text:{cleaned}"
+
     def meeting_status(self) -> str:
         if self.meeting is None:
             return "idle"
@@ -507,6 +567,9 @@ def _handle_cmd(daemon: Daemon, cmd: str) -> tuple[str, bool]:
         return f"cleared:{dropped}", False
     if cmd == "memory":
         return f"turns:{daemon.memory.turn_count()}", False
+    if cmd.startswith("transcribe_path:"):
+        path = cmd[len("transcribe_path:"):].strip()
+        return daemon.transcribe_path(path), False
     if cmd == "quit":
         return "bye", True
     return f"unknown: {cmd!r}", False
@@ -550,7 +613,11 @@ def serve() -> int:
                 break
             with conn:
                 try:
-                    data = conn.recv(64).decode("utf-8", errors="replace")
+                    # 4096 bytes is enough for every legacy command (toggle,
+                    # ask, status…) plus the new `transcribe_path:<path>` form
+                    # which can push the line up to ~150-200 bytes when the
+                    # temp file lives under a deep XDG_STATE_HOME.
+                    data = conn.recv(4096).decode("utf-8", errors="replace")
                 except OSError:
                     continue
                 response, should_quit = _handle_cmd(daemon, data)
