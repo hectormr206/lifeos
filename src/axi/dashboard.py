@@ -1343,27 +1343,26 @@ async def api_chat_ask(request: Request):
     except Exception as e:  # noqa: BLE001
         log.warning("chat memory.add failed: %s", e)
 
-    # Voice output runs in a background thread so the HTTP response returns
-    # immediately. Kill switch `chat_tts_enabled` short-circuits even when
-    # the request asked for speak=True (lets the user mute Piper globally).
+    # Voice output: synthesize a WAV with Piper and ship it base64-encoded
+    # in the response so the BROWSER plays it. This works on laptop AND on
+    # mobile via VPN (the legacy `speak()` path only fires the laptop speakers,
+    # which is useless for the phone). Synchronous synth — Piper does ~30x
+    # realtime so a 4-sentence response renders in ~200-400 ms.
+    audio_b64 = None
     spoke = False
     if want_speak and bool(config.get("chat_tts_enabled", True)) and answer.strip():
         try:
-            import threading as _t
             from axi import speak as _speak_mod
-
-            def _say() -> None:
-                try:
-                    _speak_mod.speak(answer)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("chat speak failed: %s", exc)
-
-            _t.Thread(target=_say, name="axi-chat-tts", daemon=True).start()
-            spoke = True
+            import base64 as _b64
+            wav_bytes = _speak_mod.synthesize_wav_bytes(answer)
+            if wav_bytes:
+                audio_b64 = _b64.b64encode(wav_bytes).decode("ascii")
+                spoke = True
         except Exception as e:  # noqa: BLE001
-            log.warning("chat speak spawn failed: %s", e)
+            log.warning("chat synth failed: %s", e)
 
-    return {"answer": answer, "latency_ms": latency_ms, "spoke": spoke}
+    return {"answer": answer, "latency_ms": latency_ms,
+            "spoke": spoke, "audio_b64": audio_b64}
 
 
 @app.post("/api/chat/capture-screen")

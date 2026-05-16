@@ -84,6 +84,39 @@ def speak(text: str) -> bool:
         return False
 
 
+def synthesize_wav_bytes(text: str, with_silence_prefix: bool = False) -> bytes | None:
+    """Synthesize `text` to WAV bytes WITHOUT playing them locally. Used by
+    the dashboard chat to return audio that the browser plays — works on
+    laptop AND remote (Android via VPN). Returns None on failure.
+
+    The wake-silence prefix is OFF by default here because remote browsers
+    don't need it (no BT sink wake-up); local playback (which still uses
+    the legacy `speak()` path) keeps it.
+    """
+    if not text.strip():
+        return None
+    tmp = Path(tempfile.gettempdir())
+    raw = tmp / f"axi-synth-{os.getpid()}.wav"
+    try:
+        if not _piper_synthesize(text, raw):
+            return None
+        if with_silence_prefix:
+            padded = tmp / f"axi-synth-{os.getpid()}-padded.wav"
+            _prepend_silence(raw, padded, WAKE_SILENCE_S)
+            data = padded.read_bytes()
+            try: padded.unlink()
+            except OSError: pass
+        else:
+            data = raw.read_bytes()
+        return data
+    finally:
+        try: raw.unlink()
+        except OSError: pass
+
+
+import os  # noqa: E402 — used in synthesize_wav_bytes
+
+
 if __name__ == "__main__":
     import sys
     msg = " ".join(sys.argv[1:]) or "Hola Héctor, esta es una prueba con Piper."

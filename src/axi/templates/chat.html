@@ -61,7 +61,18 @@
             />
           </template>
           <template x-if="m.role === 'axi'">
-            <div class="md" x-html="renderMarkdown(m.text)"></div>
+            <div>
+              <div class="md" x-html="renderMarkdown(m.text)"></div>
+              <template x-if="m.audio_b64">
+                <audio
+                  :src="'data:audio/wav;base64,' + m.audio_b64"
+                  controls
+                  preload="auto"
+                  class="mt-2 w-full"
+                  style="max-width: 18rem; height: 2rem;"
+                ></audio>
+              </template>
+            </div>
           </template>
           <template x-if="m.role === 'user'">
             <div style="white-space: pre-wrap" x-text="m.text"></div>
@@ -440,7 +451,26 @@ function chatApp() {
         }
         const data = await r.json();
         this.lastLatencyMs = data.latency_ms;
-        this.messages.push({ id: tempId + 'a', role: 'axi', text: data.answer });
+        this.messages.push({
+          id: tempId + 'a',
+          role: 'axi',
+          text: data.answer,
+          audio_b64: data.audio_b64 || null,
+        });
+        // Auto-play the synthesized audio (when speak toggle was on). Plays
+        // through the BROWSER speakers — laptop or phone speakers depending
+        // on which device opened the dashboard. Phone-friendly.
+        if (data.audio_b64) {
+          try {
+            const audio = new Audio('data:audio/wav;base64,' + data.audio_b64);
+            audio.play().catch((err) => {
+              // Some browsers block autoplay without prior user interaction —
+              // the inline <audio> control inside the bubble lets the user
+              // tap play manually.
+              console.warn('autoplay blocked:', err);
+            });
+          } catch (e) { /* not fatal */ }
+        }
         try {
           const store = Alpine.$data(document.querySelector('main'));
           if (store && store.refresh) store.refresh();

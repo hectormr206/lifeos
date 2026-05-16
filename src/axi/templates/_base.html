@@ -215,15 +215,15 @@
 
       <!-- Desktop nav. Compact spacing on md, comfortable on lg+. -->
       <nav class="hidden md:flex items-center gap-0 lg:gap-1 text-xs lg:text-sm whitespace-nowrap">
-        <a href="/" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_home %}{% endblock %}">Home</a>
+        <a href="/" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_home %}{% endblock %}">🏠 Home</a>
         <a href="/chat" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_chat %}{% endblock %}">💬 Chat</a>
-        <a href="/conversations" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_conversations %}{% endblock %}">Conversaciones</a>
-        <a href="/events" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_events %}{% endblock %}">Eventos</a>
-        <a href="/memory" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_memory %}{% endblock %}">Memoria</a>
+        <a href="/conversations" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_conversations %}{% endblock %}">🗨️ Conversaciones</a>
+        <a href="/events" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_events %}{% endblock %}">🔔 Eventos</a>
+        <a href="/memory" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_memory %}{% endblock %}">🧩 Memoria</a>
         <a href="/models" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_models %}{% endblock %}">🧠 Modelos</a>
-        <a href="/meetings" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_meetings %}{% endblock %}">Reuniones</a>
-        <a href="/graph" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_graph %}{% endblock %}">Grafo</a>
-        <a href="/config" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_config %}{% endblock %}">Config</a>
+        <a href="/meetings" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_meetings %}{% endblock %}">🎙️ Reuniones</a>
+        <a href="/graph" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_graph %}{% endblock %}">🕸️ Grafo</a>
+        <a href="/config" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_config %}{% endblock %}">⚙️ Config</a>
       </nav>
 
       <!-- Mobile hamburger -->
@@ -249,15 +249,15 @@
       @click.outside="navOpen = false"
     >
       <nav class="flex flex-col text-base">
-        <a href="/" class="px-4 py-3 nav-link">Home</a>
+        <a href="/" class="px-4 py-3 nav-link">🏠 Home</a>
         <a href="/chat" class="px-4 py-3 nav-link">💬 Chat</a>
-        <a href="/conversations" class="px-4 py-3 nav-link">Conversaciones</a>
-        <a href="/events" class="px-4 py-3 nav-link">Eventos</a>
-        <a href="/memory" class="px-4 py-3 nav-link">Memoria</a>
+        <a href="/conversations" class="px-4 py-3 nav-link">🗨️ Conversaciones</a>
+        <a href="/events" class="px-4 py-3 nav-link">🔔 Eventos</a>
+        <a href="/memory" class="px-4 py-3 nav-link">🧩 Memoria</a>
         <a href="/models" class="px-4 py-3 nav-link">🧠 Modelos</a>
-        <a href="/meetings" class="px-4 py-3 nav-link">Reuniones</a>
-        <a href="/graph" class="px-4 py-3 nav-link">Grafo</a>
-        <a href="/config" class="px-4 py-3 nav-link">Config</a>
+        <a href="/meetings" class="px-4 py-3 nav-link">🎙️ Reuniones</a>
+        <a href="/graph" class="px-4 py-3 nav-link">🕸️ Grafo</a>
+        <a href="/config" class="px-4 py-3 nav-link">⚙️ Config</a>
         <div class="px-4 py-3 border-t flex items-center justify-between text-xs muted" style="border-color: var(--border)">
           <span>modo: <span x-data x-text="$store.snap?.models?.mode || '—'"></span></span>
           <span>VRAM <span x-data x-text="(($store.snap?.vram?.used_mb ?? 0) / 1024).toFixed(1) + '/' + (($store.snap?.vram?.total_mb ?? 0) / 1024).toFixed(0) + ' GB'"></span></span>
