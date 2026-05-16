@@ -957,8 +957,16 @@ def _download_worker(model_id: str) -> None:
         return
 
     def cb(idx: int, total: int, pct: float) -> None:
-        # Combine per-file progress into an overall % across the bundle.
-        overall = ((idx - 1) + pct / 100.0) / total * 100.0 if total else 0.0
+        # The manager calls cb(idx, total, pct) where:
+        #   - During transfer of file N: idx=N (0-based), pct=0..99.5
+        #   - After file N finishes:     idx=N+1, pct=100  (idx is now "files done")
+        # Both branches produce a consistent overall % across the bundle.
+        if not total:
+            overall = 0.0
+        elif pct >= 100.0:
+            overall = (idx / total) * 100.0
+        else:
+            overall = (idx + pct / 100.0) / total * 100.0
         overall = max(0.0, min(100.0, overall))
         _set_model_progress(
             model_id,

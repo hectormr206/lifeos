@@ -340,12 +340,24 @@ def download(entry: ModelEntry, *, progress_cb: ProgressCb | None = None) -> Non
             f"at {model_dir(entry)} manually."
         )
 
-    from huggingface_hub import hf_hub_download  # local import → testable
+    from huggingface_hub import hf_hub_download, get_hf_file_metadata, hf_hub_url  # local import → testable
+    import threading
+    import time as _time
 
     dest = model_dir(entry)
     dest.mkdir(parents=True, exist_ok=True)
     total = len(entry.files)
     token = os.environ.get("HF_TOKEN")
+
+    def _expected_size(f: ModelFile) -> int | None:
+        """Fetch the file size from HF so we can show real % progress.
+        Returns None if unknown — progress stays at 0% during that file."""
+        try:
+            url = hf_hub_url(repo_id=f.repo_id, filename=f.filename)
+            meta = get_hf_file_metadata(url=url, token=token)
+            return meta.size
+        except Exception:  # noqa: BLE001
+            return None
 
     for idx, f in enumerate(entry.files):
         out_path = expected_path(entry, f)
@@ -355,19 +367,65 @@ def download(entry: ModelEntry, *, progress_cb: ProgressCb | None = None) -> Non
             continue
         if progress_cb:
             progress_cb(idx, total, 0.0)
-        try:
-            downloaded = hf_hub_download(
-                repo_id=f.repo_id,
-                filename=f.filename,
-                local_dir=str(dest),
-                token=token,
-            )
-        except Exception as e:  # noqa: BLE001
-            log.exception("hf_hub_download failed for %s/%s", f.repo_id, f.filename)
-            raise
+
+        expected_size = _expected_size(f)
+
+        # Spawn hf_hub_download in a worker thread so we can poll the
+        # incomplete file's size on disk and fire progress_cb with real %.
+        result: dict = {"path": None, "error": None}
+        def _worker() -> None:
+            try:
+                result["path"] = hf_hub_download(
+                    repo_id=f.repo_id,
+                    filename=f.filename,
+                    local_dir=str(dest),
+                    token=token,
+                )
+            except Exception as e:  # noqa: BLE001
+                result["error"] = e
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+        # Poll the .incomplete file that huggingface_hub writes during
+        # download. With `local_dir=...`, hf_hub_download stages the file
+        # at `{dest}/.cache/huggingface/download/<sha>.incomplete` and
+        # moves it to its final path only when complete. The sha is not
+        # predictable, so we just glob the staging dir for the largest
+        # .incomplete file and use that as our denominator.
+        staging_dir = dest / ".cache" / "huggingface" / "download"
+        while t.is_alive():
+            _time.sleep(1.0)
+            if expected_size and progress_cb:
+                size_now = 0
+                # 1) staging .incomplete (most common during active download)
+                try:
+                    if staging_dir.is_dir():
+                        for p in staging_dir.glob("*.incomplete"):
+                            try:
+                                size_now = max(size_now, p.stat().st_size)
+                            except OSError:
+                                pass
+                except OSError:
+                    pass
+                # 2) final filename (post-rename, before next iter)
+                for cand in (out_path, dest / f.filename):
+                    try:
+                        if cand.exists():
+                            size_now = max(size_now, cand.stat().st_size)
+                    except OSError:
+                        pass
+                pct = min(99.5, 100.0 * size_now / expected_size) if size_now else 0.0
+                progress_cb(idx, total, pct)
+        t.join()
+
+        if result["error"] is not None:
+            log.exception("hf_hub_download failed for %s/%s",
+                          f.repo_id, f.filename)
+            raise result["error"]
+
         # hf_hub_download returns the final path; if it differs from where
         # we expect (e.g. dest_relname rename), copy/symlink into place.
-        final = Path(downloaded)
+        final = Path(result["path"])
         if final != out_path and not out_path.exists():
             try:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
