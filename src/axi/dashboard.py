@@ -1288,17 +1288,25 @@ async def api_chat_ask(request: Request):
     if not isinstance(body, dict):
         raise HTTPException(400, "body must be JSON object")
     text = (body.get("text") or "").strip()
-    if not text:
-        raise HTTPException(400, "text is required")
+    image_b64 = body.get("image_b64") or None
+    want_speak = bool(body.get("speak", False))
+    if not text and not image_b64:
+        raise HTTPException(400, "text or image_b64 is required")
+    if not text and image_b64:
+        # When the user attaches an image without typing, default to a
+        # short descriptive prompt so the vision model has something to do.
+        text = "Describe lo que ves en esta imagen."
     if len(text) > 8000:
         raise HTTPException(400, "text too long (max 8000 chars)")
+    if image_b64 and not isinstance(image_b64, str):
+        raise HTTPException(400, "image_b64 must be a string")
 
     from axi import brain
     mem = _get_chat_memory()
     history = mem.messages()
     start = time.monotonic()
     try:
-        answer = brain.ask(text, history=history)
+        answer = brain.ask(text, history=history, image_b64=image_b64)
     except Exception as e:  # noqa: BLE001
         log.exception("chat ask failed")
         try:
@@ -1308,10 +1316,125 @@ async def api_chat_ask(request: Request):
         raise HTTPException(502, f"brain error: {e}")
     latency_ms = round((time.monotonic() - start) * 1000)
     try:
-        mem.add(text, answer)
+        # Tag the stored user turn so history rendering can show the image
+        # marker (the image bytes themselves aren't persisted — too large).
+        persisted_user = f"[imagen adjunta] {text}" if image_b64 else text
+        mem.add(persisted_user, answer, has_screenshot=bool(image_b64))
     except Exception as e:  # noqa: BLE001
         log.warning("chat memory.add failed: %s", e)
-    return {"answer": answer, "latency_ms": latency_ms}
+
+    # Voice output runs in a background thread so the HTTP response returns
+    # immediately. Kill switch `chat_tts_enabled` short-circuits even when
+    # the request asked for speak=True (lets the user mute Piper globally).
+    spoke = False
+    if want_speak and bool(config.get("chat_tts_enabled", True)) and answer.strip():
+        try:
+            import threading as _t
+            from axi import speak as _speak_mod
+
+            def _say() -> None:
+                try:
+                    _speak_mod.speak(answer)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("chat speak failed: %s", exc)
+
+            _t.Thread(target=_say, name="axi-chat-tts", daemon=True).start()
+            spoke = True
+        except Exception as e:  # noqa: BLE001
+            log.warning("chat speak spawn failed: %s", e)
+
+    return {"answer": answer, "latency_ms": latency_ms, "spoke": spoke}
+
+
+@app.post("/api/chat/capture-screen")
+def api_chat_capture_screen():
+    """Take a screenshot of the focused window (PNG, base64). Falls back to
+    a full-screen capture if the active-window path can't get a frame."""
+    from axi import vision  # noqa: PLC0415
+    b64 = vision.capture_active_window_b64()
+    if not b64:
+        try:
+            events.log_warning("chat.capture", "screen capture returned no data")
+        except Exception:  # noqa: BLE001
+            pass
+        raise HTTPException(503, detail="screen capture failed")
+    return {"image_b64": b64, "status": "ok"}
+
+
+@app.post("/api/chat/capture-camera")
+def api_chat_capture_camera():
+    """Take a webcam photo (PNG, base64). Surfaces 'busy' / 'no-device' as 503
+    so the UI can show a useful message without parsing nested JSON."""
+    from axi import eyes  # noqa: PLC0415
+    b64, status = eyes.capture_b64()
+    if not b64:
+        try:
+            events.log_warning("chat.capture", f"camera capture failed: {status}")
+        except Exception:  # noqa: BLE001
+            pass
+        raise HTTPException(503, detail=status or "camera capture failed")
+    return {"image_b64": b64, "status": status}
+
+
+# Audio chunks for transcription land in this directory as temp files. Daemon
+# reads them off disk so we avoid pushing 100-500 KB through the small Unix
+# socket recv buffer. Files are deleted right after transcription.
+_CHAT_AUDIO_DIR = Path(
+    os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+) / "axi" / "chat-audio"
+
+
+@app.post("/api/chat/transcribe")
+async def api_chat_transcribe(request: Request):
+    """Decode browser-recorded audio (webm/opus or wav), hand the temp file
+    path to the daemon, return the transcribed text. The daemon does ffmpeg
+    + Whisper because it has the model already warm on GPU."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    audio_b64 = body.get("audio_b64") or ""
+    if not isinstance(audio_b64, str) or not audio_b64.strip():
+        raise HTTPException(400, "audio_b64 required")
+    ext = body.get("ext", "webm")
+    if not isinstance(ext, str) or any(c in ext for c in "/\\."):
+        ext = "webm"
+
+    import base64 as _b64
+    import uuid as _uuid
+
+    try:
+        raw = _b64.b64decode(audio_b64, validate=False)
+    except Exception:
+        raise HTTPException(400, "audio_b64 is not valid base64")
+    if not raw:
+        raise HTTPException(400, "audio_b64 decoded to empty bytes")
+    if len(raw) > 20 * 1024 * 1024:  # 20 MB hard cap — ~3-4 min of opus
+        raise HTTPException(413, "audio too large (max 20 MB)")
+
+    _CHAT_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = _CHAT_AUDIO_DIR / f"{_uuid.uuid4().hex}.{ext}"
+    try:
+        tmp_path.write_bytes(raw)
+    except OSError as e:
+        raise HTTPException(500, f"could not stage audio: {e}")
+
+    try:
+        resp = _daemon_cmd(f"transcribe_path:{tmp_path}", timeout=30.0)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if not resp:
+        raise HTTPException(503, "daemon not responding")
+    if resp.startswith("error:"):
+        raise HTTPException(503, resp[len("error:"):])
+    if resp.startswith("text:"):
+        return {"text": resp[len("text:"):]}
+    return {"text": resp}
 
 
 @app.get("/api/chat/history")

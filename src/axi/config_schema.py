@@ -249,6 +249,11 @@ FIELDS: tuple[ConfigField, ...] = (
         "chat_enabled", "boolean", True,
         "If false, the in-dashboard text chat endpoints return 503 (P-chat kill switch).",
     ),
+    ConfigField(
+        "chat_tts_enabled", "boolean", True,
+        "If false, the chat 'speak' toggle is ignored — voice output never plays even "
+        "when the request asks for it (P-chat-multimodal kill switch).",
+    ),
     # ─────── dashboard bind ───────
     ConfigField(
         "dashboard_host", "string", "127.0.0.1",

@@ -50,14 +50,17 @@ def test_schema_covers_all_22_keys():
         "diarization_v2_enabled",
         # P-chat in-dashboard chat kill switch.
         "chat_enabled",
+        # P-chat-multimodal voice-output kill switch.
+        "chat_tts_enabled",
         # P-vpn dashboard bind config (host + port).
         "dashboard_host",
         "dashboard_port",
     }
     assert expected.issubset(names)
     # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) + 1 (P2.3) + 1 (P1.5)
-    # + 2 (P1.2) + 1 (P2.1) + 1 (P-chat) + 2 (P-vpn dashboard host/port) = 33.
-    assert len(names) == 33
+    # + 2 (P1.2) + 1 (P2.1) + 1 (P-chat) + 1 (P-chat-multimodal TTS)
+    # + 2 (P-vpn dashboard host/port) = 34.
+    assert len(names) == 34
 
 
 def test_to_json_schema_has_all_keys():
