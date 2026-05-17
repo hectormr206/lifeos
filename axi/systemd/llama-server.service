@@ -9,7 +9,7 @@ Type=simple
 # The wrapper reads $XDG_STATE_HOME/axi/active_model.json (created on first
 # launch with the historical Qwen3.6-35B-A3B defaults) and execs llama-server
 # with the assembled argv. Game-guard drops in `--cpu` via cpu-exec.conf.
-ExecStart=%h/LifeOS/axi/scripts/axi-llama-launch
+ExecStart=%h/LifeOS/lifeos/axi/scripts/axi-llama-launch
 Restart=on-failure
 RestartSec=5
 # Allow up to 60s for first-load (loading 22GB from disk takes a moment).

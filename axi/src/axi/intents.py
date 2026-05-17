@@ -261,7 +261,7 @@ def _popen(*args: str) -> str:
 
 
 def _script(name: str) -> str:
-    """Absolute path to an axi script under LifeOS/axi/scripts/."""
+    """Absolute path to an axi script under LifeOS/lifeos/axi/scripts/."""
     return str(SCRIPT_DIR / name)
 
 

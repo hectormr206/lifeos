@@ -8,8 +8,8 @@ Type=simple
 # Source secrets (HF_TOKEN for pyannote diarization, etc.) from .env. The
 # leading `-` makes the file optional so the unit still starts on systems
 # without an .env present.
-EnvironmentFile=-%h/LifeOS/axi/.env
-ExecStart=%h/LifeOS/axi/.venv/bin/python -m axi.daemon
+EnvironmentFile=-%h/LifeOS/lifeos/axi/.env
+ExecStart=%h/LifeOS/lifeos/axi/.venv/bin/python -m axi.daemon
 Restart=on-failure
 RestartSec=3
 # Inherit XDG_RUNTIME_DIR / DBUS / WAYLAND env from the user session.

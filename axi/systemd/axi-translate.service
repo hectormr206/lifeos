@@ -9,7 +9,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/LifeOS/axi/.venv/bin/python -m axi.translate
+ExecStart=%h/LifeOS/lifeos/axi/.venv/bin/python -m axi.translate
 Restart=on-failure
 RestartSec=3
 

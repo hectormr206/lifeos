@@ -9,7 +9,7 @@ Wants=axi-voice.service
 
 [Service]
 Type=simple
-ExecStart=%h/LifeOS/axi/.venv/bin/python -m axi.tray
+ExecStart=%h/LifeOS/lifeos/axi/.venv/bin/python -m axi.tray
 Restart=on-failure
 RestartSec=3
 

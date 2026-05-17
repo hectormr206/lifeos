@@ -114,7 +114,7 @@ Pre-flight check 1 falló: `pyannote/speaker-diarization-3.1` es un gated repo d
 **Para desbloquearlo**:
 1. Aceptá la licencia en https://huggingface.co/pyannote/speaker-diarization-3.1 y https://huggingface.co/pyannote/segmentation-3.0
 2. Generá un read token en https://huggingface.co/settings/tokens
-3. Decime el token (o lo metés vos a `~/LifeOS/axi/.env` como `HF_TOKEN=...`)
+3. Decime el token (o lo metés vos a `~/LifeOS/lifeos/axi/.env` como `HF_TOKEN=...`)
 4. Yo retomo P2.1 con el pre-flight desbloqueado.
 **Nota bonus**: incluso desbloqueado, torch 2.6+cu124 no tiene kernels para sm_120 (Blackwell). El módulo necesitaría forzar CPU mode (más lento pero funcional) o esperar a torch nightly cu128. Esto NO es bloqueante para el resto.
 

@@ -9,9 +9,9 @@
 # editor runs before saying "ready". Cheap (~5 s on a warm system).
 
 set -u
-cd "$HOME/LifeOS/axi"
+cd "$HOME/LifeOS/lifeos/axi"
 
-PY="$HOME/LifeOS/axi/.venv/bin/python"
+PY="$HOME/LifeOS/lifeos/axi/.venv/bin/python"
 GREEN=$'\033[32m'
 RED=$'\033[31m'
 RESET=$'\033[0m'

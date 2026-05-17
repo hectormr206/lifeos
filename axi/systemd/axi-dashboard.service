@@ -9,8 +9,8 @@ Type=simple
 # HF_TOKEN for authenticated huggingface_hub downloads from the model
 # selector. Without this, HF throttles unauthenticated traffic heavily
 # (slow + rate-limited). .env is gitignored so the token stays local.
-EnvironmentFile=-%h/LifeOS/axi/.env
-ExecStart=%h/LifeOS/axi/.venv/bin/python -m axi.dashboard
+EnvironmentFile=-%h/LifeOS/lifeos/axi/.env
+ExecStart=%h/LifeOS/lifeos/axi/.venv/bin/python -m axi.dashboard
 Restart=on-failure
 RestartSec=3
 # Listen only on localhost — never expose the dashboard to the network.

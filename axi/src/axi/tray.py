@@ -50,7 +50,7 @@ LAST_TXT_PATH = Path(
 LAST_ANSWER_PATH = Path(
     os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
 ) / "axi" / "last-answer.txt"
-AXI_CHECK = Path.home() / "LifeOS/axi/scripts/axi-check"
+AXI_CHECK = Path.home() / "LifeOS/lifeos/axi/scripts/axi-check"
 
 STATE_COLORS: dict[str, tuple[int, int, int]] = {
     "idle":         (0x88, 0x88, 0xAA),
@@ -107,7 +107,7 @@ def _open_dashboard() -> None:
     Chromium globe. Chrome enforces a singleton per `--user-data-dir`,
     so re-launching focuses an existing window when one is open.
     """
-    launcher = Path.home() / "LifeOS/axi/scripts/axi-dashboard-open"
+    launcher = Path.home() / "LifeOS/lifeos/axi/scripts/axi-dashboard-open"
     try:
         if launcher.exists():
             subprocess.Popen(
@@ -353,7 +353,7 @@ class AxiTray(QtCore.QObject):
 
     def _on_translate_toggle_click(self) -> None:
         script = "axi-translate-off" if self._translate_active() else "axi-translate-on"
-        path = Path.home() / f"LifeOS/axi/scripts/{script}"
+        path = Path.home() / f"LifeOS/lifeos/axi/scripts/{script}"
         try:
             subprocess.Popen(
                 [str(path)],
@@ -376,7 +376,7 @@ class AxiTray(QtCore.QObject):
 
     def _on_game_toggle_click(self) -> None:
         script = "axi-game-off" if self._game_mode_active() else "axi-game-on"
-        path = Path.home() / f"LifeOS/axi/scripts/{script}"
+        path = Path.home() / f"LifeOS/lifeos/axi/scripts/{script}"
         try:
             subprocess.Popen(
                 [str(path)],

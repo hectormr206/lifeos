@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 # Global-shortcut entry point: ask Axi a question with the WEBCAM as visual context.
-exec "$HOME/LifeOS/axi/.venv/bin/python" -m axi.axictl look
+exec "$HOME/LifeOS/lifeos/axi/.venv/bin/python" -m axi.axictl look

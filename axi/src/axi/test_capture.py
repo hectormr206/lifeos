@@ -1,7 +1,7 @@
 """End-to-end smoke test: record N seconds, transcribe, print.
 
 Run:
-    cd ~/LifeOS/axi && .venv/bin/python -m axi.test_capture [seconds]
+    cd ~/LifeOS/lifeos/axi && .venv/bin/python -m axi.test_capture [seconds]
 """
 from __future__ import annotations
 
