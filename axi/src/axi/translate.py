@@ -659,6 +659,12 @@ def run_interpreter() -> int:
 
     from RealtimeTTS import TextToAudioStream
 
+    # Mutable holder for Piper's length_scale (speed). Declared here so
+    # `_emit_es` can adjust it dynamically regardless of which engine
+    # branch ran. Only the Piper branch actually wires it into Piper
+    # invocations via the patched subprocess.run.
+    _piper_length_scale = [1.0]
+
     if TTS_ENGINE == "kokoro":
         # Force Kokoro onto CPU. The RTX 5070 Ti (Blackwell, sm_120) has no
         # precompiled kernels in torch 2.6 cu124, so KPipeline crashes on CUDA
@@ -685,12 +691,13 @@ def run_interpreter() -> int:
             return 2
         piper_bin = Path(__file__).resolve().parent.parent.parent / ".venv/bin/piper"
 
-        # Piper playback speed. 1.0 = default (natural pace). Anything
-        # below 1.0 makes Piper speak faster, which drains the queue
-        # faster. The user prefers a DEEP queue (fluid playback) over
-        # being close to live — so we keep 1.0 here so the queue stays
-        # full and Piper never runs out of content mid-stream.
-        PIPER_LENGTH_SCALE = float(os.environ.get("AXI_PIPER_SPEED", "1.0"))
+        # Piper playback speed (length_scale). 1.0 = natural pace; lower
+        # values make Piper speak faster. The value is held in a mutable
+        # cell so `_emit_es` can adjust it dynamically per pending queue
+        # depth (see the bands defined near MAX_QUEUE_S). AXI_PIPER_SPEED,
+        # if set, becomes the starting value and the cap for the
+        # natural-pace band; it is otherwise overridden at runtime.
+        _piper_length_scale[0] = float(os.environ.get("AXI_PIPER_SPEED", "1.0"))
         import RealtimeTTS.engines.piper_engine as _piper_mod  # noqa: PLC0415
         _piper_orig_run = _piper_mod.subprocess.run
         _piper_path_str = str(piper_bin)
@@ -700,12 +707,12 @@ def run_interpreter() -> int:
                 and cmd[0] == _piper_path_str
                 and "--length-scale" not in cmd
             ):
-                cmd = list(cmd) + ["--length-scale", str(PIPER_LENGTH_SCALE)]
+                cmd = list(cmd) + ["--length-scale", str(_piper_length_scale[0])]
             return _piper_orig_run(cmd, **kw)
         _piper_mod.subprocess.run = _piper_patched_run
 
         log.info("loading Piper engine (model=%s, length_scale=%.2f)…",
-                 PIPER_MODEL.name, PIPER_LENGTH_SCALE)
+                 PIPER_MODEL.name, _piper_length_scale[0])
         engine = PiperEngine(
             piper_path=str(piper_bin),
             voice=PiperVoice(model_file=str(PIPER_MODEL)),
@@ -799,12 +806,17 @@ def run_interpreter() -> int:
         "Proper nouns and acronyms are kept as-is.",
     )
 
-    # No queue cap. User explicitly prefers fluid playback over freshness:
-    # better to be 60s behind with continuous flow than 10s behind with
-    # gaps. Piper will accumulate and play through everything eventually.
-    # length_scale=0.85 (Piper running ~18% faster) gives some natural
-    # catch-up so lag is bounded but not capped.
-    MAX_QUEUE_S = float("inf")
+    # Queue management: dynamic length_scale that accelerates Piper when
+    # the queue is deep, plus a hard cap as a safety net. The user prefers
+    # staying close to live over absolute fluidity — a slight speed-up
+    # during catch-up is acceptable; losing 15s+ of content is not.
+    # Bands (pending_s → length_scale):
+    #   < 3s     → 1.00 (natural)
+    #   3 - 6s   → 0.92 (~8% faster)
+    #   > 6s     → 0.85 (~15% faster)
+    # MAX_QUEUE_S is the absolute safety net: if even at 0.85 we can't
+    # catch up, drop the queue and resume from the freshest chunk.
+    MAX_QUEUE_S = 15.0
     _piper_finish_time = [time.monotonic()]
 
     # Buffer policy biased toward FLUIDITY via DEEP QUEUE.
@@ -878,6 +890,8 @@ def run_interpreter() -> int:
         "GPU": "ge pe ú",
         "CPUs": "ce pe ús",
         "CPU": "ce pe ú",
+        "TPUs": "te pe ús",
+        "TPU": "te pe ú",
         "APIs": "a pe ís",
         "API": "a pe í",
         "LLMs": "ele ele emes",
@@ -888,12 +902,36 @@ def run_interpreter() -> int:
         "URL": "u erre ele",
         "URLs": "u erre eles",
         "JSON": "yeisón",
+        "YAML": "yeimol",
         "HTTP": "hache te te pé",
         "HTTPS": "hache te te pé ese",
         "AI": "ei ai",
         "ML": "eme ele",
         "UI": "iu ai",
         "UX": "iu equis",
+        "GPT": "ye pe te",
+        "RAG": "rag",
+        "ASR": "a ese erre",
+        "TTS": "te te ese",
+        "STT": "ese te te",
+        "NLP": "ene ele pe",
+        "OCR": "o ce erre",
+        "CNN": "ce ene ene",
+        "RNN": "erre ene ene",
+        "GAN": "gan",
+        "RLHF": "erre ele hache efe",
+        "AP2": "a pe dos",
+        "A2A": "a dos a",
+        "IDE": "i de e",
+        "CLI": "ce ele i",
+        "RPC": "erre pe ce",
+        "gRPC": "ye erre pe ce",
+        "SQL": "secuel",
+        "CSV": "ce ese uve",
+        "PDF": "pe de efe",
+        "VRAM": "ve ram",
+        "RAM": "ram",
+        "FAQ": "efe a cu",
     }
     # Build a regex that matches any acronym as a whole word.
     _ACRONYM_RE = re.compile(
@@ -903,12 +941,133 @@ def run_interpreter() -> int:
     def _phonetic_acronyms(text: str) -> str:
         return _ACRONYM_RE.sub(lambda m: _ACRONYM_MAP[m.group(1)], text)
 
+    # Brand / proper-noun → Spanish phonetic spelling. Case-sensitive match
+    # on the canonical spelling so we don't rewrite common Spanish words
+    # that happen to collide (e.g. "meta" the noun vs Meta the company).
+    # Add new entries here as Piper mispronounces them. Keep the canonical
+    # casing from the English source so the translator output matches.
+    _BRAND_MAP = {
+        "Google": "Gúgol",
+        "Salesforce": "Séilsfors",
+        "Anthropic": "Antrópic",
+        "OpenAI": "Open ei ai",
+        "Claude": "Clod",
+        "Gemini": "Yémini",
+        "ChatGPT": "Chat ye pe te",
+        "Bard": "Bard",
+        "Sora": "Sora",
+        "Midjourney": "Midyórni",
+        "GitHub": "Guit jab",
+        "GitLab": "Guit lab",
+        "Hugging Face": "Jáguin Feis",
+        "HuggingFace": "Jáguin Feis",
+        "LangChain": "Lang chéin",
+        "LangGraph": "Lang graf",
+        "DeepMind": "Dip maind",
+        "DeepSeek": "Dip sik",
+        "Snowflake": "Snou fléik",
+        "Databricks": "Déita briks",
+        "Cloudflare": "Cláud fler",
+        "Cohere": "Co jír",
+        "Perplexity": "Perplécsiti",
+        "Mistral": "Mistrál",
+        "Llama": "Llama",
+        "Qwen": "Cuén",
+        "PyTorch": "Pai torch",
+        "TensorFlow": "Ténsor flou",
+        "Kubernetes": "Kubernétis",
+        "Docker": "Dóker",
+        "Apple": "Ápol",
+        "Stripe": "Stráip",
+        "Vercel": "Versél",
+        "Next.js": "Next ye ese",
+        "Node.js": "Nod ye ese",
+        "TypeScript": "Taip script",
+        "JavaScript": "Yava script",
+        "Wayland": "Wéiland",
+        "Linux": "Línux",
+    }
+    # Longest-first so "Hugging Face" wins over a hypothetical "Hugging".
+    _BRAND_RE = re.compile(
+        r"\b(" + "|".join(re.escape(k) for k in sorted(_BRAND_MAP, key=len, reverse=True)) + r")\b"
+    )
+
+    def _phonetic_brands(text: str) -> str:
+        return _BRAND_RE.sub(lambda m: _BRAND_MAP[m.group(1)], text)
+
+    # Alphanumeric tokens (letters + digits, e.g. H100, B200, GPT-4, 14T,
+    # Qwen3, M3, AP2). Piper reads them character-by-character with Spanish
+    # phonetics, which sounds wrong. We split letter/digit runs, spell
+    # short uppercase letter runs (≤4) as Spanish letter names, expand
+    # digits as Spanish number words, and leave mixed-case word-like parts
+    # alone for Piper to handle.
+    _LETTER_NAMES_ES = {
+        "A": "a", "B": "be", "C": "ce", "D": "de", "E": "e",
+        "F": "efe", "G": "ge", "H": "hache", "I": "i", "J": "jota",
+        "K": "ka", "L": "ele", "M": "eme", "N": "ene", "O": "o",
+        "P": "pe", "Q": "cu", "R": "erre", "S": "ese", "T": "te",
+        "U": "u", "V": "uve", "W": "doble u", "X": "equis",
+        "Y": "ye", "Z": "zeta",
+    }
+
+    def _num_es(n: int) -> str:
+        UNITS = [
+            "cero", "uno", "dos", "tres", "cuatro", "cinco", "seis",
+            "siete", "ocho", "nueve", "diez", "once", "doce", "trece",
+            "catorce", "quince", "dieciséis", "diecisiete", "dieciocho",
+            "diecinueve", "veinte", "veintiuno", "veintidós", "veintitrés",
+            "veinticuatro", "veinticinco", "veintiséis", "veintisiete",
+            "veintiocho", "veintinueve",
+        ]
+        TENS = {3: "treinta", 4: "cuarenta", 5: "cincuenta",
+                6: "sesenta", 7: "setenta", 8: "ochenta", 9: "noventa"}
+        HUNDREDS = {2: "doscientos", 3: "trescientos", 4: "cuatrocientos",
+                    5: "quinientos", 6: "seiscientos", 7: "setecientos",
+                    8: "ochocientos", 9: "novecientos"}
+        if 0 <= n < 30:
+            return UNITS[n]
+        if n < 100:
+            t, u = divmod(n, 10)
+            return TENS[t] if u == 0 else f"{TENS[t]} y {UNITS[u]}"
+        if n < 1000:
+            h, rest = divmod(n, 100)
+            head = "cien" if h == 1 and rest == 0 else ("ciento" if h == 1 else HUNDREDS[h])
+            return head if rest == 0 else f"{head} {_num_es(rest)}"
+        # 1000+: digit-by-digit fallback.
+        return " ".join(UNITS[int(d)] for d in str(n))
+
+    def _spell_alphanum_token(token: str) -> str:
+        out: list[str] = []
+        for part in re.findall(r"[A-Za-z]+|\d+", token):
+            if part.isdigit():
+                out.append(_num_es(int(part)))
+            elif len(part) <= 4 and part.isupper():
+                out.append(" ".join(_LETTER_NAMES_ES.get(c, c) for c in part))
+            else:
+                out.append(part)
+        return " ".join(out)
+
+    _ALPHANUM_RE = re.compile(r"\b[A-Za-z0-9][A-Za-z0-9.\-]*\b")
+
+    def _phonetic_alphanum(text: str) -> str:
+        def _sub(m: re.Match) -> str:
+            tok = m.group(0)
+            has_alpha = any(c.isalpha() for c in tok)
+            has_digit = any(c.isdigit() for c in tok)
+            return _spell_alphanum_token(tok) if (has_alpha and has_digit) else tok
+        return _ALPHANUM_RE.sub(_sub, text)
+
     def _clean_for_tts(text: str) -> str:
         text = text.strip(_LEAD_TRAIL_PUNCT)
         # Collapse runs of orphan punctuation in the middle (e.g. " . ").
         text = re.sub(r"\s+([.,!?;:…])(\s|$)", r"\1\2", text)
         text = re.sub(r"(^|\s)([.,!?;:…])\s+", r"\1", text)
-        # Spell out tech acronyms phonetically for Piper.
+        # Order matters: brands first so multi-word brands and brands
+        # containing acronyms (e.g. "OpenAI") win before the acronym pass.
+        # Alphanumeric next so model names ("GPT-4", "H100") get spelled.
+        # Acronyms last for the remaining ALL-CAPS standalone tokens.
+        text = _phonetic_brands(text)
+        text = _phonetic_alphanum(text)
         text = _phonetic_acronyms(text)
         return text.strip()
 
@@ -990,6 +1149,20 @@ def run_interpreter() -> int:
         words = len(text_es_clean.split())
         est_play_s = words * 0.4
         pending_s = max(0.0, _piper_finish_time[0] - now)
+        # Dynamic Piper speed (length_scale): the further behind we fall,
+        # the faster Piper speaks. Bands match MAX_QUEUE_S comment above.
+        # Updating the cell before feeding biases the *next* Piper invocation
+        # toward the new scale; over a few sentences the queue equilibrates.
+        if pending_s < 3.0:
+            new_scale = 1.00
+        elif pending_s < 6.0:
+            new_scale = 0.92
+        else:
+            new_scale = 0.85
+        if abs(new_scale - _piper_length_scale[0]) > 1e-3:
+            log.info("piper length_scale %.2f → %.2f (pending=%.1fs)",
+                     _piper_length_scale[0], new_scale, pending_s)
+            _piper_length_scale[0] = new_scale
         if pending_s > MAX_QUEUE_S:
             log.info("queue lag %.1fs > %.0fs cap, flushing", pending_s, MAX_QUEUE_S)
             try:
