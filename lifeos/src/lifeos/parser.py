@@ -43,12 +43,17 @@ log = logging.getLogger("lifeos.parser")
 _REMINDER_TRIGGER = re.compile(
     r"^\s*(?:axi[,:\s]+)?"
     r"(?:"
-    r"record(?:a|á)me|recu[ée]rdame|acord(?:a|á)me|"
-    r"av[ií]same|av[ií]same|"
+    # -me / reflexive forms ("recordame", "recuérdame", "acordate")
+    r"record(?:a|á)me|recu[ée]rdame|acord(?:a|á)me|acu[ée]rda(?:te|me)|"
+    # bare imperatives ("recuerda llamar mañana", "acuérdate de X")
+    r"recuerd[aá]|recu[ée]rda|acuerd[aá]|acu[ée]rda|"
+    # other reminder verbs
+    r"av[ií]same|"
     r"dime|dec[ií]me|"
     r"ll[áa]mame|"
     r"m[áa]ndame|"
-    r"alertame"
+    r"alertame|"
+    r"no\s+(?:te\s+)?olvides"   # "no olvides X mañana", "no te olvides de X..."
     r")\s+"
     r"(?:de\s+|que\s+)?"
     r"(.+)$",
@@ -93,10 +98,14 @@ _IDIOM_REWRITES: list[tuple[re.Pattern[str], str]] = [
      lambda m: f"{int(m.group(1)):02d}:30"),
     (re.compile(r"\b(\d{1,2})\s+y\s+cuarto\b", re.IGNORECASE),
      lambda m: f"{int(m.group(1)):02d}:15"),
+    # "a las 9" → "a las 9:00". dateparser misparses bare hours
+    # ("mañana a las 9" returns tomorrow at current time, not 9 AM).
+    # Only apply when the hour is followed by end-of-string, whitespace,
+    # or punctuation — never when there's already a ":NN" or "am/pm".
+    (re.compile(r"\ba\s+las\s+(\d{1,2})(?!\s*[:apmAPM\d])\b", re.IGNORECASE),
+     lambda m: f"a las {int(m.group(1)):02d}:00"),
     # "el sábado a las X" — dateparser handles "sábado X" better than "el sábado a las X".
     (re.compile(r"\bel\s+", re.IGNORECASE), ""),
-    # "a las " is often noise to dateparser. Stripping it can help.
-    (re.compile(r"\ba\s+las\s+", re.IGNORECASE), ""),
 ]
 
 
