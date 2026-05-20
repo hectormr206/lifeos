@@ -1825,9 +1825,12 @@ async def api_push_subscribe(request: Request):
     Browser PushManager subscription shape:
       {endpoint, expirationTime, keys: {p256dh, auth}}
     """
+    ua = request.headers.get("user-agent")
+    log.info("push subscribe called from UA=%s", ua)
     try:
         body = await request.json()
-    except Exception:
+    except Exception as e:
+        log.warning("push subscribe: invalid JSON: %s", e)
         raise HTTPException(400, "invalid JSON")
     if not isinstance(body, dict):
         raise HTTPException(400, "body must be JSON object")
@@ -1835,12 +1838,14 @@ async def api_push_subscribe(request: Request):
     keys = body.get("keys") or {}
     p256dh = keys.get("p256dh")
     auth = keys.get("auth")
+    log.info("push subscribe payload: endpoint=%s p256dh=%s auth=%s",
+             (endpoint or "")[:80], bool(p256dh), bool(auth))
     if not endpoint or not p256dh or not auth:
         raise HTTPException(400, "endpoint and keys.p256dh and keys.auth are required")
-    ua = request.headers.get("user-agent")
     sub_id = lifeos_push.add_subscription(
         endpoint=endpoint, p256dh=p256dh, auth=auth, user_agent=ua,
     )
+    log.info("push subscribed id=%s", sub_id)
     return {"id": sub_id, "ok": True}
 
 

@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from pywebpush import WebPushException, webpush
 
@@ -40,8 +39,12 @@ def _vapid_path() -> Path:
 
 @dataclass(frozen=True, slots=True)
 class VapidKeys:
-    private_pem: str
-    public_b64url: str   # the form the PWA needs (uncompressed P-256 point, 65 bytes, base64url)
+    # Raw 32-byte EC private scalar, base64url-encoded (no padding).
+    # This is the form `pywebpush.webpush(vapid_private_key=...)` accepts.
+    private_b64url: str
+    # Uncompressed P-256 public point (0x04 || X(32) || Y(32)), base64url-encoded.
+    # This is what the browser's PushManager.subscribe() applicationServerKey needs.
+    public_b64url: str
     subject: str = "mailto:hectormr@example.local"
 
 
@@ -51,37 +54,48 @@ def _b64url(data: bytes) -> str:
 
 def _generate_vapid_keys() -> VapidKeys:
     priv = ec.generate_private_key(ec.SECP256R1())
+    private_value = priv.private_numbers().private_value
+    raw_priv = private_value.to_bytes(32, "big")
     pub_numbers = priv.public_key().public_numbers()
-    # Uncompressed point: 0x04 || X (32) || Y (32) = 65 bytes
     raw_pub = (
         b"\x04"
         + pub_numbers.x.to_bytes(32, "big")
         + pub_numbers.y.to_bytes(32, "big")
     )
-    pem = priv.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode("ascii")
-    return VapidKeys(private_pem=pem, public_b64url=_b64url(raw_pub))
+    return VapidKeys(
+        private_b64url=_b64url(raw_priv),
+        public_b64url=_b64url(raw_pub),
+    )
 
 
 def get_vapid_keys() -> VapidKeys:
-    """Load existing keys or generate-and-persist a fresh pair."""
+    """Load existing keys or generate-and-persist a fresh pair.
+
+    Migrates old PEM-based vapid.json (from the first bad attempt) by
+    regenerating — the public key changes too, so any subscriptions made
+    against the old key need to be re-registered. Logged loudly.
+    """
     path = _vapid_path()
     if path.exists():
         try:
             data = json.loads(path.read_text())
-            return VapidKeys(
-                private_pem=data["private_pem"],
-                public_b64url=data["public_b64url"],
-                subject=data.get("subject", "mailto:hectormr@example.local"),
+            if "private_b64url" in data:
+                return VapidKeys(
+                    private_b64url=data["private_b64url"],
+                    public_b64url=data["public_b64url"],
+                    subject=data.get("subject", "mailto:hectormr@example.local"),
+                )
+            # Old PEM-format file — regenerate and warn. Existing subscriptions
+            # become invalid; the PWA will re-subscribe on next "Habilitar push".
+            log.warning(
+                "vapid.json is in old PEM format — regenerating. Existing "
+                "subscriptions will be invalidated."
             )
         except Exception as e:  # noqa: BLE001
             log.warning("vapid file corrupt (%s) — regenerating", e)
     keys = _generate_vapid_keys()
     path.write_text(json.dumps({
-        "private_pem": keys.private_pem,
+        "private_b64url": keys.private_b64url,
         "public_b64url": keys.public_b64url,
         "subject": keys.subject,
     }))
@@ -146,7 +160,7 @@ def send_to_all(title: str, body: str, *, url: str = "/reminders",
             webpush(
                 subscription_info=subscription_info,
                 data=payload,
-                vapid_private_key=keys.private_pem,
+                vapid_private_key=keys.private_b64url,
                 vapid_claims={"sub": keys.subject},
                 ttl=86400,
             )

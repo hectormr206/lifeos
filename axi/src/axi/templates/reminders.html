@@ -9,6 +9,8 @@
     <div class="flex gap-2 items-center text-sm">
       <button class="btn" @click="enablePush()" x-show="!pushOn" x-cloak>📱 Habilitar push</button>
       <button class="btn" @click="testPush()" x-show="pushOn" x-cloak>📱 Probar push</button>
+      <button class="btn" @click="diagnose()" title="Estado de push en este navegador">🔍 Diagnóstico</button>
+      <button class="btn" @click="resetSW()" title="Desregistra el SW para forzar reinstalación">♻️ Reset SW</button>
       <select x-model="filter" @change="load()" class="panel2 px-3 py-2 text-sm">
         <option value="pending">Pendientes</option>
         <option value="recent">Recientes (30 días)</option>
@@ -107,31 +109,122 @@ function remindersPage() {
         return !!sub;
       } catch (e) { return false; }
     },
+    withTimeout(p, ms, label) {
+      return Promise.race([
+        p,
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout (' + label + ' tardó >' + ms + 'ms)')), ms))
+      ]);
+    },
     async enablePush() {
       this.pushStatus = '';
-      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-        this.pushStatus = 'Tu navegador no soporta Web Push.'; return;
-      }
-      if (Notification.permission === 'denied') {
-        this.pushStatus = 'Permiso bloqueado en el navegador. Activalo en Ajustes > Sitio.'; return;
-      }
-      const perm = await Notification.requestPermission();
-      if (perm !== 'granted') { this.pushStatus = 'Permiso denegado.'; return; }
+      try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+          this.pushStatus = 'Tu navegador no soporta Web Push.'; return;
+        }
+        if (Notification.permission === 'denied') {
+          this.pushStatus = 'Permiso bloqueado. Activalo desde Ajustes del navegador para este sitio.'; return;
+        }
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') { this.pushStatus = 'Permiso denegado.'; return; }
 
-      const reg = await navigator.serviceWorker.ready;
-      const keyResp = await fetch('/api/push/vapid-public-key');
-      const { public_key } = await keyResp.json();
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(public_key),
-      });
-      const r = await fetch('/api/push/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sub.toJSON()),
-      });
-      if (r.ok) { this.pushOn = true; this.pushStatus = 'Push habilitado.'; }
-      else { this.pushStatus = 'Error al registrar.'; }
+        // Force re-register with cache-bust so a stale sw.js gets replaced.
+        // We do NOT await reg.update() (hangs on Android Chrome when the old
+        // sw still controls a client). We register fresh and pick the active.
+        this.pushStatus = 'Registrando service worker…';
+        const reg = await this.withTimeout(
+          navigator.serviceWorker.register('/sw.js?v=' + Date.now(), { scope: '/' }),
+          5000, 'register'
+        );
+
+        // Wait briefly for an active worker; fall back to installing/waiting.
+        this.pushStatus = 'Esperando que el SW se active…';
+        const swReady = await this.withTimeout(
+          new Promise(resolve => {
+            if (reg.active) return resolve(reg.active);
+            const candidate = reg.installing || reg.waiting;
+            if (candidate) {
+              candidate.addEventListener('statechange', () => {
+                if (candidate.state === 'activated') resolve(candidate);
+              });
+            }
+            // Also race against the global "ready" promise
+            navigator.serviceWorker.ready.then(r => r.active && resolve(r.active));
+          }),
+          8000, 'activate'
+        ).catch(() => null);
+        if (!swReady) {
+          this.pushStatus = 'El service worker no terminó de activarse. Probá desinstalar la PWA y reinstalar.';
+          return;
+        }
+
+        this.pushStatus = 'Obteniendo clave VAPID…';
+        const keyResp = await this.withTimeout(fetch('/api/push/vapid-public-key'), 5000, 'vapid-key');
+        if (!keyResp.ok) throw new Error('VAPID key fetch: ' + keyResp.status);
+        const { public_key } = await keyResp.json();
+
+        this.pushStatus = 'Suscribiendo al PushManager…';
+        // Use the active registration we just obtained — NOT serviceWorker.ready
+        // because that can resolve to the stale one.
+        let sub;
+        try {
+          sub = await this.withTimeout(
+            reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(public_key),
+            }),
+            15000, 'pushManager.subscribe'
+          );
+        } catch (e) {
+          this.pushStatus = 'pushManager.subscribe falló: ' + (e.message || e.name || String(e));
+          return;
+        }
+
+        this.pushStatus = 'Registrando suscripción en el servidor…';
+        const r = await this.withTimeout(fetch('/api/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sub.toJSON()),
+        }), 5000, 'subscribe POST');
+        if (r.ok) {
+          this.pushOn = true;
+          this.pushStatus = 'Push habilitado ✓';
+        } else {
+          const txt = await r.text();
+          this.pushStatus = 'Servidor rechazó la suscripción (' + r.status + '): ' + txt;
+        }
+      } catch (e) {
+        this.pushStatus = 'Error: ' + (e.message || String(e));
+      }
+    },
+    async resetSW() {
+      this.pushStatus = 'Reseteando service worker…';
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        for (const r of regs) {
+          await r.unregister();
+        }
+        this.pushStatus = 'SW desregistrado. Cerrá la PWA, reabrila, y volvé a tocar "Habilitar push".';
+        this.pushOn = false;
+      } catch (e) {
+        this.pushStatus = 'Error al resetear: ' + (e.message || e);
+      }
+    },
+    async diagnose() {
+      const lines = [];
+      lines.push('sw support: ' + ('serviceWorker' in navigator));
+      lines.push('PushManager: ' + ('PushManager' in window));
+      lines.push('Notification.permission: ' + (typeof Notification !== 'undefined' ? Notification.permission : 'n/a'));
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        lines.push('sw registered: ' + !!reg);
+        if (reg) {
+          lines.push('sw scope: ' + reg.scope);
+          lines.push('sw scriptURL: ' + (reg.active ? reg.active.scriptURL : '(no active)'));
+          const sub = await reg.pushManager.getSubscription();
+          lines.push('local subscription: ' + (sub ? 'YES (' + sub.endpoint.substring(0,60) + '…)' : 'NO'));
+        }
+      }
+      this.pushStatus = lines.join(' | ');
     },
     async testPush() {
       const r = await fetch('/api/push/test', { method: 'POST' });

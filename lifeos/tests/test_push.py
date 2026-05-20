@@ -22,22 +22,27 @@ def _isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_vapid_keys_generated_once_and_persisted() -> None:
+    import base64
     from lifeos.push import get_vapid_keys, _vapid_path
 
     k1 = get_vapid_keys()
     assert k1.public_b64url
-    assert "BEGIN" in k1.private_pem
+    assert k1.private_b64url
+    # Private key is the raw 32-byte EC scalar, b64url-encoded
+    pad = "=" * (-len(k1.private_b64url) % 4)
+    assert len(base64.urlsafe_b64decode(k1.private_b64url + pad)) == 32
 
     # Same call returns same keys
     k2 = get_vapid_keys()
     assert k1.public_b64url == k2.public_b64url
-    assert k1.private_pem == k2.private_pem
+    assert k1.private_b64url == k2.private_b64url
 
     # On-disk JSON exists
     p = _vapid_path()
     assert p.exists()
     data = json.loads(p.read_text())
     assert data["public_b64url"] == k1.public_b64url
+    assert data["private_b64url"] == k1.private_b64url
 
 
 def test_vapid_public_key_decodes_to_65_bytes() -> None:
