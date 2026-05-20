@@ -3,7 +3,7 @@
 {% block title %}Recordatorios · Axi{% endblock %}
 
 {% block content %}
-<div class="space-y-4" x-data="remindersPage()" x-init="load(); init()">
+<div class="space-y-4" x-data="remindersPage()" x-init="load(); init(); startPolling()" x-destroy="stopPolling()">
   <div class="flex justify-between items-baseline gap-4 flex-wrap">
     <h1 class="text-2xl font-semibold">Recordatorios</h1>
     <div class="flex gap-2 items-center text-sm">
@@ -30,9 +30,25 @@
       <input type="datetime-local" x-model="form.when_local"
              class="panel2 px-3 py-2 text-sm">
     </div>
+    <div class="grid md:grid-cols-2 gap-2">
+      <select x-model="form.recurrence_preset" @change="onRecurrenceChange()" class="panel2 px-3 py-2 text-sm">
+        <option value="">⚡ Una sola vez</option>
+        <option value="0 9 * * *">🔁 Todos los días a las 9</option>
+        <option value="0 21 * * *">🔁 Todos los días a las 21</option>
+        <option value="0 9 * * 1">🔁 Cada lunes a las 9</option>
+        <option value="0 8 * * 1-5">🔁 Días hábiles a las 8</option>
+        <option value="0 * * * *">🔁 Cada hora</option>
+        <option value="*/30 * * * *">🔁 Cada 30 minutos</option>
+        <option value="__custom__">⚙️ Cron personalizado…</option>
+      </select>
+      <input type="text" x-model="form.recurrence_custom"
+             x-show="form.recurrence_preset === '__custom__'" x-cloak
+             placeholder="m h dom mon dow (ej: 0 9 * * *)"
+             class="panel2 px-3 py-2 text-sm font-mono">
+    </div>
     <div class="flex items-center justify-between text-sm">
       <select x-model="form.channel" class="panel2 px-3 py-2 text-sm">
-        <option value="push">📱 Push (PWA)</option>
+        <option value="push">📱 Push (laptop + Pixel)</option>
         <option value="log">📝 Solo log (test)</option>
       </select>
       <button class="btn btn-primary" @click="create()" :disabled="!form.message || !form.when_local">
@@ -64,6 +80,12 @@
             <span x-text="fmtWhen(r.when_ts)"></span>
             <span class="mx-1">·</span>
             <span x-text="r.channel"></span>
+            <template x-if="r.recurrence">
+              <span class="ml-1 px-1.5 py-0.5 panel2 rounded" x-text="'🔁 ' + cronLabel(r.recurrence)"></span>
+            </template>
+            <template x-if="r.last_fired_at">
+              <span class="ml-2 muted" x-text="'última: ' + fmtWhen(r.last_fired_at)"></span>
+            </template>
             <template x-if="r.error">
               <span class="ml-2" style="color: var(--red)" x-text="'error: ' + r.error"></span>
             </template>
@@ -97,9 +119,31 @@ function remindersPage() {
     error: '',
     pushOn: false,
     pushStatus: '',
-    form: { message: '', when_local: '', channel: 'push' },
+    form: { message: '', when_local: '', channel: 'push',
+            recurrence_preset: '', recurrence_custom: '' },
+    onRecurrenceChange() {
+      if (this.form.recurrence_preset !== '__custom__') {
+        this.form.recurrence_custom = '';
+      }
+    },
+    _pollHandle: null,
     async init() {
       this.pushOn = await this.checkPushSubscribed();
+    },
+    startPolling() {
+      // Refresh the list every 5s so fired/cancelled reminders disappear
+      // (or move to "recent") and freshly-created ones appear without a
+      // manual refresh. Cheap: just one small JSON query.
+      this.stopPolling();
+      this._pollHandle = setInterval(() => this.load(true), 5000);
+      // Pause polling when the page is hidden to save resources.
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.stopPolling();
+        else this.startPolling();
+      });
+    },
+    stopPolling() {
+      if (this._pollHandle) { clearInterval(this._pollHandle); this._pollHandle = null; }
     },
     async checkPushSubscribed() {
       if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
@@ -231,29 +275,35 @@ function remindersPage() {
       const j = await r.json();
       this.pushStatus = `enviadas=${j.sent} falladas=${j.failed} expiradas=${j.gone}`;
     },
-    async load() {
-      this.loading = true;
-      const r = await fetch('/api/reminders?status=' + this.filter);
-      if (r.ok) {
-        const data = await r.json();
-        this.rows = data.reminders || [];
-      } else {
-        this.rows = [];
-      }
+    async load(silent = false) {
+      if (!silent && this.rows.length === 0) this.loading = true;
+      try {
+        const r = await fetch('/api/reminders?status=' + this.filter);
+        if (r.ok) {
+          const data = await r.json();
+          this.rows = data.reminders || [];
+        }
+      } catch (e) { /* network blip — keep showing existing rows */ }
       this.loading = false;
     },
     async create() {
       this.error = '';
-      // datetime-local is local time; convert to ISO tz-aware
       const localDt = new Date(this.form.when_local);
       if (isNaN(localDt.getTime())) {
         this.error = 'Fecha inválida';
         return;
       }
+      let recurrence = null;
+      if (this.form.recurrence_preset === '__custom__') {
+        recurrence = this.form.recurrence_custom.trim() || null;
+      } else if (this.form.recurrence_preset) {
+        recurrence = this.form.recurrence_preset;
+      }
       const body = {
         when: localDt.toISOString(),
         message: this.form.message,
         channel: this.form.channel,
+        recurrence: recurrence,
       };
       const r = await fetch('/api/reminders', {
         method: 'POST',
@@ -267,11 +317,26 @@ function remindersPage() {
       }
       this.form.message = '';
       this.form.when_local = '';
+      this.form.recurrence_preset = '';
+      this.form.recurrence_custom = '';
       this.load();
     },
     async cancel(id) {
       await fetch('/api/reminders/' + id, { method: 'DELETE' });
       this.load();
+    },
+    cronLabel(cron) {
+      const known = {
+        '0 9 * * *': 'diario 9:00',
+        '0 21 * * *': 'diario 21:00',
+        '0 9 * * 1': 'lunes 9:00',
+        '0 8 * * 1-5': 'L-V 8:00',
+        '0 * * * *': 'cada hora',
+        '*/30 * * * *': 'cada 30min',
+        '*/15 * * * *': 'cada 15min',
+        '* * * * *': 'cada minuto',
+      };
+      return known[cron] || cron;
     },
     fmtWhen(iso) {
       try {

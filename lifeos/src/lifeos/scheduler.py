@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from lifeos import reminders, store
 
@@ -89,21 +90,39 @@ class Scheduler:
 
     # Internal — assumes lock is held by caller.
     def _schedule_job(self, rem: reminders.Reminder) -> None:
-        # Past-due jobs fire immediately (apscheduler's misfire grace).
-        # We pass rem by ID so the job picks up current state on fire.
+        # Recurring reminders use a CronTrigger from their `recurrence` field
+        # ("0 9 * * *" = daily 9am). One-shot use a DateTrigger.
+        # Past-due one-shots fire immediately (laptop was asleep edge case).
         run_date = rem.when_ts
         if run_date.tzinfo is None:
             run_date = run_date.replace(tzinfo=timezone.utc)
 
-        self._scheduler.add_job(
-            func=self._on_fire,
-            trigger="date",
-            run_date=run_date,
-            args=[rem.id],
-            id=rem.id,
-            replace_existing=True,
-            misfire_grace_time=None,  # fire even if late (laptop was asleep)
-        )
+        if rem.recurrence:
+            try:
+                trigger = CronTrigger.from_crontab(rem.recurrence, timezone="UTC")
+            except Exception as e:  # noqa: BLE001
+                log.error("invalid cron %r for reminder %s: %s",
+                          rem.recurrence, rem.id, e)
+                reminders.mark_failed(rem.id, f"invalid cron: {e}")
+                return
+            self._scheduler.add_job(
+                func=self._on_fire,
+                trigger=trigger,
+                args=[rem.id],
+                id=rem.id,
+                replace_existing=True,
+                misfire_grace_time=None,
+            )
+        else:
+            self._scheduler.add_job(
+                func=self._on_fire,
+                trigger="date",
+                run_date=run_date,
+                args=[rem.id],
+                id=rem.id,
+                replace_existing=True,
+                misfire_grace_time=None,
+            )
 
     def _on_fire(self, rid: str) -> None:
         """apscheduler callback. Re-reads the reminder (state may have changed)."""
@@ -116,7 +135,11 @@ class Scheduler:
             return
         try:
             self._dispatcher(rem)
-            reminders.mark_fired(rid)
+            if rem.is_recurring:
+                # Recurring: stay pending, just bump last_fired_at
+                reminders.mark_recurring_fired(rid)
+            else:
+                reminders.mark_fired(rid)
         except Exception as e:  # noqa: BLE001
             log.exception("dispatcher failed for reminder %s", rid)
             reminders.mark_failed(rid, str(e))

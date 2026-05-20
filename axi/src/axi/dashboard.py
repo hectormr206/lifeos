@@ -1473,15 +1473,23 @@ async def api_chat_ask(request: Request):
         if ri is not None:
             try:
                 rem = lifeos_reminders.create(
-                    when=ri.when, message=ri.message, channel="push"
+                    when=ri.when, message=ri.message, channel="push",
+                    recurrence=ri.recurrence,
                 )
                 get_scheduler().schedule(rem)
                 local_when = ri.when.astimezone(ZoneInfo("America/Mexico_City"))
-                answer = (
-                    f"Listo. Recordatorio programado para "
-                    f"{local_when.strftime('%A %-d %b %H:%M')}: "
-                    f"\"{ri.message}\". Te aviso al celular."
-                )
+                if ri.recurrence:
+                    answer = (
+                        f"Listo. Recordatorio recurrente programado ({ri.recurrence}). "
+                        f"Primera vez: {local_when.strftime('%A %-d %b %H:%M')}. "
+                        f"Te aviso en laptop y celular."
+                    )
+                else:
+                    answer = (
+                        f"Listo. Recordatorio programado para "
+                        f"{local_when.strftime('%A %-d %b %H:%M')}: "
+                        f"\"{ri.message}\". Te aviso en laptop y celular."
+                    )
                 latency_ms = round((time.monotonic() - start) * 1000)
                 try:
                     mem.add(text, answer, has_screenshot=False)
@@ -1745,6 +1753,8 @@ def _reminder_to_dict(r: lifeos_reminders.Reminder) -> dict:
         "created_at": r.created_at.isoformat(),
         "fired_at": r.fired_at.isoformat() if r.fired_at else None,
         "error": r.error,
+        "recurrence": r.recurrence,
+        "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
     }
 
 
@@ -1783,6 +1793,7 @@ async def api_reminders_create(request: Request):
     when_str = body.get("when")
     message = (body.get("message") or "").strip()
     channel = body.get("channel", "push")
+    recurrence = body.get("recurrence") or None
     if not when_str or not message:
         raise HTTPException(400, "when and message are required")
     if channel not in ("push", "log"):
@@ -1795,8 +1806,17 @@ async def api_reminders_create(request: Request):
         raise HTTPException(400, "when must be tz-aware")
     if len(message) > 500:
         raise HTTPException(400, "message too long (max 500 chars)")
+    if recurrence is not None:
+        # Validate the cron string by trying to parse it.
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+            CronTrigger.from_crontab(recurrence)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"invalid cron: {e}")
 
-    rem = lifeos_reminders.create(when=when, message=message, channel=channel)
+    rem = lifeos_reminders.create(
+        when=when, message=message, channel=channel, recurrence=recurrence,
+    )
     get_scheduler().schedule(rem)
     return _reminder_to_dict(rem)
 

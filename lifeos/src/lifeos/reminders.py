@@ -32,9 +32,16 @@ class Reminder:
     created_at: datetime
     fired_at: datetime | None
     error: str | None
+    recurrence: str | None = None        # cron string ("0 9 * * *") or None for one-shot
+    last_fired_at: datetime | None = None  # most recent fire (for recurring; equals fired_at for one-shot)
+
+    @property
+    def is_recurring(self) -> bool:
+        return bool(self.recurrence)
 
 
 def _row_to_reminder(row) -> Reminder:
+    keys = row.keys()
     return Reminder(
         id=row["id"],
         when_ts=_parse_iso(row["when_ts"]),
@@ -44,6 +51,12 @@ def _row_to_reminder(row) -> Reminder:
         created_at=_parse_iso(row["created_at"]),
         fired_at=_parse_iso(row["fired_at"]) if row["fired_at"] else None,
         error=row["error"],
+        recurrence=row["recurrence"] if "recurrence" in keys else None,
+        last_fired_at=(
+            _parse_iso(row["last_fired_at"])
+            if "last_fired_at" in keys and row["last_fired_at"]
+            else None
+        ),
     )
 
 
@@ -61,20 +74,38 @@ def _to_iso_utc(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def create(*, when: datetime, message: str, channel: Channel = "push") -> Reminder:
-    """Insert a new pending reminder."""
+def create(*, when: datetime, message: str, channel: Channel = "push",
+           recurrence: str | None = None) -> Reminder:
+    """Insert a new pending reminder.
+
+    `recurrence`: optional cron string ("0 9 * * *" = daily at 9 AM). When
+    set, `when` is the FIRST run (lets you say "starting tomorrow") but the
+    scheduler from then on uses the cron expression. The reminder never
+    transitions to `fired` status — it stays pending forever and bumps
+    `last_fired_at` on each trigger.
+    """
     if when.tzinfo is None:
         raise ValueError("when must be tz-aware (got naive datetime)")
     rid = str(ulid.new())
     with store.connect() as conn:
         conn.execute(
-            "INSERT INTO reminders(id, when_ts, message, channel, status) "
-            "VALUES (?, ?, ?, ?, 'pending')",
-            (rid, _to_iso_utc(when), message, channel),
+            "INSERT INTO reminders(id, when_ts, message, channel, status, recurrence) "
+            "VALUES (?, ?, ?, ?, 'pending', ?)",
+            (rid, _to_iso_utc(when), message, channel, recurrence),
         )
     fetched = get(rid)
     assert fetched is not None
     return fetched
+
+
+def mark_recurring_fired(rid: str) -> None:
+    """Bump last_fired_at for a recurring reminder. Keeps status=pending."""
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE reminders SET last_fired_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
+            "WHERE id = ?",
+            (rid,),
+        )
 
 
 def get(rid: str) -> Reminder | None:
@@ -108,10 +139,13 @@ def list_recent(days: int = 30) -> list[Reminder]:
 
 
 def mark_fired(rid: str) -> None:
+    """Mark a ONE-SHOT reminder as fired (terminal). Sets both fired_at
+    and last_fired_at to now."""
     with store.connect() as conn:
         conn.execute(
             "UPDATE reminders SET status='fired', "
-            "fired_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
+            "fired_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), "
+            "last_fired_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
             "WHERE id = ? AND status = 'pending'",
             (rid,),
         )

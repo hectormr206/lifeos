@@ -94,10 +94,22 @@ def _migration_003_push_subscriptions(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_004_reminders_recurrence(conn: sqlite3.Connection) -> None:
+    # Recurring reminders: cron string ("0 9 * * *" = daily at 9am).
+    # NULL → one-shot (current behavior preserved). `last_fired_at` is the
+    # most recent fire time; for one-shot it equals `fired_at`.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(reminders)").fetchall()}
+    if "recurrence" not in cols:
+        conn.execute("ALTER TABLE reminders ADD COLUMN recurrence TEXT")
+    if "last_fired_at" not in cols:
+        conn.execute("ALTER TABLE reminders ADD COLUMN last_fired_at TEXT")
+
+
 MIGRATIONS: list[Migration] = [
     _migration_001_schema_version,
     _migration_002_reminders,
     _migration_003_push_subscriptions,
+    _migration_004_reminders_recurrence,
 ]
 
 

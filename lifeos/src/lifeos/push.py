@@ -15,7 +15,9 @@ import base64
 import json
 import logging
 import os
+import shutil
 import stat
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -140,12 +142,45 @@ def remove_subscription(endpoint: str) -> None:
         )
 
 
-def send_to_all(title: str, body: str, *, url: str = "/reminders",
-                tag: str | None = None) -> dict[str, int]:
-    """Push to every stored subscription.
+def send_os_notification(title: str, body: str) -> bool:
+    """Fire a desktop notification on the user's session (KDE/GNOME/etc.).
 
-    Returns {"sent": N, "failed": M, "gone": G}. `gone` = 404/410 endpoints
-    were auto-removed from the DB (the PWA was uninstalled or session expired).
+    Uses `notify-send` (libnotify). Available out-of-the-box on most Linux
+    desktops. Returns True if the command launched OK. The notification
+    daemon decides how to render (toast, persistent, etc.).
+
+    This is fired from inside the dashboard service, which runs under the
+    user's systemd --user instance, so the DBus session is the user's own.
+    """
+    binary = shutil.which("notify-send")
+    if not binary:
+        log.warning("notify-send not found — skipping OS notification")
+        return False
+    icon = "/home/hectormr/LifeOS/lifeos/axi/src/axi/static/axi-192.png"
+    if not Path(icon).exists():
+        icon = "dialog-information"  # fallback to themed icon name
+    try:
+        subprocess.run(
+            [binary, "--app-name=Axi", "--icon", icon, "--urgency=normal",
+             title, body],
+            check=False, timeout=5,
+        )
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("notify-send failed: %s", e)
+        return False
+
+
+def send_to_all(title: str, body: str, *, url: str = "/reminders",
+                tag: str | None = None,
+                include_os: bool = True) -> dict[str, int]:
+    """Send `title`/`body` to all push subscriptions + optionally the local OS.
+
+    Returns {"sent": N, "failed": M, "gone": G, "os": 0|1}.
+      sent   = web push successes
+      failed = web push errors (other than 404/410)
+      gone   = 404/410 endpoints (subscription auto-removed)
+      os     = 1 if the local OS notification fired, 0 otherwise
     """
     keys = get_vapid_keys()
     subs = list_subscriptions()
@@ -178,4 +213,5 @@ def send_to_all(title: str, body: str, *, url: str = "/reminders",
         except Exception as e:  # noqa: BLE001
             failed += 1
             log.exception("push send unexpected error: %s", e)
-    return {"sent": sent, "failed": failed, "gone": gone}
+    os_fired = 1 if (include_os and send_os_notification(title, body)) else 0
+    return {"sent": sent, "failed": failed, "gone": gone, "os": os_fired}

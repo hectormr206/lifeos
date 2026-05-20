@@ -93,7 +93,65 @@ def _normalize_when(text: str) -> str:
 @dataclass(frozen=True, slots=True)
 class ReminderIntent:
     message: str
-    when: datetime  # tz-aware UTC
+    when: datetime           # tz-aware UTC (first run for recurring)
+    recurrence: str | None = None  # cron string ("0 9 * * *") or None
+
+
+# Spanish weekday name → cron weekday number (Monday=1, Sunday=0).
+# We accept both forms because Whisper/users transcribe inconsistently.
+_WEEKDAYS = {
+    "lunes": 1, "martes": 2, "miércoles": 3, "miercoles": 3,
+    "jueves": 4, "viernes": 5, "sábado": 6, "sabado": 6, "domingo": 0,
+}
+
+
+def _detect_recurrence(text: str) -> tuple[str | None, str]:
+    """If `text` describes a recurring pattern, return (cron_string, residual_text).
+
+    Otherwise return (None, text). The residual is the text with the
+    recurrence-phrase stripped so the time parser can keep going on what
+    remains (e.g. "todos los días a las 9" → recurrence="0 9 * * *",
+    residual="a las 9").
+    """
+    s = text.lower()
+
+    # "todos los días a las HH(:MM)"
+    m = re.search(r"\btodos\s+los\s+d[ií]as\s+a\s+las\s+(\d{1,2})(?::(\d{2}))?\b", s)
+    if m:
+        h = int(m.group(1)); mm = int(m.group(2) or 0)
+        residual = re.sub(r"\btodos\s+los\s+d[ií]as\s+", "", text, count=1, flags=re.IGNORECASE)
+        return f"{mm} {h} * * *", residual
+
+    # "cada [weekday] a las HH(:MM)"
+    weekdays_alt = "|".join(_WEEKDAYS.keys())
+    m = re.search(rf"\bcada\s+({weekdays_alt})\s+a\s+las\s+(\d{{1,2}})(?::(\d{{2}}))?\b", s)
+    if m:
+        wd = _WEEKDAYS[m.group(1)]
+        h = int(m.group(2)); mm = int(m.group(3) or 0)
+        residual = re.sub(rf"\bcada\s+({weekdays_alt})\s+", "", text, count=1, flags=re.IGNORECASE)
+        return f"{mm} {h} * * {wd}", residual
+
+    # "cada X horas" / "cada X minutos"
+    m = re.search(r"\bcada\s+(\d{1,3})\s+horas?\b", s)
+    if m:
+        n = int(m.group(1))
+        residual = re.sub(r"\bcada\s+\d{1,3}\s+horas?\b", "", text, count=1, flags=re.IGNORECASE)
+        return f"0 */{n} * * *", residual
+    m = re.search(r"\bcada\s+(\d{1,3})\s+minutos?\b", s)
+    if m:
+        n = int(m.group(1))
+        residual = re.sub(r"\bcada\s+\d{1,3}\s+minutos?\b", "", text, count=1, flags=re.IGNORECASE)
+        return f"*/{n} * * * *", residual
+
+    # "cada hora" / "cada minuto"  (singular shorthand for "cada 1")
+    if re.search(r"\bcada\s+hora\b", s):
+        residual = re.sub(r"\bcada\s+hora\b", "", text, count=1, flags=re.IGNORECASE)
+        return "0 * * * *", residual
+    if re.search(r"\bcada\s+minuto\b", s):
+        residual = re.sub(r"\bcada\s+minuto\b", "", text, count=1, flags=re.IGNORECASE)
+        return "* * * * *", residual
+
+    return None, text
 
 
 def parse_reminder(text: str, *, tz: str = "America/Mexico_City") -> Optional[ReminderIntent]:
@@ -113,6 +171,13 @@ def parse_reminder(text: str, *, tz: str = "America/Mexico_City") -> Optional[Re
     if not rest:
         return None
 
+    # Pull out a recurrence pattern first (if any). The residual is then
+    # processed for message + optional first-run time.
+    recurrence, rest = _detect_recurrence(rest)
+    rest = rest.strip(" ,;:.-")
+    if not rest:
+        return None
+
     # Find the earliest occurrence of any time marker. The chunk BEFORE it
     # is the message; the chunk FROM it on is the when-expression.
     lower = rest.lower()
@@ -122,9 +187,21 @@ def parse_reminder(text: str, *, tz: str = "America/Mexico_City") -> Optional[Re
         if i != -1 and (cut_idx == -1 or i < cut_idx):
             cut_idx = i
 
-    if cut_idx <= 0:
-        # No marker found, or marker is at position 0 (no message).
+    if cut_idx == 0:
+        # marker at position 0 = no message text
         return None
+
+    if cut_idx < 0:
+        # No explicit time. Acceptable only for recurring reminders — the
+        # cron schedule decides when to fire and `when` becomes the next
+        # cron match from now.
+        if not recurrence:
+            return None
+        message = rest
+        when_utc = _next_cron_match(recurrence, tz)
+        if when_utc is None:
+            return None
+        return ReminderIntent(message=message, when=when_utc, recurrence=recurrence)
 
     message = rest[:cut_idx].strip(" ,;:.-")
     when_text = rest[cut_idx:].strip(" ,;:.-")
@@ -147,10 +224,25 @@ def parse_reminder(text: str, *, tz: str = "America/Mexico_City") -> Optional[Re
 
     when_utc = parsed.astimezone(timezone.utc)
     if when_utc <= datetime.now(timezone.utc):
-        # If dateparser landed in the past (e.g. "a las 9" when it's 10 AM),
-        # bump to tomorrow same time. Matches user intent in 99% of cases.
         log.info("reminder fell in the past, shifting +1 day: %s", when_utc)
         from datetime import timedelta
         when_utc = when_utc + timedelta(days=1)
 
-    return ReminderIntent(message=message, when=when_utc)
+    return ReminderIntent(message=message, when=when_utc, recurrence=recurrence)
+
+
+def _next_cron_match(cron: str, tz_name: str) -> datetime | None:
+    """Compute the next firing time for a cron expression. Returns None on
+    invalid cron strings."""
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+        from zoneinfo import ZoneInfo
+
+        trigger = CronTrigger.from_crontab(cron, timezone=ZoneInfo(tz_name))
+        nxt = trigger.get_next_fire_time(None, datetime.now(ZoneInfo(tz_name)))
+        if nxt is None:
+            return None
+        return nxt.astimezone(timezone.utc)
+    except Exception as e:  # noqa: BLE001
+        log.warning("invalid cron %r: %s", cron, e)
+        return None
