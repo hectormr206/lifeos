@@ -105,11 +105,25 @@ def _migration_004_reminders_recurrence(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE reminders ADD COLUMN last_fired_at TEXT")
 
 
+def _migration_005_reminder_end_conditions(conn: sqlite3.Connection) -> None:
+    # End conditions for recurring reminders (Google-Calendar style "Finaliza"):
+    # - ends_at: ISO UTC timestamp. Scheduler stops firing after this instant.
+    # - occurrences_left: integer countdown. Decrements on each fire; when 0,
+    #   the reminder is cancelled and removed from the scheduler.
+    # NULL on both → fire forever.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(reminders)").fetchall()}
+    if "ends_at" not in cols:
+        conn.execute("ALTER TABLE reminders ADD COLUMN ends_at TEXT")
+    if "occurrences_left" not in cols:
+        conn.execute("ALTER TABLE reminders ADD COLUMN occurrences_left INTEGER")
+
+
 MIGRATIONS: list[Migration] = [
     _migration_001_schema_version,
     _migration_002_reminders,
     _migration_003_push_subscriptions,
     _migration_004_reminders_recurrence,
+    _migration_005_reminder_end_conditions,
 ]
 
 

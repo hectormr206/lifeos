@@ -1757,6 +1757,8 @@ def _reminder_to_dict(r: lifeos_reminders.Reminder) -> dict:
         "error": r.error,
         "recurrence": r.recurrence,
         "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
+        "ends_at": r.ends_at.isoformat() if r.ends_at else None,
+        "occurrences_left": r.occurrences_left,
     }
 
 
@@ -1809,15 +1811,30 @@ async def api_reminders_create(request: Request):
     if len(message) > 500:
         raise HTTPException(400, "message too long (max 500 chars)")
     if recurrence is not None:
-        # Validate the cron string by trying to parse it.
         try:
             from apscheduler.triggers.cron import CronTrigger
             CronTrigger.from_crontab(recurrence)
         except Exception as e:  # noqa: BLE001
             raise HTTPException(400, f"invalid cron: {e}")
 
+    ends_at_str = body.get("ends_at") or None
+    ends_at = None
+    if ends_at_str:
+        try:
+            ends_at = datetime.fromisoformat(ends_at_str.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(400, f"ends_at must be ISO8601: {ends_at_str!r}")
+        if ends_at.tzinfo is None:
+            raise HTTPException(400, "ends_at must be tz-aware")
+
+    occurrences_left = body.get("occurrences_left")
+    if occurrences_left is not None:
+        if not isinstance(occurrences_left, int) or occurrences_left < 1:
+            raise HTTPException(400, "occurrences_left must be a positive integer")
+
     rem = lifeos_reminders.create(
         when=when, message=message, channel=channel, recurrence=recurrence,
+        ends_at=ends_at, occurrences_left=occurrences_left,
     )
     get_scheduler().schedule(rem)
     return _reminder_to_dict(rem)

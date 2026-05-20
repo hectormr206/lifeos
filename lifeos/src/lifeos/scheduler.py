@@ -99,7 +99,16 @@ class Scheduler:
 
         if rem.recurrence:
             try:
+                # end_date stops the cron from firing past that instant.
                 trigger = CronTrigger.from_crontab(rem.recurrence, timezone="UTC")
+                if rem.ends_at is not None:
+                    # Rebuild with end_date — from_crontab() doesn't take one.
+                    parts = rem.recurrence.split()
+                    trigger = CronTrigger(
+                        minute=parts[0], hour=parts[1], day=parts[2],
+                        month=parts[3], day_of_week=parts[4],
+                        end_date=rem.ends_at, timezone="UTC",
+                    )
             except Exception as e:  # noqa: BLE001
                 log.error("invalid cron %r for reminder %s: %s",
                           rem.recurrence, rem.id, e)
@@ -136,8 +145,18 @@ class Scheduler:
         try:
             self._dispatcher(rem)
             if rem.is_recurring:
-                # Recurring: stay pending, just bump last_fired_at
                 reminders.mark_recurring_fired(rid)
+                # If this reminder has an occurrence cap, decrement.
+                # When it reaches 0, cancel the reminder and remove the job
+                # so apscheduler stops firing it.
+                remaining = reminders.decrement_occurrences(rid)
+                if remaining == 0:
+                    log.info("reminder %s reached its occurrence cap — cancelling", rid)
+                    reminders.cancel(rid)
+                    try:
+                        self._scheduler.remove_job(rid)
+                    except Exception:  # noqa: BLE001
+                        pass
             else:
                 reminders.mark_fired(rid)
         except Exception as e:  # noqa: BLE001

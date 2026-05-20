@@ -32,8 +32,10 @@ class Reminder:
     created_at: datetime
     fired_at: datetime | None
     error: str | None
-    recurrence: str | None = None        # cron string ("0 9 * * *") or None for one-shot
-    last_fired_at: datetime | None = None  # most recent fire (for recurring; equals fired_at for one-shot)
+    recurrence: str | None = None
+    last_fired_at: datetime | None = None
+    ends_at: datetime | None = None
+    occurrences_left: int | None = None
 
     @property
     def is_recurring(self) -> bool:
@@ -57,6 +59,16 @@ def _row_to_reminder(row) -> Reminder:
             if "last_fired_at" in keys and row["last_fired_at"]
             else None
         ),
+        ends_at=(
+            _parse_iso(row["ends_at"])
+            if "ends_at" in keys and row["ends_at"]
+            else None
+        ),
+        occurrences_left=(
+            row["occurrences_left"]
+            if "occurrences_left" in keys and row["occurrences_left"] is not None
+            else None
+        ),
     )
 
 
@@ -75,23 +87,31 @@ def _to_iso_utc(dt: datetime) -> str:
 
 
 def create(*, when: datetime, message: str, channel: Channel = "push",
-           recurrence: str | None = None) -> Reminder:
+           recurrence: str | None = None,
+           ends_at: datetime | None = None,
+           occurrences_left: int | None = None) -> Reminder:
     """Insert a new pending reminder.
 
-    `recurrence`: optional cron string ("0 9 * * *" = daily at 9 AM). When
-    set, `when` is the FIRST run (lets you say "starting tomorrow") but the
-    scheduler from then on uses the cron expression. The reminder never
-    transitions to `fired` status — it stays pending forever and bumps
-    `last_fired_at` on each trigger.
+    Optional end conditions for recurring reminders:
+      - `ends_at`: scheduler stops firing after this instant.
+      - `occurrences_left`: countdown of remaining fires.
+    Both are mutually compatible (whichever hits first wins).
     """
     if when.tzinfo is None:
         raise ValueError("when must be tz-aware (got naive datetime)")
+    if ends_at is not None and ends_at.tzinfo is None:
+        raise ValueError("ends_at must be tz-aware")
     rid = str(ulid.new())
     with store.connect() as conn:
         conn.execute(
-            "INSERT INTO reminders(id, when_ts, message, channel, status, recurrence) "
-            "VALUES (?, ?, ?, ?, 'pending', ?)",
-            (rid, _to_iso_utc(when), message, channel, recurrence),
+            "INSERT INTO reminders(id, when_ts, message, channel, status, "
+            "recurrence, ends_at, occurrences_left) "
+            "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
+            (
+                rid, _to_iso_utc(when), message, channel, recurrence,
+                _to_iso_utc(ends_at) if ends_at else None,
+                occurrences_left,
+            ),
         )
     fetched = get(rid)
     assert fetched is not None
@@ -106,6 +126,27 @@ def mark_recurring_fired(rid: str) -> None:
             "WHERE id = ?",
             (rid,),
         )
+
+
+def decrement_occurrences(rid: str) -> int | None:
+    """Decrement `occurrences_left` by 1 and return the new value.
+
+    Returns None if the reminder has no occurrences_left set (unbounded).
+    Returns 0 when the last allowed firing has just happened — the caller
+    should then mark the reminder cancelled and remove the apscheduler job.
+    """
+    with store.connect() as conn:
+        row = conn.execute(
+            "SELECT occurrences_left FROM reminders WHERE id = ?", (rid,)
+        ).fetchone()
+        if row is None or row["occurrences_left"] is None:
+            return None
+        new_count = max(0, int(row["occurrences_left"]) - 1)
+        conn.execute(
+            "UPDATE reminders SET occurrences_left = ? WHERE id = ?",
+            (new_count, rid),
+        )
+        return new_count
 
 
 def get(rid: str) -> Reminder | None:

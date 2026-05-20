@@ -20,42 +20,148 @@
   </div>
   <div x-show="pushStatus" x-cloak class="text-sm muted" x-text="pushStatus"></div>
 
-  <!-- Compose -->
+  <!-- Compose (Google Calendar-style) -->
   <div class="panel p-4 space-y-3">
     <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nuevo recordatorio</h2>
-    <div class="grid md:grid-cols-3 gap-2">
-      <input type="text" x-model="form.message" placeholder="Mensaje (ej: llamar al dentista)"
-             class="panel2 px-3 py-2 text-sm md:col-span-2"
-             maxlength="500">
+
+    <input type="text" x-model="form.message" placeholder="Mensaje (ej: llamar al dentista)"
+           class="panel2 px-3 py-2 text-sm w-full" maxlength="500">
+
+    <div class="flex items-center gap-2 text-sm flex-wrap">
+      <span>🕐</span>
       <input type="datetime-local" x-model="form.when_local"
              class="panel2 px-3 py-2 text-sm">
     </div>
-    <div class="grid md:grid-cols-2 gap-2">
-      <select x-model="form.recurrence_preset" @change="onRecurrenceChange()" class="panel2 px-3 py-2 text-sm">
-        <option value="">⚡ Una sola vez</option>
-        <option value="0 9 * * *">🔁 Todos los días a las 9</option>
-        <option value="0 21 * * *">🔁 Todos los días a las 21</option>
-        <option value="0 9 * * 1">🔁 Cada lunes a las 9</option>
-        <option value="0 8 * * 1-5">🔁 Días hábiles a las 8</option>
-        <option value="0 * * * *">🔁 Cada hora</option>
-        <option value="*/30 * * * *">🔁 Cada 30 minutos</option>
-        <option value="__custom__">⚙️ Cron personalizado…</option>
+
+    <div class="flex items-center gap-2 text-sm flex-wrap">
+      <span>🔁</span>
+      <select x-model="form.repeat_choice" @change="onRepeatChange()"
+              class="panel2 px-3 py-2 text-sm">
+        <option value="none">No se repite</option>
+        <option value="daily">Todos los días</option>
+        <option value="weekly_same">Cada semana, este día</option>
+        <option value="weekdays">Días hábiles (L–V)</option>
+        <option value="monthly_day">Mensualmente, este día del mes</option>
+        <option value="yearly">Anualmente, esta fecha</option>
+        <option value="custom">Personalizada…</option>
       </select>
-      <input type="text" x-model="form.recurrence_custom"
-             x-show="form.recurrence_preset === '__custom__'" x-cloak
-             placeholder="m h dom mon dow (ej: 0 9 * * *)"
-             class="panel2 px-3 py-2 text-sm font-mono">
+      <span x-show="form.repeat_choice !== 'none' && form.repeat_choice !== 'custom'"
+            x-text="endsSummary()" x-cloak class="text-xs muted"></span>
+      <button x-show="form.repeat_choice !== 'none' && form.repeat_choice !== 'custom'"
+              @click="openEndsModal = true"
+              x-cloak class="text-xs panel2 px-2 py-1 rounded">
+        Finalización…
+      </button>
     </div>
-    <div class="flex items-center justify-between text-sm">
+
+    <div class="flex items-center justify-between text-sm flex-wrap gap-2">
       <select x-model="form.channel" class="panel2 px-3 py-2 text-sm">
         <option value="push">📱 Push (laptop + Pixel)</option>
         <option value="log">📝 Solo log (test)</option>
       </select>
-      <button class="btn btn-primary" @click="create()" :disabled="!form.message || !form.when_local">
+      <button class="btn btn-primary" @click="create()"
+              :disabled="!form.message || !form.when_local">
         Programar
       </button>
     </div>
     <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
+  </div>
+
+  <!-- Custom recurrence modal -->
+  <div x-show="openCustomModal" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center"
+       style="background: rgba(0,0,0,0.7);"
+       @keydown.escape.window="openCustomModal = false">
+    <div class="panel p-6 w-full max-w-md mx-4 space-y-4">
+      <h3 class="text-lg font-semibold">Recurrencia personalizada</h3>
+
+      <div class="flex items-center gap-2 text-sm">
+        <span class="muted">Repetir cada</span>
+        <input type="number" min="1" max="99" x-model.number="custom.interval"
+               class="panel2 px-3 py-2 w-20 text-sm">
+        <select x-model="custom.unit" class="panel2 px-3 py-2 text-sm">
+          <option value="day">día(s)</option>
+          <option value="week">semana(s)</option>
+          <option value="month">mes(es)</option>
+          <option value="year">año(s)</option>
+        </select>
+      </div>
+
+      <div x-show="custom.unit === 'week'" x-cloak class="space-y-2">
+        <div class="text-sm muted">Repetir el</div>
+        <div class="flex gap-2 flex-wrap">
+          <template x-for="(label, idx) in ['L','M','X','J','V','S','D']" :key="idx">
+            <button @click="toggleWeekday(idx)"
+                    :class="custom.weekdays.includes(idx) ? 'btn-primary' : ''"
+                    class="btn-sm w-9 h-9 rounded-full panel2 text-xs"
+                    x-text="label"></button>
+          </template>
+        </div>
+      </div>
+
+      <div class="space-y-2">
+        <div class="text-sm muted">Finaliza</div>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="radio" value="never" x-model="custom.ends">
+          Nunca
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="radio" value="date" x-model="custom.ends">
+          El
+          <input type="date" x-model="custom.ends_date"
+                 :disabled="custom.ends !== 'date'"
+                 class="panel2 px-2 py-1 text-sm">
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="radio" value="count" x-model="custom.ends">
+          Después de
+          <input type="number" min="1" max="999" x-model.number="custom.ends_count"
+                 :disabled="custom.ends !== 'count'"
+                 class="panel2 px-2 py-1 w-20 text-sm">
+          <span class="muted">ocurrencias</span>
+        </label>
+      </div>
+
+      <div class="flex justify-end gap-2">
+        <button @click="openCustomModal = false" class="btn">Cancelar</button>
+        <button @click="applyCustomRecurrence()" class="btn btn-primary">Listo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- End conditions modal (for non-custom presets) -->
+  <div x-show="openEndsModal" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center"
+       style="background: rgba(0,0,0,0.7);"
+       @keydown.escape.window="openEndsModal = false">
+    <div class="panel p-6 w-full max-w-md mx-4 space-y-4">
+      <h3 class="text-lg font-semibold">Finalización</h3>
+      <div class="space-y-2">
+        <label class="flex items-center gap-2 text-sm">
+          <input type="radio" value="never" x-model="custom.ends">
+          Nunca
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="radio" value="date" x-model="custom.ends">
+          El
+          <input type="date" x-model="custom.ends_date"
+                 :disabled="custom.ends !== 'date'"
+                 class="panel2 px-2 py-1 text-sm">
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="radio" value="count" x-model="custom.ends">
+          Después de
+          <input type="number" min="1" max="999" x-model.number="custom.ends_count"
+                 :disabled="custom.ends !== 'count'"
+                 class="panel2 px-2 py-1 w-20 text-sm">
+          <span class="muted">ocurrencias</span>
+        </label>
+      </div>
+      <div class="flex justify-end gap-2">
+        <button @click="openEndsModal = false" class="btn">Cancelar</button>
+        <button @click="openEndsModal = false" class="btn btn-primary">Listo</button>
+      </div>
+    </div>
   </div>
 
   <!-- List -->
@@ -119,12 +225,104 @@ function remindersPage() {
     error: '',
     pushOn: false,
     pushStatus: '',
-    form: { message: '', when_local: '', channel: 'push',
-            recurrence_preset: '', recurrence_custom: '' },
-    onRecurrenceChange() {
-      if (this.form.recurrence_preset !== '__custom__') {
-        this.form.recurrence_custom = '';
+    form: { message: '', when_local: '', channel: 'push', repeat_choice: 'none' },
+    openCustomModal: false,
+    openEndsModal: false,
+    custom: {
+      interval: 1, unit: 'week',
+      weekdays: [],       // 0=Monday..6=Sunday  (consistent with JS Date.getDay() - 1)
+      ends: 'never',      // 'never' | 'date' | 'count'
+      ends_date: '',
+      ends_count: 13,
+    },
+    onRepeatChange() {
+      if (this.form.repeat_choice === 'custom') {
+        // Pre-seed the modal with the weekday of when_local if any
+        if (this.form.when_local) {
+          const d = new Date(this.form.when_local);
+          if (!isNaN(d)) {
+            const wd = (d.getDay() + 6) % 7;  // Mon=0..Sun=6 (our convention)
+            this.custom.weekdays = [wd];
+          }
+        }
+        this.openCustomModal = true;
       }
+    },
+    toggleWeekday(idx) {
+      const i = this.custom.weekdays.indexOf(idx);
+      if (i === -1) this.custom.weekdays.push(idx);
+      else this.custom.weekdays.splice(i, 1);
+    },
+    applyCustomRecurrence() {
+      this.openCustomModal = false;
+      // `repeat_choice = 'custom'` — actual cron is computed at submit
+    },
+    endsSummary() {
+      if (this.custom.ends === 'never') return '';
+      if (this.custom.ends === 'date') return 'hasta ' + (this.custom.ends_date || '?');
+      if (this.custom.ends === 'count') return this.custom.ends_count + ' veces';
+      return '';
+    },
+    // Build the cron string from the picked preset + the user's when_local
+    // (we always honor the chosen time-of-day from the datetime input).
+    buildRecurrence() {
+      const dt = new Date(this.form.when_local);
+      if (isNaN(dt.getTime())) return null;
+      const HH = dt.getHours();
+      const MM = dt.getMinutes();
+      const dayOfMonth = dt.getDate();
+      const month = dt.getMonth() + 1;
+      // JS getDay: Sun=0..Sat=6. Cron: Sun=0..Sat=6 too. Map our internal
+      // "Mon=0..Sun=6" weekday index for the custom picker as well.
+      const cronWd = dt.getDay();   // Sun=0, Mon=1, ..., Sat=6 (cron compatible)
+
+      switch (this.form.repeat_choice) {
+        case 'none':
+          return null;
+        case 'daily':
+          return `${MM} ${HH} * * *`;
+        case 'weekly_same':
+          return `${MM} ${HH} * * ${cronWd}`;
+        case 'weekdays':
+          return `${MM} ${HH} * * 1-5`;
+        case 'monthly_day':
+          return `${MM} ${HH} ${dayOfMonth} * *`;
+        case 'yearly':
+          return `${MM} ${HH} ${dayOfMonth} ${month} *`;
+        case 'custom': {
+          if (this.custom.unit === 'day') {
+            return `${MM} ${HH} * * *`;
+          }
+          if (this.custom.unit === 'week') {
+            const wds = this.custom.weekdays;
+            if (wds.length === 0) return null;
+            // Our picker: Mon=0..Sun=6. Cron: Sun=0..Sat=6.
+            const cronList = wds.map(i => (i === 6 ? 0 : i + 1)).sort((a,b)=>a-b).join(',');
+            return `${MM} ${HH} * * ${cronList}`;
+          }
+          if (this.custom.unit === 'month') {
+            return `${MM} ${HH} ${dayOfMonth} * *`;
+          }
+          if (this.custom.unit === 'year') {
+            return `${MM} ${HH} ${dayOfMonth} ${month} *`;
+          }
+          return null;
+        }
+        default:
+          return null;
+      }
+    },
+    buildEnds() {
+      // Only meaningful when a recurrence is set
+      if (this.custom.ends === 'date' && this.custom.ends_date) {
+        // 23:59:59 local of that date → ISO
+        const d = new Date(this.custom.ends_date + 'T23:59:59');
+        if (!isNaN(d.getTime())) return { ends_at: d.toISOString(), occurrences_left: null };
+      }
+      if (this.custom.ends === 'count' && this.custom.ends_count > 0) {
+        return { ends_at: null, occurrences_left: this.custom.ends_count };
+      }
+      return { ends_at: null, occurrences_left: null };
     },
     _pollHandle: null,
     async init() {
@@ -293,17 +491,16 @@ function remindersPage() {
         this.error = 'Fecha inválida';
         return;
       }
-      let recurrence = null;
-      if (this.form.recurrence_preset === '__custom__') {
-        recurrence = this.form.recurrence_custom.trim() || null;
-      } else if (this.form.recurrence_preset) {
-        recurrence = this.form.recurrence_preset;
-      }
+      const recurrence = this.buildRecurrence();
+      const ends = recurrence ? this.buildEnds() : { ends_at: null, occurrences_left: null };
+
       const body = {
         when: localDt.toISOString(),
         message: this.form.message,
         channel: this.form.channel,
         recurrence: recurrence,
+        ends_at: ends.ends_at,
+        occurrences_left: ends.occurrences_left,
       };
       const r = await fetch('/api/reminders', {
         method: 'POST',
@@ -315,10 +512,12 @@ function remindersPage() {
         this.error = 'No se pudo programar: ' + t;
         return;
       }
+      // Reset form
       this.form.message = '';
       this.form.when_local = '';
-      this.form.recurrence_preset = '';
-      this.form.recurrence_custom = '';
+      this.form.repeat_choice = 'none';
+      this.custom = { interval: 1, unit: 'week', weekdays: [],
+                      ends: 'never', ends_date: '', ends_count: 13 };
       this.load();
     },
     async cancel(id) {
