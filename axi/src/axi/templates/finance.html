@@ -1,0 +1,323 @@
+{% extends "_base.html" %}
+{% block nav_finance %}active{% endblock %}
+{% block title %}Finanzas · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="financePage()" x-init="load(); loadSummary(); loadPending(); startPolling()" x-destroy="stopPolling()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Finanzas</h1>
+    <div class="flex gap-2 items-center text-sm flex-wrap">
+      <select x-model="filter.kind" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option value="">Todos</option>
+        <option value="expense">💸 Gastos</option>
+        <option value="big_purchase">🛒 Compras grandes</option>
+        <option value="income">💵 Ingresos</option>
+        <option value="savings">🏦 Ahorros</option>
+        <option value="debt_payment">📉 Pago de deuda</option>
+        <option value="note">📝 Notas</option>
+      </select>
+      <select x-model.number="filter.days" @change="load(); loadSummary()" class="panel2 px-3 py-2 text-sm">
+        <option :value="7">Semana</option>
+        <option :value="30">Mes</option>
+        <option :value="90">3 meses</option>
+        <option :value="365">Año</option>
+      </select>
+      <input type="text" x-model.debounce.300ms="filter.q" @input="load()"
+             placeholder="Buscar…" class="panel2 px-3 py-2 text-sm" maxlength="120">
+    </div>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
+    <div class="panel p-3">
+      <div class="text-xs muted">Gastos</div>
+      <div class="text-lg font-semibold" style="color: var(--red)" x-text="fmtMoney(summary.expenses_total)"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Compras grandes</div>
+      <div class="text-lg font-semibold" x-text="fmtMoney(summary.big_purchases_total)"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Ingresos</div>
+      <div class="text-lg font-semibold" style="color: var(--green)" x-text="fmtMoney(summary.income_total)"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Ahorros</div>
+      <div class="text-lg font-semibold" x-text="fmtMoney(summary.savings_total)"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Balance</div>
+      <div class="text-lg font-semibold"
+           :style="balance() >= 0 ? 'color: var(--green)' : 'color: var(--red)'"
+           x-text="fmtMoney(balance())"></div>
+    </div>
+  </div>
+
+  <!-- Pending reflections -->
+  <template x-if="pending.length > 0">
+    <div class="panel p-4 space-y-2" style="border-color: var(--amber)">
+      <h2 class="text-sm font-semibold uppercase tracking-wider"
+          style="color: var(--amber)">
+        ⏳ Compras esperando reflexión
+      </h2>
+      <p class="text-xs muted">¿Cada una de estas fue impulsiva o planeada? Marcalas
+        para que Axi aprenda tu patrón de compras.</p>
+      <template x-for="r in pending" :key="r.id">
+        <div class="panel2 p-3 flex items-center gap-3 flex-wrap">
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium" x-text="r.title"></div>
+            <div class="text-xs muted" x-text="fmtMoney(r.amount, r.currency) + ' · ' + fmtTs(r.ts)"></div>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-sm panel2 px-3 py-1 rounded text-xs"
+                    style="color: var(--green)"
+                    @click="reflect(r.id, 'planned')">Planeada</button>
+            <button class="btn-sm panel2 px-3 py-1 rounded text-xs"
+                    style="color: var(--amber)"
+                    @click="reflect(r.id, 'impulsive')">Impulsiva</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <!-- Compose -->
+  <div class="panel p-4 space-y-3">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nuevo movimiento</h2>
+    <div class="grid md:grid-cols-3 gap-2">
+      <select x-model="form.kind" class="panel2 px-3 py-2 text-sm">
+        <option value="expense">💸 Gasto</option>
+        <option value="big_purchase">🛒 Compra grande</option>
+        <option value="income">💵 Ingreso</option>
+        <option value="savings">🏦 Ahorro</option>
+        <option value="debt_payment">📉 Pago de deuda</option>
+        <option value="note">📝 Nota</option>
+      </select>
+      <input type="text" x-model="form.title" placeholder="Concepto"
+             class="panel2 px-3 py-2 text-sm md:col-span-2" maxlength="200">
+    </div>
+    <div class="grid md:grid-cols-3 gap-2">
+      <input type="number" step="0.01" min="0" x-model.number="form.amount"
+             placeholder="Monto" class="panel2 px-3 py-2 text-sm">
+      <select x-model="form.currency" class="panel2 px-3 py-2 text-sm">
+        <option value="MXN">MXN</option>
+        <option value="USD">USD</option>
+        <option value="EUR">EUR</option>
+      </select>
+      <input type="text" x-model="form.merchant" placeholder="Comercio (opcional)"
+             class="panel2 px-3 py-2 text-sm" maxlength="100">
+    </div>
+    <div class="grid md:grid-cols-2 gap-2">
+      <select x-model="form.category" class="panel2 px-3 py-2 text-sm">
+        <option value="">Sin categoría</option>
+        <option value="food">🍔 Comida</option>
+        <option value="transport">🚗 Transporte</option>
+        <option value="housing">🏠 Vivienda/servicios</option>
+        <option value="entertainment">🎬 Entretenimiento</option>
+        <option value="health">🩺 Salud</option>
+        <option value="electronics">💻 Electrónica</option>
+        <option value="clothing">👕 Ropa</option>
+        <option value="subscriptions">🔄 Suscripciones</option>
+        <option value="gifts">🎁 Regalos</option>
+        <option value="misc">📦 Otro</option>
+      </select>
+      <input type="datetime-local" x-model="form.ts_local"
+             class="panel2 px-3 py-2 text-sm">
+    </div>
+    <input type="text" x-model="form.tags" placeholder="Tags (coma)"
+           class="panel2 px-3 py-2 text-sm w-full" maxlength="200">
+    <textarea x-model="form.body" placeholder="Notas (opcional)"
+              class="panel2 px-3 py-2 text-sm w-full" rows="2" maxlength="2000"></textarea>
+    <div class="flex justify-end gap-2">
+      <button class="btn btn-primary" @click="create()"
+              :disabled="!form.title || form.amount == null || !form.ts_local">
+        Guardar
+      </button>
+    </div>
+    <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
+  </div>
+
+  <!-- Timeline -->
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando…</div>
+  </template>
+  <template x-if="!loading && rows.length === 0">
+    <div class="panel p-12 text-center muted">
+      Sin movimientos. Probá decirle al chat: "gasté 250 en gasolina" o
+      "compré una laptop por 18000". Axi los anota acá.
+    </div>
+  </template>
+
+  <div class="grid gap-2" x-show="rows.length > 0">
+    <template x-for="r in rows" :key="r.id">
+      <div class="panel p-3 flex items-start gap-3">
+        <span class="text-xl" x-text="kindIcon(r.kind)"></span>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-medium" x-text="r.title"></span>
+            <span class="text-sm font-semibold"
+                  :style="isOutflow(r.kind) ? 'color: var(--red)' : 'color: var(--green)'"
+                  x-text="(isOutflow(r.kind) ? '-' : '+') + fmtMoney(r.amount, r.currency)"></span>
+            <template x-if="r.merchant">
+              <span class="text-xs muted" x-text="'@ ' + r.merchant"></span>
+            </template>
+            <template x-if="r.source !== 'manual'">
+              <span class="text-xs px-1.5 py-0.5 panel2 rounded muted" x-text="r.source"></span>
+            </template>
+          </div>
+          <div class="text-xs muted mt-1">
+            <span x-text="fmtTs(r.ts)"></span>
+            <template x-if="r.category">
+              <span class="ml-2 px-1.5 py-0.5 panel2 rounded" x-text="categoryLabel(r.category)"></span>
+            </template>
+            <template x-if="r.tags && r.tags.length > 0">
+              <template x-for="t in r.tags" :key="t">
+                <span class="ml-1 px-1.5 py-0.5 panel2 rounded" x-text="'#' + t"></span>
+              </template>
+            </template>
+            <template x-if="r.kind === 'big_purchase' && r.reflect_at && !r.reflection_done">
+              <span class="ml-2 text-xs" style="color: var(--amber)"
+                    x-text="'⏳ reflexión: ' + fmtTs(r.reflect_at)"></span>
+            </template>
+          </div>
+        </div>
+        <button @click="del(r.id)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110"
+                title="Eliminar">🗑️</button>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function financePage() {
+  return {
+    rows: [],
+    summary: { expenses_total: 0, income_total: 0, savings_total: 0,
+               big_purchases_total: 0, debt_payments_total: 0 },
+    pending: [],
+    loading: true,
+    error: '',
+    filter: { kind: '', days: 30, q: '' },
+    form: {
+      kind: 'expense', title: '', amount: null, currency: 'MXN',
+      category: '', merchant: '', ts_local: '', tags: '', body: '',
+    },
+    _pollHandle: null,
+    startPolling() {
+      this.stopPolling();
+      this._pollHandle = setInterval(() => {
+        this.load(true); this.loadSummary(); this.loadPending();
+      }, 15000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.stopPolling();
+        else this.startPolling();
+      });
+    },
+    stopPolling() {
+      if (this._pollHandle) { clearInterval(this._pollHandle); this._pollHandle = null; }
+    },
+    async load(silent = false) {
+      if (!silent && this.rows.length === 0) this.loading = true;
+      const params = new URLSearchParams();
+      if (this.filter.kind) params.set('kind', this.filter.kind);
+      if (this.filter.days) params.set('days', this.filter.days);
+      if (this.filter.q) params.set('q', this.filter.q);
+      try {
+        const r = await fetch('/api/finance/entries?' + params.toString());
+        if (r.ok) {
+          const data = await r.json();
+          this.rows = data.entries || [];
+        }
+      } catch (e) { /* keep current rows */ }
+      this.loading = false;
+    },
+    async loadSummary() {
+      const r = await fetch('/api/finance/summary?days=' + this.filter.days);
+      if (r.ok) this.summary = await r.json();
+    },
+    async loadPending() {
+      const r = await fetch('/api/finance/pending-reflections');
+      if (r.ok) {
+        const data = await r.json();
+        this.pending = data.entries || [];
+      }
+    },
+    async create() {
+      this.error = '';
+      const localDt = new Date(this.form.ts_local);
+      if (isNaN(localDt.getTime())) { this.error = 'Fecha inválida'; return; }
+      const tags = this.form.tags
+        ? this.form.tags.split(',').map(t => t.trim()).filter(Boolean)
+        : null;
+      const body = {
+        kind: this.form.kind,
+        title: this.form.title,
+        amount: this.form.amount,
+        currency: this.form.currency || 'MXN',
+        category: this.form.category || null,
+        merchant: this.form.merchant || null,
+        ts: localDt.toISOString(),
+        body: this.form.body || null,
+        tags,
+      };
+      const r = await fetch('/api/finance/entries', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { this.error = 'No se pudo guardar: ' + (await r.text()); return; }
+      this.form = {
+        kind: 'expense', title: '', amount: null, currency: 'MXN',
+        category: '', merchant: '', ts_local: '', tags: '', body: '',
+      };
+      this.load(); this.loadSummary(); this.loadPending();
+    },
+    async reflect(id, tag) {
+      const r = await fetch('/api/finance/entries/' + id + '/reflect', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag }),
+      });
+      if (r.ok) { this.loadPending(); this.load(); }
+    },
+    async del(id) {
+      await fetch('/api/finance/entries/' + id, { method: 'DELETE' });
+      this.load(); this.loadSummary(); this.loadPending();
+    },
+    balance() {
+      return (this.summary.income_total + this.summary.savings_total)
+        - (this.summary.expenses_total + this.summary.big_purchases_total
+           + this.summary.debt_payments_total);
+    },
+    isOutflow(kind) {
+      return ['expense', 'big_purchase', 'debt_payment'].indexOf(kind) !== -1;
+    },
+    kindIcon(k) {
+      return ({expense:'💸', big_purchase:'🛒', income:'💵',
+               savings:'🏦', debt_payment:'📉', note:'📝'})[k] || '•';
+    },
+    categoryLabel(c) {
+      return ({food:'🍔 comida', transport:'🚗 transporte', housing:'🏠 vivienda',
+               entertainment:'🎬 entret.', health:'🩺 salud',
+               electronics:'💻 electrónica', clothing:'👕 ropa',
+               subscriptions:'🔄 suscr.', gifts:'🎁 regalos',
+               misc:'📦 otro'})[c] || c;
+    },
+    fmtMoney(n, currency = 'MXN') {
+      if (n == null) return '—';
+      try {
+        return new Intl.NumberFormat('es-MX', {
+          style: 'currency', currency, maximumFractionDigits: 2,
+        }).format(n);
+      } catch (e) { return n.toFixed(2) + ' ' + currency; }
+    },
+    fmtTs(iso) {
+      try {
+        return new Date(iso).toLocaleString('es-MX', {
+          weekday: 'short', day: 'numeric', month: 'short',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch (e) { return iso; }
+    },
+  };
+}
+</script>
+{% endblock %}

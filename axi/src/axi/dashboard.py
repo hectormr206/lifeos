@@ -55,6 +55,11 @@ from lifeos.scheduler import get_scheduler
 from lifeos.health import entries as health_entries
 from lifeos.health import ingestion as health_ingestion
 from lifeos.health import store as health_store
+# P3 — Finance domain (encrypted store + DAO + ingestion + reflect-on-impulse).
+from lifeos.finance import entries as finance_entries
+from lifeos.finance import ingestion as finance_ingestion
+from lifeos.finance import reflect as finance_reflect
+from lifeos.finance import store as finance_store
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1516,6 +1521,62 @@ async def api_chat_ask(request: Request):
             except Exception as e:  # noqa: BLE001
                 log.warning("lifeos health fast-path failed: %s — falling back to brain", e)
 
+        # Finance fast-path: "gasté 250 en gasolina", "compré X por N", etc.
+        try:
+            fi = finance_ingestion.parse_finance(text)
+        except Exception:  # noqa: BLE001
+            fi = None
+        if fi is not None:
+            try:
+                fe = finance_entries.create(
+                    kind=fi.kind, title=fi.title, amount=fi.amount,
+                    when=datetime.now(ZoneInfo("UTC")),
+                    currency=fi.currency, category=fi.category,
+                    merchant=fi.merchant, body=text, tags=fi.tags or None,
+                    source="chat", confidence=fi.confidence,
+                )
+                # Big purchases auto-schedule a +7d reflection.
+                if fe.kind == "big_purchase":
+                    try:
+                        finance_reflect.schedule_reflection_for(fe)
+                    except Exception:  # noqa: BLE001
+                        log.exception("schedule_reflection_for failed")
+                lang = str(config.get("language", "es-MX"))
+                fam = lifeos_localize.lang_family(lang)
+                amt_str = f"{fi.amount:.0f} {fi.currency}"
+                if fam == "en":
+                    if fe.kind == "big_purchase":
+                        answer = (f"Got it. Logged big purchase \"{fi.title}\" "
+                                  f"({amt_str}) in /finance. I'll ping you in 7 days "
+                                  f"to ask if it was impulsive or planned.")
+                    elif fe.kind == "income":
+                        answer = f"Got it. Logged income \"{fi.title}\" ({amt_str})."
+                    elif fe.kind == "savings":
+                        answer = f"Got it. Logged savings ({amt_str})."
+                    else:
+                        answer = f"Got it. Logged expense \"{fi.title}\" ({amt_str})."
+                else:
+                    if fe.kind == "big_purchase":
+                        answer = (f"Anotada como gasto importante: \"{fi.title}\" "
+                                  f"({amt_str}). Te pregunto en 7 días si fue impulsiva "
+                                  f"o planeada.")
+                    elif fe.kind == "income":
+                        answer = f"Anotado ingreso: \"{fi.title}\" ({amt_str})."
+                    elif fe.kind == "savings":
+                        answer = f"Anotado ahorro ({amt_str})."
+                    else:
+                        answer = f"Anotado gasto: \"{fi.title}\" ({amt_str})."
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "finance_entry_id": fe.id}
+            except Exception as e:  # noqa: BLE001
+                log.warning("lifeos finance fast-path failed: %s — falling back to brain", e)
+
         try:
             from lifeos.parser import parse_reminder
             ri = parse_reminder(text)
@@ -1791,6 +1852,11 @@ def _lifeos_startup() -> None:
         health_store.apply_migrations()
     except Exception:  # noqa: BLE001
         log.exception("lifeos health store failed to migrate")
+    # P3: same for finance DB (independent key + DB).
+    try:
+        finance_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos finance store failed to migrate")
 
 
 @app.on_event("shutdown")
@@ -2046,6 +2112,131 @@ async def api_health_create(request: Request):
 @app.delete("/api/health/entries/{eid}")
 def api_health_delete(eid: str):
     ok = health_entries.delete(eid)
+    return {"deleted": ok}
+
+
+# ────────────────────────── lifeos (P3 finance) ────────────────────────
+
+
+def _finance_entry_to_dict(e: finance_entries.Entry) -> dict:
+    return {
+        "id": e.id,
+        "ts": e.ts.isoformat(),
+        "kind": e.kind,
+        "amount": e.amount,
+        "currency": e.currency,
+        "category": e.category,
+        "merchant": e.merchant,
+        "title": e.title,
+        "body": e.body,
+        "tags": e.tags,
+        "source": e.source,
+        "confidence": e.confidence,
+        "reflect_at": e.reflect_at.isoformat() if e.reflect_at else None,
+        "reflection_done": e.reflection_done,
+        "reminder_id": e.reminder_id,
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+@app.get("/finance", response_class=HTMLResponse)
+def finance_page(request: Request):
+    return templates.TemplateResponse(request, "finance.html", {})
+
+
+@app.get("/api/finance/entries")
+def api_finance_list(days: int = 30, kind: str | None = None, q: str | None = None):
+    if q:
+        rows = finance_entries.search(q, kind=kind if kind else None)
+    else:
+        rows = finance_entries.list_recent(
+            days=max(1, min(days, 3650)),
+            kind=kind if kind else None,
+        )
+    return {"entries": [_finance_entry_to_dict(e) for e in rows]}
+
+
+@app.get("/api/finance/summary")
+def api_finance_summary(days: int = 30):
+    return finance_entries.summary(days=max(1, min(days, 3650)))
+
+
+@app.get("/api/finance/pending-reflections")
+def api_finance_pending():
+    rows = finance_entries.pending_reflections()
+    return {"entries": [_finance_entry_to_dict(e) for e in rows]}
+
+
+@app.post("/api/finance/entries")
+async def api_finance_create(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    kind = body.get("kind")
+    title = (body.get("title") or "").strip()
+    amount = body.get("amount")
+    ts_str = body.get("ts")
+    if not kind or not title or amount is None or not ts_str:
+        raise HTTPException(400, "kind, title, amount and ts are required")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"ts must be ISO8601: {ts_str!r}")
+    if ts.tzinfo is None:
+        raise HTTPException(400, "ts must be tz-aware")
+    if len(title) > 200:
+        raise HTTPException(400, "title too long (max 200)")
+    try:
+        entry = finance_entries.create(
+            kind=kind, title=title, amount=float(amount), when=ts,
+            currency=body.get("currency", "MXN"),
+            category=body.get("category") or None,
+            merchant=body.get("merchant") or None,
+            body=body.get("body") or None,
+            tags=body.get("tags") or None,
+            source=body.get("source", "manual"),
+            confidence=float(body.get("confidence", 1.0)),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # If it's a big_purchase, fire-and-forget the reflection scheduler.
+    if entry.kind == "big_purchase":
+        try:
+            finance_reflect.schedule_reflection_for(entry)
+            # Re-fetch so reminder_id is included in the response.
+            entry = finance_entries.get(entry.id) or entry
+        except Exception:  # noqa: BLE001
+            log.exception("failed to schedule reflection for %s", entry.id)
+    return _finance_entry_to_dict(entry)
+
+
+@app.post("/api/finance/entries/{eid}/reflect")
+async def api_finance_reflect(eid: str, request: Request):
+    """Mark a big-purchase as impulsive or planned."""
+    body = await request.json()
+    tag = (body or {}).get("tag")
+    if tag not in ("impulsive", "planned"):
+        raise HTTPException(400, "tag must be 'impulsive' or 'planned'")
+    try:
+        finance_entries.mark_reflected(eid, tag=tag)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.delete("/api/finance/entries/{eid}")
+def api_finance_delete(eid: str):
+    # Cancel the linked reflection reminder if there is one.
+    e = finance_entries.get(eid)
+    if e and e.reminder_id:
+        try:
+            finance_reflect.cancel_reflection_for(e)
+        except Exception:  # noqa: BLE001
+            log.warning("failed to cancel reflection reminder for %s", eid)
+    ok = finance_entries.delete(eid)
     return {"deleted": ok}
 
 
