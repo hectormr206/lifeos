@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
-# Activate interpreter mode:
-#   1. Stop axi-voice (releases the Whisper instance + ~2 GB VRAM)
-#   2. Ensure llama-server runs on GPU (Qwen via Whisper translator)
-#   3. Start axi-translate
+# Activate interpreter mode.
+#
+# Since axi-whisper.service holds a single shared Whisper instance for
+# both axi-voice and axi-translate, the two services coexist on the same
+# GPU. This script no longer needs to stop axi-voice.
 #
 # VRAM budget (RTX 5070 Ti 12 GB):
-#   Whisper large-v3-turbo on GPU: ~1.6 GB
-#   Qwen3.6-35B-A3B MoE on GPU:    ~7.8 GB
-#   CUDA contexts + buffers:       ~1.5 GB
-#   Total:                         ~10.9 GB  (~1 GB margin)
+#   Qwen3.6-35B-A3B MoE (llama-server): ~7.8 GB
+#   Whisper large-v3-turbo (shared):    ~2.3 GB
+#   Piper + Opus-MT (translate, CPU):    ~0 GB on GPU
+#   CUDA contexts + buffers:            ~0.5 GB
+#   Total:                              ~10.6 GB  (~1.4 GB margin)
 #
-# Reversal: `axi-translate-off` returns to the normal axi-voice stack.
+# Reversal: `axi-translate-off`.
 
 set -u
 
-echo "[axi-translate-on] stopping axi-voice…"
-systemctl --user stop axi-voice.service || true
+echo "[axi-translate-on] ensuring axi-whisper.service is running…"
+systemctl --user start axi-whisper.service
 
 echo "[axi-translate-on] ensuring llama-server is on GPU…"
 # Clean up any CPU-mode drop-in from earlier runs.

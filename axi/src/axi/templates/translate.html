@@ -1,0 +1,416 @@
+{% extends "_base.html" %}
+{% block nav_translate %}active{% endblock %}
+{% block title %}Traductor · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="translateMonitor()" x-init="connect()">
+
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Monitor de traducción en vivo</h1>
+    <div class="flex gap-2 items-center text-sm">
+      <span class="text-xs muted">Estado</span>
+      <span x-show="connected" class="text-xs px-2 py-0.5 rounded-full" style="background: rgba(34, 197, 94, 0.15); color: rgb(34, 197, 94)">● conectado</span>
+      <span x-show="!connected" class="text-xs px-2 py-0.5 rounded-full" style="background: rgba(239, 68, 68, 0.15); color: rgb(239, 68, 68)">○ desconectado</span>
+      <button class="btn" @click="clear()">Limpiar</button>
+      <label class="muted text-xs flex items-center gap-1">
+        <input type="checkbox" x-model="autoscroll"> Auto-scroll
+      </label>
+    </div>
+  </div>
+
+  <!-- Live timeline of events. Each event from the flow below (EN, ES,
+       EN-dup, ES-dup, speed, flush) appears as a colored chip at NOW
+       (right edge) and slides leftward over `bufferViewS` seconds, falling
+       off the left side. The cyan overlay marks the current Whisper
+       analysis window (last `window_s` seconds). When events sit inside
+       the cyan overlay, that's the context Whisper is currently re-running
+       on. Hop boundaries are shown as faint dashed vertical lines. -->
+  <div class="panel p-4 space-y-3">
+    <div class="flex justify-between items-baseline flex-wrap gap-2">
+      <h2 class="text-sm font-semibold uppercase tracking-wider muted">Línea de tiempo de eventos</h2>
+      <div class="text-xs muted flex items-center gap-3">
+        <span>Ventana: <span class="font-mono text-base" style="color: rgb(56, 189, 248)" x-text="params.window_s.toFixed(1) + 's'">…</span></span>
+        <span>·</span>
+        <span>Hop: <span class="font-mono text-base" style="color: rgb(250, 204, 21)" x-text="params.hop_s.toFixed(1) + 's'">…</span></span>
+        <span>·</span>
+        <span>Próximo tick en
+          <span class="font-mono text-base" style="color: rgb(250, 204, 21)" x-text="`${(params.hop_s - (animTime % params.hop_s)).toFixed(1)}s`">…</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Timeline.  Past zone on the left + a thin "future" zone on the
+         right of NOW so audio chips can render BEFORE they actually play
+         (they slide leftward through NOW as playback happens). Time flows
+         right-to-left for everything; NOW is the boundary. -->
+    <div class="relative w-full overflow-hidden rounded-md"
+         style="height: 9rem; background: var(--panel2); border: 1px solid var(--border)">
+
+      <!-- Future zone background — slightly lighter so it's visually
+           distinguishable from the past. -->
+      <div class="absolute top-0 bottom-0 pointer-events-none"
+           :style="`right: 0; width: ${(futureViewS / totalViewS * 100).toFixed(1)}%; background: rgba(255, 255, 255, 0.025);`">
+      </div>
+
+      <!-- Hop grid: dashed vertical lines every hop_s, anchored to NOW and
+           scrolling left with time. -->
+      <template x-for="i in Math.ceil(totalViewS / params.hop_s) + 1" :key="i">
+        <div class="absolute top-0 bottom-0 pointer-events-none"
+             :style="`right: ${((futureViewS + (i - 1) * params.hop_s - (animTime % params.hop_s)) / totalViewS * 100).toFixed(2)}%; width: 1px; border-left: 1px dashed rgba(250, 204, 21, 0.25);`">
+        </div>
+      </template>
+
+      <!-- Window region (cyan): starts at NOW, extends window_s back. -->
+      <div class="absolute top-0 bottom-0 transition-colors duration-150"
+           :style="`right: ${(futureViewS / totalViewS * 100).toFixed(2)}%; width: ${(params.window_s / totalViewS * 100).toFixed(2)}%; background: ${windowFlash ? 'rgba(56, 189, 248, 0.32)' : 'rgba(56, 189, 248, 0.14)'}; border-left: 2px dashed rgba(56, 189, 248, 0.55);`">
+      </div>
+
+      <!-- NOW pointer at the boundary past↔future -->
+      <div class="absolute pointer-events-none"
+           :style="`right: ${(futureViewS / totalViewS * 100).toFixed(2)}%; top: -0.4rem; bottom: -0.4rem; width: 2px; background: var(--pink);`"></div>
+
+      <!-- Audio playback chips: wide bars whose width = duration. They
+           enter on the future side, cross NOW (= actually playing), and
+           exit into the past. Title tooltip shows the Spanish text. -->
+      <template x-for="ev in visibleAudio" :key="ev.id">
+        <div class="absolute" :style="`right: ${ev.rightPct}%; width: ${ev.widthPct}%; top: ${ev.top}; height: 1.5rem; opacity: ${ev.opacity};`"
+             :title="ev.tooltip">
+          <div class="h-full rounded flex items-center px-1 overflow-hidden whitespace-nowrap"
+               :style="`background: ${ev.bg}; border: 1px solid ${ev.border}; ${ev.playing ? 'box-shadow: 0 0 12px rgba(168, 85, 247, 0.6);' : ''}`">
+            <span class="text-xs font-mono" :style="`color: ${ev.fg}`" x-text="ev.label"></span>
+          </div>
+        </div>
+      </template>
+
+      <!-- Event chips (EN/ES/dedup/meta). Lane 0=EN, lane 1=ES, lane 2=meta. -->
+      <template x-for="ev in visibleEvents" :key="ev.id">
+        <div class="absolute whitespace-nowrap"
+             :style="`right: ${ev.rightPct}%; top: ${ev.top}; opacity: ${ev.opacity}; transform: translateX(50%);`"
+             :title="ev.tooltip">
+          <span class="text-xs font-mono px-1.5 py-0.5 rounded cursor-help"
+                :style="`background: ${ev.bg}; color: ${ev.fg}; border: 1px solid ${ev.border};`"
+                x-text="ev.label"></span>
+        </div>
+      </template>
+
+      <!-- Edge labels — absolutely positioned at their actual anchors so
+           the NOW label sits over the NOW pink line, not over "más viejo". -->
+      <span class="absolute text-xs muted pointer-events-none"
+            style="left: 0.5rem; bottom: 0.25rem;">más viejo ←</span>
+      <span class="absolute text-xs font-semibold pointer-events-none"
+            :style="`right: ${(futureViewS / totalViewS * 100).toFixed(2)}%; bottom: 0.25rem; transform: translateX(50%); color: var(--pink);`">NOW</span>
+      <span class="absolute text-xs muted pointer-events-none"
+            style="right: 0.5rem; bottom: 0.25rem;">→ futuro</span>
+    </div>
+
+    <!-- Legend -->
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs muted">
+      <div class="flex items-start gap-2">
+        <span style="color: rgb(56, 189, 248)" class="text-base leading-none">█</span>
+        <span><strong style="color: rgb(56, 189, 248)">Ventana</strong>: lo que Whisper re-analiza.</span>
+      </div>
+      <div class="flex items-start gap-2">
+        <span style="color: rgb(250, 204, 21)" class="text-base leading-none">┊</span>
+        <span><strong style="color: rgb(250, 204, 21)">Hop</strong>: cada vez que transcribe.</span>
+      </div>
+      <div class="flex items-start gap-2">
+        <span style="color: rgb(34, 197, 94)" class="text-base leading-none">●</span>
+        <span><strong>Chips</strong>: EN/ES/dedup (hover = ver texto).</span>
+      </div>
+      <div class="flex items-start gap-2">
+        <span style="color: rgb(168, 85, 247)" class="text-base leading-none">█</span>
+        <span><strong style="color: rgb(168, 85, 247)">AUDIO</strong>: barra ancha = duración real del audio. Gaps = silencio.</span>
+      </div>
+      <div class="flex items-start gap-2">
+        <span style="color: var(--pink)" class="text-base leading-none">│</span>
+        <span><strong style="color: var(--pink)">NOW</strong>: el presente.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Counters -->
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-center text-sm">
+    <div class="panel p-3">
+      <div class="text-xs muted">EN</div>
+      <div class="text-xl font-mono" x-text="counts.en"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">ES</div>
+      <div class="text-xl font-mono" x-text="counts.es"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">EN dedup</div>
+      <div class="text-xl font-mono" style="color: rgb(167, 139, 250)" x-text="counts.en_drop"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">ES dedup</div>
+      <div class="text-xl font-mono muted" x-text="counts.es_drop"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Cortes (flush)</div>
+      <div class="text-xl font-mono" :style="counts.flush > 0 ? 'color: rgb(248, 113, 113)' : ''" x-text="counts.flush"></div>
+    </div>
+  </div>
+
+  <!-- Stream view -->
+  <div class="panel p-0 overflow-hidden">
+    <div class="px-4 py-2 border-b text-xs muted flex items-center justify-between" style="border-color: var(--border)">
+      <span>Flujo en vivo</span>
+      <span>
+        <span style="color: rgb(34, 197, 94)">■</span> EN ·
+        <span style="color: rgb(56, 189, 248)">■</span> ES ·
+        <span style="color: rgb(167, 139, 250)">■</span> EN dup ·
+        <span class="muted">■</span> ES dup ·
+        <span style="color: rgb(250, 204, 21)">■</span> speed ·
+        <span style="color: rgb(248, 113, 113)">■</span> flush
+      </span>
+    </div>
+    <div
+      x-ref="stream"
+      class="font-mono text-sm overflow-y-auto"
+      style="max-height: 70vh; min-height: 24rem; background: var(--bg)"
+    >
+      <template x-if="rows.length === 0">
+        <div class="p-8 text-center muted">
+          Esperando eventos del traductor… Reproducí el video o iniciá el modo intérprete.
+        </div>
+      </template>
+      <template x-for="row in rows" :key="row.id">
+        <div class="px-4 py-1 flex gap-3 items-baseline border-b" style="border-color: rgba(127,127,127,0.08)">
+          <span class="text-xs muted shrink-0" style="min-width: 5.5rem" x-text="row.ts"></span>
+          <span class="text-xs shrink-0 font-semibold uppercase tracking-wider" :style="row.color" style="min-width: 4.5rem" x-text="row.label"></span>
+          <span :style="row.color" class="break-words" x-text="row.text"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <p class="muted text-xs">
+    Los eventos vienen de <code>axi-translate.service</code>. EN = Whisper, ES = Opus, dedup = duplicados descartados, speed = cambio de velocidad Piper, flush = corte por cola llena.
+  </p>
+</div>
+
+<script>
+function translateMonitor() {
+  return {
+    rows: [],
+    counts: { en: 0, es: 0, en_drop: 0, es_drop: 0, flush: 0 },
+    connected: false,
+    autoscroll: true,
+    // Live tunables — fetched from /api/translate/params on init so the
+    // visualization renders the actual running values.
+    params: { window_s: 8.0, hop_s: 1.5 },
+    // Past horizon shown on the timeline. Slightly larger than window_s so
+    // the buffer "tail" is visible outside the analysis window.
+    get bufferViewS() { return Math.max(this.params.window_s * 1.4, 10.0); },
+    // Small "future" zone to the right of NOW where audio chips appear
+    // BEFORE they actually play (i.e. while queued behind earlier audio).
+    futureViewS: 6.0,
+    get totalViewS() { return this.bufferViewS + this.futureViewS; },
+    // Continuous animation clock (seconds since the timeline started).
+    // Updated at ~30 Hz by an rAF loop so chips slide smoothly.
+    animTime: 0,
+    windowFlash: false,
+    // Events shown on the visualization timeline. Each entry has:
+    //   {id, kind, label, eventTime (seconds since _animStart)}
+    timelineEvents: [],
+    _animStart: 0,
+    _lastHopBucket: 0,
+    _rafId: 0,
+    _es: null,
+    _id: 0,
+
+    // Palette for point-event chips. Audio uses its own (purple) below.
+    _palettes() {
+      return {
+        en:       { bg: 'rgba(34, 197, 94, 0.20)',  fg: 'rgb(74, 222, 128)',  border: 'rgba(34, 197, 94, 0.6)',  label: 'EN',     lane: 0 },
+        es:       { bg: 'rgba(56, 189, 248, 0.20)', fg: 'rgb(125, 211, 252)', border: 'rgba(56, 189, 248, 0.6)', label: 'ES',     lane: 1 },
+        en_drop:  { bg: 'rgba(167, 139, 250, 0.18)',fg: 'rgb(196, 181, 253)', border: 'rgba(167, 139, 250, 0.55)',label: 'EN ✕',  lane: 0 },
+        es_drop:  { bg: 'rgba(127, 127, 127, 0.18)',fg: 'rgb(180, 180, 180)', border: 'rgba(127, 127, 127, 0.5)', label: 'ES ✕',  lane: 1 },
+        speed:    { bg: 'rgba(250, 204, 21, 0.18)', fg: 'rgb(253, 224, 71)',  border: 'rgba(250, 204, 21, 0.55)', label: 'SPEED', lane: 2 },
+        flush:    { bg: 'rgba(248, 113, 113, 0.22)',fg: 'rgb(252, 165, 165)', border: 'rgba(248, 113, 113, 0.7)', label: 'FLUSH', lane: 2 },
+      };
+    },
+
+    // Derived view of point-event chips with current right%, opacity, lane.
+    // Recomputed on every animation frame because Alpine re-renders when
+    // animTime changes. Lane top offsets: 0=top, 1=middle, 2=below middle.
+    get visibleEvents() {
+      const palettes = this._palettes();
+      const total = this.totalViewS;
+      const future = this.futureViewS;
+      const out = [];
+      // Lane top offsets within the 9rem container.
+      const lanes = ['0.4rem', '2.0rem', '3.6rem'];
+      for (const ev of this.timelineEvents) {
+        if (ev.kind === 'audio') continue;  // handled separately in visibleAudio
+        const age = this.animTime - ev.eventTime;
+        if (age < 0 || age > this.bufferViewS + 0.5) continue;
+        const rightPct = ((future + age) / total) * 100;
+        const fadeStart = ((future + this.bufferViewS - 1.5) / total) * 100;
+        const opacity = rightPct < fadeStart ? 1 : Math.max(0, 1 - (rightPct - fadeStart) / (100 - fadeStart));
+        const p = palettes[ev.kind] || palettes.en;
+        out.push({
+          id: ev.id,
+          rightPct: rightPct.toFixed(2),
+          opacity: opacity.toFixed(2),
+          top: lanes[p.lane],
+          label: p.label,
+          bg: p.bg,
+          fg: p.fg,
+          border: p.border,
+          tooltip: ev.text ? `${p.label}: ${ev.text}` : p.label,
+        });
+      }
+      return out;
+    },
+
+    // Audio chips: their position represents WHEN the audio plays, not when
+    // it was queued. Width = duration. When age == start_in, the right edge
+    // crosses NOW (= playback begins). While the bar straddles NOW, audio
+    // is currently playing.
+    get visibleAudio() {
+      const total = this.totalViewS;
+      const future = this.futureViewS;
+      const out = [];
+      const lane = '5.4rem';  // dedicated bottom lane for audio bars
+      for (const ev of this.timelineEvents) {
+        if (ev.kind !== 'audio') continue;
+        const age = this.animTime - ev.eventTime;
+        const dur = ev.duration || 0.0;
+        const startIn = ev.start_in || 0.0;
+        // Playback-relative age: positive once audio has started.
+        const playAge = age - startIn;
+        // Position of the chip's right edge in seconds (positive = in past).
+        // When playAge < 0, the right edge is in the future zone.
+        const rightSec = playAge;
+        const rightPct = ((future + rightSec) / total) * 100;
+        const widthPct = (dur / total) * 100;
+        // Cull when the LEFT edge has fallen off the left side.
+        if (rightPct > 100 + 5) continue;
+        // Also cull when the RIGHT edge is way to the right of the future zone.
+        if (rightPct < -widthPct - 5) continue;
+        // Fade audio chips as they age past the buffer view, similar to point chips.
+        const fadeStart = ((future + this.bufferViewS - 1.5) / total) * 100;
+        const opacity = rightPct < fadeStart ? 1 : Math.max(0, 1 - (rightPct - fadeStart) / (100 - fadeStart));
+        // "Playing now" = NOW (at right=future/total*100) sits between the
+        // chip's right edge and its left edge.
+        const nowPct = (future / total) * 100;
+        const playing = (rightPct < nowPct && rightPct + widthPct > nowPct);
+        const label = playing
+          ? `▶ ${dur.toFixed(1)}s`
+          : (playAge < 0 ? `⏳ ${dur.toFixed(1)}s` : `${dur.toFixed(1)}s`);
+        out.push({
+          id: ev.id,
+          rightPct: rightPct.toFixed(2),
+          widthPct: widthPct.toFixed(2),
+          opacity: opacity.toFixed(2),
+          top: lane,
+          label: label,
+          bg: 'rgba(168, 85, 247, 0.20)',
+          fg: 'rgb(216, 180, 254)',
+          border: 'rgba(168, 85, 247, 0.6)',
+          playing: playing,
+          tooltip: `AUDIO: ${ev.text || ''} · duración ${dur.toFixed(1)}s · arranca a +${startIn.toFixed(1)}s`,
+        });
+      }
+      return out;
+    },
+
+    async loadParams() {
+      try {
+        const r = await fetch('/api/translate/params');
+        if (r.ok) this.params = await r.json();
+      } catch (e) { /* keep defaults */ }
+      this._startTimeline();
+    },
+
+    _startTimeline() {
+      // Animation loop: ~30 Hz tick that updates `animTime` (used by the
+      // sweep, the next-tick countdown, and the right-to-left flow). At
+      // each completed hop boundary, briefly flash the window so the user
+      // sees the moment Whisper conceptually re-runs.
+      if (this._rafId) cancelAnimationFrame(this._rafId);
+      this._animStart = performance.now();
+      this._lastHopBucket = 0;
+      const tick = (t) => {
+        this.animTime = (t - this._animStart) / 1000;
+        const bucket = Math.floor(this.animTime / this.params.hop_s);
+        if (bucket !== this._lastHopBucket) {
+          this._lastHopBucket = bucket;
+          this.windowFlash = true;
+          setTimeout(() => { this.windowFlash = false; }, 180);
+        }
+        this._rafId = requestAnimationFrame(tick);
+      };
+      this._rafId = requestAnimationFrame(tick);
+    },
+
+    connect() {
+      this.loadParams();
+      if (this._es) this._es.close();
+      const es = new EventSource('/api/translate/stream?since_minutes=5');
+      this._es = es;
+      es.onopen = () => { this.connected = true; };
+      es.onerror = () => { this.connected = false; };
+      es.addEventListener('hello', () => { this.connected = true; });
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          this._push(data);
+        } catch (e) { /* ignore */ }
+      };
+    },
+
+    _push(d) {
+      const styleMap = {
+        en:       { label: 'EN',     color: 'color: rgb(34, 197, 94)' },
+        es:       { label: 'ES',     color: 'color: rgb(56, 189, 248)' },
+        en_drop:  { label: 'EN ✕',   color: 'color: rgb(167, 139, 250)' },
+        es_drop:  { label: 'ES ✕',   color: 'color: var(--muted)' },
+        speed:    { label: 'SPEED',  color: 'color: rgb(250, 204, 21)' },
+        flush:    { label: 'FLUSH!', color: 'color: rgb(248, 113, 113); font-weight: 600' },
+        other:    { label: 'INFO',   color: 'color: var(--muted)' },
+      };
+      const s = styleMap[d.kind] || styleMap.other;
+      this.rows.push({
+        id: ++this._id,
+        ts: d.ts,
+        text: d.text,
+        label: s.label,
+        color: s.color,
+      });
+      if (this.rows.length > 500) this.rows.splice(0, this.rows.length - 500);
+      if (d.kind in this.counts) this.counts[d.kind]++;
+
+      // Push the event onto the visualization timeline (chip flowing left).
+      this.timelineEvents.push({
+        id: this._id,
+        kind: d.kind,
+        eventTime: this.animTime,
+        text: d.text || '',
+        start_in: d.start_in,   // only set on audio events
+        duration: d.duration,   // only set on audio events
+      });
+      // Cap memory: keep at most ~150 events.
+      if (this.timelineEvents.length > 150) {
+        this.timelineEvents.splice(0, this.timelineEvents.length - 150);
+      }
+
+      if (this.autoscroll) {
+        // Scroll on next frame after Alpine renders.
+        this.$nextTick(() => {
+          const el = this.$refs.stream;
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      }
+    },
+
+    clear() {
+      this.rows = [];
+      this.counts = { en: 0, es: 0, en_drop: 0, es_drop: 0, flush: 0 };
+    },
+  };
+}
+</script>
+{% endblock %}

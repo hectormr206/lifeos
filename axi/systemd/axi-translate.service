@@ -1,11 +1,11 @@
 [Unit]
 Description=Axi interpreter mode (EN→ES real-time translation)
-After=graphical-session.target sound.target
+After=graphical-session.target sound.target axi-whisper.service
+Wants=axi-whisper.service
 PartOf=graphical-session.target
-# Note: the activation script (axi-translate-on) handles stopping axi-voice
-# explicitly so we can also restore it cleanly on deactivation. A
-# `Conflicts=axi-voice.service` directive here would also tear down
-# axi-tray via its dependency on axi-voice — not what we want.
+# Note: voice and translate can now run concurrently because both share a
+# single Whisper instance through axi-whisper.service (~1.6 GB instead of
+# 2× ~2.3 GB). The activation scripts no longer need to stop axi-voice.
 
 [Service]
 Type=simple

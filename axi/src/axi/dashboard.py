@@ -37,7 +37,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
@@ -833,6 +833,136 @@ def api_events(limit: int = 50, level: str | None = None):
 def api_events_mark_read():
     events.mark_all_read()
     return {"ok": True}
+
+
+# ────────── translate live monitor ──────────
+
+@app.get("/translate", response_class=HTMLResponse)
+def translate_page(request: Request):
+    return templates.TemplateResponse(request, "translate.html", {})
+
+
+@app.get("/api/translate/params")
+def api_translate_params():
+    """Expose the live tuning parameters the translator is running with so
+    the dashboard can render them and visualise the rolling-window flow.
+    Reads env vars with the same defaults the translator uses so this stays
+    in sync even when run-time tunables change."""
+    return {
+        "window_s": float(os.environ.get("AXI_WINDOW_S", "8.0")),
+        "hop_s": float(os.environ.get("AXI_HOP_S", "1.5")),
+        "max_queue_s": 22.0,
+        "speed_bands": [
+            {"max_pending_s": 3.0,  "length_scale": 1.00},
+            {"max_pending_s": 6.0,  "length_scale": 0.92},
+            {"max_pending_s": 10.0, "length_scale": 0.85},
+            {"max_pending_s": None, "length_scale": 0.78},
+        ],
+    }
+
+
+# Pattern matches structured logs emitted by axi.translate. journalctl
+# prints `MMM DD HH:MM:SS host process[pid]: ISO-TS axi.translate LEVEL MSG`.
+import re as _re  # noqa: PLC0415
+_TRANSLATE_LINE_RE = _re.compile(
+    r'(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) '
+    r'axi\.translate \w+ '
+    r'(?P<kind>EN|ES|DEDUP-drop|DEDUP-en-drop|piper length_scale|queue lag|audio queued): ?'
+    r'(?P<rest>.*)$'
+)
+_AUDIO_RE = _re.compile(
+    r'start_in=(?P<start>[\d.]+)s duration=(?P<dur>[\d.]+)s text=(?P<text>.*)$'
+)
+
+
+@app.get("/api/translate/stream")
+def api_translate_stream(since_minutes: int = 5):
+    """Server-Sent Events stream of structured axi-translate log events.
+    Each event is a JSON object: {ts, kind, text, [meta]}. Frontend renders
+    EN/ES in a two-column live transcript so the operator can compare
+    Whisper output and Opus translation against the source video in real
+    time. Backfills `since_minutes` to give the UI immediate context."""
+
+    if since_minutes < 0 or since_minutes > 240:
+        raise HTTPException(400, "since_minutes must be 0..240")
+
+    def _classify(kind: str, rest: str) -> dict:
+        # The "piper length_scale" line carries a colon in the middle:
+        # "piper length_scale 0.92 → 1.00 (pending=0.6s)" — preserve as-is.
+        if kind == "piper length_scale":
+            return {"kind": "speed", "text": rest}
+        if kind == "queue lag":
+            return {"kind": "flush", "text": rest}
+        if kind == "EN":
+            return {"kind": "en", "text": rest}
+        if kind == "ES":
+            return {"kind": "es", "text": rest}
+        if kind == "DEDUP-en-drop":
+            return {"kind": "en_drop", "text": rest}
+        if kind == "DEDUP-drop":
+            return {"kind": "es_drop", "text": rest}
+        if kind == "audio queued":
+            m = _AUDIO_RE.match(rest)
+            if m:
+                return {
+                    "kind": "audio",
+                    "start_in": float(m.group("start")),
+                    "duration": float(m.group("dur")),
+                    "text": m.group("text").strip(),
+                }
+            return {"kind": "other", "text": f"audio (unparsed): {rest}"}
+        return {"kind": "other", "text": f"{kind}: {rest}"}
+
+    def _gen():
+        # Send an immediate retry hint and a hello so the EventSource on
+        # the client side knows the channel is alive even before any logs
+        # arrive (the daemon may be idle).
+        yield "retry: 3000\n\n"
+        yield f"event: hello\ndata: {json.dumps({'ts': time.time()})}\n\n"
+
+        args = ["journalctl", "--user", "-u", "axi-translate.service",
+                "--no-pager", "-o", "short-iso", "-f"]
+        if since_minutes > 0:
+            args += ["--since", f"{since_minutes} minutes ago"]
+        try:
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+        except (OSError, FileNotFoundError) as e:
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            return
+
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                m = _TRANSLATE_LINE_RE.search(line)
+                if not m:
+                    continue
+                payload = _classify(m.group("kind"), m.group("rest").rstrip())
+                payload["ts"] = m.group("ts")[11:19]  # HH:MM:SS
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except (subprocess.TimeoutExpired, OSError):
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable proxy buffering if any
+        },
+    )
 
 
 # ────────── conversations (P1.4) ──────────

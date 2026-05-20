@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
-# Deactivate interpreter mode and restore the normal GPU-backed daemon stack.
+# Deactivate interpreter mode.
+#
+# Since voice and translate now coexist via the shared axi-whisper.service,
+# this just stops translate. axi-voice keeps running and axi-whisper stays
+# loaded so a future translate restart is fast.
 
 set -u
 
 echo "[axi-translate-off] stopping axi-translate…"
 systemctl --user stop axi-translate.service || true
 
-echo "[axi-translate-off] reverting llama-server to GPU mode…"
-rm -f ~/.config/systemd/user/llama-server.service.d/cpu-exec.conf
-rm -f ~/.config/systemd/user/llama-server.service.d/cpu-override.conf
-rmdir ~/.config/systemd/user/llama-server.service.d 2>/dev/null || true
-systemctl --user daemon-reload
-systemctl --user restart llama-server.service
-
-echo "[axi-translate-off] starting axi-voice…"
-systemctl --user start axi-voice.service
-
-echo "[axi-translate-off] sistema normal restaurado."
+echo "[axi-translate-off] sistema normal."

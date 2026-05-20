@@ -1,0 +1,14 @@
+[Unit]
+Description=Axi shared Whisper server (one model, multiple consumers)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/LifeOS/lifeos/axi/.env
+ExecStart=%h/LifeOS/lifeos/axi/.venv/bin/python -m axi.whisper_server
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

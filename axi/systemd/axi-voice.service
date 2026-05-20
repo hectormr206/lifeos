@@ -1,6 +1,7 @@
 [Unit]
 Description=Axi voice daemon (LifeOS)
-After=graphical-session.target sound.target
+After=graphical-session.target sound.target axi-whisper.service
+Wants=axi-whisper.service
 PartOf=graphical-session.target
 
 [Service]

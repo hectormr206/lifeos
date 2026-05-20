@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -38,16 +39,53 @@ from pathlib import Path
 
 log = logging.getLogger("axi.translate")
 
-# Translator selection. Qwen (via llama-server) produces native-quality
-# translations — handles context, proper nouns, technical terms, and
-# fragments far better than the small Opus-MT model. Cost: 3-5s per
-# translation on CPU (Qwen3.6 35B MoE). With Opus-MT, ~50ms.
+# Translator selection. Opus-MT (Helsinki-NLP/opus-mt-en-es, Marian) on CPU
+# is the default after head-to-head testing: it is small, specialised for
+# EN→ES, and runs at ~50-150ms per sentence — fast enough to keep total
+# end-to-end lag at ~4s during live conference audio. NLLB-200 distilled
+# 600M is available as a quality upgrade if it can be run on GPU (fp16,
+# ~1.2 GB VRAM); on CPU it is ~3× slower than Opus-MT for the typical
+# short sentences this pipeline produces, so it hurts more than it helps.
+# Qwen3.6 35B is kept around but is overkill (3-5s/sentence, 20+ GB VRAM).
 #
-# AXI_TRANSLATOR = "qwen" (default) | "opus"
-TRANSLATOR = os.environ.get("AXI_TRANSLATOR", "qwen").lower()
+# AXI_TRANSLATOR = "opus" (default) | "nllb" | "qwen"
+TRANSLATOR = os.environ.get("AXI_TRANSLATOR", "opus").lower()
 
-# Helsinki-NLP/opus-mt-en-es — fast fallback. ~50ms per phrase on CPU.
+# Helsinki-NLP/opus-mt-en-es — small (~300 MB) Marian model specialised for
+# EN→ES. Default is CPU even though GPU fp16 wins isolated benchmarks
+# (~40 ms vs ~67 ms on this box). In the running service Marian on GPU
+# contends with Whisper for CUDA streams and the contention adds latency
+# everywhere, growing the queue. CPU keeps Opus orthogonal to GPU work
+# and the system stays around the 4s lag sweet spot.
 OPUS_MODEL = "Helsinki-NLP/opus-mt-en-es"
+OPUS_DEVICE = os.environ.get("AXI_OPUS_DEVICE", "cpu").lower()  # cuda|cpu
+
+# NLLB-200 distilled 600M, pre-converted to CTranslate2 int8 at install
+# time (see scripts/install or the README). NLLB uses Facebook's flag
+# codes; English source and Mexican-Spanish target. spa_Latn is the
+# closest available code — NLLB does not have a separate es_MX variant,
+# but the pronunciation map and TTS voice handle the Mexican accent.
+NLLB_CT2_DIR = os.environ.get(
+    "AXI_NLLB_DIR",
+    str(Path.home() / "LifeOS/models/nllb-200-distilled-600M-ct2-int8"),
+)
+NLLB_HF_MODEL = "facebook/nllb-200-distilled-600M"
+NLLB_SRC_LANG = "eng_Latn"
+NLLB_TGT_LANG = "spa_Latn"
+NLLB_DEVICE = os.environ.get("AXI_NLLB_DEVICE", "cpu").lower()  # cuda|cpu
+# compute_type for CTranslate2. Defaults:
+#   GPU (cuda): "float16" — int8 fails with CUBLAS_STATUS_NOT_SUPPORTED on
+#       Blackwell sm_120 for many GEMM shapes. fp16 kernels are stable.
+#       fp16 NLLB-600M needs ~1.2 GB VRAM, which currently does NOT fit
+#       beside Whisper (1.6 GB) + Piper + the resident axi-voice Whisper
+#       (2.2 GB) + llama-server (7.8 GB) on a 12 GB GPU.
+#   CPU: "int8" — quantised CPU inference, ~150-250ms per sentence on a
+#       modern x86 box. This is the safe default until VRAM contention is
+#       resolved (e.g. by stopping llama-server during translate sessions).
+NLLB_COMPUTE_TYPE = os.environ.get(
+    "AXI_NLLB_COMPUTE_TYPE",
+    "float16" if NLLB_DEVICE == "cuda" else "int8",
+)
 
 # Local llama-server endpoint (the Qwen brain that powers axi-voice).
 LLAMA_SERVER_URL = os.environ.get(
@@ -284,12 +322,82 @@ def _load_translator():
     global _translator, _tokenizer
     if _translator is not None:
         return _tokenizer, _translator
-    log.info("loading translation model %s (CPU)…", OPUS_MODEL)
     from transformers import MarianMTModel, MarianTokenizer  # noqa: PLC0415
+    import torch  # noqa: PLC0415
+    use_gpu = OPUS_DEVICE == "cuda" and torch.cuda.is_available()
+    log.info("loading translation model %s (%s%s)…",
+             OPUS_MODEL, "GPU fp16" if use_gpu else "CPU fp32",
+             "" if use_gpu or OPUS_DEVICE == "cpu" else " — CUDA unavailable")
     _tokenizer = MarianTokenizer.from_pretrained(OPUS_MODEL)
-    _translator = MarianMTModel.from_pretrained(OPUS_MODEL)
+    _translator = MarianMTModel.from_pretrained(
+        OPUS_MODEL,
+        torch_dtype=torch.float16 if use_gpu else torch.float32,
+    )
+    if use_gpu:
+        _translator = _translator.to("cuda")
     _translator.eval()
     return _tokenizer, _translator
+
+
+# NLLB state: CTranslate2 translator + HF tokenizer. Loaded once on first
+# use. The tokenizer is needed for the BPE/SPM encode-decode roundtrip;
+# CT2 only handles the encoder/decoder tensor math.
+_nllb_translator = None
+_nllb_tokenizer = None
+
+
+def _load_nllb():
+    global _nllb_translator, _nllb_tokenizer
+    if _nllb_translator is not None:
+        return _nllb_tokenizer, _nllb_translator
+    if not Path(NLLB_CT2_DIR).exists():
+        raise FileNotFoundError(
+            f"NLLB CT2 model not found at {NLLB_CT2_DIR}. "
+            "Run: ct2-transformers-converter --model "
+            f"{NLLB_HF_MODEL} --output_dir {NLLB_CT2_DIR} "
+            "--quantization int8 --copy_files tokenizer.json "
+            "tokenizer_config.json special_tokens_map.json "
+            "sentencepiece.bpe.model"
+        )
+    import ctranslate2  # noqa: PLC0415
+    from transformers import AutoTokenizer  # noqa: PLC0415
+    log.info("loading NLLB translator (%s, device=%s, %s)…",
+             Path(NLLB_CT2_DIR).name, NLLB_DEVICE, NLLB_COMPUTE_TYPE)
+    _nllb_tokenizer = AutoTokenizer.from_pretrained(
+        NLLB_CT2_DIR, src_lang=NLLB_SRC_LANG
+    )
+    _nllb_translator = ctranslate2.Translator(
+        NLLB_CT2_DIR, device=NLLB_DEVICE, compute_type=NLLB_COMPUTE_TYPE,
+    )
+    return _nllb_tokenizer, _nllb_translator
+
+
+def _translate_nllb(text_en: str) -> str:
+    """Translate via NLLB-200 (CTranslate2). Returns empty string on
+    failure so the caller can drop the chunk."""
+    try:
+        tok, trn = _load_nllb()
+    except (FileNotFoundError, RuntimeError) as e:
+        log.warning("NLLB load failed: %s", e)
+        return ""
+    try:
+        src_ids = tok(text_en, return_tensors=None).input_ids
+        src_tokens = tok.convert_ids_to_tokens(src_ids)
+        results = trn.translate_batch(
+            [src_tokens],
+            target_prefix=[[NLLB_TGT_LANG]],
+            beam_size=1,            # greedy — fastest, quality holds
+            max_decoding_length=256,
+        )
+        out_tokens = results[0].hypotheses[0]
+        # Strip the target-lang prefix token if it leaks through.
+        if out_tokens and out_tokens[0] == NLLB_TGT_LANG:
+            out_tokens = out_tokens[1:]
+        out_ids = tok.convert_tokens_to_ids(out_tokens)
+        return tok.decode(out_ids, skip_special_tokens=True).strip()
+    except Exception as e:  # noqa: BLE001
+        log.warning("NLLB translation failed: %s", e)
+        return ""
 
 
 QWEN_TRANSLATE_SYSTEM = (
@@ -353,12 +461,20 @@ def translate_text(text_en: str) -> str:
     text = text_en.strip()
     if not text:
         return ""
-    if TRANSLATOR == "qwen":
+    if TRANSLATOR == "nllb":
+        result = _translate_nllb(text)
+        if result:
+            return result
+        log.info("NLLB returned empty, falling back to Opus-MT for: %s", text[:60])
+    elif TRANSLATOR == "qwen":
         return _translate_qwen(text)
     tokenizer, model = _load_translator()
     import torch  # noqa: PLC0415
     with torch.no_grad():
         inputs = tokenizer([text], return_tensors="pt", padding=True, truncation=True, max_length=512)
+        # Move inputs to the same device as the model so a GPU-resident
+        # Marian doesn't trip on CPU tensors.
+        inputs = {k: v.to(model.device) for k, v in inputs.items()}
         outputs = model.generate(
             **inputs,
             max_new_tokens=256,
@@ -389,6 +505,14 @@ _tts_grace_until = 0.0
 _TTS_GRACE_S = 2.0
 _recent_es: list[str] = []
 _RECENT_ES_MAX = 6
+# Mirror ring on the ENGLISH side. Catching dupes BEFORE the translator
+# saves the Opus call entirely and prevents inflated content from ever
+# reaching the Spanish queue. Sliding STT windows often re-transcribe the
+# same audio with slightly different wording — the EN diff in the
+# transcribe loop misses non-overlapping rewordings; this is the second
+# line of defense, on the same side as the source.
+_recent_en: list[str] = []
+_RECENT_EN_MAX = 6
 
 
 def _mark_tts_stop() -> None:
@@ -411,6 +535,43 @@ def _mark_tts_start() -> None:
 CAPTURE_SINK_NAME = "axi_video_capture"
 
 
+def _cleanup_orphan_capture_sinks() -> int:
+    """Unload any pre-existing `axi_video_capture` null-sink modules from
+    previous interpreter runs that crashed without cleanup. Without this
+    they accumulate every restart and end up causing name collisions —
+    Chrome routes to one stale sink while we monitor a different one, and
+    audio never reaches Whisper. Returns the number unloaded."""
+    try:
+        r = subprocess.run(
+            ["pactl", "list", "short", "modules"],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return 0
+    removed = 0
+    for line in r.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3 or "module-null-sink" not in parts[1]:
+            continue
+        if CAPTURE_SINK_NAME not in parts[2]:
+            continue
+        try:
+            mid = int(parts[0])
+        except ValueError:
+            continue
+        try:
+            subprocess.run(
+                ["pactl", "unload-module", str(mid)],
+                check=False, timeout=2,
+            )
+            removed += 1
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+    if removed:
+        log.info("cleaned up %d orphan capture sink(s) from previous runs", removed)
+    return removed
+
+
 def _create_capture_null_sink() -> int | None:
     """Create a PipeWire null sink we'll use as the capture target.
 
@@ -420,6 +581,9 @@ def _create_capture_null_sink() -> int | None:
     the original audio to a null sink: silent in the speakers, but its
     monitor still carries the digital audio for Whisper to capture.
     """
+    # Always sweep orphans first — multiple sinks with the same name
+    # cause PipeWire to route streams unpredictably.
+    _cleanup_orphan_capture_sinks()
     try:
         r = subprocess.run(
             ["pactl", "load-module", "module-null-sink",
@@ -622,8 +786,11 @@ def _is_recent_es(text_es: str) -> bool:
     Catching it here on the Spanish side is the last line of defense.
 
     Use word-set Jaccard-ish overlap (intersection / smaller-set size).
-    Threshold 0.55 was tuned empirically — 0.65 lets too many dupes
-    through, 0.45 starts eating legitimate adjacent sentences.
+    Threshold 0.45 was tuned empirically with the IO 2026 / Made-by-Google
+    podcast traffic — earlier 0.55 let too many semantic duplicates through
+    when the sliding STT window produced slightly different wordings of the
+    same phrase across two emissions. 0.35 starts eating legitimate
+    adjacent sentences that share topic words.
     """
     new_set = _word_set(text_es)
     if len(new_set) < 3:
@@ -635,7 +802,7 @@ def _is_recent_es(text_es: str) -> bool:
         if len(prev_set) < 3:
             continue
         overlap = len(new_set & prev_set) / min(len(new_set), len(prev_set))
-        if overlap >= 0.55:
+        if overlap >= 0.45:
             return True
     return False
 
@@ -644,6 +811,34 @@ def _remember_es(text_es: str) -> None:
     _recent_es.append(text_es)
     if len(_recent_es) > _RECENT_ES_MAX:
         del _recent_es[0]
+
+
+def _is_recent_en(text_en: str) -> bool:
+    """Same Jaccard-overlap idea as `_is_recent_es`, applied on the
+    English source BEFORE Opus runs. Catches sliding-STT-window dupes
+    that snuck past `_word_diff` (Whisper rewords the same audio slightly
+    between consecutive 6 s windows). Threshold 0.55 here is slightly
+    looser than the ES side (0.45) because English has fewer function
+    words contributing to the bag-of-words signal, so a higher cutoff
+    reflects "same content"."""
+    new_set = _word_set(text_en)
+    if len(new_set) < 3:
+        norm = _normalize_for_dedup(text_en)
+        return any(_normalize_for_dedup(p) == norm for p in _recent_en)
+    for prev in _recent_en:
+        prev_set = _word_set(prev)
+        if len(prev_set) < 3:
+            continue
+        overlap = len(new_set & prev_set) / min(len(new_set), len(prev_set))
+        if overlap >= 0.55:
+            return True
+    return False
+
+
+def _remember_en(text_en: str) -> None:
+    _recent_en.append(text_en)
+    if len(_recent_en) > _RECENT_EN_MAX:
+        del _recent_en[0]
 
 
 def run_interpreter() -> int:
@@ -655,7 +850,13 @@ def run_interpreter() -> int:
     log.info("starting interpreter EN→ES…")
 
     # Pre-load the translator so the first chunk doesn't pay the cold cost.
+    # Always load Opus-MT (the fallback). If NLLB is the primary, load it too.
     _load_translator()
+    if TRANSLATOR == "nllb":
+        try:
+            _load_nllb()
+        except (FileNotFoundError, RuntimeError) as e:
+            log.warning("NLLB preload failed (%s) — running on Opus-MT only", e)
 
     from RealtimeTTS import TextToAudioStream
 
@@ -734,6 +935,43 @@ def run_interpreter() -> int:
         default_sink = ""
     log.info("default sink (Piper output): %s", default_sink)
 
+    # BT codec keep-alive: pipe /dev/zero through pw-play into the default
+    # sink so it never goes idle between sentences. Without this, Bluetooth
+    # codecs (FreeClip etc.) suspend after a few hundred ms of silence and
+    # clip the first ~500 ms of the next Piper sentence. The stream is
+    # inaudible (zero amplitude) but keeps the codec hot. Tied to the
+    # interpreter lifetime — killed in the finally block below.
+    keep_alive_proc = None
+    if default_sink and shutil.which("paplay"):
+        try:
+            # paplay --raw accepts raw PCM on stdin and pipes forever
+            # (pw-play uses libsndfile and won't read raw stdin).
+            zero = open("/dev/zero", "rb")  # noqa: SIM115 — long-lived
+            keep_alive_proc = subprocess.Popen(
+                [
+                    "paplay",
+                    "--device", default_sink,
+                    "--raw",
+                    "--rate=48000",
+                    "--channels=2",
+                    "--format=s16le",
+                    # Stream name with "axi" so the routing watchdog
+                    # recognises this as our own and doesn't move it onto
+                    # the capture null-sink (which would silently disconnect
+                    # the keep-alive from the BT speakers).
+                    "--stream-name=axi-keepalive",
+                    "--client-name=axi-keepalive",
+                ],
+                stdin=zero,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            log.info("started sink keep-alive (silence stream) → %s", default_sink)
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("failed to start keep-alive stream: %s", e)
+            keep_alive_proc = None
+
     # Clear stale mutes from previous crashes (legacy behavior).
     _cleanup_stale_mutes()
 
@@ -781,14 +1019,13 @@ def run_interpreter() -> int:
     import collections  # noqa: PLC0415
     import numpy as np  # noqa: PLC0415
     import pyaudio  # noqa: PLC0415
-    from faster_whisper import WhisperModel  # noqa: PLC0415
 
     SAMPLE_RATE = 16000
     # Longer window = more context for Whisper = fewer misheard words.
     # 6s gives Whisper plenty of surrounding speech to disambiguate
     # homophones and proper nouns. Hop stays at 1.5s for responsiveness.
-    WINDOW_S = 6.0
-    HOP_S = 1.5
+    WINDOW_S = float(os.environ.get("AXI_WINDOW_S", "8.0"))
+    HOP_S = float(os.environ.get("AXI_HOP_S", "1.5"))
     BUFFER_LEN = int(SAMPLE_RATE * WINDOW_S)
 
     # Whisper transcription hyper-parameters tuned for ACCURACY over speed.
@@ -802,21 +1039,27 @@ def run_interpreter() -> int:
         "AXI_WHISPER_INITIAL_PROMPT",
         "The following is a technical discussion about artificial "
         "intelligence, agents, LLMs, models, APIs, GPUs, Gemini, prompts, "
-        "tokens, retrieval, agents, MCP, ADK, and software engineering. "
-        "Proper nouns and acronyms are kept as-is.",
+        "tokens, retrieval, agents, MCP, ADK, RCS, PDA, and software "
+        "engineering. Speakers may include Dieter Bohn, Rachid Finge, "
+        "Sundar Pichai, Demis Hassabis. Proper nouns and acronyms are "
+        "kept as-is.",
     )
 
-    # Queue management: dynamic length_scale that accelerates Piper when
-    # the queue is deep, plus a hard cap as a safety net. The user prefers
-    # staying close to live over absolute fluidity — a slight speed-up
-    # during catch-up is acceptable; losing 15s+ of content is not.
+    # Queue management: dynamic length_scale with a "floor" (slow Piper
+    # down when the queue is about to dry up) and a "ceiling" (speed Piper
+    # up when the queue gets deep). With the translator running ~4-5s
+    # behind the source, real speaker pauses are absorbed by that buffer
+    # before they reach the listener — so any gap we see at the output is
+    # processing variability, not a speaker pause to preserve. We bridge
+    # those micro-gaps by stretching slightly when the queue is shallow.
     # Bands (pending_s → length_scale):
-    #   < 3s     → 1.00 (natural)
-    #   3 - 6s   → 0.92 (~8% faster)
-    #   > 6s     → 0.85 (~15% faster)
-    # MAX_QUEUE_S is the absolute safety net: if even at 0.85 we can't
-    # catch up, drop the queue and resume from the freshest chunk.
-    MAX_QUEUE_S = 15.0
+    #   < 1.5s    → 1.10 (~10% slower — anti-pause floor)
+    #   1.5 - 3s  → 1.05 (~5% slower — gentle stretch)
+    #   3 - 6s    → 1.00 (natural)
+    #   6 - 10s   → 0.92 (~8% faster — gentle catch-up)
+    #   10 - 14s  → 0.85 (~15% faster)
+    #   > 14s     → 0.78 (~22% faster — emergency)
+    MAX_QUEUE_S = 22.0
     _piper_finish_time = [time.monotonic()]
 
     # Buffer policy biased toward FLUIDITY via DEEP QUEUE.
@@ -825,9 +1068,15 @@ def run_interpreter() -> int:
     # → no gaps between chunks. The cost is more lag (queue grows),
     # but the user explicitly preferred 60-80s of fluid lag over a
     # tight latency with pauses.
-    EMIT_AT_SENTENCE_END_MIN = 5   # flush at . ! ? when ≥ N words pending
-    EMIT_HARD_CAP_WORDS = 30       # force flush at N words mid-sentence
-    EMIT_IDLE_S = 2.5              # only flush idle when nothing's coming
+    # Bigger emit thresholds so each Piper invocation handles more text in
+    # one synthesis run. Every `stream.feed()` call spawns a new Piper
+    # subprocess (~150 ms startup + ~150 ms first-chunk) — concentrating
+    # content into fewer, larger feeds removes those inter-process gaps
+    # and noticeably smooths the output at the cost of ~1-2 s extra lag
+    # before each emission.
+    EMIT_AT_SENTENCE_END_MIN = 12  # flush at . ! ? when ≥ N words pending
+    EMIT_HARD_CAP_WORDS = 50       # force flush at N words mid-sentence
+    EMIT_IDLE_S = 3.5              # only flush idle when nothing's coming
     SENTENCE_END_CHARS = (".", "!", "?", "…")
 
     audio_buf: collections.deque[int] = collections.deque(maxlen=BUFFER_LEN)
@@ -839,12 +1088,20 @@ def run_interpreter() -> int:
     # The big practical win: transcriptions stay STABLE between successive
     # windows, so our word-level diff actually finds the overlap and we
     # stop hearing duplicated phrases.
-    log.info("loading Whisper (large-v3-turbo, GPU)…")
-    whisper = WhisperModel("large-v3-turbo", device="cuda", compute_type="float16")
-    # Warm up the model with a silent buffer so the first real call is fast.
-    list(whisper.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32),
-                            language="en", beam_size=1)[0])
-    log.info("Whisper warmed")
+    # Whisper now lives in axi-whisper.service (shared by voice + translate).
+    # We use the thin client; no GPU resources are acquired in this process
+    # for transcription. This frees ~1.6 GB VRAM that used to be a second
+    # copy of large-v3-turbo. See whisper_server.py / whisper_client.py.
+    from axi.whisper_client import (  # noqa: PLC0415
+        transcribe as _whisper_transcribe,
+        ping as _whisper_ping,
+        WhisperServiceError,
+    )
+    log.info("waiting for axi-whisper.service…")
+    if not _whisper_ping(timeout_s=60.0):
+        log.error("axi-whisper.service did not become ready — aborting")
+        return 2
+    log.info("axi-whisper.service ready")
 
     _NORM_RE = re.compile(r"[^a-z0-9]+")
 
@@ -953,6 +1210,9 @@ def run_interpreter() -> int:
         "OpenAI": "Open ei ai",
         "Claude": "Clod",
         "Gemini": "Yémini",
+        # Opus-MT often Spanish-izes "Gemini" → "Géminis" (the zodiac sign).
+        # Catch the translated form too so Piper doesn't read it as "JE-mi-nis".
+        "Géminis": "Yémini",
         "ChatGPT": "Chat ye pe te",
         "Bard": "Bard",
         "Sora": "Sora",
@@ -1057,15 +1317,30 @@ def run_interpreter() -> int:
             return _spell_alphanum_token(tok) if (has_alpha and has_digit) else tok
         return _ALPHANUM_RE.sub(_sub, text)
 
-    def _clean_for_tts(text: str) -> str:
+    def _normalize_punct(text: str) -> str:
+        """Strip leading/trailing junk and collapse orphan punctuation."""
         text = text.strip(_LEAD_TRAIL_PUNCT)
-        # Collapse runs of orphan punctuation in the middle (e.g. " . ").
         text = re.sub(r"\s+([.,!?;:…])(\s|$)", r"\1\2", text)
         text = re.sub(r"(^|\s)([.,!?;:…])\s+", r"\1", text)
-        # Order matters: brands first so multi-word brands and brands
-        # containing acronyms (e.g. "OpenAI") win before the acronym pass.
-        # Alphanumeric next so model names ("GPT-4", "H100") get spelled.
-        # Acronyms last for the remaining ALL-CAPS standalone tokens.
+        return text.strip()
+
+    def _clean_for_translate(text: str) -> str:
+        """Used on the ENGLISH side before sending to the translator. Only
+        normalises punctuation — pronunciation rewrites must NOT run here
+        because they inject Spanish-phonetic spellings that Opus-MT would
+        then pass through unchanged, polluting the Spanish output (e.g.
+        'Made by Google' would become 'Made by Gúgol' in the source,
+        survive translation, and reach the listener as a half-Spanish
+        phrase)."""
+        return _normalize_punct(text)
+
+    def _clean_for_tts(text: str) -> str:
+        """Used on the SPANISH side just before Piper. Order matters:
+        brands first so multi-word brands and brands containing acronyms
+        (e.g. 'OpenAI') win before the acronym pass; alphanumeric next so
+        model names ('GPT-4', 'H100') get spelled; acronyms last for the
+        remaining ALL-CAPS standalone tokens."""
+        text = _normalize_punct(text)
         text = _phonetic_brands(text)
         text = _phonetic_alphanum(text)
         text = _phonetic_acronyms(text)
@@ -1118,10 +1393,63 @@ def run_interpreter() -> int:
                 en_buf_last_add[0] = time.time()
             _emit_es(phrase)
 
+    # Feed-debounce: concentrate multiple short translations into a single
+    # `stream.feed()` call. Each call spawns a fresh Piper subprocess
+    # (~300 ms startup overhead), and that overhead is the dominant source
+    # of audible inter-sentence pauses once the per-emit pacing controls
+    # are tuned. Holding the latest text for FEED_DEBOUNCE_S after each
+    # arrival concatenates anything that arrives during that window into
+    # one synthesis run with continuous audio inside.
+    FEED_DEBOUNCE_S = 0.4
+    _feed_buf: list[str] = []
+    _feed_lock = threading.Lock()
+    _feed_timer: list[threading.Timer | None] = [None]
+
+    def _flush_feed():
+        with _feed_lock:
+            if not _feed_buf:
+                return
+            text = " ".join(_feed_buf).strip()
+            _feed_buf.clear()
+            _feed_timer[0] = None
+        if not text:
+            return
+        try:
+            stream.feed(text)
+            if not stream.is_playing():
+                stream.play_async()
+        except Exception as e:  # noqa: BLE001
+            log.warning("stream feed failed: %s", e)
+
+    def _schedule_feed(text: str) -> None:
+        with _feed_lock:
+            _feed_buf.append(text)
+            if _feed_timer[0] is not None:
+                _feed_timer[0].cancel()
+            t = threading.Timer(FEED_DEBOUNCE_S, _flush_feed)
+            t.daemon = True
+            _feed_timer[0] = t
+            t.start()
+
     def _emit_es(text_en: str) -> None:
-        text_en = _clean_for_tts(text_en)
+        # STT-only validation mode: log the raw English transcript and stop.
+        # Skips translation + TTS + queue management so the operator can
+        # check Whisper's output side-by-side with a reference transcript
+        # without any audio noise.
+        if os.environ.get("AXI_STT_ONLY", "").lower() in ("1", "true", "yes"):
+            raw = text_en.strip()
+            if raw:
+                log.info("EN-raw: %s", raw)
+            return
+        text_en = _clean_for_translate(text_en)
         if not text_en:
             return
+        # EN-side dedup BEFORE the translator runs. Saves the Opus call
+        # entirely when sliding STT windows duplicate content.
+        if _is_recent_en(text_en):
+            log.info("DEDUP-en-drop: %s", text_en[:120])
+            return
+        _remember_en(text_en)
         # NOTE: we no longer gate on TTS playback. Piper plays to the
         # default sink (BT headphones) and we capture from the null-sink's
         # monitor — Piper's audio never enters our capture path, so there's
@@ -1132,13 +1460,27 @@ def run_interpreter() -> int:
             log.warning("translation failed: %s", e)
             return
         if _is_recent_es(text_es):
+            log.info("DEDUP-drop: %s", text_es[:120])
             return
         text_es_clean = _clean_for_tts(text_es)
+        if not text_es_clean:
+            return
+        # Strip trailing sentence-end punctuation. Piper renders a "." or
+        # "?" as a ~150-200 ms silence at the end of the audio clip. With
+        # back-to-back sentences this becomes audible inter-sentence
+        # pauses. Removing the terminal mark keeps the natural prosody
+        # inside the sentence (commas, mid-sentence semicolons remain) but
+        # eliminates the trailing dead air between consecutive Piper runs.
+        text_es_clean = text_es_clean.rstrip(".!?…").rstrip()
         if not text_es_clean:
             return
         log.info("EN: %s", text_en[:80])
         log.info("ES: %s", text_es_clean[:80])
         _remember_es(text_es_clean)
+        # TTS-mute validation: log accepted EN/ES but skip audio so we can
+        # validate emission/dedup behavior without disturbing the operator.
+        if os.environ.get("AXI_TTS_MUTE", "").lower() in ("1", "true", "yes"):
+            return
         # Queue depth control. Estimate seconds of audio currently
         # pending: each Spanish word takes ~0.4s at normal speech rate.
         # If estimated queue > MAX_QUEUE_S, we're falling behind the
@@ -1153,12 +1495,18 @@ def run_interpreter() -> int:
         # the faster Piper speaks. Bands match MAX_QUEUE_S comment above.
         # Updating the cell before feeding biases the *next* Piper invocation
         # toward the new scale; over a few sentences the queue equilibrates.
-        if pending_s < 3.0:
-            new_scale = 1.00
-        elif pending_s < 6.0:
+        if pending_s < 2.0:
+            new_scale = 1.12       # aggressive anti-pause floor
+        elif pending_s < 4.0:
+            new_scale = 1.05       # gentle stretch to keep queue ≥ 4 s
+        elif pending_s < 7.0:
+            new_scale = 1.00       # natural pace, our sweet spot
+        elif pending_s < 11.0:
             new_scale = 0.92
-        else:
+        elif pending_s < 15.0:
             new_scale = 0.85
+        else:
+            new_scale = 0.78
         if abs(new_scale - _piper_length_scale[0]) > 1e-3:
             log.info("piper length_scale %.2f → %.2f (pending=%.1fs)",
                      _piper_length_scale[0], new_scale, pending_s)
@@ -1169,14 +1517,29 @@ def run_interpreter() -> int:
                 stream.stop()
             except Exception:  # noqa: BLE001
                 pass
+            # Cancel any pending debounce buffer so the flush is clean.
+            with _feed_lock:
+                _feed_buf.clear()
+                if _feed_timer[0] is not None:
+                    _feed_timer[0].cancel()
+                    _feed_timer[0] = None
             _piper_finish_time[0] = now + est_play_s
             stream.feed(text_es_clean)
             stream.play_async()
             return
+        # `start_in` is when this sentence will actually leave the speakers,
+        # measured from the moment it was queued. With the queue empty it's
+        # 0; with N seconds of pending audio ahead, it's N. We log it
+        # alongside the duration so the dashboard can render a chip whose
+        # width = audio duration AND whose horizontal position reflects the
+        # actual playback period (gaps between bars = audible silence).
+        start_in_s = pending_s
         _piper_finish_time[0] = max(_piper_finish_time[0], now) + est_play_s
-        stream.feed(text_es_clean)
-        if not stream.is_playing():
-            stream.play_async()
+        _schedule_feed(text_es_clean)
+        log.info(
+            "audio queued: start_in=%.2fs duration=%.2fs text=%s",
+            start_in_s, est_play_s, text_es_clean[:80],
+        )
 
     def _capture_loop() -> None:
         """PyAudio thread: continuously read the 'pulse' device and fill
@@ -1229,7 +1592,7 @@ def run_interpreter() -> int:
                     np.array(audio_buf, dtype=np.float32) / 32768.0
                 )
             try:
-                segments, _info = whisper.transcribe(
+                r = _whisper_transcribe(
                     audio_np,
                     language="en",
                     beam_size=WHISPER_BEAM_SIZE,
@@ -1243,9 +1606,9 @@ def run_interpreter() -> int:
                     # if a window goes wrong).
                     condition_on_previous_text=False,
                 )
-                new_text = " ".join(s.text for s in segments).strip()
-            except Exception as e:  # noqa: BLE001
-                log.warning("whisper failed: %s", e)
+                new_text = r.text
+            except WhisperServiceError as e:
+                log.warning("whisper service call failed: %s", e)
                 continue
             if not new_text:
                 continue
@@ -1344,6 +1707,15 @@ def run_interpreter() -> int:
             stream.stop()
         except Exception:  # noqa: BLE001
             pass
+        if keep_alive_proc is not None:
+            try:
+                keep_alive_proc.terminate()
+                keep_alive_proc.wait(timeout=2)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    keep_alive_proc.kill()
+                except OSError:
+                    pass
         if default_sink:
             _restore_routing(moved_inputs, default_sink)
         _unload_module(capture_module_id)

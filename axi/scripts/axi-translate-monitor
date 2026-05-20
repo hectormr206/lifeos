@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Live monitor for axi-translate: shows EN (Whisper), ES (Opus), and dedup
+# drops side-by-side with timestamps so you can eyeball against the
+# original video subtitles. Run in a separate terminal while the
+# translator service is active.
+#
+# Usage:  axi-translate-monitor            # follow live
+#         axi-translate-monitor --since "30 min ago"   # backfill + follow
+set -euo pipefail
+
+# Pass --no-follow to dump and exit; default follows.
+EXTRA=("${@:-}")
+SINCE=""
+NO_FOLLOW=0
+for arg in "$@"; do
+    case "$arg" in
+        --no-follow) NO_FOLLOW=1 ;;
+        --since=*) SINCE="${arg#--since=}" ;;
+        --since) ;;
+    esac
+done
+
+# Colors (ANSI). Empty if stdout is not a terminal.
+if [ -t 1 ]; then
+    DIM=$'\033[2m';   RESET=$'\033[0m'
+    GREEN=$'\033[1;32m'; CYAN=$'\033[1;36m'; YELLOW=$'\033[1;33m'
+    GRAY=$'\033[0;90m';  MAGENTA=$'\033[0;35m'
+else
+    DIM=""; RESET=""; GREEN=""; CYAN=""; YELLOW=""; GRAY=""; MAGENTA=""
+fi
+
+PY=$(cat <<'PYEOF'
+import sys, re, time
+
+# Match lines like:
+#   may 19 16:58:35 cachyos-hectormr python[123]: 2026-05-19 16:58:35,127 axi.translate INFO EN: ...
+# Extract HH:MM:SS,mmm and the (kind, text) after the level.
+PATTERN = re.compile(
+    r'^\w+ \d+ \d\d:\d\d:\d\d \S+ \S+ '
+    r'(?P<ts>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}) '
+    r'axi\.translate \w+ '
+    r'(?P<kind>EN|ES|DEDUP-drop|DEDUP-en-drop|piper length_scale|queue lag): ?'
+    r'(?P<rest>.*)$'
+)
+
+# ANSI palette inherited from shell.
+import os
+DIM=os.environ.get('AXI_C_DIM',''); RESET=os.environ.get('AXI_C_RESET','')
+GREEN=os.environ.get('AXI_C_GREEN',''); CYAN=os.environ.get('AXI_C_CYAN','')
+YELLOW=os.environ.get('AXI_C_YELLOW',''); GRAY=os.environ.get('AXI_C_GRAY','')
+MAGENTA=os.environ.get('AXI_C_MAGENTA','')
+
+last_en_ts = None
+last_en_text = None
+
+for line in sys.stdin:
+    m = PATTERN.search(line)
+    if not m:
+        continue
+    ts = m.group('ts').split(' ', 1)[1][:8]  # HH:MM:SS
+    kind = m.group('kind')
+    rest = m.group('rest').rstrip()
+
+    if kind == 'EN':
+        color = GREEN
+        last_en_ts = ts
+        last_en_text = rest
+        prefix = 'EN '
+        suffix = ''
+    elif kind == 'ES':
+        color = CYAN
+        # Compute time since matching EN — usually translation was
+        # logged in the same tick so suffix is "+0.00s" most of the time.
+        suffix = ''
+        if last_en_ts:
+            # Both timestamps within the same second produce 0.
+            try:
+                def secs(t): h,m,s=t.split(':'); return int(h)*3600+int(m)*60+int(s)
+                d = secs(ts) - secs(last_en_ts)
+                if d >= 0 and d < 30:
+                    suffix = f'{DIM}  (+{d}s after EN){RESET}'
+            except Exception:
+                pass
+        prefix = 'ES '
+    elif kind == 'DEDUP-en-drop':
+        color = MAGENTA
+        prefix = 'EN!'  # ! = dedup-dropped on EN side
+        suffix = f'{DIM}  (EN dup, Opus skipped){RESET}'
+    elif kind == 'DEDUP-drop':
+        color = GRAY
+        prefix = 'ES!'
+        suffix = f'{DIM}  (ES dup){RESET}'
+    elif kind == 'piper length_scale':
+        color = YELLOW
+        prefix = '   '
+        suffix = ''
+        rest = f'speed → {rest}'
+    elif kind == 'queue lag':
+        color = YELLOW + '\033[1m'  # bold yellow
+        prefix = '!!!'
+        suffix = ''
+        rest = f'QUEUE FLUSH (cut audio): {rest}'
+    else:
+        continue
+
+    print(f'{DIM}[{ts}]{RESET} {color}{prefix}{RESET} {color}{rest}{RESET}{suffix}',
+          flush=True)
+PYEOF
+)
+
+export AXI_C_DIM="$DIM" AXI_C_RESET="$RESET" AXI_C_GREEN="$GREEN"
+export AXI_C_CYAN="$CYAN" AXI_C_YELLOW="$YELLOW" AXI_C_GRAY="$GRAY" AXI_C_MAGENTA="$MAGENTA"
+
+JOURNAL_ARGS=(--user -u axi-translate.service --no-pager)
+if [ -n "$SINCE" ]; then
+    JOURNAL_ARGS+=(--since "$SINCE")
+fi
+if [ "$NO_FOLLOW" -eq 0 ]; then
+    JOURNAL_ARGS+=(-f)
+fi
+
+PY_BIN=/home/hectormr/LifeOS/lifeos/axi/.venv/bin/python
+[ -x "$PY_BIN" ] || PY_BIN=python3
+
+journalctl "${JOURNAL_ARGS[@]}" 2>/dev/null | "$PY_BIN" -u -c "$PY"
