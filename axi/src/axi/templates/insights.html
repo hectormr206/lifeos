@@ -1,0 +1,141 @@
+{% extends "_base.html" %}
+{% block nav_insights %}active{% endblock %}
+{% block title %}Insights · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="insightsPage()" x-init="loadPreview(); loadPatterns()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Insights</h1>
+    <div class="flex gap-2 items-center text-sm flex-wrap">
+      <select x-model="cadence" @change="loadPreview(); loadPatterns()" class="panel2 px-3 py-2 text-sm">
+        <option value="daily">Diario</option>
+        <option value="weekly">Semanal</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="panel p-4 space-y-2">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">
+      Cómo funciona
+    </h2>
+    <p class="text-sm muted">
+      Axi escanea tus 7 dominios y compone un resumen automáticamente.
+      Por default el diario se envía a tu laptop + celular a las
+      <strong>21:00</strong> y el semanal el <strong>domingo a las 20:00</strong>.
+      También podés correrlo manualmente abajo — el push se dispara igual.
+      Esta página NO persiste el historial; el último resumen vive aquí
+      hasta que generes otro o cambies de cadencia.
+    </p>
+  </div>
+
+  <!-- Patterns block -->
+  <div class="space-y-2" x-show="patterns.length > 0">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">
+      🔍 Patrones detectados
+    </h2>
+    <template x-for="p in patterns" :key="p.kind + ':' + p.message">
+      <div class="panel p-3 flex items-start gap-3"
+           :style="severityBorder(p.severity)">
+        <span class="text-xl" x-text="severityIcon(p.severity)"></span>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm" x-text="p.message"></div>
+          <div class="text-xs muted mt-1" x-text="'pattern: ' + p.kind"></div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- Digest preview -->
+  <div class="panel p-4 space-y-3">
+    <div class="flex items-baseline justify-between flex-wrap gap-2">
+      <h2 class="text-sm font-semibold muted uppercase tracking-wider">
+        Vista previa
+      </h2>
+      <div class="text-xs muted" x-text="metaText()"></div>
+    </div>
+    <pre class="text-sm whitespace-pre-wrap font-sans" x-text="preview || 'Cargando…'"></pre>
+    <div class="flex justify-end gap-2 flex-wrap">
+      <button class="btn" @click="loadPreview()">↻ Refrescar</button>
+      <button class="btn btn-primary" @click="runNow()"
+              :disabled="running">
+        <span x-show="!running">📱 Correr y enviar push ahora</span>
+        <span x-show="running">Enviando…</span>
+      </button>
+    </div>
+    <div x-show="status" x-text="status" x-cloak class="text-xs muted"></div>
+  </div>
+</div>
+
+<script>
+function insightsPage() {
+  return {
+    cadence: 'daily',
+    preview: '',
+    patterns: [],
+    sections_count: 0,
+    patterns_count: 0,
+    generated_at: '',
+    running: false,
+    status: '',
+    async loadPreview() {
+      this.status = '';
+      try {
+        const r = await fetch('/api/insights/preview?cadence=' + this.cadence);
+        if (r.ok) {
+          const d = await r.json();
+          this.preview = d.body;
+          this.sections_count = d.sections_count;
+          this.patterns_count = d.patterns_count;
+          this.generated_at = d.generated_at;
+        }
+      } catch (e) { /* keep */ }
+    },
+    async loadPatterns() {
+      try {
+        const r = await fetch('/api/insights/patterns?cadence=' + this.cadence);
+        if (r.ok) this.patterns = (await r.json()).patterns || [];
+      } catch (e) { /* keep */ }
+    },
+    async runNow() {
+      this.running = true;
+      this.status = '';
+      try {
+        const url = this.cadence === 'daily'
+          ? '/api/insights/run-daily'
+          : '/api/insights/run-weekly';
+        const r = await fetch(url, { method: 'POST' });
+        if (r.ok) {
+          const d = await r.json();
+          this.preview = d.body;
+          this.status = '✓ Push enviado a laptop + Pixel.';
+          this.loadPatterns();
+        } else {
+          this.status = 'Error: ' + (await r.text());
+        }
+      } catch (e) {
+        this.status = 'Error de red.';
+      } finally {
+        this.running = false;
+      }
+    },
+    metaText() {
+      if (!this.generated_at) return '';
+      const dt = new Date(this.generated_at).toLocaleTimeString('es-MX', {
+        hour: '2-digit', minute: '2-digit',
+      });
+      return `${this.sections_count} sección(es) · ${this.patterns_count} patrón(es) · generado ${dt}`;
+    },
+    severityIcon(s) {
+      return ({info: 'ℹ️', warning: '⚠️', critical: '🚨'})[s] || '🔍';
+    },
+    severityBorder(s) {
+      return ({
+        info: '',
+        warning: 'border-color: var(--amber);',
+        critical: 'border-color: var(--red);',
+      })[s] || '';
+    },
+  };
+}
+</script>
+{% endblock %}

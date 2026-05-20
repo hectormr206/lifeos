@@ -86,6 +86,10 @@ from lifeos.learning import store as learn_store
 from lifeos.events import entries as events_entries
 from lifeos.events import ingestion as events_ingestion
 from lifeos.events import store as events_store
+# P6.1 — Insights / proactive intelligence (daily + weekly digest + patterns).
+from lifeos.insights import cron as insights_cron
+from lifeos.insights import digest as insights_digest
+from lifeos.insights import patterns as insights_patterns
 
 log = logging.getLogger("axi.dashboard")
 
@@ -2225,6 +2229,18 @@ def _lifeos_startup() -> None:
         events_store.apply_migrations()
     except Exception:  # noqa: BLE001
         log.exception("lifeos events store failed to migrate")
+    # P6.1: insights — register the daily + weekly cron jobs and bind the
+    # push dispatcher. Reuses the same Web Push + OS notification path as
+    # reminders, so the user gets insights on laptop + Pixel exactly like
+    # any reminder.
+    try:
+        def _insights_push(title: str, body: str) -> None:
+            lifeos_push.send_to_all(title=title, body=body, url="/insights",
+                                    tag="lifeos-insight")
+        insights_cron.set_push(_insights_push)
+        insights_cron.start_jobs()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos insights cron failed to start")
 
 
 @app.on_event("shutdown")
@@ -3117,6 +3133,59 @@ async def api_calendar_create(request: Request):
 @app.delete("/api/calendar/{eid}")
 def api_calendar_delete(eid: str):
     return {"deleted": events_entries.delete(eid)}
+
+
+# ────────────────────────── lifeos (P6.1 insights) ─────────────────────
+
+
+@app.get("/insights", response_class=HTMLResponse)
+def insights_page(request: Request):
+    return templates.TemplateResponse(request, "insights.html", {})
+
+
+@app.post("/api/insights/run-daily")
+def api_insights_run_daily():
+    """Compose the daily digest now, dispatch push, return body for UI."""
+    body = insights_cron.run_daily_now()
+    return {"cadence": "daily", "body": body}
+
+
+@app.post("/api/insights/run-weekly")
+def api_insights_run_weekly():
+    body = insights_cron.run_weekly_now()
+    return {"cadence": "weekly", "body": body}
+
+
+@app.get("/api/insights/preview")
+def api_insights_preview(cadence: str = "daily"):
+    """Compose a digest WITHOUT dispatching push — for the dashboard's
+    live preview pane."""
+    if cadence not in ("daily", "weekly"):
+        raise HTTPException(400, "cadence must be 'daily' or 'weekly'")
+    d = insights_digest.compose(cadence=cadence)
+    return {
+        "cadence": d.cadence,
+        "body": d.body,
+        "sections_count": d.sections_count,
+        "patterns_count": d.patterns_count,
+        "generated_at": d.generated_at.isoformat(),
+    }
+
+
+@app.get("/api/insights/patterns")
+def api_insights_patterns(cadence: str = "daily"):
+    """Just the patterns — useful when the dashboard wants to render them
+    as separate cards."""
+    if cadence not in ("daily", "weekly"):
+        raise HTTPException(400, "cadence must be 'daily' or 'weekly'")
+    detected = insights_patterns.detect_all(cadence=cadence)
+    return {
+        "patterns": [
+            {"kind": p.kind, "message": p.message, "severity": p.severity,
+             "data": p.data}
+            for p in detected
+        ]
+    }
 
 
 # Weekly retro scheduler — reuses lifeos.reminders (P1) for the cron nudge.
