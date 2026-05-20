@@ -46,6 +46,11 @@ from axi import config, events, store
 from axi import models_manager
 from axi import model_params_schema
 
+# LifeOS — life-system layer. Sibling package. P1 ships reminders + scheduler.
+from lifeos import reminders as lifeos_reminders
+from lifeos import push as lifeos_push
+from lifeos.scheduler import get_scheduler
+
 log = logging.getLogger("axi.dashboard")
 
 SOCK_PATH = Path(
@@ -1455,6 +1460,39 @@ async def api_chat_ask(request: Request):
     mem = _get_chat_memory()
     history = mem.messages()
     start = time.monotonic()
+
+    # LifeOS reminder fast-path: if the user said "recordame X mañana a las 9",
+    # we handle it deterministically without bothering the brain. Saves ~3s
+    # latency and avoids reasoning-model hallucinations on time math.
+    if not image_b64:
+        try:
+            from lifeos.parser import parse_reminder
+            ri = parse_reminder(text)
+        except Exception:  # noqa: BLE001
+            ri = None
+        if ri is not None:
+            try:
+                rem = lifeos_reminders.create(
+                    when=ri.when, message=ri.message, channel="push"
+                )
+                get_scheduler().schedule(rem)
+                local_when = ri.when.astimezone(ZoneInfo("America/Mexico_City"))
+                answer = (
+                    f"Listo. Recordatorio programado para "
+                    f"{local_when.strftime('%A %-d %b %H:%M')}: "
+                    f"\"{ri.message}\". Te aviso al celular."
+                )
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "reminder_id": rem.id}
+            except Exception as e:  # noqa: BLE001
+                log.warning("lifeos reminder fast-path failed: %s — falling back to brain", e)
+
     try:
         answer = brain.ask(text, history=history, image_b64=image_b64)
     except Exception as e:  # noqa: BLE001
@@ -1653,6 +1691,180 @@ def _maybe_migrate_meeting_fts() -> None:
             events.log_error("dashboard", f"meeting FTS migration failed: {e}")
         except Exception:  # noqa: BLE001
             pass
+
+
+# ────────────────────────── lifeos (P1 reminders) ─────────────────────
+
+def _lifeos_push_dispatcher(rem: lifeos_reminders.Reminder) -> None:
+    """Reminder dispatcher: send Web Push to all subscribed PWAs.
+
+    Push payloads carry generic titles only (per PRD §5.3); body holds the
+    user's own text since this device is single-user behind VPN. Future
+    multi-user variant would title=generic-only and detail-fetch-on-tap.
+    """
+    if rem.channel == "log":
+        log.info("REMINDER FIRED [log] %s", rem.message)
+        return
+    result = lifeos_push.send_to_all(
+        title="Recordatorio",
+        body=rem.message,
+        url="/reminders",
+        tag=f"reminder:{rem.id}",
+    )
+    log.info("reminder %s push: %s", rem.id, result)
+    if result.get("sent", 0) == 0 and result.get("failed", 0) > 0:
+        raise RuntimeError(f"all push attempts failed: {result}")
+
+
+@app.on_event("startup")
+def _lifeos_startup() -> None:
+    """Boot the LifeOS scheduler. Loads pending reminders and arms apscheduler."""
+    try:
+        sched = get_scheduler()
+        sched.set_dispatcher(_lifeos_push_dispatcher)
+        sched.start()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos scheduler failed to start")
+
+
+@app.on_event("shutdown")
+def _lifeos_shutdown() -> None:
+    try:
+        get_scheduler().shutdown(wait=False)
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos scheduler failed to shutdown cleanly")
+
+
+def _reminder_to_dict(r: lifeos_reminders.Reminder) -> dict:
+    return {
+        "id": r.id,
+        "when_ts": r.when_ts.isoformat(),
+        "message": r.message,
+        "channel": r.channel,
+        "status": r.status,
+        "created_at": r.created_at.isoformat(),
+        "fired_at": r.fired_at.isoformat() if r.fired_at else None,
+        "error": r.error,
+    }
+
+
+@app.get("/reminders", response_class=HTMLResponse)
+def reminders_page(request: Request):
+    return templates.TemplateResponse(request, "reminders.html", {})
+
+
+@app.get("/api/reminders")
+def api_reminders_list(status: str = "pending"):
+    """List reminders. status='pending' (default) or 'recent' for last 30 days."""
+    if status == "pending":
+        items = lifeos_reminders.list_pending()
+    elif status == "recent":
+        items = lifeos_reminders.list_recent(days=30)
+    else:
+        raise HTTPException(400, "status must be 'pending' or 'recent'")
+    return {"reminders": [_reminder_to_dict(r) for r in items]}
+
+
+@app.post("/api/reminders")
+async def api_reminders_create(request: Request):
+    """Create a reminder.
+
+    Body: {"when": ISO8601 string (tz-aware), "message": str, "channel": "push"|"log"}
+
+    NL date parsing happens in axi.intents BEFORE hitting this endpoint, so
+    the API stays explicit.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    when_str = body.get("when")
+    message = (body.get("message") or "").strip()
+    channel = body.get("channel", "push")
+    if not when_str or not message:
+        raise HTTPException(400, "when and message are required")
+    if channel not in ("push", "log"):
+        raise HTTPException(400, "channel must be 'push' or 'log'")
+    try:
+        when = datetime.fromisoformat(when_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"when must be ISO8601: {when_str!r}")
+    if when.tzinfo is None:
+        raise HTTPException(400, "when must be tz-aware")
+    if len(message) > 500:
+        raise HTTPException(400, "message too long (max 500 chars)")
+
+    rem = lifeos_reminders.create(when=when, message=message, channel=channel)
+    get_scheduler().schedule(rem)
+    return _reminder_to_dict(rem)
+
+
+@app.delete("/api/reminders/{rid}")
+def api_reminders_cancel(rid: str):
+    ok = lifeos_reminders.cancel(rid)
+    if ok:
+        get_scheduler().cancel(rid)
+    return {"cancelled": ok}
+
+
+# ─── Web Push ──────────────────────────────────────────────────────────
+
+
+@app.get("/api/push/vapid-public-key")
+def api_push_public_key():
+    """PWA fetches this and uses it to subscribe via PushManager."""
+    return {"public_key": lifeos_push.get_vapid_keys().public_b64url}
+
+
+@app.post("/api/push/subscribe")
+async def api_push_subscribe(request: Request):
+    """PWA registers its push subscription here.
+
+    Browser PushManager subscription shape:
+      {endpoint, expirationTime, keys: {p256dh, auth}}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    endpoint = body.get("endpoint")
+    keys = body.get("keys") or {}
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
+    if not endpoint or not p256dh or not auth:
+        raise HTTPException(400, "endpoint and keys.p256dh and keys.auth are required")
+    ua = request.headers.get("user-agent")
+    sub_id = lifeos_push.add_subscription(
+        endpoint=endpoint, p256dh=p256dh, auth=auth, user_agent=ua,
+    )
+    return {"id": sub_id, "ok": True}
+
+
+@app.delete("/api/push/subscribe")
+async def api_push_unsubscribe(request: Request):
+    body = await request.json()
+    endpoint = body.get("endpoint") if isinstance(body, dict) else None
+    if not endpoint:
+        raise HTTPException(400, "endpoint required")
+    lifeos_push.remove_subscription(endpoint)
+    return {"ok": True}
+
+
+@app.post("/api/push/test")
+def api_push_test():
+    """Send a smoke-test push to every subscribed PWA. Useful for the
+    'Probar push' button in /reminders."""
+    return lifeos_push.send_to_all(
+        title="Axi", body="Notificación de prueba 👋", url="/reminders",
+        tag="smoke-test",
+    )
+
+
+# ────────────────────────── main entry ──────────────────────────────────
 
 
 def main() -> int:

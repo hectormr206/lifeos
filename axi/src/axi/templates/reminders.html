@@ -1,0 +1,203 @@
+{% extends "_base.html" %}
+{% block nav_reminders %}active{% endblock %}
+{% block title %}Recordatorios · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="remindersPage()" x-init="load(); init()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Recordatorios</h1>
+    <div class="flex gap-2 items-center text-sm">
+      <button class="btn" @click="enablePush()" x-show="!pushOn" x-cloak>📱 Habilitar push</button>
+      <button class="btn" @click="testPush()" x-show="pushOn" x-cloak>📱 Probar push</button>
+      <select x-model="filter" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option value="pending">Pendientes</option>
+        <option value="recent">Recientes (30 días)</option>
+      </select>
+      <button class="btn" @click="load()">Refrescar</button>
+    </div>
+  </div>
+  <div x-show="pushStatus" x-cloak class="text-sm muted" x-text="pushStatus"></div>
+
+  <!-- Compose -->
+  <div class="panel p-4 space-y-3">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nuevo recordatorio</h2>
+    <div class="grid md:grid-cols-3 gap-2">
+      <input type="text" x-model="form.message" placeholder="Mensaje (ej: llamar al dentista)"
+             class="panel2 px-3 py-2 text-sm md:col-span-2"
+             maxlength="500">
+      <input type="datetime-local" x-model="form.when_local"
+             class="panel2 px-3 py-2 text-sm">
+    </div>
+    <div class="flex items-center justify-between text-sm">
+      <select x-model="form.channel" class="panel2 px-3 py-2 text-sm">
+        <option value="push">📱 Push (PWA)</option>
+        <option value="log">📝 Solo log (test)</option>
+      </select>
+      <button class="btn btn-primary" @click="create()" :disabled="!form.message || !form.when_local">
+        Programar
+      </button>
+    </div>
+    <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
+  </div>
+
+  <!-- List -->
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando…</div>
+  </template>
+  <template x-if="!loading && rows.length === 0">
+    <div class="panel p-12 text-center muted">
+      Nada programado. Decile a Axi en el chat: "recordame llamar al dentista mañana a las 9".
+    </div>
+  </template>
+
+  <div class="grid gap-2" x-show="rows.length > 0">
+    <template x-for="r in rows" :key="r.id">
+      <div class="panel p-3 flex items-start gap-3">
+        <span class="text-xs px-2 py-0.5 rounded-full panel2 uppercase tracking-wider"
+              :style="statusStyle(r.status)"
+              x-text="r.status"></span>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-medium" x-text="r.message"></div>
+          <div class="text-xs muted mt-1">
+            <span x-text="fmtWhen(r.when_ts)"></span>
+            <span class="mx-1">·</span>
+            <span x-text="r.channel"></span>
+            <template x-if="r.error">
+              <span class="ml-2" style="color: var(--red)" x-text="'error: ' + r.error"></span>
+            </template>
+          </div>
+        </div>
+        <button x-show="r.status === 'pending'"
+                @click="cancel(r.id)"
+                class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">
+          Cancelar
+        </button>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function urlBase64ToUint8Array(b64) {
+  const padding = '='.repeat((4 - b64.length % 4) % 4);
+  const base64 = (b64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; ++i) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function remindersPage() {
+  return {
+    rows: [],
+    filter: 'pending',
+    loading: true,
+    error: '',
+    pushOn: false,
+    pushStatus: '',
+    form: { message: '', when_local: '', channel: 'push' },
+    async init() {
+      this.pushOn = await this.checkPushSubscribed();
+    },
+    async checkPushSubscribed() {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        return !!sub;
+      } catch (e) { return false; }
+    },
+    async enablePush() {
+      this.pushStatus = '';
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        this.pushStatus = 'Tu navegador no soporta Web Push.'; return;
+      }
+      if (Notification.permission === 'denied') {
+        this.pushStatus = 'Permiso bloqueado en el navegador. Activalo en Ajustes > Sitio.'; return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') { this.pushStatus = 'Permiso denegado.'; return; }
+
+      const reg = await navigator.serviceWorker.ready;
+      const keyResp = await fetch('/api/push/vapid-public-key');
+      const { public_key } = await keyResp.json();
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(public_key),
+      });
+      const r = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub.toJSON()),
+      });
+      if (r.ok) { this.pushOn = true; this.pushStatus = 'Push habilitado.'; }
+      else { this.pushStatus = 'Error al registrar.'; }
+    },
+    async testPush() {
+      const r = await fetch('/api/push/test', { method: 'POST' });
+      const j = await r.json();
+      this.pushStatus = `enviadas=${j.sent} falladas=${j.failed} expiradas=${j.gone}`;
+    },
+    async load() {
+      this.loading = true;
+      const r = await fetch('/api/reminders?status=' + this.filter);
+      if (r.ok) {
+        const data = await r.json();
+        this.rows = data.reminders || [];
+      } else {
+        this.rows = [];
+      }
+      this.loading = false;
+    },
+    async create() {
+      this.error = '';
+      // datetime-local is local time; convert to ISO tz-aware
+      const localDt = new Date(this.form.when_local);
+      if (isNaN(localDt.getTime())) {
+        this.error = 'Fecha inválida';
+        return;
+      }
+      const body = {
+        when: localDt.toISOString(),
+        message: this.form.message,
+        channel: this.form.channel,
+      };
+      const r = await fetch('/api/reminders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        this.error = 'No se pudo programar: ' + t;
+        return;
+      }
+      this.form.message = '';
+      this.form.when_local = '';
+      this.load();
+    },
+    async cancel(id) {
+      await fetch('/api/reminders/' + id, { method: 'DELETE' });
+      this.load();
+    },
+    fmtWhen(iso) {
+      try {
+        return new Date(iso).toLocaleString('es-MX', {
+          weekday: 'short', day: 'numeric', month: 'short',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch (e) { return iso; }
+    },
+    statusStyle(s) {
+      const colors = {
+        pending: 'color: var(--blue); border-color: var(--blue);',
+        fired: 'color: var(--green); border-color: var(--green);',
+        cancelled: 'color: var(--muted); border-color: var(--border);',
+        failed: 'color: white; background: var(--red); border-color: var(--red);',
+      };
+      return colors[s] || '';
+    },
+  };
+}
+</script>
+{% endblock %}
