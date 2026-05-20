@@ -119,11 +119,12 @@ fi
 
 # ─── 6. axi-whisper RPC ───────────────────────────────────────────────
 step 6 "axi-whisper RPC"
-if [ -S "$HOME/.local/state/axi/whisper.sock" ]; then
-    pass "axi-whisper socket existe"
+WHISPER_SOCK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/axi/whisper.sock"
+if [ -S "$WHISPER_SOCK" ]; then
+    pass "axi-whisper socket existe ($WHISPER_SOCK)"
 else
     if systemctl --user is-active --quiet axi-whisper; then
-        warn "axi-whisper" "service activo pero no encuentro el socket (revisar logs)"
+        warn "axi-whisper" "service activo pero socket no en $WHISPER_SOCK (revisar logs)"
     else
         fail "axi-whisper" "service no activo"
         OVERALL=1
