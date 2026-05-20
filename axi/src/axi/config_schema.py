@@ -266,6 +266,40 @@ FIELDS: tuple[ConfigField, ...] = (
         "Puerto del dashboard. Reinicio del dashboard requerido.",
         minimum=1024, maximum=65535,
     ),
+    # ─────── lifeos posture (P6.2) ───────
+    ConfigField(
+        "posture_enabled", "boolean", False,
+        "Master toggle for camera-based posture scans (opt-in).",
+    ),
+    ConfigField(
+        "posture_cadence_minutes", "integer", 25,
+        "Minutes between scheduled posture scans.",
+        minimum=5, maximum=240,
+    ),
+    ConfigField(
+        "posture_start_hour", "integer", 9,
+        "Earliest hour of the day (local) for posture scans.",
+        minimum=0, maximum=23,
+    ),
+    ConfigField(
+        "posture_end_hour", "integer", 18,
+        "Latest hour of the day (local) for posture scans.",
+        minimum=1, maximum=24,
+    ),
+    ConfigField(
+        "posture_weekdays_only", "boolean", True,
+        "If true, posture scans only run Monday-Friday.",
+    ),
+    ConfigField(
+        "posture_cooldown_minutes", "integer", 30,
+        "Minimum minutes between consecutive nudges so the user isn't spammed.",
+        minimum=1, maximum=600,
+    ),
+    ConfigField(
+        "posture_confidence_threshold", "number", 0.6,
+        "Minimum LLM confidence to fire a nudge.",
+        minimum=0.0, maximum=1.0,
+    ),
 )
 
 

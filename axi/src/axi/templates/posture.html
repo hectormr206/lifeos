@@ -1,0 +1,225 @@
+{% extends "_base.html" %}
+{% block nav_posture %}active{% endblock %}
+{% block title %}Postura · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="posturePage()"
+     x-init="loadStatus(); loadSummary(); loadScans(); startPolling()" x-destroy="stopPolling()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Postura</h1>
+    <div class="flex gap-2 items-center text-sm">
+      <span class="muted" x-text="status.enabled ? 'Encendido' : 'Apagado'"></span>
+      <label class="inline-flex items-center cursor-pointer">
+        <input type="checkbox" :checked="status.enabled" @change="toggle($event.target.checked)"
+               class="sr-only peer">
+        <div class="w-11 h-6 panel2 rounded-full relative peer-checked:bg-blue-500 transition"
+             :style="status.enabled ? 'background: var(--blue)' : ''">
+          <div class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition"
+               :class="status.enabled ? 'translate-x-5' : ''"></div>
+        </div>
+      </label>
+    </div>
+  </div>
+
+  <!-- Privacy notice -->
+  <div class="panel p-4 space-y-1" style="border-color: var(--amber)">
+    <h2 class="text-sm font-semibold uppercase tracking-wider"
+        style="color: var(--amber)">🔒 Privacidad</h2>
+    <p class="text-xs muted">
+      Los frames de tu cámara NUNCA se guardan a disco. Van al LLM local
+      (Qwen multimodal corriendo en tu laptop), devuelve una clasificación,
+      y solo el resultado clasificado queda en el store cifrado. La imagen
+      original se descarta inmediatamente.
+    </p>
+  </div>
+
+  <!-- Status card -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+    <div class="panel p-3">
+      <div class="text-xs muted">Escaneos hoy</div>
+      <div class="text-lg font-semibold" x-text="summary.total_scans || 0"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Nudges enviados</div>
+      <div class="text-lg font-semibold" x-text="summary.nudges_sent || 0"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Cadencia</div>
+      <div class="text-sm font-semibold"
+           x-text="status.cadence_minutes + ' min · ' + status.start_hour + '–' + status.end_hour + 'h' + (status.weekdays_only ? ' L-V' : '')"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Cooldown</div>
+      <div class="text-sm font-semibold"
+           x-text="status.in_cooldown ? '🔇 en cooldown' : (status.cooldown_minutes + ' min')"></div>
+    </div>
+  </div>
+
+  <!-- Per-state breakdown -->
+  <div class="panel p-4" x-show="Object.keys(summary.by_state || {}).length > 0">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider mb-2">
+      Distribución última semana
+    </h2>
+    <div class="flex flex-wrap gap-2">
+      <template x-for="state in Object.keys(summary.by_state)" :key="state">
+        <span class="panel2 px-3 py-1 rounded-full text-xs"
+              :style="stateColor(state)"
+              x-text="stateIcon(state) + ' ' + stateLabel(state) + ' · ' + summary.by_state[state]"></span>
+      </template>
+    </div>
+  </div>
+
+  <!-- Manual scan -->
+  <div class="panel p-4 space-y-3">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Escaneo manual</h2>
+    <p class="text-xs muted">
+      Forzá un escaneo ahora. Útil para probar antes de prender el modo automático,
+      o para checkear tu postura cuando vos quieras (no espera la cadencia).
+    </p>
+    <div class="flex gap-2 items-center flex-wrap">
+      <button class="btn btn-primary" @click="scanNow()" :disabled="scanning">
+        <span x-show="!scanning">🪑 Escanear ahora</span>
+        <span x-show="scanning">Capturando + analizando…</span>
+      </button>
+      <span x-show="lastScanResult" x-cloak class="text-sm">
+        <span x-text="stateIcon(lastScanResult.state) + ' ' + stateLabel(lastScanResult.state)"></span>
+        <span class="muted" x-text="'(conf ' + (lastScanResult.confidence * 100).toFixed(0) + '%)'"></span>
+        <span x-show="lastScanResult.nudge_sent" class="ml-2" style="color: var(--amber)">📱 push enviado</span>
+      </span>
+    </div>
+    <div x-show="lastScanResult && lastScanResult.suggestion" x-cloak class="text-sm panel2 p-3 rounded"
+         x-text="lastScanResult && lastScanResult.suggestion"></div>
+    <div x-show="lastScanResult && lastScanResult.error" x-cloak class="text-sm" style="color: var(--red)"
+         x-text="lastScanResult && ('Error: ' + lastScanResult.error)"></div>
+  </div>
+
+  <!-- Recent scans -->
+  <div class="space-y-2" x-show="scans.length > 0">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Escaneos recientes</h2>
+    <template x-for="s in scans" :key="s.id">
+      <div class="panel p-3 flex items-start gap-3">
+        <span class="text-xl" x-text="stateIcon(s.state)"></span>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-medium" x-text="stateLabel(s.state)"></span>
+            <span class="text-xs muted" x-text="'conf ' + (s.confidence * 100).toFixed(0) + '%'"></span>
+            <span class="text-xs px-1.5 py-0.5 panel2 rounded muted" x-text="s.source"></span>
+            <template x-if="s.nudge_sent">
+              <span class="text-xs" style="color: var(--amber)">📱 nudge</span>
+            </template>
+          </div>
+          <div class="text-xs muted mt-1" x-text="fmtTs(s.ts)"></div>
+          <template x-if="s.suggestion">
+            <div class="text-xs mt-2" x-text="s.suggestion"></div>
+          </template>
+          <template x-if="s.error">
+            <div class="text-xs mt-1" style="color: var(--red)" x-text="'error: ' + s.error"></div>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <template x-if="scans.length === 0">
+    <div class="panel p-12 text-center muted">
+      Sin escaneos todavía. Tocá <strong>"Escanear ahora"</strong> para probar — necesitás
+      cámara web disponible y que el brain (Qwen multimodal) esté arriba.
+    </div>
+  </template>
+</div>
+
+<script>
+function posturePage() {
+  return {
+    status: {},
+    summary: {},
+    scans: [],
+    lastScanResult: null,
+    scanning: false,
+    _pollHandle: null,
+    startPolling() {
+      this.stopPolling();
+      this._pollHandle = setInterval(() => {
+        this.loadStatus(); this.loadSummary(); this.loadScans(true);
+      }, 20000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.stopPolling(); else this.startPolling();
+      });
+    },
+    stopPolling() { if (this._pollHandle) { clearInterval(this._pollHandle); this._pollHandle = null; } },
+    async loadStatus() {
+      const r = await fetch('/api/posture/status');
+      if (r.ok) this.status = await r.json();
+    },
+    async loadSummary() {
+      const r = await fetch('/api/posture/summary?days=7');
+      if (r.ok) this.summary = await r.json();
+    },
+    async loadScans(silent = false) {
+      const r = await fetch('/api/posture/scans?days=7&limit=30');
+      if (r.ok) this.scans = (await r.json()).scans || [];
+    },
+    async toggle(value) {
+      const r = await fetch('/api/posture/enable', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: value }),
+      });
+      if (r.ok) this.loadStatus();
+    },
+    async scanNow() {
+      this.scanning = true;
+      this.lastScanResult = null;
+      try {
+        const r = await fetch('/api/posture/scan-now', { method: 'POST' });
+        if (r.ok) {
+          this.lastScanResult = await r.json();
+          this.loadScans(); this.loadSummary(); this.loadStatus();
+        } else {
+          this.lastScanResult = { state: 'error', error: await r.text(),
+                                  confidence: 0, suggestion: '', nudge_sent: false };
+        }
+      } catch (e) {
+        this.lastScanResult = { state: 'error', error: String(e),
+                                confidence: 0, suggestion: '', nudge_sent: false };
+      } finally {
+        this.scanning = false;
+      }
+    },
+    stateIcon(s) {
+      return ({
+        good: '✅', slouched: '🪨', forward_head: '👤',
+        leaning: '↘️', not_at_desk: '🚪', face_not_visible: '👁️‍🗨️',
+        error: '⚠️',
+      })[s] || '🔍';
+    },
+    stateLabel(s) {
+      return ({
+        good: 'postura buena', slouched: 'encorvado',
+        forward_head: 'cabeza adelantada', leaning: 'inclinado',
+        not_at_desk: 'no en escritorio', face_not_visible: 'cara no visible',
+        error: 'error',
+      })[s] || s;
+    },
+    stateColor(s) {
+      return ({
+        good: 'color: var(--green)',
+        slouched: 'color: var(--amber)',
+        forward_head: 'color: var(--amber)',
+        leaning: 'color: var(--amber)',
+        not_at_desk: 'color: var(--muted)',
+        face_not_visible: 'color: var(--muted)',
+        error: 'color: var(--red)',
+      })[s] || '';
+    },
+    fmtTs(iso) {
+      try {
+        return new Date(iso).toLocaleTimeString('es-MX', {
+          hour: '2-digit', minute: '2-digit',
+          day: '2-digit', month: 'short',
+        });
+      } catch (e) { return iso; }
+    },
+  };
+}
+</script>
+{% endblock %}

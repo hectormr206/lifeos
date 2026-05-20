@@ -90,6 +90,10 @@ from lifeos.events import store as events_store
 from lifeos.insights import cron as insights_cron
 from lifeos.insights import digest as insights_digest
 from lifeos.insights import patterns as insights_patterns
+# P6.2 — Posture / desk-health scans (multimodal vision, encrypted).
+from lifeos.posture import cron as posture_cron
+from lifeos.posture import scans as posture_scans
+from lifeos.posture import store as posture_store
 
 log = logging.getLogger("axi.dashboard")
 
@@ -2241,6 +2245,43 @@ def _lifeos_startup() -> None:
         insights_cron.start_jobs()
     except Exception:  # noqa: BLE001
         log.exception("lifeos insights cron failed to start")
+    # P6.2: posture — encrypted store + multimodal scanner cron. The
+    # toggle is read from config at fire time so the user can flip it
+    # without restarting. Defaults: disabled, weekdays 09-18, every 25
+    # min, cooldown 30 min, confidence threshold 0.6.
+    try:
+        posture_store.apply_migrations()
+        from axi import brain as _axi_brain
+        from axi import eyes as _axi_eyes
+
+        def _posture_capture() -> str:
+            b64, _ = _axi_eyes.capture_b64()
+            return b64 or ""
+
+        def _posture_push(title: str, body: str) -> None:
+            lifeos_push.send_to_all(title=title, body=body, url="/posture",
+                                    tag="lifeos-posture")
+
+        def _posture_enabled() -> bool:
+            return bool(config.get("posture_enabled", False))
+
+        posture_cron.configure(
+            capture_fn=_posture_capture,
+            brain_ask=_axi_brain.ask,
+            push_fn=_posture_push,
+            is_enabled_fn=_posture_enabled,
+            cooldown_minutes=int(config.get("posture_cooldown_minutes", 30)),
+            confidence_threshold=float(config.get("posture_confidence_threshold", 0.6)),
+            language=str(config.get("language", "es-MX")),
+        )
+        posture_cron.start_jobs(
+            cadence_minutes=int(config.get("posture_cadence_minutes", 25)),
+            start_hour=int(config.get("posture_start_hour", 9)),
+            end_hour=int(config.get("posture_end_hour", 18)),
+            weekdays_only=bool(config.get("posture_weekdays_only", True)),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos posture cron failed to start")
 
 
 @app.on_event("shutdown")
@@ -3170,6 +3211,86 @@ def api_insights_preview(cadence: str = "daily"):
         "patterns_count": d.patterns_count,
         "generated_at": d.generated_at.isoformat(),
     }
+
+
+# ────────────────────────── lifeos (P6.2 posture) ──────────────────────
+
+
+def _scan_to_dict(s: posture_scans.Scan) -> dict:
+    return {
+        "id": s.id, "ts": s.ts.isoformat(),
+        "state": s.state, "confidence": s.confidence,
+        "suggestion": s.suggestion, "nudge_sent": s.nudge_sent,
+        "source": s.source, "error": s.error,
+        "is_problematic": s.is_problematic,
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+    }
+
+
+@app.get("/posture", response_class=HTMLResponse)
+def posture_page(request: Request):
+    return templates.TemplateResponse(request, "posture.html", {})
+
+
+@app.get("/api/posture/status")
+def api_posture_status():
+    last_nudge = posture_scans.last_nudge_at()
+    return {
+        "enabled": bool(config.get("posture_enabled", False)),
+        "cadence_minutes": int(config.get("posture_cadence_minutes", 25)),
+        "start_hour": int(config.get("posture_start_hour", 9)),
+        "end_hour": int(config.get("posture_end_hour", 18)),
+        "weekdays_only": bool(config.get("posture_weekdays_only", True)),
+        "cooldown_minutes": int(config.get("posture_cooldown_minutes", 30)),
+        "confidence_threshold": float(config.get("posture_confidence_threshold", 0.6)),
+        "last_nudge_at": last_nudge.isoformat() if last_nudge else None,
+        "in_cooldown": posture_scans.in_cooldown(
+            int(config.get("posture_cooldown_minutes", 30))
+        ),
+    }
+
+
+@app.get("/api/posture/scans")
+def api_posture_scans_list(days: int = 7, limit: int = 100):
+    rows = posture_scans.list_recent(
+        days=max(1, min(days, 365)),
+        limit=max(1, min(limit, 500)),
+    )
+    return {"scans": [_scan_to_dict(s) for s in rows]}
+
+
+@app.get("/api/posture/summary")
+def api_posture_summary(days: int = 7):
+    return posture_scans.summary(days=max(1, min(days, 365)))
+
+
+@app.post("/api/posture/scan-now")
+def api_posture_scan_now():
+    """Manual scan — bypasses the enable toggle. Honors cooldown for nudge
+    dispatch but always records the scan."""
+    scan = posture_cron.run_scan_now(source="manual")
+    return _scan_to_dict(scan)
+
+
+@app.post("/api/posture/enable")
+async def api_posture_enable(request: Request):
+    """Flip the global enable toggle. Body: {enabled: bool}.
+
+    Persists via the same load/merge/save flow used by /api/config so
+    the change survives restarts. The cron's is_enabled_fn re-reads
+    config.get() at every fire, so no scheduler restart needed.
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON")
+    enabled = bool(body.get("enabled", False))
+    merged = dict(config._load())  # noqa: SLF001
+    merged["posture_enabled"] = enabled
+    try:
+        config.save(merged)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"config save failed: {e}")
+    return {"enabled": enabled}
 
 
 @app.get("/api/insights/patterns")
