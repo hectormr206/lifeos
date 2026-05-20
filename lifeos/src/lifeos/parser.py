@@ -26,9 +26,30 @@ log = logging.getLogger("lifeos.parser")
 
 # Trigger verbs at the start of the message (with optional leading "axi, ").
 # Captures the remainder in group 1.
+#
+# The trigger verbs all imply "do this at a future time". We accept many
+# natural ways the user might phrase it:
+#   - record(a|á)me / recuérdame / acord(a|á)me — classical "remind me"
+#   - avísame / avisame                          — "let me know"
+#   - dime / decime / decíme                     — "tell me"
+#   - llámame / llamame                          — "call/ping me"
+#   - mándame / mandame                          — "send me"
+#   - alertame                                   — "alert me"
+#
+# Critical safety: every trigger ALSO requires a time marker (handled later
+# in parse_reminder via _WHEN_MARKERS). So "dime hola" by itself does NOT
+# match — only "dime hola en 20 segundos" does. This prevents misfires on
+# casual conversation.
 _REMINDER_TRIGGER = re.compile(
     r"^\s*(?:axi[,:\s]+)?"
-    r"(?:record(?:a|á)me|recu[ée]rdame|acord(?:a|á)me)\s+"
+    r"(?:"
+    r"record(?:a|á)me|recu[ée]rdame|acord(?:a|á)me|"
+    r"av[ií]same|av[ií]same|"
+    r"dime|dec[ií]me|"
+    r"ll[áa]mame|"
+    r"m[áa]ndame|"
+    r"alertame"
+    r")\s+"
     r"(?:de\s+|que\s+)?"
     r"(.+)$",
     re.IGNORECASE | re.DOTALL,
