@@ -166,6 +166,38 @@ def _migration_005_reminder_end_conditions(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE reminders ADD COLUMN occurrences_left INTEGER")
 
 
+def _migration_007_fastpath_metrics(conn: sqlite3.Connection) -> None:
+    # Instrumentation for the chat fast-path. Records ONLY metadata
+    # (which stage handled the call, latency, input size) — NEVER the
+    # text content itself. That keeps this table OK to live in the
+    # unencrypted core DB. The text stays in the per-domain encrypted
+    # stores (or in the brain's chat memory, also unencrypted today).
+    #
+    # Used to answer: "what % of chat calls fall through to the brain,
+    # and what's the latency cost?" before deciding to build nano-agents.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fastpath_metrics (
+            id TEXT PRIMARY KEY,
+            ts TEXT NOT NULL,
+            stage TEXT NOT NULL,                   -- which branch handled the call
+            latency_ms INTEGER NOT NULL,
+            text_length INTEGER NOT NULL DEFAULT 0,
+            has_image INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fastpath_ts "
+        "ON fastpath_metrics(ts DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fastpath_stage_ts "
+        "ON fastpath_metrics(stage, ts DESC)"
+    )
+
+
 MIGRATIONS: list[Migration] = [
     _migration_001_schema_version,
     _migration_002_reminders,
@@ -173,6 +205,7 @@ MIGRATIONS: list[Migration] = [
     _migration_004_reminders_recurrence,
     _migration_005_reminder_end_conditions,
     _migration_006_edges,
+    _migration_007_fastpath_metrics,
 ]
 
 

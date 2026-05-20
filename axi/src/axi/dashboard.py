@@ -94,6 +94,10 @@ from lifeos.insights import patterns as insights_patterns
 from lifeos.posture import cron as posture_cron
 from lifeos.posture import scans as posture_scans
 from lifeos.posture import store as posture_store
+# Nano-agents PRD — fast-path instrumentation. Records which stage handled
+# each chat call + latency, so we can decide empirically whether nano-agents
+# are worth building. Stores metadata only (no text content).
+from lifeos import metrics as lifeos_metrics
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1505,6 +1509,23 @@ async def api_chat_ask(request: Request):
     history = mem.messages()
     start = time.monotonic()
 
+    # Fast-path instrumentation. Each branch that successfully handles the
+    # call sets stage_holder[0] then calls _record_metric() before returning.
+    # If everything falls through to the brain, "brain" is recorded by default.
+    stage_holder = ["brain"]
+    _track_text_length = len(text) if text else 0
+    _track_has_image = bool(image_b64)
+    def _record_metric():
+        try:
+            lifeos_metrics.record(
+                stage=stage_holder[0],
+                latency_ms=int((time.monotonic() - start) * 1000),
+                text_length=_track_text_length,
+                has_image=_track_has_image,
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("fastpath metric record failed", exc_info=True)
+
     # LifeOS reminder fast-path: if the user said "recordame X mañana a las 9",
     # we handle it deterministically without bothering the brain. Saves ~3s
     # latency and avoids reasoning-model hallucinations on time math.
@@ -1529,6 +1550,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, result.answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "purchase_consult"
+                _record_metric()
                 return {
                     "answer": result.answer,
                     "latency_ms": latency_ms,
@@ -1587,6 +1610,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "exercise"
+                _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
                         "spoke": False, "audio_b64": None,
                         "exercise_session_id": sess.id}
@@ -1631,6 +1656,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "spirituality"
+                _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
                         "spoke": False, "audio_b64": None,
                         "spirituality_entry_id": se.id}
@@ -1682,6 +1709,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "learning"
+                _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
                         "spoke": False, "audio_b64": None,
                         "learning_entry_id": le.id}
@@ -1719,6 +1748,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "events"
+                _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
                         "spoke": False, "audio_b64": None,
                         "event_id": ev.id}
@@ -1774,6 +1805,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "health"
+                _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
                         "spoke": False, "audio_b64": None,
                         "health_entry_id": entry.id}
@@ -1865,6 +1898,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "relationships"
+                _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
                         "spoke": False, "audio_b64": None,
                         "interaction_id": interaction.id,
@@ -1922,6 +1957,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "finance"
+                _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
                         "spoke": False, "audio_b64": None,
                         "finance_entry_id": fe.id}
@@ -1959,6 +1996,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "reminders"
+                _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
                         "spoke": False, "audio_b64": None,
                         "reminder_id": rem.id}
@@ -2001,6 +2040,8 @@ async def api_chat_ask(request: Request):
         except Exception as e:  # noqa: BLE001
             log.warning("chat synth failed: %s", e)
 
+    # brain fallback path — stage_holder still "brain" (default).
+    _record_metric()
     return {"answer": answer, "latency_ms": latency_ms,
             "spoke": spoke, "audio_b64": audio_b64}
 
@@ -3291,6 +3332,38 @@ async def api_posture_enable(request: Request):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"config save failed: {e}")
     return {"enabled": enabled}
+
+
+# ─── Fast-path metrics (nano-agents PRD instrumentation) ──────────────
+
+
+@app.get("/api/metrics/fastpath")
+def api_metrics_fastpath(days: int = 7):
+    """Per-stage counts + latency stats for the chat fast-path.
+
+    Used to answer "are nano-agents worth building?" — if `brain_fallback_pct`
+    is high (e.g. >30%), there's room for the brain to be displaced by
+    specialized small models.
+    """
+    return lifeos_metrics.summary(days=max(1, min(days, 365)))
+
+
+@app.get("/api/metrics/fastpath/recent")
+def api_metrics_fastpath_recent(days: int = 1, limit: int = 100):
+    rows = lifeos_metrics.list_recent(
+        days=max(1, min(days, 30)),
+        limit=max(1, min(limit, 500)),
+    )
+    return {
+        "metrics": [
+            {
+                "id": m.id, "ts": m.ts.isoformat(),
+                "stage": m.stage, "latency_ms": m.latency_ms,
+                "text_length": m.text_length, "has_image": m.has_image,
+            }
+            for m in rows
+        ],
+    }
 
 
 @app.get("/api/insights/patterns")
