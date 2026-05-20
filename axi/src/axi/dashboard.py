@@ -70,6 +70,10 @@ from lifeos.relationships import ingestion as rel_ingestion
 from lifeos.relationships import interactions as rel_interactions
 from lifeos.relationships import people as rel_people
 from lifeos.relationships import store as rel_store
+# P5.2 — Exercise domain (sessions, encrypted).
+from lifeos.exercise import ingestion as ex_ingestion
+from lifeos.exercise import sessions as ex_sessions
+from lifeos.exercise import store as ex_store
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1519,6 +1523,56 @@ async def api_chat_ask(request: Request):
             except Exception as e:  # noqa: BLE001
                 log.warning("purchase consult failed: %s — falling back to brain", e)
 
+        # Exercise fast-path: "caminé 30 min", "corrí 5 km", "gym 60 min", etc.
+        try:
+            ei = ex_ingestion.parse_exercise(text)
+        except Exception:  # noqa: BLE001
+            ei = None
+        if ei is not None:
+            try:
+                sess = ex_sessions.create(
+                    kind=ei.kind, title=ei.title,
+                    duration_minutes=ei.duration_minutes,
+                    when=datetime.now(ZoneInfo("UTC")),
+                    location=ei.location, body=text,
+                    data=ei.data or None,
+                    source="chat", confidence=ei.confidence,
+                )
+                streak = ex_sessions.current_streak()
+                lang = str(config.get("language", "es-MX"))
+                fam = lifeos_localize.lang_family(lang)
+                kind_label_es = {
+                    "walk": "caminata", "run": "trote", "cardio": "cardio",
+                    "strength": "fuerza", "yoga": "yoga", "sports": "deportes",
+                    "other": "ejercicio",
+                }
+                kind_label_en = {
+                    "walk": "walk", "run": "run", "cardio": "cardio",
+                    "strength": "strength", "yoga": "yoga", "sports": "sports",
+                    "other": "exercise",
+                }
+                label = (kind_label_en if fam == "en" else kind_label_es).get(
+                    ei.kind, ei.kind
+                )
+                if fam == "en":
+                    answer = f"Logged {label} session — {ei.duration_minutes} min."
+                    if streak >= 2:
+                        answer += f" 🔥 {streak}-day streak."
+                else:
+                    answer = f"Anotada sesión de {label} — {ei.duration_minutes} min."
+                    if streak >= 2:
+                        answer += f" 🔥 Racha de {streak} días consecutivos."
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "exercise_session_id": sess.id}
+            except Exception as e:  # noqa: BLE001
+                log.warning("lifeos exercise fast-path failed: %s — falling back", e)
+
         # Health ingestion fast-path: detect "me duele X", "glucosa N",
         # "presión X/Y", "tomé X", etc. Persists silently to the encrypted
         # store and acknowledges briefly. Per PRD §9.5 default: silent + a
@@ -2007,6 +2061,11 @@ def _lifeos_startup() -> None:
         rel_store.apply_migrations()
     except Exception:  # noqa: BLE001
         log.exception("lifeos relationships store failed to migrate")
+    # P5.2: exercise DB (independent key + DB).
+    try:
+        ex_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos exercise store failed to migrate")
 
 
 @app.on_event("shutdown")
@@ -2520,6 +2579,86 @@ async def api_rel_interactions_create(request: Request):
 @app.delete("/api/relationships/interactions/{iid}")
 def api_rel_interactions_delete(iid: str):
     return {"deleted": rel_interactions.delete(iid)}
+
+
+# ────────────────────────── lifeos (P5.2 exercise) ─────────────────────
+
+
+def _session_to_dict(s: ex_sessions.Session) -> dict:
+    return {
+        "id": s.id, "ts": s.ts.isoformat(),
+        "kind": s.kind, "duration_minutes": s.duration_minutes,
+        "intensity": s.intensity,
+        "mood_pre": s.mood_pre, "mood_post": s.mood_post,
+        "mood_delta": s.mood_delta,
+        "location": s.location, "title": s.title, "body": s.body,
+        "data": s.data, "tags": s.tags,
+        "source": s.source, "confidence": s.confidence,
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+    }
+
+
+@app.get("/exercise", response_class=HTMLResponse)
+def exercise_page(request: Request):
+    return templates.TemplateResponse(request, "exercise.html", {})
+
+
+@app.get("/api/exercise/sessions")
+def api_ex_list(days: int = 30, kind: str | None = None, limit: int = 300):
+    rows = ex_sessions.list_recent(
+        days=max(1, min(days, 3650)),
+        kind=kind if kind else None,
+        limit=max(1, min(limit, 1000)),
+    )
+    return {"sessions": [_session_to_dict(s) for s in rows]}
+
+
+@app.get("/api/exercise/summary")
+def api_ex_summary(days: int = 30):
+    out = ex_sessions.summary(days=max(1, min(days, 3650)))
+    out["streak_days"] = ex_sessions.current_streak()
+    return out
+
+
+@app.post("/api/exercise/sessions")
+async def api_ex_create(request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON")
+    kind = body.get("kind")
+    title = (body.get("title") or "").strip()
+    duration = body.get("duration_minutes")
+    ts_str = body.get("ts")
+    if not kind or not title or duration is None or not ts_str:
+        raise HTTPException(400, "kind, title, duration_minutes, ts required")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"ts must be ISO8601: {ts_str!r}")
+    if ts.tzinfo is None:
+        raise HTTPException(400, "ts must be tz-aware")
+    try:
+        s = ex_sessions.create(
+            kind=kind, title=title,
+            duration_minutes=int(duration), when=ts,
+            intensity=body.get("intensity"),
+            mood_pre=body.get("mood_pre"),
+            mood_post=body.get("mood_post"),
+            location=body.get("location") or None,
+            body=body.get("body") or None,
+            data=body.get("data") or None,
+            tags=body.get("tags") or None,
+            source=body.get("source", "manual"),
+            confidence=float(body.get("confidence", 1.0)),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _session_to_dict(s)
+
+
+@app.delete("/api/exercise/sessions/{sid}")
+def api_ex_delete(sid: str):
+    return {"deleted": ex_sessions.delete(sid)}
 
 
 # ────────────────────────── main entry ──────────────────────────────────

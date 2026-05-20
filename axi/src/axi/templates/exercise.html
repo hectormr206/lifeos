@@ -1,0 +1,239 @@
+{% extends "_base.html" %}
+{% block nav_exercise %}active{% endblock %}
+{% block title %}Ejercicio · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="exercisePage()"
+     x-init="load(); loadSummary(); startPolling()" x-destroy="stopPolling()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Ejercicio</h1>
+    <div class="flex gap-2 items-center text-sm flex-wrap">
+      <select x-model="filter.kind" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option value="">Todos</option>
+        <option value="walk">🚶 Caminata</option>
+        <option value="run">🏃 Trote</option>
+        <option value="cardio">❤️ Cardio</option>
+        <option value="strength">💪 Fuerza</option>
+        <option value="yoga">🧘 Yoga</option>
+        <option value="sports">⚽ Deportes</option>
+        <option value="other">📋 Otro</option>
+      </select>
+      <select x-model.number="filter.days" @change="load(); loadSummary()" class="panel2 px-3 py-2 text-sm">
+        <option :value="7">Semana</option>
+        <option :value="30">Mes</option>
+        <option :value="90">3 meses</option>
+        <option :value="365">Año</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+    <div class="panel p-3">
+      <div class="text-xs muted">Sesiones</div>
+      <div class="text-lg font-semibold" x-text="summary.sessions_count || 0"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Minutos totales</div>
+      <div class="text-lg font-semibold" x-text="(summary.total_minutes || 0).toLocaleString('es-MX')"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Promedio por sesión</div>
+      <div class="text-lg font-semibold"
+           x-text="summary.sessions_count > 0
+             ? Math.round(summary.total_minutes / summary.sessions_count) + ' min'
+             : '—'"></div>
+    </div>
+    <div class="panel p-3">
+      <div class="text-xs muted">Racha</div>
+      <div class="text-lg font-semibold"
+           :style="(summary.streak_days || 0) >= 3 ? 'color: var(--amber)' : ''"
+           x-text="(summary.streak_days || 0) === 0 ? '—' :
+                   (summary.streak_days + ' día' + (summary.streak_days > 1 ? 's 🔥' : ' 🔥'))"></div>
+    </div>
+  </div>
+
+  <!-- Compose -->
+  <div class="panel p-4 space-y-3">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nueva sesión</h2>
+    <div class="grid md:grid-cols-3 gap-2">
+      <select x-model="form.kind" class="panel2 px-3 py-2 text-sm">
+        <option value="walk">🚶 Caminata</option>
+        <option value="run">🏃 Trote</option>
+        <option value="cardio">❤️ Cardio</option>
+        <option value="strength">💪 Fuerza</option>
+        <option value="yoga">🧘 Yoga</option>
+        <option value="sports">⚽ Deportes</option>
+        <option value="other">📋 Otro</option>
+      </select>
+      <input type="text" x-model="form.title" placeholder="Resumen"
+             class="panel2 px-3 py-2 text-sm md:col-span-2" maxlength="200">
+    </div>
+    <div class="grid md:grid-cols-4 gap-2 items-center text-sm">
+      <input type="number" min="0" max="1440" x-model.number="form.duration_minutes"
+             placeholder="Minutos" class="panel2 px-3 py-2 text-sm">
+      <div class="flex items-center gap-2">
+        <span class="muted text-xs">Intensidad:</span>
+        <input type="range" min="1" max="10" x-model.number="form.intensity" class="w-24">
+        <span x-text="form.intensity"></span>
+      </div>
+      <input type="text" x-model="form.location" placeholder="Lugar (outdoor/gym/casa)"
+             class="panel2 px-3 py-2 text-sm" maxlength="80">
+      <input type="datetime-local" x-model="form.ts_local" class="panel2 px-3 py-2 text-sm">
+    </div>
+    <div class="grid md:grid-cols-3 gap-2 items-center text-sm">
+      <div class="flex items-center gap-2">
+        <span class="muted text-xs">Ánimo antes:</span>
+        <input type="range" min="1" max="10" x-model.number="form.mood_pre" class="w-24">
+        <span x-text="form.mood_pre"></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="muted text-xs">Ánimo después:</span>
+        <input type="range" min="1" max="10" x-model.number="form.mood_post" class="w-24">
+        <span x-text="form.mood_post"></span>
+      </div>
+      <input type="text" x-model="form.tags" placeholder="Tags (coma)"
+             class="panel2 px-3 py-2 text-sm" maxlength="200">
+    </div>
+    <textarea x-model="form.body" placeholder="Notas (opcional)"
+              class="panel2 px-3 py-2 text-sm w-full" rows="2" maxlength="2000"></textarea>
+    <div class="flex justify-end">
+      <button class="btn btn-primary" @click="create()"
+              :disabled="!form.title || !form.duration_minutes || !form.ts_local">
+        Guardar
+      </button>
+    </div>
+    <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
+  </div>
+
+  <!-- Timeline -->
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando…</div>
+  </template>
+  <template x-if="!loading && rows.length === 0">
+    <div class="panel p-12 text-center muted">
+      Sin sesiones en este rango. Probá decirle al chat: "caminé 30 minutos" o "gym 60 min".
+    </div>
+  </template>
+
+  <div class="grid gap-2" x-show="rows.length > 0">
+    <template x-for="r in rows" :key="r.id">
+      <div class="panel p-3 flex items-start gap-3">
+        <span class="text-xl" x-text="kindIcon(r.kind)"></span>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-medium" x-text="r.title"></span>
+            <span class="text-xs muted" x-text="r.duration_minutes + ' min'"></span>
+            <template x-if="r.intensity">
+              <span class="text-xs muted" x-text="'· int ' + r.intensity"></span>
+            </template>
+            <template x-if="r.data && r.data.distance_km">
+              <span class="text-xs muted" x-text="'· ' + r.data.distance_km + ' km'"></span>
+            </template>
+            <template x-if="r.mood_delta !== null">
+              <span class="text-xs px-1.5 py-0.5 panel2 rounded"
+                    :style="r.mood_delta > 0 ? 'color: var(--green)' : 'color: var(--red)'"
+                    x-text="(r.mood_delta > 0 ? '+' : '') + r.mood_delta + ' ánimo'"></span>
+            </template>
+            <template x-if="r.source !== 'manual'">
+              <span class="text-xs px-1.5 py-0.5 panel2 rounded muted" x-text="r.source"></span>
+            </template>
+          </div>
+          <div class="text-xs muted mt-1">
+            <span x-text="fmtTs(r.ts)"></span>
+            <template x-if="r.location">
+              <span class="ml-2 px-1.5 py-0.5 panel2 rounded" x-text="r.location"></span>
+            </template>
+          </div>
+          <template x-if="r.body">
+            <div class="text-xs mt-2" x-text="r.body"></div>
+          </template>
+        </div>
+        <button @click="del(r.id)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">🗑️</button>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function exercisePage() {
+  return {
+    rows: [], summary: {},
+    loading: true,
+    error: '',
+    filter: { kind: '', days: 30 },
+    form: {
+      kind: 'walk', title: '', duration_minutes: null,
+      intensity: 5, mood_pre: 5, mood_post: 5,
+      location: '', body: '', tags: '', ts_local: '',
+    },
+    _pollHandle: null,
+    startPolling() {
+      this.stopPolling();
+      this._pollHandle = setInterval(() => { this.load(true); this.loadSummary(); }, 15000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.stopPolling(); else this.startPolling();
+      });
+    },
+    stopPolling() { if (this._pollHandle) { clearInterval(this._pollHandle); this._pollHandle = null; } },
+    async load(silent = false) {
+      if (!silent && this.rows.length === 0) this.loading = true;
+      const params = new URLSearchParams();
+      if (this.filter.kind) params.set('kind', this.filter.kind);
+      if (this.filter.days) params.set('days', this.filter.days);
+      try {
+        const r = await fetch('/api/exercise/sessions?' + params.toString());
+        if (r.ok) this.rows = (await r.json()).sessions || [];
+      } catch (e) { /* keep */ }
+      this.loading = false;
+    },
+    async loadSummary() {
+      const r = await fetch('/api/exercise/summary?days=' + this.filter.days);
+      if (r.ok) this.summary = await r.json();
+    },
+    async create() {
+      this.error = '';
+      const localDt = new Date(this.form.ts_local);
+      if (isNaN(localDt.getTime())) { this.error = 'Fecha inválida'; return; }
+      const tags = this.form.tags
+        ? this.form.tags.split(',').map(t => t.trim()).filter(Boolean)
+        : null;
+      const body = {
+        kind: this.form.kind, title: this.form.title,
+        duration_minutes: this.form.duration_minutes,
+        intensity: this.form.intensity,
+        mood_pre: this.form.mood_pre, mood_post: this.form.mood_post,
+        location: this.form.location || null,
+        body: this.form.body || null,
+        ts: localDt.toISOString(),
+        tags,
+      };
+      const r = await fetch('/api/exercise/sessions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { this.error = 'No se pudo guardar: ' + (await r.text()); return; }
+      this.form.title = ''; this.form.duration_minutes = null;
+      this.form.body = ''; this.form.tags = ''; this.form.location = '';
+      this.load(); this.loadSummary();
+    },
+    async del(id) {
+      await fetch('/api/exercise/sessions/' + id, { method: 'DELETE' });
+      this.load(); this.loadSummary();
+    },
+    kindIcon(k) {
+      return ({walk:'🚶', run:'🏃', cardio:'❤️', strength:'💪',
+               yoga:'🧘', sports:'⚽', other:'📋'})[k] || '•';
+    },
+    fmtTs(iso) {
+      try {
+        return new Date(iso).toLocaleString('es-MX', {
+          weekday: 'short', day: 'numeric', month: 'short',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch (e) { return iso; }
+    },
+  };
+}
+</script>
+{% endblock %}
