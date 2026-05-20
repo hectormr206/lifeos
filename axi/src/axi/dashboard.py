@@ -74,6 +74,10 @@ from lifeos.relationships import store as rel_store
 from lifeos.exercise import ingestion as ex_ingestion
 from lifeos.exercise import sessions as ex_sessions
 from lifeos.exercise import store as ex_store
+# P5.3 — Spirituality domain (reflections, gratitude, meditation, retros).
+from lifeos.spirituality import entries as spirit_entries
+from lifeos.spirituality import ingestion as spirit_ingestion
+from lifeos.spirituality import store as spirit_store
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1573,6 +1577,50 @@ async def api_chat_ask(request: Request):
             except Exception as e:  # noqa: BLE001
                 log.warning("lifeos exercise fast-path failed: %s — falling back", e)
 
+        # Spirituality fast-path: "hoy agradezco X", "medité N min",
+        # "reflexión: X". Conservative parser — high precision over recall.
+        try:
+            si = spirit_ingestion.parse_spirituality(text)
+        except Exception:  # noqa: BLE001
+            si = None
+        if si is not None:
+            try:
+                se = spirit_entries.create(
+                    kind=si.kind, title=si.title,
+                    when=datetime.now(ZoneInfo("UTC")),
+                    body=si.body or text, data=si.data or None,
+                    source="chat", confidence=si.confidence,
+                )
+                lang = str(config.get("language", "es-MX"))
+                fam = lifeos_localize.lang_family(lang)
+                kind_label_es = {
+                    "reflection": "reflexión", "gratitude": "agradecimiento",
+                    "meditation": "meditación", "value": "valor",
+                    "retro": "retrospectiva", "question": "pregunta",
+                }
+                kind_label_en = {
+                    "reflection": "reflection", "gratitude": "gratitude",
+                    "meditation": "meditation", "value": "value",
+                    "retro": "retro", "question": "question",
+                }
+                label = (kind_label_en if fam == "en" else kind_label_es).get(
+                    si.kind, si.kind
+                )
+                if fam == "en":
+                    answer = f"Logged {label} in /spirituality."
+                else:
+                    answer = f"Anotado en espiritualidad como {label}. Lo ves en /spirituality."
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "spirituality_entry_id": se.id}
+            except Exception as e:  # noqa: BLE001
+                log.warning("lifeos spirituality fast-path failed: %s — falling back", e)
+
         # Health ingestion fast-path: detect "me duele X", "glucosa N",
         # "presión X/Y", "tomé X", etc. Persists silently to the encrypted
         # store and acknowledges briefly. Per PRD §9.5 default: silent + a
@@ -2066,6 +2114,11 @@ def _lifeos_startup() -> None:
         ex_store.apply_migrations()
     except Exception:  # noqa: BLE001
         log.exception("lifeos exercise store failed to migrate")
+    # P5.3: spirituality DB (independent key + DB).
+    try:
+        spirit_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos spirituality store failed to migrate")
 
 
 @app.on_event("shutdown")
@@ -2659,6 +2712,115 @@ async def api_ex_create(request: Request):
 @app.delete("/api/exercise/sessions/{sid}")
 def api_ex_delete(sid: str):
     return {"deleted": ex_sessions.delete(sid)}
+
+
+# ────────────────────────── lifeos (P5.3 spirituality) ─────────────────
+
+
+def _spirit_entry_to_dict(e: spirit_entries.Entry) -> dict:
+    return {
+        "id": e.id, "ts": e.ts.isoformat(),
+        "kind": e.kind, "title": e.title, "body": e.body,
+        "mood": e.mood, "data": e.data, "tags": e.tags,
+        "source": e.source, "confidence": e.confidence,
+        "reminder_id": e.reminder_id,
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+@app.get("/spirituality", response_class=HTMLResponse)
+def spirituality_page(request: Request):
+    return templates.TemplateResponse(request, "spirituality.html", {})
+
+
+@app.get("/api/spirituality/entries")
+def api_spirit_list(days: int = 90, kind: str | None = None,
+                    q: str | None = None, limit: int = 200):
+    if q:
+        rows = spirit_entries.search(q, kind=kind if kind else None,
+                                     limit=max(1, min(limit, 500)))
+    else:
+        rows = spirit_entries.list_recent(
+            days=max(1, min(days, 3650)),
+            kind=kind if kind else None,
+            limit=max(1, min(limit, 500)),
+        )
+    return {"entries": [_spirit_entry_to_dict(e) for e in rows]}
+
+
+@app.post("/api/spirituality/entries")
+async def api_spirit_create(request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON")
+    kind = body.get("kind")
+    title = (body.get("title") or "").strip()
+    ts_str = body.get("ts")
+    if not kind or not title or not ts_str:
+        raise HTTPException(400, "kind, title, ts required")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"ts must be ISO8601: {ts_str!r}")
+    if ts.tzinfo is None:
+        raise HTTPException(400, "ts must be tz-aware")
+    try:
+        e = spirit_entries.create(
+            kind=kind, title=title, when=ts,
+            body=body.get("body") or None,
+            mood=body.get("mood"),
+            data=body.get("data") or None,
+            tags=body.get("tags") or None,
+            source=body.get("source", "manual"),
+            confidence=float(body.get("confidence", 1.0)),
+        )
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+    return _spirit_entry_to_dict(e)
+
+
+@app.delete("/api/spirituality/entries/{eid}")
+def api_spirit_delete(eid: str):
+    return {"deleted": spirit_entries.delete(eid)}
+
+
+# Weekly retro scheduler — reuses lifeos.reminders (P1) for the cron nudge.
+# Body: {weekday: 0..6 (Sun=0..Sat=6), hour: 0..23, minute: 0..59}.
+# Default: Sunday 21:00.
+@app.post("/api/spirituality/schedule-weekly-retro")
+async def api_spirit_schedule_weekly_retro(request: Request):
+    body = await request.json() if request.headers.get("content-length", "0") != "0" else {}
+    if not isinstance(body, dict):
+        body = {}
+    weekday = int(body.get("weekday", 0))      # Sun
+    hour = int(body.get("hour", 21))
+    minute = int(body.get("minute", 0))
+    if not (0 <= weekday <= 6) or not (0 <= hour <= 23) or not (0 <= minute <= 59):
+        raise HTTPException(400, "invalid weekday/hour/minute")
+    cron = f"{minute} {hour} * * {weekday}"
+    lang = str(config.get("language", "es-MX"))
+    msg = (
+        "Hora de tu retrospectiva semanal. ¿Qué funcionó, qué no, "
+        "y en qué te enfocás esta semana?"
+        if lifeos_localize.lang_family(lang) == "es"
+        else "Time for your weekly retrospective. What worked, what didn't, "
+             "and what's your focus this week?"
+    )
+    # Use the cron's next match as the first run.
+    from apscheduler.triggers.cron import CronTrigger
+    from zoneinfo import ZoneInfo as _ZI
+    tz = _ZI("America/Mexico_City")
+    first_run = CronTrigger.from_crontab(cron, timezone=tz).get_next_fire_time(
+        None, datetime.now(tz)
+    )
+    if first_run is None:
+        raise HTTPException(500, "cron has no upcoming match (shouldn't happen)")
+    rem = lifeos_reminders.create(
+        when=first_run.astimezone(ZoneInfo("UTC")),
+        message=msg, channel="push", recurrence=cron,
+    )
+    get_scheduler().schedule(rem)
+    return {"reminder_id": rem.id, "cron": cron, "first_run": rem.when_ts.isoformat()}
 
 
 # ────────────────────────── main entry ──────────────────────────────────

@@ -1,0 +1,305 @@
+{% extends "_base.html" %}
+{% block nav_spirituality %}active{% endblock %}
+{% block title %}Espiritualidad · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="spiritualityPage()"
+     x-init="load(); startPolling()" x-destroy="stopPolling()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Espiritualidad</h1>
+    <div class="flex gap-2 items-center text-sm flex-wrap">
+      <button class="btn" @click="showRetroScheduler = !showRetroScheduler">
+        ⏰ Retro semanal
+      </button>
+      <select x-model="filter.kind" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option value="">Todos los tipos</option>
+        <option value="reflection">💭 Reflexión</option>
+        <option value="gratitude">🙏 Gratitud</option>
+        <option value="meditation">🧘 Meditación</option>
+        <option value="value">⭐ Valor</option>
+        <option value="retro">📋 Retro</option>
+        <option value="question">❓ Pregunta</option>
+      </select>
+      <select x-model.number="filter.days" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option :value="30">Mes</option>
+        <option :value="90">3 meses</option>
+        <option :value="180">6 meses</option>
+        <option :value="365">Año</option>
+        <option :value="3650">Todo</option>
+      </select>
+      <input type="text" x-model.debounce.300ms="filter.q" @input="load()"
+             placeholder="Buscar…" class="panel2 px-3 py-2 text-sm" maxlength="120">
+    </div>
+  </div>
+
+  <!-- Weekly retro scheduler -->
+  <div x-show="showRetroScheduler" x-cloak class="panel p-4 space-y-3"
+       style="border-color: var(--amber)">
+    <h2 class="text-sm font-semibold uppercase tracking-wider"
+        style="color: var(--amber)">⏰ Configurar retro semanal</h2>
+    <p class="text-xs muted">
+      Axi te manda un push (laptop + Pixel) cada semana en la hora que elijas.
+      Tap → abre esta página con el form de retro abierto.
+    </p>
+    <div class="grid md:grid-cols-3 gap-2 items-center text-sm">
+      <select x-model.number="retroForm.weekday" class="panel2 px-3 py-2 text-sm">
+        <option :value="0">Domingo</option>
+        <option :value="1">Lunes</option>
+        <option :value="2">Martes</option>
+        <option :value="3">Miércoles</option>
+        <option :value="4">Jueves</option>
+        <option :value="5">Viernes</option>
+        <option :value="6">Sábado</option>
+      </select>
+      <div class="flex items-center gap-2">
+        <span class="muted text-xs">Hora:</span>
+        <input type="number" min="0" max="23" x-model.number="retroForm.hour" class="panel2 px-3 py-2 w-16 text-sm">
+        <span>:</span>
+        <input type="number" min="0" max="59" step="5" x-model.number="retroForm.minute" class="panel2 px-3 py-2 w-16 text-sm">
+      </div>
+      <button class="btn btn-primary" @click="scheduleRetro()">Programar</button>
+    </div>
+    <div x-show="retroStatus" x-cloak class="text-xs" x-text="retroStatus"></div>
+  </div>
+
+  <!-- Compose — context-aware: shows extra fields for retro/gratitude -->
+  <div class="panel p-4 space-y-3">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nueva entrada</h2>
+    <div class="grid md:grid-cols-3 gap-2">
+      <select x-model="form.kind" @change="onKindChange()" class="panel2 px-3 py-2 text-sm">
+        <option value="reflection">💭 Reflexión</option>
+        <option value="gratitude">🙏 Gratitud</option>
+        <option value="meditation">🧘 Meditación</option>
+        <option value="value">⭐ Valor</option>
+        <option value="retro">📋 Retro semanal</option>
+        <option value="question">❓ Pregunta</option>
+      </select>
+      <input type="text" x-model="form.title" placeholder="Título"
+             class="panel2 px-3 py-2 text-sm md:col-span-2" maxlength="200">
+    </div>
+
+    <!-- Retro-specific fields -->
+    <template x-if="form.kind === 'retro'">
+      <div class="grid md:grid-cols-3 gap-2">
+        <textarea x-model="form.retro_wins" placeholder="✅ Qué funcionó esta semana"
+                  class="panel2 px-3 py-2 text-sm" rows="3" maxlength="1000"></textarea>
+        <textarea x-model="form.retro_losses" placeholder="❌ Qué no funcionó"
+                  class="panel2 px-3 py-2 text-sm" rows="3" maxlength="1000"></textarea>
+        <textarea x-model="form.retro_next_focus" placeholder="🎯 Foco para la próxima"
+                  class="panel2 px-3 py-2 text-sm" rows="3" maxlength="1000"></textarea>
+      </div>
+    </template>
+
+    <!-- Gratitude-specific: comma-separated list, optional -->
+    <template x-if="form.kind === 'gratitude'">
+      <input type="text" x-model="form.gratitude_items"
+             placeholder="3 cosas que agradezco (separadas por coma)"
+             class="panel2 px-3 py-2 text-sm w-full" maxlength="500">
+    </template>
+
+    <!-- Meditation-specific: duration -->
+    <template x-if="form.kind === 'meditation'">
+      <div class="flex items-center gap-2 text-sm">
+        <span class="muted">Duración:</span>
+        <input type="number" min="1" max="240" x-model.number="form.med_minutes"
+               class="panel2 px-3 py-2 w-24 text-sm" placeholder="min">
+        <span class="muted">minutos</span>
+      </div>
+    </template>
+
+    <div class="grid md:grid-cols-3 gap-2 items-center text-sm">
+      <input type="datetime-local" x-model="form.ts_local" class="panel2 px-3 py-2 text-sm">
+      <div class="flex items-center gap-2">
+        <span class="muted text-xs">Ánimo (1-10):</span>
+        <input type="range" min="1" max="10" x-model.number="form.mood" class="w-24">
+        <span x-text="form.mood"></span>
+      </div>
+      <input type="text" x-model="form.tags" placeholder="Tags (coma)"
+             class="panel2 px-3 py-2 text-sm" maxlength="200">
+    </div>
+
+    <textarea x-model="form.body" placeholder="El cuerpo de la entrada — escribí libremente."
+              class="panel2 px-3 py-2 text-sm w-full font-serif" rows="5" maxlength="5000"></textarea>
+
+    <div class="flex justify-end">
+      <button class="btn btn-primary" @click="create()"
+              :disabled="!form.title || !form.ts_local">
+        Guardar
+      </button>
+    </div>
+    <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
+  </div>
+
+  <!-- Timeline -->
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando…</div>
+  </template>
+  <template x-if="!loading && rows.length === 0">
+    <div class="panel p-12 text-center muted">
+      Sin entradas en este rango. Probá decirle al chat: "hoy agradezco X, Y, Z" o
+      "medité 15 minutos". O escribí directamente desde acá.
+    </div>
+  </template>
+
+  <div class="grid gap-2" x-show="rows.length > 0">
+    <template x-for="r in rows" :key="r.id">
+      <div class="panel p-3 flex items-start gap-3">
+        <span class="text-xl" x-text="kindIcon(r.kind)"></span>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-medium" x-text="r.title"></span>
+            <template x-if="r.mood !== null">
+              <span class="text-xs muted" x-text="'· ánimo ' + r.mood + '/10'"></span>
+            </template>
+            <template x-if="r.source !== 'manual'">
+              <span class="text-xs px-1.5 py-0.5 panel2 rounded muted" x-text="r.source"></span>
+            </template>
+          </div>
+          <div class="text-xs muted mt-1" x-text="fmtTs(r.ts)"></div>
+          <template x-if="r.body">
+            <div class="text-sm mt-2 whitespace-pre-wrap" x-text="r.body"></div>
+          </template>
+          <!-- Kind-specific rendering -->
+          <template x-if="r.kind === 'retro' && r.data && r.data.wins">
+            <div class="text-xs mt-2 grid md:grid-cols-3 gap-2">
+              <div><div class="muted uppercase tracking-wider mb-1">✅ Funcionó</div>
+                <div class="whitespace-pre-wrap" x-text="Array.isArray(r.data.wins) ? r.data.wins.join('\n') : r.data.wins"></div></div>
+              <div><div class="muted uppercase tracking-wider mb-1">❌ No funcionó</div>
+                <div class="whitespace-pre-wrap" x-text="Array.isArray(r.data.losses) ? r.data.losses.join('\n') : r.data.losses"></div></div>
+              <div><div class="muted uppercase tracking-wider mb-1">🎯 Foco</div>
+                <div class="whitespace-pre-wrap" x-text="r.data.next_focus || ''"></div></div>
+            </div>
+          </template>
+          <template x-if="r.kind === 'gratitude' && r.data && r.data.items && r.data.items.length > 0">
+            <ul class="text-xs mt-2 list-disc list-inside">
+              <template x-for="item in r.data.items" :key="item">
+                <li x-text="item"></li>
+              </template>
+            </ul>
+          </template>
+          <template x-if="r.kind === 'meditation' && r.data && r.data.duration_minutes">
+            <div class="text-xs muted mt-1" x-text="r.data.duration_minutes + ' min'"></div>
+          </template>
+        </div>
+        <button @click="del(r.id)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">🗑️</button>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function spiritualityPage() {
+  return {
+    rows: [],
+    loading: true,
+    error: '',
+    showRetroScheduler: false,
+    retroStatus: '',
+    retroForm: { weekday: 0, hour: 21, minute: 0 },
+    filter: { kind: '', days: 90, q: '' },
+    form: {
+      kind: 'reflection', title: '', ts_local: '',
+      body: '', mood: 5, tags: '',
+      retro_wins: '', retro_losses: '', retro_next_focus: '',
+      gratitude_items: '', med_minutes: 15,
+    },
+    _pollHandle: null,
+    startPolling() {
+      this.stopPolling();
+      // 30s — these are slower-moving entries than reminders/health.
+      this._pollHandle = setInterval(() => this.load(true), 30000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.stopPolling(); else this.startPolling();
+      });
+    },
+    stopPolling() { if (this._pollHandle) { clearInterval(this._pollHandle); this._pollHandle = null; } },
+    onKindChange() {
+      // Reset kind-specific fields on switch.
+      this.form.retro_wins = '';
+      this.form.retro_losses = '';
+      this.form.retro_next_focus = '';
+      this.form.gratitude_items = '';
+    },
+    async load(silent = false) {
+      if (!silent && this.rows.length === 0) this.loading = true;
+      const params = new URLSearchParams();
+      if (this.filter.kind) params.set('kind', this.filter.kind);
+      if (this.filter.days) params.set('days', this.filter.days);
+      if (this.filter.q) params.set('q', this.filter.q);
+      try {
+        const r = await fetch('/api/spirituality/entries?' + params.toString());
+        if (r.ok) this.rows = (await r.json()).entries || [];
+      } catch (e) { /* keep current */ }
+      this.loading = false;
+    },
+    async create() {
+      this.error = '';
+      const localDt = new Date(this.form.ts_local);
+      if (isNaN(localDt.getTime())) { this.error = 'Fecha inválida'; return; }
+      const tags = this.form.tags
+        ? this.form.tags.split(',').map(t => t.trim()).filter(Boolean)
+        : null;
+      let data = null;
+      if (this.form.kind === 'retro') {
+        const splitNonEmpty = (s) => (s || '').split('\n').map(x => x.trim()).filter(Boolean);
+        data = {
+          wins: splitNonEmpty(this.form.retro_wins),
+          losses: splitNonEmpty(this.form.retro_losses),
+          next_focus: (this.form.retro_next_focus || '').trim(),
+        };
+      } else if (this.form.kind === 'gratitude' && this.form.gratitude_items) {
+        const items = this.form.gratitude_items.split(',').map(s => s.trim()).filter(Boolean);
+        if (items.length > 0) data = { items };
+      } else if (this.form.kind === 'meditation') {
+        data = { duration_minutes: this.form.med_minutes };
+      }
+      const body = {
+        kind: this.form.kind, title: this.form.title,
+        ts: localDt.toISOString(),
+        body: this.form.body || null,
+        mood: this.form.mood,
+        data, tags,
+      };
+      const r = await fetch('/api/spirituality/entries', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { this.error = 'No se pudo guardar: ' + (await r.text()); return; }
+      this.form.title = ''; this.form.body = ''; this.form.tags = '';
+      this.form.retro_wins = ''; this.form.retro_losses = ''; this.form.retro_next_focus = '';
+      this.form.gratitude_items = '';
+      this.load();
+    },
+    async scheduleRetro() {
+      this.retroStatus = 'Programando…';
+      const r = await fetch('/api/spirituality/schedule-weekly-retro', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.retroForm),
+      });
+      if (!r.ok) { this.retroStatus = 'Error: ' + (await r.text()); return; }
+      const data = await r.json();
+      const firstRun = new Date(data.first_run).toLocaleString('es-MX', {
+        weekday: 'long', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+      });
+      this.retroStatus = `✓ Programado. Primera vez: ${firstRun}. Cron: ${data.cron}`;
+    },
+    async del(id) {
+      await fetch('/api/spirituality/entries/' + id, { method: 'DELETE' });
+      this.load();
+    },
+    kindIcon(k) {
+      return ({reflection:'💭', gratitude:'🙏', meditation:'🧘',
+               value:'⭐', retro:'📋', question:'❓'})[k] || '•';
+    },
+    fmtTs(iso) {
+      try {
+        return new Date(iso).toLocaleString('es-MX', {
+          weekday: 'short', day: 'numeric', month: 'short',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch (e) { return iso; }
+    },
+  };
+}
+</script>
+{% endblock %}
