@@ -60,6 +60,10 @@ from lifeos.finance import entries as finance_entries
 from lifeos.finance import ingestion as finance_ingestion
 from lifeos.finance import reflect as finance_reflect
 from lifeos.finance import store as finance_store
+# P4 — Decision engine + graph edges (cross-domain reasoning).
+from lifeos.decide import purchase as decide_purchase
+from lifeos.decide import query_parser as decide_query_parser
+from lifeos.decide import symptom as decide_symptom
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1475,6 +1479,40 @@ async def api_chat_ask(request: Request):
     # we handle it deterministically without bothering the brain. Saves ~3s
     # latency and avoids reasoning-model hallucinations on time math.
     if not image_b64:
+        # P4 decision-query fast-path: "¿puedo comprar X?" → cross-domain
+        # consult using finance history + impulse classification. MUST run
+        # BEFORE finance ingestion or "comprar" gets misread as a purchase
+        # log.
+        try:
+            qi = decide_query_parser.parse_query(text)
+        except Exception:  # noqa: BLE001
+            qi = None
+        if isinstance(qi, decide_query_parser.PurchaseConsultIntent):
+            try:
+                from axi import brain as _brain
+                lang = str(config.get("language", "es-MX"))
+                result = decide_purchase.consult(
+                    qi.item, brain_ask=_brain.ask, language=lang,
+                )
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, result.answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                return {
+                    "answer": result.answer,
+                    "latency_ms": latency_ms,
+                    "spoke": False, "audio_b64": None,
+                    "consult": {
+                        "kind": "purchase",
+                        "citations": result.citations,
+                        "impulsive_ratio": result.context.impulsive_ratio,
+                        "classified_total": result.context.classified_total,
+                    },
+                }
+            except Exception as e:  # noqa: BLE001
+                log.warning("purchase consult failed: %s — falling back to brain", e)
+
         # Health ingestion fast-path: detect "me duele X", "glucosa N",
         # "presión X/Y", "tomé X", etc. Persists silently to the encrypted
         # store and acknowledges briefly. Per PRD §9.5 default: silent + a
@@ -1510,6 +1548,15 @@ async def api_chat_ask(request: Request):
                 else:
                     answer = (f"Anotado en salud como {kind_label}: \"{hi.title}\". "
                               f"{'Confianza: %d%%.' % int(hi.confidence * 100) if hi.confidence < 1.0 else ''}").strip()
+                # P4: surface historical pattern when this is a symptom.
+                if entry.kind == "symptom":
+                    try:
+                        recurrences = decide_symptom.find_recurrences(entry)
+                        pattern_msg = decide_symptom.summarize(entry, recurrences, language=lang)
+                        if pattern_msg:
+                            answer = answer + "\n\n" + pattern_msg
+                    except Exception:  # noqa: BLE001
+                        log.exception("symptom pattern surfacer failed")
                 latency_ms = round((time.monotonic() - start) * 1000)
                 try:
                     mem.add(text, answer, has_screenshot=False)

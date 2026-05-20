@@ -105,6 +105,54 @@ def _migration_004_reminders_recurrence(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE reminders ADD COLUMN last_fired_at TEXT")
 
 
+def _migration_006_edges(conn: sqlite3.Connection) -> None:
+    # Cross-domain graph edges. The actual entries live in their respective
+    # (encrypted) per-domain DBs; this table only holds ulids + relation
+    # vocabulary, which on its own discloses nothing useful. The benefit
+    # of co-locating edges here is that the graph layer can query without
+    # decrypting any sensitive store unless the caller actually needs the
+    # destination entry's content.
+    #
+    # Controlled vocabulary for `rel` (extended as needed):
+    #   - caused-by         A was caused by B (effect → cause)
+    #   - precedes          A happened before B in a meaningful sequence
+    #   - same-event        A and B describe the same real-world event
+    #   - mentions-person   A mentions person B (people: TODO)
+    #   - resolved-by       A (problem) was resolved by B (intervention)
+    #   - pattern-of        A is one instance of recurring pattern B
+    #   - triggered-by      A was triggered by B
+    #   - funded            B funded A (savings → purchase)
+    #   - costs             A costs B (e.g. recurring expense vs entry)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS edges (
+            id TEXT PRIMARY KEY,
+            src_id TEXT NOT NULL,
+            src_domain TEXT NOT NULL,
+            dst_id TEXT NOT NULL,
+            dst_domain TEXT NOT NULL,
+            rel TEXT NOT NULL,
+            weight REAL NOT NULL DEFAULT 1.0,
+            metadata TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_by TEXT NOT NULL DEFAULT 'system'
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_edges_src "
+        "ON edges(src_domain, src_id, rel)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_edges_dst "
+        "ON edges(dst_domain, dst_id, rel)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_edges_rel "
+        "ON edges(rel)"
+    )
+
+
 def _migration_005_reminder_end_conditions(conn: sqlite3.Connection) -> None:
     # End conditions for recurring reminders (Google-Calendar style "Finaliza"):
     # - ends_at: ISO UTC timestamp. Scheduler stops firing after this instant.
@@ -124,6 +172,7 @@ MIGRATIONS: list[Migration] = [
     _migration_003_push_subscriptions,
     _migration_004_reminders_recurrence,
     _migration_005_reminder_end_conditions,
+    _migration_006_edges,
 ]
 
 
