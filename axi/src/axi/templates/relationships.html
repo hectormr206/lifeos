@@ -1,0 +1,246 @@
+{% extends "_base.html" %}
+{% block nav_relationships %}active{% endblock %}
+{% block title %}Relaciones · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="relationshipsPage()"
+     x-init="loadPeople(); load(); startPolling()" x-destroy="stopPolling()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Relaciones</h1>
+    <div class="flex gap-2 items-center text-sm flex-wrap">
+      <select x-model="filter.kind" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option value="">Todos los tipos</option>
+        <option value="conversation">💬 Conversación</option>
+        <option value="conflict">🔥 Conflicto</option>
+        <option value="quality_time">✨ Tiempo de calidad</option>
+        <option value="call">📞 Llamada</option>
+        <option value="text">📱 Mensajes</option>
+        <option value="note">📝 Nota</option>
+      </select>
+      <select x-model.number="filter.days" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option :value="7">Semana</option>
+        <option :value="30">Mes</option>
+        <option :value="90">3 meses</option>
+        <option :value="365">Año</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- People grid -->
+  <div class="panel p-4 space-y-3">
+    <div class="flex justify-between items-center flex-wrap gap-2">
+      <h2 class="text-sm font-semibold muted uppercase tracking-wider">
+        Personas (<span x-text="people.length"></span>)
+      </h2>
+      <button class="btn btn-sm" @click="showAddPerson = !showAddPerson"
+              x-text="showAddPerson ? 'Cancelar' : '+ Agregar'"></button>
+    </div>
+    <div x-show="showAddPerson" x-cloak class="grid md:grid-cols-3 gap-2">
+      <input type="text" x-model="personForm.name" placeholder="Nombre"
+             class="panel2 px-3 py-2 text-sm" maxlength="80">
+      <input type="text" x-model="personForm.role" placeholder="Rol (esposa, amigo, jefe…)"
+             class="panel2 px-3 py-2 text-sm" maxlength="60">
+      <button class="btn btn-primary" @click="createPerson()"
+              :disabled="!personForm.name">Guardar</button>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <template x-for="p in people" :key="p.id">
+        <button @click="filter.person_id = (filter.person_id === p.id ? null : p.id); load()"
+                :class="filter.person_id === p.id ? 'btn-primary' : ''"
+                class="panel2 px-3 py-2 text-sm rounded-lg flex items-center gap-2 hover:brightness-110">
+          <span class="text-xs muted" x-text="initialOf(p.name)"></span>
+          <span class="font-medium" x-text="p.name"></span>
+          <template x-if="p.role">
+            <span class="text-xs muted" x-text="p.role"></span>
+          </template>
+        </button>
+      </template>
+      <template x-if="people.length === 0">
+        <div class="muted text-sm">Sin personas. Probá decirle al chat: "hablé con María".</div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Compose interaction -->
+  <div class="panel p-4 space-y-3" x-show="people.length > 0">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nueva interacción</h2>
+    <div class="grid md:grid-cols-3 gap-2">
+      <select x-model="form.person_id" class="panel2 px-3 py-2 text-sm">
+        <option value="">— Persona —</option>
+        <template x-for="p in people" :key="p.id">
+          <option :value="p.id" x-text="p.name"></option>
+        </template>
+      </select>
+      <select x-model="form.kind" class="panel2 px-3 py-2 text-sm">
+        <option value="conversation">💬 Conversación</option>
+        <option value="conflict">🔥 Conflicto</option>
+        <option value="quality_time">✨ Tiempo de calidad</option>
+        <option value="call">📞 Llamada</option>
+        <option value="text">📱 Mensajes</option>
+        <option value="note">📝 Nota</option>
+      </select>
+      <input type="datetime-local" x-model="form.ts_local" class="panel2 px-3 py-2 text-sm">
+    </div>
+    <input type="text" x-model="form.title" placeholder="Resumen breve"
+           class="panel2 px-3 py-2 text-sm w-full" maxlength="200">
+    <div class="grid md:grid-cols-3 gap-2 items-center text-sm">
+      <div class="flex items-center gap-2">
+        <span class="muted">Ánimo antes:</span>
+        <input type="range" min="1" max="10" x-model.number="form.mood_pre" class="w-32">
+        <span x-text="form.mood_pre"></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="muted">Ánimo después:</span>
+        <input type="range" min="1" max="10" x-model.number="form.mood_post" class="w-32">
+        <span x-text="form.mood_post"></span>
+      </div>
+      <input type="text" x-model="form.tags" placeholder="Tags (coma)"
+             class="panel2 px-3 py-2 text-sm" maxlength="200">
+    </div>
+    <textarea x-model="form.body" placeholder="Detalles (opcional)"
+              class="panel2 px-3 py-2 text-sm w-full" rows="2" maxlength="2000"></textarea>
+    <div class="flex justify-end">
+      <button class="btn btn-primary" @click="createInteraction()"
+              :disabled="!form.person_id || !form.title || !form.ts_local">
+        Guardar
+      </button>
+    </div>
+    <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
+  </div>
+
+  <!-- Timeline -->
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando…</div>
+  </template>
+  <template x-if="!loading && rows.length === 0">
+    <div class="panel p-12 text-center muted">
+      Sin interacciones en este rango. Probá decirle al chat: "hablé con María" o "pelea con Juan".
+    </div>
+  </template>
+
+  <div class="grid gap-2" x-show="rows.length > 0">
+    <template x-for="r in rows" :key="r.id">
+      <div class="panel p-3 flex items-start gap-3">
+        <span class="text-xl" x-text="kindIcon(r.kind)"></span>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-medium" x-text="r.title"></span>
+            <span class="text-xs muted" x-text="'· ' + (personName(r.person_id) || '?')"></span>
+            <template x-if="r.mood_delta !== null">
+              <span class="text-xs px-1.5 py-0.5 panel2 rounded"
+                    :style="r.mood_delta > 0 ? 'color: var(--green)' : 'color: var(--red)'"
+                    x-text="(r.mood_delta > 0 ? '+' : '') + r.mood_delta + ' ánimo'"></span>
+            </template>
+            <template x-if="r.source !== 'manual'">
+              <span class="text-xs px-1.5 py-0.5 panel2 rounded muted" x-text="r.source"></span>
+            </template>
+          </div>
+          <div class="text-xs muted mt-1" x-text="fmtTs(r.ts)"></div>
+          <template x-if="r.body">
+            <div class="text-xs mt-2" x-text="r.body"></div>
+          </template>
+        </div>
+        <button @click="del(r.id)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">🗑️</button>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function relationshipsPage() {
+  return {
+    rows: [], people: [],
+    loading: true,
+    error: '',
+    showAddPerson: false,
+    personForm: { name: '', role: '' },
+    filter: { person_id: null, kind: '', days: 30 },
+    form: {
+      person_id: '', kind: 'conversation', ts_local: '',
+      title: '', body: '', tags: '',
+      mood_pre: 5, mood_post: 5,
+    },
+    _pollHandle: null,
+    startPolling() {
+      this.stopPolling();
+      this._pollHandle = setInterval(() => { this.load(true); this.loadPeople(true); }, 15000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.stopPolling(); else this.startPolling();
+      });
+    },
+    stopPolling() { if (this._pollHandle) { clearInterval(this._pollHandle); this._pollHandle = null; } },
+    async loadPeople(silent = false) {
+      try {
+        const r = await fetch('/api/relationships/people');
+        if (r.ok) this.people = (await r.json()).people || [];
+      } catch (e) { /* keep current */ }
+    },
+    async load(silent = false) {
+      if (!silent && this.rows.length === 0) this.loading = true;
+      const params = new URLSearchParams();
+      if (this.filter.person_id) params.set('person_id', this.filter.person_id);
+      if (this.filter.kind) params.set('kind', this.filter.kind);
+      if (this.filter.days) params.set('days', this.filter.days);
+      try {
+        const r = await fetch('/api/relationships/interactions?' + params.toString());
+        if (r.ok) this.rows = (await r.json()).interactions || [];
+      } catch (e) { /* keep */ }
+      this.loading = false;
+    },
+    async createPerson() {
+      const r = await fetch('/api/relationships/people', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.personForm),
+      });
+      if (!r.ok) { this.error = await r.text(); return; }
+      this.personForm = { name: '', role: '' };
+      this.showAddPerson = false;
+      this.loadPeople();
+    },
+    async createInteraction() {
+      this.error = '';
+      const localDt = new Date(this.form.ts_local);
+      if (isNaN(localDt.getTime())) { this.error = 'Fecha inválida'; return; }
+      const tags = this.form.tags
+        ? this.form.tags.split(',').map(t => t.trim()).filter(Boolean)
+        : null;
+      const body = {
+        person_id: this.form.person_id, kind: this.form.kind, title: this.form.title,
+        ts: localDt.toISOString(),
+        body: this.form.body || null, tags,
+        mood_pre: this.form.mood_pre, mood_post: this.form.mood_post,
+      };
+      const r = await fetch('/api/relationships/interactions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { this.error = 'No se pudo guardar: ' + (await r.text()); return; }
+      this.form.title = ''; this.form.body = ''; this.form.tags = '';
+      this.form.mood_pre = 5; this.form.mood_post = 5;
+      this.load();
+    },
+    async del(id) {
+      await fetch('/api/relationships/interactions/' + id, { method: 'DELETE' });
+      this.load();
+    },
+    personName(pid) {
+      const p = this.people.find(p => p.id === pid);
+      return p ? p.name : null;
+    },
+    initialOf(name) { return (name || '?').trim()[0].toUpperCase(); },
+    kindIcon(k) {
+      return ({conversation:'💬', conflict:'🔥', quality_time:'✨',
+               call:'📞', text:'📱', note:'📝'})[k] || '•';
+    },
+    fmtTs(iso) {
+      try {
+        return new Date(iso).toLocaleString('es-MX', {
+          weekday: 'short', day: 'numeric', month: 'short',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch (e) { return iso; }
+    },
+  };
+}
+</script>
+{% endblock %}

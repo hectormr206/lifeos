@@ -64,6 +64,12 @@ from lifeos.finance import store as finance_store
 from lifeos.decide import purchase as decide_purchase
 from lifeos.decide import query_parser as decide_query_parser
 from lifeos.decide import symptom as decide_symptom
+from lifeos import edges as lifeos_edges
+# P5.1 — Relationships domain (people + interactions, encrypted).
+from lifeos.relationships import ingestion as rel_ingestion
+from lifeos.relationships import interactions as rel_interactions
+from lifeos.relationships import people as rel_people
+from lifeos.relationships import store as rel_store
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1568,6 +1574,98 @@ async def api_chat_ask(request: Request):
             except Exception as e:  # noqa: BLE001
                 log.warning("lifeos health fast-path failed: %s — falling back to brain", e)
 
+        # Relationships fast-path: "hablé con María", "pelea con Juan", etc.
+        # We try this BEFORE finance because both can mention amounts but only
+        # one has a person + verb structure.
+        try:
+            ri_rel = rel_ingestion.parse_interaction(text)
+        except Exception:  # noqa: BLE001
+            ri_rel = None
+        if ri_rel is not None:
+            try:
+                person = rel_people.get_or_create(name=ri_rel.person_name)
+                interaction = rel_interactions.create(
+                    person_id=person.id, kind=ri_rel.kind,
+                    title=ri_rel.title, body=text,
+                    when=datetime.now(ZoneInfo("UTC")),
+                    tags=ri_rel.tags or None,
+                    source="chat", confidence=ri_rel.confidence,
+                )
+                # Auto-create a mentions-person edge from interaction → person.
+                # This is the first auto-edge of the system; future cross-domain
+                # linkers (mood ↔ interaction, conflict ↔ recovery) will follow
+                # this pattern.
+                try:
+                    lifeos_edges.create(
+                        src=("relationships", interaction.id),
+                        dst=("relationships", person.id),
+                        rel="mentions-person",
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("failed to create mentions-person edge")
+
+                lang = str(config.get("language", "es-MX"))
+                fam = lifeos_localize.lang_family(lang)
+                kind_label_es = {
+                    "conversation": "conversación", "conflict": "discusión",
+                    "quality_time": "tiempo de calidad", "call": "llamada",
+                    "text": "mensajes", "note": "nota",
+                }
+                kind_label_en = {
+                    "conversation": "conversation", "conflict": "conflict",
+                    "quality_time": "quality time", "call": "call",
+                    "text": "messages", "note": "note",
+                }
+                label = (kind_label_en if fam == "en" else kind_label_es)[ri_rel.kind]
+
+                # For conflicts, surface past patterns with this person so the
+                # user sees this is a recurring topic (or not).
+                pattern_msg: str | None = None
+                if ri_rel.kind == "conflict":
+                    try:
+                        past_conflicts = rel_interactions.conflict_history(
+                            person.id, days=365,
+                        )
+                        # Don't count the one we just created.
+                        past_n = len([c for c in past_conflicts if c.id != interaction.id])
+                        if past_n >= 1:
+                            if fam == "en":
+                                pattern_msg = (
+                                    f"📊 You've had {past_n} conflict(s) with "
+                                    f"{person.name} in the past year."
+                                )
+                            else:
+                                pat = "discusión" if past_n == 1 else "discusiones"
+                                pattern_msg = (
+                                    f"📊 Has tenido {past_n} {pat} con "
+                                    f"{person.name} en el último año."
+                                )
+                    except Exception:  # noqa: BLE001
+                        log.exception("conflict history scan failed")
+
+                if fam == "en":
+                    answer = (
+                        f"Logged {label} with {person.name} in /relationships."
+                    )
+                else:
+                    answer = (
+                        f"Anotado: {label} con {person.name}. Lo ves en /relationships."
+                    )
+                if pattern_msg:
+                    answer = answer + "\n\n" + pattern_msg
+
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "interaction_id": interaction.id,
+                        "person_id": person.id}
+            except Exception as e:  # noqa: BLE001
+                log.warning("lifeos relationships fast-path failed: %s — falling back", e)
+
         # Finance fast-path: "gasté 250 en gasolina", "compré X por N", etc.
         try:
             fi = finance_ingestion.parse_finance(text)
@@ -1904,6 +2002,11 @@ def _lifeos_startup() -> None:
         finance_store.apply_migrations()
     except Exception:  # noqa: BLE001
         log.exception("lifeos finance store failed to migrate")
+    # P5.1: relationships DB (independent key + DB).
+    try:
+        rel_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos relationships store failed to migrate")
 
 
 @app.on_event("shutdown")
@@ -2285,6 +2388,138 @@ def api_finance_delete(eid: str):
             log.warning("failed to cancel reflection reminder for %s", eid)
     ok = finance_entries.delete(eid)
     return {"deleted": ok}
+
+
+# ────────────────────────── lifeos (P5.1 relationships) ────────────────
+
+
+def _person_to_dict(p: rel_people.Person) -> dict:
+    return {
+        "id": p.id, "name": p.name, "role": p.role,
+        "since": p.since.isoformat() if p.since else None,
+        "color": p.color, "notes": p.notes,
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+    }
+
+
+def _interaction_to_dict(i: rel_interactions.Interaction) -> dict:
+    return {
+        "id": i.id, "ts": i.ts.isoformat(),
+        "person_id": i.person_id, "kind": i.kind,
+        "title": i.title, "body": i.body,
+        "mood_pre": i.mood_pre, "mood_post": i.mood_post,
+        "mood_delta": i.mood_delta,
+        "tags": i.tags, "source": i.source, "confidence": i.confidence,
+        "created_at": i.created_at.isoformat() if i.created_at else None,
+    }
+
+
+@app.get("/relationships", response_class=HTMLResponse)
+def relationships_page(request: Request):
+    return templates.TemplateResponse(request, "relationships.html", {})
+
+
+# ─── People ───────────────────────────────────────────────────────────
+
+
+@app.get("/api/relationships/people")
+def api_rel_people_list():
+    return {"people": [_person_to_dict(p) for p in rel_people.list_all()]}
+
+
+@app.post("/api/relationships/people")
+async def api_rel_people_create(request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON")
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    try:
+        p = rel_people.create(
+            name=name, role=body.get("role") or None,
+            color=body.get("color") or None, notes=body.get("notes") or None,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _person_to_dict(p)
+
+
+@app.put("/api/relationships/people/{pid}")
+async def api_rel_people_update(pid: str, request: Request):
+    body = await request.json()
+    p = rel_people.update(
+        pid,
+        role=body.get("role"),
+        color=body.get("color"),
+        notes=body.get("notes"),
+    )
+    if p is None:
+        raise HTTPException(404, "person not found")
+    return _person_to_dict(p)
+
+
+@app.delete("/api/relationships/people/{pid}")
+def api_rel_people_delete(pid: str):
+    return {"deleted": rel_people.delete(pid)}
+
+
+# ─── Interactions ─────────────────────────────────────────────────────
+
+
+@app.get("/api/relationships/interactions")
+def api_rel_interactions_list(person_id: str | None = None,
+                              days: int = 30,
+                              kind: str | None = None,
+                              limit: int = 300):
+    if person_id:
+        rows = rel_interactions.timeline_for(
+            person_id, days=max(1, min(days, 3650)), limit=max(1, min(limit, 1000)),
+        )
+    else:
+        rows = rel_interactions.list_recent(
+            days=max(1, min(days, 3650)),
+            kind=kind if kind else None,
+            limit=max(1, min(limit, 1000)),
+        )
+    return {"interactions": [_interaction_to_dict(i) for i in rows]}
+
+
+@app.post("/api/relationships/interactions")
+async def api_rel_interactions_create(request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON")
+    person_id = body.get("person_id")
+    kind = body.get("kind")
+    title = (body.get("title") or "").strip()
+    ts_str = body.get("ts")
+    if not person_id or not kind or not title or not ts_str:
+        raise HTTPException(400, "person_id, kind, title, ts required")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"ts must be ISO8601: {ts_str!r}")
+    if ts.tzinfo is None:
+        raise HTTPException(400, "ts must be tz-aware")
+    try:
+        i = rel_interactions.create(
+            person_id=person_id, kind=kind, title=title, when=ts,
+            body=body.get("body") or None,
+            mood_pre=body.get("mood_pre"),
+            mood_post=body.get("mood_post"),
+            tags=body.get("tags") or None,
+            source=body.get("source", "manual"),
+            confidence=float(body.get("confidence", 1.0)),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _interaction_to_dict(i)
+
+
+@app.delete("/api/relationships/interactions/{iid}")
+def api_rel_interactions_delete(iid: str):
+    return {"deleted": rel_interactions.delete(iid)}
 
 
 # ────────────────────────── main entry ──────────────────────────────────
