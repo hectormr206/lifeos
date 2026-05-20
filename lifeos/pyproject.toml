@@ -10,6 +10,7 @@ dependencies = [
     "dateparser>=1.2",
     "pywebpush>=2.0",
     "cryptography>=42",
+    "sqlcipher3-wheels>=0.5",
 ]
 
 [project.optional-dependencies]

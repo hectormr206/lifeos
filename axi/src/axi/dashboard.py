@@ -51,6 +51,10 @@ from lifeos import reminders as lifeos_reminders
 from lifeos import push as lifeos_push
 from lifeos import localize as lifeos_localize
 from lifeos.scheduler import get_scheduler
+# P2 — Health domain (encrypted store + DAO + chat ingestion).
+from lifeos.health import entries as health_entries
+from lifeos.health import ingestion as health_ingestion
+from lifeos.health import store as health_store
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1466,6 +1470,52 @@ async def api_chat_ask(request: Request):
     # we handle it deterministically without bothering the brain. Saves ~3s
     # latency and avoids reasoning-model hallucinations on time math.
     if not image_b64:
+        # Health ingestion fast-path: detect "me duele X", "glucosa N",
+        # "presión X/Y", "tomé X", etc. Persists silently to the encrypted
+        # store and acknowledges briefly. Per PRD §9.5 default: silent + a
+        # weekly review push (the review is P2.x; for now we just confirm).
+        try:
+            hi = health_ingestion.parse_health(text)
+        except Exception:  # noqa: BLE001
+            hi = None
+        if hi is not None:
+            try:
+                entry = health_entries.create(
+                    kind=hi.kind, title=hi.title, when=datetime.now(ZoneInfo("UTC")),
+                    body=text, data=hi.data or None, tags=hi.tags or None,
+                    source="chat", confidence=hi.confidence,
+                )
+                lang = str(config.get("language", "es-MX"))
+                kind_label_es = {
+                    "symptom": "síntoma", "vital": "vital",
+                    "medication": "medicación", "condition": "condición",
+                    "note": "nota",
+                }
+                kind_label_en = {
+                    "symptom": "symptom", "vital": "vital",
+                    "medication": "medication", "condition": "condition",
+                    "note": "note",
+                }
+                fam = lifeos_localize.lang_family(lang)
+                kind_label = (kind_label_en if fam == "en" else kind_label_es)[hi.kind]
+                if fam == "en":
+                    answer = (f"Got it. Logged as {kind_label} in /health: "
+                              f"\"{hi.title}\". "
+                              f"{'Confidence: %d%%.' % int(hi.confidence * 100) if hi.confidence < 1.0 else ''}").strip()
+                else:
+                    answer = (f"Anotado en salud como {kind_label}: \"{hi.title}\". "
+                              f"{'Confianza: %d%%.' % int(hi.confidence * 100) if hi.confidence < 1.0 else ''}").strip()
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "health_entry_id": entry.id}
+            except Exception as e:  # noqa: BLE001
+                log.warning("lifeos health fast-path failed: %s — falling back to brain", e)
+
         try:
             from lifeos.parser import parse_reminder
             ri = parse_reminder(text)
@@ -1735,6 +1785,12 @@ def _lifeos_startup() -> None:
         sched.start()
     except Exception:  # noqa: BLE001
         log.exception("lifeos scheduler failed to start")
+    # P2: ensure the encrypted health DB is initialized + schema current.
+    # First call generates the key file if missing.
+    try:
+        health_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos health store failed to migrate")
 
 
 @app.on_event("shutdown")
@@ -1906,6 +1962,91 @@ def api_push_test():
         title="Axi", body="Notificación de prueba 👋", url="/reminders",
         tag="smoke-test",
     )
+
+
+# ────────────────────────── lifeos (P2 health) ─────────────────────────
+
+
+def _health_entry_to_dict(e: health_entries.Entry) -> dict:
+    return {
+        "id": e.id,
+        "ts": e.ts.isoformat(),
+        "kind": e.kind,
+        "title": e.title,
+        "body": e.body,
+        "data": e.data,
+        "tags": e.tags,
+        "source": e.source,
+        "confidence": e.confidence,
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+@app.get("/health", response_class=HTMLResponse)
+def health_page(request: Request):
+    return templates.TemplateResponse(request, "health.html", {})
+
+
+@app.get("/api/health/entries")
+def api_health_list(days: int = 30, kind: str | None = None, q: str | None = None):
+    """List health entries. Optional filters: days back, kind, free-text query."""
+    if q:
+        rows = health_entries.search(q, kind=kind if kind else None)
+    else:
+        rows = health_entries.list_recent(
+            days=max(1, min(days, 3650)),
+            kind=kind if kind else None,
+        )
+    return {"entries": [_health_entry_to_dict(e) for e in rows]}
+
+
+@app.post("/api/health/entries")
+async def api_health_create(request: Request):
+    """Create a health entry.
+
+    Body: {kind, title, ts (ISO tz-aware), body?, data?, tags?, source?}
+    Source defaults to 'manual'.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    kind = body.get("kind")
+    title = (body.get("title") or "").strip()
+    ts_str = body.get("ts")
+    if not kind or not title or not ts_str:
+        raise HTTPException(400, "kind, title and ts are required")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"ts must be ISO8601: {ts_str!r}")
+    if ts.tzinfo is None:
+        raise HTTPException(400, "ts must be tz-aware")
+    if len(title) > 200:
+        raise HTTPException(400, "title too long (max 200)")
+    src = body.get("source", "manual")
+    if src not in ("manual", "chat", "voice"):
+        raise HTTPException(400, "source must be manual|chat|voice")
+    try:
+        entry = health_entries.create(
+            kind=kind, title=title, when=ts,
+            body=body.get("body") or None,
+            data=body.get("data") or None,
+            tags=body.get("tags") or None,
+            source=src,
+            confidence=float(body.get("confidence", 1.0)),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _health_entry_to_dict(entry)
+
+
+@app.delete("/api/health/entries/{eid}")
+def api_health_delete(eid: str):
+    ok = health_entries.delete(eid)
+    return {"deleted": ok}
 
 
 # ────────────────────────── main entry ──────────────────────────────────
