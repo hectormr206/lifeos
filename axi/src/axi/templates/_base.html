@@ -213,25 +213,11 @@
               x-text="(($store.snap?.vram?.used_mb ?? 0) / 1024).toFixed(1) + '/' + (($store.snap?.vram?.total_mb ?? 0) / 1024).toFixed(0)">—</span>
       </a>
 
-      <!-- Desktop nav. Compact spacing on md, comfortable on lg+. -->
-      <nav class="hidden md:flex items-center gap-0 lg:gap-1 text-xs lg:text-sm whitespace-nowrap">
-        <a href="/" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_home %}{% endblock %}">🏠 Home</a>
-        <a href="/chat" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_chat %}{% endblock %}">💬 Chat</a>
-        <a href="/conversations" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_conversations %}{% endblock %}">🗨️ Conversaciones</a>
-        <a href="/translate" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_translate %}{% endblock %}">🌐 Traductor</a>
-        <a href="/events" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_events %}{% endblock %}">🔔 Eventos</a>
-        <a href="/memory" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_memory %}{% endblock %}">🧩 Memoria</a>
-        <a href="/models" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_models %}{% endblock %}">🧠 Modelos</a>
-        <a href="/meetings" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_meetings %}{% endblock %}">🎙️ Reuniones</a>
-        <a href="/graph" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_graph %}{% endblock %}">🕸️ Grafo</a>
-        <a href="/config" class="nav-link px-2 lg:px-4 py-1.5 {% block nav_config %}{% endblock %}">⚙️ Config</a>
-      </nav>
-
-      <!-- Mobile hamburger -->
+      <!-- Hamburger (always active) -->
       <button
         type="button"
         @click="navOpen = !navOpen"
-        class="md:hidden p-2 rounded-lg panel2 text-base"
+        class="p-2 rounded-lg panel2 text-base"
         aria-label="Abrir menú"
         style="min-width: 2.75rem; min-height: 2.75rem;"
       >
@@ -248,7 +234,7 @@
       x-show="navOpen"
       x-cloak
       x-transition.opacity
-      class="md:hidden fixed inset-x-0 z-50 border-t shadow-2xl"
+      class="fixed inset-x-0 z-50 border-t shadow-2xl"
       style="border-color: var(--border); background: var(--panel); top: 3.5rem; max-height: calc(100dvh - 3.5rem); overflow-y: auto;"
       @click.outside="navOpen = false"
     >

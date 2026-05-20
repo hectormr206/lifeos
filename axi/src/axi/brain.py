@@ -144,11 +144,17 @@ def _ask_impl(
     think: bool = False,
     image_b64: str | None = None,
     history: list[dict] | None = None,
+    _retry_budget: int | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
     """Inner implementation: returns (text, raw_response_dict).
 
     The metric wrapper uses the raw dict to extract `usage` tokens and model.
     Callers of public `ask()` only see the text.
+
+    Reasoning-model safety net: if the response comes back with empty `content`
+    while `reasoning_content` is populated and `finish_reason == "length"`, the
+    model spent the whole budget thinking and never reached the answer. We
+    retry ONCE with a much larger budget so callers don't get empty strings.
     """
     if image_b64:
         user_content = [
@@ -166,12 +172,16 @@ def _ask_impl(
         messages.extend(history)
     messages.append({"role": "user", "content": user_content})
 
+    effective_max_tokens = _retry_budget if _retry_budget is not None else max_tokens
     payload = json.dumps({
         "messages": messages,
-        "temperature": 0.6,
+        # 0.3 chosen after A/B: equivalent chat quality vs 0.6, 100% vs 50%
+        # on strict logic puzzles. Lower it per-call if a caller wants more
+        # creative variance.
+        "temperature": 0.3,
         "top_p": 0.95,
         "top_k": 20,
-        "max_tokens": max_tokens,
+        "max_tokens": effective_max_tokens,
         "stream": False,
         # Qwen3-specific: passed through llama-server's --jinja templating.
         "chat_template_kwargs": {"enable_thinking": think},
@@ -185,10 +195,24 @@ def _ask_impl(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        message = data["choices"][0]["message"]
-        # With --reasoning-format auto, reasoning_content is separate from
-        # content. With thinking disabled, content holds the full answer.
-        return (message.get("content") or "").strip(), data
+        choice = data["choices"][0]
+        message = choice["message"]
+        content = (message.get("content") or "").strip()
+        if not content and _retry_budget is None:
+            reasoning = (message.get("reasoning_content") or "").strip()
+            finish = choice.get("finish_reason")
+            if reasoning and finish == "length":
+                retry_budget = max(effective_max_tokens * 4, 2048)
+                log.warning(
+                    "brain: reasoning consumed full budget (max_tokens=%d, finish=length); retrying with %d",
+                    effective_max_tokens, retry_budget,
+                )
+                return _ask_impl(
+                    prompt, system=system, max_tokens=max_tokens, timeout=timeout,
+                    think=think, image_b64=image_b64, history=history,
+                    _retry_budget=retry_budget,
+                )
+        return content, data
     except urllib.error.URLError as e:
         log.error("brain unreachable: %s", e)
         return "[Axi brain no responde — ¿está corriendo llama-server?]", None
