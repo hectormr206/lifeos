@@ -1,0 +1,232 @@
+{% extends "_base.html" %}
+{% block nav_calendar %}active{% endblock %}
+{% block title %}Calendario · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="calendarPage()"
+     x-init="load(); startPolling()" x-destroy="stopPolling()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Calendario</h1>
+    <div class="flex gap-2 items-center text-sm flex-wrap">
+      <select x-model="filter.kind" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option value="">Todos</option>
+        <option value="birthday">🎂 Cumpleaños</option>
+        <option value="anniversary">💍 Aniversario</option>
+        <option value="travel">✈️ Viaje</option>
+        <option value="party">🎉 Fiesta</option>
+        <option value="meeting">📅 Reunión</option>
+        <option value="deadline">⏰ Deadline</option>
+        <option value="milestone">🏁 Hito</option>
+        <option value="other">📋 Otro</option>
+      </select>
+      <input type="text" x-model.debounce.300ms="filter.q" @input="load()"
+             placeholder="Buscar…" class="panel2 px-3 py-2 text-sm" maxlength="120">
+    </div>
+  </div>
+
+  <!-- Compose -->
+  <div class="panel p-4 space-y-3">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nuevo evento</h2>
+    <div class="grid md:grid-cols-3 gap-2">
+      <select x-model="form.kind" class="panel2 px-3 py-2 text-sm">
+        <option value="birthday">🎂 Cumpleaños</option>
+        <option value="anniversary">💍 Aniversario</option>
+        <option value="travel">✈️ Viaje</option>
+        <option value="party">🎉 Fiesta</option>
+        <option value="meeting">📅 Reunión</option>
+        <option value="deadline">⏰ Deadline</option>
+        <option value="milestone">🏁 Hito</option>
+        <option value="other">📋 Otro</option>
+      </select>
+      <input type="text" x-model="form.title" placeholder="Título"
+             class="panel2 px-3 py-2 text-sm md:col-span-2" maxlength="200">
+    </div>
+    <div class="grid md:grid-cols-3 gap-2">
+      <input type="datetime-local" x-model="form.ts_local" class="panel2 px-3 py-2 text-sm">
+      <input type="text" x-model="form.location" placeholder="Lugar (opcional)"
+             class="panel2 px-3 py-2 text-sm" maxlength="100">
+      <input type="text" x-model="form.people" placeholder="Personas (coma)"
+             class="panel2 px-3 py-2 text-sm" maxlength="200">
+    </div>
+    <input type="text" x-model="form.tags" placeholder="Tags (coma)"
+           class="panel2 px-3 py-2 text-sm w-full" maxlength="200">
+    <textarea x-model="form.body" placeholder="Notas (opcional)"
+              class="panel2 px-3 py-2 text-sm w-full" rows="2" maxlength="2000"></textarea>
+    <div class="flex justify-end">
+      <button class="btn btn-primary" @click="create()"
+              :disabled="!form.title || !form.ts_local">
+        Guardar
+      </button>
+    </div>
+    <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
+  </div>
+
+  <!-- Upcoming -->
+  <div class="space-y-2" x-show="upcoming.length > 0">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">
+      Próximos (<span x-text="upcoming.length"></span>)
+    </h2>
+    <template x-for="r in upcoming" :key="r.id">
+      <div class="panel p-3 flex items-start gap-3">
+        <span class="text-xl" x-text="kindIcon(r.kind)"></span>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-medium" x-text="r.title"></span>
+            <span class="text-xs muted" x-text="'en ' + daysUntil(r.ts) + ' día' + (daysUntil(r.ts) === 1 ? '' : 's')"></span>
+            <template x-if="r.location">
+              <span class="text-xs muted" x-text="'@ ' + r.location"></span>
+            </template>
+            <template x-if="r.source !== 'manual'">
+              <span class="text-xs px-1.5 py-0.5 panel2 rounded muted" x-text="r.source"></span>
+            </template>
+          </div>
+          <div class="text-xs muted mt-1" x-text="fmtTs(r.ts)"></div>
+          <template x-if="r.people && r.people.length > 0">
+            <div class="text-xs muted mt-1">
+              <template x-for="p in r.people" :key="p">
+                <span class="mr-1 px-1.5 py-0.5 panel2 rounded" x-text="'@ ' + p"></span>
+              </template>
+            </div>
+          </template>
+          <template x-if="r.body">
+            <div class="text-xs mt-2" x-text="r.body"></div>
+          </template>
+        </div>
+        <button @click="del(r.id)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">🗑️</button>
+      </div>
+    </template>
+  </div>
+
+  <!-- Past -->
+  <div class="space-y-2" x-show="past.length > 0">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">
+      Recientes (<span x-text="past.length"></span>)
+    </h2>
+    <template x-for="r in past" :key="r.id">
+      <div class="panel p-3 flex items-start gap-3 opacity-80">
+        <span class="text-xl" x-text="kindIcon(r.kind)"></span>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-medium" x-text="r.title"></span>
+            <template x-if="r.location">
+              <span class="text-xs muted" x-text="'@ ' + r.location"></span>
+            </template>
+          </div>
+          <div class="text-xs muted mt-1" x-text="fmtTs(r.ts)"></div>
+          <template x-if="r.body">
+            <div class="text-xs mt-2" x-text="r.body"></div>
+          </template>
+        </div>
+        <button @click="del(r.id)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">🗑️</button>
+      </div>
+    </template>
+  </div>
+
+  <template x-if="!loading && upcoming.length === 0 && past.length === 0">
+    <div class="panel p-12 text-center muted">
+      Sin eventos. Probá decirle al chat: "cumple papá el 8 de junio" o "aniversario 14 de febrero".
+    </div>
+  </template>
+</div>
+
+<script>
+function calendarPage() {
+  return {
+    upcoming: [], past: [],
+    loading: true, error: '',
+    filter: { kind: '', q: '' },
+    form: {
+      kind: 'birthday', title: '', ts_local: '',
+      location: '', people: '', tags: '', body: '',
+    },
+    _pollHandle: null,
+    startPolling() {
+      this.stopPolling();
+      this._pollHandle = setInterval(() => this.load(true), 30000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.stopPolling(); else this.startPolling();
+      });
+    },
+    stopPolling() { if (this._pollHandle) { clearInterval(this._pollHandle); this._pollHandle = null; } },
+    async load(silent = false) {
+      if (!silent && this.upcoming.length === 0 && this.past.length === 0) this.loading = true;
+      try {
+        if (this.filter.q) {
+          const params = new URLSearchParams();
+          params.set('q', this.filter.q);
+          if (this.filter.kind) params.set('kind', this.filter.kind);
+          const r = await fetch('/api/calendar?' + params.toString());
+          if (r.ok) {
+            const data = (await r.json()).events || [];
+            this.upcoming = data.filter(e => e.is_upcoming);
+            this.past = data.filter(e => !e.is_upcoming);
+          }
+        } else {
+          const [ru, rp] = await Promise.all([
+            fetch('/api/calendar/upcoming?days_ahead=180'),
+            fetch('/api/calendar/past?days_back=60'),
+          ]);
+          if (ru.ok) {
+            let up = (await ru.json()).events || [];
+            if (this.filter.kind) up = up.filter(e => e.kind === this.filter.kind);
+            this.upcoming = up;
+          }
+          if (rp.ok) {
+            let pp = (await rp.json()).events || [];
+            if (this.filter.kind) pp = pp.filter(e => e.kind === this.filter.kind);
+            this.past = pp;
+          }
+        }
+      } catch (e) { /* keep */ }
+      this.loading = false;
+    },
+    async create() {
+      this.error = '';
+      const localDt = new Date(this.form.ts_local);
+      if (isNaN(localDt.getTime())) { this.error = 'Fecha inválida'; return; }
+      const tags = this.form.tags
+        ? this.form.tags.split(',').map(t => t.trim()).filter(Boolean)
+        : null;
+      const people = this.form.people
+        ? this.form.people.split(',').map(t => t.trim()).filter(Boolean)
+        : null;
+      const body = {
+        kind: this.form.kind, title: this.form.title,
+        ts: localDt.toISOString(),
+        location: this.form.location || null,
+        people, tags,
+        body: this.form.body || null,
+      };
+      const r = await fetch('/api/calendar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { this.error = 'No se pudo guardar: ' + (await r.text()); return; }
+      this.form.title = ''; this.form.body = ''; this.form.tags = '';
+      this.form.location = ''; this.form.people = '';
+      this.load();
+    },
+    async del(id) {
+      await fetch('/api/calendar/' + id, { method: 'DELETE' });
+      this.load();
+    },
+    daysUntil(iso) {
+      const ms = new Date(iso).getTime() - Date.now();
+      return Math.max(0, Math.ceil(ms / 86400000));
+    },
+    kindIcon(k) {
+      return ({birthday:'🎂', anniversary:'💍', travel:'✈️', party:'🎉',
+               meeting:'📅', deadline:'⏰', milestone:'🏁', other:'📋'})[k] || '•';
+    },
+    fmtTs(iso) {
+      try {
+        return new Date(iso).toLocaleString('es-MX', {
+          weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch (e) { return iso; }
+    },
+  };
+}
+</script>
+{% endblock %}

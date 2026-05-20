@@ -1,0 +1,181 @@
+"""Detect events from chat text.
+
+Conservative — only birthdays and anniversaries get auto-parsed because
+they're the clearest fixed-shape patterns. Travels, parties, deadlines,
+meetings — all use the /events form (too ambiguous to regex without
+risking phantom entries).
+
+Recognized patterns:
+    "cumple papá el 8/jun"   / "cumple de María 14 de febrero"      → birthday
+    "aniversario 14 de febrero" / "aniversario X/Y el DATE"          → anniversary
+
+Date parsing uses dateparser (reused from P1). Both relative phrases
+("en 3 días") and explicit dates ("14 de febrero", "12/jun", "2026-06-12")
+work — though for events the explicit form is usually what the user
+wants.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
+import dateparser
+
+log = logging.getLogger("lifeos.events.ingestion")
+
+
+@dataclass(frozen=True, slots=True)
+class EventIntent:
+    kind: str
+    title: str
+    when: datetime              # tz-aware UTC
+    people: list[str] = field(default_factory=list)
+    body: str | None = None
+    confidence: float = 0.85
+
+
+# Name capture: 1-3 capitalized tokens. Validated in Python (Unicode-aware)
+# to dodge re.IGNORECASE polluting [A-Z] (lesson from relationships P5.1).
+_NAME_LOOSE = r"(?P<name>[\wÁÉÍÓÚÑáéíóúñü\s]+?)"
+
+_STOP_AFTER_NAME = frozenset({
+    "hoy", "ayer", "anoche", "mañana", "esta", "este", "esa", "ese",
+    "porque", "para", "sobre", "de", "del", "en", "el", "la", "los",
+    "las", "al", "a", "y", "pero", "que",
+})
+
+
+def _is_proper_name_token(tok: str) -> bool:
+    if not tok:
+        return False
+    if not tok[0].isupper():
+        return False
+    return tok.replace("-", "").replace("'", "").isalpha()
+
+
+def _clean_name(raw: str) -> str | None:
+    raw = (raw or "").strip(" ,.;:!?")
+    if not raw:
+        return None
+    tokens = raw.split()
+    out: list[str] = []
+    for t in tokens:
+        tlow = t.lower().rstrip(".,;:!?")
+        if tlow in _STOP_AFTER_NAME:
+            break
+        if not _is_proper_name_token(t):
+            break
+        out.append(t)
+        if len(out) >= 3:
+            break
+    if not out:
+        return None
+    return " ".join(out)
+
+
+def _parse_when(text: str, tz_name: str = "America/Mexico_City") -> datetime | None:
+    """Parse a date phrase from text. PREFER_DATES_FROM=future so 'el 14
+    de febrero' resolves to next Feb 14, not last Feb 14.
+
+    Strips leading articles ("el", "la") because dateparser chokes on
+    "el 20 de mayo" but handles "20 de mayo".
+    """
+    if not text or not text.strip():
+        return None
+    cleaned = text.strip()
+    cleaned = re.sub(r"^(?:el|la|un|una|los|las)\s+", "", cleaned, flags=re.IGNORECASE)
+    parsed = dateparser.parse(
+        cleaned,
+        languages=["es"],
+        settings={
+            "TIMEZONE": tz_name,
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "PREFER_DATES_FROM": "future",
+        },
+    )
+    if parsed is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+# ─── Birthday ─────────────────────────────────────────────────────────
+
+_BIRTHDAY_RE = re.compile(
+    rf"\bcumple(?:años)?\s+(?:de\s+)?{_NAME_LOOSE}\s+"
+    rf"(?:el\s+|en\s+)?(?P<when>.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _try_birthday(text: str) -> EventIntent | None:
+    m = _BIRTHDAY_RE.search(text)
+    if not m:
+        return None
+    name = _clean_name(m.group("name"))
+    if not name:
+        return None
+    when = _parse_when(m.group("when"))
+    if when is None:
+        return None
+    return EventIntent(
+        kind="birthday",
+        title=f"Cumple {name}",
+        when=when,
+        people=[name],
+    )
+
+
+# ─── Anniversary ──────────────────────────────────────────────────────
+
+_ANNIVERSARY_RE = re.compile(
+    r"\baniversario\s+(?:de\s+)?(?P<rest>.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _try_anniversary(text: str) -> EventIntent | None:
+    m = _ANNIVERSARY_RE.search(text)
+    if not m:
+        return None
+    rest = m.group("rest").strip()
+    # If `rest` starts with proper-name tokens, peel them off — dateparser
+    # can't handle "María 14 de febrero", needs just "14 de febrero".
+    tokens = rest.split()
+    name_parts: list[str] = []
+    date_start_idx = 0
+    for i, t in enumerate(tokens):
+        if _is_proper_name_token(t) and len(name_parts) < 3:
+            name_parts.append(t)
+            date_start_idx = i + 1
+        else:
+            break
+    date_text = " ".join(tokens[date_start_idx:]) if name_parts else rest
+    when = _parse_when(date_text)
+    if when is None:
+        return None
+    name = " ".join(name_parts) if name_parts else None
+    title = f"Aniversario {name}" if name else "Aniversario"
+    people = [name] if name else []
+    return EventIntent(
+        kind="anniversary", title=title, when=when, people=people,
+    )
+
+
+_PARSERS = (_try_birthday, _try_anniversary)
+
+
+def parse_event(text: str) -> EventIntent | None:
+    if not text or not isinstance(text, str):
+        return None
+    for parser in _PARSERS:
+        try:
+            res = parser(text)
+            if res is not None:
+                return res
+        except Exception as e:  # noqa: BLE001
+            log.warning("events parser %s crashed: %s", parser.__name__, e)
+    return None

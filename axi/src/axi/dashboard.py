@@ -82,6 +82,10 @@ from lifeos.spirituality import store as spirit_store
 from lifeos.learning import entries as learn_entries
 from lifeos.learning import ingestion as learn_ingestion
 from lifeos.learning import store as learn_store
+# P5.5 — Events domain (catch-all, date-anchored).
+from lifeos.events import entries as events_entries
+from lifeos.events import ingestion as events_ingestion
+from lifeos.events import store as events_store
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1676,6 +1680,43 @@ async def api_chat_ask(request: Request):
             except Exception as e:  # noqa: BLE001
                 log.warning("lifeos learning fast-path failed: %s — falling back", e)
 
+        # Events fast-path: "cumple X DATE" / "aniversario DATE" only.
+        # Other event kinds use the /events form.
+        try:
+            evi = events_ingestion.parse_event(text)
+        except Exception:  # noqa: BLE001
+            evi = None
+        if evi is not None:
+            try:
+                ev = events_entries.create(
+                    kind=evi.kind, title=evi.title, when=evi.when,
+                    people=evi.people or None,
+                    body=text,
+                    source="chat", confidence=evi.confidence,
+                )
+                try:
+                    _link_event_to_people(ev)
+                except Exception:  # noqa: BLE001
+                    log.exception("event auto-link failed")
+                lang = str(config.get("language", "es-MX"))
+                fam = lifeos_localize.lang_family(lang)
+                local_when = evi.when.astimezone(ZoneInfo("America/Mexico_City"))
+                formatted = lifeos_localize.format_local_when(local_when, lang)
+                if fam == "en":
+                    answer = f"Logged {evi.kind} \"{evi.title}\" for {formatted} in /calendar."
+                else:
+                    answer = f"Anotado evento: \"{evi.title}\" — {formatted}. Lo ves en /calendar."
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "event_id": ev.id}
+            except Exception as e:  # noqa: BLE001
+                log.warning("lifeos events fast-path failed: %s — falling back", e)
+
         # Health ingestion fast-path: detect "me duele X", "glucosa N",
         # "presión X/Y", "tomé X", etc. Persists silently to the encrypted
         # store and acknowledges briefly. Per PRD §9.5 default: silent + a
@@ -2179,6 +2220,11 @@ def _lifeos_startup() -> None:
         learn_store.apply_migrations()
     except Exception:  # noqa: BLE001
         log.exception("lifeos learning store failed to migrate")
+    # P5.5: events DB (independent key + DB).
+    try:
+        events_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos events store failed to migrate")
 
 
 @app.on_event("shutdown")
@@ -2939,6 +2985,138 @@ async def api_learn_update_progress(eid: str, request: Request):
 @app.delete("/api/learning/entries/{eid}")
 def api_learn_delete(eid: str):
     return {"deleted": learn_entries.delete(eid)}
+
+
+# ────────────────────────── lifeos (P5.5 events) ───────────────────────
+
+
+def _event_to_dict(e: events_entries.Event) -> dict:
+    return {
+        "id": e.id, "ts": e.ts.isoformat(),
+        "kind": e.kind, "title": e.title, "body": e.body,
+        "location": e.location, "people": e.people,
+        "data": e.data, "tags": e.tags,
+        "source": e.source, "confidence": e.confidence,
+        "reminder_id": e.reminder_id,
+        "is_upcoming": e.is_upcoming,
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+def _link_event_to_people(event: events_entries.Event) -> int:
+    """For each mentioned person who already exists in
+    lifeos.relationships.people, create a mentions-person edge from the
+    event to the person. Returns the count of edges created.
+
+    Doesn't auto-create Person rows here — that would muddy the
+    relationships data with names that may have been misspelled in the
+    event ingestion. If the person doesn't exist, the name stays in
+    events.people as a free-form string.
+    """
+    if not event.people:
+        return 0
+    count = 0
+    for name in event.people:
+        try:
+            person = rel_people.find_by_name(name)
+        except Exception:  # noqa: BLE001
+            person = None
+        if person is None:
+            continue
+        try:
+            lifeos_edges.create(
+                src=("events", event.id),
+                dst=("relationships", person.id),
+                rel="mentions-person",
+            )
+            count += 1
+        except Exception:  # noqa: BLE001
+            log.exception("failed to create mentions-person edge for event %s", event.id)
+    return count
+
+
+@app.get("/calendar", response_class=HTMLResponse)
+def calendar_page(request: Request):
+    """LifeOS calendar/events page. Uses /calendar to avoid collision
+    with axi's existing /events (which serves the system event log)."""
+    return templates.TemplateResponse(request, "calendar.html", {})
+
+
+@app.get("/api/calendar/upcoming")
+def api_calendar_upcoming(days_ahead: int = 90, limit: int = 100):
+    rows = events_entries.upcoming(
+        days_ahead=max(1, min(days_ahead, 3650)),
+        limit=max(1, min(limit, 500)),
+    )
+    return {"events": [_event_to_dict(e) for e in rows]}
+
+
+@app.get("/api/calendar/past")
+def api_calendar_past(days_back: int = 30, limit: int = 100):
+    rows = events_entries.past(
+        days_back=max(1, min(days_back, 3650)),
+        limit=max(1, min(limit, 500)),
+    )
+    return {"events": [_event_to_dict(e) for e in rows]}
+
+
+@app.get("/api/calendar")
+def api_calendar_window(days_back: int = 30, days_ahead: int = 90,
+                        kind: str | None = None, q: str | None = None,
+                        limit: int = 300):
+    if q:
+        rows = events_entries.search(q, kind=kind if kind else None,
+                                     limit=max(1, min(limit, 500)))
+    else:
+        rows = events_entries.list_recent(
+            days_back=max(1, min(days_back, 3650)),
+            days_ahead=max(1, min(days_ahead, 3650)),
+            kind=kind if kind else None,
+            limit=max(1, min(limit, 500)),
+        )
+    return {"events": [_event_to_dict(e) for e in rows]}
+
+
+@app.post("/api/calendar")
+async def api_calendar_create(request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON")
+    kind = body.get("kind")
+    title = (body.get("title") or "").strip()
+    ts_str = body.get("ts")
+    if not kind or not title or not ts_str:
+        raise HTTPException(400, "kind, title, ts required")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"ts must be ISO8601: {ts_str!r}")
+    if ts.tzinfo is None:
+        raise HTTPException(400, "ts must be tz-aware")
+    try:
+        e = events_entries.create(
+            kind=kind, title=title, when=ts,
+            body=body.get("body") or None,
+            location=body.get("location") or None,
+            people=body.get("people") or None,
+            data=body.get("data") or None,
+            tags=body.get("tags") or None,
+            source=body.get("source", "manual"),
+            confidence=float(body.get("confidence", 1.0)),
+        )
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+    # Auto-link to existing people in relationships domain.
+    try:
+        _link_event_to_people(e)
+    except Exception:  # noqa: BLE001
+        log.exception("event auto-link failed for %s", e.id)
+    return _event_to_dict(e)
+
+
+@app.delete("/api/calendar/{eid}")
+def api_calendar_delete(eid: str):
+    return {"deleted": events_entries.delete(eid)}
 
 
 # Weekly retro scheduler — reuses lifeos.reminders (P1) for the cron nudge.
