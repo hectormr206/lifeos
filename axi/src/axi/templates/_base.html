@@ -88,7 +88,8 @@
            x-cloak
            class="state-dot event-critical-dot pulse"
            :title="'Eventos críticos sin leer: ' + ($store.snap?.unread_critical_events || 0)"></a>
-        <span class="font-semibold text-lg">Axi</span>
+        <a href="/" class="font-semibold text-lg hover:opacity-80 transition"
+           title="Ir al dashboard">Axi</a>
         <span class="muted text-sm" x-data x-text="$store.snap?.now?.time || '—'">—</span>
         <!-- P2.4 — Whisper restart-pending pill. Shown when the user changed
              whisper_model_name / whisper_beam_size / whisper_initial_prompt
@@ -239,26 +240,72 @@
       @click.outside="navOpen = false"
     >
       <nav class="flex flex-col text-base">
+        <!-- Always-visible: most-used entry points -->
         <a href="/" class="px-4 py-3 nav-link">🏠 Home</a>
         <a href="/chat" class="px-4 py-3 nav-link">💬 Chat</a>
         <a href="/conversations" class="px-4 py-3 nav-link">🗨️ Conversaciones</a>
-        <a href="/translate" class="px-4 py-3 nav-link">🌐 Traductor</a>
-        <a href="/events" class="px-4 py-3 nav-link">🔔 Eventos</a>
-        <a href="/reminders" class="px-4 py-3 nav-link">⏰ Recordatorios</a>
-        <a href="/health" class="px-4 py-3 nav-link">🩺 Salud</a>
-        <a href="/finance" class="px-4 py-3 nav-link">💰 Finanzas</a>
-        <a href="/relationships" class="px-4 py-3 nav-link">👥 Relaciones</a>
-        <a href="/exercise" class="px-4 py-3 nav-link">🏋️ Ejercicio</a>
-        <a href="/spirituality" class="px-4 py-3 nav-link">🧘 Espiritualidad</a>
-        <a href="/learning" class="px-4 py-3 nav-link">📚 Aprendizaje</a>
-        <a href="/calendar" class="px-4 py-3 nav-link">📅 Calendario</a>
-        <a href="/insights" class="px-4 py-3 nav-link">🔮 Insights</a>
-        <a href="/posture" class="px-4 py-3 nav-link">🪑 Postura</a>
-        <a href="/memory" class="px-4 py-3 nav-link">🧩 Memoria</a>
-        <a href="/models" class="px-4 py-3 nav-link">🧠 Modelos</a>
-        <a href="/meetings" class="px-4 py-3 nav-link">🎙️ Reuniones</a>
-        <a href="/graph" class="px-4 py-3 nav-link">🕸️ Grafo</a>
-        <a href="/config" class="px-4 py-3 nav-link">⚙️ Config</a>
+
+        <!-- LifeOS — tu vida (open by default — the meat of the system) -->
+        <div x-data="{ open: true }" class="border-t" style="border-color: var(--border)">
+          <button @click="open = !open"
+                  class="w-full px-4 py-2 text-xs uppercase tracking-wider muted flex justify-between items-center hover:bg-white/5 transition">
+            <span>LifeOS · tu vida</span>
+            <span x-text="open ? '−' : '+'"></span>
+          </button>
+          <div x-show="open" x-transition.opacity x-cloak>
+            <a href="/health" class="px-4 py-3 nav-link block">🩺 Salud</a>
+            <a href="/finance" class="px-4 py-3 nav-link block">💰 Finanzas</a>
+            <a href="/relationships" class="px-4 py-3 nav-link block">👥 Relaciones</a>
+            <a href="/exercise" class="px-4 py-3 nav-link block">🏋️ Ejercicio</a>
+            <a href="/spirituality" class="px-4 py-3 nav-link block">🧘 Espiritualidad</a>
+            <a href="/learning" class="px-4 py-3 nav-link block">📚 Aprendizaje</a>
+            <a href="/calendar" class="px-4 py-3 nav-link block">📅 Calendario</a>
+          </div>
+        </div>
+
+        <!-- Proactivo (collapsed by default — accessed less often) -->
+        <div x-data="{ open: false }" class="border-t" style="border-color: var(--border)">
+          <button @click="open = !open"
+                  class="w-full px-4 py-2 text-xs uppercase tracking-wider muted flex justify-between items-center hover:bg-white/5 transition">
+            <span>Proactivo</span>
+            <span x-text="open ? '−' : '+'"></span>
+          </button>
+          <div x-show="open" x-transition.opacity x-cloak>
+            <a href="/reminders" class="px-4 py-3 nav-link block">⏰ Recordatorios</a>
+            <a href="/insights" class="px-4 py-3 nav-link block">🔮 Insights</a>
+            <a href="/posture" class="px-4 py-3 nav-link block">🪑 Postura</a>
+          </div>
+        </div>
+
+        <!-- Axi tools (collapsed) -->
+        <div x-data="{ open: false }" class="border-t" style="border-color: var(--border)">
+          <button @click="open = !open"
+                  class="w-full px-4 py-2 text-xs uppercase tracking-wider muted flex justify-between items-center hover:bg-white/5 transition">
+            <span>Axi · herramientas</span>
+            <span x-text="open ? '−' : '+'"></span>
+          </button>
+          <div x-show="open" x-transition.opacity x-cloak>
+            <a href="/translate" class="px-4 py-3 nav-link block">🌐 Traductor</a>
+            <a href="/meetings" class="px-4 py-3 nav-link block">🎙️ Reuniones</a>
+            <a href="/memory" class="px-4 py-3 nav-link block">🧩 Memoria</a>
+            <a href="/graph" class="px-4 py-3 nav-link block">🕸️ Grafo</a>
+            <a href="/models" class="px-4 py-3 nav-link block">🧠 Modelos</a>
+          </div>
+        </div>
+
+        <!-- Sistema (collapsed) -->
+        <div x-data="{ open: false }" class="border-t" style="border-color: var(--border)">
+          <button @click="open = !open"
+                  class="w-full px-4 py-2 text-xs uppercase tracking-wider muted flex justify-between items-center hover:bg-white/5 transition">
+            <span>Sistema</span>
+            <span x-text="open ? '−' : '+'"></span>
+          </button>
+          <div x-show="open" x-transition.opacity x-cloak>
+            <a href="/events" class="px-4 py-3 nav-link block">🔔 Eventos</a>
+            <a href="/config" class="px-4 py-3 nav-link block">⚙️ Config</a>
+          </div>
+        </div>
+
         <div class="px-4 py-3 border-t flex items-center justify-between text-xs muted" style="border-color: var(--border)">
           <span>modo: <span x-data x-text="$store.snap?.models?.mode || '—'"></span></span>
           <span>VRAM <span x-data x-text="(($store.snap?.vram?.used_mb ?? 0) / 1024).toFixed(1) + '/' + (($store.snap?.vram?.total_mb ?? 0) / 1024).toFixed(0) + ' GB'"></span></span>
