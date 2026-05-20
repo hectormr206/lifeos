@@ -49,6 +49,7 @@ from axi import model_params_schema
 # LifeOS — life-system layer. Sibling package. P1 ships reminders + scheduler.
 from lifeos import reminders as lifeos_reminders
 from lifeos import push as lifeos_push
+from lifeos import localize as lifeos_localize
 from lifeos.scheduler import get_scheduler
 
 log = logging.getLogger("axi.dashboard")
@@ -1477,18 +1478,19 @@ async def api_chat_ask(request: Request):
                     recurrence=ri.recurrence,
                 )
                 get_scheduler().schedule(rem)
+                lang = str(config.get("language", "es-MX"))
                 local_when = ri.when.astimezone(ZoneInfo("America/Mexico_City"))
+                formatted_when = lifeos_localize.format_local_when(local_when, lang)
                 if ri.recurrence:
-                    answer = (
-                        f"Listo. Recordatorio recurrente programado ({ri.recurrence}). "
-                        f"Primera vez: {local_when.strftime('%A %-d %b %H:%M')}. "
-                        f"Te aviso en laptop y celular."
+                    answer = lifeos_localize.msg(
+                        "reminder_recurring", lang,
+                        cron=ri.recurrence, when=formatted_when,
+                        message=ri.message,
                     )
                 else:
-                    answer = (
-                        f"Listo. Recordatorio programado para "
-                        f"{local_when.strftime('%A %-d %b %H:%M')}: "
-                        f"\"{ri.message}\". Te aviso en laptop y celular."
+                    answer = lifeos_localize.msg(
+                        "reminder_one_shot", lang,
+                        when=formatted_when, message=ri.message,
                     )
                 latency_ms = round((time.monotonic() - start) * 1000)
                 try:
