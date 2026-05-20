@@ -1,0 +1,240 @@
+{% extends "_base.html" %}
+{% block nav_learning %}active{% endblock %}
+{% block title %}Aprendizaje · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="learningPage()"
+     x-init="load(); startPolling()" x-destroy="stopPolling()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">Aprendizaje</h1>
+    <div class="flex gap-2 items-center text-sm flex-wrap">
+      <select x-model="filter.kind" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option value="">Todos</option>
+        <option value="book">📖 Libros</option>
+        <option value="course">🎓 Cursos</option>
+        <option value="article">📰 Artículos</option>
+        <option value="idea">💡 Ideas</option>
+        <option value="research_question">🔬 Investigar</option>
+        <option value="note">📝 Notas</option>
+        <option value="quote">📜 Citas</option>
+      </select>
+      <select x-model="filter.status" @change="load()" class="panel2 px-3 py-2 text-sm">
+        <option value="">Todos</option>
+        <option value="active">En progreso</option>
+        <option value="done">Terminados</option>
+        <option value="someday">Algún día</option>
+        <option value="abandoned">Abandonados</option>
+      </select>
+      <input type="text" x-model.debounce.300ms="filter.q" @input="load()"
+             placeholder="Buscar…" class="panel2 px-3 py-2 text-sm" maxlength="120">
+    </div>
+  </div>
+
+  <!-- Compose -->
+  <div class="panel p-4 space-y-3">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nueva entrada</h2>
+    <div class="grid md:grid-cols-3 gap-2">
+      <select x-model="form.kind" class="panel2 px-3 py-2 text-sm">
+        <option value="book">📖 Libro</option>
+        <option value="course">🎓 Curso</option>
+        <option value="article">📰 Artículo</option>
+        <option value="idea">💡 Idea</option>
+        <option value="research_question">🔬 Pregunta para investigar</option>
+        <option value="note">📝 Nota</option>
+        <option value="quote">📜 Cita</option>
+      </select>
+      <input type="text" x-model="form.title" placeholder="Título"
+             class="panel2 px-3 py-2 text-sm md:col-span-2" maxlength="200">
+    </div>
+    <template x-if="form.kind === 'book' || form.kind === 'article' || form.kind === 'quote'">
+      <input type="text" x-model="form.author" placeholder="Autor"
+             class="panel2 px-3 py-2 text-sm w-full" maxlength="100">
+    </template>
+    <div class="grid md:grid-cols-3 gap-2">
+      <select x-model="form.status" class="panel2 px-3 py-2 text-sm">
+        <option value="active">En progreso</option>
+        <option value="done">Terminado</option>
+        <option value="someday">Algún día</option>
+        <option value="abandoned">Abandonado</option>
+      </select>
+      <input type="text" x-model="form.progress" placeholder="Progreso (ej: cap 3/12)"
+             class="panel2 px-3 py-2 text-sm" maxlength="60">
+      <input type="datetime-local" x-model="form.ts_local" class="panel2 px-3 py-2 text-sm">
+    </div>
+    <template x-if="form.status === 'done'">
+      <div class="flex items-center gap-2 text-sm">
+        <span class="muted">Rating:</span>
+        <input type="range" min="1" max="10" x-model.number="form.rating" class="w-32">
+        <span x-text="form.rating + '/10'"></span>
+      </div>
+    </template>
+    <input type="text" x-model="form.tags" placeholder="Tags (coma)"
+           class="panel2 px-3 py-2 text-sm w-full" maxlength="200">
+    <textarea x-model="form.body" placeholder="Notas, citas, ideas relacionadas…"
+              class="panel2 px-3 py-2 text-sm w-full" rows="3" maxlength="5000"></textarea>
+    <div class="flex justify-end">
+      <button class="btn btn-primary" @click="create()"
+              :disabled="!form.title || !form.ts_local">
+        Guardar
+      </button>
+    </div>
+    <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
+  </div>
+
+  <!-- Timeline -->
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando…</div>
+  </template>
+  <template x-if="!loading && rows.length === 0">
+    <div class="panel p-12 text-center muted">
+      Sin entradas. Probá decirle al chat: "empecé el libro 'Atomic Habits'" o "idea: X".
+    </div>
+  </template>
+
+  <div class="grid gap-2" x-show="rows.length > 0">
+    <template x-for="r in rows" :key="r.id">
+      <div class="panel p-3 flex items-start gap-3">
+        <span class="text-xl" x-text="kindIcon(r.kind)"></span>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm font-medium" x-text="r.title"></span>
+            <template x-if="r.author">
+              <span class="text-xs muted" x-text="'· ' + r.author"></span>
+            </template>
+            <span class="text-xs px-1.5 py-0.5 panel2 rounded"
+                  :style="statusStyle(r.status)"
+                  x-text="statusLabel(r.status)"></span>
+            <template x-if="r.progress">
+              <span class="text-xs muted" x-text="r.progress"></span>
+            </template>
+            <template x-if="r.rating">
+              <span class="text-xs" style="color: var(--amber)" x-text="'★ ' + r.rating + '/10'"></span>
+            </template>
+            <template x-if="r.source !== 'manual'">
+              <span class="text-xs px-1.5 py-0.5 panel2 rounded muted" x-text="r.source"></span>
+            </template>
+          </div>
+          <div class="text-xs muted mt-1" x-text="fmtTs(r.ts)"></div>
+          <template x-if="r.body">
+            <div class="text-xs mt-2 whitespace-pre-wrap" x-text="r.body"></div>
+          </template>
+          <template x-if="r.tags && r.tags.length > 0">
+            <div class="text-xs muted mt-1">
+              <template x-for="t in r.tags" :key="t">
+                <span class="mr-1 px-1.5 py-0.5 panel2 rounded" x-text="'#' + t"></span>
+              </template>
+            </div>
+          </template>
+        </div>
+        <div class="flex flex-col gap-1">
+          <template x-if="r.status === 'active' && (r.kind === 'book' || r.kind === 'course')">
+            <button @click="markDone(r.id)"
+                    class="text-xs panel2 px-2 py-1 rounded hover:brightness-110"
+                    title="Marcar terminado">✓ done</button>
+          </template>
+          <button @click="del(r.id)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">🗑️</button>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function learningPage() {
+  return {
+    rows: [], loading: true, error: '',
+    filter: { kind: '', status: '', q: '' },
+    form: {
+      kind: 'book', title: '', author: '',
+      status: 'active', progress: '', rating: 8,
+      body: '', tags: '', ts_local: '',
+    },
+    _pollHandle: null,
+    startPolling() {
+      this.stopPolling();
+      this._pollHandle = setInterval(() => this.load(true), 30000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.stopPolling(); else this.startPolling();
+      });
+    },
+    stopPolling() { if (this._pollHandle) { clearInterval(this._pollHandle); this._pollHandle = null; } },
+    async load(silent = false) {
+      if (!silent && this.rows.length === 0) this.loading = true;
+      const params = new URLSearchParams();
+      if (this.filter.kind) params.set('kind', this.filter.kind);
+      if (this.filter.status) params.set('status', this.filter.status);
+      if (this.filter.q) params.set('q', this.filter.q);
+      try {
+        const r = await fetch('/api/learning/entries?' + params.toString());
+        if (r.ok) this.rows = (await r.json()).entries || [];
+      } catch (e) { /* keep */ }
+      this.loading = false;
+    },
+    async create() {
+      this.error = '';
+      const localDt = new Date(this.form.ts_local);
+      if (isNaN(localDt.getTime())) { this.error = 'Fecha inválida'; return; }
+      const tags = this.form.tags
+        ? this.form.tags.split(',').map(t => t.trim()).filter(Boolean)
+        : null;
+      const body = {
+        kind: this.form.kind, title: this.form.title,
+        ts: localDt.toISOString(),
+        body: this.form.body || null,
+        author: this.form.author || null,
+        status: this.form.status,
+        progress: this.form.progress || null,
+        rating: this.form.status === 'done' ? this.form.rating : null,
+        tags,
+      };
+      const r = await fetch('/api/learning/entries', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { this.error = 'No se pudo guardar: ' + (await r.text()); return; }
+      this.form.title = ''; this.form.body = ''; this.form.tags = '';
+      this.form.author = ''; this.form.progress = '';
+      this.load();
+    },
+    async markDone(id) {
+      const rating = prompt('Rating 1-10?', '8');
+      const n = parseInt(rating, 10);
+      const body = (n >= 1 && n <= 10) ? { rating: n } : {};
+      await fetch('/api/learning/entries/' + id + '/done', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      this.load();
+    },
+    async del(id) {
+      await fetch('/api/learning/entries/' + id, { method: 'DELETE' });
+      this.load();
+    },
+    kindIcon(k) {
+      return ({book:'📖', course:'🎓', article:'📰', idea:'💡',
+               research_question:'🔬', note:'📝', quote:'📜'})[k] || '•';
+    },
+    statusLabel(s) {
+      return ({active:'en progreso', done:'terminado',
+               someday:'algún día', abandoned:'abandonado'})[s] || s;
+    },
+    statusStyle(s) {
+      return ({
+        active: 'color: var(--blue); border-color: var(--blue);',
+        done: 'color: var(--green); border-color: var(--green);',
+        someday: 'color: var(--muted);',
+        abandoned: 'color: var(--red); border-color: var(--red);',
+      })[s] || '';
+    },
+    fmtTs(iso) {
+      try {
+        return new Date(iso).toLocaleString('es-MX', {
+          weekday: 'short', day: 'numeric', month: 'short',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch (e) { return iso; }
+    },
+  };
+}
+</script>
+{% endblock %}

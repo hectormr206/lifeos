@@ -78,6 +78,10 @@ from lifeos.exercise import store as ex_store
 from lifeos.spirituality import entries as spirit_entries
 from lifeos.spirituality import ingestion as spirit_ingestion
 from lifeos.spirituality import store as spirit_store
+# P5.4 — Learning domain (books, courses, ideas, research questions).
+from lifeos.learning import entries as learn_entries
+from lifeos.learning import ingestion as learn_ingestion
+from lifeos.learning import store as learn_store
 
 log = logging.getLogger("axi.dashboard")
 
@@ -1621,6 +1625,57 @@ async def api_chat_ask(request: Request):
             except Exception as e:  # noqa: BLE001
                 log.warning("lifeos spirituality fast-path failed: %s — falling back", e)
 
+        # Learning fast-path: "empecé 'X'", "leí 'X'", "idea: X",
+        # "investigar X". Conservative — quotes or explicit prefix required.
+        try:
+            li = learn_ingestion.parse_learning(text)
+        except Exception:  # noqa: BLE001
+            li = None
+        if li is not None:
+            try:
+                le = learn_entries.create(
+                    kind=li.kind, title=li.title, status=li.status,
+                    when=datetime.now(ZoneInfo("UTC")),
+                    body=li.body or None, author=li.author or None,
+                    data=li.data or None,
+                    source="chat", confidence=li.confidence,
+                )
+                lang = str(config.get("language", "es-MX"))
+                fam = lifeos_localize.lang_family(lang)
+                kind_label_es = {
+                    "book": "libro", "course": "curso", "article": "artículo",
+                    "idea": "idea", "research_question": "pregunta para investigar",
+                    "note": "nota", "quote": "cita",
+                }
+                kind_label_en = {
+                    "book": "book", "course": "course", "article": "article",
+                    "idea": "idea", "research_question": "research question",
+                    "note": "note", "quote": "quote",
+                }
+                label = (kind_label_en if fam == "en" else kind_label_es).get(
+                    li.kind, li.kind
+                )
+                status_note = ""
+                if li.kind == "book":
+                    if li.status == "done":
+                        status_note = " (terminado)" if fam == "es" else " (done)"
+                    elif li.status == "active":
+                        status_note = " (en progreso)" if fam == "es" else " (in progress)"
+                if fam == "en":
+                    answer = f"Logged {label} \"{li.title}\"{status_note} in /learning."
+                else:
+                    answer = f"Anotado en aprendizaje: {label} \"{li.title}\"{status_note}. Lo ves en /learning."
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "learning_entry_id": le.id}
+            except Exception as e:  # noqa: BLE001
+                log.warning("lifeos learning fast-path failed: %s — falling back", e)
+
         # Health ingestion fast-path: detect "me duele X", "glucosa N",
         # "presión X/Y", "tomé X", etc. Persists silently to the encrypted
         # store and acknowledges briefly. Per PRD §9.5 default: silent + a
@@ -2119,6 +2174,11 @@ def _lifeos_startup() -> None:
         spirit_store.apply_migrations()
     except Exception:  # noqa: BLE001
         log.exception("lifeos spirituality store failed to migrate")
+    # P5.4: learning DB (independent key + DB).
+    try:
+        learn_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos learning store failed to migrate")
 
 
 @app.on_event("shutdown")
@@ -2782,6 +2842,103 @@ async def api_spirit_create(request: Request):
 @app.delete("/api/spirituality/entries/{eid}")
 def api_spirit_delete(eid: str):
     return {"deleted": spirit_entries.delete(eid)}
+
+
+# ────────────────────────── lifeos (P5.4 learning) ─────────────────────
+
+
+def _learn_entry_to_dict(e: learn_entries.Entry) -> dict:
+    return {
+        "id": e.id, "ts": e.ts.isoformat(),
+        "kind": e.kind, "title": e.title, "body": e.body, "author": e.author,
+        "status": e.status, "progress": e.progress, "rating": e.rating,
+        "data": e.data, "tags": e.tags,
+        "source": e.source, "confidence": e.confidence,
+        "completed_at": e.completed_at.isoformat() if e.completed_at else None,
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+@app.get("/learning", response_class=HTMLResponse)
+def learning_page(request: Request):
+    return templates.TemplateResponse(request, "learning.html", {})
+
+
+@app.get("/api/learning/entries")
+def api_learn_list(days: int = 3650, kind: str | None = None,
+                   status: str | None = None, q: str | None = None,
+                   limit: int = 200):
+    if q:
+        rows = learn_entries.search(q, kind=kind if kind else None,
+                                    limit=max(1, min(limit, 500)))
+    else:
+        rows = learn_entries.list_recent(
+            days=max(1, min(days, 36500)),
+            kind=kind if kind else None,
+            status=status if status else None,
+            limit=max(1, min(limit, 500)),
+        )
+    return {"entries": [_learn_entry_to_dict(e) for e in rows]}
+
+
+@app.post("/api/learning/entries")
+async def api_learn_create(request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON")
+    kind = body.get("kind")
+    title = (body.get("title") or "").strip()
+    ts_str = body.get("ts")
+    if not kind or not title or not ts_str:
+        raise HTTPException(400, "kind, title, ts required")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"ts must be ISO8601: {ts_str!r}")
+    if ts.tzinfo is None:
+        raise HTTPException(400, "ts must be tz-aware")
+    try:
+        e = learn_entries.create(
+            kind=kind, title=title, when=ts,
+            body=body.get("body") or None,
+            author=body.get("author") or None,
+            status=body.get("status", "active"),
+            progress=body.get("progress") or None,
+            rating=body.get("rating"),
+            data=body.get("data") or None,
+            tags=body.get("tags") or None,
+            source=body.get("source", "manual"),
+            confidence=float(body.get("confidence", 1.0)),
+        )
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+    return _learn_entry_to_dict(e)
+
+
+@app.post("/api/learning/entries/{eid}/done")
+async def api_learn_mark_done(eid: str, request: Request):
+    body = await request.json() if request.headers.get("content-length", "0") != "0" else {}
+    rating = (body or {}).get("rating") if isinstance(body, dict) else None
+    try:
+        learn_entries.mark_done(eid, rating=rating)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/learning/entries/{eid}/progress")
+async def api_learn_update_progress(eid: str, request: Request):
+    body = await request.json()
+    progress = (body or {}).get("progress") if isinstance(body, dict) else None
+    if not progress:
+        raise HTTPException(400, "progress is required")
+    learn_entries.update_progress(eid, progress=str(progress))
+    return {"ok": True}
+
+
+@app.delete("/api/learning/entries/{eid}")
+def api_learn_delete(eid: str):
+    return {"deleted": learn_entries.delete(eid)}
 
 
 # Weekly retro scheduler — reuses lifeos.reminders (P1) for the cron nudge.
