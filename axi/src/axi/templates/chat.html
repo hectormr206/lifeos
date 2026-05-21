@@ -319,6 +319,18 @@ function chatApp() {
       this.online = navigator.onLine !== false;
       window.addEventListener('online', () => { this.online = true; this._tryDrainQueue(); });
       window.addEventListener('offline', () => { this.online = false; });
+      // Mark that chat handles its own reconnect — global handler in
+      // _base.html will skip the auto-reload for this page so the user
+      // doesn't lose what they're typing.
+      window.AXI_HANDLES_RECONNECT = true;
+      // Re-load history when reachability transitions to true (VPN came
+      // back mid-session) — without this, the chat would stay empty
+      // until the user manually reloaded the page.
+      window.addEventListener('axi-reachability', (e) => {
+        if (e.detail.reachable === true && this.messages.length === 0) {
+          this.loadHistory().then(() => this._restoreQueueBubbles());
+        }
+      });
       await this._refreshQueuedCount();
 
       // Listen for SW messages (sync results).
@@ -547,8 +559,19 @@ function chatApp() {
 
     async loadHistory() {
       this.loading = true;
+      // Skip the fetch entirely if we already know the backend is
+      // unreachable (probe ran in _base.html). The page renders the
+      // queued-bubble restore + empty thread without waiting.
+      const reachable = await window.axiAwaitReachable();
+      if (!reachable) {
+        this.loading = false;
+        return;
+      }
       try {
-        const r = await fetch('/api/chat/history?limit=50');
+        const ctrl = new AbortController();
+        const timeout = setTimeout(() => ctrl.abort(), 5000);
+        const r = await fetch('/api/chat/history?limit=50', { signal: ctrl.signal });
+        clearTimeout(timeout);
         if (!r.ok) throw new Error('history ' + r.status);
         const rows = await r.json();
         const out = [];
@@ -558,7 +581,8 @@ function chatApp() {
         }
         this.messages = out;
       } catch (e) {
-        // Silent — empty state is fine
+        // Network failure mid-session — keep empty history, user can
+        // still send (gets queued).
       } finally {
         this.loading = false;
       }

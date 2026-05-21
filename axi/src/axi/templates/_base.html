@@ -76,6 +76,78 @@
     .md th, .md td { border: 1px solid var(--border); padding: 0.35rem 0.6rem; }
     .md th { background: var(--panel2); }
   </style>
+  <!-- ─── Reachability probe (runs BEFORE Alpine inits) ─────────────────
+       Probes the backend with a 2s timeout to determine if the laptop
+       is actually reachable (VPN up, server alive). Without this, every
+       page would fire its own fetches and hang for 1-2 min on a broken
+       VPN waiting for TCP timeouts. With this:
+         - window.AXI_REACHABLE = true|false|null (null = still probing)
+         - 'axi-reachability' custom event fires once with the result
+         - window.axiAwaitReachable() returns a Promise<bool>
+       Page scripts (chat, conversations, dashboard, etc.) should call
+       axiAwaitReachable() before deciding to fetch data. When false,
+       skip the fetch and render an offline placeholder instead. -->
+  <script>
+    window.AXI_REACHABLE = null;
+    (function probeBackend() {
+      // Fast path: if the device itself reports offline, skip probe.
+      if (navigator.onLine === false) {
+        window.AXI_REACHABLE = false;
+        document.addEventListener('DOMContentLoaded', () => {
+          window.dispatchEvent(new CustomEvent('axi-reachability', { detail: { reachable: false } }));
+        });
+        return;
+      }
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 2000);
+      // /api/badge/count is intentionally tiny and side-effect free.
+      fetch('/api/badge/count', { signal: ctrl.signal, cache: 'no-store' })
+        .then(r => {
+          clearTimeout(t);
+          window.AXI_REACHABLE = r.ok;
+          window.dispatchEvent(new CustomEvent('axi-reachability', { detail: { reachable: r.ok } }));
+        })
+        .catch(() => {
+          clearTimeout(t);
+          window.AXI_REACHABLE = false;
+          window.dispatchEvent(new CustomEvent('axi-reachability', { detail: { reachable: false } }));
+        });
+      // Re-probe when 'online' fires (e.g. VPN reconnected mid-session).
+      window.addEventListener('online', () => {
+        const ctrl2 = new AbortController();
+        const t2 = setTimeout(() => ctrl2.abort(), 2000);
+        fetch('/api/badge/count', { signal: ctrl2.signal, cache: 'no-store' })
+          .then(r => {
+            clearTimeout(t2);
+            window.AXI_REACHABLE = r.ok;
+            window.dispatchEvent(new CustomEvent('axi-reachability', { detail: { reachable: r.ok } }));
+          })
+          .catch(() => {});  // stay offline
+      });
+    })();
+    window.axiAwaitReachable = function() {
+      if (window.AXI_REACHABLE !== null) return Promise.resolve(window.AXI_REACHABLE);
+      return new Promise(resolve => {
+        window.addEventListener('axi-reachability', e => resolve(e.detail.reachable), { once: true });
+      });
+    };
+
+    // Auto-reload when connection comes back, EXCEPT for pages that handle
+    // their own reconnect (set window.AXI_HANDLES_RECONNECT = true).
+    // Chat and conversations refetch their own data; other pages do a full
+    // reload so they pick up fresh data automatically.
+    (function() {
+      let wasOffline = navigator.onLine === false || window.AXI_REACHABLE === false;
+      window.addEventListener('axi-reachability', (e) => {
+        if (e.detail.reachable === true && wasOffline) {
+          if (window.AXI_HANDLES_RECONNECT) return;  // page handles its own
+          // Slight delay so the user sees the "Conexión restaurada" toast.
+          setTimeout(() => window.location.reload(), 1500);
+        }
+        if (e.detail.reachable === false) wasOffline = true;
+      });
+    })();
+  </script>
 </head>
 <body class="min-h-screen">
   <header class="border-b sticky top-0 z-40" style="border-color: var(--border); background: var(--panel)" x-data="{ navOpen: false }">
@@ -318,38 +390,75 @@
   <!-- Global offline banner — visible on EVERY page when the device has
        no network. Explains why API calls / data loading will fail.
        z-30 (below header z-40 and drawer z-50) so the hamburger menu
-       items aren't obstructed when open. The user can dismiss for the
-       current tab session (sessionStorage); banner reappears next visit
-       if still offline. -->
+       items aren't obstructed when open.
+
+       Dismiss state is PER-VIEW only — NO persistence. Reaparece al
+       recargar/navegar. Razón: en Android PWA standalone, sessionStorage
+       persiste entre opens (no se limpia al cerrar la app), entonces
+       un dismiss "para esta sesión" se volvía permanente y la banner
+       nunca volvía a aparecer aunque hubiera nueva desconexión. -->
   <div x-data="{ online: navigator.onLine !== false,
-                 dismissed: sessionStorage.getItem('axi_offline_banner_dismissed') === '1',
+                 reachable: window.AXI_REACHABLE,
+                 dismissed: false,
                  init() {
                    window.addEventListener('online', () => { this.online = true; });
                    window.addEventListener('offline', () => {
                      this.online = false;
-                     this.dismissed = false;          // re-show when offline event fires
-                     sessionStorage.removeItem('axi_offline_banner_dismissed');
+                     this.reachable = false;
+                     this.dismissed = false;
                    });
-                 },
-                 dismiss() {
-                   this.dismissed = true;
-                   sessionStorage.setItem('axi_offline_banner_dismissed', '1');
+                   window.addEventListener('axi-reachability', (e) => {
+                     this.reachable = e.detail.reachable;
+                     if (e.detail.reachable === false) this.dismissed = false;
+                   });
                  } }"
        x-init="init()"
-       x-show="!online && !dismissed" x-cloak
+       x-show="(!online || reachable === false) && !dismissed" x-cloak
        class="max-w-7xl mx-auto px-3 md:px-6"
        style="position: sticky; top: 4rem; z-index: 30;">
     <div class="panel p-3 text-sm flex items-center gap-2"
          style="background: rgba(255, 200, 0, 0.10); border-color: var(--amber);">
       <span style="font-size: 1.25rem">📴</span>
       <div class="flex-1 min-w-0">
-        <strong>Sin conexión</strong> — los datos del servidor no van a cargar.
-        <span class="muted">El chat sigue: se encola y se envía al reconectar.</span>
+        <strong x-text="!online ? 'Sin internet' : 'Sin conexión a la laptop'"></strong>
+        <span class="muted"
+              x-text="!online
+                ? '— activa WiFi o datos. El chat se encola.'
+                : '— activa la VPN. El chat se encola y se envía al reconectar.'"></span>
       </div>
       <button class="btn text-xs" @click="location.reload()"
               style="padding: 0.25rem 0.5rem;" title="Reintentar">↻</button>
-      <button class="btn text-xs" @click="dismiss()"
-              style="padding: 0.25rem 0.5rem;" title="Cerrar (vuelve a aparecer si se va la conexión otra vez)">✕</button>
+      <button class="btn text-xs" @click="dismissed = true"
+              style="padding: 0.25rem 0.5rem;" title="Cerrar (vuelve a aparecer al recargar)">✕</button>
+    </div>
+  </div>
+
+  <!-- Conexión restaurada — toast verde que aparece cuando reachability
+       pasa de false a true. Auto-dismiss después de 4s. -->
+  <div x-data="{ visible: false,
+                 wasOffline: navigator.onLine === false || window.AXI_REACHABLE === false,
+                 init() {
+                   window.addEventListener('axi-reachability', (e) => {
+                     if (e.detail.reachable === true && this.wasOffline) {
+                       this.visible = true;
+                       setTimeout(() => { this.visible = false; }, 4000);
+                       this.wasOffline = false;
+                     }
+                     if (e.detail.reachable === false) this.wasOffline = true;
+                   });
+                 } }"
+       x-init="init()"
+       x-show="visible" x-cloak
+       x-transition.opacity
+       class="max-w-7xl mx-auto px-3 md:px-6"
+       style="position: sticky; top: 4rem; z-index: 30;">
+    <div class="panel p-3 text-sm flex items-center gap-2"
+         style="background: rgba(102, 204, 102, 0.10); border-color: var(--green, #6c6);">
+      <span style="font-size: 1.25rem">✓</span>
+      <div class="flex-1 min-w-0">
+        <strong style="color: var(--green, #6c6)">Conexión restaurada</strong>
+        <span class="muted">— recargando datos…</span>
+      </div>
     </div>
   </div>
 

@@ -77,20 +77,34 @@ function conversationsPage() {
     pageSize: 50,
     async load(beforeTs) {
       this.loading = true;
+      // Skip fetch if backend unreachable — page renders empty state.
+      const reachable = await window.axiAwaitReachable();
+      if (!reachable) { this.loading = false; return; }
       try {
         const params = new URLSearchParams({ limit: this.pageSize });
         if (beforeTs) params.set('before_ts', beforeTs);
-        const r = await fetch('/api/conversations?' + params);
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 5000);
+        const r = await fetch('/api/conversations?' + params, { signal: ctrl.signal });
+        clearTimeout(t);
         if (!r.ok) return;
         const data = await r.json();
         if (data.length < this.pageSize) this.hasMore = false;
         if (beforeTs) this.turns.push(...data);
         else this.turns = data;
-      } finally {
+      } catch (e) { /* aborted/network — keep empty */ } finally {
         this.loading = false;
       }
     },
-    init() { this.load(); },
+    init() {
+      // Conversations re-fetches its own data on reconnect; skip the
+      // global auto-reload (would clear any search text the user typed).
+      window.AXI_HANDLES_RECONNECT = true;
+      this.load();
+      window.addEventListener('axi-reachability', (e) => {
+        if (e.detail.reachable === true && this.turns.length === 0) this.load();
+      });
+    },
     loadMore() {
       const last = this.turns[this.turns.length - 1];
       if (!last) return;
