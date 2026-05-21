@@ -1493,6 +1493,21 @@ async def api_chat_ask(request: Request):
     text = (body.get("text") or "").strip()
     image_b64 = body.get("image_b64") or None
     want_speak = bool(body.get("speak", False))
+    # PWA optional fields — captured by the chat UI when the user toggles
+    # the corresponding affordances. None when absent. We log them and pass
+    # to the relevant domain create() as ad-hoc tag/data fields.
+    raw_location = body.get("location") if isinstance(body.get("location"), dict) else None
+    location_tag: str | None = None
+    if raw_location:
+        try:
+            lat = float(raw_location.get("lat"))
+            lng = float(raw_location.get("lng"))
+            # Use ';' inside the value because tags are CSV-serialized in
+            # the DB and a literal ',' would split this into two phantom tags.
+            location_tag = f"gps:{lat:.5f};{lng:.5f}"
+            log.info("chat call with location: %s", location_tag)
+        except (TypeError, ValueError):
+            location_tag = None
     if not text and not image_b64:
         raise HTTPException(400, "text or image_b64 is required")
     if not text and image_b64:
@@ -1729,6 +1744,7 @@ async def api_chat_ask(request: Request):
                     kind=evi.kind, title=evi.title, when=evi.when,
                     people=evi.people or None,
                     body=text,
+                    tags=[location_tag] if location_tag else None,
                     source="chat", confidence=evi.confidence,
                 )
                 try:
@@ -1914,11 +1930,16 @@ async def api_chat_ask(request: Request):
             fi = None
         if fi is not None:
             try:
+                # Merge ingestion tags with PWA-captured location tag (if on).
+                merged_tags = list(fi.tags or [])
+                if location_tag:
+                    merged_tags.append(location_tag)
                 fe = finance_entries.create(
                     kind=fi.kind, title=fi.title, amount=fi.amount,
                     when=datetime.now(ZoneInfo("UTC")),
                     currency=fi.currency, category=fi.category,
-                    merchant=fi.merchant, body=text, tags=fi.tags or None,
+                    merchant=fi.merchant, body=text,
+                    tags=merged_tags or None,
                     source="chat", confidence=fi.confidence,
                 )
                 # Big purchases auto-schedule a +7d reflection.
@@ -2214,17 +2235,39 @@ def _lifeos_push_dispatcher(rem: lifeos_reminders.Reminder) -> None:
     Push payloads carry generic titles only (per PRD §5.3); body holds the
     user's own text since this device is single-user behind VPN. Future
     multi-user variant would title=generic-only and detail-fetch-on-tap.
+
+    Tag convention: when this reminder is linked to a finance big_purchase
+    awaiting reflection, emit `finance-reflect:<entry_id>` so the PWA's
+    service worker renders Impulsiva/Planeada action buttons inline. The
+    sw.js detects the prefix and wires the action handlers.
     """
     if rem.channel == "log":
         log.info("REMINDER FIRED [log] %s", rem.message)
         return
+    tag = f"reminder:{rem.id}"
+    url = "/reminders"
+    # Detect "finance reflection" reminders by reverse-lookup: any finance
+    # entry pending reflection whose reminder_id matches this reminder.id?
+    try:
+        with finance_store.connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM finance_entries "
+                "WHERE reminder_id = ? AND deleted_at IS NULL "
+                "  AND reflection_done = 0",
+                (rem.id,),
+            ).fetchone()
+        if row:
+            tag = f"finance-reflect:{row['id']}"
+            url = "/finance"
+    except Exception:  # noqa: BLE001
+        log.exception("finance reflection lookup failed for reminder %s", rem.id)
     result = lifeos_push.send_to_all(
         title="Recordatorio",
         body=rem.message,
-        url="/reminders",
-        tag=f"reminder:{rem.id}",
+        url=url,
+        tag=tag,
     )
-    log.info("reminder %s push: %s", rem.id, result)
+    log.info("reminder %s push: %s (tag=%s)", rem.id, result, tag)
     if result.get("sent", 0) == 0 and result.get("failed", 0) > 0:
         raise RuntimeError(f"all push attempts failed: {result}")
 
@@ -3332,6 +3375,93 @@ async def api_posture_enable(request: Request):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"config save failed: {e}")
     return {"enabled": enabled}
+
+
+# ────────────────────────── PWA Web platform APIs ──────────────────────
+
+
+@app.post("/share")
+async def pwa_share_target(request: Request):
+    """Web Share Target endpoint — receives content shared from any
+    Android app via the system share sheet.
+
+    Manifest declares this as the destination. Payload comes as
+    multipart/form-data with fields `title`, `text`, `url`, and
+    optional `files`. We compose them into a single chat-like message
+    and redirect to /share-receive?text=<encoded> so the user can
+    review before persisting (avoids accidental commits from a
+    misfired share).
+    """
+    from fastapi.responses import RedirectResponse
+    from urllib.parse import urlencode
+
+    try:
+        form = await request.form()
+    except Exception:
+        return RedirectResponse(url="/?share_error=invalid_form", status_code=303)
+
+    parts = []
+    title = form.get("title")
+    text = form.get("text")
+    url = form.get("url")
+    if title:
+        parts.append(str(title).strip())
+    if text:
+        parts.append(str(text).strip())
+    if url:
+        parts.append(str(url).strip())
+    combined = "\n".join(p for p in parts if p)[:8000]
+
+    # Files (e.g. shared images): for v1 we don't auto-process them — the
+    # share-receive page lists them as attached so the user decides.
+    files_count = 0
+    try:
+        for k in form.keys():
+            if k == "files":
+                vals = form.getlist(k)
+                files_count = len(vals)
+                break
+    except Exception:
+        pass
+
+    qs = urlencode({"text": combined, "files": str(files_count)})
+    return RedirectResponse(url=f"/share-receive?{qs}", status_code=303)
+
+
+@app.get("/share-receive", response_class=HTMLResponse)
+def pwa_share_receive(request: Request):
+    """Review page for shared content. User edits / confirms / cancels
+    before it goes into the chat fast-path."""
+    return templates.TemplateResponse(request, "share_receive.html", {})
+
+
+@app.get("/api/badge/count")
+def api_badge_count():
+    """Number to show on the installed PWA's app icon (Android Badging API).
+
+    Counts items that need user attention:
+      - Pending finance reflections (big_purchase awaiting impulse classification)
+      - Unread critical events (system event log)
+
+    Cheap query — used by the SW after every push and by the foreground
+    page on visibility change.
+    """
+    pending_finance = 0
+    try:
+        pending_finance = len(finance_entries.pending_reflections())
+    except Exception:  # noqa: BLE001
+        log.exception("badge: pending_reflections failed")
+    unread_events = 0
+    try:
+        unread_events = int(events.unread_critical_count())
+    except Exception:  # noqa: BLE001
+        # axi.events may not have this helper — fall back to 0.
+        pass
+    return {
+        "count": pending_finance + unread_events,
+        "pending_reflections": pending_finance,
+        "unread_critical_events": unread_events,
+    }
 
 
 # ─── Fast-path metrics (nano-agents PRD instrumentation) ──────────────

@@ -1,0 +1,90 @@
+{% extends "_base.html" %}
+{% block title %}Compartido · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4 max-w-2xl mx-auto" x-data="shareReceive()" x-init="parseUrl()">
+  <h1 class="text-2xl font-semibold">📤 Contenido compartido</h1>
+  <p class="text-sm muted">
+    Lo que compartiste desde otra app. Revisalo y elegí dónde guardarlo:
+    al chat (entra al fast-path), o como nota de aprendizaje.
+  </p>
+
+  <textarea x-model="text" class="panel2 px-3 py-3 text-sm w-full font-sans"
+            rows="8" maxlength="8000" placeholder="Contenido"></textarea>
+
+  <div class="text-xs muted" x-show="filesCount > 0" x-cloak
+       x-text="'+' + filesCount + ' archivo(s) adjunto(s) — todavía no se procesan automáticamente'"></div>
+
+  <div class="flex gap-2 flex-wrap">
+    <button class="btn btn-primary" @click="sendToChat()" :disabled="busy">
+      <span x-show="!busy">💬 Mandar al chat</span>
+      <span x-show="busy">Enviando…</span>
+    </button>
+    <button class="btn" @click="saveAsLearning()" :disabled="busy">📚 Como nota de aprendizaje</button>
+    <a href="/" class="btn">Cancelar</a>
+  </div>
+
+  <div x-show="status" x-cloak class="text-sm panel2 p-3 rounded" x-text="status"></div>
+</div>
+
+<script>
+function shareReceive() {
+  return {
+    text: '',
+    filesCount: 0,
+    busy: false,
+    status: '',
+    parseUrl() {
+      const p = new URLSearchParams(window.location.search);
+      this.text = p.get('text') || '';
+      this.filesCount = parseInt(p.get('files') || '0', 10);
+    },
+    async sendToChat() {
+      this.busy = true; this.status = '';
+      try {
+        const r = await fetch('/api/chat/ask', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: this.text }),
+        });
+        if (r.ok) {
+          const d = await r.json();
+          this.status = '✓ Procesado por chat: ' + d.answer.slice(0, 200);
+          if (navigator.vibrate) navigator.vibrate(50);
+          setTimeout(() => { window.location.href = '/chat'; }, 1500);
+        } else {
+          this.status = 'Error: ' + (await r.text());
+        }
+      } catch (e) {
+        this.status = 'Error de red: ' + e;
+      } finally {
+        this.busy = false;
+      }
+    },
+    async saveAsLearning() {
+      this.busy = true; this.status = '';
+      const title = this.text.split('\n')[0].slice(0, 120) || 'Compartido';
+      try {
+        const r = await fetch('/api/learning/entries', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            kind: 'note', title, body: this.text,
+            ts: new Date().toISOString(), source: 'chat',
+          }),
+        });
+        if (r.ok) {
+          this.status = '✓ Guardado en /learning';
+          if (navigator.vibrate) navigator.vibrate(50);
+          setTimeout(() => { window.location.href = '/learning'; }, 1500);
+        } else {
+          this.status = 'Error: ' + (await r.text());
+        }
+      } catch (e) {
+        this.status = 'Error: ' + e;
+      } finally {
+        this.busy = false;
+      }
+    },
+  };
+}
+</script>
+{% endblock %}

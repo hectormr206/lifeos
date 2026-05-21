@@ -141,10 +141,38 @@
         :disabled="capturing || pending"
         class="btn"
         style="min-height: 2.5rem; min-width: 2.75rem;"
-        title="Captura de pantalla"
+        title="Captura de pantalla (laptop)"
       >
         <span x-show="capturing !== 'screen'">🖥</span>
         <span x-show="capturing === 'screen'" x-cloak>⏳</span>
+      </button>
+      <!-- Pixel camera (PWA on phone). Uses Web getUserMedia to capture from
+           the device this PWA is running on. Different from the 📷 button
+           above which captures from the LAPTOP webcam. -->
+      <button
+        type="button"
+        @click="capturePhoneCamera()"
+        :disabled="capturing || pending"
+        class="btn"
+        style="min-height: 2.5rem; min-width: 2.75rem;"
+        title="Cámara del dispositivo (Pixel)"
+      >
+        <span x-show="capturing !== 'phone-camera'">📱</span>
+        <span x-show="capturing === 'phone-camera'" x-cloak>⏳</span>
+      </button>
+      <!-- Geolocation toggle. When ON, the next chat message will include
+           lat/lng so the backend can geo-tag finance/event entries. -->
+      <button
+        type="button"
+        @click="toggleLocation()"
+        :disabled="pending"
+        class="btn"
+        :style="locationOn
+          ? 'min-height: 2.5rem; min-width: 2.75rem; background: rgba(102,204,255,0.2); border-color: var(--blue);'
+          : 'min-height: 2.5rem; min-width: 2.75rem;'"
+        :title="locationOn ? 'Ubicación ON — adjuntar lat/lng al próximo mensaje' : 'Ubicación OFF — clic para activar'"
+      >
+        <span x-text="locationOn ? '📍' : '📵'"></span>
       </button>
       <button
         type="button"
@@ -216,10 +244,12 @@ function chatApp() {
 
     // Multimodal state
     pendingImage: null,    // base64 PNG to attach to next /api/chat/ask
-    capturing: null,       // 'screen' | 'camera' | null — spinner driver
+    capturing: null,       // 'screen' | 'camera' | 'phone-camera' | null
     recording: false,      // mic active
     transcribing: false,   // POST /api/chat/transcribe in flight
     speakOn: false,        // persists in localStorage
+    locationOn: false,     // when true, attach lat/lng to next message
+    _pendingLocation: null,  // {lat, lng, accuracy_m} captured at send time
     _mediaRecorder: null,
     _audioChunks: [],
     _audioStream: null,
@@ -229,9 +259,87 @@ function chatApp() {
       try {
         const stored = localStorage.getItem('axi_chat_speak');
         this.speakOn = stored === '1';
+        const locStored = localStorage.getItem('axi_chat_location');
+        this.locationOn = locStored === '1';
       } catch (e) { /* private mode etc. */ }
       await this.loadHistory();
       this.scrollToBottom();
+      // Best-effort badge refresh on page load (foreground) so the icon
+      // stays accurate even between push events.
+      this.refreshBadge();
+      // Refresh badge every time the tab comes back to foreground.
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) this.refreshBadge();
+      });
+    },
+
+    async refreshBadge() {
+      try {
+        const r = await fetch('/api/badge/count');
+        if (!r.ok || !('setAppBadge' in navigator)) return;
+        const { count } = await r.json();
+        if (count > 0) await navigator.setAppBadge(count);
+        else await navigator.clearAppBadge();
+      } catch (e) { /* badging API unavailable on this platform */ }
+    },
+
+    toggleLocation() {
+      this.locationOn = !this.locationOn;
+      try { localStorage.setItem('axi_chat_location', this.locationOn ? '1' : '0'); } catch(e) {}
+      if (this.locationOn && navigator.vibrate) navigator.vibrate(30);
+    },
+
+    async _captureLocationOnce() {
+      // Get a fresh GPS fix when the user sends a message with location on.
+      // 10s timeout so a flaky GPS doesn't block the send.
+      if (!this.locationOn || !navigator.geolocation) return null;
+      return new Promise((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy_m: pos.coords.accuracy,
+          }),
+          () => resolve(null),  // permission denied / no fix
+          { timeout: 10000, maximumAge: 60000, enableHighAccuracy: false },
+        );
+      });
+    },
+
+    async capturePhoneCamera() {
+      // Live capture from the device this PWA is running on (Pixel camera
+      // when installed on Android). Uses getUserMedia + a hidden video
+      // element to grab one frame, then stops the stream.
+      if (this.capturing) return;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        this.error = 'Tu navegador no soporta acceso a la cámara.';
+        return;
+      }
+      this.capturing = 'phone-camera';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },  // back camera on phones
+          audio: false,
+        });
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        await video.play();
+        // Wait a moment so the camera adjusts exposure
+        await new Promise(r => setTimeout(r, 250));
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        stream.getTracks().forEach(t => t.stop());
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        this.pendingImage = dataUrl.split(',')[1];   // strip "data:image/jpeg;base64,"
+        if (navigator.vibrate) navigator.vibrate(40);
+      } catch (e) {
+        this.error = 'No se pudo capturar: ' + (e.message || e);
+      } finally {
+        this.capturing = null;
+      }
     },
 
     async loadHistory() {
@@ -435,6 +543,9 @@ function chatApp() {
       this.pendingImage = null;
       this.$nextTick(() => { this.autogrow(); this.scrollToBottom(); });
       this.pending = true;
+      // Best-effort location capture before the request — non-blocking on
+      // failure so a refused permission or slow GPS doesn't break sends.
+      const location = await this._captureLocationOnce();
       try {
         const r = await fetch('/api/chat/ask', {
           method: 'POST',
@@ -443,6 +554,7 @@ function chatApp() {
             text,
             image_b64: image_b64 || null,
             speak: this.speakOn,
+            location: location || undefined,
           }),
         });
         if (!r.ok) {
@@ -475,8 +587,15 @@ function chatApp() {
           const store = Alpine.$data(document.querySelector('main'));
           if (store && store.refresh) store.refresh();
         } catch (e) { /* not fatal */ }
+        // Subtle haptic feedback when a response lands — only on mobile
+        // (laptop browsers ignore vibrate()).
+        if (navigator.vibrate) navigator.vibrate(30);
+        // Refresh the app icon badge in case this call resolved a
+        // pending reflection or generated a new insight.
+        this.refreshBadge();
       } catch (e) {
         this.error = 'No pude obtener respuesta: ' + e.message;
+        if (navigator.vibrate) navigator.vibrate([60, 50, 60]);  // error pattern
       } finally {
         this.pending = false;
         this.$nextTick(() => this.scrollToBottom());
