@@ -113,6 +113,19 @@
             </template>
           </div>
           <div class="text-xs muted mt-1" x-text="fmtTs(r.ts)"></div>
+          <!-- Structured data fields (pulso, IMC, grasa, etc.) as labeled
+               chips. Only renders what's actually present in r.data; if the
+               user didn't include a metric, the chip simply doesn't appear. -->
+          <template x-if="r.data && Object.keys(r.data).length > 0">
+            <div class="mt-2 flex flex-wrap gap-1">
+              <template x-for="chip in dataChips(r.data)" :key="chip.label">
+                <span class="text-xs panel2 px-2 py-0.5 rounded inline-flex items-center gap-1">
+                  <span class="muted" x-text="chip.label"></span>
+                  <span class="font-medium" x-text="chip.value"></span>
+                </span>
+              </template>
+            </div>
+          </template>
           <template x-if="r.body">
             <div class="text-xs mt-2" x-text="r.body"></div>
           </template>
@@ -226,6 +239,63 @@ function healthPage() {
     },
     kindIcon(k) {
       return ({symptom:'🤒', vital:'📊', medication:'💊', condition:'📋', note:'📝'})[k] || '•';
+    },
+    // Render data fields as labeled chips. Maps internal field keys to
+    // user-readable labels + units. Only includes fields that have a value;
+    // missing metrics (the user didn't send them) simply don't render.
+    dataChips(d) {
+      if (!d || typeof d !== 'object') return [];
+      // Each entry: [key, label, unit]. Order = display order.
+      const SCHEMA = [
+        // Vitals (blood pressure, glucose, weight, sleep)
+        ['systolic', 'Sistólica', 'mmHg'],
+        ['diastolic', 'Diastólica', 'mmHg'],
+        ['pulse_bpm', 'Pulso', 'bpm'],
+        ['value', null, null],     // generic — label depends on `type`
+        // Body composition
+        ['weight_kg', 'Peso', 'kg'],
+        ['muscle_pct', 'Músculo', '%'],
+        ['body_fat_pct', 'Grasa', '%'],
+        ['visceral_fat', 'Visceral', ''],
+        ['basal_metabolic_rate', 'RM', 'kcal'],
+        ['bmi', 'IMC', ''],
+        // Sleep
+        ['start_hour_24', 'Dormido a', 'h'],
+        ['end_hour_24', 'Despertó a', 'h'],
+      ];
+      // 'value' field uses a label derived from `type` (so glucose, weight,
+      // sleep_hours, body_fat_pct… each get the right label).
+      const TYPE_LABELS = {
+        glucose: ['Glucosa', 'mg/dL'],
+        weight: ['Peso', 'kg'],
+        sleep_hours: ['Sueño', 'h'],
+        body_fat_pct: ['Grasa', '%'],
+        muscle_pct: ['Músculo', '%'],
+        basal_metabolic_rate: ['RM', 'kcal'],
+        bmi: ['IMC', ''],
+        visceral_fat: ['Visceral', ''],
+      };
+      const out = [];
+      for (const [key, label, unit] of SCHEMA) {
+        if (d[key] === undefined || d[key] === null) continue;
+        let l = label;
+        let u = unit;
+        if (key === 'value' && d.type && TYPE_LABELS[d.type]) {
+          [l, u] = TYPE_LABELS[d.type];
+        } else if (key === 'value') {
+          continue;  // generic value without a known type label
+        }
+        let v = d[key];
+        // Format clock hours nicely.
+        if (key === 'start_hour_24' || key === 'end_hour_24') {
+          const min_key = key.replace('hour_24', 'minute');
+          const mm = d[min_key] || 0;
+          v = String(v).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+          u = '';
+        }
+        out.push({ label: l, value: u ? `${v} ${u}` : `${v}` });
+      }
+      return out;
     },
     fmtTs(iso) {
       try {
