@@ -315,6 +315,28 @@
     </div>
   </header>
 
+  <!-- Global offline banner — visible on EVERY page when the device has
+       no network. Explains why API calls / data loading will fail. -->
+  <div x-data="{ online: navigator.onLine !== false,
+                 init() {
+                   window.addEventListener('online', () => this.online = true);
+                   window.addEventListener('offline', () => this.online = false);
+                 } }"
+       x-init="init()"
+       x-show="!online" x-cloak
+       class="max-w-7xl mx-auto px-3 md:px-6"
+       style="position: sticky; top: 4rem; z-index: 40;">
+    <div class="panel p-3 text-sm flex items-center gap-3"
+         style="background: rgba(255, 200, 0, 0.10); border-color: var(--amber);">
+      <span style="font-size: 1.5rem">📴</span>
+      <div class="flex-1">
+        <strong>Sin conexión</strong> — los datos del servidor no van a cargar.
+        <span class="muted">El chat sigue funcionando: lo que escribas se encola y se envía cuando vuelva la VPN.</span>
+      </div>
+      <button class="btn text-xs" @click="location.reload()" title="Reintentar">↻</button>
+    </div>
+  </div>
+
   <main class="max-w-7xl mx-auto px-3 md:px-6 py-3 md:py-6" x-data="dashboardStore()">
     {% block content %}{% endblock %}
   </main>

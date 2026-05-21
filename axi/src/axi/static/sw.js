@@ -18,7 +18,7 @@
 //   - The OS decides WHEN to fire — typically within minutes of reconnecting.
 //   - Each sync event has ~12s CPU budget; large queues may need multiple fires.
 
-const CACHE_VERSION = 'axi-shell-v4';
+const CACHE_VERSION = 'axi-shell-v5';
 const SHELL_URLS = [
   '/',
   '/chat',
@@ -70,9 +70,13 @@ self.addEventListener('fetch', (event) => {
   // go straight to network.
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // Navigation requests (HTML pages): network-first, cached shell on failure.
+  // Navigation requests (HTML pages): stale-while-revalidate.
+  // Serves cached shell IMMEDIATELY (so the app loads instant even when
+  // the VPN is down and fetch would otherwise hang for 10-30s waiting
+  // for a TCP timeout). The fresh response is fetched in background and
+  // replaces the cache for the NEXT visit.
   if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
-    event.respondWith(networkFirst(req));
+    event.respondWith(staleWhileRevalidate(req));
     return;
   }
 
@@ -85,29 +89,45 @@ self.addEventListener('fetch', (event) => {
   // API GETs (no special handling — page itself decides how to degrade).
 });
 
-async function networkFirst(req) {
-  try {
-    const fresh = await fetch(req);
-    if (fresh.ok) {
-      const cache = await caches.open(CACHE_VERSION);
+// stale-while-revalidate: return cached IMMEDIATELY if we have it. Fire
+// a fresh fetch in background to update the cache for next visit. If no
+// cached version exists yet (first visit ever), wait for the fresh fetch.
+// This is what makes the app load fast even on broken VPN — we don't
+// wait for a TCP timeout.
+async function staleWhileRevalidate(req) {
+  const cache = await caches.open(CACHE_VERSION);
+  const cached = await cache.match(req);
+  const fetchAndUpdate = fetch(req).then((fresh) => {
+    if (fresh && fresh.ok) {
       cache.put(req, fresh.clone()).catch(() => {});
     }
     return fresh;
-  } catch (e) {
-    const cached = await caches.match(req);
-    if (cached) return cached;
-    const home = await caches.match('/');
-    if (home) return home;
-    return new Response(
-      '<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
-      '<style>body{font-family:system-ui;padding:2rem;text-align:center;color:#888}' +
-      'h1{color:#cc66ff}</style>' +
-      '<h1>📡 Sin conexión</h1>' +
-      '<p>Axi no puede comunicarse con la laptop ahora mismo.</p>' +
-      '<p>Verificá la VPN o reintenta cuando estés en casa.</p>',
-      { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
-    );
+  }).catch(() => null);
+
+  if (cached) {
+    // Don't wait for the network — page renders instantly. The fetch
+    // continues in the background and updates the cache so the user
+    // gets the latest version on the NEXT visit. waitUntil() is not
+    // available on a `fetch` event from inside `respondWith`, but the
+    // pending promise stays alive in browser context.
+    fetchAndUpdate.catch(() => {});  // suppress unhandled-rejection warnings
+    return cached;
   }
+  // First visit (no cache yet): wait for network. If that fails, fall
+  // back to the homepage shell so SOMETHING renders.
+  const fresh = await fetchAndUpdate;
+  if (fresh) return fresh;
+  const home = await cache.match('/');
+  if (home) return home;
+  return new Response(
+    '<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
+    '<style>body{font-family:system-ui;padding:2rem;text-align:center;color:#888}' +
+    'h1{color:#cc66ff}</style>' +
+    '<h1>📡 Sin conexión</h1>' +
+    '<p>Axi no puede comunicarse con la laptop ahora mismo.</p>' +
+    '<p>Verificá la VPN o reintenta cuando estés en casa.</p>',
+    { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+  );
 }
 
 async function cacheFirst(req) {
@@ -176,7 +196,10 @@ async function notifyClients(message) {
 }
 
 async function drainChatQueue() {
+  // Only drain items in 'queued' state — items in 'error' state require
+  // user intervention (manual retry from chat UI) so we don't auto-resend.
   const items = (await idbAll(QUEUE_STORE)).filter((i) => i.status === 'queued');
+  let lastTransientError = null;
   for (const item of items) {
     try {
       const r = await fetch('/api/chat/ask', {
@@ -189,26 +212,51 @@ async function drainChatQueue() {
           location: item.location || undefined,
         }),
       });
-      if (!r.ok) {
-        // Server reachable but rejected — drop from queue so it doesn't
-        // retry forever, notify foreground for surfaced error.
+      if (r.ok) {
+        const data = await r.json();
+        // SUCCESS — safe to remove from queue.
         await idbDelete(QUEUE_STORE, item.id);
-        await notifyClients({ type: 'sync-error', tempId: item.id, error: `HTTP ${r.status}` });
+        await notifyClients({
+          type: 'sync-sent', tempId: item.id,
+          answer: data.answer, latency_ms: data.latency_ms,
+        });
         continue;
       }
-      const data = await r.json();
-      await idbDelete(QUEUE_STORE, item.id);
-      await notifyClients({
-        type: 'sync-sent', tempId: item.id,
-        answer: data.answer, latency_ms: data.latency_ms,
-      });
+      // 5xx = transient (server momentarily down, brain crashed, etc.).
+      //   KEEP in queue, throw so the browser retries the sync later.
+      // 4xx = permanent (validation, auth, bad payload).
+      //   Mark as 'error' but DO NOT DELETE — let the user see + retry
+      //   from the chat UI. Never silently lose data.
+      if (r.status >= 500) {
+        lastTransientError = new Error(`HTTP ${r.status}`);
+        await notifyClients({ type: 'sync-retry', tempId: item.id });
+        // Don't continue to next item — let throw signal sync incomplete.
+        break;
+      } else {
+        await idbPut({ ...item, status: 'error', error: `HTTP ${r.status}` });
+        await notifyClients({ type: 'sync-error', tempId: item.id, error: `HTTP ${r.status}` });
+      }
     } catch (e) {
+      // Network failure (offline / VPN down). Keep item queued, browser
+      // will retry the sync when network is back.
+      lastTransientError = e;
       await notifyClients({ type: 'sync-retry', tempId: item.id });
-      throw e;  // signal to browser that sync didn't complete
+      break;  // stop processing — the rest will retry next time
     }
   }
-  // Refresh badge after successful drain.
+  // Refresh badge after any successful drain.
   try { await refreshBadge(); } catch (e) { /* offline */ }
+  if (lastTransientError) throw lastTransientError;  // signal sync incomplete
+}
+
+async function idbPut(item) {
+  const db = await openIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([QUEUE_STORE], 'readwrite');
+    tx.objectStore(QUEUE_STORE).put(item);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
 self.addEventListener('sync', (event) => {

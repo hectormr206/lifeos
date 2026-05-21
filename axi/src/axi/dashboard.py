@@ -2026,7 +2026,31 @@ async def api_chat_ask(request: Request):
                 log.warning("lifeos reminder fast-path failed: %s — falling back to brain", e)
 
     try:
-        answer = brain.ask(text, history=history, image_b64=image_b64)
+        # If the PWA captured GPS at send time, inject it into the system
+        # prompt so the brain "sees" it instead of denying knowledge. We
+        # only mention it (no reverse-geocoding) — coordinates are private
+        # data and the user can interpret them.
+        brain_system = brain.SYSTEM_PROMPT
+        if raw_location:
+            try:
+                _lat = float(raw_location.get("lat"))
+                _lng = float(raw_location.get("lng"))
+                _acc = raw_location.get("accuracy_m")
+                acc_str = f", precisión ≈{int(_acc)}m" if _acc else ""
+                brain_system = (
+                    brain_system
+                    + f"\n\n--- CONTEXTO EN VIVO (importante) ---\n"
+                    + f"El usuario compartió SU UBICACIÓN ACTUAL desde el dispositivo "
+                    + f"vía GPS del navegador: lat={_lat:.5f}, lng={_lng:.5f}{acc_str}.\n"
+                    + f"Esta información VIENE DIRECTAMENTE del GPS de su dispositivo "
+                    + f"en este momento. NO digas que no tenés acceso — SÍ lo tenés. "
+                    + f"Si te pregunta dónde está, mencioná las coordenadas o decile "
+                    + f"que no podés convertirlas a un nombre de lugar todavía."
+                )
+                log.info("brain: injecting location context (lat=%.5f, lng=%.5f)", _lat, _lng)
+            except (TypeError, ValueError):
+                pass
+        answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64)
     except Exception as e:  # noqa: BLE001
         log.exception("chat ask failed")
         try:

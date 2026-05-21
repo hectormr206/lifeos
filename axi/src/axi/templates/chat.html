@@ -94,8 +94,11 @@
                 </div>
               </template>
               <template x-if="m.status === 'error'">
-                <div class="text-xs mt-1" style="color: var(--red)"
-                     x-text="'⚠ error: ' + (m.errorMsg || '(desconocido)')"></div>
+                <div class="text-xs mt-1 flex items-center gap-2" style="color: var(--red)">
+                  <span x-text="'⚠ ' + (m.errorMsg || 'falló')"></span>
+                  <button class="btn" style="padding: 0.1rem 0.5rem; font-size: 0.75rem;"
+                          @click="retryQueued(m.id.slice(0, -1))">↻ Reintentar</button>
+                </div>
               </template>
             </div>
           </template>
@@ -108,9 +111,8 @@
         <div
           class="px-3 py-2 rounded-2xl text-sm muted pulse"
           style="background: var(--panel2); border: 1px solid var(--border);"
-        >
-          Axi escribiendo…
-        </div>
+          x-text="online ? 'Axi escribiendo…' : '⏳ Encolando — se enviará cuando vuelva la conexión'"
+        ></div>
       </div>
     </template>
     <template x-if="error">
@@ -146,13 +148,17 @@
   <div class="mt-2 panel p-2 md:p-3">
     <!-- Toolbar (mobile-first: wrap, big touch targets) -->
     <div class="flex flex-wrap gap-1 mb-2">
+      <!-- Webcam laptop + screenshot + voz a Whisper: TODOS requieren VPN
+           (la captura corre en la laptop o la transcripción usa el daemon).
+           Disabled cuando el dispositivo está offline. -->
       <button
         type="button"
         @click="captureCamera()"
-        :disabled="capturing || pending"
+        :disabled="capturing || pending || !online"
         class="btn"
         style="min-height: 2.5rem; min-width: 2.75rem;"
-        title="Foto webcam"
+        :title="online ? 'Foto webcam (requiere VPN)' : 'Foto webcam — sin conexión'"
+        :style="!online ? 'opacity: 0.4' : ''"
       >
         <span x-show="capturing !== 'camera'">📷</span>
         <span x-show="capturing === 'camera'" x-cloak>⏳</span>
@@ -160,10 +166,11 @@
       <button
         type="button"
         @click="captureScreen()"
-        :disabled="capturing || pending"
+        :disabled="capturing || pending || !online"
         class="btn"
         style="min-height: 2.5rem; min-width: 2.75rem;"
-        title="Captura de pantalla (laptop)"
+        :title="online ? 'Captura de pantalla (laptop)' : 'Captura de pantalla — sin conexión'"
+        :style="!online ? 'opacity: 0.4' : ''"
       >
         <span x-show="capturing !== 'screen'">🖥</span>
         <span x-show="capturing === 'screen'" x-cloak>⏳</span>
@@ -196,6 +203,8 @@
       >
         <span x-text="locationOn ? '📍' : '📵'"></span>
       </button>
+      <!-- Mic: graba con MediaRecorder local pero la transcripción la hace
+           Whisper en la laptop. Requiere VPN. -->
       <button
         type="button"
         @mousedown.prevent="startRecording()"
@@ -204,26 +213,27 @@
         @touchstart.prevent="startRecording()"
         @touchend.prevent="stopRecording()"
         @touchcancel="stopRecording()"
-        :disabled="pending || transcribing"
+        :disabled="pending || transcribing || !online"
         class="btn"
         :style="recording
           ? 'min-height: 2.5rem; min-width: 2.75rem; background: rgba(238,51,51,0.25); border-color: var(--red);'
-          : 'min-height: 2.5rem; min-width: 2.75rem;'"
-        :title="recording ? 'Soltá para transcribir' : 'Mantén presionado para grabar'"
+          : (!online ? 'min-height: 2.5rem; min-width: 2.75rem; opacity: 0.4' : 'min-height: 2.5rem; min-width: 2.75rem;')"
+        :title="!online ? 'Micrófono — sin conexión a Whisper' : (recording ? 'Soltá para transcribir' : 'Mantén presionado para grabar')"
       >
         <span x-show="!recording && !transcribing">🎤</span>
         <span x-show="recording" x-cloak>● REC</span>
         <span x-show="transcribing && !recording" x-cloak>⏳</span>
       </button>
+      <!-- TTS: Piper synth corre en laptop, requiere VPN. -->
       <button
         type="button"
         @click="toggleSpeak()"
-        :disabled="pending"
+        :disabled="pending || !online"
         class="btn"
         :style="speakOn
           ? 'min-height: 2.5rem; min-width: 2.75rem; background: rgba(102,204,255,0.2); border-color: var(--blue);'
-          : 'min-height: 2.5rem; min-width: 2.75rem;'"
-        :title="speakOn ? 'Voz activada — clic para silenciar' : 'Voz desactivada — clic para activar'"
+          : (!online ? 'min-height: 2.5rem; min-width: 2.75rem; opacity: 0.4' : 'min-height: 2.5rem; min-width: 2.75rem;')"
+        :title="!online ? 'Voz TTS — sin conexión a Piper' : (speakOn ? 'Voz activada — clic para silenciar' : 'Voz desactivada — clic para activar')"
       >
         <span x-text="speakOn ? '🔊' : '🔇'"></span>
       </button>
@@ -292,6 +302,10 @@ function chatApp() {
         this.locationOn = locStored === '1';
       } catch (e) { /* private mode etc. */ }
       await this.loadHistory();
+      // CRITICAL: restore any pending/error items from IDB queue as
+      // bubbles. If the user closed the app while messages were queued
+      // (or sync failed), they reappear here. Never silently lose data.
+      await this._restoreQueueBubbles();
       this.scrollToBottom();
       // Best-effort badge refresh on page load (foreground) so the icon
       // stays accurate even between push events.
@@ -365,6 +379,49 @@ function chatApp() {
         const all = await this._idbAll();
         this.queuedCount = all.filter(x => x.status === 'queued').length;
       } catch (e) { this.queuedCount = 0; }
+    },
+
+    async _restoreQueueBubbles() {
+      // Show any persisted-but-unsent messages as bubbles at the bottom
+      // of the conversation. Status reflects what happened to them:
+      //   'queued' → still waiting for sync
+      //   'error'  → permanent server reject; user can manually retry
+      try {
+        const all = await this._idbAll();
+        const sorted = all.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+        for (const item of sorted) {
+          // Don't add a bubble if one with this id is already in the
+          // local messages array (e.g. just got enqueued this session).
+          if (this.messages.find(m => m.id === item.id + 'u')) continue;
+          this.messages.push({
+            id: item.id + 'u',
+            role: 'user',
+            text: item.text || '(imagen)',
+            image_b64: item.image_b64 || null,
+            queued: true,
+            status: item.status,
+            errorMsg: item.error || null,
+          });
+        }
+        this.queuedCount = all.filter(x => x.status === 'queued').length;
+      } catch (e) { /* IDB unavailable — proceed without */ }
+    },
+
+    async retryQueued(tempId) {
+      // User-triggered retry from a bubble marked 'error'. Re-mark as
+      // 'queued' in IDB and register sync.
+      try {
+        const all = await this._idbAll();
+        const item = all.find(i => i.id === tempId);
+        if (!item) return;
+        await this._idbPut({ ...item, status: 'queued', error: null });
+        const bubble = this.messages.find(m => m.id === tempId + 'u');
+        if (bubble) { bubble.status = 'queued'; bubble.errorMsg = null; }
+        await this._refreshQueuedCount();
+        const reg = await navigator.serviceWorker.ready;
+        if ('sync' in reg) await reg.sync.register('chat-queue');
+        if (this.online) await this._tryDrainQueue();
+      } catch (e) { /* ignored */ }
     },
 
     async _enqueueChat(text, image_b64, location) {
