@@ -20,6 +20,14 @@ dependencies = [
     "python-multipart>=0.0.20",
     "jinja2>=3.1.6",
     "huggingface-hub>=0.24",
+    # Resemblyzer is the V0 diarization fallback (used when pyannote V2
+    # fails or isn't enabled). Must stay pinned so `uv pip install -e .`
+    # never silently drops the fallback path again.
+    "resemblyzer>=0.1.4",
+    # Speaker diarization V2 (P2.1). pyannote.audio 4.x renamed
+    # use_auth_token → token; diarize_v2.py handles both via signature
+    # introspection.
+    "pyannote.audio>=3.1",
 ]
 
 [build-system]
