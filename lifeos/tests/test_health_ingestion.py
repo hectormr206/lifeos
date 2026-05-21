@@ -225,3 +225,39 @@ def test_single_rm_metabolic_rate() -> None:
     assert h is not None
     assert h.data["type"] == "basal_metabolic_rate"
     assert h.data["value"] == 1500
+
+
+def test_natural_sleep_y_media() -> None:
+    """'8 y media' = 8:30. Should compute 5.5h not 5.0h."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health(
+        "Me dormí a las 3 de la mañana y desperté a las 8 y media de la mañana."
+    )
+    assert h is not None
+    assert h.data["value"] == 5.5
+    assert h.data["end_hour_24"] == 8
+    assert h.data["end_minute"] == 30
+
+
+def test_natural_sleep_y_cuarto() -> None:
+    """'11 y cuarto' = 11:15."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("Me dormí a las 11 y cuarto de la noche y desperté a las 7")
+    assert h is not None
+    assert h.data["start_minute"] == 15
+
+
+def test_body_composition_plausibility_rejects_extreme() -> None:
+    """A field value outside physiological range is DROPPED (whole entry
+    not rejected — other plausible fields are kept)."""
+    from lifeos.health.ingestion import parse_health
+    # weight 500 kg is implausible; muscle 30% is fine. The weight should
+    # drop, muscle kept. Since it's now only 1 field, _try_body_composition
+    # falls through and _try_vital's single-muscle parser catches it.
+    h = parse_health("musculo 30%, weight 500")
+    assert h is not None
+    # Either it's a body_composition WITHOUT weight, or fell to single muscle.
+    if h.data.get("type") == "body_composition":
+        assert "weight_kg" not in h.data
+    else:
+        assert h.data.get("type") == "muscle_pct"

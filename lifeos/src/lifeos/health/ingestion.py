@@ -118,28 +118,50 @@ _SP_HOUR_WORDS = {
 # "una" pulls double duty as the indefinite article ("una hora") and the
 # number 1. We only accept it in the clock context here.
 
-# Natural-language sleep: "me dormí (a/como a) las X (am|pm|de la noche/mañana)
-# ... desperté/me levanté/acabo de despertar (ahorita | a las Y)".
-# Captures the START hour as either a digit OR a Spanish number word
-# (una|dos|...|doce). END hour captured similarly or 'ahorita' = now.
+# Natural-language sleep with named groups for readability. Handles:
+#   me dormí (a/como a las) X (:MM | y media | y cuarto | y N)
+#       (de la noche/mañana/tarde/madrugada | am | pm | h)
+#   ... desperté/me levanté/acabo de despertar
+#   (ahorita | a las Y (:MM | y media | y cuarto | y N))
 _HOUR_WORD_ALT = "|".join(_SP_HOUR_WORDS.keys())
 _SLEEP_FROM_TO_RE = re.compile(
     r"\bme\s+dorm[íi]\s*"
-    r"(?:como\s+)?"                                 # "como a la una"
-    r"(?:a\s+)?"
-    r"(?:la\s+|las\s+)?"
-    rf"(\d{{1,2}}|{_HOUR_WORD_ALT})"                # group 1: start hour (digit OR word)
-    r"(?::(\d{2}))?\s*"                             # group 2: optional minutes
-    r"(?:de\s+la\s+(noche|ma[ñn]ana|tarde|madrugada)|am|pm|h)?"   # group 3: period
+    r"(?:como\s+)?(?:a\s+)?(?:la\s+|las\s+)?"
+    rf"(?P<start_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
+    r"(?:"
+    r"  :(?P<start_min>\d{2})"
+    r"  | \s+y\s+(?P<start_min_word>media|cuarto|\d{1,2})"
+    r")?\s*"
+    r"(?:de\s+la\s+(?P<period>noche|ma[ñn]ana|tarde|madrugada)|am|pm|h)?"
     r".{1,120}?"
     r"(?:desp[eé]rt[éo]|me\s+levant[éo]|acabo\s+de\s+(?:despertar|levantar))"
     r"(?:.{0,40}?"
-    r"(?:(ahorita|ya|reci[eé]n)"                    # group 4: "now" marker
-    r"|a\s+(?:la\s+|las\s+)?"
-    rf"(\d{{1,2}}|{_HOUR_WORD_ALT})"                # group 5: end hour
-    r"(?::(\d{2}))?))?",                            # group 6: end minutes
-    re.IGNORECASE | re.DOTALL,
+    r"(?:"
+    r"  (?P<now>ahorita|ya|reci[eé]n)"
+    r"  | a\s+(?:la\s+|las\s+)?"
+    rf"   (?P<end_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
+    r"  (?:"
+    r"    :(?P<end_min>\d{2})"
+    r"    | \s+y\s+(?P<end_min_word>media|cuarto|\d{1,2})"
+    r"  )?"
+    r"))?",
+    re.IGNORECASE | re.DOTALL | re.VERBOSE,
 )
+
+
+def _parse_minutes_word(tok: str | None) -> int:
+    """Convert 'media' → 30, 'cuarto' → 15, '20' → 20. Returns 0 on None."""
+    if not tok:
+        return 0
+    tok = tok.strip().lower()
+    if tok == "media":
+        return 30
+    if tok == "cuarto":
+        return 15
+    if tok.isdigit():
+        n = int(tok)
+        return n if 0 <= n <= 59 else 0
+    return 0
 
 
 def _parse_hour_token(tok: str) -> int | None:
@@ -215,6 +237,20 @@ _BODY_FIELD_PATTERNS = [
 ]
 
 
+# Plausibility ranges per body-composition metric. Used to reject obvious
+# mis-parses (e.g., "FAT 64" can't be 64% body fat — likely the user meant
+# something else or there's a typo). If a value falls outside, we DROP just
+# that field; we don't reject the whole entry.
+_BODY_FIELD_RANGES: dict[str, tuple[float, float]] = {
+    "visceral_fat": (1, 60),                  # Inbody-style integer 1-30 typical
+    "body_fat_pct": (1, 70),                  # %
+    "muscle_pct": (1, 70),                    # %
+    "basal_metabolic_rate": (600, 4000),      # kcal/day
+    "bmi": (10, 60),                          # kg/m²
+    "weight_kg": (25, 300),                   # kg
+}
+
+
 def _try_body_composition(text: str) -> HealthIntent | None:
     """Parse multi-field body composition messages like:
         'Musculo 34.5%, RM 1435, weight 64, FAC 18.7%, visceral FAC 8. BMI 25'
@@ -233,6 +269,11 @@ def _try_body_composition(text: str) -> HealthIntent | None:
             try:
                 v = float(m.group(1))
             except ValueError:
+                continue
+            # Plausibility check — drop the field if value is outside
+            # physiological range (likely a typo / mis-parse).
+            lo, hi = _BODY_FIELD_RANGES.get(name, (-1e9, 1e9))
+            if not (lo <= v <= hi):
                 continue
             fields[name] = v
             label = {
@@ -271,14 +312,17 @@ def _try_natural_sleep(text: str) -> HealthIntent | None:
     m = _SLEEP_FROM_TO_RE.search(text)
     if not m:
         return None
-    start_h = _parse_hour_token(m.group(1))
+    start_h = _parse_hour_token(m.group("start_h"))
     if start_h is None:
         return None
-    start_min = int(m.group(2)) if m.group(2) else 0
-    period = (m.group(3) or "").lower()       # "noche"|"mañana"|"tarde"|"madrugada"|""
-    end_phrase = (m.group(4) or "").lower()
-    end_h_token = m.group(5)
-    end_min_str = m.group(6)
+    # Minutes can come either as ':MM' digits or as 'y media|cuarto|N'.
+    start_min = int(m.group("start_min")) if m.group("start_min") else \
+                _parse_minutes_word(m.group("start_min_word"))
+    period = (m.group("period") or "").lower()
+    end_phrase = (m.group("now") or "").lower()
+    end_h_token = m.group("end_h")
+    end_min_str = m.group("end_min")
+    end_min_word = m.group("end_min_word")
 
     # Disambiguate AM/PM from the spoken period when possible.
     # "a la una de la noche/madrugada" → 1:00 AM
@@ -307,7 +351,9 @@ def _try_natural_sleep(text: str) -> HealthIntent | None:
         if eh_parsed is None:
             return None
         eh24 = eh_parsed
-        em = int(end_min_str) if end_min_str else 0
+        # End minutes can also come as digit OR "y media|cuarto|N".
+        em = (int(end_min_str) if end_min_str
+              else _parse_minutes_word(end_min_word))
         # Heuristic: if explicit end_hour < start_hour, assume next day.
         # If no period given for end, assume morning if eh24 ≤ 11.
     elif "ahorita" in end_phrase or "ya" in end_phrase or "recién" in end_phrase:
@@ -377,11 +423,14 @@ def _try_vital(text: str) -> HealthIntent | None:
     m = _WEIGHT_RE.search(text)
     if m:
         v = float(m.group(1))
-        return HealthIntent(
-            kind="vital",
-            title=f"peso {v} kg",
-            data={"type": "weight", "value": v, "unit": "kg"},
-        )
+        # Plausibility: 25-300 kg. Outside this is almost certainly not a
+        # body-weight value (e.g. someone writing 'weight 500' as a typo).
+        if 25 <= v <= 300:
+            return HealthIntent(
+                kind="vital",
+                title=f"peso {v} kg",
+                data={"type": "weight", "value": v, "unit": "kg"},
+            )
     m = _SLEEP_HOURS_RE.search(text)
     if m:
         v = float(m.group(1))
