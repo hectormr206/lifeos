@@ -1560,6 +1560,84 @@ def chat_page(request: Request):
 # ─── Nano-agent fallback (called from chat_ask when all regex miss) ────
 
 
+# Spanish relationship-role keywords → canonical person name + role label.
+# Used to resolve relationships interactions when the user said "mi mamá"
+# / "mi esposa" instead of a proper name. Each role gets ONE canonical
+# person record (created on first use, reused after).
+_ROLE_ALIASES: list[tuple[re.Pattern[str], str, str]] = [
+    # (regex pattern, canonical_name, role_label)
+    (re.compile(r"\bmi\s+(mam[áa]|madre)\b", re.IGNORECASE), "Mamá", "madre"),
+    (re.compile(r"\bmi\s+(pap[áa]|padre)\b", re.IGNORECASE), "Papá", "padre"),
+    (re.compile(r"\bmi\s+(esposa|mujer|se[ñn]ora|vieja)\b", re.IGNORECASE), "Esposa", "esposa"),
+    (re.compile(r"\bmi\s+(esposo|marido|viejo)\b", re.IGNORECASE), "Esposo", "esposo"),
+    (re.compile(r"\bmi\s+(hermana)\b", re.IGNORECASE), "Hermana", "hermana"),
+    (re.compile(r"\bmi\s+(hermano)\b", re.IGNORECASE), "Hermano", "hermano"),
+    (re.compile(r"\bmi\s+(hij[ao]s?)\b", re.IGNORECASE), "Hijo/a", "hijo"),
+    (re.compile(r"\bmi\s+(abuela)\b", re.IGNORECASE), "Abuela", "abuela"),
+    (re.compile(r"\bmi\s+(abuelo)\b", re.IGNORECASE), "Abuelo", "abuelo"),
+    (re.compile(r"\bmi\s+(suegra)\b", re.IGNORECASE), "Suegra", "suegra"),
+    (re.compile(r"\bmi\s+(suegro)\b", re.IGNORECASE), "Suegro", "suegro"),
+    (re.compile(r"\bmi\s+(t[ií]a)\b", re.IGNORECASE), "Tía", "tía"),
+    (re.compile(r"\bmi\s+(t[ií]o)\b", re.IGNORECASE), "Tío", "tío"),
+    (re.compile(r"\bmi\s+(prim[ao])\b", re.IGNORECASE), "Primo/a", "primo"),
+    (re.compile(r"\bmi\s+(jef[ea])\b", re.IGNORECASE), "Jefe/a", "jefe"),
+    (re.compile(r"\bmi\s+(novi[ao])\b", re.IGNORECASE), "Novio/a", "pareja"),
+]
+
+
+def _strip_role_pseudo_names(names: list[str]) -> list[str]:
+    """Defense-in-depth filter: the nano sometimes captures 'mi mamá',
+    'mi esposa' as a person name despite the prompt rule. Strip those
+    out so the wire can route to the role-alias resolver instead of
+    creating a person record literally named 'mi esposa'."""
+    KINSHIP = {
+        "mamá", "mama", "madre", "papá", "papa", "padre",
+        "esposa", "esposo", "mujer", "marido", "vieja", "viejo",
+        "hermana", "hermano", "hija", "hijo", "abuela", "abuelo",
+        "suegra", "suegro", "tía", "tia", "tío", "tio",
+        "prima", "primo", "novia", "novio", "señora", "señor",
+        "jefa", "jefe", "yo", "mí", "mi",
+    }
+    out: list[str] = []
+    for n in names:
+        n_stripped = (n or "").strip()
+        if not n_stripped:
+            continue
+        n_lower = n_stripped.lower()
+        if n_lower.startswith("mi "):
+            continue
+        if n_lower in KINSHIP:
+            continue
+        # Must start with capital letter (proper noun).
+        if not n_stripped[0].isupper():
+            continue
+        out.append(n_stripped)
+    return out
+
+
+def _resolve_role_alias(text: str):
+    """When the user said 'mi mamá', 'mi esposa', etc. instead of a proper
+    name, we anchor the interaction to a CANONICAL person record. Returns
+    the Person if a role is detected (and find_or_create succeeds), or
+    None if no role keyword matches.
+
+    Convention: ONE canonical record per role ("Mamá", "Papá", etc.). The
+    user can later rename it (in /relationships) to the real name without
+    affecting the role lookup — find_by_name resolves on the actual name.
+    """
+    for pat, canonical_name, role_label in _ROLE_ALIASES:
+        if pat.search(text):
+            try:
+                existing = rel_people.find_by_name(canonical_name)
+                if existing:
+                    return existing
+                return rel_people.create(name=canonical_name, role=role_label)
+            except Exception:  # noqa: BLE001
+                log.exception("role-alias resolution failed for %s", canonical_name)
+                return None
+    return None
+
+
 def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
     """Last resort before the main brain: ask the nano entity extractor
     what this message is about. If it returns a structured result with a
@@ -1723,17 +1801,7 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
 
         # ─── relationships ──────────────────────────────────────────
         if domain == "relationships":
-            from lifeos.relationships import people as _ppl
             from lifeos.relationships import interactions as _int
-            if not result.people:
-                return None  # rule: people-less relationship has no person to attach to
-            name = result.people[0]
-            # Find or create the person.
-            existing = _ppl.find_by_name(name)
-            if existing:
-                person = existing
-            else:
-                person = _ppl.create(name=name, source="chat")
             kind_map = {"conversation": "conversation",
                         "call": "call",
                         "meeting": "meeting",
@@ -1741,20 +1809,77 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
                         "shared_meal": "shared_meal",
                         "milestone": "milestone",
                         None: "conversation"}
+            kind = kind_map.get(result.kind, "conversation")
+            person = None
+            # Filter out role pseudo-names the nano may have leaked into
+            # `people` ('mi esposa', 'mi papá', etc.). Then:
+            #   Path 1: explicit proper name remains → use it.
+            #   Path 2: nothing left → fall to role-alias resolver.
+            real_names = _strip_role_pseudo_names(result.people)
+            if real_names:
+                name = real_names[0]
+                existing = rel_people.find_by_name(name)
+                person = existing or rel_people.create(name=name)
+            else:
+                person = _resolve_role_alias(text)
+            if person is None:
+                # No anchor we can attach to. Better to fall through to
+                # brain than create an orphan "anonymous" interaction.
+                return None
             inter = _int.create(
                 person_id=person.id,
-                kind=kind_map.get(result.kind, "conversation"),
-                title=(result.title or f"interacción con {name}"),
+                kind=kind,
+                title=(result.title or f"interacción con {person.name}"),
                 when=now_utc, body=text,
                 source="chat", confidence=result.confidence,
             )
             return {
                 "domain": "relationships",
-                "answer": f'Anotada interacción (nano): {kind_map.get(result.kind, "conversación")} con {name}.',
+                "answer": f'Anotada interacción (nano): {kind} con {person.name}.',
                 "entry_ids": [inter.id, person.id],
             }
 
-        # health/spirituality currently not wired — fall through.
+        # ─── health (conversacional, regex prioritizes structured) ──
+        if domain == "health":
+            # The regex parser handles structured cases (presión X/Y, RM N,
+            # IMC N, dormí Xh, etc.) — anything that gets here is the
+            # ambiguous tail. We persist a kind="note" entry with body=text
+            # so it's at least visible in /health. The user can edit later.
+            from lifeos.health import entries as _he
+            kind_map = {"symptom": "symptom", "vital": "vital",
+                        "medication": "medication", "condition": "condition",
+                        "note": "note", None: "note"}
+            entry = _he.create(
+                kind=kind_map.get(result.kind, "note"),
+                title=(result.title or text[:80]),
+                when=now_utc, body=text,
+                tags=extra_tags or None,
+                source="chat", confidence=result.confidence,
+            )
+            return {
+                "domain": "health",
+                "answer": f'Anotado en salud (nano, nota): "{result.title or text[:60]}".',
+                "entry_ids": [entry.id],
+            }
+
+        # ─── spirituality (low frequency; minimal wire) ─────────────
+        if domain == "spirituality":
+            from lifeos.spirituality import entries as _se
+            kind_map = {"gratitude": "gratitude", "reflection": "reflection",
+                        "prayer": "prayer", "meditation": "meditation",
+                        "retro": "retro", None: "reflection"}
+            entry = _se.create(
+                kind=kind_map.get(result.kind, "reflection"),
+                title=(result.title or text[:80]),
+                when=now_utc, body=text,
+                source="chat", confidence=result.confidence,
+            )
+            return {
+                "domain": "spirituality",
+                "answer": f'Anotado en espiritualidad (nano): "{result.title or text[:60]}".',
+                "entry_ids": [entry.id],
+            }
+
         return None
 
     except Exception as e:  # noqa: BLE001
