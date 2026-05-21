@@ -88,43 +88,71 @@
        axiAwaitReachable() before deciding to fetch data. When false,
        skip the fetch and render an offline placeholder instead. -->
   <script>
+    // ─── Reachability probe + global fetch gate ─────────────────────
+    //
+    // Three jobs:
+    //
+    //   1. Probe the backend at page load to set window.AXI_REACHABLE.
+    //   2. Monkey-patch window.fetch so EVERY backend call is gated:
+    //      - while AXI_REACHABLE === false → fails immediately with
+    //        TypeError (no waiting for TCP timeout — page renders
+    //        empty state instantly)
+    //      - while AXI_REACHABLE === null  → caller awaits the probe
+    //      - while AXI_REACHABLE === true  → fetch goes through; if
+    //        the network fails, a re-probe fires automatically so the
+    //        banner reflects reality within a couple seconds
+    //   3. Periodic re-probe: every 30s when reachable, every 5s when
+    //      not — so VPN drops or reconnects mid-session are detected
+    //      without the user having to navigate.
+    //
+    // This is a single-source-of-truth pattern: pages don't need to
+    // care about reachability themselves. They just call fetch() like
+    // normal and either it returns or it throws fast.
+
     window.AXI_REACHABLE = null;
-    (function probeBackend() {
-      // Fast path: if the device itself reports offline, skip probe.
+    const PROBE_URL = '/api/badge/count';
+    const _originalFetch = window.fetch.bind(window);
+    let _probeInFlight = false;
+
+    function _dispatchReachability(state) {
+      if (state === window.AXI_REACHABLE) return;  // no change → no dispatch
+      window.AXI_REACHABLE = state;
+      window.dispatchEvent(new CustomEvent('axi-reachability', { detail: { reachable: state } }));
+    }
+
+    function _probe() {
+      if (_probeInFlight) return;
       if (navigator.onLine === false) {
-        window.AXI_REACHABLE = false;
-        document.addEventListener('DOMContentLoaded', () => {
-          window.dispatchEvent(new CustomEvent('axi-reachability', { detail: { reachable: false } }));
-        });
+        _dispatchReachability(false);
         return;
       }
+      _probeInFlight = true;
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 2000);
-      // /api/badge/count is intentionally tiny and side-effect free.
-      fetch('/api/badge/count', { signal: ctrl.signal, cache: 'no-store' })
-        .then(r => {
-          clearTimeout(t);
-          window.AXI_REACHABLE = r.ok;
-          window.dispatchEvent(new CustomEvent('axi-reachability', { detail: { reachable: r.ok } }));
-        })
-        .catch(() => {
-          clearTimeout(t);
-          window.AXI_REACHABLE = false;
-          window.dispatchEvent(new CustomEvent('axi-reachability', { detail: { reachable: false } }));
-        });
-      // Re-probe when 'online' fires (e.g. VPN reconnected mid-session).
-      window.addEventListener('online', () => {
-        const ctrl2 = new AbortController();
-        const t2 = setTimeout(() => ctrl2.abort(), 2000);
-        fetch('/api/badge/count', { signal: ctrl2.signal, cache: 'no-store' })
-          .then(r => {
-            clearTimeout(t2);
-            window.AXI_REACHABLE = r.ok;
-            window.dispatchEvent(new CustomEvent('axi-reachability', { detail: { reachable: r.ok } }));
-          })
-          .catch(() => {});  // stay offline
-      });
-    })();
+      _originalFetch(PROBE_URL, { signal: ctrl.signal, cache: 'no-store' })
+        .then(r => { clearTimeout(t); _probeInFlight = false; _dispatchReachability(!!r.ok); })
+        .catch(() => { clearTimeout(t); _probeInFlight = false; _dispatchReachability(false); });
+    }
+
+    // Initial probe at page load.
+    _probe();
+
+    // Re-probe on browser-level connectivity changes.
+    window.addEventListener('online',  () => _probe());
+    window.addEventListener('offline', () => _dispatchReachability(false));
+
+    // Periodic re-probe — frequency depends on current state:
+    //   reachable=true  → 30s (low overhead while everything's fine)
+    //   reachable=false → 5s  (snappy detection when VPN comes back)
+    let _pollInterval = null;
+    function _scheduleNext() {
+      if (_pollInterval) clearTimeout(_pollInterval);
+      const delay = (window.AXI_REACHABLE === false) ? 5000 : 30000;
+      _pollInterval = setTimeout(() => { _probe(); _scheduleNext(); }, delay);
+    }
+    window.addEventListener('axi-reachability', _scheduleNext);
+    _scheduleNext();
+
     window.axiAwaitReachable = function() {
       if (window.AXI_REACHABLE !== null) return Promise.resolve(window.AXI_REACHABLE);
       return new Promise(resolve => {
@@ -132,16 +160,50 @@
       });
     };
 
+    // ─── Patched fetch: fail-fast gate + auto re-probe on failure ──
+    //
+    // The patched fetch decides what to do based on AXI_REACHABLE:
+    //   null  → wait for the in-flight initial probe to resolve, then decide
+    //   true  → forward to native fetch. If it fails with a network error,
+    //           trigger an immediate re-probe (so the banner reflects the
+    //           drop within ~2s instead of waiting for the next poll).
+    //   false → reject immediately with TypeError("AXI: backend unreachable")
+    //           so the page renders its empty/offline state instantly
+    //           instead of hanging for a TCP timeout (~1-2 min).
+    //
+    // Exempt URLs (never gated): cross-origin, the probe itself, and
+    // /share (PWA share-target — must complete the redirect even when
+    // the probe hasn't run yet).
+    window.fetch = async function(input, init) {
+      const url = (typeof input === 'string') ? input : input.url;
+      const isBackend = url && (url.startsWith('/') || url.startsWith(window.location.origin));
+      const isExempt = (url === PROBE_URL) || url.startsWith('/share');
+      if (!isBackend || isExempt) {
+        return _originalFetch(input, init);
+      }
+      if (window.AXI_REACHABLE === null) {
+        await window.axiAwaitReachable();
+      }
+      if (window.AXI_REACHABLE === false) {
+        throw new TypeError('AXI: backend unreachable');
+      }
+      try {
+        return await _originalFetch(input, init);
+      } catch (e) {
+        // Network failure — possibly VPN just dropped. Trigger a re-probe
+        // so the banner + global state updates quickly.
+        if (e instanceof TypeError) _probe();
+        throw e;
+      }
+    };
+
     // Auto-reload when connection comes back, EXCEPT for pages that handle
     // their own reconnect (set window.AXI_HANDLES_RECONNECT = true).
-    // Chat and conversations refetch their own data; other pages do a full
-    // reload so they pick up fresh data automatically.
     (function() {
       let wasOffline = navigator.onLine === false || window.AXI_REACHABLE === false;
       window.addEventListener('axi-reachability', (e) => {
         if (e.detail.reachable === true && wasOffline) {
-          if (window.AXI_HANDLES_RECONNECT) return;  // page handles its own
-          // Slight delay so the user sees the "Conexión restaurada" toast.
+          if (window.AXI_HANDLES_RECONNECT) return;
           setTimeout(() => window.location.reload(), 1500);
         }
         if (e.detail.reachable === false) wasOffline = true;

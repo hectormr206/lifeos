@@ -315,20 +315,29 @@ function chatApp() {
         if (!document.hidden) this.refreshBadge();
       });
 
-      // Offline detection + sync wiring.
-      this.online = navigator.onLine !== false;
-      window.addEventListener('online', () => { this.online = true; this._tryDrainQueue(); });
-      window.addEventListener('offline', () => { this.online = false; });
+      // online flag reflects "can I reach the backend right now". Combines
+      // navigator.onLine (device has any network) with AXI_REACHABLE
+      // (laptop is reachable through VPN). Both must be true.
+      this.online = navigator.onLine !== false && window.AXI_REACHABLE !== false;
+      const _syncOnline = () => {
+        this.online = navigator.onLine !== false && window.AXI_REACHABLE !== false;
+        if (this.online) this._tryDrainQueue();
+      };
+      window.addEventListener('online', _syncOnline);
+      window.addEventListener('offline', _syncOnline);
+
       // Mark that chat handles its own reconnect — global handler in
-      // _base.html will skip the auto-reload for this page so the user
-      // doesn't lose what they're typing.
+      // _base.html will skip the auto-reload so the user doesn't lose
+      // text they're composing.
       window.AXI_HANDLES_RECONNECT = true;
-      // Re-load history when reachability transitions to true (VPN came
-      // back mid-session) — without this, the chat would stay empty
-      // until the user manually reloaded the page.
+      // Re-load history every time reachability becomes true, and update
+      // the online flag. Without this, the chat would stay frozen as
+      // "Sin conexión" until the user manually reloaded.
       window.addEventListener('axi-reachability', (e) => {
-        if (e.detail.reachable === true && this.messages.length === 0) {
+        this.online = navigator.onLine !== false && e.detail.reachable !== false;
+        if (e.detail.reachable === true) {
           this.loadHistory().then(() => this._restoreQueueBubbles());
+          this._tryDrainQueue();
         }
       });
       await this._refreshQueuedCount();
