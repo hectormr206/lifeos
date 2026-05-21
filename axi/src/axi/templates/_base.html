@@ -316,24 +316,40 @@
   </header>
 
   <!-- Global offline banner — visible on EVERY page when the device has
-       no network. Explains why API calls / data loading will fail. -->
+       no network. Explains why API calls / data loading will fail.
+       z-30 (below header z-40 and drawer z-50) so the hamburger menu
+       items aren't obstructed when open. The user can dismiss for the
+       current tab session (sessionStorage); banner reappears next visit
+       if still offline. -->
   <div x-data="{ online: navigator.onLine !== false,
+                 dismissed: sessionStorage.getItem('axi_offline_banner_dismissed') === '1',
                  init() {
-                   window.addEventListener('online', () => this.online = true);
-                   window.addEventListener('offline', () => this.online = false);
+                   window.addEventListener('online', () => { this.online = true; });
+                   window.addEventListener('offline', () => {
+                     this.online = false;
+                     this.dismissed = false;          // re-show when offline event fires
+                     sessionStorage.removeItem('axi_offline_banner_dismissed');
+                   });
+                 },
+                 dismiss() {
+                   this.dismissed = true;
+                   sessionStorage.setItem('axi_offline_banner_dismissed', '1');
                  } }"
        x-init="init()"
-       x-show="!online" x-cloak
+       x-show="!online && !dismissed" x-cloak
        class="max-w-7xl mx-auto px-3 md:px-6"
-       style="position: sticky; top: 4rem; z-index: 40;">
-    <div class="panel p-3 text-sm flex items-center gap-3"
+       style="position: sticky; top: 4rem; z-index: 30;">
+    <div class="panel p-3 text-sm flex items-center gap-2"
          style="background: rgba(255, 200, 0, 0.10); border-color: var(--amber);">
-      <span style="font-size: 1.5rem">📴</span>
-      <div class="flex-1">
+      <span style="font-size: 1.25rem">📴</span>
+      <div class="flex-1 min-w-0">
         <strong>Sin conexión</strong> — los datos del servidor no van a cargar.
-        <span class="muted">El chat sigue funcionando: lo que escribas se encola y se envía cuando vuelva la VPN.</span>
+        <span class="muted">El chat sigue: se encola y se envía al reconectar.</span>
       </div>
-      <button class="btn text-xs" @click="location.reload()" title="Reintentar">↻</button>
+      <button class="btn text-xs" @click="location.reload()"
+              style="padding: 0.25rem 0.5rem;" title="Reintentar">↻</button>
+      <button class="btn text-xs" @click="dismiss()"
+              style="padding: 0.25rem 0.5rem;" title="Cerrar (vuelve a aparecer si se va la conexión otra vez)">✕</button>
     </div>
   </div>
 
