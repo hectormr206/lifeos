@@ -183,12 +183,21 @@ def _run_pyannote(audio: np.ndarray, sr: int, token: str, device: str) -> list[d
     — saves us a round-trip through a temporary WAV.
     """
     # Lazy imports: we MUST tolerate pyannote being broken at module import time.
+    import inspect  # noqa: PLC0415
     import torch  # noqa: PLC0415
     from pyannote.audio import Pipeline  # noqa: PLC0415
 
+    # pyannote.audio renamed the auth kwarg between 3.x and 4.x:
+    #   3.x:  use_auth_token=
+    #   4.x:  token=
+    # CachyOS pulled 4.0.4 with the new name and the old call silently
+    # raised TypeError, killing diarization without surfacing. Inspect
+    # the signature once and pass the right kwarg.
+    sig = inspect.signature(Pipeline.from_pretrained)
+    token_kwarg = "token" if "token" in sig.parameters else "use_auth_token"
     pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
-        use_auth_token=token,
+        **{token_kwarg: token},
     )
     if pipeline is None:
         raise RuntimeError(
