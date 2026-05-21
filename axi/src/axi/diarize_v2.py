@@ -216,7 +216,13 @@ def _run_pyannote(audio: np.ndarray, sr: int, token: str, device: str) -> list[d
         pipeline.to(torch.device("cpu"))
 
     waveform = torch.from_numpy(audio).unsqueeze(0)  # [1, N]
-    diarization = pipeline({"waveform": waveform, "sample_rate": sr})
+    result = pipeline({"waveform": waveform, "sample_rate": sr})
+
+    # pyannote.audio 3.x returned a pyannote.core.Annotation directly.
+    # 4.x wraps it inside DiarizeOutput as `.speaker_diarization` (plus
+    # adds `speaker_embeddings`, `exclusive_speaker_diarization`).
+    # Detect either shape so the same code works on both.
+    diarization = getattr(result, "speaker_diarization", result)
 
     turns: list[dict] = []
     for turn, _track, label in diarization.itertracks(yield_label=True):
