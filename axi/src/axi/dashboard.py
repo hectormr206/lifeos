@@ -1557,6 +1557,211 @@ def chat_page(request: Request):
     return templates.TemplateResponse(request, "chat.html", {})
 
 
+# ─── Nano-agent fallback (called from chat_ask when all regex miss) ────
+
+
+def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
+    """Last resort before the main brain: ask the nano entity extractor
+    what this message is about. If it returns a structured result with a
+    known domain, persist it to the corresponding store and build a chat
+    response. Returns None on any failure → caller falls through to brain.
+
+    Cost: ~1.5-2.5s on CPU. Worth it because the brain costs 2-5s AND
+    can't actually persist anything.
+    """
+    try:
+        from lifeos.agents import extractor as nano_extractor
+    except Exception as e:  # noqa: BLE001
+        log.warning("nano extractor import failed: %s", e)
+        return None
+
+    try:
+        result = nano_extractor.extract(text, timeout_s=5.0)
+    except Exception as e:  # noqa: BLE001
+        log.warning("nano extractor crashed: %s", e)
+        return None
+    if result is None or not result.domain:
+        return None
+
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    domain = result.domain
+    extra_tags = [location_tag] if location_tag else []
+
+    try:
+        # ─── finance ────────────────────────────────────────────────
+        if domain == "finance":
+            from lifeos.finance import entries as _fe
+            from lifeos.finance.ingestion import FinanceIntent  # for tags shape
+            merchant = result.merchant
+            currency = result.currency or "MXN"
+            # If we have ≥2 itemized products, store ONE entry per item so
+            # the user can later filter/aggregate by category.
+            entry_ids: list[str] = []
+            kind_map = {"expense": "expense", "income": "income",
+                        "savings": "savings", "debt_payment": "debt_payment",
+                        "big_purchase": "big_purchase", None: "expense"}
+            base_kind = kind_map.get(result.kind, "expense")
+            if result.items and len(result.items) >= 2:
+                for it in result.items:
+                    if it.get("amount") is None:
+                        continue
+                    cat = it.get("category")
+                    tags = list(extra_tags)
+                    if merchant:
+                        tags.append(f"merchant:{merchant}")
+                    fe = _fe.create(
+                        kind=base_kind, title=str(it["name"]),
+                        amount=float(it["amount"]),
+                        when=now_utc, currency=currency,
+                        category=cat, merchant=merchant, body=text,
+                        tags=tags or None, source="chat",
+                        confidence=result.confidence,
+                    )
+                    entry_ids.append(fe.id)
+                title_human = f"{len(entry_ids)} ítems en {merchant or 'compra'}"
+            elif result.amount is not None:
+                # Single entry with total amount.
+                fe = _fe.create(
+                    kind=base_kind, title=(result.title or "gasto"),
+                    amount=float(result.amount),
+                    when=now_utc, currency=currency,
+                    merchant=merchant, body=text,
+                    tags=extra_tags or None, source="chat",
+                    confidence=result.confidence,
+                )
+                entry_ids.append(fe.id)
+                title_human = f"{result.amount:g} {currency} en {merchant or (result.title or 'gasto')}"
+            else:
+                # Finance domain but no amount detected — bail.
+                return None
+            return {
+                "domain": "finance",
+                "answer": f'Anotado en finanzas (nano): {title_human}. {len(entry_ids)} entry(s).',
+                "entry_ids": entry_ids,
+            }
+
+        # ─── exercise ───────────────────────────────────────────────
+        if domain == "exercise":
+            from lifeos.exercise import sessions as _es
+            if not result.duration_minutes:
+                return None  # we need a duration to log a session
+            kind_map = {"walk": "walk", "run": "run", "cardio": "cardio",
+                        "strength": "strength", "yoga": "yoga",
+                        "sports": "sports", None: "other"}
+            sess = _es.create(
+                kind=kind_map.get(result.kind, "other"),
+                title=(result.title or "sesión de ejercicio"),
+                duration_minutes=int(result.duration_minutes),
+                when=now_utc, body=text,
+                tags=extra_tags or None, source="chat",
+                confidence=result.confidence,
+            )
+            return {
+                "domain": "exercise",
+                "answer": f'Anotada sesión (nano): {result.title or "ejercicio"} — {int(result.duration_minutes)} min.',
+                "entry_ids": [sess.id],
+            }
+
+        # ─── learning ───────────────────────────────────────────────
+        if domain == "learning":
+            from lifeos.learning import entries as _le
+            kind_map = {"book": "book", "course": "course",
+                        "article": "article", "idea": "idea",
+                        "study": "research_question",
+                        "research_question": "research_question",
+                        None: "idea"}
+            author = result.people[0] if result.people else None
+            le = _le.create(
+                kind=kind_map.get(result.kind, "idea"),
+                title=(result.title or text[:80]),
+                when=now_utc, body=text, author=author,
+                source="chat", confidence=result.confidence,
+            )
+            return {
+                "domain": "learning",
+                "answer": f'Anotado en aprendizaje (nano): "{result.title or text[:60]}".',
+                "entry_ids": [le.id],
+            }
+
+        # ─── events ─────────────────────────────────────────────────
+        if domain == "events":
+            from lifeos.events import entries as _ev
+            kind_map = {"travel": "travel", "party": "party",
+                        "milestone": "milestone", "anniversary": "anniversary",
+                        "birthday": "birthday", None: "milestone"}
+            # Parse the first date_text if any. dateparser handles "el 15 de
+            # junio de 2018", "mañana", "el próximo viernes", etc.
+            when = now_utc
+            if result.dates_text:
+                try:
+                    import dateparser
+                    parsed = dateparser.parse(
+                        result.dates_text[0],
+                        languages=["es"],
+                        settings={"TIMEZONE": "America/Mexico_City",
+                                  "RETURN_AS_TIMEZONE_AWARE": True,
+                                  "PREFER_DATES_FROM": "current_period"},
+                    )
+                    if parsed:
+                        when = parsed
+                except Exception:  # noqa: BLE001
+                    pass
+            ev = _ev.create(
+                kind=kind_map.get(result.kind, "milestone"),
+                title=(result.title or text[:80]),
+                when=when,
+                people=result.people or None,
+                body=text,
+                tags=extra_tags or None,
+                source="chat", confidence=result.confidence,
+            )
+            return {
+                "domain": "events",
+                "answer": f'Anotado evento (nano): "{result.title or text[:60]}".',
+                "entry_ids": [ev.id],
+            }
+
+        # ─── relationships ──────────────────────────────────────────
+        if domain == "relationships":
+            from lifeos.relationships import people as _ppl
+            from lifeos.relationships import interactions as _int
+            if not result.people:
+                return None  # rule: people-less relationship has no person to attach to
+            name = result.people[0]
+            # Find or create the person.
+            existing = _ppl.find_by_name(name)
+            if existing:
+                person = existing
+            else:
+                person = _ppl.create(name=name, source="chat")
+            kind_map = {"conversation": "conversation",
+                        "call": "call",
+                        "meeting": "meeting",
+                        "conflict": "conflict",
+                        "shared_meal": "shared_meal",
+                        "milestone": "milestone",
+                        None: "conversation"}
+            inter = _int.create(
+                person_id=person.id,
+                kind=kind_map.get(result.kind, "conversation"),
+                title=(result.title or f"interacción con {name}"),
+                when=now_utc, body=text,
+                source="chat", confidence=result.confidence,
+            )
+            return {
+                "domain": "relationships",
+                "answer": f'Anotada interacción (nano): {kind_map.get(result.kind, "conversación")} con {name}.',
+                "entry_ids": [inter.id, person.id],
+            }
+
+        # health/spirituality currently not wired — fall through.
+        return None
+
+    except Exception as e:  # noqa: BLE001
+        log.exception("nano-extract persistence failed for domain=%s: %s", domain, e)
+        return None
+
+
 @app.post("/api/chat/ask")
 async def api_chat_ask(request: Request):
     if not bool(config.get("chat_enabled", True)):
@@ -2101,6 +2306,32 @@ async def api_chat_ask(request: Request):
                         "reminder_id": rem.id}
             except Exception as e:  # noqa: BLE001
                 log.warning("lifeos reminder fast-path failed: %s — falling back to brain", e)
+
+    # ─── Nano-agent fallback (BEFORE the main brain) ────────────────
+    # All regex parsers missed. Try the entity extractor (Qwen3.5-0.8B
+    # on port 8090). If it identifies a domain and we successfully
+    # persist, return that. Otherwise fall through to the main brain.
+    if not image_b64:
+        try:
+            nano_out = _try_nano_extract(text, location_tag)
+        except Exception as e:  # noqa: BLE001
+            log.exception("nano-extract wrapper failed: %s", e)
+            nano_out = None
+        if nano_out is not None:
+            latency_ms = round((time.monotonic() - start) * 1000)
+            try:
+                mem.add(text, nano_out["answer"], has_screenshot=False)
+            except Exception as e:  # noqa: BLE001
+                log.warning("chat memory.add failed: %s", e)
+            stage_holder[0] = f"nano_{nano_out['domain']}"
+            _record_metric()
+            return {
+                "answer": nano_out["answer"],
+                "latency_ms": latency_ms,
+                "spoke": False, "audio_b64": None,
+                "nano_domain": nano_out["domain"],
+                "entry_ids": nano_out.get("entry_ids", []),
+            }
 
     try:
         # If the PWA captured GPS at send time, inject it into the system

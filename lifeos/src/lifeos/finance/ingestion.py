@@ -249,9 +249,25 @@ def _try_savings(text: str) -> FinanceIntent | None:
 _PARSERS = (_try_savings, _try_purchase, _try_outflow, _try_income)
 
 
+# Heuristic: a message that contains a colon followed by multiple
+# "<NUMBER> <word>" pairs (e.g., "Aurrera: 320 detergente, 450 papel,
+# 500 cable") looks like an itemized ticket. The single-entry regex
+# captures the TOTAL but loses the per-item breakdown. We DECLINE such
+# messages so the chat_ask flow falls through to the nano-agent
+# extractor, which can split into individual entries.
+_ITEMIZED_LIST_RE = re.compile(
+    r":\s*\d+\s*\w+\s*[,;].*?\d+\s*\w+",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def parse_finance(text: str) -> FinanceIntent | None:
     """Try to extract a finance entry from `text`. Returns None on no match."""
     if not text or not isinstance(text, str):
+        return None
+    # Decline itemized tickets — those go to the nano extractor for
+    # per-item entries with sub-categories.
+    if _ITEMIZED_LIST_RE.search(text):
         return None
     for parser in _PARSERS:
         try:
