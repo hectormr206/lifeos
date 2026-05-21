@@ -20,8 +20,19 @@
   style="height: calc(100dvh - 9rem); min-height: 24rem;"
 >
   <!-- Header strip -->
-  <div class="flex items-baseline justify-between mb-3">
-    <div class="font-semibold text-base md:text-lg">💬 Chat con Axi</div>
+  <div class="flex items-baseline justify-between mb-3 gap-2 flex-wrap">
+    <div class="font-semibold text-base md:text-lg flex items-center gap-2">
+      💬 Chat con Axi
+      <!-- Online/offline indicator + queue count when sin VPN. -->
+      <span x-show="!online" x-cloak
+            class="text-xs px-2 py-0.5 rounded-full panel2"
+            style="color: var(--amber); border-color: var(--amber);"
+            x-text="queuedCount > 0 ? '📴 sin conexión · ' + queuedCount + ' encolado(s)' : '📴 sin conexión'"></span>
+      <span x-show="online && queuedCount > 0" x-cloak
+            class="text-xs px-2 py-0.5 rounded-full panel2"
+            style="color: var(--blue); border-color: var(--blue);"
+            x-text="'⏳ sincronizando ' + queuedCount"></span>
+    </div>
     <div class="muted text-xs">
       <span x-show="lastLatencyMs !== null" x-cloak>
         última respuesta: <span x-text="lastLatencyMs"></span> ms
@@ -75,7 +86,18 @@
             </div>
           </template>
           <template x-if="m.role === 'user'">
-            <div style="white-space: pre-wrap" x-text="m.text"></div>
+            <div>
+              <div style="white-space: pre-wrap" x-text="m.text"></div>
+              <template x-if="m.status === 'queued'">
+                <div class="text-xs muted mt-1" style="color: var(--amber)">
+                  ⏳ encolado — se envía cuando vuelva la conexión
+                </div>
+              </template>
+              <template x-if="m.status === 'error'">
+                <div class="text-xs mt-1" style="color: var(--red)"
+                     x-text="'⚠ error: ' + (m.errorMsg || '(desconocido)')"></div>
+              </template>
+            </div>
           </template>
         </div>
       </div>
@@ -255,6 +277,13 @@ function chatApp() {
     _audioStream: null,
     _audioMime: 'audio/webm',
 
+    // Offline state
+    online: true,            // navigator.onLine cached
+    queuedCount: 0,          // how many messages waiting in IDB
+    _idbName: 'axi-offline',
+    _idbVersion: 1,
+    _queueStore: 'chat_queue',
+
     async init() {
       try {
         const stored = localStorage.getItem('axi_chat_speak');
@@ -271,6 +300,123 @@ function chatApp() {
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) this.refreshBadge();
       });
+
+      // Offline detection + sync wiring.
+      this.online = navigator.onLine !== false;
+      window.addEventListener('online', () => { this.online = true; this._tryDrainQueue(); });
+      window.addEventListener('offline', () => { this.online = false; });
+      await this._refreshQueuedCount();
+
+      // Listen for SW messages (sync results).
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          const m = event.data || {};
+          if (m.type === 'sync-sent') {
+            // Replace pending bubble's text with the now-confirmed user msg
+            // and append Axi's response.
+            this._onSyncSent(m.tempId, m.answer, m.latency_ms);
+          } else if (m.type === 'sync-error') {
+            this._onSyncError(m.tempId, m.error);
+          } else if (m.type === 'sync-retry') {
+            // Still offline — leave bubble in queued state.
+          }
+        });
+      }
+    },
+
+    // ─── IndexedDB helpers ────────────────────────────────────────────
+
+    _openIdb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(this._idbName, this._idbVersion);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(this._queueStore)) {
+            db.createObjectStore(this._queueStore, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    },
+
+    async _idbPut(item) {
+      const db = await this._openIdb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction([this._queueStore], 'readwrite');
+        tx.objectStore(this._queueStore).put(item);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    },
+
+    async _idbAll() {
+      const db = await this._openIdb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction([this._queueStore], 'readonly');
+        const req = tx.objectStore(this._queueStore).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    },
+
+    async _refreshQueuedCount() {
+      try {
+        const all = await this._idbAll();
+        this.queuedCount = all.filter(x => x.status === 'queued').length;
+      } catch (e) { this.queuedCount = 0; }
+    },
+
+    async _enqueueChat(text, image_b64, location) {
+      // Persist the unsent message so background sync can drain it later.
+      const id = 'q' + Date.now() + Math.random().toString(36).slice(2, 8);
+      await this._idbPut({
+        id, text, image_b64: image_b64 || null,
+        location: location || null,
+        status: 'queued',
+        created_at: new Date().toISOString(),
+      });
+      await this._refreshQueuedCount();
+      // Register sync (browser fires when reconnected).
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        if ('sync' in reg) await reg.sync.register('chat-queue');
+      } catch (e) { /* sync unsupported — manual drain will still try */ }
+      return id;
+    },
+
+    async _tryDrainQueue() {
+      // Manual nudge to the SW to drain now (faster than waiting for
+      // OS-fired sync, which can take minutes).
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        if (reg.active) reg.active.postMessage({ type: 'drain-chat-queue' });
+      } catch (e) {}
+    },
+
+    _onSyncSent(tempId, answer, latency_ms) {
+      // Find the pending bubble by tempId, mark it as sent, append response.
+      const u = this.messages.find(m => m.id === tempId + 'u');
+      if (u) {
+        u.status = 'sent';
+        delete u.queued;
+      }
+      this.messages.push({
+        id: tempId + 'a', role: 'axi', text: answer,
+      });
+      this.lastLatencyMs = latency_ms;
+      this._refreshQueuedCount();
+      if (navigator.vibrate) navigator.vibrate(30);
+      this.$nextTick(() => this.scrollToBottom());
+    },
+
+    _onSyncError(tempId, error) {
+      const u = this.messages.find(m => m.id === tempId + 'u');
+      if (u) {
+        u.status = 'error';
+        u.errorMsg = error;
+      }
+      this._refreshQueuedCount();
     },
 
     async refreshBadge() {
@@ -546,6 +692,30 @@ function chatApp() {
       // Best-effort location capture before the request — non-blocking on
       // failure so a refused permission or slow GPS doesn't break sends.
       const location = await this._captureLocationOnce();
+
+      // If we're known-offline OR the request fails, queue the message in
+      // IndexedDB and register Background Sync. The SW will drain the
+      // queue when network is restored and call back via postMessage.
+      const queueOnFailure = async (err) => {
+        // Use the optimistic bubble's id as a stable tempId so we can find
+        // it later when sync completes.
+        const queuedTempId = await this._enqueueChat(text, image_b64, location);
+        const u = this.messages.find(m => m.id === tempId + 'u');
+        if (u) {
+          u.id = queuedTempId + 'u';
+          u.queued = true;
+          u.status = 'queued';
+        }
+        if (navigator.vibrate) navigator.vibrate([40, 60, 40]);
+      };
+
+      if (!this.online) {
+        await queueOnFailure(new Error('offline'));
+        this.pending = false;
+        this.$nextTick(() => this.scrollToBottom());
+        return;
+      }
+
       try {
         const r = await fetch('/api/chat/ask', {
           method: 'POST',
@@ -594,8 +764,23 @@ function chatApp() {
         // pending reflection or generated a new insight.
         this.refreshBadge();
       } catch (e) {
-        this.error = 'No pude obtener respuesta: ' + e.message;
-        if (navigator.vibrate) navigator.vibrate([60, 50, 60]);  // error pattern
+        // Network error → queue for background sync and inform the user.
+        // The bubble we already pushed stays visible with "encolado" status.
+        const isNetwork = (
+          e instanceof TypeError ||
+          /failed to fetch|network/i.test(e.message || '')
+        );
+        if (isNetwork) {
+          await queueOnFailure(e);
+          this.online = false;  // mirror state — onLine sometimes lies
+        } else {
+          // Real server error (4xx/5xx, validation, etc.) — surface and
+          // mark the bubble accordingly.
+          this.error = 'No pude obtener respuesta: ' + e.message;
+          const u = this.messages.find(m => m.id === tempId + 'u');
+          if (u) { u.status = 'error'; u.errorMsg = e.message; }
+          if (navigator.vibrate) navigator.vibrate([60, 50, 60]);
+        }
       } finally {
         this.pending = false;
         this.$nextTick(() => this.scrollToBottom());
