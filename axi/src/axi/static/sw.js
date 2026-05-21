@@ -18,7 +18,7 @@
 //   - The OS decides WHEN to fire — typically within minutes of reconnecting.
 //   - Each sync event has ~12s CPU budget; large queues may need multiple fires.
 
-const CACHE_VERSION = 'axi-shell-v3';
+const CACHE_VERSION = 'axi-shell-v4';
 const SHELL_URLS = [
   '/',
   '/chat',
@@ -32,6 +32,7 @@ const SHELL_URLS = [
   '/calendar',
   '/insights',
   '/posture',
+  '/setup',
   '/share-receive',
   '/manifest.webmanifest',
   '/static/axi-192.png',

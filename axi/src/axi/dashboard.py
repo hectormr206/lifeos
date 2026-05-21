@@ -3377,6 +3377,212 @@ async def api_posture_enable(request: Request):
     return {"enabled": enabled}
 
 
+# ────────────────────────── Setup / Health checklist ──────────────────
+
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page(request: Request):
+    return templates.TemplateResponse(request, "setup.html", {})
+
+
+@app.get("/api/setup/status")
+def api_setup_status():
+    """Aggregated status of every user-action-required item across the
+    stack. Drives the /setup page checklist. Read-only, fast.
+
+    Sections (each independently fault-tolerant — a crash in one section
+    doesn't break the others):
+      - encryption   : 8 domain key files + VAPID file
+      - huggingface  : HF token + accepted gated repos for diarization V1
+      - llm          : llama-server health + active model + VRAM
+      - push         : VAPID + subscription count + endpoints
+      - network      : TLS cert + WireGuard interface state
+      - config       : language, timezone, kill switches
+    """
+    import os
+    from pathlib import Path
+
+    out: dict = {}
+
+    # ─── Encryption keys & DBs ─────────────────────────────────────
+    try:
+        state_dir = Path(os.environ.get("LIFEOS_STATE_DIR")
+                         or (Path.home() / ".local" / "state" / "lifeos"))
+        domains = ["health", "finance", "relationships", "exercise",
+                   "spirituality", "learning", "events", "posture"]
+        domain_status = []
+        for d in domains:
+            domain_status.append({
+                "name": d,
+                "key_present": (state_dir / f"{d}.key").is_file(),
+                "db_present": (state_dir / f"{d}.db").is_file(),
+            })
+        out["encryption"] = {
+            "state_dir": str(state_dir),
+            "domains": domain_status,
+            "all_keys_present": all(d["key_present"] for d in domain_status),
+            "vapid_present": (state_dir / "vapid.json").is_file(),
+        }
+    except Exception as e:  # noqa: BLE001
+        out["encryption"] = {"error": str(e)}
+
+    # ─── HuggingFace token + gated repos (diarization V1) ─────────
+    try:
+        hf_token_env = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+        hf_token_file = Path.home() / ".cache" / "huggingface" / "token"
+        env_file_token = None
+        try:
+            env_file = Path.home() / "LifeOS" / "lifeos" / "axi" / ".env"
+            if env_file.is_file():
+                for line in env_file.read_text().splitlines():
+                    if line.startswith("HF_TOKEN="):
+                        env_file_token = line.split("=", 1)[1].strip().strip("'\"")
+                        break
+        except Exception:
+            pass
+        token_source = None
+        if hf_token_env:
+            token_source = "environment variable"
+        elif hf_token_file.is_file():
+            token_source = str(hf_token_file)
+        elif env_file_token:
+            token_source = "axi/.env"
+        out["huggingface"] = {
+            "token_present": bool(hf_token_env or hf_token_file.is_file() or env_file_token),
+            "token_source": token_source,
+            "gated_repos": [
+                {
+                    "repo": "pyannote/segmentation-3.0",
+                    "accept_url": "https://huggingface.co/pyannote/segmentation-3.0",
+                    "needed_for": "Diarización V1 (meetings con múltiples hablantes)",
+                },
+                {
+                    "repo": "pyannote/speaker-diarization-3.1",
+                    "accept_url": "https://huggingface.co/pyannote/speaker-diarization-3.1",
+                    "needed_for": "Diarización V1",
+                },
+                {
+                    "repo": "pyannote/speaker-diarization-community-1",
+                    "accept_url": "https://huggingface.co/pyannote/speaker-diarization-community-1",
+                    "needed_for": "Backbone nuevo de pyannote 4.x",
+                },
+            ],
+            "diarization_v2_enabled": bool(config.get("diarization_v2_enabled", False)),
+        }
+    except Exception as e:  # noqa: BLE001
+        out["huggingface"] = {"error": str(e)}
+
+    # ─── LLM (llama-server) ────────────────────────────────────────
+    try:
+        import urllib.request as _urllib
+        llama_ok = False
+        try:
+            with _urllib.urlopen(LLAMA_HEALTH, timeout=2) as r:
+                llama_ok = r.status == 200
+        except Exception:
+            pass
+        active_model = None
+        try:
+            import json as _json
+            am_path = Path.home() / ".local" / "state" / "axi" / "active_model.json"
+            if am_path.is_file():
+                active_model = _json.loads(am_path.read_text())
+        except Exception:
+            pass
+        vram_used_mb = vram_total_mb = None
+        try:
+            import subprocess as _sp
+            r = _sp.run(
+                ["nvidia-smi", "--query-gpu=memory.used,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if r.returncode == 0:
+                used, total = r.stdout.strip().split(",")
+                vram_used_mb = int(used.strip())
+                vram_total_mb = int(total.strip())
+        except Exception:
+            pass
+        out["llm"] = {
+            "llama_server_ok": llama_ok,
+            "active_model_id": active_model.get("id") if active_model else None,
+            "active_model_gguf": active_model.get("gguf") if active_model else None,
+            "vram_used_mb": vram_used_mb,
+            "vram_total_mb": vram_total_mb,
+        }
+    except Exception as e:  # noqa: BLE001
+        out["llm"] = {"error": str(e)}
+
+    # ─── Push subscriptions ────────────────────────────────────────
+    try:
+        subs = lifeos_push.list_subscriptions()
+        out["push"] = {
+            "subscriptions_count": len(subs),
+            "subscriptions": [
+                {
+                    "id": s["id"],
+                    "user_agent": (s.get("user_agent") or "")[:80],
+                    "endpoint_host": (s.get("endpoint") or "").split("/")[2]
+                        if s.get("endpoint") else "",
+                    "created_at": s.get("created_at"),
+                }
+                for s in subs
+            ],
+        }
+    except Exception as e:  # noqa: BLE001
+        out["push"] = {"error": str(e)}
+
+    # ─── Network (TLS + WireGuard) ─────────────────────────────────
+    try:
+        import subprocess as _sp
+        tls_dir = Path(
+            os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+        ) / "axi" / "tls"
+        tls_certs = []
+        if tls_dir.is_dir():
+            for key in sorted(tls_dir.glob("*-key.pem")):
+                cert = key.with_name(key.name.replace("-key.pem", ".pem"))
+                if cert.exists():
+                    tls_certs.append({"cert": str(cert), "key": str(key)})
+        wg_up = False
+        wg_iface = None
+        try:
+            r = _sp.run(["wg", "show", "interfaces"], capture_output=True, text=True, timeout=2)
+            if r.returncode == 0 and r.stdout.strip():
+                wg_iface = r.stdout.strip().split()[0]
+                wg_up = True
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+        out["network"] = {
+            "dashboard_host": str(config.get("dashboard_host", "127.0.0.1")),
+            "dashboard_port": int(config.get("dashboard_port", 8081)),
+            "tls_certs": tls_certs,
+            "tls_present": len(tls_certs) > 0,
+            "wireguard_up": wg_up,
+            "wireguard_interface": wg_iface,
+        }
+    except Exception as e:  # noqa: BLE001
+        out["network"] = {"error": str(e)}
+
+    # ─── Config knobs the user typically tunes ─────────────────────
+    try:
+        out["config"] = {
+            "language": str(config.get("language", "es-MX")),
+            "timezone": str(config.get("timezone", "America/Mexico_City")),
+            "user_name": str(config.get("user_name", "Héctor")),
+            "posture_enabled": bool(config.get("posture_enabled", False)),
+            "chat_enabled": bool(config.get("chat_enabled", True)),
+            "vision_enabled": bool(config.get("vision_enabled", True)),
+            "tts_enabled": bool(config.get("tts_enabled", True)),
+        }
+    except Exception as e:  # noqa: BLE001
+        out["config"] = {"error": str(e)}
+
+    return out
+
+
 # ────────────────────────── PWA Web platform APIs ──────────────────────
 
 
