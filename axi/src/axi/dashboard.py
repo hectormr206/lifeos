@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -128,6 +129,82 @@ templates.env.globals["dashboard_poll_ms"] = lambda: int(
 )
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# ────────────────────── Anti-hallucination guardrail ──────────────────
+#
+# The brain (Qwen 35B) has no tool-use — it can only emit text. When the
+# regex ingestion fast-path doesn't match a user message about health,
+# finance, etc., the call falls through to the brain. The brain often
+# generates a confirmation ("anotado X", "registré tu Y") even though
+# nothing was actually persisted. This deceives the user into thinking
+# their data was saved.
+#
+# Solution: a deterministic post-process check. After brain.ask returns,
+# if the response matches any "persistence claim" pattern, override it
+# with an honest message that tells the user to write the data manually
+# (and suggests a format that the ingestion would accept).
+#
+# This is a backstop in addition to the system prompt rules — the prompt
+# tells the model not to claim, this code GUARANTEES it doesn't matter
+# if the model still does.
+
+# Phrases that indicate the brain is claiming it persisted something.
+# Curated from observed hallucinations in chat memory.
+_PERSISTENCE_CLAIM_RE = re.compile(
+    r"\b("
+    r"anotad[oa]s?|anot[éeé]|anotando|"
+    r"registrad[oa]s?|registr[éeé]|registrando|"
+    r"guardad[oa]s?|guard[éeé]|guardando|"
+    r"agregad[oa]s?|agregu[ée]|agregando|añadid[oa]s?|añad[íi]|"
+    r"apuntad[oa]s?|apunt[éeé]|apuntando|"
+    r"ya\s+est[áa]\s+(?:en|guardad|registrad|anotad)|"
+    r"lo\s+(?:guard[éeé]|registr[éeé]|anot[éeé]|apunt[éeé]|met[íi]|agregu[éeé])|"
+    r"queda(?:ron)?\s+(?:guardad|registrad|anotad)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_persistence_claim(text: str) -> bool:
+    """True iff `text` claims data was persisted. Used to detect brain
+    hallucinations when the ingestion fast-path actually missed."""
+    if not text:
+        return False
+    return bool(_PERSISTENCE_CLAIM_RE.search(text))
+
+
+# Map of keywords → suggested format. When the user's message contains
+# one of these keywords AND the brain hallucinated persistence, we
+# include a hint about what format actually works.
+_FORMAT_HINTS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(presi[oó]n|pulso|fc|frecuencia\s+card)", re.IGNORECASE),
+     "presión 120/80, pulso 72"),
+    (re.compile(r"\b(grasa|fat|fac|musculo|m[uú]sculo|imc|bmi|rm|visceral|peso)\b", re.IGNORECASE),
+     "músculo 34.5%, grasa 18.7%, peso 64, RM 1435, IMC 25, visceral 8"),
+    (re.compile(r"\b(dorm[íi]|sue[ñn]o|despert)", re.IGNORECASE),
+     "dormí 7 horas  (o)  me dormí a las 23 y desperté ahorita"),
+    (re.compile(r"\b(glucos[ao])", re.IGNORECASE),
+     "glucosa 95"),
+    (re.compile(r"\b(gast[éeé]|compr[éeé]|pagu[éeé])", re.IGNORECASE),
+     "gasté 250 en café"),
+    (re.compile(r"\bcamin[éeé]|corr[íi]|entren|gym", re.IGNORECASE),
+     "caminé 30 minutos  (o)  corrí 5 km"),
+]
+
+
+def _suggested_format_message(user_text: str) -> str:
+    """Build the honest 'no se guardó, anotalo manual' message with a
+    format hint specific to what the user was trying to log."""
+    hint = None
+    for pat, suggested in _FORMAT_HINTS:
+        if pat.search(user_text):
+            hint = suggested
+            break
+    base = "No pude registrar esto automáticamente. Anotalo manual en el dominio correspondiente (/health, /finance, etc.)."
+    if hint:
+        base += f' Formato que sí detecto: "{hint}".'
+    return base
 
 
 # ────────────────────────── daemon comms ───────────────────────────────
@@ -2051,6 +2128,23 @@ async def api_chat_ask(request: Request):
             except (TypeError, ValueError):
                 pass
         answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64)
+        # ─── Anti-hallucination guardrail (two-step verification) ──────
+        #
+        # Reaching this code path means NONE of the fast-path ingestion
+        # branches matched. So NOTHING was actually persisted. If the
+        # brain's response nonetheless claims persistence ("anotado",
+        # "registré", "guardé", etc.) it's hallucinating — confusing the
+        # user into thinking data was saved when it wasn't.
+        #
+        # The system prompt already instructs the brain not to do this,
+        # but small models hallucinate anyway. This is the deterministic
+        # guardrail that ALWAYS works regardless of model behavior.
+        if _looks_like_persistence_claim(answer):
+            log.warning(
+                "brain hallucinated persistence claim on text=%r — overriding",
+                text[:120],
+            )
+            answer = _suggested_format_message(text)
     except Exception as e:  # noqa: BLE001
         log.exception("chat ask failed")
         try:
