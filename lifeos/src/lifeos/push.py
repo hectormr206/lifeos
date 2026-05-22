@@ -25,7 +25,7 @@ from typing import Any
 from cryptography.hazmat.primitives.asymmetric import ec
 from pywebpush import WebPushException, webpush
 
-from lifeos import store
+from lifeos import store, notif_budget
 
 log = logging.getLogger("lifeos.push")
 
@@ -173,15 +173,43 @@ def send_os_notification(title: str, body: str) -> bool:
 
 def send_to_all(title: str, body: str, *, url: str = "/reminders",
                 tag: str | None = None,
-                include_os: bool = True) -> dict[str, int]:
+                include_os: bool = True,
+                priority: str = "ambient") -> dict[str, int]:
     """Send `title`/`body` to all push subscriptions + optionally the local OS.
 
-    Returns {"sent": N, "failed": M, "gone": G, "os": 0|1}.
-      sent   = web push successes
-      failed = web push errors (other than 404/410)
-      gone   = 404/410 endpoints (subscription auto-removed)
-      os     = 1 if the local OS notification fired, 0 otherwise
+    Returns {"sent": N, "failed": M, "gone": G, "os": 0|1, "suppressed": 0|1}.
+      sent       = web push successes
+      failed     = web push errors (other than 404/410)
+      gone       = 404/410 endpoints (subscription auto-removed)
+      os         = 1 if the local OS notification fired, 0 otherwise
+      suppressed = 1 if the notification was suppressed by budget rules, 0 otherwise
     """
+    # --- Budget check ---
+    original_title, original_body = title, body
+    decision = notif_budget.evaluate(title, body, priority)
+
+    if decision.action == "suppress":
+        notif_budget.record(
+            title=original_title,
+            body=original_body,
+            priority=priority,
+            outcome=f"suppressed_{decision.reason}",
+        )
+        log.info(
+            "notification suppressed (reason=%s): %r", decision.reason, title[:60]
+        )
+        return {"sent": 0, "failed": 0, "gone": 0, "os": 0,
+                "suppressed": 1, "reason": decision.reason}
+
+    if decision.action == "coalesce":
+        title = decision.title  # type: ignore[assignment]
+        body = decision.body    # type: ignore[assignment]
+        outcome = "coalesce"
+        log.info("notification coalesced — digest: %r", title)
+    else:
+        outcome = "sent"
+
+    # --- Fanout ---
     keys = get_vapid_keys()
     subs = list_subscriptions()
     sent = failed = gone = 0
@@ -214,4 +242,14 @@ def send_to_all(title: str, body: str, *, url: str = "/reminders",
             failed += 1
             log.exception("push send unexpected error: %s", e)
     os_fired = 1 if (include_os and send_os_notification(title, body)) else 0
-    return {"sent": sent, "failed": failed, "gone": gone, "os": os_fired}
+
+    # Record with original title/body so dedup hashes against caller intent
+    notif_budget.record(
+        title=original_title,
+        body=original_body,
+        priority=priority,
+        outcome=outcome,
+    )
+
+    return {"sent": sent, "failed": failed, "gone": gone, "os": os_fired,
+            "suppressed": 0}
