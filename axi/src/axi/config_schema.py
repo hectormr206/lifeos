@@ -155,6 +155,12 @@ FIELDS: tuple[ConfigField, ...] = (
         "regex intent is sent to the brain (2 s timeout) for classification. "
         "Off by default to keep the dictation path zero-cost (P1.2).",
     ),
+    ConfigField(
+        "reminder_voice_enabled", "boolean", True,
+        "If true, transcribed speech is checked for reminder intent before the "
+        "intent classifier and dictation path. Set to false to disable voice "
+        "reminder creation (e.g. if the parser causes false positives).",
+    ),
     # ─────── meeting mode tuning ───────
     ConfigField(
         "meeting_silence_rms", "number", 0.015,
