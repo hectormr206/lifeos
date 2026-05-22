@@ -22,6 +22,7 @@ behavior later without code changes.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import signal
@@ -60,6 +61,36 @@ def _chunk_seconds() -> int:
 
 def _screen_interval_s() -> int:
     return int(config.get("meeting_screen_interval_s", DEFAULT_SCREEN_INTERVAL_S))
+
+
+def _build_display_env() -> dict:
+    """Return a dict suitable for `subprocess.run(env=...)` that always
+    includes WAYLAND_DISPLAY + DISPLAY, even when the systemd user manager
+    started this daemon BEFORE Plasma populated those vars (which happens
+    when no `systemctl --user import-environment` ran at session start).
+
+    Without this, `spectacle -b -n -a -o file.png` returns rc=0 BUT writes
+    no file — silent failure. That left meeting #6 with 0 screenshots
+    despite a healthy capture loop.
+
+    Strategy: start from current env, then fill in WAYLAND_DISPLAY by
+    sniffing /run/user/<uid>/wayland-N sockets, and DISPLAY with a
+    conservative default of `:0`."""
+    env = os.environ.copy()
+    if not env.get("WAYLAND_DISPLAY"):
+        runtime = env.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        try:
+            for entry in sorted(os.listdir(runtime)):
+                if entry.startswith("wayland-") and not entry.endswith(".lock"):
+                    env["WAYLAND_DISPLAY"] = entry
+                    break
+        except OSError:
+            pass
+    if not env.get("DISPLAY"):
+        env["DISPLAY"] = ":0"
+    if not env.get("XDG_SESSION_TYPE"):
+        env["XDG_SESSION_TYPE"] = "wayland"
+    return env
 
 
 def _screen_dedup_hamming() -> int:
@@ -362,11 +393,21 @@ class MeetingSession:
         the previous saved frame via a 64-bit perceptual hash so unchanging
         meeting screens don't fill the disk."""
         tmp = self.dir / "_screen_probe.png"
+        # Build env ONCE for the loop. spectacle fails silently on Wayland
+        # when WAYLAND_DISPLAY is missing — see _build_display_env() docs.
+        spectacle_env = _build_display_env()
+        log.info(
+            "screen capture: WAYLAND_DISPLAY=%s DISPLAY=%s every %ds",
+            spectacle_env.get("WAYLAND_DISPLAY", "(missing)"),
+            spectacle_env.get("DISPLAY", "(missing)"),
+            _screen_interval_s(),
+        )
         while not self._screen_stop.is_set():
             try:
                 subprocess.run(
                     ["spectacle", "-b", "-n", "-a", "-o", str(tmp)],
                     check=False, timeout=10, capture_output=True,
+                    env=spectacle_env,
                 )
                 if tmp.exists() and tmp.stat().st_size > 0:
                     phash = _compute_phash(tmp)
