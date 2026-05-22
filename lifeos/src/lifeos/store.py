@@ -166,6 +166,28 @@ def _migration_005_reminder_end_conditions(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE reminders ADD COLUMN occurrences_left INTEGER")
 
 
+def _migration_008_notif_log(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notif_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+            hash TEXT NOT NULL,
+            priority TEXT NOT NULL DEFAULT 'ambient',
+            outcome TEXT NOT NULL DEFAULT 'sent'
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notif_log_sent_at "
+        "ON notif_log(sent_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notif_log_hash_sent_at "
+        "ON notif_log(hash, sent_at DESC)"
+    )
+
+
 def _migration_007_fastpath_metrics(conn: sqlite3.Connection) -> None:
     # Instrumentation for the chat fast-path. Records ONLY metadata
     # (which stage handled the call, latency, input size) — NEVER the
@@ -206,6 +228,7 @@ MIGRATIONS: list[Migration] = [
     _migration_005_reminder_end_conditions,
     _migration_006_edges,
     _migration_007_fastpath_metrics,
+    _migration_008_notif_log,
 ]
 
 
