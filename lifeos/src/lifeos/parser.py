@@ -17,7 +17,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import dateparser
 
@@ -184,11 +184,22 @@ def _detect_recurrence(text: str) -> tuple[str | None, str]:
     return None, text
 
 
-def parse_reminder(text: str, *, tz: str = "America/Mexico_City") -> Optional[ReminderIntent]:
+def parse_reminder(
+    text: str,
+    *,
+    tz: str = "America/Mexico_City",
+    brain_fallback: Callable[[str, str], Optional[datetime]] | None = None,
+) -> Optional[ReminderIntent]:
     """Try to parse `text` as a reminder request. Returns None if it doesn't fit.
 
     `tz` is the user's local timezone — used to interpret things like
     "mañana a las 9" against the right day boundary.
+
+    `brain_fallback` is an optional callable invoked when dateparser cannot
+    interpret the when-expression. Signature: ``(when_text: str, tz: str) ->
+    datetime | None``. Must return a timezone-aware datetime or None. If it
+    raises, the exception is caught and None is returned. Defaults to None —
+    callers that don't supply it keep the original behaviour.
     """
     if not text or not isinstance(text, str):
         return None
@@ -225,8 +236,30 @@ def parse_reminder(text: str, *, tz: str = "America/Mexico_City") -> Optional[Re
         # No explicit time. Acceptable only for recurring reminders — the
         # cron schedule decides when to fire and `when` becomes the next
         # cron match from now.
+        # Exception: if a brain_fallback is provided, give it the whole `rest`
+        # text — it may be able to parse an implicit time expression like
+        # "después del almuerzo" even without a canonical marker. On success,
+        # use `rest` as both the message and time source.
         if not recurrence:
-            return None
+            if brain_fallback is None:
+                return None
+            try:
+                fallback_dt = brain_fallback(rest, tz)
+            except Exception:  # noqa: BLE001
+                log.info("brain_fallback raised for %r (no marker), giving up", rest, exc_info=True)
+                return None
+            if fallback_dt is None:
+                return None
+            if fallback_dt.tzinfo is None:
+                log.info(
+                    "brain_fallback returned a naive datetime for %r — discarding", rest,
+                )
+                return None
+            when_utc = fallback_dt.astimezone(timezone.utc)
+            if when_utc <= datetime.now(timezone.utc):
+                from datetime import timedelta
+                when_utc = when_utc + timedelta(days=1)
+            return ReminderIntent(message=rest, when=when_utc, recurrence=None)
         message = rest
         when_utc = _next_cron_match(recurrence, tz)
         if when_utc is None:
@@ -250,7 +283,23 @@ def parse_reminder(text: str, *, tz: str = "America/Mexico_City") -> Optional[Re
     )
     if parsed is None:
         log.info("dateparser could not interpret %r", when_text)
-        return None
+        if brain_fallback is not None:
+            try:
+                fallback_dt = brain_fallback(when_text, tz)
+            except Exception:  # noqa: BLE001
+                log.info("brain_fallback raised for %r, giving up", when_text, exc_info=True)
+                return None
+            if fallback_dt is None:
+                return None
+            if fallback_dt.tzinfo is None:
+                log.info(
+                    "brain_fallback returned a naive datetime for %r — discarding",
+                    when_text,
+                )
+                return None
+            parsed = fallback_dt
+        else:
+            return None
 
     when_utc = parsed.astimezone(timezone.utc)
     if when_utc <= datetime.now(timezone.utc):

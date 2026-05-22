@@ -2395,7 +2395,8 @@ async def api_chat_ask(request: Request):
 
         try:
             from lifeos.parser import parse_reminder
-            ri = parse_reminder(text)
+            from axi.reminder_brain import parse_when_brain
+            ri = parse_reminder(text, brain_fallback=parse_when_brain)
         except Exception:  # noqa: BLE001
             ri = None
         if ri is not None:
