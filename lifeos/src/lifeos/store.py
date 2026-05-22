@@ -1,8 +1,15 @@
-"""SQLite store with versioned schema migrations.
+"""Encrypted SQLite (sqlcipher3) store with versioned schema migrations.
 
-One database lives at `~/.local/state/lifeos/lifeos.db` (override via
-`LIFEOS_DB_PATH`). Each module owns its tables but shares this connection
-helper so the scheduler's jobstore and the reminders DAO see the same DB.
+Layout:
+    ~/.local/state/lifeos/lifeos.db   ← encrypted blob
+    ~/.local/state/lifeos/lifeos.key  ← 32-byte random key, hex-encoded, chmod 600
+
+The key file can be overridden via env vars for tests/migrations:
+    LIFEOS_DB_PATH   — alternate DB path
+    LIFEOS_KEY_PATH  — alternate key file path (takes priority over LIFEOS_STATE_DIR)
+
+Each module owns its tables but shares this connection helper so the
+scheduler's jobstore and the reminders DAO see the same DB.
 
 Migrations are append-only: each version is a function that takes a connection
 and brings the schema from version N-1 to N. The `schema_version` table
@@ -11,42 +18,91 @@ tracks which migrations have run; `apply_migrations()` is idempotent.
 
 from __future__ import annotations
 
+import logging
 import os
-import sqlite3
+import secrets
+import stat
 import threading
 from pathlib import Path
 from typing import Callable
 
-_DEFAULT_DB = Path.home() / ".local" / "state" / "lifeos" / "lifeos.db"
+import sqlcipher3
+
+log = logging.getLogger("lifeos.store")
 
 _lock = threading.Lock()
+
+
+def _default_dir() -> Path:
+    return Path(
+        os.environ.get("LIFEOS_STATE_DIR")
+        or (Path.home() / ".local" / "state" / "lifeos")
+    )
 
 
 def db_path() -> Path:
     """Return the active DB path. Honors LIFEOS_DB_PATH for tests."""
     override = os.environ.get("LIFEOS_DB_PATH")
-    return Path(override) if override else _DEFAULT_DB
+    return Path(override) if override else (_default_dir() / "lifeos.db")
 
 
-def connect() -> sqlite3.Connection:
-    """Open a connection to the LifeOS DB. Ensures parent dir exists.
+def key_path() -> Path:
+    """Return the active key file path. Honors LIFEOS_KEY_PATH for tests."""
+    override = os.environ.get("LIFEOS_KEY_PATH")
+    return Path(override) if override else (_default_dir() / "lifeos.key")
 
-    Connections are NOT cached. SQLite is happy with many short connections,
-    and this keeps multi-threaded use simple (each caller gets its own).
+
+def load_key() -> str:
+    """Read or generate the encryption key. Returns the hex-encoded key string.
+
+    First call generates 32 random bytes, persists them hex-encoded, and
+    tightens permissions to 600. Subsequent calls just read the file.
+    Per-process caching is acceptable — key rotation requires restart.
+    """
+    kp = key_path()
+    kp.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if kp.exists():
+        return kp.read_text().strip()
+    key = secrets.token_bytes(32).hex()
+    kp.write_text(key)
+    try:
+        kp.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 600
+    except Exception:  # noqa: BLE001
+        pass
+    log.info("generated new lifeos encryption key at %s", kp)
+    return key
+
+
+def connect() -> sqlcipher3.Connection:
+    """Open an encrypted connection to the LifeOS DB. Ensures parent dir exists.
+
+    Each call returns a fresh connection — sqlcipher3 connections are not
+    thread-safe by default. Connections are cheap; pool if overhead is measured.
+
+    The PRAGMA key must be applied IMMEDIATELY after connect(), before any
+    other query, or sqlcipher3 treats the file as unkeyed.
     """
     p = db_path()
     p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    conn = sqlite3.connect(p, isolation_level=None, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    key = load_key()
+    conn = sqlcipher3.connect(p, isolation_level=None, check_same_thread=False)
+    # Hex key must use the special "x'...'" syntax in PRAGMA key.
+    conn.execute(f"PRAGMA key = \"x'{key}'\"")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Tighten permissions on first write — the journal/wal files inherit.
+    try:
+        p.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except Exception:  # noqa: BLE001
+        pass
+    conn.row_factory = sqlcipher3.Row
     return conn
 
 
-Migration = Callable[[sqlite3.Connection], None]
+Migration = Callable[[sqlcipher3.Connection], None]
 
 
-def _migration_001_schema_version(conn: sqlite3.Connection) -> None:
+def _migration_001_schema_version(conn: sqlcipher3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS schema_version (
@@ -57,7 +113,7 @@ def _migration_001_schema_version(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migration_002_reminders(conn: sqlite3.Connection) -> None:
+def _migration_002_reminders(conn: sqlcipher3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS reminders (
@@ -78,7 +134,7 @@ def _migration_002_reminders(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migration_003_push_subscriptions(conn: sqlite3.Connection) -> None:
+def _migration_003_push_subscriptions(conn: sqlcipher3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -94,7 +150,7 @@ def _migration_003_push_subscriptions(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migration_004_reminders_recurrence(conn: sqlite3.Connection) -> None:
+def _migration_004_reminders_recurrence(conn: sqlcipher3.Connection) -> None:
     # Recurring reminders: cron string ("0 9 * * *" = daily at 9am).
     # NULL → one-shot (current behavior preserved). `last_fired_at` is the
     # most recent fire time; for one-shot it equals `fired_at`.
@@ -105,7 +161,7 @@ def _migration_004_reminders_recurrence(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE reminders ADD COLUMN last_fired_at TEXT")
 
 
-def _migration_006_edges(conn: sqlite3.Connection) -> None:
+def _migration_006_edges(conn: sqlcipher3.Connection) -> None:
     # Cross-domain graph edges. The actual entries live in their respective
     # (encrypted) per-domain DBs; this table only holds ulids + relation
     # vocabulary, which on its own discloses nothing useful. The benefit
@@ -153,7 +209,7 @@ def _migration_006_edges(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migration_005_reminder_end_conditions(conn: sqlite3.Connection) -> None:
+def _migration_005_reminder_end_conditions(conn: sqlcipher3.Connection) -> None:
     # End conditions for recurring reminders (Google-Calendar style "Finaliza"):
     # - ends_at: ISO UTC timestamp. Scheduler stops firing after this instant.
     # - occurrences_left: integer countdown. Decrements on each fire; when 0,
@@ -166,7 +222,7 @@ def _migration_005_reminder_end_conditions(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE reminders ADD COLUMN occurrences_left INTEGER")
 
 
-def _migration_008_notif_log(conn: sqlite3.Connection) -> None:
+def _migration_008_notif_log(conn: sqlcipher3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS notif_log (
@@ -188,11 +244,11 @@ def _migration_008_notif_log(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migration_007_fastpath_metrics(conn: sqlite3.Connection) -> None:
+def _migration_007_fastpath_metrics(conn: sqlcipher3.Connection) -> None:
     # Instrumentation for the chat fast-path. Records ONLY metadata
     # (which stage handled the call, latency, input size) — NEVER the
     # text content itself. That keeps this table OK to live in the
-    # unencrypted core DB. The text stays in the per-domain encrypted
+    # encrypted core DB. The text stays in the per-domain encrypted
     # stores (or in the brain's chat memory, also unencrypted today).
     #
     # Used to answer: "what % of chat calls fall through to the brain,
@@ -232,8 +288,8 @@ MIGRATIONS: list[Migration] = [
 ]
 
 
-def apply_migrations(conn: sqlite3.Connection | None = None) -> int:
-    """Bring the DB to the latest schema. Returns the resulting version.
+def apply_migrations(conn: sqlcipher3.Connection | None = None) -> int:
+    """Bring the encrypted DB to the latest schema. Returns the resulting version.
 
     Idempotent — safe to call on every startup. Acquires a process-wide lock
     so concurrent first-runs (rare but possible during tests) don't both try

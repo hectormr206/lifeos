@@ -10,6 +10,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LIFEOS_DB_PATH", str(tmp_path / "lifeos.db"))
+    monkeypatch.setenv("LIFEOS_KEY_PATH", str(tmp_path / "lifeos.key"))
     from lifeos import store
     store.apply_migrations()
     yield
