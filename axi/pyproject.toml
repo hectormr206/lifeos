@@ -15,6 +15,10 @@ dependencies = [
     "pytesseract>=0.3.13",
     "kokoro-onnx>=0.5.0",
     "coqui-tts>=0.27.5",
+    # In-process Piper TTS bindings. axi.piper_python_engine loads the
+    # ONNX once at boot and reuses it per sentence, replacing RealtimeTTS'
+    # subprocess-per-sentence PiperEngine.
+    "piper-tts>=1.4.0",
     "fastapi>=0.136.1",
     "uvicorn[standard]>=0.46.0",
     "python-multipart>=0.0.20",

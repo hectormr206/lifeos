@@ -883,40 +883,30 @@ def run_interpreter() -> int:
         log.info("loading Kokoro engine (voice=%s, device=cpu)…", KOKORO_VOICE)
         engine = KokoroEngine(voice=KOKORO_VOICE)
     else:
-        # Default: Piper. ~10-20x realtime on CPU, first-chunk ~150ms.
-        # Same voice (es_MX-claude-high) that axi-voice uses, so the
-        # translation sounds like Axi.
-        from RealtimeTTS import PiperEngine, PiperVoice  # noqa: PLC0415
+        # Default: Piper, loaded in-process via the `piper-tts` Python
+        # bindings. Same voice (es_MX-claude-high) that axi-voice uses, so
+        # the translation sounds like Axi. The model is loaded ONCE at
+        # boot (~650 ms cold) and reused for every sentence (~70 ms warm),
+        # eliminating the per-sentence subprocess boot that the upstream
+        # RealtimeTTS PiperEngine paid.
+        from axi.piper_python_engine import PiperPythonEngine  # noqa: PLC0415
         if not PIPER_MODEL.exists():
             log.error("Piper model not found at %s", PIPER_MODEL)
             return 2
-        piper_bin = Path(__file__).resolve().parent.parent.parent / ".venv/bin/piper"
 
         # Piper playback speed (length_scale). 1.0 = natural pace; lower
         # values make Piper speak faster. The value is held in a mutable
         # cell so `_emit_es` can adjust it dynamically per pending queue
         # depth (see the bands defined near MAX_QUEUE_S). AXI_PIPER_SPEED,
-        # if set, becomes the starting value and the cap for the
-        # natural-pace band; it is otherwise overridden at runtime.
+        # if set, becomes the starting value for the natural-pace band; it
+        # is otherwise overridden at runtime. The engine reads the cell
+        # fresh on every synthesize() call.
         _piper_length_scale[0] = float(os.environ.get("AXI_PIPER_SPEED", "1.0"))
-        import RealtimeTTS.engines.piper_engine as _piper_mod  # noqa: PLC0415
-        _piper_orig_run = _piper_mod.subprocess.run
-        _piper_path_str = str(piper_bin)
-        def _piper_patched_run(cmd, **kw):
-            if (
-                isinstance(cmd, list) and cmd
-                and cmd[0] == _piper_path_str
-                and "--length-scale" not in cmd
-            ):
-                cmd = list(cmd) + ["--length-scale", str(_piper_length_scale[0])]
-            return _piper_orig_run(cmd, **kw)
-        _piper_mod.subprocess.run = _piper_patched_run
-
-        log.info("loading Piper engine (model=%s, length_scale=%.2f)…",
+        log.info("loading Piper engine in-process (model=%s, length_scale=%.2f)…",
                  PIPER_MODEL.name, _piper_length_scale[0])
-        engine = PiperEngine(
-            piper_path=str(piper_bin),
-            voice=PiperVoice(model_file=str(PIPER_MODEL)),
+        engine = PiperPythonEngine(
+            model_path=str(PIPER_MODEL),
+            get_length_scale=lambda: _piper_length_scale[0],
         )
     stream = TextToAudioStream(
         engine,
