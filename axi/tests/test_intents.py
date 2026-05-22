@@ -31,6 +31,13 @@ CASES = [
     ("axi, limpia conversación", "clear_conversation"),
     ("axi, olvida la conversación", "clear_conversation"),
     ("axi borra historial", "clear_conversation"),
+    # ── Whisper-mishearing variants of the wake word ──
+    ("Así, abre el dashboard", "open_dashboard"),
+    ("Axie, abre el dashboard", "open_dashboard"),
+    ("Hexi, abre el dashboard", "open_dashboard"),
+    ("Jaxi, abre el dashboard", "open_dashboard"),
+    ("ASI abre el dashboard", "open_dashboard"),
+    ("Hatxi, abre el dashboard", "open_dashboard"),
     # ── negatives (must NOT misfire) ──
     ("axi me dijo que abre el dashboard", None),
     ("hola axi", None),
