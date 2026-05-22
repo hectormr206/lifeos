@@ -78,6 +78,11 @@ _WHEN_MARKERS = (
     "en ",       # "en 30 minutos", "en 2 horas"
     "a las",     # "a las 9", "a las 14:30"
     "dentro de", # "dentro de 2 horas"
+    # Relative-time idioms — dateparser can't handle these, but the brain
+    # fallback can. Splitting here ensures the message portion is clean.
+    "después de", "despues de",  # "después de comer", "después del almuerzo"
+    "cuando ",                    # "cuando termine la reunión"
+    "tras ",                      # "tras la cena"
 )
 
 

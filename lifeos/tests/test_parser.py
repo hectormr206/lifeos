@@ -153,6 +153,36 @@ def test_brain_fallback_default_none_preserves_old_behavior() -> None:
     assert ri is None
 
 
+def test_relative_time_markers_split_message_correctly() -> None:
+    """The 'después de', 'cuando', 'tras' markers should split message from when_text
+    so the brain receives only the time fragment, not the whole rest.
+    """
+    from lifeos.parser import parse_reminder
+
+    captured: dict[str, str] = {}
+    target_dt = datetime(2026, 5, 25, 15, 30, tzinfo=timezone.utc)
+
+    def _fallback(when_text: str, tz: str) -> datetime:
+        captured["when_text"] = when_text
+        return target_dt
+
+    ri = parse_reminder(
+        "Axi, recuérdame llamar a mamá después de comer",
+        brain_fallback=_fallback,
+    )
+    assert ri is not None
+    assert ri.message == "llamar a mamá"
+    assert captured["when_text"].startswith("después de"), captured
+
+    ri2 = parse_reminder(
+        "recordame ir al gym cuando termine la reunión",
+        brain_fallback=_fallback,
+    )
+    assert ri2 is not None
+    assert ri2.message == "ir al gym"
+    assert captured["when_text"].startswith("cuando"), captured
+
+
 def test_brain_fallback_must_return_timezone_aware() -> None:
     """If the fallback returns a naive datetime, the parser treats it as invalid."""
     from lifeos.parser import parse_reminder
