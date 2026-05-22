@@ -9,7 +9,7 @@ Plus per-domain structured tables (health, finance, …). The graph is
 the semantic layer; the domain tables are the authoritative numeric/
 temporal records. Bridge via `node_id` foreign keys.
 
-The DB is a single file at `~/.local/state/axi/lifeos.db`. WAL mode is
+The DB is a single file at `~/.local/state/axi/memory.db`. WAL mode is
 enabled for safe concurrent access from the daemon and (future) other
 modules / a dashboard.
 """
@@ -27,7 +27,7 @@ from typing import Any, Iterator
 STATE_DIR = Path(
     os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
 ) / "axi"
-DB_PATH = STATE_DIR / "lifeos.db"
+DB_PATH = STATE_DIR / "memory.db"
 
 _SCHEMA = r"""
 PRAGMA journal_mode=WAL;

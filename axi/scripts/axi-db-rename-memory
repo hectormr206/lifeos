@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# One-shot migration: rename ~/.local/state/axi/lifeos.db → memory.db
+#
+# Eliminates the naming collision with ~/.local/state/lifeos/lifeos.db
+# (the LifeOS sibling package's own encrypted store).
+#
+# Stops the four axi systemd-user services that hold the DB open,
+# moves the three SQLite files atomically (.db, .db-shm, .db-wal),
+# then restarts the services.
+
+set -euo pipefail
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/axi"
+OLD="$STATE_DIR/lifeos.db"
+NEW="$STATE_DIR/memory.db"
+
+SERVICES=(axi-dashboard axi-voice axi-tray axi-whisper)
+
+if [[ ! -f "$OLD" && -f "$NEW" ]]; then
+    echo "[skip] already migrated — $NEW exists, $OLD gone"
+    exit 0
+fi
+
+if [[ ! -f "$OLD" ]]; then
+    echo "[skip] $OLD does not exist; nothing to migrate"
+    exit 0
+fi
+
+if [[ -f "$NEW" ]]; then
+    echo "[abort] both $OLD and $NEW exist — refusing to overwrite"
+    exit 1
+fi
+
+echo "[1/4] stopping axi services"
+systemctl --user stop "${SERVICES[@]}"
+
+echo "[2/4] verifying no process holds $OLD"
+if command -v fuser >/dev/null && fuser "$OLD" 2>/dev/null; then
+    echo "[abort] $OLD still held by a process; aborting"
+    systemctl --user start "${SERVICES[@]}"
+    exit 1
+fi
+
+echo "[3/4] moving SQLite files: lifeos.db{,-shm,-wal} → memory.db{,-shm,-wal}"
+mv "$OLD" "$NEW"
+[[ -f "$OLD-shm" ]] && mv "$OLD-shm" "$NEW-shm"
+[[ -f "$OLD-wal" ]] && mv "$OLD-wal" "$NEW-wal"
+
+echo "[4/4] starting axi services"
+systemctl --user start "${SERVICES[@]}"
+
+echo "done. axi now reads from $NEW"
