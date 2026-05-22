@@ -18,6 +18,7 @@ def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Point every encrypted store at tmp_path."""
     monkeypatch.setenv("LIFEOS_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("LIFEOS_DB_PATH", str(tmp_path / "lifeos.db"))
+    monkeypatch.setenv("LIFEOS_KEY_PATH", str(tmp_path / "lifeos.key"))
     monkeypatch.setenv("LIFEOS_HEALTH_DB_PATH", str(tmp_path / "health.db"))
     monkeypatch.setenv("LIFEOS_HEALTH_KEY_PATH", str(tmp_path / "health.key"))
     monkeypatch.setenv("LIFEOS_FINANCE_DB_PATH", str(tmp_path / "finance.db"))
