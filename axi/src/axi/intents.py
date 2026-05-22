@@ -62,10 +62,15 @@ _IMPERATIVES = (
 # Trigger word at the start. We accept several Whisper-misheard variants
 # of "axi" because Whisper interprets non-Spanish "Axi" as the nearest
 # Spanish word that sounds similar: "así", "asi", "asís", "axí", "axis",
-# "ax", "achi", "hachi", "hatxi". They all share the phoneme /a-ks-i/ or
-# /a-s-i/. By matching variants here, we capture commands the user
-# pronounced as "Axi" even when Whisper writes them as "Así".
-_TRIGGER = r"(?:axi|así|asi|axí|asís|axis|hachi|achi|hatxi|ax|hace|hacé|haz|asx)"
+# "axie", "hexi", "jaxi", "jaxie", "ax", "achi", "hachi", "hatxi". They
+# all share the phoneme /a-ks-i/ or /a-s-i/. By matching variants here,
+# we capture commands the user pronounced as "Axi" even when Whisper
+# writes them as something else. Longest-first to avoid prefix matches
+# (e.g. "axi" matching before "axie" would break "Axie, ...").
+_TRIGGER = (
+    r"(?:asís|hatxi|hachi|jaxie|axie|hexi|jaxi|jexi|"
+    r"axí|axis|axi|así|asi|achi|hace|hacé|haz|asx|ax)"
+)
 _PREFIX_RE = re.compile(
     rf"^\s*{_TRIGGER}\s*[,:.\-\s]+\s*(?P<rest>.+)$",
     re.IGNORECASE | re.DOTALL,
