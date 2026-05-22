@@ -1,6 +1,6 @@
 """Shared test fixtures.
 
-Every test gets a fresh temp SQLite DB so the production lifeos.db is
+Every test gets a fresh temp SQLite DB so the production memory.db is
 never touched. Done by monkeypatching `axi.store.DB_PATH` and resetting
 the cached connection.
 """
