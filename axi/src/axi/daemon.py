@@ -349,6 +349,20 @@ class Daemon:
         log.info("raw:     %s", raw)
         log.info("cleaned: %s", text)
 
+        # Reminder fastpath — check BEFORE the intent classifier so that
+        # "Axi, recordame X" creates a real reminder and short-circuits the
+        # rest of the pipeline (no typing, no dictation).
+        if config.get("reminder_voice_enabled", True):
+            try:
+                from axi.reminder_voice import try_create_reminder  # noqa: PLC0415
+                _rid = try_create_reminder(text)
+            except Exception as _e:  # noqa: BLE001
+                log.warning("reminder_voice fastpath raised: %s", _e)
+                _rid = None
+            if _rid is not None:
+                self._set_state("idle")
+                return f"reminder:{_rid}"
+
         # P1.2 — voice command palette. If the utterance is a recognized
         # imperative ("axi, abre el dashboard"), execute the action and
         # SKIP typing. Otherwise fall through to the normal dictation flow.
