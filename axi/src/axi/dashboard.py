@@ -32,6 +32,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -118,7 +119,98 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 STATIC_DIR = PROJECT_ROOT / "static"
 
-app = FastAPI(title="Axi Dashboard", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """LifeOS startup/shutdown wired through FastAPI's lifespan protocol.
+
+    Startup: arm the scheduler, apply migrations on every encrypted store,
+    register insights + posture crons. Shutdown: stop the scheduler cleanly.
+    """
+    try:
+        sched = get_scheduler()
+        sched.set_dispatcher(_lifeos_push_dispatcher)
+        sched.start()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos scheduler failed to start")
+    try:
+        health_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos health store failed to migrate")
+    try:
+        finance_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos finance store failed to migrate")
+    try:
+        rel_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos relationships store failed to migrate")
+    try:
+        ex_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos exercise store failed to migrate")
+    try:
+        spirit_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos spirituality store failed to migrate")
+    try:
+        learn_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos learning store failed to migrate")
+    try:
+        events_store.apply_migrations()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos events store failed to migrate")
+    try:
+        def _insights_push(title: str, body: str) -> None:
+            lifeos_push.send_to_all(title=title, body=body, url="/insights",
+                                    tag="lifeos-insight")
+        insights_cron.set_push(_insights_push)
+        insights_cron.start_jobs()
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos insights cron failed to start")
+    try:
+        posture_store.apply_migrations()
+        from axi import brain as _axi_brain
+        from axi import eyes as _axi_eyes
+
+        def _posture_capture() -> str:
+            b64, _ = _axi_eyes.capture_b64()
+            return b64 or ""
+
+        def _posture_push(title: str, body: str) -> None:
+            lifeos_push.send_to_all(title=title, body=body, url="/posture",
+                                    tag="lifeos-posture")
+
+        def _posture_enabled() -> bool:
+            return bool(config.get("posture_enabled", False))
+
+        posture_cron.configure(
+            capture_fn=_posture_capture,
+            brain_ask=_axi_brain.ask,
+            push_fn=_posture_push,
+            is_enabled_fn=_posture_enabled,
+            cooldown_minutes=int(config.get("posture_cooldown_minutes", 30)),
+            confidence_threshold=float(config.get("posture_confidence_threshold", 0.6)),
+            language=str(config.get("language", "es-MX")),
+        )
+        posture_cron.start_jobs(
+            cadence_minutes=int(config.get("posture_cadence_minutes", 25)),
+            start_hour=int(config.get("posture_start_hour", 9)),
+            end_hour=int(config.get("posture_end_hour", 18)),
+            weekdays_only=bool(config.get("posture_weekdays_only", True)),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos posture cron failed to start")
+
+    yield
+
+    try:
+        get_scheduler().shutdown(wait=False)
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos scheduler failed to shutdown cleanly")
+
+
+app = FastAPI(title="Axi Dashboard", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # Expose live config values to every template (P0.4). The callable runs on
@@ -2745,110 +2837,6 @@ def _lifeos_push_dispatcher(rem: lifeos_reminders.Reminder) -> None:
     log.info("reminder %s push: %s (tag=%s)", rem.id, result, tag)
     if result.get("sent", 0) == 0 and result.get("failed", 0) > 0:
         raise RuntimeError(f"all push attempts failed: {result}")
-
-
-@app.on_event("startup")
-def _lifeos_startup() -> None:
-    """Boot the LifeOS scheduler. Loads pending reminders and arms apscheduler."""
-    try:
-        sched = get_scheduler()
-        sched.set_dispatcher(_lifeos_push_dispatcher)
-        sched.start()
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos scheduler failed to start")
-    # P2: ensure the encrypted health DB is initialized + schema current.
-    # First call generates the key file if missing.
-    try:
-        health_store.apply_migrations()
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos health store failed to migrate")
-    # P3: same for finance DB (independent key + DB).
-    try:
-        finance_store.apply_migrations()
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos finance store failed to migrate")
-    # P5.1: relationships DB (independent key + DB).
-    try:
-        rel_store.apply_migrations()
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos relationships store failed to migrate")
-    # P5.2: exercise DB (independent key + DB).
-    try:
-        ex_store.apply_migrations()
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos exercise store failed to migrate")
-    # P5.3: spirituality DB (independent key + DB).
-    try:
-        spirit_store.apply_migrations()
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos spirituality store failed to migrate")
-    # P5.4: learning DB (independent key + DB).
-    try:
-        learn_store.apply_migrations()
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos learning store failed to migrate")
-    # P5.5: events DB (independent key + DB).
-    try:
-        events_store.apply_migrations()
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos events store failed to migrate")
-    # P6.1: insights — register the daily + weekly cron jobs and bind the
-    # push dispatcher. Reuses the same Web Push + OS notification path as
-    # reminders, so the user gets insights on laptop + Pixel exactly like
-    # any reminder.
-    try:
-        def _insights_push(title: str, body: str) -> None:
-            lifeos_push.send_to_all(title=title, body=body, url="/insights",
-                                    tag="lifeos-insight")
-        insights_cron.set_push(_insights_push)
-        insights_cron.start_jobs()
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos insights cron failed to start")
-    # P6.2: posture — encrypted store + multimodal scanner cron. The
-    # toggle is read from config at fire time so the user can flip it
-    # without restarting. Defaults: disabled, weekdays 09-18, every 25
-    # min, cooldown 30 min, confidence threshold 0.6.
-    try:
-        posture_store.apply_migrations()
-        from axi import brain as _axi_brain
-        from axi import eyes as _axi_eyes
-
-        def _posture_capture() -> str:
-            b64, _ = _axi_eyes.capture_b64()
-            return b64 or ""
-
-        def _posture_push(title: str, body: str) -> None:
-            lifeos_push.send_to_all(title=title, body=body, url="/posture",
-                                    tag="lifeos-posture")
-
-        def _posture_enabled() -> bool:
-            return bool(config.get("posture_enabled", False))
-
-        posture_cron.configure(
-            capture_fn=_posture_capture,
-            brain_ask=_axi_brain.ask,
-            push_fn=_posture_push,
-            is_enabled_fn=_posture_enabled,
-            cooldown_minutes=int(config.get("posture_cooldown_minutes", 30)),
-            confidence_threshold=float(config.get("posture_confidence_threshold", 0.6)),
-            language=str(config.get("language", "es-MX")),
-        )
-        posture_cron.start_jobs(
-            cadence_minutes=int(config.get("posture_cadence_minutes", 25)),
-            start_hour=int(config.get("posture_start_hour", 9)),
-            end_hour=int(config.get("posture_end_hour", 18)),
-            weekdays_only=bool(config.get("posture_weekdays_only", True)),
-        )
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos posture cron failed to start")
-
-
-@app.on_event("shutdown")
-def _lifeos_shutdown() -> None:
-    try:
-        get_scheduler().shutdown(wait=False)
-    except Exception:  # noqa: BLE001
-        log.exception("lifeos scheduler failed to shutdown cleanly")
 
 
 def _reminder_to_dict(r: lifeos_reminders.Reminder) -> dict:
