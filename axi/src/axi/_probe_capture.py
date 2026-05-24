@@ -1,7 +1,10 @@
-"""End-to-end smoke test: record N seconds, transcribe, print.
+"""End-to-end smoke probe: record N seconds, transcribe, print.
+
+Not a pytest module — hand-run diagnostic. The leading underscore keeps it
+out of pytest collection while still importable as `python -m axi._probe_capture`.
 
 Run:
-    cd ~/LifeOS/lifeos/axi && .venv/bin/python -m axi.test_capture [seconds]
+    cd ~/LifeOS/lifeos/axi && .venv/bin/python -m axi._probe_capture [seconds]
 """
 from __future__ import annotations
 
