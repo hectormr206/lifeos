@@ -1,21 +1,51 @@
 """Smoke tests for the in-process Piper engine.
 
-Skipped when the Piper voice model isn't on disk (CI / dev machines
-without the model). When present, verifies the engine loads, produces
-PCM bytes, and reads `length_scale` fresh per call.
+Skipped when the Piper voice model isn't on disk OR when the heavy
+audio/TTS stack (pyaudio, RealtimeTTS, torch+NCCL) can't import in
+this environment. `axi.piper_python_engine` does top-level imports of
+all three, so we probe importability before letting pytest collect the
+test bodies.
+
+When everything is present, verifies the engine loads, produces PCM
+bytes, and reads `length_scale` fresh per call.
 """
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import pytest
 
 PIPER_MODEL = Path.home() / "LifeOS/models/piper-voices/es_MX-claude/es_MX-claude-high.onnx"
 
-pytestmark = pytest.mark.skipif(
-    not PIPER_MODEL.exists(),
-    reason=f"piper voice model not found at {PIPER_MODEL}",
-)
+
+def _audio_stack_importable() -> tuple[bool, str]:
+    """True iff piper_python_engine's module-level imports can succeed.
+
+    Probes pyaudio + RealtimeTTS (which itself imports torch). Returns a
+    (ok, reason) pair so the skip message points at the actual blocker.
+    """
+    if importlib.util.find_spec("pyaudio") is None:
+        return False, "pyaudio not installed"
+    try:
+        import RealtimeTTS  # noqa: F401  triggers torch import (NCCL etc.)
+    except Exception as e:  # noqa: BLE001
+        return False, f"RealtimeTTS import failed: {e}"
+    return True, ""
+
+
+_audio_ok, _audio_reason = _audio_stack_importable()
+
+pytestmark = [
+    pytest.mark.skipif(
+        not PIPER_MODEL.exists(),
+        reason=f"piper voice model not found at {PIPER_MODEL}",
+    ),
+    pytest.mark.skipif(
+        not _audio_ok,
+        reason=f"audio stack unavailable: {_audio_reason}",
+    ),
+]
 
 
 def _drain(q):

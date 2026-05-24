@@ -123,26 +123,31 @@ def test_chat_ask_persists_image_marker(client, monkeypatch):
     assert "mirá" in rows[-1]["user_text"]
 
 
-def test_chat_ask_speak_fires_speak_in_background(client, monkeypatch):
-    """speak=True → axi.speak.speak(answer) is called on a background thread."""
+def test_chat_ask_speak_synthesizes_wav_in_response(client, monkeypatch):
+    """speak=True → synthesize_wav_bytes(answer) runs synchronously and the
+    response carries audio_b64 + spoke=True.
+
+    Was previously named *_fires_speak_in_background and patched
+    speak_mod.speak — that legacy path was replaced by a synchronous
+    synth+ship pipeline (dashboard.py:2624-2645) so the browser plays
+    the audio over VPN/mobile, not the laptop speakers.
+    """
     from axi import brain, speak as speak_mod
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "hola Héctor")
-    spoken: list[str] = []
-    event = threading.Event()
+    synthesized: list[str] = []
 
-    def fake_speak(text):
-        spoken.append(text)
-        event.set()
-        return True
+    def fake_synth(text: str) -> bytes:
+        synthesized.append(text)
+        return b"RIFF\x00\x00\x00\x00WAVEfmt fake-pcm-bytes"
 
-    monkeypatch.setattr(speak_mod, "speak", fake_speak)
+    monkeypatch.setattr(speak_mod, "synthesize_wav_bytes", fake_synth)
 
     r = client.post("/api/chat/ask", json={"text": "saludá", "speak": True})
     assert r.status_code == 200
-    assert r.json()["spoke"] is True
-    # Wait briefly for the daemon thread; it should fire near-instantly.
-    assert event.wait(timeout=2.0), "speak() was never called"
-    assert spoken == ["hola Héctor"]
+    payload = r.json()
+    assert payload["spoke"] is True
+    assert payload["audio_b64"], "expected base64-encoded WAV in response"
+    assert synthesized == ["hola Héctor"]
 
 
 def test_chat_ask_speak_killswitch_blocks_tts(client, monkeypatch):
