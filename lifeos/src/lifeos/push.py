@@ -156,9 +156,12 @@ def send_os_notification(title: str, body: str) -> bool:
     if not binary:
         log.warning("notify-send not found — skipping OS notification")
         return False
-    icon = "/home/hectormr/LifeOS/lifeos/axi/src/axi/static/axi-192.png"
-    if not Path(icon).exists():
-        icon = "dialog-information"  # fallback to themed icon name
+    # Resolve icon without coupling `lifeos` to `axi`'s filesystem layout.
+    # `LIFEOS_NOTIFY_ICON` lets the embedder (the axi dashboard / systemd unit)
+    # point at axi/static/axi-192.png; absent that, fall back to a themed icon.
+    icon = os.environ.get("LIFEOS_NOTIFY_ICON", "").strip()
+    if not icon or not Path(icon).exists():
+        icon = "dialog-information"  # themed icon name (always renderable)
     try:
         subprocess.run(
             [binary, "--app-name=Axi", "--icon", icon, "--urgency=normal",
