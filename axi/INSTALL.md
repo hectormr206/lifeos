@@ -4,7 +4,7 @@
 
 ```fish
 cd ~/LifeOS/lifeos/axi
-.venv/bin/python -m axi.test_capture 5
+.venv/bin/python -m axi._probe_capture 5
 ```
 
 Hablá durante los 5 segundos. Debería imprimir la transcripción.

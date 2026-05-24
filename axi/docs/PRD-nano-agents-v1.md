@@ -1,8 +1,9 @@
-# PRD — LifeOS / Axi · Nano-Agents (v1)
+# PRD — LifeOS / Axi · Nano-Agents (v1.1 — reality update)
 
 > **Authored**: 2026-05-20
+> **Last revised**: 2026-05-22 (v1.1 reality update — see §0.1 and §13)
 > **Owner**: Héctor Martínez
-> **Status**: DRAFT — awaiting review and phase greenlight
+> **Status**: PARTIALLY IMPLEMENTED · awaiting empirical decision (continue / archive) once post-fix metrics accumulate
 > **Companion to**: [PRD-life-companion-v1.md](./PRD-life-companion-v1.md) (completed; Phases P0-P6.2 in production)
 
 ---
@@ -20,6 +21,53 @@ Hoy LifeOS usa **un solo modelo grande** (Qwen3.6 35B-A3B en GPU + CPU) para tod
 **Visión clave**: en una conferencia (ref. citada por Héctor) se demostró que un nano-agente especializado puede **ganarle** a un LLM de frontera en su nicho específico, porque el prompt está optimizado y el modelo no se distrae con la generalidad.
 
 **Lo que NO hace este PRD**: reemplazar Qwen3.6 35B-A3B. El brain grande sigue siendo el orquestador para tareas cross-domain (purchase consult, retros, conversación abierta). Los nano-agentes son **herramientas** que el brain llama.
+
+---
+
+## 0.1 Reality update — 2026-05-22
+
+Esta sección refleja lo que **realmente se construyó y lo que falló de las premisas originales** desde que el PRD se redactó (2026-05-20). Es la verdad operacional al día de hoy. El resto del documento queda como intención de diseño original; donde una afirmación quedó desmentida por la realidad, se agrega un bloque **[REALITY 2026-05-22]:** inline.
+
+### Qué se construyó
+
+- **N0 Foundation**: ✅ `lifeos.agents.runtime.call_nano()` (HTTP client al nano llama-server). Endpoint default `127.0.0.1:8090`, timeout 5s, `disable_thinking=True`, `max_tokens=800` (valores menores producen content vacío en Qwen3.5-0.8B).
+- **N2 Entity extractor**: ✅ `lifeos.agents.extractor.extract()`. Few-shot prompt curado con reglas estrictas anti-FP en `people` y reglas DOMAIN para que ejercicio gane sobre relationships cuando hay actividad física. Wirear en `axi/src/axi/dashboard.py:_try_nano_extract()` como fallback ANTES del brain cuando ninguna regex matchea.
+- **Servicio runtime**: ✅ `llama-nano.service` (port 8090) corriendo Qwen3.5-0.8B-Q4_K_M en **CPU-only** garantizado vía `CUDA_VISIBLE_DEVICES=""` + `-ngl 0`. MemoryMax=2G. Separado del brain (`llama-server.service`, port 8080, GPU).
+
+### Qué se saltó / desvió del plan original
+
+- **N1 Intent classifier saltado**. El PRD §6 lo recomendaba como "primer slice" porque toca el 100% de los chat calls. En la práctica se fue directo a N2 (entity extractor) — decisión no documentada en su momento.
+- **Runtime ≠ Ollama**. El PRD §4.1 recomendaba Ollama (multi-model hot-swap, LRU eviction). Se implementó con un segundo `llama-server` dedicado a un único modelo. Trade-off: ✅ aislamiento de hardware (CUDA hidden), ✅ stack conocido; ❌ no hay hot-swap, escalar nano-agentes implica más servicios o compartir prompt con el mismo modelo.
+- **Modelo ≠ Qwen3-0.6B**. El PRD §3 recomendaba Qwen3-0.6B. Se usa **Qwen3.5-0.8B-Q4_K_M** por preferencia explícita del owner: SIEMPRE el modelo más actual de su familia, no bajar a versiones previas por latencia.
+- **Eval harness no existe**. `agents/eval/`, `golden_sets/`, `bootstrap.py` del §4.3/§5 → no se construyeron.
+
+### Premisa principal del PRD **REFUTADA por mediciones**
+
+El PRD §1.2 prometía nano-agente a **50-200ms** en CPU vs 2-5s del brain. Datos reales (129 calls de chat instrumentados en `lifeos.metrics.fastpath_metrics`):
+
+| Etapa | n | p50 | Observación |
+|---|---|---|---|
+| brain (Qwen 35B en GPU) | 44 | **2332 ms** | mucho más rápido de lo asumido (MoE A3B en GPU) |
+| nano_* (Qwen 0.8B en CPU) | 54 | **2000-3900 ms** | ~igual o peor que el brain |
+| regex health/finance/relationships | 15 | **14-33 ms** | sí cumple su rol |
+
+**Conclusión empírica**: el nano Qwen3.5-0.8B en CPU con `-t 4` y outputs JSON de 800 tokens **NO** entrega la ventaja de latencia que el PRD asumía. La ventaja real, si la hay, es **accuracy** (capturar variantes que la regex no agarra) y/o **persistencia automática** (el nano no solo entiende, también escribe al store correspondiente — cosa que el brain no hace). No latencia.
+
+### Bug encontrado y fixeado (2026-05-22)
+
+- **30 de 129 calls (23%)** fueron clasificadas como `nano_spirituality` con un avg de **4 caracteres** de input. Causa: (a) el caller no tenía guard de longitud mínima → cualquier input vacío iba al nano; (b) el wire de spirituality en `_try_nano_extract` carecía de la quality guard que sí tenían los otros dominios (finance exige `amount`, exercise exige `duration_minutes`, etc.). El modelo defaulteaba a "spirituality" para inputs ambiguos y el wire persistía cualquier basura como reflexión.
+- **Fix aplicado**: (1) `dashboard.py:2532` ahora skipea el nano si `len(text.strip()) < 12`. (2) `dashboard.py:1958` exige `result.title || result.kind || len(text.strip()) >= 20` antes de persistir spirituality.
+- Después del fix, hay que reacumular datos limpios (~24-48h) antes de decidir continue / archive.
+
+### Decisión pendiente (próximo viaje al PRD)
+
+Con la baseline contaminada + premisa de latencia refutada, las opciones son:
+
+- **A. Continue — pivot rationale**: aceptar que el nano NO da ganancia de latencia, defender su existencia por accuracy + persistencia. Construir el eval harness de §4.3 con golden sets y MEDIR si el nano agarra cosas que la regex y el brain pierden. Si <30% de las nano_* calls hubieran sido brain "no-action" igual → no vale.
+- **B. Continue — N1 intent classifier**: el PRD original lo recomendaba precisamente porque toca el 100% de calls. Pero implementarlo con Qwen3.5-0.8B en CPU agregaría 2-4s a TODAS las calls. Mata el caso de uso salvo que se acelere drásticamente (que no podemos sin bajar a un modelo más viejo, vetado por el owner).
+- **C. Archive honestamente**: vivir solo con regex + brain directo. Apagar `llama-nano.service`, liberar 2GB de RAM. El extractor queda en código por si en el futuro se quiere reactivar con otro modelo.
+
+**Recomendación honesta del orquestador**: si los datos post-fix no muestran que el nano "salva" >30% de calls que de otro modo irían al brain con resultado equivalente, ir directo a **C**. Si sí salva, **A** con eval harness.
 
 ---
 
@@ -49,6 +97,8 @@ Modelos de 500M-1.5B params, quantizados a Q4 (~200-300MB en disco), corriendo e
 - **Especialización**: prompt+fine-tune en una sola tarea → accuracy alta en ese nicho
 - **Composabilidad**: el orquestador (Qwen 35B) puede llamar varios nano-agentes en paralelo o secuencialmente
 - **Costo marginal**: agregar un nano-agente = 300MB en disco + prompt iteration
+
+> **[REALITY 2026-05-22]**: el bullet de "latencia 50-200ms" es **falso** con Qwen3.5-0.8B Q4 en CPU + outputs JSON ~800 tokens + `-t 4`. Medición real: **p50 = 2000-3900 ms**, ~igual o peor que el brain Qwen 35B-A3B en GPU. La ventaja, si existe, es accuracy + persistencia automática — no latencia. Ver §0.1.
 
 ### 1.3 Lo que NO mejora con nano-agentes
 
@@ -101,6 +151,8 @@ Investigación de hoy (2026-05-20). Foco: ≤1.5B params, Spanish-capable, GGUF 
 
 **Pick recomendado**: **Qwen3-0.6B** para la mayoría de tier 1, **Gemma 3 1B** si necesitamos más capacidad. Ambos caben en 300MB Q4 y manejan Spanish nativamente.
 
+> **[REALITY 2026-05-22]**: el modelo en prod es **Qwen3.5-0.8B-Q4_K_M**, no Qwen3-0.6B. Decisión explícita del owner: SIEMPRE el más actual de la familia, aunque cueste algo más de latencia/RAM. Si Qwen libera 3.6-0.X o equivalente, migrar. Ver memoria #194 (`preferences/model-currency`).
+
 ---
 
 ## 4. Architecture
@@ -123,6 +175,8 @@ Opciones evaluadas:
 - No interfiere con llama-server (que sigue con Qwen 35B en 8080).
 - Trivial de actualizar y monitorear.
 - Si queremos cambiar después, la abstracción `lifeos.agents.runtime` esconde el backend.
+
+> **[REALITY 2026-05-22]**: NO se implementó con Ollama. Se montó un **segundo `llama-server` dedicado** (`llama-nano.service` en port 8090) con un único modelo cargado, `CUDA_VISIBLE_DEVICES=""` para aislamiento absoluto. Trade-offs aceptados: gana stack conocido + aislamiento de hardware más explícito; pierde hot-swap multi-modelo y eviction LRU. Si se necesita multi-agente concurrente con modelos distintos, esta decisión hay que reabrirla. Ver §0.1 y memoria #193 (`architecture/nano-agents`).
 
 ### 4.2 Orquestación — cuándo se llama a quién
 
@@ -200,7 +254,7 @@ Tooling propuesto: `lifeos/agents/eval/` con:
 - Smoke test: prompt simple desde Python.
 - `lifeos.agents.runtime.AgentClient` — wrapper HTTP.
 
-### **N1 — Intent classifier** (1-2 sesiones) ← **primer slice**
+### **N1 — Intent classifier** (1-2 sesiones) ← **primer slice** · **[REALITY 2026-05-22]: SALTADO — se fue directo a N2.**
 **Goal**: reemplazar la cadena lineal de 8 regex con UN classify call.
 - Definir la tarea: input → domain ∈ {health, finance, relationships, exercise, spirituality, learning, events, reminders, chat}
 - Bootstrap del prompt
@@ -208,7 +262,7 @@ Tooling propuesto: `lifeos/agents/eval/` con:
 - Eval harness corre y mide
 - Wirear al chat fast-path: si confidence ≥0.7, dispatch directo al regex del dominio; si no, continuar con la cadena actual.
 
-### **N2 — Entity extractor**
+### **N2 — Entity extractor** · **[REALITY 2026-05-22]: IMPLEMENTADO** — único nano-agente en prod hoy. Wireado en `dashboard.py:_try_nano_extract`. Bug `nano_spirituality` (4-char inputs catch-all) detectado en métricas, fixeado en `dashboard.py:2532` y `dashboard.py:1958` el 2026-05-22. Falta el harness de eval con golden sets (§4.3) para validar accuracy.
 **Goal**: capturar variantes que las regex no agarran.
 - Output structured JSON: `{people: [...], amounts: [{value, currency}], dates: [...], locations: [...]}`
 - Wirear como fallback antes del brain (cuando ningún regex de dominio matcheó).
@@ -316,6 +370,27 @@ Si no querés instrumentar primero y preferís arrancar con N0+N1 sobre la fe:
 
 Mi recomendación HONESTA: instrumentación primero. Es 1 hora bien gastada que puede ahorrar 2 semanas de construir en el aire.
 
+> **[REALITY 2026-05-22]**: la instrumentación se construyó (`lifeos.metrics.fastpath_metrics`) y se observó. El "construir en el aire" sucedió igual: N0+N2 se implementaron antes de mirar números, y los números desmintieron la premisa de latencia. Lección: instrumentar NO ALCANZA — hay que LEER los datos antes de buildear la siguiente fase. Ver §0.1 y §13.
+
 ---
 
-*Fin del PRD. Decisiones pendientes están en §9. Cuando revises, marca lo que querés cambiar y desde ahí seguimos.*
+## 13. Changelog
+
+### v1.1 — 2026-05-22 (reality update)
+
+- Status: DRAFT → PARTIALLY IMPLEMENTED, awaiting empirical decision.
+- §0.1 nueva — verdad operacional al día de hoy: qué se construyó, qué se desvió, premisa de latencia refutada, bug fixeado, opciones de decisión (continue / archive).
+- §1.2 — bullet de "latencia 50-200ms" marcado como falso con números reales.
+- §3 — modelo en prod corregido a Qwen3.5-0.8B-Q4_K_M (no Qwen3-0.6B).
+- §4.1 — runtime real: segundo `llama-server`, no Ollama. Trade-offs explícitos.
+- §6 — N1 marcado SALTADO; N2 marcado IMPLEMENTADO con referencia al bug fixeado.
+- §12 — nota de "instrumentar no alcanza, hay que LEER los datos".
+- Memorias relacionadas: #192 (`architecture/llama-servers`), #193 (`architecture/nano-agents`), #194 (`preferences/model-currency`), #195 (`bugfix/axi-lifeos-path-dep`).
+
+### v1.0 — 2026-05-20 (initial draft)
+
+- Original DRAFT por Héctor Martínez. Visión completa, fases N0-N7, candidates de modelos, eval pipeline propuesto. Recomendaba Ollama + Qwen3-0.6B + N1 como primer slice.
+
+---
+
+*Fin del PRD. La próxima vez que se abra este documento, comparar el snapshot de métricas post-fix (≥24h después del 2026-05-22 13:09) y decidir entre A, B, C de §0.1. NO buildear más nano-agentes hasta tomar esa decisión.*

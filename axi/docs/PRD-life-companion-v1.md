@@ -327,14 +327,22 @@ These need Héctor's input or a design decision before implementation starts:
 
 ---
 
-## 9. Open questions for Héctor (please decide before P1 kicks off)
+## 9. Open questions for Héctor — **✅ RESOLVED (2026-05-22)**
+
+> Las 6 questions fueron auditadas y cerradas el 2026-05-22. Todas resueltas a favor de la opción que el PRD recomendaba, todas shippeadas con commits trazables. Confirmación de Héctor + memoria de decisión #189 (`lifeos/prd-v1/open-questions`). Esta sección se conserva como histórico — no abrir nuevas decisiones acá; abrir un follow-up nuevo si algo se rompe.
 
 1. **NL parsing approach for reminders**: ¿`dateparser` (rápido, determinístico) o brain (más flexible pero más lento y menos predecible)? Yo voto dateparser primero, brain como fallback.
+   - **✅ RESOLVED**: `dateparser` fast-path (~180ms) + brain fallback wireado en commit `796bc01`. Ver memoria #184 (`brain fallback into LifeOS reminder parser`).
 2. **Encryption scope for v1**: ¿`sqlcipher` desde el día uno en P2 (más fricción, más seguro), o SQLite plano detrás de chmod 700 con migración a sqlcipher en P4? Yo voto **sqlcipher desde día uno** — migrar después es siempre más costoso.
+   - **✅ RESOLVED**: sqlcipher en TODOS los stores. Commits: health `b1b6449`, finance `d0f2a0b`, lifeos core `791442b`, y cada dominio (relationships/exercise/spirituality/learning/events) con key independiente.
 3. **Notification budget default**: ¿cuántas notificaciones por día tope antes de empezar a deduplicar / suprimir? Sugerencia: 5/día, configurable en `/config`.
+   - **✅ RESOLVED**: cap diario 5 (ambient) + dedup sha256[:16] window 1h + soft coalescing. Commit `d780bac`.
 4. **Voice trigger for the new domains**: ¿usamos el prefijo existente `Axi, ...` o agregamos verbos específicos (`Axi, gasté...`, `Axi, comí...`)? Yo voto: mantener `Axi, ...` y dejar que el intent classifier rute. Menos sintaxis que recordar.
+   - **✅ RESOLVED**: prefijo único `Axi, ...` con ruteo por intent. Pipeline de voz validado en prod 2026-05-22 (reminder `01KS8DGA78Z9P7C959SFGHW6VJ`, latencia ~2.3s end-to-end).
 5. **Confirmación de ingestión automática**: cuando Axi auto-clasifica "me duele la garganta" como `health/symptom`, ¿lo guarda silencioso y te muestra un "confirmá" al final del día, o te pregunta en el momento? Yo voto: **silencioso + daily-review push a las 21:00** para no romper el flow.
+   - **✅ RESOLVED con matiz aceptado por Héctor**: silent persistence + brief ack inline (`dashboard.py:2275-2277`) + insights digest cron @ 21:00 (P6.1). Difiere del PRD original (no es una "lista plana de confirmá X, confirmá Y") — el digest entrega **patrones detectados**, cumpliendo el espíritu (silent + review diario) con más valor. Si en uso real falta capacidad de corregir clasificaciones, abrir follow-up nuevo.
 6. **Repo layout**: ¿el nuevo código vive en `lifeos/lifeos/` (nuevo paquete hermano de `axi/`) o como sub-módulo dentro de `axi/`? Yo voto: **paquete hermano `lifeos/`** — la visión es que axi es el agente, y lifeos es el sistema de vida del que axi es la cara conversacional. Ya está implícito en la metáfora del repo.
+   - **✅ RESOLVED**: paquete hermano en `/home/hectormr/LifeOS/lifeos/{axi,lifeos}/`. Restructura completada en memorias #148-#150. Hoy axi declara lifeos como path-dep editable en su pyproject (ver memoria #195).
 
 ---
 
