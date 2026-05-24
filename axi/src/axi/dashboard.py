@@ -119,6 +119,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 STATIC_DIR = PROJECT_ROOT / "static"
 
+def _apply_nano_endpoint(endpoint: str) -> None:
+    """Propagate the configured nano llama-server URL to the environment and,
+    if lifeos.agents.runtime is already loaded, refresh its module-level
+    attribute so live calls use the new value without a restart.
+
+    Safe to call multiple times (idempotent side-effects).
+    """
+    ep = endpoint.strip()
+    if not ep:
+        return
+    os.environ["LIFEOS_NANO_ENDPOINT"] = ep
+    try:
+        from lifeos.agents import runtime as _nano_runtime  # noqa: PLC0415
+        _nano_runtime.NANO_ENDPOINT = ep
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """LifeOS startup/shutdown wired through FastAPI's lifespan protocol.
@@ -126,6 +144,9 @@ async def lifespan(_app: FastAPI):
     Startup: arm the scheduler, apply migrations on every encrypted store,
     register insights + posture crons. Shutdown: stop the scheduler cleanly.
     """
+    # Propagate nano_endpoint from config before any lifeos runtime call.
+    _apply_nano_endpoint(str(config.get("nano_endpoint", "http://127.0.0.1:8090")))
+
     try:
         sched = get_scheduler()
         sched.set_dispatcher(_lifeos_push_dispatcher)
@@ -1956,6 +1977,13 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
 
         # ─── spirituality (low frequency; minimal wire) ─────────────
         if domain == "spirituality":
+            # Quality guard: spirituality is the model's default bucket for
+            # ambiguous/short inputs (verified empirically: 30 of 129 chat
+            # calls landed here with avg 4 chars of input → noise entries).
+            # Only persist when the extractor produced an actual title/kind
+            # or the input itself is substantive enough to be a reflection.
+            if not (result.title or result.kind) and len(text.strip()) < 20:
+                return None
             from lifeos.spirituality import entries as _se
             kind_map = {"gratitude": "gratitude", "reflection": "reflection",
                         "prayer": "prayer", "meditation": "meditation",
@@ -2537,7 +2565,11 @@ async def api_chat_ask(request: Request):
     # All regex parsers missed. Try the entity extractor (Qwen3.5-0.8B
     # on port 8090). If it identifies a domain and we successfully
     # persist, return that. Otherwise fall through to the main brain.
-    if not image_b64:
+    # Min-length guard: very short inputs (<12 chars) have no structure
+    # for the extractor to recover and trigger spurious classifications
+    # (the model defaults to "spirituality" on near-empty text). Skip
+    # straight to the brain instead of burning ~4s on noise.
+    if not image_b64 and len(text.strip()) >= 12:
         try:
             nano_out = _try_nano_extract(text, location_tag)
         except Exception as e:  # noqa: BLE001

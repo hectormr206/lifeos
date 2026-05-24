@@ -207,6 +207,12 @@ FIELDS: tuple[ConfigField, ...] = (
         "V0 Resemblyzer pipeline. Opt-in because pyannote pulls ~600 MB of "
         "deps and runs on CPU (Blackwell sm_120 has no torch kernels yet).",
     ),
+    ConfigField(
+        "diarize_version", "string", "auto",
+        "Diarizer elegido: 'auto' (intenta pyannote, cae a Resemblyzer), "
+        "'v2' (fuerza pyannote, log si falla), 'v0' (fuerza Resemblyzer).",
+        choices=("auto", "v2", "v0"),
+    ),
     # ─────── disk guards (P2.3) ───────
     ConfigField(
         "disk_min_gb_free", "integer", 2,
@@ -259,6 +265,11 @@ FIELDS: tuple[ConfigField, ...] = (
         "chat_tts_enabled", "boolean", True,
         "If false, the chat 'speak' toggle is ignored — voice output never plays even "
         "when the request asks for it (P-chat-multimodal kill switch).",
+    ),
+    # ─────── nano-agents endpoint ───────
+    ConfigField(
+        "nano_endpoint", "string", "http://127.0.0.1:8090",
+        "URL del nano llama-server (extractor de entidades, puerto 8090).",
     ),
     # ─────── dashboard bind ───────
     ConfigField(

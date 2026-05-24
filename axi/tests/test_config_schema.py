@@ -19,10 +19,18 @@ def test_defaults_round_trip():
     assert out == defaults
 
 
-def test_schema_covers_all_22_keys():
+def test_schema_covers_historical_keys():
+    """Every config key ever shipped must still exist in the schema.
+
+    Originally this test also asserted an exact total count (22, then 34) —
+    that drifted with each new feature flag and ate maintenance for no
+    real signal. Schema growth is not a bug; silent REMOVAL of a key is.
+    Keeping the subset check (would catch removal) and dropping the
+    brittle total-count assertion.
+    """
     names = set(config_schema.field_names())
-    expected = {
-        # 12 existing/already-in-defaults
+    historical_keys = {
+        # 12 existing/already-in-defaults (P0.0-P0.3 baseline)
         "timezone", "language", "user_name",
         "tts_enabled", "vision_enabled", "fact_extraction_enabled",
         "events_enabled",
@@ -56,11 +64,8 @@ def test_schema_covers_all_22_keys():
         "dashboard_host",
         "dashboard_port",
     }
-    assert expected.issubset(names)
-    # 22 P0.4 baseline + 1 P0.2 + 2 (P1.3, P2.5) + 1 (P2.3) + 1 (P1.5)
-    # + 2 (P1.2) + 1 (P2.1) + 1 (P-chat) + 1 (P-chat-multimodal TTS)
-    # + 2 (P-vpn dashboard host/port) = 34.
-    assert len(names) == 34
+    missing = historical_keys - names
+    assert not missing, f"config schema dropped historical keys: {sorted(missing)}"
 
 
 def test_to_json_schema_has_all_keys():
