@@ -2055,9 +2055,14 @@ async def api_chat_ask(request: Request):
         if isinstance(qi, decide_query_parser.PurchaseConsultIntent):
             try:
                 from axi import brain as _brain
+                from lifeos.insights.correlate import build_bundle  # noqa: PLC0415
                 lang = str(config.get("language", "es-MX"))
+                # Inject live cross-domain context (patterns + graph edges) so
+                # the purchase decision sees sleep/health signals, not just
+                # finance. No domain_hint on purpose: the value is cross-domain.
                 result = decide_purchase.consult(
                     qi.item, brain_ask=_brain.ask, language=lang,
+                    bundle=build_bundle(),
                 )
                 latency_ms = round((time.monotonic() - start) * 1000)
                 try:
@@ -2309,8 +2314,11 @@ async def api_chat_ask(request: Request):
                 # P4: surface historical pattern when this is a symptom.
                 if entry.kind == "symptom":
                     try:
+                        from lifeos.insights.correlate import build_bundle  # noqa: PLC0415
                         recurrences = decide_symptom.find_recurrences(entry)
-                        pattern_msg = decide_symptom.summarize(entry, recurrences, language=lang)
+                        pattern_msg = decide_symptom.summarize(
+                            entry, recurrences, language=lang, bundle=build_bundle(),
+                        )
                         if pattern_msg:
                             answer = answer + "\n\n" + pattern_msg
                     except Exception:  # noqa: BLE001
@@ -4162,6 +4170,35 @@ def api_metrics_fastpath_recent(days: int = 1, limit: int = 100):
             }
             for m in rows
         ],
+    }
+
+
+@app.get("/api/insights/context")
+def api_insights_context():
+    """Return the active correlation bundle (patterns + edges + summary).
+
+    This is a read-only endpoint — no brain call, no side effects.
+    The front-end can poll this to render an 'active context' card.
+    """
+    from lifeos.insights.correlate import build_bundle  # noqa: PLC0415
+    bundle = build_bundle()
+    return {
+        "patterns": [
+            {"kind": p.kind, "message": p.message, "severity": p.severity,
+             "data": p.data}
+            for p in bundle.active_patterns
+        ],
+        "edges": [
+            {
+                "id": e.id,
+                "src": {"domain": e.src_domain, "id": e.src_id},
+                "dst": {"domain": e.dst_domain, "id": e.dst_id},
+                "rel": e.rel,
+                "metadata": e.metadata,
+            }
+            for e in bundle.relevant_edges
+        ],
+        "summary": bundle.edge_summary,
     }
 
 

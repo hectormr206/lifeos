@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from lifeos.finance import entries as finance_entries
+from lifeos.insights.correlate import CorrelationBundle
 
 log = logging.getLogger("lifeos.decide.purchase")
 
@@ -78,7 +79,8 @@ def _fmt_short_date(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
 
-def build_prompt(ctx: PurchaseContext, language: str = "es-MX") -> str:
+def build_prompt(ctx: PurchaseContext, language: str = "es-MX",
+                 bundle: CorrelationBundle | None = None) -> str:
     """Render a context-rich prompt for the brain."""
     lang_es = language.lower().startswith("es")
     lines: list[str] = []
@@ -162,18 +164,31 @@ def build_prompt(ctx: PurchaseContext, language: str = "es-MX") -> str:
             )
         lines.append("")
 
+    # ── Correlation context injection ──────────────────────────────────────
+    if bundle is not None and bundle.edge_summary:
+        lines.append("")
+        lines.append("=== Contexto de vida actual ===")
+        lines.append(bundle.edge_summary)
+        lines.append("===============================")
+        lines.append("")
+
     return "\n".join(lines)
 
 
 def consult(item: str, *, brain_ask: Callable[..., str],
-            language: str = "es-MX") -> PurchaseConsultResult:
+            language: str = "es-MX",
+            bundle: CorrelationBundle | None = None) -> PurchaseConsultResult:
     """Run a full purchase consult and return the answer.
 
     `brain_ask` is the callable the dashboard injects (typically
     `axi.brain.ask`). Signature: `brain_ask(prompt: str) -> str`.
+
+    `bundle` is an optional CorrelationBundle produced by
+    `lifeos.insights.correlate.build_bundle`. When provided, the active
+    life-context is appended to the prompt.
     """
     ctx = gather_context(item)
-    prompt = build_prompt(ctx, language=language)
+    prompt = build_prompt(ctx, language=language, bundle=bundle)
     try:
         answer = brain_ask(prompt, max_tokens=1024)
     except TypeError:

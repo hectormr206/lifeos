@@ -14,9 +14,12 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from lifeos.health import entries as health_entries
+
+if TYPE_CHECKING:
+    from lifeos.insights.correlate import CorrelationBundle
 
 
 def find_recurrences(entry: health_entries.Entry,
@@ -68,7 +71,8 @@ def _seasonal_pattern(entries: Iterable[health_entries.Entry]) -> str | None:
 
 def summarize(entry: health_entries.Entry,
               recurrences: list[health_entries.Entry],
-              language: str = "es-MX") -> str | None:
+              language: str = "es-MX",
+              bundle: "CorrelationBundle | None" = None) -> str | None:
     """Render a one-paragraph nudge about past recurrences. None if no
     meaningful pattern."""
     if not recurrences:
@@ -92,4 +96,13 @@ def summarize(entry: health_entries.Entry,
         msg += f" La más reciente: {most_recent_str}."
         if months_pattern:
             msg += f" Este patrón se repite en {months_pattern}."
+
+    # ── Correlation context injection ──────────────────────────────────────
+    if bundle is not None and bundle.edge_summary:
+        msg += (
+            "\n\n=== Contexto de vida actual ===\n"
+            + bundle.edge_summary
+            + "\n==============================="
+        )
+
     return msg

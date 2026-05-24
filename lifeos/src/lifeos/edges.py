@@ -32,6 +32,8 @@ REL_VOCAB = frozenset({
     "caused-by", "precedes", "same-event",
     "mentions-person", "resolved-by", "pattern-of",
     "triggered-by", "funded", "costs",
+    # Correlation Engine (P6.3)
+    "correlates-with", "pattern-active-at",
 })
 
 

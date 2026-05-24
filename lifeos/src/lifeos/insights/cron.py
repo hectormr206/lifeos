@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.triggers.cron import CronTrigger
 
 from lifeos.insights import digest
+from lifeos.insights.correlate import register as _register_correlation
 from lifeos.scheduler import get_scheduler
 
 log = logging.getLogger("lifeos.insights.cron")
@@ -117,6 +118,9 @@ def start_jobs(*, daily_hour: int = _DEFAULT_DAILY_HOUR,
         id="lifeos.insights.weekly", replace_existing=True,
         misfire_grace_time=7200,
     )
+    # Register correlation_snapshot (hourly, defined in correlate.py).
+    _register_correlation(sched)
+
     log.info(
         "insight jobs registered: daily=%02d:%02d, weekly=day%d@%02d:%02d",
         daily_hour, daily_minute, weekly_weekday, weekly_hour, weekly_minute,
