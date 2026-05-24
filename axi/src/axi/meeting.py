@@ -827,13 +827,35 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
     # of the generic 'Reunión' bucket. Failures here are non-fatal; the
     # summary still works with the channel-level labels.
     try:
-        # P2.1: opt-in V2 (pyannote.audio). V2 is a strict drop-in — same
-        # signature, same DB side-effects — and falls back to V0 internally
-        # on any error path, so flipping the flag never deadens diarization.
-        if config.get("diarization_v2_enabled", False):
-            from axi.diarize_v2 import diarize_meeting
-        else:
+        # P2.1: diarize_version kill-switch.
+        #   "auto" → try V2 (pyannote), silently fall back to V0 on error.
+        #   "v2"   → force pyannote; log warning and fall back to V0 on error.
+        #   "v0"   → force Resemblyzer (V0) unconditionally.
+        # The legacy boolean flag `diarization_v2_enabled` is superseded by
+        # `diarize_version`; if someone still has the old flag set we honour it
+        # via the "auto" path.
+        _diar_version = str(config.get("diarize_version", "auto")).strip().lower()
+        if _diar_version == "v0":
             from axi.diarize import diarize_meeting
+        elif _diar_version == "v2":
+            try:
+                from axi.diarize_v2 import diarize_meeting
+            except Exception as _v2_err:  # noqa: BLE001
+                events.log_warning(
+                    "meeting.diarize",
+                    f"diarize_v2 unavailable, falling back to v0: {_v2_err}",
+                )
+                from axi.diarize import diarize_meeting
+        else:
+            # "auto" (default) — try V2, fall back to V0 silently.
+            # Also honoured for any unrecognised value (safe default).
+            if config.get("diarization_v2_enabled", False):
+                try:
+                    from axi.diarize_v2 import diarize_meeting
+                except Exception:  # noqa: BLE001
+                    from axi.diarize import diarize_meeting
+            else:
+                from axi.diarize import diarize_meeting
         diar_info = diarize_meeting(meeting_id)
         log.info("diarization for meeting %d: %s", meeting_id, diar_info)
         # Refresh in-memory segments list with new speaker labels for the

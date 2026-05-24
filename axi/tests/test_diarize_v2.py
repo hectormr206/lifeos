@@ -23,6 +23,24 @@ import soundfile as sf
 from axi import diarize_v2, store
 
 
+def _resemblyzer_torch_ok() -> tuple[bool, str]:
+    """Diarize V2's preprocess_wav goes through resemblyzer → torch → NCCL.
+    Even with pyannote and Resemblyzer's centroid step mocked, the test
+    still indirectly imports torch via the diarize module chain. If torch
+    can't load its CUDA companion libs (e.g. libnccl.so.2 absent), the
+    happy-path test asserts on empty cluster results. Probe the import
+    here so we skip cleanly instead of failing on a hard-to-read assert.
+    """
+    try:
+        import torch  # noqa: F401
+    except Exception as e:  # noqa: BLE001
+        return False, f"torch import failed: {e}"
+    return True, ""
+
+
+_torch_ok, _torch_reason = _resemblyzer_torch_ok()
+
+
 # ─────────────────────── helpers ─────────────────────────────────────────
 
 def _make_meeting_with_chunks(tmp_path: Path, n_chunks: int = 2) -> int:
@@ -160,6 +178,10 @@ def test_assign_segment_labels_picks_dominant_overlap():
     assert out[101] == "SPEAKER_01"
 
 
+@pytest.mark.skipif(
+    not _torch_ok,
+    reason=f"happy path needs torch loadable end-to-end ({_torch_reason})",
+)
 def test_v2_happy_path_with_mocked_pipeline(tmp_path, monkeypatch):
     """End-to-end V2: mock the pyannote Pipeline to return a known
     diarization, verify the DB ends up with the right speaker labels.
