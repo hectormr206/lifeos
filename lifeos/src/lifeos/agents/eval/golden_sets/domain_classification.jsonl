@@ -1,0 +1,57 @@
+// Golden set for nano extractor domain-classification eval — v1
+// Format: {"text": str, "expected_domain": str|null, "note": str (optional)}
+// Valid domains: finance, relationships, exercise, learning, health, events, spirituality
+// Use null (not the string) when no domain should be extracted.
+// Run eval: cd ~/LifeOS/lifeos/lifeos && .venv/bin/python -m lifeos.agents.eval._run_eval
+
+// ── FINANCE (5 cases) ──────────────────────────────────────────────────────
+{"text": "Gasté 500 pesos en el super", "expected_domain": "finance", "note": "classic regex-trivial finance case"}
+{"text": "Pagué 1850 en Aurrera: detergente, papel, cable HDMI", "expected_domain": "finance"}
+{"text": "Me cobraron 230 de Uber esta mañana", "expected_domain": "finance"}
+{"text": "Compré los tenis en $1299, los de descuento", "expected_domain": "finance"}
+{"text": "Salió 3400 la cena para 4 personas en el restaurante", "expected_domain": "finance"}
+
+// ── RELATIONSHIPS (4 cases) ────────────────────────────────────────────────
+{"text": "Hablé con Diego sobre el proyecto de trabajo", "expected_domain": "relationships"}
+{"text": "Tuve una discusión fuerte con mi mamá esta tarde", "expected_domain": "relationships"}
+{"text": "Llamé a mi hermana para ver cómo estaba", "expected_domain": "relationships"}
+{"text": "Conocí a los papás de mi novia en la cena", "expected_domain": "relationships"}
+
+// ── EXERCISE (5 cases) ─────────────────────────────────────────────────────
+{"text": "Corrí 5km en el parque esta mañana", "expected_domain": "exercise"}
+{"text": "Fui al gym a entrenar pierna, 1 hora", "expected_domain": "exercise"}
+{"text": "Caminé con mi esposa Daniela durante 45 minutos", "expected_domain": "exercise", "note": "walk with person — should be exercise not relationships"}
+{"text": "Hice 30 minutos de yoga en casa", "expected_domain": "exercise"}
+{"text": "Entrené fuerza con pesas hoy en la mañana", "expected_domain": "exercise"}
+
+// ── LEARNING (4 cases) ─────────────────────────────────────────────────────
+{"text": "Estoy aprendiendo Claude Code para LifeOS", "expected_domain": "learning"}
+{"text": "Empecé el libro Atomic Habits de James Clear", "expected_domain": "learning"}
+{"text": "Estudié 2 horas de arquitectura hexagonal", "expected_domain": "learning"}
+{"text": "Vi un video sobre sistemas de memoria espaciada", "expected_domain": "learning"}
+
+// ── HEALTH (4 cases) ───────────────────────────────────────────────────────
+{"text": "Dormí mal, me desperté tres veces", "expected_domain": "health"}
+{"text": "Me tomé la presión: 120/80, estoy bien", "expected_domain": "health"}
+{"text": "Tengo dolor de cabeza desde ayer en la tarde", "expected_domain": "health"}
+{"text": "Pesé 78kg esta mañana en ayunas", "expected_domain": "health"}
+
+// ── EVENTS (3 cases) ───────────────────────────────────────────────────────
+{"text": "El cumpleaños de mi mamá es el 12 de julio", "expected_domain": "events"}
+{"text": "Mi esposa Daniela y yo nos casamos el 15 de junio de 2018", "expected_domain": "events"}
+{"text": "La graduación de mi sobrino es el próximo mes", "expected_domain": "events"}
+
+// ── SPIRITUALITY (3 cases) ─────────────────────────────────────────────────
+{"text": "Hoy me desperté agradecido por todo lo que tengo", "expected_domain": "spirituality"}
+{"text": "Medité 20 minutos al amanecer, me siento en paz", "expected_domain": "spirituality"}
+{"text": "Reflexioné sobre mis metas y el sentido de lo que hago", "expected_domain": "spirituality"}
+
+// ── NULL / TRAP CASES (8 cases) ────────────────────────────────────────────
+{"text": "ok", "expected_domain": null, "note": "trap: very short input (<5 chars), historically misclassified as spirituality"}
+{"text": "si", "expected_domain": null, "note": "trap: 2-char input — should be null"}
+{"text": "...", "expected_domain": null, "note": "trap: punctuation only — no extractable signal"}
+{"text": "no sé", "expected_domain": null, "note": "trap: ambiguous filler — no domain signal"}
+{"text": "mm", "expected_domain": null, "note": "trap: <12 chars, no content"}
+{"text": "prueba", "expected_domain": null, "note": "trap: generic test word, no domain"}
+{"text": "jeje que raro", "expected_domain": null, "note": "trap: social filler, ambiguous — should NOT default to spirituality"}
+{"text": "buenas noches", "expected_domain": null, "note": "trap: greeting only, historically leaked to spirituality"}
