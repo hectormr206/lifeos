@@ -32,6 +32,21 @@ dependencies = [
     # use_auth_token → token; diarize_v2.py handles both via signature
     # introspection.
     "pyannote.audio>=3.1",
+    # Sibling LifeOS core package — imported as `from lifeos import ...`
+    # for reminders, agents (nano), metrics, store, and per-domain
+    # ingestion (finance/exercise/health/etc.). Sourced as an editable
+    # path dep below so `uv sync` keeps it installed.
+    "lifeos",
+    # Audio playback for piper_python_engine.py (TTS output) and
+    # translate.py (live capture). Not a transitive of any current dep —
+    # must be declared explicitly or uv sync drops it.
+    "pyaudio>=0.2.14",
+    # VAD for diarize.preprocess_wav. resemblyzer pulls plain `webrtcvad`
+    # but that package's wheel has a broken layout under uv (top-level
+    # webrtcvad.py + _webrtcvad.so go missing post-install). Pinning the
+    # `-wheels` fork ships a working binary install. Keep both: resemblyzer
+    # still depends on `webrtcvad`, and `-wheels` overrides the import.
+    "webrtcvad-wheels>=2.0.14",
 ]
 
 [build-system]
@@ -43,3 +58,11 @@ packages = ["src/axi"]
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+lifeos = { path = "../lifeos", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
