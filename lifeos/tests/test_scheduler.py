@@ -126,15 +126,21 @@ def test_cancel_removes_job_and_dispatcher_does_not_fire() -> None:
     sched = Scheduler(dispatcher=dispatcher)
     sched.start()
     try:
+        # Use a 5-second lead time so cancel is guaranteed to happen long before
+        # the job would fire — eliminates the race between schedule() and cancel().
         rem = reminders.create(
-            when=datetime.now(timezone.utc) + timedelta(milliseconds=600),
+            when=datetime.now(timezone.utc) + timedelta(seconds=5),
             message="cancel-me",
         )
         sched.schedule(rem)
         reminders.cancel(rem.id)
         sched.cancel(rem.id)
 
-        assert not fired.wait(timeout=1.2), "cancelled reminder fired anyway"
+        # Deterministic check: the job must no longer exist in the scheduler.
+        assert sched._scheduler.get_job(rem.id) is None, "job still present after cancel"
+
+        # Confirm the dispatcher never fires within a short observation window.
+        assert not fired.wait(timeout=0.5), "cancelled reminder fired anyway"
     finally:
         sched.shutdown(wait=True)
 
