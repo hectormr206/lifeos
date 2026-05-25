@@ -21,8 +21,16 @@
   <div x-show="pushStatus" x-cloak class="text-sm muted" x-text="pushStatus"></div>
 
   <!-- Compose (Google Calendar-style) -->
-  <div class="panel p-4 space-y-3">
-    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nuevo recordatorio</h2>
+  <div class="panel p-4 space-y-3" id="compose-form">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold muted uppercase tracking-wider"
+          x-text="editingId ? 'Editar recordatorio' : 'Nuevo recordatorio'"></h2>
+      <button x-show="editingId" x-cloak
+              @click="cancelEdit()"
+              class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">
+        Cancelar edición
+      </button>
+    </div>
 
     <input type="text" x-model="form.message" placeholder="Mensaje (ej: llamar al dentista)"
            class="panel2 px-3 py-2 text-sm w-full" maxlength="500">
@@ -59,9 +67,10 @@
         <option value="push">📱 Push (laptop + Pixel)</option>
         <option value="log">📝 Solo log (test)</option>
       </select>
-      <button class="btn btn-primary" @click="create()"
-              :disabled="!form.message || !form.when_local">
-        Programar
+      <button class="btn btn-primary"
+              @click="editingId ? update(editingId) : create()"
+              :disabled="!form.message || !form.when_local"
+              x-text="editingId ? 'Guardar cambios' : 'Programar'">
       </button>
     </div>
     <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
@@ -197,11 +206,16 @@
             </template>
           </div>
         </div>
-        <button x-show="r.status === 'pending'"
-                @click="cancel(r.id)"
-                class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">
-          Cancelar
-        </button>
+        <div x-show="r.status === 'pending'" class="flex gap-1 flex-shrink-0">
+          <button @click="startEdit(r)"
+                  class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">
+            Editar
+          </button>
+          <button @click="cancel(r.id)"
+                  class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">
+            Cancelar
+          </button>
+        </div>
       </div>
     </template>
   </div>
@@ -225,6 +239,7 @@ function remindersPage() {
     error: '',
     pushOn: false,
     pushStatus: '',
+    editingId: null,
     form: { message: '', when_local: '', channel: 'push', repeat_choice: 'none' },
     openCustomModal: false,
     openEndsModal: false,
@@ -473,6 +488,94 @@ function remindersPage() {
       const j = await r.json();
       this.pushStatus = `enviadas=${j.sent} falladas=${j.failed} expiradas=${j.gone}`;
     },
+    // ── Edit helpers ──────────────────────────────────────────────────────
+    startEdit(r) {
+      this.editingId = r.id;
+      this.error = '';
+      this.form.message = r.message;
+      this.form.channel = r.channel;
+      // Convert UTC ISO to a local datetime-local string (YYYY-MM-DDTHH:MM)
+      const d = new Date(r.when_ts);
+      const pad = n => String(n).padStart(2, '0');
+      this.form.when_local = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' +
+                              pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      // Restore recurrence state
+      if (r.recurrence) {
+        // We store the raw cron; map back to a preset or fall to custom
+        const presets = {
+          daily:        /^\d+ \d+ \* \* \*$/,
+          weekly_same:  /^\d+ \d+ \* \* \d$/,
+          weekdays:     /^\d+ \d+ \* \* 1-5$/,
+          monthly_day:  /^\d+ \d+ \d+ \* \*$/,
+          yearly:       /^\d+ \d+ \d+ \d+ \*$/,
+        };
+        let matched = 'custom';
+        for (const [key, re] of Object.entries(presets)) {
+          if (re.test(r.recurrence)) { matched = key; break; }
+        }
+        this.form.repeat_choice = matched;
+        if (matched === 'custom') {
+          this.custom.interval = 1;
+          this.custom.unit = 'week';
+          this.custom.weekdays = [];
+        }
+      } else {
+        this.form.repeat_choice = 'none';
+      }
+      // Restore end conditions
+      if (r.occurrences_left != null) {
+        this.custom.ends = 'count';
+        this.custom.ends_count = r.occurrences_left;
+      } else if (r.ends_at) {
+        this.custom.ends = 'date';
+        this.custom.ends_date = r.ends_at.substring(0, 10);
+      } else {
+        this.custom.ends = 'never';
+        this.custom.ends_date = '';
+        this.custom.ends_count = 13;
+      }
+      // Scroll up to the form
+      document.getElementById('compose-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    cancelEdit() {
+      this.editingId = null;
+      this.error = '';
+      this.form.message = '';
+      this.form.when_local = '';
+      this.form.repeat_choice = 'none';
+      this.custom = { interval: 1, unit: 'week', weekdays: [],
+                      ends: 'never', ends_date: '', ends_count: 13 };
+    },
+    async update(id) {
+      this.error = '';
+      const localDt = new Date(this.form.when_local);
+      if (isNaN(localDt.getTime())) {
+        this.error = 'Fecha inválida';
+        return;
+      }
+      const recurrence = this.buildRecurrence();
+      const ends = recurrence ? this.buildEnds() : { ends_at: null, occurrences_left: null };
+      const body = {
+        when: localDt.toISOString(),
+        message: this.form.message,
+        channel: this.form.channel,
+        recurrence: recurrence,
+        ends_at: ends.ends_at,
+        occurrences_left: ends.occurrences_left,
+      };
+      const r = await fetch('/api/reminders/' + id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        this.error = 'No se pudo guardar: ' + t;
+        return;
+      }
+      this.cancelEdit();
+      this.load();
+    },
     async load(silent = false) {
       if (!silent && this.rows.length === 0) this.loading = true;
       try {
@@ -513,6 +616,7 @@ function remindersPage() {
         return;
       }
       // Reset form
+      this.editingId = null;
       this.form.message = '';
       this.form.when_local = '';
       this.form.repeat_choice = 'none';

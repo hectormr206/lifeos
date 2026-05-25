@@ -211,3 +211,44 @@ def cancel(rid: str) -> bool:
             (rid,),
         )
         return cur.rowcount > 0
+
+
+def update(
+    rid: str,
+    *,
+    when: datetime,
+    message: str,
+    channel: Channel,
+    recurrence: str | None = None,
+    ends_at: datetime | None = None,
+    occurrences_left: int | None = None,
+) -> "Reminder | None":
+    """Update a PENDING reminder.
+
+    Returns the updated Reminder, or None if no pending row matched (e.g.
+    the reminder was already fired/cancelled, or does not exist).
+    Raises ValueError for naive datetimes (mirrors create()).
+    """
+    if when.tzinfo is None:
+        raise ValueError("when must be tz-aware (got naive datetime)")
+    if ends_at is not None and ends_at.tzinfo is None:
+        raise ValueError("ends_at must be tz-aware")
+    with store.connect() as conn:
+        cur = conn.execute(
+            "UPDATE reminders "
+            "SET when_ts=?, message=?, channel=?, recurrence=?, "
+            "    ends_at=?, occurrences_left=? "
+            "WHERE id=? AND status='pending'",
+            (
+                _to_iso_utc(when),
+                message,
+                channel,
+                recurrence,
+                _to_iso_utc(ends_at) if ends_at else None,
+                occurrences_left,
+                rid,
+            ),
+        )
+        if cur.rowcount == 0:
+            return None
+    return get(rid)
