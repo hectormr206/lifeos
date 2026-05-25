@@ -138,12 +138,14 @@ def _guess_category(text: str) -> str | None:
 _NUM = r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+"
 _UNIT = r"pesos|peso|mxn|usd|dólares|dolares|eur|euros"
 
-# "gasté N (en X)" / "pagué N (en X)"
+# "gasté N (en X)" / "pagué N (en X)" / "salió N (X)"
+# The connector before `what` is optional so "Salió 3400 la cena..." matches
+# even without an explicit "en/de/a" immediately after the amount.
 _OUTFLOW_RE = re.compile(
-    rf"\b(?:me\s+)?(?:gast[éeè]|pagu[éeè])\s+"
-    rf"\$?\s*(?P<amount>{_NUM})(?=\s|[.;]|$)\s*"
+    rf"\b(?:me\s+)?(?:gast[éeè]|pagu[éeè]|sali[óoò])\s+"
+    rf"\$?\s*(?P<amount>{_NUM})(?=\s|[.;,]|$)\s*"
     rf"(?P<unit>{_UNIT})?\s*"
-    rf"(?:(?:en|de|de\s+la|del|a|a\s+la)\s+(?P<what>[^.;]+?))?"
+    rf"(?:(?:(?:en|de|de\s+la|del|a|a\s+la)\s+)?(?P<what>[^.;]*?))?"
     rf"(?:[.;]|$)",
     re.IGNORECASE,
 )
@@ -153,7 +155,7 @@ _PURCHASE_RE = re.compile(
     rf"\b(?:me\s+)?compr[éeè]\s+"
     rf"(?P<what>.+?)\s+"
     rf"(?:por|a|en)\s+"
-    rf"\$?\s*(?P<amount>{_NUM})(?=\s|[.;]|$)\s*"
+    rf"\$?\s*(?P<amount>{_NUM})(?=\s|[.;,]|$)\s*"
     rf"(?P<unit>{_UNIT})?",
     re.IGNORECASE,
 )
