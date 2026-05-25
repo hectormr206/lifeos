@@ -16,7 +16,9 @@ from lifeos.agents.eval.scoring import (
     DomainScore,
     GoldenCase,
     format_report,
+    format_segmented_report,
     load_golden_set,
+    score_by_layer,
     score_domain,
 )
 
@@ -350,3 +352,214 @@ class TestFormatReport:
         report = format_report(score)
         assert "finance" in report
         assert "exercise" in report
+
+
+# ---------------------------------------------------------------------------
+# GoldenCase — layer field
+# ---------------------------------------------------------------------------
+
+
+class TestGoldenCaseLayerField:
+    def test_default_layer_is_nano(self) -> None:
+        gc = GoldenCase(text="Corrí 5km", expected_domain="exercise")
+        assert gc.layer == "nano"
+
+    def test_layer_can_be_set_to_guard(self) -> None:
+        gc = GoldenCase(text="ok", expected_domain=None, layer="guard")
+        assert gc.layer == "guard"
+
+    def test_layer_can_be_set_to_regex(self) -> None:
+        gc = GoldenCase(text="Gasté 500", expected_domain="finance", layer="regex")
+        assert gc.layer == "regex"
+
+    def test_layer_can_be_set_to_nano(self) -> None:
+        gc = GoldenCase(text="Me cobraron 230", expected_domain="finance", layer="nano")
+        assert gc.layer == "nano"
+
+
+# ---------------------------------------------------------------------------
+# load_golden_set — layer field
+# ---------------------------------------------------------------------------
+
+
+class TestLoadGoldenSetLayerField:
+    def test_loads_layer_field(self, tmp_path: Path) -> None:
+        content = json.dumps(
+            {"text": "Gasté 500", "expected_domain": "finance", "layer": "regex"}
+        )
+        f = tmp_path / "set.jsonl"
+        f.write_text(content)
+        result = load_golden_set(f)
+        assert result[0].layer == "regex"
+
+    def test_missing_layer_defaults_to_nano(self, tmp_path: Path) -> None:
+        content = json.dumps({"text": "Corrí 5km", "expected_domain": "exercise"})
+        f = tmp_path / "set.jsonl"
+        f.write_text(content)
+        result = load_golden_set(f)
+        assert result[0].layer == "nano"
+
+    def test_layer_guard_loaded(self, tmp_path: Path) -> None:
+        content = json.dumps(
+            {"text": "ok", "expected_domain": None, "layer": "guard"}
+        )
+        f = tmp_path / "set.jsonl"
+        f.write_text(content)
+        result = load_golden_set(f)
+        assert result[0].layer == "guard"
+
+    def test_mixed_layers_loaded_correctly(self, tmp_path: Path) -> None:
+        lines = [
+            json.dumps({"text": "A", "expected_domain": "finance", "layer": "regex"}),
+            json.dumps({"text": "B", "expected_domain": None, "layer": "guard"}),
+            json.dumps({"text": "C", "expected_domain": "exercise"}),
+        ]
+        f = tmp_path / "set.jsonl"
+        f.write_text("\n".join(lines))
+        result = load_golden_set(f)
+        assert result[0].layer == "regex"
+        assert result[1].layer == "guard"
+        assert result[2].layer == "nano"  # default
+
+
+# ---------------------------------------------------------------------------
+# score_by_layer
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def layered_golden_set() -> list[GoldenCase]:
+    return [
+        GoldenCase(text="Gasté 500", expected_domain="finance", layer="regex"),
+        GoldenCase(text="Pagué 1000", expected_domain="finance", layer="regex"),
+        GoldenCase(text="ok", expected_domain=None, layer="guard"),
+        GoldenCase(text="si", expected_domain=None, layer="guard"),
+        GoldenCase(text="Corrí 5km", expected_domain="exercise", layer="nano"),
+        GoldenCase(text="Hablé con Diego", expected_domain="relationships", layer="nano"),
+        GoldenCase(text="Me cobraron 230", expected_domain="finance", layer="nano"),
+    ]
+
+
+class TestScoreByLayer:
+    def test_returns_dict_with_overall_key(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        result = score_by_layer(preds, layered_golden_set)
+        assert "overall" in result
+
+    def test_returns_per_layer_keys(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        result = score_by_layer(preds, layered_golden_set)
+        assert "regex" in result
+        assert "guard" in result
+        assert "nano" in result
+
+    def test_overall_score_matches_score_domain(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        result = score_by_layer(preds, layered_golden_set)
+        expected = score_domain(preds, layered_golden_set)
+        assert result["overall"].accuracy == pytest.approx(expected.accuracy)
+        assert result["overall"].total == expected.total
+
+    def test_regex_layer_accuracy(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        # All regex cases correct
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        result = score_by_layer(preds, layered_golden_set)
+        assert result["regex"].accuracy == pytest.approx(1.0)
+        assert result["regex"].total == 2
+
+    def test_guard_layer_accuracy(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        result = score_by_layer(preds, layered_golden_set)
+        assert result["guard"].accuracy == pytest.approx(1.0)
+        assert result["guard"].total == 2
+
+    def test_nano_layer_accuracy(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        result = score_by_layer(preds, layered_golden_set)
+        assert result["nano"].accuracy == pytest.approx(1.0)
+        assert result["nano"].total == 3
+
+    def test_nano_layer_partial_accuracy(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        # nano case "Corrí 5km" predicted wrong
+        preds = ["finance", "finance", None, None, "finance", "relationships", "finance"]
+        result = score_by_layer(preds, layered_golden_set)
+        assert result["nano"].accuracy == pytest.approx(2 / 3)
+
+    def test_missing_layer_in_set_still_grouped(self, tmp_path: Path) -> None:
+        """score_by_layer works even when some cases have layer='nano' by default."""
+        golds = [
+            GoldenCase(text="A", expected_domain="exercise"),  # default nano
+            GoldenCase(text="B", expected_domain="exercise"),  # default nano
+        ]
+        preds = ["exercise", "finance"]
+        result = score_by_layer(preds, golds)
+        assert result["nano"].total == 2
+        assert result["nano"].accuracy == pytest.approx(0.5)
+
+    def test_length_mismatch_raises(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        with pytest.raises(ValueError, match="length"):
+            score_by_layer(["finance"], layered_golden_set)
+
+
+# ---------------------------------------------------------------------------
+# format_segmented_report
+# ---------------------------------------------------------------------------
+
+
+class TestFormatSegmentedReport:
+    def test_returns_string(self, layered_golden_set: list[GoldenCase]) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        scores = score_by_layer(preds, layered_golden_set)
+        report = format_segmented_report(scores, layered_golden_set)
+        assert isinstance(report, str)
+        assert len(report) > 0
+
+    def test_contains_raw_accuracy(self, layered_golden_set: list[GoldenCase]) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        scores = score_by_layer(preds, layered_golden_set)
+        report = format_segmented_report(scores, layered_golden_set)
+        assert "overall" in report.lower() or "raw" in report.lower() or "Accuracy" in report
+
+    def test_contains_nano_eligible_section(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        scores = score_by_layer(preds, layered_golden_set)
+        report = format_segmented_report(scores, layered_golden_set)
+        assert "nano" in report.lower()
+        assert "eligible" in report.lower() or "nano" in report.lower()
+
+    def test_contains_per_layer_counts(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        scores = score_by_layer(preds, layered_golden_set)
+        report = format_segmented_report(scores, layered_golden_set)
+        # Should mention each layer
+        assert "regex" in report.lower()
+        assert "guard" in report.lower()
+
+    def test_nano_accuracy_prominently_labeled(
+        self, layered_golden_set: list[GoldenCase]
+    ) -> None:
+        preds = ["finance", "finance", None, None, "exercise", "relationships", "finance"]
+        scores = score_by_layer(preds, layered_golden_set)
+        report = format_segmented_report(scores, layered_golden_set)
+        # Nano-eligible accuracy must appear with a metric value
+        assert "100.0%" in report or "100%" in report  # all nano correct in fixture

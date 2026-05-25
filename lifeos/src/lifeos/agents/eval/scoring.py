@@ -8,18 +8,39 @@ Null domains are modelled as the string "null" internally so they participate
 in per-class metrics like any other label. Callers and data files use Python
 ``None`` / JSON ``null``; the conversion happens at load/score boundaries.
 
+Pipeline layers
+---------------
+The golden set annotates each case with a ``layer`` field that reflects which
+production layer is responsible for handling the input:
+
+``nano``
+    The nano extractor is called and its prediction matters.  This is the
+    primary layer and the one used for the *nano-eligible accuracy* metric.
+
+``regex``
+    The regex-based finance parser matches the text BEFORE the nano is ever
+    called.  The nano's output is irrelevant for these cases in production.
+
+``guard``
+    A dashboard guard short-circuits before (or immediately after) the nano
+    runs, so the nano's prediction has no effect.  Examples:
+    - Text shorter than 12 chars → nano is never called.
+    - Spirituality result with no title/kind on text < 20 chars → discarded.
+
 Public API:
-    GoldenCase            — dataclass for one labeled eval example
-    DomainScore           — dataclass holding all scoring outputs
-    load_golden_set(path) — read a .jsonl file into list[GoldenCase]
-    score_domain(preds, golds) -> DomainScore
-    format_report(score)  -> str
+    GoldenCase                       — dataclass for one labeled eval example
+    DomainScore                      — dataclass holding all scoring outputs
+    load_golden_set(path)            — read a .jsonl file into list[GoldenCase]
+    score_domain(preds, golds)       -> DomainScore
+    score_by_layer(preds, golds)     -> dict[str, DomainScore]
+    format_report(score)             -> str
+    format_segmented_report(scores, golds) -> str
 """
 
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Union
@@ -39,11 +60,19 @@ class GoldenCase:
             ``health``, ``events``, ``spirituality``) or ``None`` meaning
             no extraction should occur.
         note: Optional free-text annotation (e.g. "trap case — too short").
+        layer: Which production pipeline layer handles this input.
+            - ``"nano"``  — nano extractor is called and its output matters
+              (default; backward-compatible with golden sets lacking the field).
+            - ``"regex"`` — regex finance parser fires before nano; nano output
+              is irrelevant in production for these cases.
+            - ``"guard"`` — a dashboard guard short-circuits before the nano
+              result reaches storage (too-short inputs, spirituality noise).
     """
 
     text: str
     expected_domain: str | None
     note: str = ""
+    layer: str = "nano"
 
 
 @dataclass
@@ -78,7 +107,9 @@ def load_golden_set(path: Union[str, Path]) -> list[GoldenCase]:
       - ``expected_domain``: str | null
 
     Optional fields:
-      - ``note``: str  (defaults to ``""``)
+      - ``note``:  str  (defaults to ``""``)
+      - ``layer``: str  (defaults to ``"nano"`` — backward-compatible with sets
+                   that predate the layer segmentation feature)
 
     Lines that start with ``//`` or ``#`` (after optional whitespace) are
     treated as comments and skipped, so you can annotate the golden-set file.
@@ -106,6 +137,7 @@ def load_golden_set(path: Union[str, Path]) -> list[GoldenCase]:
                 text=obj["text"],
                 expected_domain=obj.get("expected_domain"),  # None when JSON null
                 note=obj.get("note", ""),
+                layer=obj.get("layer", "nano"),  # "nano" default — backward compat
             )
         )
     return cases
@@ -256,4 +288,156 @@ def format_report(score: DomainScore) -> str:
             lines.append(f"    {gold:<16} → {pred:<16}  ×{count}")
 
     lines.append("=" * 62)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Segmented scoring
+# ---------------------------------------------------------------------------
+
+
+def score_by_layer(
+    predictions: list[str | None],
+    golds: list[GoldenCase],
+) -> dict[str, DomainScore]:
+    """Score predictions grouped by the ``layer`` field of each golden case.
+
+    Calls :func:`score_domain` independently on each layer subset and also on
+    the full set.  The result is a mapping from layer name to
+    :class:`DomainScore`.  The key ``"overall"`` always contains the aggregate
+    over all cases regardless of layer.
+
+    Recognised layer values in the golden set are ``"nano"``, ``"regex"``, and
+    ``"guard"``, but any string value is accepted — unknown layers are grouped
+    under their own key.
+
+    Args:
+        predictions: Predicted domain strings (or ``None``) for each case.
+            Must be the same length and order as ``golds``.
+        golds: Labeled golden cases with ``layer`` annotations.
+
+    Returns:
+        A dict mapping each observed layer name (plus ``"overall"``) to a
+        :class:`DomainScore` computed over that subset.
+
+    Raises:
+        ValueError: When ``len(predictions) != len(golds)``.
+    """
+    if len(predictions) != len(golds):
+        raise ValueError(
+            f"predictions length ({len(predictions)}) != golds length ({len(golds)})"
+        )
+
+    # Group indices by layer
+    layer_indices: dict[str, list[int]] = defaultdict(list)
+    for idx, gc in enumerate(golds):
+        layer_indices[gc.layer].append(idx)
+
+    result: dict[str, DomainScore] = {}
+
+    # Overall score across every case
+    result["overall"] = score_domain(predictions, golds)
+
+    # Per-layer scores
+    for layer, indices in sorted(layer_indices.items()):
+        layer_preds = [predictions[i] for i in indices]
+        layer_golds = [golds[i] for i in indices]
+        result[layer] = score_domain(layer_preds, layer_golds)
+
+    return result
+
+
+def format_segmented_report(
+    scores: dict[str, DomainScore],
+    golds: list[GoldenCase],
+) -> str:
+    """Render a multi-section text report from the output of :func:`score_by_layer`.
+
+    The report includes:
+
+    1. **Raw accuracy** over all cases (same as :func:`format_report` on
+       ``scores["overall"]``).
+    2. **Layer breakdown** — case counts per layer (nano / regex / guard).
+    3. **Nano-eligible accuracy** — the real decision metric, prominently
+       labelled.  Includes the per-class table for the nano subset.
+
+    Args:
+        scores: Mapping from layer name to :class:`DomainScore`, as returned
+            by :func:`score_by_layer`.  Must contain the ``"overall"`` key.
+        golds: The original golden cases (used for layer case counts).
+
+    Returns:
+        A multi-line string suitable for printing to a terminal.
+    """
+    lines: list[str] = []
+
+    # ── Section 1: Raw accuracy ──────────────────────────────────────────────
+    overall = scores["overall"]
+    correct_overall = round(overall.accuracy * overall.total)
+    lines.append("=" * 62)
+    lines.append("  Domain Classification Eval — Segmented Report")
+    lines.append("=" * 62)
+    lines.append(
+        f"  Raw accuracy (all {overall.total} cases) : "
+        f"{overall.accuracy:.1%}  ({correct_overall}/{overall.total})"
+    )
+    lines.append("")
+
+    # ── Section 2: Layer breakdown ───────────────────────────────────────────
+    layer_counts = Counter(gc.layer for gc in golds)
+    lines.append("  Layer breakdown:")
+    for layer in ("nano", "regex", "guard"):
+        count = layer_counts.get(layer, 0)
+        score = scores.get(layer)
+        if score is not None:
+            correct = round(score.accuracy * score.total)
+            lines.append(
+                f"    {layer:<8}  {count:>3} cases  "
+                f"accuracy {score.accuracy:.1%}  ({correct}/{score.total})"
+            )
+        else:
+            lines.append(f"    {layer:<8}  {count:>3} cases  (no predictions)")
+    # Any unexpected layers
+    for layer, count in sorted(layer_counts.items()):
+        if layer not in ("nano", "regex", "guard"):
+            score = scores.get(layer)
+            if score is not None:
+                correct = round(score.accuracy * score.total)
+                lines.append(
+                    f"    {layer:<8}  {count:>3} cases  "
+                    f"accuracy {score.accuracy:.1%}  ({correct}/{score.total})"
+                )
+    lines.append("")
+
+    # ── Section 3: Nano-eligible accuracy (decision metric) ─────────────────
+    nano_score = scores.get("nano")
+    lines.append("─" * 62)
+    if nano_score is not None:
+        correct_nano = round(nano_score.accuracy * nano_score.total)
+        lines.append("  ★ NANO-ELIGIBLE ACCURACY  ←  decision metric")
+        lines.append(
+            f"  Accuracy : {nano_score.accuracy:.1%}  "
+            f"({correct_nano}/{nano_score.total} correct)"
+        )
+        lines.append("")
+        # Per-class table for nano subset
+        header = f"  {'Class':<16} {'Precision':>10} {'Recall':>8} {'F1':>8}"
+        lines.append(header)
+        lines.append("  " + "-" * 46)
+        for label, metrics in sorted(nano_score.per_class.items()):
+            lines.append(
+                f"  {label:<16} {metrics['precision']:>10.3f}"
+                f" {metrics['recall']:>8.3f} {metrics['f1']:>8.3f}"
+            )
+        if nano_score.confusion:
+            lines.append("")
+            lines.append("  Nano misclassifications (gold → predicted):")
+            for (gold, pred), count in sorted(
+                nano_score.confusion.items(), key=lambda kv: -kv[1]
+            ):
+                lines.append(f"    {gold:<16} → {pred:<16}  ×{count}")
+    else:
+        lines.append("  No nano-layer cases found in golden set.")
+    lines.append("=" * 62)
+
     return "\n".join(lines)

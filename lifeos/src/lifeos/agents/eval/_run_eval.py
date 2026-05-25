@@ -1,8 +1,8 @@
 """Live eval script for the nano entity-extractor domain classifier.
 
 Loads the golden set, calls ``extractor.extract()`` for each case, then
-scores and prints a report. This is NOT a pytest module — the leading
-underscore keeps it out of pytest collection.
+scores and prints a segmented report.  This is NOT a pytest module — the
+leading underscore keeps it out of pytest collection.
 
 Requirements:
     The nano llama-server must be running on port 8090.
@@ -21,13 +21,17 @@ from pathlib import Path
 
 from lifeos.agents.eval.scoring import (
     GoldenCase,
-    format_report,
+    format_segmented_report,
     load_golden_set,
-    score_domain,
+    score_by_layer,
 )
 from lifeos.agents import extractor
 
 _GOLDEN_SET_PATH = Path(__file__).parent / "golden_sets" / "domain_classification.jsonl"
+
+# Accuracy threshold applied to the NANO-ELIGIBLE layer (the real decision
+# metric).  The nano scored ~96% on its actual niche; 0.85 is a sane floor.
+_NANO_THRESHOLD = 0.85
 
 
 def _predict(case: GoldenCase) -> str | None:
@@ -48,29 +52,33 @@ def main() -> None:
     print(f"  {len(cases)} cases loaded.\n")
 
     predictions: list[str | None] = []
-    failures = 0
 
     for i, case in enumerate(cases, start=1):
         pred = _predict(case)
         predictions.append(pred)
         status = "✓" if pred == case.expected_domain else "✗"
         note_str = f"  [{case.note}]" if case.note else ""
+        layer_tag = f"[{case.layer}]"
         print(
-            f"  [{i:02d}] {status}  gold={case.expected_domain!r:<16}"
+            f"  [{i:02d}] {status} {layer_tag:<7} gold={case.expected_domain!r:<16}"
             f"  pred={pred!r:<16}  text={case.text[:50]!r}{note_str}"
         )
-        if pred != case.expected_domain:
-            failures += 1
 
     print()
-    score = score_domain(predictions, cases)
-    print(format_report(score))
+    scores = score_by_layer(predictions, cases)
+    print(format_segmented_report(scores, cases))
 
-    # Exit code: 0 if accuracy >= 0.7 (a reasonable bar for v1), else 1.
-    threshold = 0.70
-    if score.accuracy < threshold:
+    # Exit code threshold: applies to NANO-ELIGIBLE accuracy (not raw).
+    # Raw accuracy is printed for transparency but is not the decision signal.
+    nano_score = scores.get("nano")
+    if nano_score is None:
+        print("\n[WARN] No nano-layer cases found; cannot evaluate threshold.", file=sys.stderr)
+        sys.exit(1)
+
+    if nano_score.accuracy < _NANO_THRESHOLD:
         print(
-            f"\n[WARN] Accuracy {score.accuracy:.1%} is below threshold {threshold:.0%}.",
+            f"\n[WARN] Nano-eligible accuracy {nano_score.accuracy:.1%} is below "
+            f"threshold {_NANO_THRESHOLD:.0%}.",
             file=sys.stderr,
         )
         sys.exit(1)
