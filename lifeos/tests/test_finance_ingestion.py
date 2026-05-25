@@ -135,3 +135,65 @@ def test_category_subscriptions() -> None:
     fi = parse_finance("pagué 199 de Netflix")
     assert fi is not None
     assert fi.category == "entertainment"
+
+
+# ── Fix 1: comma boundary in _PURCHASE_RE and _OUTFLOW_RE ─────────────────────
+
+def test_purchase_comma_after_amount_matches() -> None:
+    """'compré X en $N,' — comma after amount must not break the match."""
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("Compré los tenis en $1299, los de descuento")
+    assert fi is not None
+    assert fi.amount == 1299.0
+
+
+def test_outflow_thousands_separator_not_truncated() -> None:
+    """'gasté 1,500 en X' — thousands sep must yield 1500, not 1."""
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("gasté 1,500 en el super")
+    assert fi is not None
+    assert fi.amount == 1500.0
+
+
+def test_purchase_thousands_separator_not_truncated() -> None:
+    """'compré X por 15,000' — thousands sep must yield 15000, not 15."""
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("compré una laptop por 15,000")
+    assert fi is not None
+    assert fi.amount == 15000.0
+
+
+def test_outflow_decimal_intact_after_comma_boundary_fix() -> None:
+    """'pagué 50.50 de propina' — decimal point must not be affected."""
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("pagué 50.50 de propina")
+    assert fi is not None
+    assert fi.amount == 50.5
+
+
+# ── Fix 2: "salió" as outflow verb in _OUTFLOW_RE ─────────────────────────────
+
+def test_salio_outflow_matches() -> None:
+    """'Salió N <description>' — must be caught as a finance intent."""
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("Salió 3400 la cena para 4 personas en el restauran")
+    assert fi is not None
+    assert fi.amount == 3400.0
+
+
+def test_salio_without_number_is_none() -> None:
+    """'salió a correr' — no adjacent number, must NOT match as finance."""
+    from lifeos.finance.ingestion import parse_finance
+    assert parse_finance("salió a correr en la mañana") is None
+
+
+def test_salio_sun_is_none() -> None:
+    """'salió el sol' — no adjacent number, must NOT match."""
+    from lifeos.finance.ingestion import parse_finance
+    assert parse_finance("salió el sol después de la lluvia") is None
+
+
+def test_sali_first_person_is_none() -> None:
+    """'salí' (first person singular) must NOT trigger the outflow pattern."""
+    from lifeos.finance.ingestion import parse_finance
+    assert parse_finance("salí temprano del trabajo") is None
