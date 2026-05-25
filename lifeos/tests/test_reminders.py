@@ -120,3 +120,110 @@ def test_when_must_be_tz_aware() -> None:
     naive = datetime(2026, 6, 1, 9, 0, 0)
     with pytest.raises(ValueError, match="tz-aware"):
         reminders.create(when=naive, message="x")
+
+
+# ─── update() tests ────────────────────────────────────────────────────────────
+
+def test_update_changes_all_fields() -> None:
+    from lifeos import reminders
+
+    now = datetime.now(timezone.utc)
+    original_when = now + timedelta(hours=1)
+    new_when = now + timedelta(hours=5)
+    new_ends_at = now + timedelta(days=30)
+
+    rem = reminders.create(
+        when=original_when, message="original message",
+        channel="push", recurrence="0 9 * * *",
+        ends_at=now + timedelta(days=7), occurrences_left=3,
+    )
+
+    updated = reminders.update(
+        rem.id,
+        when=new_when,
+        message="updated message",
+        channel="log",
+        recurrence="0 21 * * *",
+        ends_at=new_ends_at,
+        occurrences_left=10,
+    )
+
+    assert updated is not None
+    assert updated.id == rem.id
+    assert updated.message == "updated message"
+    assert updated.channel == "log"
+    assert updated.recurrence == "0 21 * * *"
+    assert updated.occurrences_left == 10
+    assert updated.ends_at is not None
+    # when_ts and ends_at round-trip through ISO8601 UTC (second precision)
+    assert abs((updated.when_ts - new_when).total_seconds()) < 2
+    assert abs((updated.ends_at - new_ends_at).total_seconds()) < 2
+    assert updated.status == "pending"
+
+
+def test_update_on_cancelled_returns_none() -> None:
+    from lifeos import reminders
+
+    now = datetime.now(timezone.utc)
+    rem = reminders.create(when=now + timedelta(hours=1), message="x")
+    reminders.cancel(rem.id)
+
+    result = reminders.update(
+        rem.id,
+        when=now + timedelta(hours=2),
+        message="should not apply",
+        channel="push",
+    )
+
+    assert result is None
+    fetched = reminders.get(rem.id)
+    assert fetched is not None
+    assert fetched.message == "x"  # unchanged
+
+
+def test_update_on_fired_returns_none() -> None:
+    from lifeos import reminders
+
+    now = datetime.now(timezone.utc)
+    rem = reminders.create(when=now + timedelta(hours=1), message="x")
+    reminders.mark_fired(rem.id)
+
+    result = reminders.update(
+        rem.id,
+        when=now + timedelta(hours=2),
+        message="should not apply",
+        channel="push",
+    )
+
+    assert result is None
+
+
+def test_update_naive_when_raises_value_error() -> None:
+    from lifeos import reminders
+
+    now = datetime.now(timezone.utc)
+    rem = reminders.create(when=now + timedelta(hours=1), message="x")
+
+    with pytest.raises(ValueError, match="tz-aware"):
+        reminders.update(
+            rem.id,
+            when=datetime(2026, 6, 1, 9, 0, 0),  # naive
+            message="x",
+            channel="push",
+        )
+
+
+def test_update_naive_ends_at_raises_value_error() -> None:
+    from lifeos import reminders
+
+    now = datetime.now(timezone.utc)
+    rem = reminders.create(when=now + timedelta(hours=1), message="x")
+
+    with pytest.raises(ValueError, match="tz-aware"):
+        reminders.update(
+            rem.id,
+            when=now + timedelta(hours=2),
+            message="x",
+            channel="push",
+            ends_at=datetime(2026, 12, 31, 23, 59, 0),  # naive
+        )

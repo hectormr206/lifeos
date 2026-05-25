@@ -2974,6 +2974,73 @@ async def api_reminders_create(request: Request):
     return _reminder_to_dict(rem)
 
 
+@app.patch("/api/reminders/{rid}")
+async def api_reminders_update(rid: str, request: Request):
+    """Update a pending reminder.
+
+    Body: same shape as POST (when, message, channel, recurrence?, ends_at?,
+    occurrences_left?).  Only pending reminders can be edited; returns 404
+    otherwise.  Re-schedules the APScheduler job to reflect the new values.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    when_str = body.get("when")
+    message = (body.get("message") or "").strip()
+    channel = body.get("channel", "push")
+    recurrence = body.get("recurrence") or None
+    if not when_str or not message:
+        raise HTTPException(400, "when and message are required")
+    if channel not in ("push", "log"):
+        raise HTTPException(400, "channel must be 'push' or 'log'")
+    try:
+        when = datetime.fromisoformat(when_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"when must be ISO8601: {when_str!r}")
+    if when.tzinfo is None:
+        raise HTTPException(400, "when must be tz-aware")
+    if len(message) > 500:
+        raise HTTPException(400, "message too long (max 500 chars)")
+    if recurrence is not None:
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+            CronTrigger.from_crontab(recurrence)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"invalid cron: {e}")
+
+    ends_at_str = body.get("ends_at") or None
+    ends_at = None
+    if ends_at_str:
+        try:
+            ends_at = datetime.fromisoformat(ends_at_str.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(400, f"ends_at must be ISO8601: {ends_at_str!r}")
+        if ends_at.tzinfo is None:
+            raise HTTPException(400, "ends_at must be tz-aware")
+
+    occurrences_left = body.get("occurrences_left")
+    if occurrences_left is not None:
+        if not isinstance(occurrences_left, int) or occurrences_left < 1:
+            raise HTTPException(400, "occurrences_left must be a positive integer")
+
+    updated = lifeos_reminders.update(
+        rid,
+        when=when, message=message, channel=channel, recurrence=recurrence,
+        ends_at=ends_at, occurrences_left=occurrences_left,
+    )
+    if updated is None:
+        raise HTTPException(404, "not found or not pending")
+
+    # Re-schedule: cancel the old job, register the new one
+    sched = get_scheduler()
+    sched.cancel(rid)
+    sched.schedule(updated)
+    return _reminder_to_dict(updated)
+
+
 @app.delete("/api/reminders/{rid}")
 def api_reminders_cancel(rid: str):
     ok = lifeos_reminders.cancel(rid)
