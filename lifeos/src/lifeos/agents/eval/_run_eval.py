@@ -26,6 +26,7 @@ from lifeos.agents.eval.scoring import (
     score_by_layer,
 )
 from lifeos.agents import extractor
+from lifeos.finance.ingestion import parse_finance, FinanceIntent
 
 _GOLDEN_SET_PATH = Path(__file__).parent / "golden_sets" / "domain_classification.jsonl"
 
@@ -34,16 +35,29 @@ _GOLDEN_SET_PATH = Path(__file__).parent / "golden_sets" / "domain_classificatio
 _NANO_THRESHOLD = 0.85
 
 
-def _predict(case: GoldenCase) -> str | None:
-    """Run the nano extractor for one golden case.
+def _route_predict(text: str, layer: str, extract_fn=extractor.extract, parse_fn=parse_finance) -> str | None:
+    """Dispatch a single prediction to the correct production layer.
 
-    Returns the predicted domain string, or ``None`` when the extractor
-    returns ``None`` (service unreachable, garbage output, or no-action).
+    In production, ``layer == "regex"`` cases are handled by the regex
+    finance parser (parse_finance) BEFORE the nano is ever called.  Running
+    the nano on those cases would measure the nano on inputs it never sees in
+    production, skewing the reported regex-layer accuracy.  All other layers
+    (nano, guard) keep using the nano extractor as normal.
     """
-    result = extractor.extract(case.text)
+    if layer == "regex":
+        # Mirror production: regex finance parser fires first for these cases.
+        result = parse_fn(text)
+        return "finance" if isinstance(result, FinanceIntent) else None
+    # nano / guard layers: use the live extractor.
+    result = extract_fn(text)
     if result is None:
         return None
     return result.domain
+
+
+def _predict(case: GoldenCase) -> str | None:
+    """Predict the domain for one golden case using the correct production layer."""
+    return _route_predict(case.text, case.layer)
 
 
 def main() -> None:
