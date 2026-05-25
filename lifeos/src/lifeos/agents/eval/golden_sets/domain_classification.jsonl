@@ -1,57 +1,69 @@
-// Golden set for nano extractor domain-classification eval — v1
-// Format: {"text": str, "expected_domain": str|null, "note": str (optional)}
+// Golden set for nano extractor domain-classification eval — v2
+// Format: {"text": str, "expected_domain": str|null, "layer": str, "note": str (optional)}
 // Valid domains: finance, relationships, exercise, learning, health, events, spirituality
 // Use null (not the string) when no domain should be extracted.
 // Run eval: cd ~/LifeOS/lifeos/lifeos && .venv/bin/python -m lifeos.agents.eval._run_eval
+//
+// layer values:
+//   "nano"  — nano extractor is called and its prediction is what matters (decision metric)
+//   "regex" — regex finance parser (lifeos/finance/ingestion.py) fires BEFORE nano;
+//             nano result is irrelevant in production for these cases.
+//             Patterns: gasté/pagué + number (_OUTFLOW_RE), compré X por/a/en N (_PURCHASE_RE),
+//             cobré/me llegó/me depositaron/recibí N (_INCOME_RE), ahorré N (_SAVINGS_RE).
+//             Note: itemized tickets (colon + multiple item/number pairs) are DECLINED by
+//             _ITEMIZED_LIST_RE and fall through to nano, so those are labelled "nano".
+//   "guard" — dashboard guard short-circuits regardless of nano output:
+//             (a) text < 12 chars → nano not called at all.
+//             (b) spirituality result with no title/kind on text < 20 chars → discarded.
 
 // ── FINANCE (5 cases) ──────────────────────────────────────────────────────
-{"text": "Gasté 500 pesos en el super", "expected_domain": "finance", "note": "classic regex-trivial finance case"}
-{"text": "Pagué 1850 en Aurrera: detergente, papel, cable HDMI", "expected_domain": "finance"}
-{"text": "Me cobraron 230 de Uber esta mañana", "expected_domain": "finance"}
-{"text": "Compré los tenis en $1299, los de descuento", "expected_domain": "finance"}
-{"text": "Salió 3400 la cena para 4 personas en el restaurante", "expected_domain": "finance"}
+{"text": "Gasté 500 pesos en el super", "expected_domain": "finance", "layer": "regex", "note": "classic regex-trivial finance case — _OUTFLOW_RE matches"}
+{"text": "Pagué 1850 en Aurrera: detergente, papel, cable HDMI", "expected_domain": "finance", "layer": "regex", "note": "regex outflow matches; _ITEMIZED_LIST_RE does NOT block (no item+number pairs after colon)"}
+{"text": "Me cobraron 230 de Uber esta mañana", "expected_domain": "finance", "layer": "nano", "note": "cobraron (passive) not in _INCOME_RE (which needs cobré/me llegó/me depositaron/recibí) — falls to nano"}
+{"text": "Compré los tenis en $1299, los de descuento", "expected_domain": "finance", "layer": "regex", "note": "_PURCHASE_RE now catches this: comma boundary fix in lookahead allows amount followed by ','."}
+{"text": "Salió 3400 la cena para 4 personas en el restaurante", "expected_domain": "finance", "layer": "regex", "note": "_OUTFLOW_RE now catches this: sali[óoò] added to verb alternation; optional connector allows 'Salió N <free-text>'."}
 
 // ── RELATIONSHIPS (4 cases) ────────────────────────────────────────────────
-{"text": "Hablé con Diego sobre el proyecto de trabajo", "expected_domain": "relationships"}
-{"text": "Tuve una discusión fuerte con mi mamá esta tarde", "expected_domain": "relationships"}
-{"text": "Llamé a mi hermana para ver cómo estaba", "expected_domain": "relationships"}
-{"text": "Conocí a los papás de mi novia en la cena", "expected_domain": "relationships"}
+{"text": "Hablé con Diego sobre el proyecto de trabajo", "expected_domain": "relationships", "layer": "nano"}
+{"text": "Tuve una discusión fuerte con mi mamá esta tarde", "expected_domain": "relationships", "layer": "nano"}
+{"text": "Llamé a mi hermana para ver cómo estaba", "expected_domain": "relationships", "layer": "nano"}
+{"text": "Conocí a los papás de mi novia en la cena", "expected_domain": "relationships", "layer": "nano"}
 
 // ── EXERCISE (5 cases) ─────────────────────────────────────────────────────
-{"text": "Corrí 5km en el parque esta mañana", "expected_domain": "exercise"}
-{"text": "Fui al gym a entrenar pierna, 1 hora", "expected_domain": "exercise"}
-{"text": "Caminé con mi esposa Daniela durante 45 minutos", "expected_domain": "exercise", "note": "walk with person — should be exercise not relationships"}
-{"text": "Hice 30 minutos de yoga en casa", "expected_domain": "exercise"}
-{"text": "Entrené fuerza con pesas hoy en la mañana", "expected_domain": "exercise"}
+{"text": "Corrí 5km en el parque esta mañana", "expected_domain": "exercise", "layer": "nano"}
+{"text": "Fui al gym a entrenar pierna, 1 hora", "expected_domain": "exercise", "layer": "nano"}
+{"text": "Caminé con mi esposa Daniela durante 45 minutos", "expected_domain": "exercise", "layer": "nano", "note": "walk with person — should be exercise not relationships"}
+{"text": "Hice 30 minutos de yoga en casa", "expected_domain": "exercise", "layer": "nano"}
+{"text": "Entrené fuerza con pesas hoy en la mañana", "expected_domain": "exercise", "layer": "nano"}
 
 // ── LEARNING (4 cases) ─────────────────────────────────────────────────────
-{"text": "Estoy aprendiendo Claude Code para LifeOS", "expected_domain": "learning"}
-{"text": "Empecé el libro Atomic Habits de James Clear", "expected_domain": "learning"}
-{"text": "Estudié 2 horas de arquitectura hexagonal", "expected_domain": "learning"}
-{"text": "Vi un video sobre sistemas de memoria espaciada", "expected_domain": "learning"}
+{"text": "Estoy aprendiendo Claude Code para LifeOS", "expected_domain": "learning", "layer": "nano"}
+{"text": "Empecé el libro Atomic Habits de James Clear", "expected_domain": "learning", "layer": "nano"}
+{"text": "Estudié 2 horas de arquitectura hexagonal", "expected_domain": "learning", "layer": "nano"}
+{"text": "Vi un video sobre sistemas de memoria espaciada", "expected_domain": "learning", "layer": "nano"}
 
 // ── HEALTH (4 cases) ───────────────────────────────────────────────────────
-{"text": "Dormí mal, me desperté tres veces", "expected_domain": "health"}
-{"text": "Me tomé la presión: 120/80, estoy bien", "expected_domain": "health"}
-{"text": "Tengo dolor de cabeza desde ayer en la tarde", "expected_domain": "health"}
-{"text": "Pesé 78kg esta mañana en ayunas", "expected_domain": "health"}
+{"text": "Dormí mal, me desperté tres veces", "expected_domain": "health", "layer": "nano"}
+{"text": "Me tomé la presión: 120/80, estoy bien", "expected_domain": "health", "layer": "nano"}
+{"text": "Tengo dolor de cabeza desde ayer en la tarde", "expected_domain": "health", "layer": "nano"}
+{"text": "Pesé 78kg esta mañana en ayunas", "expected_domain": "health", "layer": "nano"}
 
 // ── EVENTS (3 cases) ───────────────────────────────────────────────────────
-{"text": "El cumpleaños de mi mamá es el 12 de julio", "expected_domain": "events"}
-{"text": "Mi esposa Daniela y yo nos casamos el 15 de junio de 2018", "expected_domain": "events"}
-{"text": "La graduación de mi sobrino es el próximo mes", "expected_domain": "events"}
+{"text": "El cumpleaños de mi mamá es el 12 de julio", "expected_domain": "events", "layer": "nano"}
+{"text": "Mi esposa Daniela y yo nos casamos el 15 de junio de 2018", "expected_domain": "events", "layer": "nano"}
+{"text": "La graduación de mi sobrino es el próximo mes", "expected_domain": "events", "layer": "nano"}
 
 // ── SPIRITUALITY (3 cases) ─────────────────────────────────────────────────
-{"text": "Hoy me desperté agradecido por todo lo que tengo", "expected_domain": "spirituality"}
-{"text": "Medité 20 minutos al amanecer, me siento en paz", "expected_domain": "spirituality"}
-{"text": "Reflexioné sobre mis metas y el sentido de lo que hago", "expected_domain": "spirituality"}
+{"text": "Hoy me desperté agradecido por todo lo que tengo", "expected_domain": "spirituality", "layer": "nano"}
+{"text": "Medité 20 minutos al amanecer, me siento en paz", "expected_domain": "spirituality", "layer": "nano"}
+{"text": "Reflexioné sobre mis metas y el sentido de lo que hago", "expected_domain": "spirituality", "layer": "nano"}
 
 // ── NULL / TRAP CASES (8 cases) ────────────────────────────────────────────
-{"text": "ok", "expected_domain": null, "note": "trap: very short input (<5 chars), historically misclassified as spirituality"}
-{"text": "si", "expected_domain": null, "note": "trap: 2-char input — should be null"}
-{"text": "...", "expected_domain": null, "note": "trap: punctuation only — no extractable signal"}
-{"text": "no sé", "expected_domain": null, "note": "trap: ambiguous filler — no domain signal"}
-{"text": "mm", "expected_domain": null, "note": "trap: <12 chars, no content"}
-{"text": "prueba", "expected_domain": null, "note": "trap: generic test word, no domain"}
-{"text": "jeje que raro", "expected_domain": null, "note": "trap: social filler, ambiguous — should NOT default to spirituality"}
-{"text": "buenas noches", "expected_domain": null, "note": "trap: greeting only, historically leaked to spirituality"}
+{"text": "ok", "expected_domain": null, "layer": "guard", "note": "trap: 2 chars < 12 — nano not called (guard a)"}
+{"text": "si", "expected_domain": null, "layer": "guard", "note": "trap: 2 chars < 12 — nano not called (guard a)"}
+{"text": "...", "expected_domain": null, "layer": "guard", "note": "trap: 3 chars < 12 — nano not called (guard a)"}
+{"text": "no sé", "expected_domain": null, "layer": "guard", "note": "trap: 5 chars < 12 — nano not called (guard a)"}
+{"text": "mm", "expected_domain": null, "layer": "guard", "note": "trap: 2 chars < 12 — nano not called (guard a)"}
+{"text": "prueba", "expected_domain": null, "layer": "guard", "note": "trap: 6 chars < 12 — nano not called (guard a)"}
+{"text": "jeje que raro", "expected_domain": null, "layer": "guard", "note": "trap: 13 chars ≥ 12 so nano runs, but spirituality guard (<20 chars, no title/kind) discards result (guard b)"}
+{"text": "buenas noches", "expected_domain": null, "layer": "guard", "note": "trap: 13 chars ≥ 12 so nano runs, but spirituality guard (<20 chars, no title/kind) discards result (guard b)"}
