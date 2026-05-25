@@ -101,6 +101,7 @@ def test_brain_fallback_not_called_when_dateparser_succeeds() -> None:
 
 def test_brain_fallback_called_when_dateparser_returns_none() -> None:
     """When dateparser fails, the fallback is invoked and its datetime is used."""
+    from freezegun import freeze_time
     from lifeos.parser import parse_reminder
 
     target_dt = datetime(2026, 5, 25, 15, 30, tzinfo=timezone.utc)
@@ -109,10 +110,13 @@ def test_brain_fallback_called_when_dateparser_returns_none() -> None:
         assert "almuerzo" in when_text.lower() or when_text  # called with the when fragment
         return target_dt
 
-    ri = parse_reminder(
-        "recordame llamar al médico después del almuerzo",
-        brain_fallback=_fallback,
-    )
+    # Freeze the clock to early morning UTC so target_dt (15:30 UTC) is always
+    # in the future — prevents parse_reminder's past-check from shifting +1 day.
+    with freeze_time("2026-05-25 08:00:00"):
+        ri = parse_reminder(
+            "recordame llamar al médico después del almuerzo",
+            brain_fallback=_fallback,
+        )
     assert ri is not None
     assert ri.when == target_dt
 
