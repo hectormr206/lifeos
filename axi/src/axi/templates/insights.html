@@ -3,7 +3,7 @@
 {% block title %}Insights · Axi{% endblock %}
 
 {% block content %}
-<div class="space-y-4" x-data="insightsPage()" x-init="loadPreview(); loadPatterns()">
+<div class="space-y-4" x-data="insightsPage()" x-init="loadPreview(); loadPatterns(); loadCorrelations()">
   <div class="flex justify-between items-baseline gap-4 flex-wrap">
     <h1 class="text-2xl font-semibold">Insights</h1>
     <div class="flex gap-2 items-center text-sm flex-wrap">
@@ -45,6 +45,22 @@
     </template>
   </div>
 
+  <!-- Correlations block -->
+  <div class="space-y-2" x-show="correlations.length > 0">
+    <h2 class="text-sm font-semibold muted uppercase tracking-wider">
+      🔗 Correlaciones descubiertas
+    </h2>
+    <template x-for="c in correlations" :key="c.id">
+      <div class="panel p-3 flex items-start gap-3">
+        <div class="flex-1 min-w-0">
+          <div class="text-sm" x-text="c.metadata?.note || c.rel"></div>
+          <div class="text-xs muted mt-1" x-show="c.metadata?.strength"
+               x-text="'fuerza: ' + c.metadata?.strength"></div>
+        </div>
+      </div>
+    </template>
+  </div>
+
   <!-- Digest preview -->
   <div class="panel p-4 space-y-3">
     <div class="flex items-baseline justify-between flex-wrap gap-2">
@@ -72,6 +88,7 @@ function insightsPage() {
     cadence: 'daily',
     preview: '',
     patterns: [],
+    correlations: [],
     sections_count: 0,
     patterns_count: 0,
     generated_at: '',
@@ -94,6 +111,15 @@ function insightsPage() {
       try {
         const r = await fetch('/api/insights/patterns?cadence=' + this.cadence);
         if (r.ok) this.patterns = (await r.json()).patterns || [];
+      } catch (e) { /* keep */ }
+    },
+    async loadCorrelations() {
+      try {
+        const r = await fetch('/api/insights/context');
+        if (r.ok) {
+          const d = await r.json();
+          this.correlations = (d.edges || []).filter(e => e.rel === 'correlates-with');
+        }
       } catch (e) { /* keep */ }
     },
     async runNow() {
