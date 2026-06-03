@@ -141,6 +141,59 @@ def create(*, kind: Kind, title: str, amount: float, when: datetime,
     return fetched
 
 
+def update(
+    eid: str,
+    *,
+    kind: Kind,
+    title: str,
+    amount: float,
+    when: datetime,
+    currency: str = "MXN",
+    category: str | None = None,
+    merchant: str | None = None,
+    body: str | None = None,
+    tags: list[str] | None = None,
+) -> Entry | None:
+    """Update a non-deleted finance entry.
+
+    Returns the updated Entry, or None if no active row matched (the entry
+    does not exist or has been soft-deleted). Raises ValueError for invalid
+    kind, naive datetimes, or negative amounts (mirrors create()).
+
+    Note: source and confidence are immutable provenance, and the reflection
+    loop state (reflect_at, reflection_done, reminder_id) is owned by the
+    big-purchase flow — none of those are editable here.
+    """
+    if kind not in _VALID_KINDS:
+        raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
+    if when.tzinfo is None:
+        raise ValueError("when must be tz-aware (got naive datetime)")
+    if amount < 0:
+        raise ValueError("amount must be non-negative (kind decides direction)")
+    with store.connect() as conn:
+        cur = conn.execute(
+            "UPDATE finance_entries "
+            "SET ts=?, kind=?, amount=?, currency=?, category=?, merchant=?, "
+            "    title=?, body=?, tags=? "
+            "WHERE id=? AND deleted_at IS NULL",
+            (
+                _to_iso_utc(when),
+                kind,
+                float(amount),
+                currency,
+                category,
+                merchant,
+                title,
+                body,
+                ",".join(tags) if tags else None,
+                eid,
+            ),
+        )
+        if cur.rowcount == 0:
+            return None
+    return get(eid)
+
+
 def get(eid: str, *, include_deleted: bool = False) -> Entry | None:
     with store.connect() as conn:
         if include_deleted:

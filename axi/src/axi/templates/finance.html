@@ -82,8 +82,16 @@
   </template>
 
   <!-- Compose -->
-  <div class="panel p-4 space-y-3">
-    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nuevo movimiento</h2>
+  <div class="panel p-4 space-y-3" id="finance-compose-form">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold muted uppercase tracking-wider"
+          x-text="editingId ? 'Editar movimiento' : 'Nuevo movimiento'"></h2>
+      <button x-show="editingId" x-cloak
+              @click="cancelEdit()"
+              class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">
+        Cancelar edición
+      </button>
+    </div>
     <div class="grid md:grid-cols-3 gap-2">
       <select x-model="form.kind" class="panel2 px-3 py-2 text-sm">
         <option value="expense">💸 Gasto</option>
@@ -129,9 +137,10 @@
     <textarea x-model="form.body" placeholder="Notas (opcional)"
               class="panel2 px-3 py-2 text-sm w-full" rows="2" maxlength="2000"></textarea>
     <div class="flex justify-end gap-2">
-      <button class="btn btn-primary" @click="create()"
-              :disabled="!form.title || form.amount == null || !form.ts_local">
-        Guardar
+      <button class="btn btn-primary"
+              @click="editingId ? update(editingId) : create()"
+              :disabled="!form.title || form.amount == null || !form.ts_local"
+              x-text="editingId ? 'Guardar cambios' : 'Guardar'">
       </button>
     </div>
     <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
@@ -181,8 +190,12 @@
             </template>
           </div>
         </div>
-        <button @click="del(r.id)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110"
-                title="Eliminar">🗑️</button>
+        <div class="flex gap-1 flex-shrink-0">
+          <button @click="startEdit(r)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110"
+                  title="Editar">✏️</button>
+          <button @click="del(r.id)" class="text-xs panel2 px-2 py-1 rounded hover:brightness-110"
+                  title="Eliminar">🗑️</button>
+        </div>
       </div>
     </template>
   </div>
@@ -197,6 +210,7 @@ function financePage() {
     pending: [],
     loading: true,
     error: '',
+    editingId: null,
     filter: { kind: '', days: 30, q: '' },
     form: {
       kind: 'expense', title: '', amount: null, currency: 'MXN',
@@ -269,6 +283,59 @@ function financePage() {
         kind: 'expense', title: '', amount: null, currency: 'MXN',
         category: '', merchant: '', ts_local: '', tags: '', body: '',
       };
+      this.load(); this.loadSummary(); this.loadPending();
+    },
+    // ── Edit helpers ──────────────────────────────────────────────────────
+    startEdit(r) {
+      this.editingId = r.id;
+      this.error = '';
+      this.form.kind = r.kind;
+      this.form.title = r.title;
+      this.form.amount = r.amount;
+      this.form.currency = r.currency || 'MXN';
+      this.form.category = r.category || '';
+      this.form.merchant = r.merchant || '';
+      this.form.body = r.body || '';
+      this.form.tags = (r.tags || []).join(', ');
+      // Convert UTC ISO to datetime-local string (YYYY-MM-DDTHH:MM)
+      const d = new Date(r.ts);
+      const pad = n => String(n).padStart(2, '0');
+      this.form.ts_local = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' +
+                           pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      document.getElementById('finance-compose-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    cancelEdit() {
+      this.editingId = null;
+      this.error = '';
+      this.form = {
+        kind: 'expense', title: '', amount: null, currency: 'MXN',
+        category: '', merchant: '', ts_local: '', tags: '', body: '',
+      };
+    },
+    async update(id) {
+      this.error = '';
+      const localDt = new Date(this.form.ts_local);
+      if (isNaN(localDt.getTime())) { this.error = 'Fecha inválida'; return; }
+      const tags = this.form.tags
+        ? this.form.tags.split(',').map(t => t.trim()).filter(Boolean)
+        : null;
+      const body = {
+        kind: this.form.kind,
+        title: this.form.title,
+        amount: this.form.amount,
+        currency: this.form.currency || 'MXN',
+        category: this.form.category || null,
+        merchant: this.form.merchant || null,
+        ts: localDt.toISOString(),
+        body: this.form.body || null,
+        tags,
+      };
+      const r = await fetch('/api/finance/entries/' + id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { this.error = 'No se pudo guardar: ' + (await r.text()); return; }
+      this.cancelEdit();
       this.load(); this.loadSummary(); this.loadPending();
     },
     async reflect(id, tag) {

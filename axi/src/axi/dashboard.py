@@ -3349,6 +3349,54 @@ async def api_finance_reflect(eid: str, request: Request):
     return {"ok": True}
 
 
+@app.patch("/api/finance/entries/{eid}")
+async def api_finance_update(eid: str, request: Request):
+    """Update a non-deleted finance entry.
+
+    Body: {kind, title, amount, ts (ISO tz-aware), currency?, category?,
+    merchant?, body?, tags?}. source and confidence are immutable
+    provenance, and the reflection-loop state (reflect_at, reflection_done,
+    reminder_id) is owned by the big-purchase flow — none are edited here.
+    Returns 404 if the entry does not exist or has been soft-deleted.
+    Returns 400 for validation errors (same rules as POST).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    kind = body.get("kind")
+    title = (body.get("title") or "").strip()
+    amount = body.get("amount")
+    ts_str = body.get("ts")
+    if not kind or not title or amount is None or not ts_str:
+        raise HTTPException(400, "kind, title, amount and ts are required")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"ts must be ISO8601: {ts_str!r}")
+    if ts.tzinfo is None:
+        raise HTTPException(400, "ts must be tz-aware")
+    if len(title) > 200:
+        raise HTTPException(400, "title too long (max 200)")
+    try:
+        updated = finance_entries.update(
+            eid,
+            kind=kind, title=title, amount=float(amount), when=ts,
+            currency=body.get("currency", "MXN"),
+            category=body.get("category") or None,
+            merchant=body.get("merchant") or None,
+            body=body.get("body") or None,
+            tags=body.get("tags") or None,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if updated is None:
+        raise HTTPException(404, "not found or deleted")
+    return _finance_entry_to_dict(updated)
+
+
 @app.delete("/api/finance/entries/{eid}")
 def api_finance_delete(eid: str):
     # Cancel the linked reflection reminder if there is one.
