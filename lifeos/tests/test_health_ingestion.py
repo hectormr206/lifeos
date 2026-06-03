@@ -142,6 +142,53 @@ def test_bp_bare_rejects_implausible_values() -> None:
     assert h is None or h.data.get("type") != "blood_pressure"
 
 
+# ── Héctor's real morning formats (regressed to nano before; see
+#    bugs/health-bp-regex-format-gaps). The pulse can be plural "pulsos"
+#    and the pulse number can come BEFORE the word ("58 pulsos"). ────────
+
+
+def test_bp_plural_pulsos_keyword_before_number_slash() -> None:
+    """'132/83, pulsos 58' — slash BP + plural 'pulsos' before the number."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("132/83, pulsos 58")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 132
+    assert h.data["diastolic"] == 83
+    assert h.data["pulse_bpm"] == 58
+
+
+def test_bp_three_bare_numbers_trailing_pulsos() -> None:
+    """'132, 83, 58 pulsos' — sys, dia, pulse then the trailing word."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("132, 83, 58 pulsos")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 132
+    assert h.data["diastolic"] == 83
+    assert h.data["pulse_bpm"] == 58
+
+
+def test_bp_three_bare_numbers_trailing_pulsos_slash() -> None:
+    """'117/83/57 pulsos' and '118, 83, 52 pulsos.' variants seen in history."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("118, 83, 52 pulsos.")
+    assert h is not None
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 118
+    assert h.data["diastolic"] == 83
+    assert h.data["pulse_bpm"] == 52
+
+
+def test_bp_plural_pulsos_still_rejects_implausible() -> None:
+    """The new plural/trailing forms keep the physiological sanity bounds."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("12, 14, 18 pulsos")  # all below range
+    assert h is None or h.data.get("type") != "blood_pressure"
+
+
 def test_body_composition_full_inbody_string() -> None:
     """Real user input from Inbody scale: 6 fields in one message."""
     from lifeos.health.ingestion import parse_health

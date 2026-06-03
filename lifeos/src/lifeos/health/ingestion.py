@@ -91,11 +91,19 @@ _BP_RE = re.compile(
 )
 _BP_PULSE_BARE_RE = re.compile(
     # "116, 84 y pulso 72"  /  "116/84 pulso 72"  /  "116, 84 pulso 72"
-    # Both sides have to be plausible (sys >= 80; dia >= 40) to avoid
-    # eating "150, 200" type non-medical numbers — checked in Python.
+    # /  "132/83, pulsos 58" (plural). Both sides have to be plausible
+    # (sys >= 80; dia >= 40) to avoid eating "150, 200" type non-medical
+    # numbers — checked in Python.
     r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})"
     r"(?:\s+y\s+|\s*,?\s+|\s*[.;]\s+)?"
-    r"(?:pulso|fc|frecuencia\s+card[íi]aca|hr)\s*[:=]?\s*(\d{2,3})\b",
+    r"(?:pulsos?|fc|frecuencia\s+card[íi]aca|hr)\s*[:=]?\s*(\d{2,3})\b",
+    re.IGNORECASE,
+)
+_BP_PULSE_TRAILING_RE = re.compile(
+    # Pulse number BEFORE the word: "132, 83, 58 pulsos" / "118, 83, 52
+    # pulsos." — three bare numbers (sys, dia, pulse) closed by "pulso(s)".
+    # Same physiological plausibility gate applies (checked in Python).
+    r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})\s*[,/]\s*(\d{2,3})\s*pulsos?\b",
     re.IGNORECASE,
 )
 _WEIGHT_RE = re.compile(
@@ -409,7 +417,7 @@ def _try_vital(text: str) -> HealthIntent | None:
     # Bare BP + pulse: "116, 84 y pulso 72" / "116/84 pulso 72". Only fires
     # when the numbers fall in physiological ranges (sys 80-220, dia 40-130,
     # pulse 30-220) to avoid false positives on dimensions/codes/accounting.
-    m = _BP_PULSE_BARE_RE.search(text)
+    m = _BP_PULSE_BARE_RE.search(text) or _BP_PULSE_TRAILING_RE.search(text)
     if m:
         sys, dia, pulse = int(m.group(1)), int(m.group(2)), int(m.group(3))
         if 80 <= sys <= 220 and 40 <= dia <= 130 and 30 <= pulse <= 220:
