@@ -187,3 +187,97 @@ def test_soft_delete() -> None:
                        when=datetime.now(timezone.utc))
     assert entries.delete(e.id) is True
     assert all(r.id != e.id for r in entries.list_recent(days=30))
+
+
+# ── update() tests ────────────────────────────────────────────────────────────
+
+
+def test_update_changes_fields() -> None:
+    from lifeos.finance import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(
+        kind="expense", title="original", amount=100,
+        currency="MXN", category="food", merchant="Soriana",
+        when=now, body="old body", tags=["a"], source="manual",
+    )
+    new_when = now + timedelta(hours=1)
+    updated = entries.update(
+        e.id,
+        kind="big_purchase",
+        title="updated",
+        amount=4500,
+        when=new_when,
+        currency="USD",
+        category="electronics",
+        merchant="Best Buy",
+        body="new body",
+        tags=["b", "c"],
+    )
+    assert updated is not None
+    assert updated.id == e.id
+    assert updated.kind == "big_purchase"
+    assert updated.title == "updated"
+    assert updated.amount == 4500
+    assert updated.currency == "USD"
+    assert updated.category == "electronics"
+    assert updated.merchant == "Best Buy"
+    assert updated.body == "new body"
+    assert updated.tags == ["b", "c"]
+    # ts reflects new_when
+    assert abs((updated.ts - new_when).total_seconds()) < 2
+    # source is immutable provenance — unchanged by update()
+    assert updated.source == "manual"
+
+
+def test_update_roundtrips_via_get() -> None:
+    from lifeos.finance import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(kind="expense", title="x", amount=10, when=now)
+    entries.update(e.id, kind="expense", title="y", amount=20, when=now)
+    fetched = entries.get(e.id)
+    assert fetched is not None
+    assert fetched.title == "y"
+    assert fetched.amount == 20
+
+
+def test_update_returns_none_for_missing_id() -> None:
+    from lifeos.finance import entries
+    now = datetime.now(timezone.utc)
+    result = entries.update(
+        "nonexistent-id", kind="expense", title="x", amount=1, when=now
+    )
+    assert result is None
+
+
+def test_update_returns_none_for_deleted_entry() -> None:
+    from lifeos.finance import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(kind="expense", title="x", amount=1, when=now)
+    entries.delete(e.id)
+    result = entries.update(e.id, kind="expense", title="y", amount=1, when=now)
+    assert result is None
+
+
+def test_update_rejects_invalid_kind() -> None:
+    from lifeos.finance import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(kind="expense", title="x", amount=1, when=now)
+    with pytest.raises(ValueError, match="kind"):
+        entries.update(e.id, kind="totally_wrong", title="x", amount=1, when=now)
+
+
+def test_update_rejects_negative_amount() -> None:
+    from lifeos.finance import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(kind="expense", title="x", amount=1, when=now)
+    with pytest.raises(ValueError, match="amount"):
+        entries.update(e.id, kind="expense", title="x", amount=-5, when=now)
+
+
+def test_update_rejects_naive_datetime() -> None:
+    from lifeos.finance import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(kind="expense", title="x", amount=1, when=now)
+    with pytest.raises(ValueError, match="tz-aware"):
+        entries.update(e.id, kind="expense", title="x", amount=1,
+                       when=datetime.now())  # naive
