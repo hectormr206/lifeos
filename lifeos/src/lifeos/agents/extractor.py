@@ -154,18 +154,34 @@ def _try_parse_json(content: str) -> dict | None:
     return None
 
 
-def extract(text: str, *, timeout_s: float = 5.0) -> ExtractionResult | None:
+def extract(
+    text: str,
+    *,
+    timeout_s: float = 5.0,
+    retry_timeout_s: float = 15.0,
+    retries: int = 1,
+) -> ExtractionResult | None:
     """Run the entity extractor over `text`. Returns None on:
       - empty input
-      - nano service unreachable
+      - nano service unreachable (after exhausting retries)
       - model returned garbage / unparseable JSON
       - domain came back as null (no useful extraction)
 
     Callers should treat None as "fast-path didn't help; fall through to
     the main brain as before". This keeps the regex → nano → brain
-    cascade safe by default."""
+    cascade safe by default.
+
+    Transient-failure retry: a nano *transport* failure (timeout, service
+    unreachable) is NOT a "no domain here" decision — it's infra noise from
+    CPU contention or an input too long to finish inside `timeout_s`. Since
+    the brain fallback does NOT persist, a swallowed timeout silently drops
+    the user's data. So on `r.ok == False` we retry up to `retries` times
+    with the larger `retry_timeout_s` budget before giving up. A clean
+    answer (parse failure, null domain) is NOT retried — that's a real
+    decision and burning a 15s retry on it would only add latency."""
     if not text or not text.strip():
         return None
+
     r = runtime.call_nano(
         system=_SYSTEM_PROMPT,
         user=text,
@@ -173,8 +189,25 @@ def extract(text: str, *, timeout_s: float = 5.0) -> ExtractionResult | None:
         max_tokens=800,
         timeout_s=timeout_s,
     )
+    attempt = 0
+    while not r.ok and attempt < retries:
+        attempt += 1
+        log.warning(
+            "nano extractor: call failed (%s, %dms) — retry %d/%d (timeout=%.0fs)",
+            r.error, r.latency_ms, attempt, retries, retry_timeout_s,
+        )
+        r = runtime.call_nano(
+            system=_SYSTEM_PROMPT,
+            user=text,
+            temperature=0.1,
+            max_tokens=800,
+            timeout_s=retry_timeout_s,
+        )
     if not r.ok:
-        log.warning("nano extractor: call failed (%s, %dms)", r.error, r.latency_ms)
+        log.warning(
+            "nano extractor: call failed after %d attempt(s) (%s, %dms)",
+            attempt + 1, r.error, r.latency_ms,
+        )
         return None
 
     parsed = _try_parse_json(r.content)
