@@ -7,3 +7,6 @@
 *~
 .idea/
 .vscode/
+
+# SDD tooling (machine-specific absolute paths, regenerable via sdd-init)
+.atl/
