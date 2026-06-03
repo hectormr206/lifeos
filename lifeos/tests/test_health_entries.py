@@ -127,3 +127,94 @@ def test_soft_delete() -> None:
     # But get() still returns them so we can show "(eliminado)" if needed
     assert entries.get(e.id) is None  # default: hide deleted
     assert entries.get(e.id, include_deleted=True) is not None
+
+
+# ── update() tests ────────────────────────────────────────────────────────────
+
+
+def test_update_changes_fields() -> None:
+    from lifeos.health import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(
+        kind="note", title="original", when=now,
+        body="old body", tags=["a"], source="manual",
+    )
+    new_when = now + timedelta(hours=1)
+    updated = entries.update(
+        e.id,
+        kind="symptom",
+        title="updated",
+        when=new_when,
+        body="new body",
+        tags=["b", "c"],
+        data={"severity": 5},
+    )
+    assert updated is not None
+    assert updated.id == e.id
+    assert updated.kind == "symptom"
+    assert updated.title == "updated"
+    assert updated.body == "new body"
+    assert updated.tags == ["b", "c"]
+    assert updated.data == {"severity": 5}
+    # ts reflects new_when
+    assert abs((updated.ts - new_when).total_seconds()) < 2
+    # source is immutable provenance — unchanged by update()
+    assert updated.source == "manual"
+
+
+def test_update_roundtrips_via_get() -> None:
+    from lifeos.health import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(kind="note", title="x", when=now)
+    entries.update(e.id, title="y", kind="note", when=now)
+    fetched = entries.get(e.id)
+    assert fetched is not None
+    assert fetched.title == "y"
+
+
+def test_update_returns_none_for_missing_id() -> None:
+    from lifeos.health import entries
+    now = datetime.now(timezone.utc)
+    result = entries.update("nonexistent-id", title="x", kind="note", when=now)
+    assert result is None
+
+
+def test_update_returns_none_for_deleted_entry() -> None:
+    from lifeos.health import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(kind="note", title="x", when=now)
+    entries.delete(e.id)
+    result = entries.update(e.id, title="y", kind="note", when=now)
+    assert result is None
+
+
+def test_update_rejects_invalid_kind() -> None:
+    from lifeos.health import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(kind="note", title="x", when=now)
+    with pytest.raises(ValueError, match="kind"):
+        entries.update(e.id, title="x", kind="banana", when=now)  # type: ignore[arg-type]
+
+
+def test_update_rejects_naive_datetime() -> None:
+    from lifeos.health import entries
+    naive = datetime(2026, 6, 1, 9, 0, 0)
+    e = entries.create(kind="note", title="x", when=datetime.now(timezone.utc))
+    with pytest.raises(ValueError, match="tz-aware"):
+        entries.update(e.id, title="x", kind="note", when=naive)
+
+
+def test_update_clears_optional_fields_when_none() -> None:
+    """Passing body=None clears body; tags=None clears tags; data=None clears data."""
+    from lifeos.health import entries
+    now = datetime.now(timezone.utc)
+    e = entries.create(
+        kind="note", title="x", when=now,
+        body="has body", tags=["tag1"], data={"key": "val"},
+    )
+    updated = entries.update(e.id, title="x", kind="note", when=now,
+                             body=None, tags=None, data=None)
+    assert updated is not None
+    assert updated.body is None
+    assert updated.tags == []
+    assert updated.data == {}

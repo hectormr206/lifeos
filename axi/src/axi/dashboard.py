@@ -3188,6 +3188,49 @@ async def api_health_create(request: Request):
     return _health_entry_to_dict(entry)
 
 
+@app.patch("/api/health/entries/{eid}")
+async def api_health_update(eid: str, request: Request):
+    """Update a non-deleted health entry.
+
+    Body: {kind, title, ts (ISO tz-aware), body?, data?, tags?}
+    source and confidence are immutable provenance and cannot be edited.
+    Returns 404 if the entry does not exist or has been soft-deleted.
+    Returns 400 for validation errors (same rules as POST).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    kind = body.get("kind")
+    title = (body.get("title") or "").strip()
+    ts_str = body.get("ts")
+    if not kind or not title or not ts_str:
+        raise HTTPException(400, "kind, title and ts are required")
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"ts must be ISO8601: {ts_str!r}")
+    if ts.tzinfo is None:
+        raise HTTPException(400, "ts must be tz-aware")
+    if len(title) > 200:
+        raise HTTPException(400, "title too long (max 200)")
+    try:
+        updated = health_entries.update(
+            eid,
+            kind=kind, title=title, when=ts,
+            body=body.get("body") or None,
+            data=body.get("data") or None,
+            tags=body.get("tags") or None,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if updated is None:
+        raise HTTPException(404, "not found or deleted")
+    return _health_entry_to_dict(updated)
+
+
 @app.delete("/api/health/entries/{eid}")
 def api_health_delete(eid: str):
     ok = health_entries.delete(eid)

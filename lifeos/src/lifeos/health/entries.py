@@ -168,3 +168,46 @@ def delete(eid: str) -> bool:
             (eid,),
         )
         return cur.rowcount > 0
+
+
+def update(
+    eid: str,
+    *,
+    kind: Kind,
+    title: str,
+    when: datetime,
+    body: str | None = None,
+    data: dict | None = None,
+    tags: list[str] | None = None,
+) -> "Entry | None":
+    """Update a non-deleted health entry.
+
+    Returns the updated Entry, or None if no active row matched (e.g. the
+    entry does not exist or has been soft-deleted).
+    Raises ValueError for invalid kind or naive datetimes (mirrors create()).
+
+    Note: source and confidence are immutable provenance — they are set at
+    creation and cannot be edited here.
+    """
+    if kind not in _VALID_KINDS:
+        raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
+    if when.tzinfo is None:
+        raise ValueError("when must be tz-aware (got naive datetime)")
+    with store.connect() as conn:
+        cur = conn.execute(
+            "UPDATE health_entries "
+            "SET ts=?, kind=?, title=?, body=?, data=?, tags=? "
+            "WHERE id=? AND deleted_at IS NULL",
+            (
+                _to_iso_utc(when),
+                kind,
+                title,
+                body,
+                json.dumps(data) if data else None,
+                ",".join(tags) if tags else None,
+                eid,
+            ),
+        )
+        if cur.rowcount == 0:
+            return None
+    return get(eid)

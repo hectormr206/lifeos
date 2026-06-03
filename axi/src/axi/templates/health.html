@@ -29,8 +29,16 @@
   </div>
 
   <!-- Compose -->
-  <div class="panel p-4 space-y-3">
-    <h2 class="text-sm font-semibold muted uppercase tracking-wider">Nueva entrada</h2>
+  <div class="panel p-4 space-y-3" id="health-compose-form">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold muted uppercase tracking-wider"
+          x-text="editingId ? 'Editar entrada' : 'Nueva entrada'"></h2>
+      <button x-show="editingId" x-cloak
+              @click="cancelEdit()"
+              class="text-xs panel2 px-2 py-1 rounded hover:brightness-110">
+        Cancelar edición
+      </button>
+    </div>
     <div class="grid md:grid-cols-3 gap-2">
       <select x-model="form.kind" @change="onKindChange()" class="panel2 px-3 py-2 text-sm">
         <option value="symptom">🤒 Síntoma</option>
@@ -79,8 +87,10 @@
     <textarea x-model="form.body" placeholder="Notas (opcional)"
               class="panel2 px-3 py-2 text-sm w-full" rows="2" maxlength="2000"></textarea>
     <div class="flex justify-end gap-2">
-      <button class="btn btn-primary" @click="create()" :disabled="!form.title || !form.ts_local">
-        Guardar
+      <button class="btn btn-primary"
+              @click="editingId ? update(editingId) : create()"
+              :disabled="!form.title || !form.ts_local"
+              x-text="editingId ? 'Guardar cambios' : 'Guardar'">
       </button>
     </div>
     <div x-show="error" x-text="error" x-cloak class="text-sm" style="color: var(--red)"></div>
@@ -137,9 +147,14 @@
             </div>
           </template>
         </div>
-        <button @click="del(r.id)"
-                class="text-xs panel2 px-2 py-1 rounded hover:brightness-110"
-                title="Eliminar">🗑️</button>
+        <div class="flex gap-1 flex-shrink-0">
+          <button @click="startEdit(r)"
+                  class="text-xs panel2 px-2 py-1 rounded hover:brightness-110"
+                  title="Editar">✏️</button>
+          <button @click="del(r.id)"
+                  class="text-xs panel2 px-2 py-1 rounded hover:brightness-110"
+                  title="Eliminar">🗑️</button>
+        </div>
       </div>
     </template>
   </div>
@@ -151,6 +166,7 @@ function healthPage() {
     rows: [],
     loading: true,
     error: '',
+    editingId: null,
     filter: { kind: '', days: 30, q: '' },
     form: {
       kind: 'symptom', title: '', ts_local: '', body: '', tags: '',
@@ -231,6 +247,85 @@ function healthPage() {
         kind: 'symptom', title: '', ts_local: '', body: '', tags: '',
         vital_type: 'glucose', vital_value: null, bp_sys: null, bp_dia: null,
       };
+      this.load();
+    },
+    // ── Edit helpers ──────────────────────────────────────────────────────
+    startEdit(r) {
+      this.editingId = r.id;
+      this.error = '';
+      this.form.kind = r.kind;
+      this.form.title = r.title;
+      this.form.body = r.body || '';
+      this.form.tags = (r.tags || []).join(', ');
+      // Convert UTC ISO to datetime-local string (YYYY-MM-DDTHH:MM)
+      const d = new Date(r.ts);
+      const pad = n => String(n).padStart(2, '0');
+      this.form.ts_local = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' +
+                           pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      // Restore vital-specific fields if kind is vital
+      if (r.kind === 'vital' && r.data) {
+        this.form.vital_type = r.data.type || 'glucose';
+        if (r.data.type === 'blood_pressure') {
+          this.form.bp_sys = r.data.systolic || null;
+          this.form.bp_dia = r.data.diastolic || null;
+          this.form.vital_value = null;
+        } else {
+          this.form.vital_value = r.data.value != null ? r.data.value : null;
+          this.form.bp_sys = null;
+          this.form.bp_dia = null;
+        }
+      } else {
+        this.form.vital_type = 'glucose';
+        this.form.vital_value = null;
+        this.form.bp_sys = null;
+        this.form.bp_dia = null;
+      }
+      document.getElementById('health-compose-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    cancelEdit() {
+      this.editingId = null;
+      this.error = '';
+      this.form = {
+        kind: 'symptom', title: '', ts_local: '', body: '', tags: '',
+        vital_type: 'glucose', vital_value: null, bp_sys: null, bp_dia: null,
+      };
+    },
+    async update(id) {
+      this.error = '';
+      const localDt = new Date(this.form.ts_local);
+      if (isNaN(localDt.getTime())) { this.error = 'Fecha inválida'; return; }
+      let data = null;
+      if (this.form.kind === 'vital') {
+        if (this.form.vital_type === 'blood_pressure') {
+          if (!this.form.bp_sys || !this.form.bp_dia) {
+            this.error = 'Ingresá sistólica y diastólica'; return;
+          }
+          data = { type: 'blood_pressure', systolic: this.form.bp_sys,
+                   diastolic: this.form.bp_dia, unit: 'mmHg' };
+        } else {
+          if (this.form.vital_value == null) {
+            this.error = 'Ingresá un valor numérico'; return;
+          }
+          const unit = ({glucose:'mg/dL', weight:'kg', sleep_hours:'h'})[this.form.vital_type] || '';
+          data = { type: this.form.vital_type, value: this.form.vital_value, unit };
+        }
+      }
+      const tags = this.form.tags
+        ? this.form.tags.split(',').map(t => t.trim()).filter(Boolean)
+        : null;
+      const body = {
+        kind: this.form.kind,
+        title: this.form.title,
+        ts: localDt.toISOString(),
+        body: this.form.body || null,
+        data, tags,
+      };
+      const r = await fetch('/api/health/entries/' + id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { this.error = 'No se pudo guardar: ' + (await r.text()); return; }
+      this.cancelEdit();
       this.load();
     },
     async del(id) {
