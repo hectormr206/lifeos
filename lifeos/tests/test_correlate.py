@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from dataclasses import FrozenInstanceError
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -227,3 +228,734 @@ def test_rel_vocab_contains_new_relations() -> None:
     from lifeos.edges import REL_VOCAB
     assert "correlates-with" in REL_VOCAB
     assert "pattern-active-at" in REL_VOCAB
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 1 — CorrelationResult frozen dataclass
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_correlation_result_is_frozen() -> None:
+    """CorrelationResult must be a frozen dataclass — mutation raises FrozenInstanceError."""
+    from lifeos.insights.correlate import CorrelationResult
+
+    result = CorrelationResult(
+        rate_ratio=2.5,
+        poor_sleep_days=4,
+        ok_sleep_days=6,
+        impulsive_after_poor=3,
+        impulsive_after_ok=1,
+        total_impulsive=3,
+        window_days=90,
+        lag_days=2,
+        threshold=6.5,
+    )
+    with pytest.raises(FrozenInstanceError):
+        result.rate_ratio = 1.0  # type: ignore[misc]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Helpers for Phase 2 unit tests (pure detector, no DB)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_sleep_entry(ts: datetime, hours: float):
+    """Minimal Entry-like object for the health (sleep_hours vital) DAO."""
+    e = MagicMock()
+    e.ts = ts
+    e.data = {"type": "sleep_hours", "value": hours}
+    e.tags = []
+    return e
+
+
+def _make_purchase_entry(ts: datetime):
+    """Minimal Entry-like object for the finance (big_purchase impulsive) DAO."""
+    e = MagicMock()
+    e.ts = ts
+    e.data = {}
+    e.tags = ["impulsive"]
+    return e
+
+
+def _fake_health_fn(*entries):
+    """Return a callable that ignores arguments and yields the given sleep entries."""
+    def _inner(**_kwargs):
+        return list(entries)
+    return _inner
+
+
+def _fake_finance_fn(*entries):
+    """Return a callable that ignores arguments and yields the given purchase entries."""
+    def _inner(**_kwargs):
+        return list(entries)
+    return _inner
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 2 — _detect_sleep_spending_correlation unit tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_NOW = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _d(offset_days: int) -> datetime:
+    """Shorthand: _NOW minus offset_days."""
+    return _NOW - timedelta(days=offset_days)
+
+
+def test_fires_when_all_thresholds_met() -> None:
+    """Detector fires (returns CorrelationResult) when all three guards pass."""
+    from lifeos.insights.correlate import CorrelationResult, _detect_sleep_spending_correlation
+
+    # 3 poor-sleep days: D-10, D-9, D-8
+    sleep = [
+        _make_sleep_entry(_d(10), 5.0),
+        _make_sleep_entry(_d(9), 4.5),
+        _make_sleep_entry(_d(8), 5.5),
+    ]
+    # 2 impulsive purchases within lag 0-2 days of poor-sleep days
+    finance = [
+        _make_purchase_entry(_d(10)),   # same day as D-10 poor sleep (lag=0)
+        _make_purchase_entry(_d(7)),    # D-8 + 1 day (lag=1)
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+
+    assert isinstance(result, CorrelationResult)
+    assert result.rate_ratio >= 2.0
+
+
+def test_none_when_poor_sleep_days_below_3() -> None:
+    """Returns None when fewer than 3 poor-sleep days (only 2)."""
+    from lifeos.insights.correlate import _detect_sleep_spending_correlation
+
+    sleep = [
+        _make_sleep_entry(_d(10), 5.0),
+        _make_sleep_entry(_d(9), 4.5),
+    ]
+    finance = [
+        _make_purchase_entry(_d(10)),
+        _make_purchase_entry(_d(9)),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+    assert result is None
+
+
+def test_none_when_total_impulsive_below_2() -> None:
+    """Returns None when fewer than 2 impulsive purchases in lag window."""
+    from lifeos.insights.correlate import _detect_sleep_spending_correlation
+
+    sleep = [
+        _make_sleep_entry(_d(10), 5.0),
+        _make_sleep_entry(_d(9), 4.5),
+        _make_sleep_entry(_d(8), 4.0),
+    ]
+    finance = [
+        _make_purchase_entry(_d(10)),  # only 1 impulsive purchase
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+    assert result is None
+
+
+def test_none_when_rate_ratio_below_2() -> None:
+    """Returns None when impulsive purchase rate is spread evenly (ratio < 2.0)."""
+    from lifeos.insights.correlate import _detect_sleep_spending_correlation
+
+    # 3 poor-sleep days, 3 ok-sleep days, impulsive purchases after each
+    sleep = [
+        _make_sleep_entry(_d(10), 5.0),  # poor
+        _make_sleep_entry(_d(9), 4.5),   # poor
+        _make_sleep_entry(_d(8), 5.0),   # poor
+        _make_sleep_entry(_d(7), 7.0),   # ok
+        _make_sleep_entry(_d(6), 8.0),   # ok
+        _make_sleep_entry(_d(5), 7.5),   # ok
+    ]
+    # Impulsive purchases after every day → equal rates → ratio ~1.0
+    finance = [
+        _make_purchase_entry(_d(10)),
+        _make_purchase_entry(_d(9)),
+        _make_purchase_entry(_d(8)),
+        _make_purchase_entry(_d(7)),
+        _make_purchase_entry(_d(6)),
+        _make_purchase_entry(_d(5)),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+    assert result is None
+
+
+def test_lag_window_inclusive() -> None:
+    """Purchase on D+2 counts; purchase on D+3 does NOT count toward impulsive_after_poor.
+
+    Uses a single isolated poor-sleep day well-separated from other poor days so that
+    the lag boundary is unambiguous.  The other two poor-sleep days are placed 20+ days
+    away so purchases near day 10 cannot accidentally fall within their lag windows.
+    """
+    from lifeos.insights.correlate import CorrelationResult, _detect_sleep_spending_correlation
+
+    # Poor day A is at D-30 (isolated); poor days B and C at D-50 and D-60 (far away)
+    poor_a = _d(30)
+    purchase_d2 = poor_a + timedelta(days=2)   # D-28 — within lag=2 of poor_a
+    purchase_d3 = poor_a + timedelta(days=3)   # D-27 — outside lag=2 of poor_a
+
+    sleep = [
+        _make_sleep_entry(_d(30), 5.0),   # poor A
+        _make_sleep_entry(_d(50), 5.0),   # poor B (far from purchases)
+        _make_sleep_entry(_d(60), 5.0),   # poor C (far from purchases)
+    ]
+    finance_with_d2 = [
+        _make_purchase_entry(purchase_d2),   # lag=2 → counts for poor_a
+        _make_purchase_entry(_d(30)),        # lag=0 → counts for poor_a
+    ]
+    # Purchases only at lag=3 from poor_a (and not within lag of B or C either)
+    finance_with_d3_only = [
+        _make_purchase_entry(purchase_d3),                    # D-27, lag=3 from poor_a
+        _make_purchase_entry(purchase_d3 + timedelta(days=1)),  # D-26, lag=4
+    ]
+
+    # With lag=2 purchase it should fire (impulsive_after_poor >= 1, rate_ratio high)
+    result_fires = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance_with_d2),
+    )
+    assert isinstance(result_fires, CorrelationResult)
+
+    # With only D+3 (outside lag for ALL poor days), impulsive_after_poor = 0 → None
+    result_silent = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance_with_d3_only),
+    )
+    # total_impulsive >= 2 but impulsive_after_poor = 0 → rate_ratio = 0 < 2.0
+    assert result_silent is None
+
+
+def test_ok_sleep_zero_denominator() -> None:
+    """When ok_sleep_days=0, rate_after_ok uses floor 0.001, no ZeroDivisionError."""
+    from lifeos.insights.correlate import CorrelationResult, _detect_sleep_spending_correlation
+
+    # All sleep days are poor
+    sleep = [_make_sleep_entry(_d(i), 5.0) for i in range(3, 7)]
+    finance = [
+        _make_purchase_entry(_d(3)),
+        _make_purchase_entry(_d(4)),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+    assert isinstance(result, CorrelationResult)
+    assert result.ok_sleep_days == 0
+
+
+def test_multiple_sleep_entries_same_day_takes_min() -> None:
+    """When a day has two sleep entries, the minimum hours governs classification."""
+    from lifeos.insights.correlate import CorrelationResult, _detect_sleep_spending_correlation
+
+    # D-10: one entry at 7h (would be ok) + one entry at 5h (poor) → min=5h → poor
+    sleep = [
+        _make_sleep_entry(_d(10), 7.0),
+        _make_sleep_entry(_d(10), 5.0),
+        _make_sleep_entry(_d(9), 5.0),
+        _make_sleep_entry(_d(8), 5.0),
+    ]
+    finance = [
+        _make_purchase_entry(_d(10)),
+        _make_purchase_entry(_d(9)),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+    # D-10 should be classified as poor (min=5h), giving us 3 poor days total
+    assert isinstance(result, CorrelationResult)
+    assert result.poor_sleep_days == 3
+
+
+def test_boundary_6_5h_is_ok() -> None:
+    """sleep_hours == 6.5 is NOT poor (strict less-than)."""
+    from lifeos.insights.correlate import _detect_sleep_spending_correlation
+
+    # Only 2 "poor" days if 6.5 is treated as poor, but should be classified ok
+    # → only 2 actual poor days → None
+    sleep = [
+        _make_sleep_entry(_d(10), 6.4),  # poor
+        _make_sleep_entry(_d(9), 6.4),   # poor
+        _make_sleep_entry(_d(8), 6.5),   # ok (boundary)
+    ]
+    finance = [
+        _make_purchase_entry(_d(10)),
+        _make_purchase_entry(_d(9)),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+    # Only 2 poor days → None
+    assert result is None
+
+
+def test_boundary_ratio_exactly_2_0_fires() -> None:
+    """rate_ratio exactly 2.0 must produce a result (>= is inclusive)."""
+    from lifeos.insights.correlate import CorrelationResult, _detect_sleep_spending_correlation
+
+    # 3 poor days, 3 ok days
+    # impulsive_after_poor = 3, poor_sleep_days = 3 → rate_poor = 1.0
+    # impulsive_after_ok = 3, ok_sleep_days = 6 → rate_ok = 0.5
+    # ratio = 1.0 / 0.5 = 2.0 exactly
+    sleep = [
+        _make_sleep_entry(_d(10), 5.0),  # poor
+        _make_sleep_entry(_d(8), 5.0),   # poor
+        _make_sleep_entry(_d(6), 5.0),   # poor
+        _make_sleep_entry(_d(4), 7.0),   # ok
+        _make_sleep_entry(_d(3), 7.0),   # ok
+        _make_sleep_entry(_d(2), 7.0),   # ok
+        _make_sleep_entry(_d(20), 7.0),  # ok
+        _make_sleep_entry(_d(19), 7.0),  # ok
+        _make_sleep_entry(_d(18), 7.0),  # ok
+    ]
+    # 3 impulsive purchases after 3 poor days (lag=0), 3 after ok days (lag=0)
+    finance = [
+        _make_purchase_entry(_d(10)),  # after D-10 poor
+        _make_purchase_entry(_d(8)),   # after D-8 poor
+        _make_purchase_entry(_d(6)),   # after D-6 poor
+        _make_purchase_entry(_d(4)),   # after D-4 ok
+        _make_purchase_entry(_d(3)),   # after D-3 ok
+        _make_purchase_entry(_d(2)),   # after D-2 ok
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+    assert isinstance(result, CorrelationResult)
+    assert result.rate_ratio >= 2.0
+
+
+def test_result_field_values_match_inputs() -> None:
+    """CorrelationResult fields accurately reflect the seeded data."""
+    from lifeos.insights.correlate import CorrelationResult, _detect_sleep_spending_correlation
+
+    sleep = [
+        _make_sleep_entry(_d(10), 5.0),
+        _make_sleep_entry(_d(9), 4.5),
+        _make_sleep_entry(_d(8), 5.5),
+    ]
+    finance = [
+        _make_purchase_entry(_d(10)),
+        _make_purchase_entry(_d(7)),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+
+    assert isinstance(result, CorrelationResult)
+    assert result.window_days == 90
+    assert result.lag_days == 2
+    assert result.threshold == 6.5
+    assert result.poor_sleep_days == 3
+    assert result.total_impulsive == 2
+
+
+def test_none_when_no_sleep_data() -> None:
+    """Zero sleep entries → None, no exception."""
+    from lifeos.insights.correlate import _detect_sleep_spending_correlation
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(),
+        finance_list_recent=_fake_finance_fn(_make_purchase_entry(_d(5))),
+    )
+    assert result is None
+
+
+def test_none_when_no_finance_data() -> None:
+    """Zero finance entries → None, no exception."""
+    from lifeos.insights.correlate import _detect_sleep_spending_correlation
+
+    sleep = [
+        _make_sleep_entry(_d(10), 5.0),
+        _make_sleep_entry(_d(9), 5.0),
+        _make_sleep_entry(_d(8), 5.0),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(),
+    )
+    assert result is None
+
+
+def test_none_when_all_sleep_good() -> None:
+    """All sleep >= 6.5h → no poor days → None."""
+    from lifeos.insights.correlate import _detect_sleep_spending_correlation
+
+    sleep = [
+        _make_sleep_entry(_d(10), 8.0),
+        _make_sleep_entry(_d(9), 7.5),
+        _make_sleep_entry(_d(8), 6.5),  # exactly at threshold → ok
+    ]
+    finance = [
+        _make_purchase_entry(_d(10)),
+        _make_purchase_entry(_d(9)),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+    assert result is None
+
+
+def test_composite_minimum_boundaries_fires() -> None:
+    """Detector fires when ALL three guards sit at their exact minimum simultaneously.
+
+    Composite minimum: poor_sleep_days == 3, total_impulsive == 2, rate_ratio >= 2.0.
+
+    Construction for rate_ratio == 2.0 exactly:
+      - poor_sleep_days = 3, ok_sleep_days = 3
+      - impulsive_after_poor = 2  →  rate_after_poor = 2/3
+      - impulsive_after_ok   = 1  →  rate_after_ok   = 1/3
+      - rate_ratio = (2/3) / (1/3) = 2.0 (exact integer arithmetic)
+      - total_impulsive = 2 (P1 satisfies lag for both a poor day and an ok day;
+        P2 satisfies lag for a second poor day; third poor day has no match)
+    """
+    from lifeos.insights.correlate import CorrelationResult, _detect_sleep_spending_correlation
+
+    # Sleep days layout (all within the 90-day window via _NOW anchor)
+    # poor: D-10, D-5, D-1 (3 poor days)
+    # ok:   D-11, D-15, D-20 (3 ok days)
+    sleep = [
+        _make_sleep_entry(_d(10), 5.0),   # poor — will be matched by P1 (lag=1)
+        _make_sleep_entry(_d(5),  5.0),   # poor — will be matched by P2 (lag=0)
+        _make_sleep_entry(_d(1),  5.0),   # poor — no match (third minimum poor day)
+        _make_sleep_entry(_d(11), 7.0),   # ok — will be matched by P1 (lag=2)
+        _make_sleep_entry(_d(15), 7.0),   # ok — no match
+        _make_sleep_entry(_d(20), 7.0),   # ok — no match
+    ]
+    # P1 = D-9: lag=1 after poor D-10, lag=2 after ok D-11 → counted for both
+    # P2 = D-5: lag=0 after poor D-5
+    # total distinct impulsive purchase days = 2
+    finance = [
+        _make_purchase_entry(_d(9)),   # P1
+        _make_purchase_entry(_d(5)),   # P2
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+
+    assert isinstance(result, CorrelationResult), "Detector must fire at composite minimum"
+    assert result.poor_sleep_days == 3
+    assert result.total_impulsive == 2
+    assert result.rate_ratio == pytest.approx(2.0)
+
+
+def test_purchase_before_poor_sleep_not_counted() -> None:
+    """A purchase 1 day BEFORE a poor-sleep day must not count toward impulsive_after_poor."""
+    from lifeos.insights.correlate import _detect_sleep_spending_correlation
+
+    # Poor sleep on D-10; purchase on D-11 (1 day BEFORE, negative lag)
+    poor_day = _d(10)
+    purchase_before = poor_day - timedelta(days=1)
+
+    sleep = [
+        _make_sleep_entry(_d(10), 5.0),
+        _make_sleep_entry(_d(9), 5.0),
+        _make_sleep_entry(_d(8), 5.0),
+    ]
+    # Purchase before poor day + one more that shouldn't match either
+    finance = [
+        _make_purchase_entry(purchase_before),
+        _make_purchase_entry(purchase_before - timedelta(days=1)),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW,
+        health_list_recent=_fake_health_fn(*sleep),
+        finance_list_recent=_fake_finance_fn(*finance),
+    )
+    # impulsive_after_poor = 0, rate_ratio = 0 < 2.0 → None
+    assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 3 — _persist_correlation_edge unit tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_result(rate_ratio: float = 2.5) -> "CorrelationResult":  # type: ignore[name-defined]
+    from lifeos.insights.correlate import CorrelationResult
+    return CorrelationResult(
+        rate_ratio=rate_ratio,
+        poor_sleep_days=4,
+        ok_sleep_days=6,
+        impulsive_after_poor=3,
+        impulsive_after_ok=1,
+        total_impulsive=3,
+        window_days=90,
+        lag_days=2,
+        threshold=6.5,
+    )
+
+
+def test_persist_creates_edge_with_correct_shape() -> None:
+    """_persist_correlation_edge calls edges_mod.create with correct src/dst/rel/created_by."""
+    from lifeos.insights.correlate import _persist_correlation_edge
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge(_make_result(), _NOW, edges_mod=mock_edges)
+
+    mock_edges.create.assert_called_once()
+    kwargs = mock_edges.create.call_args.kwargs
+    assert kwargs["rel"] == "correlates-with"
+    assert kwargs["src"] == ("health", "sleep_deficit_pattern")
+    assert kwargs["dst"] == ("finance", "impulsive_spending")
+    assert kwargs["created_by"] == "correlation_snapshot"
+
+
+def test_persist_metadata_keys_present() -> None:
+    """Created edge metadata must contain all required keys."""
+    from lifeos.insights.correlate import _persist_correlation_edge
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge(_make_result(), _NOW, edges_mod=mock_edges)
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    required = {
+        "strength", "rate_ratio", "window_days", "lag_days",
+        "poor_sleep_days", "impulsive_after_poor", "total_impulsive",
+        "threshold", "expires_at", "snapshot", "note",
+    }
+    for key in required:
+        assert key in metadata, f"Missing metadata key: {key}"
+
+
+def test_persist_expires_at_is_now_plus_7_days() -> None:
+    """expires_at must equal (now + 7 days).isoformat()."""
+    from lifeos.insights.correlate import _persist_correlation_edge
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    fixed_now = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    _persist_correlation_edge(_make_result(), fixed_now, edges_mod=mock_edges)
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    expected = (fixed_now + timedelta(days=7)).isoformat()
+    assert metadata["expires_at"] == expected
+
+
+def test_persist_note_is_nonempty_spanish_string() -> None:
+    """note must be a non-empty string containing at least one non-ASCII character."""
+    from lifeos.insights.correlate import _persist_correlation_edge
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge(_make_result(), _NOW, edges_mod=mock_edges)
+
+    note = mock_edges.create.call_args.kwargs["metadata"]["note"]
+    assert isinstance(note, str)
+    assert len(note.strip()) > 0
+    # Must contain at least one non-ASCII character (Spanish accented letter)
+    assert any(ord(c) > 127 for c in note), f"note has no non-ASCII chars: {note!r}"
+
+
+def test_persist_deletes_stale_edge_before_create() -> None:
+    """When a stale matching edge exists, delete() is called before create()."""
+    from lifeos.insights.correlate import _persist_correlation_edge
+
+    stale_edge = MagicMock()
+    stale_edge.id = "stale-id"
+    stale_edge.src_id = "sleep_deficit_pattern"
+    stale_edge.dst_id = "impulsive_spending"
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = [stale_edge]
+
+    call_order = []
+    mock_edges.delete.side_effect = lambda _id: call_order.append("delete")
+    mock_edges.create.side_effect = lambda **_kw: call_order.append("create") or MagicMock()
+
+    _persist_correlation_edge(_make_result(), _NOW, edges_mod=mock_edges)
+
+    mock_edges.delete.assert_called_once_with("stale-id")
+    assert call_order == ["delete", "create"]
+
+
+def test_persist_no_delete_when_no_stale_edge() -> None:
+    """When by_relation returns empty list, delete() is NOT called."""
+    from lifeos.insights.correlate import _persist_correlation_edge
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge(_make_result(), _NOW, edges_mod=mock_edges)
+
+    mock_edges.delete.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 5 — Integration tests (real DAOs + _isolated fixture)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _seed_poor_sleep(offset_days: int, hours: float = 5.0) -> None:
+    """Insert a sleep vital entry at real now - offset_days."""
+    from lifeos.health import entries as health_entries
+    when = datetime.now(timezone.utc) - timedelta(days=offset_days)
+    health_entries.create(
+        kind="vital",
+        title="sleep",
+        when=when,
+        data={"type": "sleep_hours", "value": hours},
+    )
+
+
+def _seed_impulsive_purchase(offset_days: int) -> None:
+    """Insert an impulsive big_purchase entry at real now - offset_days."""
+    from lifeos.finance import entries as finance_entries
+    when = datetime.now(timezone.utc) - timedelta(days=offset_days)
+    finance_entries.create(
+        kind="big_purchase",
+        title="impulse buy",
+        amount=500.0,
+        when=when,
+        tags=["impulsive"],
+    )
+
+
+def test_snapshot_writes_correlates_with_edge() -> None:
+    """After seeding poor sleep + impulsive purchases, snapshot writes exactly one edge."""
+    from lifeos import edges
+    from lifeos.insights.correlate import _run_correlation_snapshot
+
+    # Seed 3 poor-sleep days within the last ~10 days
+    _seed_poor_sleep(10)
+    _seed_poor_sleep(9)
+    _seed_poor_sleep(8)
+    # Seed 2 impulsive purchases within lag 0-2 of poor-sleep days
+    _seed_impulsive_purchase(10)   # same day as D-10 poor sleep
+    _seed_impulsive_purchase(8)    # same day as D-8 poor sleep
+
+    _run_correlation_snapshot()
+
+    matching = [
+        e for e in edges.by_relation("correlates-with")
+        if e.src_id == "sleep_deficit_pattern" and e.dst_id == "impulsive_spending"
+    ]
+    assert len(matching) == 1, f"Expected exactly 1 correlates-with edge, got {len(matching)}"
+    edge = matching[0]
+    md = edge.metadata or {}
+    # Spanish note must contain at least one non-ASCII character
+    note = md.get("note", "")
+    assert len(note) > 0
+    assert any(ord(c) > 127 for c in note), f"note has no non-ASCII chars: {note!r}"
+    # expires_at must be in the future
+    expires_at = md.get("expires_at", "")
+    exp_dt = datetime.fromisoformat(expires_at)
+    if exp_dt.tzinfo is None:
+        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+    assert exp_dt > datetime.now(timezone.utc), "expires_at should be in the future"
+
+
+def test_dedup_no_duplicate_on_rerun() -> None:
+    """Running snapshot twice on the same data produces exactly one matching edge."""
+    from lifeos import edges
+    from lifeos.insights.correlate import _run_correlation_snapshot
+
+    _seed_poor_sleep(10)
+    _seed_poor_sleep(9)
+    _seed_poor_sleep(8)
+    _seed_impulsive_purchase(10)
+    _seed_impulsive_purchase(9)
+
+    _run_correlation_snapshot()
+    _run_correlation_snapshot()
+
+    matching = [
+        e for e in edges.by_relation("correlates-with")
+        if e.src_id == "sleep_deficit_pattern" and e.dst_id == "impulsive_spending"
+    ]
+    assert len(matching) == 1, f"Expected exactly 1 edge after two runs, got {len(matching)}"
+
+
+def test_surfaces_via_build_bundle() -> None:
+    """After snapshot, build_bundle() includes the correlates-with edge and its note.
+
+    Seeds use real datetime.now(timezone.utc) (not injected _NOW) to avoid the
+    SQLite datetime('now') hazard: the DAO timestamps are written with wall-clock
+    now, and list_recent() also uses wall-clock now to compute the window boundary.
+    Using _NOW (a fixed past datetime) would make the entries fall outside the
+    live query window and produce an empty result.
+    """
+    from lifeos import edges
+    from lifeos.insights.correlate import _run_correlation_snapshot, build_bundle, render_summary
+
+    _seed_poor_sleep(10)
+    _seed_poor_sleep(9)
+    _seed_poor_sleep(8)
+    _seed_impulsive_purchase(10)
+    _seed_impulsive_purchase(9)
+
+    _run_correlation_snapshot()
+
+    # Patch detect_all to [] to isolate from patterns detection
+    with patch("lifeos.insights.patterns.detect_all", return_value=[]):
+        bundle = build_bundle()
+
+    corr_edges = [
+        e for e in bundle.relevant_edges
+        if e.rel == "correlates-with"
+        and e.src_id == "sleep_deficit_pattern"
+        and e.dst_id == "impulsive_spending"
+    ]
+    assert len(corr_edges) >= 1, "correlates-with edge should appear in bundle.relevant_edges"
+
+    # S3: also assert against bundle.edge_summary — the field purchase-consult injects
+    edge_summary = bundle.edge_summary
+    assert isinstance(edge_summary, str), "bundle.edge_summary must be a string"
+    assert len(edge_summary) > 0, "bundle.edge_summary must be non-empty after snapshot"
+    assert "correlates-with" in edge_summary, (
+        f"bundle.edge_summary must mention the correlates-with edge: {edge_summary!r}"
+    )
+
+    # The edge's note must appear in both render_summary output and edge_summary
+    note = (corr_edges[0].metadata or {}).get("note", "")
+    summary = render_summary([], corr_edges)
+    assert note in summary, f"Edge note not found in render_summary output: {summary!r}"
+    assert note in edge_summary, f"Edge note not found in bundle.edge_summary: {edge_summary!r}"
