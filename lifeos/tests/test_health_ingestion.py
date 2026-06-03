@@ -189,16 +189,23 @@ def test_body_composition_single_field_falls_through() -> None:
 def test_natural_sleep_una_de_madrugada() -> None:
     """User reports: 'Me dormí a la una de la madrugada y acabo de despertar
     ahorita.' — Spanish hour word + 'ahorita' = now."""
+    from freezegun import freeze_time
     from lifeos.health.ingestion import parse_health
-    h = parse_health(
-        "Me dormí a la una de la madrugada y acabo de despertar ahorita."
-    )
+
+    # The 'ahorita' branch resolves the wake time from datetime.now(). Without
+    # pinning the clock the asserted duration drifts with wall-time and the
+    # 16h sanity bound trips after ~17:00 CDMX, making the test flaky. Freeze
+    # to 14:00 UTC = 08:00 CDMX so "slept at 1:00, awoke now" is a clean 7h.
+    with freeze_time("2026-05-25 14:00:00"):
+        h = parse_health(
+            "Me dormí a la una de la madrugada y acabo de despertar ahorita."
+        )
     assert h is not None
     assert h.kind == "vital"
     assert h.data["type"] == "sleep_hours"
     assert h.data["start_hour_24"] == 1
-    # Hours depend on "now" — should be positive and plausible (0.5..16)
-    assert 0.5 <= h.data["value"] <= 16
+    # Hours depend on the frozen "now" — 1:00 → 8:00 CDMX = 7.0h.
+    assert h.data["value"] == 7.0
 
 
 def test_natural_sleep_explicit_end() -> None:
