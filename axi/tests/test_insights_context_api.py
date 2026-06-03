@@ -113,3 +113,26 @@ def test_insights_context_with_mocked_bundle(client, monkeypatch) -> None:
     assert data["summary"] != ""
     # Summary contains the human-readable content from the bundle
     assert "Contexto de vida actual" in data["summary"]
+
+
+def test_insights_context_edge_metadata_serialized(client) -> None:
+    """A correlates-with edge serializes rel + non-empty metadata.note."""
+    from lifeos.edges import Edge
+    from lifeos.insights.correlate import CorrelationBundle
+
+    edge = Edge(
+        id="e1", src_id="sleep", src_domain="health",
+        dst_id="spend", dst_domain="finance", rel="correlates-with",
+        metadata={"note": "Compras impulsivas 2.3x tras mal sueño.", "strength": 0.82},
+    )
+    mock_bundle = CorrelationBundle(
+        active_patterns=[], relevant_edges=[edge],
+        edge_summary="Contexto de vida actual:",
+    )
+    with patch("lifeos.insights.correlate.build_bundle", return_value=mock_bundle):
+        r = client.get("/api/insights/context")
+    assert r.status_code == 200
+    edges = r.json()["edges"]
+    assert len(edges) == 1
+    assert edges[0]["rel"] == "correlates-with"
+    assert edges[0]["metadata"]["note"]  # non-empty
