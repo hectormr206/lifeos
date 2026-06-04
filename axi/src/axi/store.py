@@ -17,12 +17,16 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sqlite3
+import stat
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+
+import sqlcipher3
 
 STATE_DIR = Path(
     os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
@@ -219,7 +223,32 @@ _conn_lock = threading.Lock()
 _init_lock = threading.Lock()
 
 
-def _connect() -> sqlite3.Connection:
+def key_path() -> Path:
+    """Path to the at-rest encryption key for the memory store."""
+    return STATE_DIR / "memory.key"
+
+
+def load_key() -> str:
+    """Read or generate the hex-encoded SQLCipher key.
+
+    First call generates 32 random bytes, persists them hex-encoded, and
+    tightens permissions to 600. Subsequent calls just read the file.
+    Per-process caching is acceptable — key rotation requires a restart.
+    """
+    kp = key_path()
+    kp.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if kp.exists():
+        return kp.read_text().strip()
+    key = secrets.token_bytes(32).hex()
+    kp.write_text(key)
+    try:
+        kp.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 600
+    except OSError:
+        pass
+    return key
+
+
+def _connect() -> sqlcipher3.Connection:
     global _conn
     if _conn is not None:
         return _conn
@@ -227,8 +256,23 @@ def _connect() -> sqlite3.Connection:
         if _conn is not None:
             return _conn
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        c = sqlite3.connect(str(DB_PATH), check_same_thread=False, isolation_level=None)
-        c.row_factory = sqlite3.Row
+        # One-time, transparent upgrade: an older plaintext memory.db is
+        # encrypted in place (backup + atomic swap) before we open it.
+        from axi import db_migrate
+        db_migrate.migrate_to_encrypted()
+        key = load_key()
+        c = sqlcipher3.connect(
+            str(DB_PATH), check_same_thread=False, isolation_level=None
+        )
+        # PRAGMA key MUST come first or SQLCipher treats the file as unkeyed.
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA foreign_keys=ON")
+        c.row_factory = sqlcipher3.Row
+        try:
+            DB_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
         _conn = c
         return _conn
 
