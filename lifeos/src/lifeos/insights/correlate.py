@@ -408,6 +408,13 @@ def _exercise_gap_note(result: "LaggedCorrelationResult") -> str:
     )
 
 
+def _conflict_spending_note(result: "LaggedCorrelationResult") -> str:
+    return (
+        f"Compras impulsivas {result.rate_ratio:.1f}× más frecuentes tras días de conflicto, "
+        f"basado en {result.trigger_count} días de conflicto."
+    )
+
+
 # ─── New detectors ────────────────────────────────────────────────────────────
 
 
@@ -509,6 +516,49 @@ def _detect_exercise_gap_spending_correlation(
     )
 
 
+def _detect_conflict_spending_correlation(
+    now: datetime,
+    *,
+    rel_list_recent=None,
+    finance_list_recent=None,
+) -> "LaggedCorrelationResult | None":
+    """Detect whether conflict days correlate with impulsive spending (retail-therapy pattern).
+
+    Returns a LaggedCorrelationResult when all guards pass, otherwise None.
+    Inject `rel_list_recent` / `finance_list_recent` callables for unit testing.
+    """
+    if rel_list_recent is None:
+        from lifeos.relationships import interactions as rel_interactions  # noqa: PLC0415
+        rel_list_recent = rel_interactions.list_recent
+
+    if finance_list_recent is None:
+        from lifeos.finance import entries as finance_entries  # noqa: PLC0415
+        finance_list_recent = finance_entries.list_recent
+
+    rel_raw = rel_list_recent(days=_WINDOW_DAYS, kind="conflict")
+    finance_raw = finance_list_recent(days=_WINDOW_DAYS, kind="big_purchase")
+
+    conflict_days = _conflict_days(rel_raw)
+    event_days = _impulsive_purchase_days(finance_raw)
+
+    trigger_days = conflict_days
+    non_trigger_days = _window_dates(now, _WINDOW_DAYS) - conflict_days
+
+    return _detect_lagged_correlation(
+        trigger_days=trigger_days,
+        non_trigger_days=non_trigger_days,
+        event_days=event_days,
+        n_trigger_days=len(trigger_days),
+        n_non_trigger_days=len(non_trigger_days),
+        window_days=_WINDOW_DAYS,
+        lag_days=_LAG_DAYS,
+        min_trigger_days=_MIN_POOR_SLEEP_DAYS,
+        min_total_events=_MIN_TOTAL_IMPULSIVE,
+        min_rate_ratio=_MIN_RATE_RATIO,
+        rate_floor=_OK_RATE_FLOOR,
+    )
+
+
 # ─── Detector registry ───────────────────────────────────────────────────────
 
 _DETECTORS: list[tuple] = [
@@ -544,6 +594,19 @@ _DETECTORS: list[tuple] = [
                 src=("exercise", "inactivity_pattern"),
                 dst=("finance", "impulsive_spending"),
                 note_fn=_exercise_gap_note,
+            ),
+        },
+    ),
+    # Conflict days → impulsive spending (retail-therapy pattern)
+    (
+        _detect_conflict_spending_correlation,
+        {
+            "name": "conflict_spending",
+            "persist": functools.partial(
+                _persist_correlation_edge_for,
+                src=("relationships", "conflict_pattern"),
+                dst=("finance", "impulsive_spending"),
+                note_fn=_conflict_spending_note,
             ),
         },
     ),
