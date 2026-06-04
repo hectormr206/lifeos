@@ -36,6 +36,9 @@ dependencies = [
     # Ships its own SQLCipher build, so no system sqlcipher package is needed.
     # Also a transitive of lifeos, but axi imports it directly now.
     "sqlcipher3-wheels>=0.5",
+    # MCP server (axi.mcp_server) — exposes LifeOS capabilities to local
+    # agents over stdio. Official Python SDK; FastMCP lives under mcp.server.
+    "mcp>=1.2",
     # Sibling LifeOS core package — imported as `from lifeos import ...`
     # for reminders, agents (nano), metrics, store, and per-domain
     # ingestion (finance/exercise/health/etc.). Sourced as an editable
