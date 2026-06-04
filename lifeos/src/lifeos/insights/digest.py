@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from lifeos.insights import patterns
+from lifeos.insights.correlate import filter_unexpired
 
 log = logging.getLogger("lifeos.insights.digest")
 
@@ -28,6 +29,7 @@ class Digest:
     body: str          # the rendered text
     sections_count: int
     patterns_count: int
+    correlations_count: int = 0
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -192,6 +194,33 @@ def _section_reminders_fired(days: int) -> str | None:
     return f"⏰ Recordatorios: {len(fired)} cumplido(s)"
 
 
+def _section_correlations() -> tuple[str | None, int]:
+    """Return (rendered section text or None, count of notes rendered).
+
+    Pulls unexpired correlates-with edges from the graph, skips edges with
+    empty notes, and renders them under a '🔗 Correlaciones:' header.
+    """
+    try:
+        from lifeos import edges  # noqa: PLC0415
+        rows = edges.by_relation("correlates-with", limit=50)
+    except Exception:  # noqa: BLE001
+        return None, 0
+
+    now = datetime.now(timezone.utc)
+    kept = filter_unexpired(rows, now)
+    lines = []
+    for e in kept:
+        note = (e.metadata or {}).get("note", "")
+        if not note:
+            continue
+        lines.append(f"  • {note}")
+
+    if not lines:
+        return None, 0
+    section = "🔗 Correlaciones:\n" + "\n".join(lines)
+    return section, len(lines)
+
+
 def compose(*, cadence: str = "daily") -> Digest:
     """Compose a digest. cadence='daily' = last 24h. cadence='weekly' = last 7d."""
     days = 1 if cadence == "daily" else 7
@@ -217,7 +246,9 @@ def compose(*, cadence: str = "daily") -> Digest:
     detected = patterns.detect_all(cadence=cadence)
     pattern_lines = [f"  • {p.message}" for p in detected]
 
-    if not sections and not pattern_lines:
+    corr_section, correlations_count = _section_correlations()
+
+    if not sections and not pattern_lines and not corr_section:
         body = (
             f"{header}\n\nNo hubo actividad registrada. "
             f"Una semana sin notas es válida — descansar también cuenta."
@@ -225,13 +256,16 @@ def compose(*, cadence: str = "daily") -> Digest:
             else f"{header}\n\nNo registraste nada hoy. Mañana es otro día."
         )
         return Digest(cadence=cadence, body=body, sections_count=0,
-                      patterns_count=0)
+                      patterns_count=0, correlations_count=0)
 
     body = header + "\n\n" + "\n".join(sections)
+    if corr_section:
+        body += "\n\n" + corr_section
     if pattern_lines:
         body += "\n\n🔍 Patrones detectados:\n" + "\n".join(pattern_lines)
     return Digest(
         cadence=cadence, body=body,
         sections_count=len(sections),
         patterns_count=len(detected),
+        correlations_count=correlations_count,
     )

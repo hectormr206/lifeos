@@ -831,6 +831,82 @@ def test_persist_no_delete_when_no_stale_edge() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# filter_unexpired — unit tests (task 1.1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_edge_with_expires(expires_offset_seconds: int | None, note: str = "test") -> MagicMock:
+    """Build a minimal edge mock with optional expires_at relative to real now."""
+    e = MagicMock()
+    if expires_offset_seconds is None:
+        e.metadata = {"note": note}
+    else:
+        exp = datetime.now(timezone.utc) + timedelta(seconds=expires_offset_seconds)
+        e.metadata = {"note": note, "expires_at": exp.isoformat()}
+    return e
+
+
+def test_filter_unexpired_no_expires_at_kept() -> None:
+    """Edge with no expires_at must always be kept."""
+    from lifeos.insights.correlate import filter_unexpired
+
+    e = _make_edge_with_expires(None)
+    result = filter_unexpired([e], datetime.now(timezone.utc))
+    assert result == [e]
+
+
+def test_filter_unexpired_future_kept() -> None:
+    """Edge with expires_at in the future must be kept."""
+    from lifeos.insights.correlate import filter_unexpired
+
+    e = _make_edge_with_expires(+86400)  # +1 day
+    result = filter_unexpired([e], datetime.now(timezone.utc))
+    assert result == [e]
+
+
+def test_filter_unexpired_past_skipped() -> None:
+    """Edge with expires_at in the past must be excluded."""
+    from lifeos.insights.correlate import filter_unexpired
+
+    e = _make_edge_with_expires(-86400)  # -1 day (expired)
+    result = filter_unexpired([e], datetime.now(timezone.utc))
+    assert result == []
+
+
+def test_filter_unexpired_parse_error_kept() -> None:
+    """Edge with a non-parseable expires_at string must be kept (silent pass)."""
+    from lifeos.insights.correlate import filter_unexpired
+
+    e = MagicMock()
+    e.metadata = {"expires_at": "not-a-date", "note": "bad date edge"}
+    result = filter_unexpired([e], datetime.now(timezone.utc))
+    assert result == [e]
+
+
+def test_filter_unexpired_naive_datetime_treated_as_utc() -> None:
+    """Naive datetime in expires_at must be treated as UTC."""
+    from lifeos.insights.correlate import filter_unexpired
+
+    # Naive datetime far in the future — should be kept
+    future_naive = (datetime.now(timezone.utc) + timedelta(days=1)).replace(tzinfo=None)
+    e = MagicMock()
+    e.metadata = {"expires_at": future_naive.isoformat(), "note": "naive future"}
+    result = filter_unexpired([e], datetime.now(timezone.utc))
+    assert result == [e]
+
+
+def test_filter_unexpired_mixed_list() -> None:
+    """Mix of expired, unexpired, and no-expires edges returns only the valid ones."""
+    from lifeos.insights.correlate import filter_unexpired
+
+    kept1 = _make_edge_with_expires(None, "no expiry")
+    kept2 = _make_edge_with_expires(+86400, "future")
+    dropped = _make_edge_with_expires(-86400, "past")
+    now = datetime.now(timezone.utc)
+    result = filter_unexpired([kept1, dropped, kept2], now)
+    assert result == [kept1, kept2]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Phase 5 — Integration tests (real DAOs + _isolated fixture)
 # ═══════════════════════════════════════════════════════════════════════════════
 

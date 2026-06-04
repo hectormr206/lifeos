@@ -68,16 +68,16 @@ def run_daily_now() -> str:
     """Compose + dispatch the daily digest. Returns the digest body for
     the dashboard's manual-trigger button."""
     d = digest.compose(cadence="daily")
-    log.info("daily digest composed: sections=%d patterns=%d",
-             d.sections_count, d.patterns_count)
+    log.info("daily digest composed: sections=%d patterns=%d correlations=%d",
+             d.sections_count, d.patterns_count, d.correlations_count)
     _dispatch("📊 Resumen del día", d.body)
     return d.body
 
 
 def run_weekly_now() -> str:
     d = digest.compose(cadence="weekly")
-    log.info("weekly digest composed: sections=%d patterns=%d",
-             d.sections_count, d.patterns_count)
+    log.info("weekly digest composed: sections=%d patterns=%d correlations=%d",
+             d.sections_count, d.patterns_count, d.correlations_count)
     _dispatch("📊 Resumen semanal", d.body)
     return d.body
 

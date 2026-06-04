@@ -208,3 +208,151 @@ def test_digest_includes_patterns_block() -> None:
     assert d.patterns_count >= 1
     assert "patrones detectados" in d.body.lower()
     assert "Carlos" in d.body
+
+
+# ─── Correlations section (Phase 2 tasks 2.1–2.7) ─────────────────────
+
+
+def _seed_correlation_edge(note: str, expires_offset_days: float, rel: str = "correlates-with"):
+    """Seed a graph edge in the test DB with given note and expiry offset from now."""
+    from lifeos import edges
+    from datetime import timezone as _tz
+
+    expires = (datetime.now(_tz.utc) + timedelta(days=expires_offset_days)).isoformat()
+    edges.create(
+        src=("health", "sleep_deficit_pattern"),
+        dst=("finance", "impulsive_spending"),
+        rel=rel,
+        metadata={"note": note, "expires_at": expires},
+        created_by="test",
+    )
+
+
+def test_unexpired_correlation_rendered_daily() -> None:
+    """Unexpired correlates-with edge with note renders in daily digest."""
+    from lifeos.insights.digest import compose
+
+    _seed_correlation_edge("sleep → spending", expires_offset_days=1)
+    d = compose(cadence="daily")
+    assert "🔗 Correlaciones:" in d.body
+    assert "sleep → spending" in d.body
+    assert d.correlations_count == 1
+
+
+def test_unexpired_correlation_rendered_weekly() -> None:
+    """Unexpired correlates-with edge with note renders in weekly digest."""
+    from lifeos.insights.digest import compose
+
+    _seed_correlation_edge("sleep → spending", expires_offset_days=1)
+    d = compose(cadence="weekly")
+    assert "🔗 Correlaciones:" in d.body
+    assert "sleep → spending" in d.body
+    assert d.correlations_count == 1
+
+
+def test_expired_correlation_excluded() -> None:
+    """Expired correlates-with edge is excluded; count=0 and note absent."""
+    from lifeos.insights.digest import compose
+
+    _seed_correlation_edge("stale note", expires_offset_days=-1)
+    d = compose(cadence="daily")
+    assert "stale note" not in d.body
+    assert d.correlations_count == 0
+
+
+def test_empty_note_edge_skipped() -> None:
+    """Edge with empty string note is skipped; count=0 and header absent."""
+    from lifeos import edges
+    from datetime import timezone as _tz
+
+    exp = (datetime.now(_tz.utc) + timedelta(days=1)).isoformat()
+    edges.create(
+        src=("health", "x"),
+        dst=("finance", "y"),
+        rel="correlates-with",
+        metadata={"note": "", "expires_at": exp},
+        created_by="test",
+    )
+    from lifeos.insights.digest import compose
+    d = compose(cadence="daily")
+    assert "🔗 Correlaciones:" not in d.body
+    assert d.correlations_count == 0
+
+
+def test_none_metadata_edge_skipped() -> None:
+    """Edge with metadata=None is skipped; count=0 and header absent."""
+    from lifeos import edges
+    from lifeos.insights.digest import compose
+
+    # Seed a correlates-with edge with no metadata at all (metadata=None).
+    # filter_unexpired keeps it (no expires_at), but _section_correlations
+    # must skip it because (None or {}).get("note","") == "".
+    edges.create(
+        src=("health", "x"),
+        dst=("finance", "y"),
+        rel="correlates-with",
+        metadata=None,
+        created_by="test",
+    )
+    d = compose(cadence="daily")
+    assert "🔗 Correlaciones:" not in d.body
+    assert d.correlations_count == 0
+
+
+def test_no_correlations_header_absent() -> None:
+    """With no edges, the correlations header must not appear."""
+    from lifeos.insights.digest import compose
+
+    d = compose(cadence="daily")
+    assert "🔗 Correlaciones:" not in d.body
+    assert d.correlations_count == 0
+
+
+def test_mixed_relations_only_correlates_with_counted() -> None:
+    """Only correlates-with edges render; related-to edges must not appear."""
+    from lifeos import edges
+    from datetime import timezone as _tz
+
+    exp = (datetime.now(_tz.utc) + timedelta(days=1)).isoformat()
+    # The valid correlates-with edge
+    edges.create(
+        src=("health", "a"),
+        dst=("finance", "b"),
+        rel="correlates-with",
+        metadata={"note": "valid-note", "expires_at": exp},
+        created_by="test",
+    )
+    # A related-to edge that should NOT appear under correlations
+    edges.create(
+        src=("health", "c"),
+        dst=("finance", "d"),
+        rel="related-to",
+        metadata={"note": "other-note", "expires_at": exp},
+        created_by="test",
+    )
+    from lifeos.insights.digest import compose
+    d = compose(cadence="daily")
+    assert d.correlations_count == 1
+    assert "valid-note" in d.body
+    assert "other-note" not in d.body
+
+
+def test_correlation_alone_produces_nonempty_digest() -> None:
+    """Correlation alone (no domain data, no patterns) must produce a non-empty digest."""
+    from lifeos.insights.digest import compose
+
+    _seed_correlation_edge("sleep → spending", expires_offset_days=1)
+    d = compose(cadence="daily")
+    assert len(d.body.strip()) > 0
+    assert "🔗 Correlaciones:" in d.body
+    assert d.correlations_count == 1
+
+
+def test_empty_all_stays_empty() -> None:
+    """No domains, no patterns, no correlations → early-return fires, count=0."""
+    from lifeos.insights.digest import compose
+
+    d = compose(cadence="daily")
+    # Empty path: body contains the 'no activity' message
+    assert d.correlations_count == 0
+    assert d.sections_count == 0

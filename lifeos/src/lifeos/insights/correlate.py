@@ -35,6 +35,34 @@ _OK_RATE_FLOOR = 0.001
 _TTL_DAYS = 7
 
 
+def filter_unexpired(edges_list: list, now: datetime) -> list:
+    """Return only the edges that have not yet expired.
+
+    Rules (behavior-preserving extract from build_bundle):
+    - Edge with no metadata.expires_at → kept.
+    - Edge with expires_at parseable as ISO datetime:
+        - Naive datetime → treated as UTC.
+        - If exp_dt < now → dropped (expired).
+        - Otherwise → kept.
+    - Edge with non-parseable expires_at (ValueError / TypeError) → kept (silent pass).
+    """
+    kept = []
+    for e in edges_list:
+        md = e.metadata or {}
+        expires_at = md.get("expires_at")
+        if expires_at:
+            try:
+                exp_dt = datetime.fromisoformat(expires_at)
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if exp_dt < now:
+                    continue  # expired — skip
+            except (ValueError, TypeError):
+                pass
+        kept.append(e)
+    return kept
+
+
 @dataclass(frozen=True)
 class CorrelationResult:
     """Metrics produced by the sleep → impulsive-spending detector."""
@@ -317,20 +345,7 @@ def build_bundle(
         cutoff_iso = (_now - timedelta(hours=24)).isoformat()
         for rel in ("pattern-active-at", "correlates-with"):
             batch = edges.by_relation(rel, limit=50)
-            for e in batch:
-                # TTL pruning: skip if metadata.expires_at is in the past.
-                md = e.metadata or {}
-                expires_at = md.get("expires_at")
-                if expires_at:
-                    try:
-                        exp_dt = datetime.fromisoformat(expires_at)
-                        if exp_dt.tzinfo is None:
-                            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-                        if exp_dt < _now:
-                            continue   # expired — skip (lazy TTL enforcement)
-                    except (ValueError, TypeError):
-                        pass
-
+            for e in filter_unexpired(batch, _now):
                 if domain_hint:
                     if domain_hint not in (e.src_domain, e.dst_domain):
                         continue
