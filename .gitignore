@@ -10,3 +10,6 @@
 
 # SDD tooling (machine-specific absolute paths, regenerable via sdd-init)
 .atl/
+
+# Funding workspace — grant correspondence stays local-only
+docs/funding/
