@@ -1969,9 +1969,9 @@ def test_exercise_gap_none_when_fewer_than_2_impulsive() -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_detectors_list_has_three_entries() -> None:
-    """_DETECTORS must have exactly 3 entries."""
+    """_DETECTORS must have exactly 4 entries (3 original + conflict_spending)."""
     from lifeos.insights.correlate import _DETECTORS
-    assert len(_DETECTORS) == 3
+    assert len(_DETECTORS) == 4
 
 
 def test_detectors_each_entry_is_two_tuple() -> None:
@@ -2011,7 +2011,7 @@ def test_detectors_new_entries_have_partial_persist() -> None:
     import functools
     from lifeos.insights.correlate import _DETECTORS
     new_entries = [(fn, cfg) for fn, cfg in _DETECTORS if cfg.get("name") != "sleep_spending"]
-    assert len(new_entries) == 2, f"Expected 2 new detector entries, got {len(new_entries)}"
+    assert len(new_entries) == 3, f"Expected 3 new detector entries, got {len(new_entries)}"
     for _, cfg in new_entries:
         assert isinstance(cfg["persist"], functools.partial), (
             f"New detector cfg['persist'] should be functools.partial, got {type(cfg['persist'])}"
@@ -2145,3 +2145,332 @@ def test_snapshot_idempotency_no_duplicates_on_rerun() -> None:
     assert len(matching) == 1, (
         f"Expected exactly 1 sleep edge after two runs (idempotency), got {len(matching)}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 6 — _detect_conflict_spending_correlation  [conflict-spending]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Anchor for phase 6 tests — fixed now for deterministic date arithmetic
+_NOW6 = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _d6(offset_days: int) -> datetime:
+    """Shorthand: _NOW6 minus offset_days (UTC)."""
+    return _NOW6 - timedelta(days=offset_days)
+
+
+def _fake_rel_list6(*entries):
+    """DAO fake for relationship interactions (kwargs-only inner)."""
+    def _inner(**_kwargs):
+        return list(entries)
+    return _inner
+
+
+def _fake_finance_list6(*entries):
+    """DAO fake for finance entries (kwargs-only inner)."""
+    def _inner(**_kwargs):
+        return list(entries)
+    return _inner
+
+
+def test_conflict_spending_fires_when_all_guards_pass() -> None:
+    """(a) Returns LaggedCorrelationResult when >=3 conflict days and impulsive rate ratio passes."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_conflict_spending_correlation
+
+    interactions = [
+        _make_interaction(_d6(10), "conflict"),
+        _make_interaction(_d6(9),  "conflict"),
+        _make_interaction(_d6(8),  "conflict"),
+    ]
+    finance = [
+        _make_purchase_entry(_d6(10)),  # lag=0 after conflict D-10
+        _make_purchase_entry(_d6(8)),   # lag=0 after conflict D-8
+    ]
+
+    result = _detect_conflict_spending_correlation(
+        _NOW6,
+        rel_list_recent=_fake_rel_list6(*interactions),
+        finance_list_recent=_fake_finance_list6(*finance),
+    )
+
+    assert isinstance(result, LaggedCorrelationResult)
+    assert result.trigger_count == 3
+    assert result.rate_ratio >= 2.0
+
+
+def test_conflict_spending_none_when_fewer_than_3_conflict_days() -> None:
+    """(b) Returns None when conflict_days < 3 (min_trigger_days guard)."""
+    from lifeos.insights.correlate import _detect_conflict_spending_correlation
+
+    interactions = [
+        _make_interaction(_d6(10), "conflict"),
+        _make_interaction(_d6(9),  "conflict"),
+    ]
+    finance = [
+        _make_purchase_entry(_d6(10)),
+        _make_purchase_entry(_d6(9)),
+    ]
+
+    result = _detect_conflict_spending_correlation(
+        _NOW6,
+        rel_list_recent=_fake_rel_list6(*interactions),
+        finance_list_recent=_fake_finance_list6(*finance),
+    )
+    assert result is None
+
+
+def test_conflict_spending_none_when_fewer_than_2_impulsive_purchases() -> None:
+    """(c) Returns None when total impulsive purchases < 2."""
+    from lifeos.insights.correlate import _detect_conflict_spending_correlation
+
+    interactions = [
+        _make_interaction(_d6(10), "conflict"),
+        _make_interaction(_d6(9),  "conflict"),
+        _make_interaction(_d6(8),  "conflict"),
+    ]
+    finance = [
+        _make_purchase_entry(_d6(10)),  # only 1
+    ]
+
+    result = _detect_conflict_spending_correlation(
+        _NOW6,
+        rel_list_recent=_fake_rel_list6(*interactions),
+        finance_list_recent=_fake_finance_list6(*finance),
+    )
+    assert result is None
+
+
+def test_conflict_spending_none_when_rate_ratio_below_2() -> None:
+    """(d) Returns None when rate_ratio < 2.0 (purchases concentrated on non-conflict days).
+
+    With 3 conflict days and 87 non-conflict days in the 90-day window:
+    - events_after_trigger = 0 (no purchases on or after conflict days within lag)
+    - events_after_non_trigger = 2 (purchases on non-conflict days)
+    → rate_trigger = 0/3 = 0.0, rate_non = 2/87 ≈ 0.023
+    → rate_ratio = 0 / 0.023 = 0.0 < 2.0 → None
+    (Guard C fires because no purchases follow conflict days.)
+    """
+    from lifeos.insights.correlate import _detect_conflict_spending_correlation
+
+    interactions = [
+        _make_interaction(_d6(10), "conflict"),
+        _make_interaction(_d6(9),  "conflict"),
+        _make_interaction(_d6(8),  "conflict"),
+    ]
+    # Purchases on non-conflict days only (far from conflict window to avoid lag overlap)
+    finance = [
+        _make_purchase_entry(_d6(50)),   # non-conflict, far from conflict days
+        _make_purchase_entry(_d6(60)),   # non-conflict, far from conflict days
+    ]
+
+    result = _detect_conflict_spending_correlation(
+        _NOW6,
+        rel_list_recent=_fake_rel_list6(*interactions),
+        finance_list_recent=_fake_finance_list6(*finance),
+    )
+    assert result is None
+
+
+def test_conflict_spending_none_when_no_conflict_data() -> None:
+    """(e) Returns None when no conflict interactions at all."""
+    from lifeos.insights.correlate import _detect_conflict_spending_correlation
+
+    finance = [
+        _make_purchase_entry(_d6(10)),
+        _make_purchase_entry(_d6(9)),
+    ]
+
+    result = _detect_conflict_spending_correlation(
+        _NOW6,
+        rel_list_recent=_fake_rel_list6(),
+        finance_list_recent=_fake_finance_list6(*finance),
+    )
+    assert result is None
+
+
+def test_conflict_spending_none_when_no_finance_data() -> None:
+    """(f) Returns None when no impulsive purchases at all."""
+    from lifeos.insights.correlate import _detect_conflict_spending_correlation
+
+    interactions = [
+        _make_interaction(_d6(10), "conflict"),
+        _make_interaction(_d6(9),  "conflict"),
+        _make_interaction(_d6(8),  "conflict"),
+    ]
+
+    result = _detect_conflict_spending_correlation(
+        _NOW6,
+        rel_list_recent=_fake_rel_list6(*interactions),
+        finance_list_recent=_fake_finance_list6(),
+    )
+    assert result is None
+
+
+def test_conflict_spending_negative_lag_not_counted() -> None:
+    """(g) Purchase BEFORE a conflict day (negative lag) must not be counted."""
+    from lifeos.insights.correlate import _detect_conflict_spending_correlation
+
+    conflict_day = _d6(10)
+    purchase_before = conflict_day - timedelta(days=1)  # 1 day before → negative lag
+
+    interactions = [
+        _make_interaction(_d6(10), "conflict"),
+        _make_interaction(_d6(9),  "conflict"),
+        _make_interaction(_d6(8),  "conflict"),
+    ]
+    finance = [
+        _make_purchase_entry(purchase_before),
+        _make_purchase_entry(purchase_before - timedelta(days=1)),
+    ]
+
+    result = _detect_conflict_spending_correlation(
+        _NOW6,
+        rel_list_recent=_fake_rel_list6(*interactions),
+        finance_list_recent=_fake_finance_list6(*finance),
+    )
+    # events_after_trigger = 0 → rate_ratio = 0 < 2.0 → None
+    assert result is None
+
+
+def test_conflict_spending_note_is_nonempty_spanish() -> None:
+    """(h) _conflict_spending_note returns a non-empty Spanish string."""
+    from lifeos.insights.correlate import _conflict_spending_note, LaggedCorrelationResult
+
+    r = LaggedCorrelationResult(
+        trigger_count=4,
+        non_trigger_count=86,
+        events_after_trigger=3,
+        events_after_non_trigger=0,
+        total_events=3,
+        rate_ratio=2.8,
+        window_days=90,
+        lag_days=2,
+    )
+    note = _conflict_spending_note(r)
+    assert isinstance(note, str)
+    assert len(note.strip()) > 0
+    assert any(ord(c) > 127 for c in note), f"note has no non-ASCII chars: {note!r}"
+    # Must mention conflict and impulsive purchase concepts in Spanish
+    assert "conflicto" in note.lower() or "Conflicto" in note
+
+
+def test_conflict_spending_persist_writes_correct_edge() -> None:
+    """(i) Persist writes edge with src=('relationships','conflict_pattern') dst=('finance','impulsive_spending')."""
+    from lifeos.insights.correlate import _DETECTORS, LaggedCorrelationResult
+
+    # Find the conflict_spending detector
+    cs_entries = [(fn, cfg) for fn, cfg in _DETECTORS if cfg.get("name") == "conflict_spending"]
+    assert len(cs_entries) == 1, "Expected exactly one 'conflict_spending' detector"
+    _, cfg = cs_entries[0]
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    r = LaggedCorrelationResult(
+        trigger_count=4, non_trigger_count=86,
+        events_after_trigger=3, events_after_non_trigger=0,
+        total_events=3, rate_ratio=2.8, window_days=90, lag_days=2,
+    )
+    cfg["persist"](r, _NOW6, edges_mod=mock_edges)
+
+    mock_edges.create.assert_called_once()
+    kwargs = mock_edges.create.call_args.kwargs
+    assert kwargs["src"] == ("relationships", "conflict_pattern")
+    assert kwargs["dst"] == ("finance", "impulsive_spending")
+    assert kwargs["rel"] == "correlates-with"
+
+    note = kwargs["metadata"]["note"]
+    assert len(note) > 0
+    assert any(ord(c) > 127 for c in note)
+
+
+def test_conflict_spending_edge_distinct_from_other_detectors() -> None:
+    """(j) Conflict-spending edge has distinct (src_id, dst_id) vs sleep_spending and exercise_gap_spending."""
+    from lifeos.insights.correlate import _DETECTORS
+
+    edge_ids = set()
+    for fn, cfg in _DETECTORS:
+        mock_edges = MagicMock()
+        mock_edges.by_relation.return_value = []
+        captured = {}
+
+        def _capture_create(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        mock_edges.create.side_effect = _capture_create
+
+        from lifeos.insights.correlate import LaggedCorrelationResult
+        r = LaggedCorrelationResult(
+            trigger_count=4, non_trigger_count=3,
+            events_after_trigger=3, events_after_non_trigger=0,
+            total_events=3, rate_ratio=2.5, window_days=90, lag_days=2,
+        )
+        # sleep_spending uses the bespoke persist which takes CorrelationResult — skip it
+        if cfg["name"] == "sleep_spending":
+            continue
+        cfg["persist"](r, _NOW6, edges_mod=mock_edges)
+        src = captured["src"]
+        dst = captured["dst"]
+        pair = (src[1], dst[1])
+        assert pair not in edge_ids, f"Duplicate edge pair {pair} found across detectors"
+        edge_ids.add(pair)
+
+
+def test_detectors_list_has_four_entries_after_conflict_spending() -> None:
+    """_DETECTORS must have exactly 4 entries after adding conflict_spending."""
+    from lifeos.insights.correlate import _DETECTORS
+    assert len(_DETECTORS) == 4
+
+
+def test_conflict_spending_detector_in_detectors_list() -> None:
+    """conflict_spending detector is registered in _DETECTORS."""
+    from lifeos.insights.correlate import _DETECTORS
+    names = [cfg.get("name") for _, cfg in _DETECTORS]
+    assert "conflict_spending" in names
+
+
+# ─── Integration snapshot test for conflict_spending ─────────────────────────
+
+
+def _seed_conflict_for_integration(offset_days: int) -> None:
+    """Insert a conflict interaction at real now - offset_days."""
+    from lifeos.relationships import interactions as rel_interactions, people as rel_people
+    when = datetime.now(timezone.utc) - timedelta(days=offset_days)
+    existing = rel_people.list_all() if hasattr(rel_people, "list_all") else []
+    if not existing:
+        person = rel_people.create(name="Integration Person")
+        person_id = person.id
+    else:
+        person_id = existing[0].id
+    rel_interactions.create(
+        kind="conflict",
+        title="conflict integration",
+        person_id=person_id,
+        when=when,
+    )
+
+
+def test_snapshot_conflict_spending_writes_edge() -> None:
+    """Snapshot writes a conflict_pattern → impulsive_spending edge when data fires."""
+    from lifeos import edges
+    from lifeos.insights.correlate import _run_correlation_snapshot
+
+    # 3 conflict days + 2 impulsive purchases on conflict days → should fire
+    _seed_conflict_for_integration(10)
+    _seed_conflict_for_integration(9)
+    _seed_conflict_for_integration(8)
+    _seed_impulsive_purchase(10)
+    _seed_impulsive_purchase(8)
+
+    _run_correlation_snapshot()
+
+    matching = [
+        e for e in edges.by_relation("correlates-with")
+        if e.src_id == "conflict_pattern" and e.dst_id == "impulsive_spending"
+    ]
+    assert len(matching) == 1, f"Expected 1 conflict_spending edge, got {len(matching)}"
+    md = matching[0].metadata or {}
+    assert len(md.get("note", "")) > 0
+    assert any(ord(c) > 127 for c in md["note"]), "note should contain Spanish characters"
