@@ -1035,3 +1035,325 @@ def test_surfaces_via_build_bundle() -> None:
     summary = render_summary([], corr_edges)
     assert note in summary, f"Edge note not found in render_summary output: {summary!r}"
     assert note in edge_summary, f"Edge note not found in bundle.edge_summary: {edge_summary!r}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 1 (new) — LaggedCorrelationResult frozen dataclass  [task 1.1 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_lagged_correlation_result_fields_exist() -> None:
+    """LaggedCorrelationResult must have all 8 fields and be a frozen dataclass."""
+    from lifeos.insights.correlate import LaggedCorrelationResult
+
+    r = LaggedCorrelationResult(
+        trigger_count=6,
+        non_trigger_count=4,
+        events_after_trigger=3,
+        events_after_non_trigger=1,
+        total_events=10,
+        rate_ratio=3.5,
+        window_days=90,
+        lag_days=2,
+    )
+    assert r.trigger_count == 6
+    assert r.non_trigger_count == 4
+    assert r.events_after_trigger == 3
+    assert r.events_after_non_trigger == 1
+    assert r.total_events == 10
+    assert r.rate_ratio == 3.5
+    assert r.window_days == 90
+    assert r.lag_days == 2
+
+
+def test_lagged_correlation_result_is_frozen() -> None:
+    """LaggedCorrelationResult must be frozen — mutation raises FrozenInstanceError."""
+    from dataclasses import FrozenInstanceError
+    from lifeos.insights.correlate import LaggedCorrelationResult
+
+    r = LaggedCorrelationResult(
+        trigger_count=1,
+        non_trigger_count=1,
+        events_after_trigger=1,
+        events_after_non_trigger=0,
+        total_events=5,
+        rate_ratio=2.0,
+        window_days=90,
+        lag_days=2,
+    )
+    with pytest.raises(FrozenInstanceError):
+        r.rate_ratio = 1.0  # type: ignore[misc]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 1 (new) — _detect_lagged_correlation primitive  [task 1.3 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_BASE_DATE = date(2024, 6, 15)
+
+
+def _trigger_set(offsets: list[int]) -> set[date]:
+    """Build a set of trigger dates: base_date - offset for each offset."""
+    return {_BASE_DATE - timedelta(days=o) for o in offsets}
+
+
+def _event_set(offsets: list[int]) -> set[date]:
+    """Build a set of event dates: base_date - offset for each offset."""
+    return {_BASE_DATE - timedelta(days=o) for o in offsets}
+
+
+def test_primitive_fires_all_guards_pass() -> None:
+    """(a) All guards pass → returns LaggedCorrelationResult with correct counts."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_lagged_correlation
+
+    # 6 trigger days, events within lag of some triggers → rate_ratio >= 2.0
+    trigger = _trigger_set([10, 11, 12, 13, 14, 15])
+    non_trigger = _trigger_set([20, 21, 22, 23])
+    # Events at trigger+1 (lag=1) for 4 of the 6 trigger days
+    events = _event_set([9, 10, 11, 12])
+
+    result = _detect_lagged_correlation(
+        trigger_days=trigger,
+        non_trigger_days=non_trigger,
+        event_days=events,
+        n_trigger_days=len(trigger),
+        n_non_trigger_days=len(non_trigger),
+        window_days=90,
+        lag_days=2,
+        min_trigger_days=5,
+        min_total_events=3,
+        min_rate_ratio=2.0,
+    )
+
+    assert isinstance(result, LaggedCorrelationResult)
+    assert result.rate_ratio >= 2.0
+    assert result.trigger_count == 6
+    assert result.total_events == len(events)
+
+
+def test_primitive_none_trigger_count_below_min() -> None:
+    """(b) n_trigger_days < min_trigger_days → None."""
+    from lifeos.insights.correlate import _detect_lagged_correlation
+
+    trigger = _trigger_set([10, 11, 12, 13])  # 4 days
+    non_trigger = _trigger_set([20, 21, 22])
+    events = _event_set([9, 10, 5])
+
+    result = _detect_lagged_correlation(
+        trigger_days=trigger,
+        non_trigger_days=non_trigger,
+        event_days=events,
+        n_trigger_days=len(trigger),  # 4 < 5
+        n_non_trigger_days=len(non_trigger),
+        window_days=90,
+        lag_days=2,
+        min_trigger_days=5,
+        min_total_events=2,
+        min_rate_ratio=2.0,
+    )
+
+    assert result is None
+
+
+def test_primitive_fires_trigger_count_at_boundary() -> None:
+    """(c) n_trigger_days == min_trigger_days → result (boundary inclusive)."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_lagged_correlation
+
+    trigger = _trigger_set([10, 11, 12, 13, 14])  # exactly 5
+    non_trigger = _trigger_set([20, 21])
+    # Events after all 5 triggers but none after non-triggers → high ratio
+    events = _event_set([9, 10, 11, 12, 13])
+
+    result = _detect_lagged_correlation(
+        trigger_days=trigger,
+        non_trigger_days=non_trigger,
+        event_days=events,
+        n_trigger_days=5,
+        n_non_trigger_days=len(non_trigger),
+        window_days=90,
+        lag_days=2,
+        min_trigger_days=5,
+        min_total_events=2,
+        min_rate_ratio=2.0,
+    )
+
+    assert isinstance(result, LaggedCorrelationResult)
+
+
+def test_primitive_none_total_events_below_min() -> None:
+    """(d) total_events < min_total_events → None."""
+    from lifeos.insights.correlate import _detect_lagged_correlation
+
+    trigger = _trigger_set([10, 11, 12, 13, 14, 15])
+    non_trigger = _trigger_set([20, 21])
+    events = _event_set([9])  # only 1 event
+
+    result = _detect_lagged_correlation(
+        trigger_days=trigger,
+        non_trigger_days=non_trigger,
+        event_days=events,
+        n_trigger_days=len(trigger),
+        n_non_trigger_days=len(non_trigger),
+        window_days=90,
+        lag_days=2,
+        min_trigger_days=5,
+        min_total_events=2,  # need 2, have 1
+        min_rate_ratio=2.0,
+    )
+
+    assert result is None
+
+
+def test_primitive_fires_total_events_at_boundary() -> None:
+    """(e) total_events == min_total_events → result (boundary inclusive)."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_lagged_correlation
+
+    trigger = _trigger_set([10, 11, 12, 13, 14, 15])
+    non_trigger = _trigger_set([30, 31])
+    events = _event_set([9, 10])  # exactly 2 events, both after triggers
+
+    result = _detect_lagged_correlation(
+        trigger_days=trigger,
+        non_trigger_days=non_trigger,
+        event_days=events,
+        n_trigger_days=len(trigger),
+        n_non_trigger_days=len(non_trigger),
+        window_days=90,
+        lag_days=2,
+        min_trigger_days=5,
+        min_total_events=2,
+        min_rate_ratio=2.0,
+    )
+
+    assert isinstance(result, LaggedCorrelationResult)
+
+
+def test_primitive_none_rate_ratio_below_min() -> None:
+    """(f) rate_ratio < min_rate_ratio → None."""
+    from lifeos.insights.correlate import _detect_lagged_correlation
+
+    # Spread events evenly across trigger and non-trigger to get ratio ~1.0
+    trigger = _trigger_set([10, 11, 12, 13, 14, 15])
+    non_trigger = _trigger_set([20, 21, 22, 23, 24, 25])
+    # Events after each trigger AND each non-trigger → equal rates → ratio ~1.0
+    events = _event_set([9, 10, 11, 12, 13, 14, 19, 20, 21, 22, 23, 24])
+
+    result = _detect_lagged_correlation(
+        trigger_days=trigger,
+        non_trigger_days=non_trigger,
+        event_days=events,
+        n_trigger_days=len(trigger),
+        n_non_trigger_days=len(non_trigger),
+        window_days=90,
+        lag_days=2,
+        min_trigger_days=5,
+        min_total_events=2,
+        min_rate_ratio=2.0,
+    )
+
+    assert result is None
+
+
+def test_primitive_fires_rate_ratio_at_boundary() -> None:
+    """(g) rate_ratio == min_rate_ratio → result (boundary inclusive).
+
+    Construction for exactly ratio=2.0:
+      - 4 trigger days, 4 non-trigger days (well separated from each other)
+      - events_after_trigger = 2  → rate_trigger = 2/4 = 0.5
+      - events_after_non_trigger = 1  → rate_non = 1/4 = 0.25
+      - rate_ratio = 0.5 / 0.25 = 2.0 exactly
+    Trigger days at offsets 30–33 from _BASE_DATE; non-trigger at 50–53.
+    Events at trigger+1 for 2 triggers, and non-trigger+1 for 1 non-trigger.
+    No overlap between event dates and trigger/non-trigger dates.
+    """
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_lagged_correlation
+
+    trigger = {
+        _BASE_DATE - timedelta(days=30),
+        _BASE_DATE - timedelta(days=32),
+        _BASE_DATE - timedelta(days=34),
+        _BASE_DATE - timedelta(days=36),
+    }
+    non_trigger = {
+        _BASE_DATE - timedelta(days=50),
+        _BASE_DATE - timedelta(days=52),
+        _BASE_DATE - timedelta(days=54),
+        _BASE_DATE - timedelta(days=56),
+    }
+    events = {
+        _BASE_DATE - timedelta(days=29),  # after trigger D-30 (lag=1)
+        _BASE_DATE - timedelta(days=31),  # after trigger D-32 (lag=1)
+        _BASE_DATE - timedelta(days=49),  # after non-trigger D-50 (lag=1)
+    }
+
+    result = _detect_lagged_correlation(
+        trigger_days=trigger,
+        non_trigger_days=non_trigger,
+        event_days=events,
+        n_trigger_days=len(trigger),
+        n_non_trigger_days=len(non_trigger),
+        window_days=90,
+        lag_days=2,
+        min_trigger_days=3,
+        min_total_events=2,
+        min_rate_ratio=2.0,
+    )
+
+    assert isinstance(result, LaggedCorrelationResult)
+    assert result.rate_ratio == pytest.approx(2.0)
+
+
+def test_primitive_event_before_trigger_not_counted() -> None:
+    """(h) Event 1 day BEFORE a trigger day (negative lag) must NOT be counted."""
+    from lifeos.insights.correlate import _detect_lagged_correlation
+
+    trigger_day = _BASE_DATE - timedelta(days=10)
+    # Event is 1 day BEFORE trigger (trigger_day - 1)
+    event_before = trigger_day - timedelta(days=1)
+
+    trigger = {trigger_day, _BASE_DATE - timedelta(days=20), _BASE_DATE - timedelta(days=30),
+               _BASE_DATE - timedelta(days=40), _BASE_DATE - timedelta(days=50)}
+    non_trigger = {_BASE_DATE - timedelta(days=60), _BASE_DATE - timedelta(days=61)}
+    events = {event_before, event_before - timedelta(days=1)}  # both before any trigger
+
+    result = _detect_lagged_correlation(
+        trigger_days=trigger,
+        non_trigger_days=non_trigger,
+        event_days=events,
+        n_trigger_days=len(trigger),
+        n_non_trigger_days=len(non_trigger),
+        window_days=90,
+        lag_days=2,
+        min_trigger_days=5,
+        min_total_events=2,
+        min_rate_ratio=2.0,
+    )
+    # events_after_trigger = 0 → rate_ratio = 0 → None
+    assert result is None
+
+
+def test_primitive_rate_floor_prevents_zero_division() -> None:
+    """(i) rate_after_non_trigger=0 + rate_floor=0.001 → finite result, no ZeroDivision."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_lagged_correlation
+
+    trigger = _trigger_set([10, 11, 12, 13, 14, 15])
+    non_trigger = _trigger_set([50, 51, 52])  # far from events → 0 events after
+    # Events only after triggers → events_after_non_trigger = 0
+    events = _event_set([9, 10, 11])
+
+    result = _detect_lagged_correlation(
+        trigger_days=trigger,
+        non_trigger_days=non_trigger,
+        event_days=events,
+        n_trigger_days=len(trigger),
+        n_non_trigger_days=len(non_trigger),
+        window_days=90,
+        lag_days=2,
+        min_trigger_days=5,
+        min_total_events=2,
+        min_rate_ratio=2.0,
+        rate_floor=0.001,
+    )
+
+    assert isinstance(result, LaggedCorrelationResult)
+    import math
+    assert math.isfinite(result.rate_ratio)

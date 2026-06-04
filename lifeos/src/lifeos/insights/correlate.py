@@ -64,6 +64,20 @@ def filter_unexpired(edges_list: list, now: datetime) -> list:
 
 
 @dataclass(frozen=True)
+class LaggedCorrelationResult:
+    """Generic metrics from the pure lagged-correlation primitive."""
+
+    trigger_count: int           # number of trigger days (|trigger_days|)
+    non_trigger_count: int       # number of non-trigger days
+    events_after_trigger: int    # trigger days with >=1 event in lag window
+    events_after_non_trigger: int  # non-trigger days with >=1 event in lag window
+    total_events: int            # |event_days| (all event days in window)
+    rate_ratio: float
+    window_days: int
+    lag_days: int
+
+
+@dataclass(frozen=True)
 class CorrelationResult:
     """Metrics produced by the sleep → impulsive-spending detector."""
 
@@ -76,6 +90,76 @@ class CorrelationResult:
     window_days: int
     lag_days: int
     threshold: float
+
+
+# ─── Pure lagged-correlation primitive ───────────────────────────────────────
+
+
+def _detect_lagged_correlation(
+    *,
+    trigger_days: "set[date]",
+    non_trigger_days: "set[date]",
+    event_days: "set[date]",
+    n_trigger_days: int,
+    n_non_trigger_days: int,
+    window_days: int,
+    lag_days: int,
+    min_trigger_days: int,
+    min_total_events: int,
+    min_rate_ratio: float,
+    rate_floor: float = 0.001,
+) -> "LaggedCorrelationResult | None":
+    """Pure function: detect whether trigger days correlate with events within lag window.
+
+    Guard order (must match existing behavior):
+      1. trigger count guard
+      2. total events guard
+      3. rate_ratio guard
+
+    Lag match: a trigger day d is matched if any event_day falls in
+    {d + timedelta(days=lag) for lag in range(lag_days + 1)}, i.e. lag in [0..lag_days].
+    Days BEFORE the trigger are never counted (negative lag not in range).
+    """
+    # Guard A: trigger count
+    if n_trigger_days < min_trigger_days:
+        return None
+
+    # Guard B: total events (cheap pre-filter)
+    total_events = len(event_days)
+    if total_events < min_total_events:
+        return None
+
+    # Lag match counts
+    events_after_trigger = sum(
+        1 for d in trigger_days
+        if any((d + timedelta(days=lag)) in event_days for lag in range(lag_days + 1))
+    )
+    events_after_non_trigger = sum(
+        1 for d in non_trigger_days
+        if any((d + timedelta(days=lag)) in event_days for lag in range(lag_days + 1))
+    )
+
+    rate_trigger = events_after_trigger / n_trigger_days
+    rate_non = (
+        events_after_non_trigger / n_non_trigger_days
+        if n_non_trigger_days > 0 else 0.0
+    )
+    rate_ratio = rate_trigger / max(rate_non, rate_floor)
+
+    # Guard C: rate ratio
+    if rate_ratio < min_rate_ratio:
+        return None
+
+    return LaggedCorrelationResult(
+        trigger_count=n_trigger_days,
+        non_trigger_count=n_non_trigger_days,
+        events_after_trigger=events_after_trigger,
+        events_after_non_trigger=events_after_non_trigger,
+        total_events=total_events,
+        rate_ratio=rate_ratio,
+        window_days=window_days,
+        lag_days=lag_days,
+    )
 
 
 # ─── Sleep → spending detector ───────────────────────────────────────────────
@@ -111,7 +195,7 @@ def _detect_sleep_spending_correlation(
     health_list_recent=None,
     finance_list_recent=None,
 ) -> "CorrelationResult | None":
-    """Pure detector: read sleep + impulsive-purchase data, apply heuristic.
+    """Adapter: build trigger/event sets, call primitive, map result to CorrelationResult.
 
     Returns a CorrelationResult when all three guards pass, otherwise None.
     Never touches the graph.  Inject `health_list_recent` / `finance_list_recent`
@@ -129,60 +213,41 @@ def _detect_sleep_spending_correlation(
     finance_raw = finance_list_recent(days=_WINDOW_DAYS, kind="big_purchase")
 
     sleep_by_day = _bucket_sleep_by_day(sleep_raw)
-    impulsive_days = _impulsive_purchase_days(finance_raw)
-
     if not sleep_by_day:
         return None
 
-    # Classify each sleep day
-    poor_sleep_days = sum(1 for h in sleep_by_day.values() if h < _SLEEP_THRESHOLD)
-    ok_sleep_days = len(sleep_by_day) - poor_sleep_days
-    total_impulsive = len(impulsive_days)
+    # Build trigger/non-trigger sets from sleep classification
+    trigger_days = {d for d, h in sleep_by_day.items() if h < _SLEEP_THRESHOLD}
+    non_trigger_days = set(sleep_by_day) - trigger_days
+    event_days = _impulsive_purchase_days(finance_raw)
 
-    # Early guards — avoid needless computation
-    if poor_sleep_days < _MIN_POOR_SLEEP_DAYS:
-        return None
-    # NOTE: total_impulsive counts ALL impulsive-purchase days in the full 90-day window
-    # (via len(impulsive_days)), not only those that fall within a lag window after a
-    # poor-sleep day.  This is intentional: it's a cheap pre-filter that avoids the O(n)
-    # lag-match loop when spending data is sparse.  The rate_ratio guard is the
-    # load-bearing signal that captures the directional relationship.
-    if total_impulsive < _MIN_TOTAL_IMPULSIVE:
-        return None
-
-    # Lag match: count poor/ok days that have an impulsive purchase within lag window
-    from datetime import timedelta as _td  # noqa: PLC0415
-
-    impulsive_after_poor = 0
-    impulsive_after_ok = 0
-    for day, hours in sleep_by_day.items():
-        matched = any(
-            (day + _td(days=lag)) in impulsive_days
-            for lag in range(_LAG_DAYS + 1)  # 0, 1, 2
-        )
-        if hours < _SLEEP_THRESHOLD:
-            if matched:
-                impulsive_after_poor += 1
-        else:
-            if matched:
-                impulsive_after_ok += 1
-
-    rate_after_poor = impulsive_after_poor / poor_sleep_days
-    rate_after_ok = impulsive_after_ok / ok_sleep_days if ok_sleep_days > 0 else 0.0
-    rate_ratio = rate_after_poor / max(rate_after_ok, _OK_RATE_FLOOR)
-
-    if rate_ratio < _MIN_RATE_RATIO:
-        return None
-
-    return CorrelationResult(
-        rate_ratio=rate_ratio,
-        poor_sleep_days=poor_sleep_days,
-        ok_sleep_days=ok_sleep_days,
-        impulsive_after_poor=impulsive_after_poor,
-        impulsive_after_ok=impulsive_after_ok,
-        total_impulsive=total_impulsive,
+    lagged = _detect_lagged_correlation(
+        trigger_days=trigger_days,
+        non_trigger_days=non_trigger_days,
+        event_days=event_days,
+        n_trigger_days=len(trigger_days),
+        n_non_trigger_days=len(non_trigger_days),
         window_days=_WINDOW_DAYS,
         lag_days=_LAG_DAYS,
+        min_trigger_days=_MIN_POOR_SLEEP_DAYS,
+        min_total_events=_MIN_TOTAL_IMPULSIVE,
+        min_rate_ratio=_MIN_RATE_RATIO,
+        rate_floor=_OK_RATE_FLOOR,
+    )
+
+    if lagged is None:
+        return None
+
+    # Map LaggedCorrelationResult → CorrelationResult (byte-identical public contract)
+    return CorrelationResult(
+        rate_ratio=lagged.rate_ratio,
+        poor_sleep_days=lagged.trigger_count,
+        ok_sleep_days=lagged.non_trigger_count,
+        impulsive_after_poor=lagged.events_after_trigger,
+        impulsive_after_ok=lagged.events_after_non_trigger,
+        total_impulsive=lagged.total_events,
+        window_days=lagged.window_days,
+        lag_days=lagged.lag_days,
         threshold=_SLEEP_THRESHOLD,
     )
 
