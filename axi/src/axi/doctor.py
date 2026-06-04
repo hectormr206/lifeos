@@ -27,6 +27,7 @@ from pathlib import Path
 
 GREEN = "\033[32m"
 RED = "\033[31m"
+YELLOW = "\033[33m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 
@@ -62,6 +63,11 @@ REQUIRED_FILES = [
     Path.home() / "LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf",
     Path.home() / "LifeOS/models/Qwen3.6-35B-A3B/mmproj-BF16.gguf",
     Path.home() / "LifeOS/models/piper-voices/es_MX-claude/es_MX-claude-high.onnx",
+]
+# Optional files: present is nice, absent is not a failure. The voice-clone
+# reference is a personal recording — a fresh install simply runs without
+# XTTS voice cloning until the user records one.
+OPTIONAL_FILES = [
     Path.home() / "LifeOS/models/voices/hector-reference.wav",
 ]
 
@@ -247,6 +253,14 @@ def check_files(r: Result) -> None:
             r.ok(p.name, f"{size_mb:.1f} MB")
         else:
             r.fail(p.name, f"falta en {p}")
+    for p in OPTIONAL_FILES:
+        if p.exists():
+            size_mb = p.stat().st_size / 1024 / 1024
+            r.ok(p.name, f"{size_mb:.1f} MB")
+        else:
+            # Optional — note it without counting as a failure.
+            print(f"  {YELLOW}○{RESET} {p.name} {DIM}(opcional, ausente — "
+                  f"clonación de voz desactivada){RESET}")
 
 
 def main() -> int:

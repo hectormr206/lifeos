@@ -119,7 +119,7 @@ if [ "$NO_FOLLOW" -eq 0 ]; then
     JOURNAL_ARGS+=(-f)
 fi
 
-PY_BIN=/home/hectormr/LifeOS/lifeos/axi/.venv/bin/python
+PY_BIN="$HOME/LifeOS/lifeos/axi/.venv/bin/python"
 [ -x "$PY_BIN" ] || PY_BIN=python3
 
 journalctl "${JOURNAL_ARGS[@]}" 2>/dev/null | "$PY_BIN" -u -c "$PY"
