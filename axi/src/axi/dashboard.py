@@ -3954,6 +3954,7 @@ def api_insights_preview(cadence: str = "daily"):
         "body": d.body,
         "sections_count": d.sections_count,
         "patterns_count": d.patterns_count,
+        "correlations_count": d.correlations_count,
         "generated_at": d.generated_at.isoformat(),
     }
 

@@ -136,3 +136,11 @@ def test_insights_context_edge_metadata_serialized(client) -> None:
     assert len(edges) == 1
     assert edges[0]["rel"] == "correlates-with"
     assert edges[0]["metadata"]["note"]  # non-empty
+
+
+def test_insights_preview_includes_correlations_count(client) -> None:
+    """GET /api/insights/preview must return JSON with a 'correlations_count' key."""
+    r = client.get("/api/insights/preview")
+    assert r.status_code == 200
+    data = r.json()
+    assert "correlations_count" in data
