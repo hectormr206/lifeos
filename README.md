@@ -139,7 +139,7 @@ The earlier Rust domains are preserved as `archive/*` git tags and can be revive
 
 Planned, **not yet present**:
 
-- **MCP tool surface** — expose LifeOS capabilities to other local agents via the Model Context Protocol.
+- **MCP tool surface** — *v1 shipped*: a local [MCP](https://modelcontextprotocol.io) server (`axi.mcp_server`) exposes read + additive-write tools over stdio so other local agents (e.g. Claude Code) can work with your memory, reminders, finance, and health. See [axi/docs/mcp.md](axi/docs/mcp.md). Expanding to insights/digest and per-tool consent next.
 - **OS-level control** — let the assistant act on the desktop (open apps, manage windows) safely.
 - **Multi-device sync** — encrypted peer-to-peer sync across the user's own devices (still no cloud).
 - **Beyond CachyOS** — broaden tested support to other Arch-based and non-KDE setups.
