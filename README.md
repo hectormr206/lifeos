@@ -21,7 +21,7 @@ Everything runs on a single laptop against **100% local models**. Nothing is sen
 Personal AI assistants today are cloud services: your most intimate data — what you say, what's on your screen, your health and money — is uploaded, stored, and mined by someone else. LifeOS is built on the opposite premise: **digital sovereignty**. The assistant that knows the most about you should run on hardware *you* own, with data *you* control, on software *you* can read and change.
 
 - **Local-first** — the LLM, speech-to-text, text-to-speech, and OCR all run on-device.
-- **Privacy by default** — audio, conversations, meetings, and your life-companion records all stay on your disk. Life-companion data (health, finance, reminders, …) is encrypted at rest with SQLCipher.
+- **Privacy by default** — audio, conversations, meetings, and your life-companion records all stay on your disk, and both data stores (the assistant's memory and the life domains) are encrypted at rest with SQLCipher.
 - **Yours to inspect** — open source (MIT), no hidden services, no accounts.
 
 This is the through-line of the project and it has never changed (see [The pivot](#project-status--the-pivot) for how the *implementation* evolved).
@@ -79,7 +79,7 @@ The life companion (personal domains, all in the dashboard):
   └─────────────────────────────────────────────────────────────┘
 ```
 
-All inference runs locally: `faster-whisper` (large-v3-turbo) for speech, `llama.cpp` + Qwen for the brain, Piper for speech, Tesseract for OCR. Life-companion data lives in encrypted SQLite (SQLCipher) under your home directory; Axi's conversation memory is local SQLite.
+All inference runs locally: `faster-whisper` (large-v3-turbo) for speech, `llama.cpp` + Qwen for the brain, Piper for speech, Tesseract for OCR. Both stores — the assistant's memory and the life-companion data — are encrypted at rest with SQLCipher (AES-256) under your home directory.
 
 ---
 
@@ -121,7 +121,7 @@ After install, bind a global shortcut (e.g. Super+Space) to `axi/scripts/axi-tog
 ## Privacy & data ownership
 
 - **No network egress for inference** — STT, the LLM, TTS, and OCR are all local binaries/models.
-- **Data at rest is encrypted** — the life-companion store uses SQLCipher; keys stay on your machine.
+- **Data at rest is encrypted** — both SQLite stores use SQLCipher (AES-256); the keys stay on your machine. See [axi/docs/threat-model.md](axi/docs/threat-model.md).
 - **The dashboard binds to `127.0.0.1` by default** — no auth, no TLS, because it never leaves the loopback interface unless *you* opt in to exposing it over a private VPN (Tailscale/WireGuard).
 - **No accounts, no telemetry, no phone-home.**
 
