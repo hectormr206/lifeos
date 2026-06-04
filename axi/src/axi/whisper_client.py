@@ -24,7 +24,7 @@ SOCKET_PATH = Path(
 ) / "axi" / "whisper.sock"
 
 DEFAULT_CONNECT_TIMEOUT_S = 30.0  # tolerant for server cold start
-DEFAULT_REQUEST_TIMEOUT_S = 60.0
+DEFAULT_REQUEST_TIMEOUT_S = 600.0  # long recordings can take up to ~10 min
 
 
 class WhisperServiceError(RuntimeError):
@@ -135,10 +135,13 @@ def transcribe(
     sock = _connect(connect_timeout_s)
     try:
         sock.settimeout(request_timeout_s)
-        sock.sendall(struct.pack("!I", len(payload)) + payload)
-        sock.sendall(struct.pack("!I", len(audio_bytes)) + audio_bytes)
-        (resp_len,) = struct.unpack("!I", _read_exact(sock, 4))
-        resp = json.loads(_read_exact(sock, resp_len).decode("utf-8"))
+        try:
+            sock.sendall(struct.pack("!I", len(payload)) + payload)
+            sock.sendall(struct.pack("!I", len(audio_bytes)) + audio_bytes)
+            (resp_len,) = struct.unpack("!I", _read_exact(sock, 4))
+            resp = json.loads(_read_exact(sock, resp_len).decode("utf-8"))
+        except OSError as e:
+            raise WhisperServiceError(f"transport failed: {e}") from e
     finally:
         try:
             sock.close()

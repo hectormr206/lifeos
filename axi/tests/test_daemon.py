@@ -340,3 +340,211 @@ def test_default_construction_still_works(monkeypatch):
     assert callable(d.vision_capture)
     assert callable(d.eyes_capture)
     assert callable(d.meeting_factory)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PR1 — Never-hang guard tests (Phase 1.1)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _ErrorTranscriber:
+    """FakeTranscriber that raises a given exception on transcribe()."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+        self.calls = 0
+
+    def transcribe(self, audio: np.ndarray) -> tuple[str, str, float]:
+        self.calls += 1
+        raise self._exc
+
+
+def _run_toggle_cycle(d: Daemon) -> str:
+    """Start + stop recording via toggle×2, wait for idle."""
+    _handle_cmd(d, "toggle")   # start recording
+    _handle_cmd(d, "toggle")   # stop → transcribe in bg thread
+    return _wait_idle(d)
+
+
+def test_stop_and_transcribe_whisper_service_error(monkeypatch):
+    """WhisperServiceError during transcription → daemon returns to idle.
+
+    Phase 1.1.1 — RED test. Must FAIL before try/except is added to daemon.
+    """
+    from axi.whisper_client import WhisperServiceError
+    tx = _ErrorTranscriber(WhisperServiceError("server gone"))
+    d = _build(transcriber=tx)
+    final = _run_toggle_cycle(d)
+    assert final == "idle", f"state stuck at {final!r}"
+    assert tx.calls == 1
+
+
+def test_stop_and_transcribe_broken_pipe_error(monkeypatch):
+    """BrokenPipeError during transcription → daemon returns to idle.
+
+    Phase 1.1.2 — RED test.
+    """
+    tx = _ErrorTranscriber(BrokenPipeError("pipe broken"))
+    d = _build(transcriber=tx)
+    final = _run_toggle_cycle(d)
+    assert final == "idle", f"state stuck at {final!r}"
+
+
+def test_stop_and_transcribe_generic_exception(monkeypatch):
+    """Any Exception during transcription → daemon returns to idle.
+
+    Phase 1.1.3 — RED test. Also asserts that the notify mock was called
+    (error notification surfaced to user).
+    """
+    notify_calls: list[dict] = []
+    from axi import daemon as d_mod
+    monkeypatch.setattr(d_mod, "notify", lambda *a, **kw: notify_calls.append({"args": a, "kwargs": kw}))
+
+    tx = _ErrorTranscriber(RuntimeError("boom"))
+    d = _build(transcriber=tx)
+    final = _run_toggle_cycle(d)
+    assert final == "idle", f"state stuck at {final!r}"
+    # At least one notify call should carry an error indication.
+    assert any("error" in str(c).lower() or "Error" in str(c) for c in notify_calls), \
+        f"expected error notification, got: {notify_calls}"
+
+
+def test_stop_and_transcribe_success_reaches_idle():
+    """Success path ends in idle (non-regression anchor).
+
+    Phase 1.1.4 — should PASS before and after the guard is added.
+    """
+    tx = FakeTranscriber(text="probando")
+    d = _build(transcriber=tx)
+    final = _run_toggle_cycle(d)
+    assert final == "idle"
+    assert tx.calls == 1
+
+
+def test_stop_and_ask_error_leaves_idle(monkeypatch):
+    """Exception in _stop_and_ask → daemon returns to idle.
+
+    Phase 1.1.5 — RED test.
+    """
+    from axi import daemon as d_mod
+    monkeypatch.setattr(d_mod, "notify", lambda *a, **kw: None)
+
+    tx = _ErrorTranscriber(RuntimeError("ask-boom"))
+    d = _build(transcriber=tx)
+    _handle_cmd(d, "ask")   # start recording (ask mode)
+    _handle_cmd(d, "ask")   # stop → _stop_and_ask in bg thread
+    final = _wait_idle(d)
+    assert final == "idle", f"state stuck at {final!r}"
+
+
+def test_stop_and_ask_success_does_not_clobber_thinking_speaking():
+    """Happy path of _stop_and_ask ends in idle (speaking→idle via TTS thread).
+
+    Phase 1.1.6 — guard must NOT clobber the legitimate speaking/idle path.
+    This must PASS before and after the guard is added.
+    """
+    tx = FakeTranscriber(text="¿cuál es la capital de Francia?")
+    d = _build(transcriber=tx)
+    _handle_cmd(d, "ask")
+    _handle_cmd(d, "ask")   # stop → _stop_and_ask in bg
+    # speaking→idle is the happy-path terminal; _wait_idle accepts idle.
+    final = _wait_idle(d, timeout=4.0)
+    assert final == "idle", f"expected idle, got {final!r}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PR1 — Watchdog tests (Phase 1.2)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _BlockingTranscriber:
+    """Transcriber that blocks until an Event is set (simulates infinite hang)."""
+
+    def __init__(self) -> None:
+        self.unblock = threading.Event()
+        self.calls = 0
+        self.started = threading.Event()
+
+    def transcribe(self, audio: np.ndarray) -> tuple[str, str, float]:
+        self.calls += 1
+        self.started.set()
+        self.unblock.wait()   # blocks until test releases it
+        return "never", "es", 0.0
+
+
+def test_watchdog_forces_idle_on_timeout(monkeypatch):
+    """Watchdog fires after WATCHDOG_TIMEOUT_S → forces idle + error notify.
+
+    Phase 1.2.1 — RED test. Must FAIL before watchdog is implemented.
+    """
+    import axi.daemon as d_mod
+    monkeypatch.setattr(d_mod, "WATCHDOG_TIMEOUT_S", 0.05)
+
+    notify_calls: list[dict] = []
+    monkeypatch.setattr(d_mod, "notify", lambda *a, **kw: notify_calls.append({"args": a, "kwargs": kw}))
+
+    tx = _BlockingTranscriber()
+    d = _build(transcriber=tx)
+    _handle_cmd(d, "toggle")   # start
+    _handle_cmd(d, "toggle")   # stop → _stop_and_transcribe bg thread
+
+    # Wait for transcriber to enter its blocking wait.
+    tx.started.wait(timeout=2.0)
+
+    # Watchdog should fire after ~50ms (monkeypatched); give 500ms margin.
+    deadline = time.time() + 0.5
+    while time.time() < deadline:
+        if d.state == "idle":
+            break
+        time.sleep(0.02)
+
+    # Unblock the transcriber so its thread doesn't leak.
+    tx.unblock.set()
+
+    assert d.state == "idle", f"watchdog did not fire; state={d.state!r}"
+    assert any("error" in str(c).lower() or "timeout" in str(c).lower()
+               or "watchdog" in str(c).lower() or "Error" in str(c)
+               for c in notify_calls), \
+        f"expected error/timeout notification, got: {notify_calls}"
+
+
+def test_watchdog_does_not_fire_on_fast_completion():
+    """Fast transcription completes before watchdog timeout — watchdog must
+    NOT fire spuriously (no extra idle transition).
+
+    Phase 1.2.2 — RED test. Passes implicitly once watchdog is correct.
+    """
+    tx = FakeTranscriber(text="rápido")
+    d = _build(transcriber=tx)
+    final = _run_toggle_cycle(d)
+    # State should be idle from normal flow, not from watchdog.
+    assert final == "idle"
+    assert tx.calls == 1
+
+
+def test_watchdog_armed_disarmed_via_set_state(monkeypatch):
+    """_set_state(\"transcribing\") arms watchdog; _set_state(\"idle\") disarms it.
+
+    Phase 1.2.3 — RED test. Must FAIL before _set_state integrates watchdog.
+    """
+    import axi.daemon as d_mod
+    # Use a long timeout so it never accidentally fires during the test.
+    monkeypatch.setattr(d_mod, "WATCHDOG_TIMEOUT_S", 300.0)
+
+    arm_calls: list[str] = []
+    disarm_calls: list[str] = []
+
+    d = _build()
+
+    original_arm = getattr(d, "_arm_watchdog", None)
+    original_disarm = getattr(d, "_disarm_watchdog", None)
+
+    # If the methods don't exist yet the test fails here (RED).
+    assert original_arm is not None, "_arm_watchdog method not found on Daemon"
+    assert original_disarm is not None, "_disarm_watchdog method not found on Daemon"
+
+    import unittest.mock as mock
+    with mock.patch.object(d, "_arm_watchdog", wraps=d._arm_watchdog) as mock_arm, \
+         mock.patch.object(d, "_disarm_watchdog", wraps=d._disarm_watchdog) as mock_disarm:
+        d._set_state("transcribing")
+        assert mock_arm.called, "_arm_watchdog not called when entering transcribing"
+        d._set_state("idle")
+        assert mock_disarm.called, "_disarm_watchdog not called when leaving transcribing"

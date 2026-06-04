@@ -57,6 +57,10 @@ DEFAULT_MODEL = "large-v3-turbo"
 DEFAULT_DEVICE = "cuda"
 DEFAULT_COMPUTE = "float16"
 
+# Maximum audio payload accepted per request.
+# ~1.5h of fp32 16kHz mono is ~345MB; 400MB gives comfortable headroom.
+MAX_AUDIO_BYTES = 400 * 1024 * 1024
+
 # /run/user/$UID/axi/whisper.sock — same dir convention as axi voice.sock.
 RUNTIME_DIR = Path(
     os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
@@ -86,9 +90,8 @@ def _handle(conn: socket.socket, model: WhisperModel, lock: threading.Lock) -> N
             raise ValueError(f"params too large: {params_len}")
         params = json.loads(_read_exact(conn, params_len).decode("utf-8"))
         (audio_len,) = struct.unpack("!I", _read_exact(conn, 4))
-        # Cap at ~120 s of fp32 16 kHz mono = 7.5 MB — generous for a 6-8 s
-        # window plus headroom.
-        if audio_len > 16 * 1024 * 1024:
+        # Cap at MAX_AUDIO_BYTES (~400 MB, covers ~1.5h fp32 16kHz mono).
+        if audio_len > MAX_AUDIO_BYTES:
             raise ValueError(f"audio too large: {audio_len}")
         audio_bytes = _read_exact(conn, audio_len)
         audio = np.frombuffer(audio_bytes, dtype=np.float32)

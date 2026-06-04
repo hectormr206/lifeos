@@ -53,6 +53,10 @@ def _default_meeting_factory(*, transcribe_fn, brain_ask_fn) -> MeetingSession:
 
 SOCK_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", str(Path.home() / ".local/state"))) / "axi" / "voice.sock"
 
+# Watchdog timeout: 20 minutes. Armed when state enters "transcribing",
+# disarmed on any exit. Fires only if transcription stalls completely.
+WATCHDOG_TIMEOUT_S = 1200
+
 # P2.4 — Whisper restart-pending marker. Daemon clears it on startup; the
 # dashboard creates it when a user changes a Whisper config field. Keeping
 # the path here (vs importing from dashboard) avoids dragging FastAPI into
@@ -143,10 +147,47 @@ class Daemon:
         self.vision_capture = vision_capture or _default_vision_capture
         self.eyes_capture = eyes_capture or _default_eyes_capture
         self.meeting_factory = meeting_factory or _default_meeting_factory
+        # Watchdog timer — armed while in "transcribing", disarmed on exit.
+        self._watchdog: threading.Timer | None = None
+        self._watchdog_lock = threading.Lock()
+
+    def _arm_watchdog(self) -> None:
+        """Cancel any existing watchdog and start a fresh one."""
+        with self._watchdog_lock:
+            if self._watchdog is not None:
+                self._watchdog.cancel()
+            t = threading.Timer(WATCHDOG_TIMEOUT_S, self._on_watchdog_fire)
+            t.daemon = True
+            t.start()
+            self._watchdog = t
+
+    def _disarm_watchdog(self) -> None:
+        """Cancel the watchdog if one is running."""
+        with self._watchdog_lock:
+            if self._watchdog is not None:
+                self._watchdog.cancel()
+                self._watchdog = None
+
+    def _on_watchdog_fire(self) -> None:
+        """Called by the timer thread when transcription stalls."""
+        if self.state.startswith("transcribing"):
+            log.warning("watchdog fired — transcription stalled; forcing idle")
+            self._set_state("idle")
+            notify(
+                "Axi",
+                "Error: transcripción detuvo (watchdog timeout)",
+                icon="dialog-error",
+                timeout_ms=4000,
+            )
 
     def _set_state(self, state: str) -> None:
         with self._state_lock:
             self._state = state
+        # Arm watchdog when entering "transcribing"; disarm on any other state.
+        if state.startswith("transcribing"):
+            self._arm_watchdog()
+        else:
+            self._disarm_watchdog()
 
     @property
     def state(self) -> str:
@@ -213,97 +254,113 @@ class Daemon:
 
     def _stop_and_ask(self) -> str:
         self._set_state("transcribing")
-        audio = self.recorder.stop()
-        if audio is None or len(audio) < _min_record_samples():
-            self._set_state("idle")
-            notify("Axi", "Pregunta muy corta", icon="dialog-warning", timeout_ms=2000)
-            return "too-short"
-        import numpy as _np
-        rms = float(_np.sqrt(_np.mean(audio**2)))
-        if rms < _silence_rms_threshold():
-            self._set_state("idle")
-            log.info("ask silence gate: rms=%.5f", rms)
-            notify("Axi", "No oí pregunta", icon="dialog-warning", timeout_ms=2000)
-            return "silence"
-        raw, lang, _prob = self.transcriber.transcribe(audio)
-        if not raw:
-            self._set_state("idle")
-            notify("Axi", "No oí nada", icon="dialog-warning", timeout_ms=2000)
-            return "empty"
-        question = clean_text(raw)
-        log.info("question: %s", question)
-
-        self._set_state("thinking")
-        screenshot = self._pending_screenshot
-        self._pending_screenshot = None
-        vision_note = " 👁️" if screenshot else ""
-        history = self.memory.messages()
-        facts = self.memory.relevant_facts(question, limit=5)
-        notify(
-            "Axi",
-            f"🧠{vision_note} Pensando… (mem: {len(history)//2} turnos, {len(facts)} facts)",
-            icon="view-refresh",
-            transient=True,
-            timeout_ms=3000,
-        )
-        # Inject relevant long-term facts into the system layer so the answer
-        # is grounded in what Axi actually knows about Héctor.
-        from axi.brain import SYSTEM_PROMPT
-        system = SYSTEM_PROMPT
-        if facts:
-            system = SYSTEM_PROMPT + "\n\nLo que sabes de Héctor (memoria largo plazo):\n- " + "\n- ".join(facts)
-        # P1.5 — opportunistic OCR. When the screen capture carries text
-        # the brain can't easily "read" from the image (small fonts, dense
-        # UI), prepend the OCR transcription so the answer is grounded in
-        # what's actually written on screen. No-op when ocr_enabled=False
-        # or when tesseract / pytesseract aren't installed.
-        ocr_question = question
-        if screenshot and config.get("ocr_enabled", True):
-            try:
-                from axi.vision import ocr_from_b64  # noqa: PLC0415
-                ocr_text = ocr_from_b64(screenshot)
-            except Exception as e:  # noqa: BLE001
-                log.warning("ocr_from_b64 failed: %s", e)
-                ocr_text = None
-            if ocr_text and len(ocr_text) > 20:
-                ocr_question = f"Texto en pantalla:\n{ocr_text}\n\n{question}"
-        answer = self.brain_ask(ocr_question, system=system, image_b64=screenshot, history=history)
-        log.info("answer: %s (vision=%s, history=%d, facts=%d)", answer, bool(screenshot), len(history) // 2, len(facts))
-        _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
-
-        # Fact extraction in the background — does not block the response.
-        if config.get("fact_extraction_enabled", True):
-            def _extract():
-                try:
-                    n = extract_and_store(question, answer, conv_node_id)
-                    if n:
-                        log.info("extracted %d fact(s) from turn", n)
-                except Exception as e:  # noqa: BLE001
-                    log.warning("fact extraction failed: %s", e)
-            threading.Thread(target=_extract, daemon=True).start()
-
-        save_last_answer(question, answer)
-        to_clipboard(answer)
-
-        preview = answer if len(answer) <= 400 else answer[:397] + "…"
-        notify(
-            title=f"Axi → {question[:60]}",
-            body=preview,
-            icon="dialog-information",
-            timeout_ms=15000,
-        )
-
-        # TTS plays in the background so the daemon can return to idle
-        # immediately. The "speaking" state lets the tray reflect that
-        # Axi is talking even after the notification has shown.
-        self._set_state("speaking")
-        def _say():
-            try:
-                speak_text(answer)
-            finally:
+        try:
+            audio = self.recorder.stop()
+            if audio is None or len(audio) < _min_record_samples():
                 self._set_state("idle")
-        threading.Thread(target=_say, daemon=True).start()
-        return answer
+                notify("Axi", "Pregunta muy corta", icon="dialog-warning", timeout_ms=2000)
+                return "too-short"
+            import numpy as _np
+            rms = float(_np.sqrt(_np.mean(audio**2)))
+            if rms < _silence_rms_threshold():
+                self._set_state("idle")
+                log.info("ask silence gate: rms=%.5f", rms)
+                notify("Axi", "No oí pregunta", icon="dialog-warning", timeout_ms=2000)
+                return "silence"
+            raw, lang, _prob = self.transcriber.transcribe(audio)
+            if not raw:
+                self._set_state("idle")
+                notify("Axi", "No oí nada", icon="dialog-warning", timeout_ms=2000)
+                return "empty"
+            question = clean_text(raw)
+            log.info("question: %s", question)
+
+            self._set_state("thinking")
+            screenshot = self._pending_screenshot
+            self._pending_screenshot = None
+            vision_note = " 👁️" if screenshot else ""
+            history = self.memory.messages()
+            facts = self.memory.relevant_facts(question, limit=5)
+            notify(
+                "Axi",
+                f"🧠{vision_note} Pensando… (mem: {len(history)//2} turnos, {len(facts)} facts)",
+                icon="view-refresh",
+                transient=True,
+                timeout_ms=3000,
+            )
+            # Inject relevant long-term facts into the system layer so the answer
+            # is grounded in what Axi actually knows about Héctor.
+            from axi.brain import SYSTEM_PROMPT
+            system = SYSTEM_PROMPT
+            if facts:
+                system = SYSTEM_PROMPT + "\n\nLo que sabes de Héctor (memoria largo plazo):\n- " + "\n- ".join(facts)
+            # P1.5 — opportunistic OCR. When the screen capture carries text
+            # the brain can't easily "read" from the image (small fonts, dense
+            # UI), prepend the OCR transcription so the answer is grounded in
+            # what's actually written on screen. No-op when ocr_enabled=False
+            # or when tesseract / pytesseract aren't installed.
+            ocr_question = question
+            if screenshot and config.get("ocr_enabled", True):
+                try:
+                    from axi.vision import ocr_from_b64  # noqa: PLC0415
+                    ocr_text = ocr_from_b64(screenshot)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("ocr_from_b64 failed: %s", e)
+                    ocr_text = None
+                if ocr_text and len(ocr_text) > 20:
+                    ocr_question = f"Texto en pantalla:\n{ocr_text}\n\n{question}"
+            answer = self.brain_ask(ocr_question, system=system, image_b64=screenshot, history=history)
+            log.info("answer: %s (vision=%s, history=%d, facts=%d)", answer, bool(screenshot), len(history) // 2, len(facts))
+            _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
+
+            # Fact extraction in the background — does not block the response.
+            if config.get("fact_extraction_enabled", True):
+                def _extract():
+                    try:
+                        n = extract_and_store(question, answer, conv_node_id)
+                        if n:
+                            log.info("extracted %d fact(s) from turn", n)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("fact extraction failed: %s", e)
+                threading.Thread(target=_extract, daemon=True).start()
+
+            save_last_answer(question, answer)
+            to_clipboard(answer)
+
+            preview = answer if len(answer) <= 400 else answer[:397] + "…"
+            notify(
+                title=f"Axi → {question[:60]}",
+                body=preview,
+                icon="dialog-information",
+                timeout_ms=15000,
+            )
+
+            # TTS plays in the background so the daemon can return to idle
+            # immediately. The "speaking" state lets the tray reflect that
+            # Axi is talking even after the notification has shown.
+            self._set_state("speaking")
+            def _say():
+                try:
+                    speak_text(answer)
+                finally:
+                    self._set_state("idle")
+            threading.Thread(target=_say, daemon=True).start()
+            return answer
+        except Exception as e:  # noqa: BLE001
+            log.exception("_stop_and_ask failed: %s", e)
+            notify(
+                "Axi",
+                f"Error al procesar pregunta: {e}",
+                icon="dialog-error",
+                timeout_ms=4000,
+            )
+            return f"error:{e}"
+        finally:
+            # Guard: only force idle if still stuck in "transcribing".
+            # Happy path legitimately transitions to "thinking"→"speaking"→"idle"
+            # via the TTS background thread — do NOT clobber those states.
+            if self.state == "transcribing":
+                self._set_state("idle")
 
     def _start(self) -> str:
         source = self.recorder.start()
@@ -316,105 +373,121 @@ class Daemon:
 
     def _stop_and_transcribe(self) -> str:
         self._set_state("transcribing")
-        # If this dictation started during a meeting, register its window so
-        # the meeting processor excludes it from the meeting transcript.
-        if self.meeting is not None and getattr(self, "_dictation_start_ts", None) is not None:
-            self.meeting.register_dictation(self._dictation_start_ts, time.time())
-            self._dictation_start_ts = None
-        audio = self.recorder.stop()
-        min_samples = _min_record_samples()
-        if audio is None or len(audio) < min_samples:
-            self._set_state("idle")
-            notify("Axi", "Grabación muy corta", icon="dialog-warning", timeout_ms=2000)
-            return "too-short"
-        import numpy as _np
-        rms = float(_np.sqrt(_np.mean(audio**2)))
-        threshold = _silence_rms_threshold()
-        if rms < threshold:
-            self._set_state("idle")
-            log.info("silence gate triggered: rms=%.5f < %.5f", rms, threshold)
-            notify("Axi", "No oí nada (silencio)", icon="dialog-warning", timeout_ms=2000)
-            return "silence"
-
-        notify("Axi", "Transcribiendo…", icon="view-refresh", transient=True, timeout_ms=2000)
-        raw, lang, prob = self.transcriber.transcribe(audio)
-        log.info("transcribed lang=%s prob=%.2f chars=%d", lang, prob, len(raw))
-
-        if not raw:
-            self._set_state("idle")
-            notify("Axi", "Nada que transcribir", icon="dialog-warning", timeout_ms=2000)
-            return "empty"
-
-        text = clean_text(raw)
-        log.info("raw:     %s", raw)
-        log.info("cleaned: %s", text)
-
-        # Reminder fastpath — check BEFORE the intent classifier so that
-        # "Axi, recordame X" creates a real reminder and short-circuits the
-        # rest of the pipeline (no typing, no dictation).
-        if config.get("reminder_voice_enabled", True):
-            try:
-                from axi.reminder_voice import try_create_reminder  # noqa: PLC0415
-                _rid = try_create_reminder(text)
-            except Exception as _e:  # noqa: BLE001
-                log.warning("reminder_voice fastpath raised: %s", _e)
-                _rid = None
-            if _rid is not None:
+        try:
+            # If this dictation started during a meeting, register its window so
+            # the meeting processor excludes it from the meeting transcript.
+            if self.meeting is not None and getattr(self, "_dictation_start_ts", None) is not None:
+                self.meeting.register_dictation(self._dictation_start_ts, time.time())
+                self._dictation_start_ts = None
+            audio = self.recorder.stop()
+            min_samples = _min_record_samples()
+            if audio is None or len(audio) < min_samples:
                 self._set_state("idle")
-                return f"reminder:{_rid}"
+                notify("Axi", "Grabación muy corta", icon="dialog-warning", timeout_ms=2000)
+                return "too-short"
+            import numpy as _np
+            rms = float(_np.sqrt(_np.mean(audio**2)))
+            threshold = _silence_rms_threshold()
+            if rms < threshold:
+                self._set_state("idle")
+                log.info("silence gate triggered: rms=%.5f < %.5f", rms, threshold)
+                notify("Axi", "No oí nada (silencio)", icon="dialog-warning", timeout_ms=2000)
+                return "silence"
 
-        # P1.2 — voice command palette. If the utterance is a recognized
-        # imperative ("axi, abre el dashboard"), execute the action and
-        # SKIP typing. Otherwise fall through to the normal dictation flow.
-        if config.get("intents_enabled", True):
-            try:
-                from axi import events as _events, intents as _intents  # noqa: PLC0415
-                brain_fallback = self.brain_ask if config.get(
-                    "intents_brain_fallback_enabled", False
-                ) else None
-                intent_result = _intents.classify(text, brain_ask=brain_fallback)
-            except Exception as e:  # noqa: BLE001
-                log.warning("intent classify raised: %s", e)
-                intent_result = None
-            if intent_result:
-                intent_name, params = intent_result
+            notify("Axi", "Transcribiendo…", icon="view-refresh", transient=True, timeout_ms=2000)
+            raw, lang, prob = self.transcriber.transcribe(audio)
+            log.info("transcribed lang=%s prob=%.2f chars=%d", lang, prob, len(raw))
+
+            if not raw:
+                self._set_state("idle")
+                notify("Axi", "Nada que transcribir", icon="dialog-warning", timeout_ms=2000)
+                return "empty"
+
+            text = clean_text(raw)
+            log.info("raw:     %s", raw)
+            log.info("cleaned: %s", text)
+
+            # Reminder fastpath — check BEFORE the intent classifier so that
+            # "Axi, recordame X" creates a real reminder and short-circuits the
+            # rest of the pipeline (no typing, no dictation).
+            if config.get("reminder_voice_enabled", True):
                 try:
-                    _events.log_info(
-                        "intents", f"matched {intent_name!r}",
-                        data={"text": text, "params": params},
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-                try:
-                    _intents.INTENT_HANDLERS[intent_name](self)
-                    notify("Axi", f"Acción ejecutada: {intent_name}",
-                           transient=True, timeout_ms=2500)
+                    from axi.reminder_voice import try_create_reminder  # noqa: PLC0415
+                    _rid = try_create_reminder(text)
+                except Exception as _e:  # noqa: BLE001
+                    log.warning("reminder_voice fastpath raised: %s", _e)
+                    _rid = None
+                if _rid is not None:
                     self._set_state("idle")
-                    return f"intent:{intent_name}"
+                    return f"reminder:{_rid}"
+
+            # P1.2 — voice command palette. If the utterance is a recognized
+            # imperative ("axi, abre el dashboard"), execute the action and
+            # SKIP typing. Otherwise fall through to the normal dictation flow.
+            if config.get("intents_enabled", True):
+                try:
+                    from axi import events as _events, intents as _intents  # noqa: PLC0415
+                    brain_fallback = self.brain_ask if config.get(
+                        "intents_brain_fallback_enabled", False
+                    ) else None
+                    intent_result = _intents.classify(text, brain_ask=brain_fallback)
                 except Exception as e:  # noqa: BLE001
+                    log.warning("intent classify raised: %s", e)
+                    intent_result = None
+                if intent_result:
+                    intent_name, params = intent_result
                     try:
-                        _events.log_error(
-                            "intents", f"handler {intent_name} failed: {e}",
+                        _events.log_info(
+                            "intents", f"matched {intent_name!r}",
+                            data={"text": text, "params": params},
                         )
                     except Exception:  # noqa: BLE001
                         pass
-                    # fall through to dictation
+                    try:
+                        _intents.INTENT_HANDLERS[intent_name](self)
+                        notify("Axi", f"Acción ejecutada: {intent_name}",
+                               transient=True, timeout_ms=2500)
+                        self._set_state("idle")
+                        return f"intent:{intent_name}"
+                    except Exception as e:  # noqa: BLE001
+                        try:
+                            _events.log_error(
+                                "intents", f"handler {intent_name} failed: {e}",
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                        # fall through to dictation
 
-        last_path = save_last(text)
-        clip = to_clipboard(text)
-        typed = type_to_focused(text)
-        log.info("saved=%s clipboard=%s typed=%s", last_path, clip, typed)
+            last_path = save_last(text)
+            clip = to_clipboard(text)
+            typed = type_to_focused(text)
+            log.info("saved=%s clipboard=%s typed=%s", last_path, clip, typed)
 
-        preview = text if len(text) <= 200 else text[:197] + "…"
-        clip_note = "" if clip != "none" else " · clipboard FALTANTE"
-        paste_note = " · tipeado" if typed else " · solo clipboard"
-        notify(
-            title=f"✓ {len(text.split())} palabras · {lang}{clip_note}{paste_note}",
-            body=preview,
-            timeout_ms=5000,
-        )
-        self._set_state("idle")
-        return text
+            preview = text if len(text) <= 200 else text[:197] + "…"
+            clip_note = "" if clip != "none" else " · clipboard FALTANTE"
+            paste_note = " · tipeado" if typed else " · solo clipboard"
+            notify(
+                title=f"✓ {len(text.split())} palabras · {lang}{clip_note}{paste_note}",
+                body=preview,
+                timeout_ms=5000,
+            )
+            self._set_state("idle")
+            return text
+        except Exception as e:  # noqa: BLE001
+            log.exception("_stop_and_transcribe failed: %s", e)
+            notify(
+                "Axi",
+                f"Error al transcribir: {e}",
+                icon="dialog-error",
+                timeout_ms=4000,
+            )
+            return f"error:{e}"
+        finally:
+            # Safety net: if we are still stuck in "transcribing" (an unhandled
+            # exception escaped the except block, or a branch forgot to set idle),
+            # force idle. Does NOT clobber "thinking"/"speaking"/"idle".
+            if self.state == "transcribing":
+                self._set_state("idle")
 
     def status(self) -> str:
         # When a meeting is active it overrides the normal state so the tray
