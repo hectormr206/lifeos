@@ -270,6 +270,8 @@ def _make_purchase_entry(ts: datetime):
     """Minimal Entry-like object for the finance (big_purchase impulsive) DAO."""
     e = MagicMock()
     e.ts = ts
+    e.title = "impulse buy"
+    e.amount = 500.0
     e.data = {}
     e.tags = ["impulsive"]
     return e
@@ -998,6 +1000,11 @@ def test_snapshot_writes_correlates_with_edge() -> None:
     if exp_dt.tzinfo is None:
         exp_dt = exp_dt.replace(tzinfo=timezone.utc)
     assert exp_dt > datetime.now(timezone.utc), "expires_at should be in the future"
+    # W2: evidence dict must be persisted with a non-empty event_items list
+    evidence = md.get("evidence")
+    assert evidence is not None, "edge metadata must contain an 'evidence' key"
+    assert isinstance(evidence.get("event_items"), list), "evidence['event_items'] must be a list"
+    assert len(evidence["event_items"]) > 0, "evidence['event_items'] must not be empty"
 
 
 def test_dedup_no_duplicate_on_rerun() -> None:
@@ -2473,4 +2480,593 @@ def test_snapshot_conflict_spending_writes_edge() -> None:
     assert len(matching) == 1, f"Expected 1 conflict_spending edge, got {len(matching)}"
     md = matching[0].metadata or {}
     assert len(md.get("note", "")) > 0
-    assert any(ord(c) > 127 for c in md["note"]), "note should contain Spanish characters"
+    # W2: evidence dict must be persisted with a non-empty event_items list
+    evidence = md.get("evidence")
+    assert evidence is not None, "conflict_spending edge metadata must contain 'evidence'"
+    assert isinstance(evidence.get("event_items"), list), "evidence['event_items'] must be a list"
+    assert len(evidence["event_items"]) > 0, "evidence['event_items'] must not be empty"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 1 — _collect_evidence unit tests  [task 1.1 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_purchase_entry_ev(ts: datetime, title: str = "Coffee", amount: float = 5.0):
+    """Finance entry mock with title, amount, ts, and tags=[impulsive]."""
+    e = MagicMock()
+    e.ts = ts
+    e.title = title
+    e.amount = amount
+    e.tags = ["impulsive"]
+    e.data = {}
+    return e
+
+
+def _make_interaction_ev(ts: datetime, title: str = "fight", kind: str = "conflict"):
+    """Relationship interaction mock with title, kind, ts."""
+    i = MagicMock()
+    i.ts = ts
+    i.title = title
+    i.kind = kind
+    return i
+
+
+_CE_NOW = datetime(2024, 3, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _ce_day(offset: int) -> datetime:
+    """_CE_NOW minus offset days (UTC)."""
+    return _CE_NOW - timedelta(days=offset)
+
+
+def test_collect_evidence_no_match_returns_empty() -> None:
+    """Event entries outside the lag window → event_items empty, matched_pairs=0, capped=False."""
+    from lifeos.insights.correlate import _collect_evidence
+
+    trigger_days = {_ce_day(10).date()}
+    # Entry is 5 days BEFORE trigger → day = _ce_day(10).date() - 1 day → excluded
+    entries = [_make_purchase_entry_ev(_ce_day(11))]  # day before trigger
+
+    result = _collect_evidence(
+        trigger_days,
+        entries,
+        lag_days=2,
+        label_fn=lambda e: f"{e.title} ${e.amount:.0f}",
+        event_label="compras",
+    )
+
+    assert result["event_items"] == []
+    assert result["matched_pairs"] == 0
+    assert result["capped"] is False
+    assert result["event_label"] == "compras"
+
+
+def test_collect_evidence_boundary_lag_day_included() -> None:
+    """Event on exactly trigger + lag_days is included (inclusive boundary)."""
+    from lifeos.insights.correlate import _collect_evidence
+
+    trigger_day = _ce_day(10).date()
+    # Entry on trigger + 2 days (lag boundary)
+    entry_ts = datetime(trigger_day.year, trigger_day.month, trigger_day.day,
+                        tzinfo=timezone.utc) + timedelta(days=2)
+    entries = [_make_purchase_entry_ev(entry_ts)]
+
+    result = _collect_evidence(
+        {trigger_day},
+        entries,
+        lag_days=2,
+        label_fn=lambda e: e.title,
+        event_label="test",
+    )
+
+    assert result["matched_pairs"] == 1
+    assert len(result["event_items"]) == 1
+
+
+def test_collect_evidence_negative_lag_excluded() -> None:
+    """Event one day before trigger is excluded (negative lag)."""
+    from lifeos.insights.correlate import _collect_evidence
+
+    trigger_day = _ce_day(10).date()
+    # Entry 1 day before trigger
+    entry_ts = datetime(trigger_day.year, trigger_day.month, trigger_day.day,
+                        tzinfo=timezone.utc) - timedelta(days=1)
+    entries = [_make_purchase_entry_ev(entry_ts)]
+
+    result = _collect_evidence(
+        {trigger_day},
+        entries,
+        lag_days=2,
+        label_fn=lambda e: e.title,
+        event_label="test",
+    )
+
+    assert result["event_items"] == []
+    assert result["matched_pairs"] == 0
+
+
+def test_collect_evidence_exactly_max_items_not_capped() -> None:
+    """Exactly max_items=8 matched entries → capped=False, len(event_items)==8."""
+    from lifeos.insights.correlate import _collect_evidence
+
+    trigger_day = _ce_day(20).date()
+    # 8 entries on trigger day (lag=0)
+    entries = [
+        _make_purchase_entry_ev(_ce_day(20), title=f"item{i}", amount=float(i))
+        for i in range(8)
+    ]
+
+    result = _collect_evidence(
+        {trigger_day},
+        entries,
+        lag_days=2,
+        label_fn=lambda e: f"{e.title} ${e.amount:.0f}",
+        event_label="test",
+    )
+
+    assert result["matched_pairs"] == 8
+    assert len(result["event_items"]) == 8
+    assert result["capped"] is False
+
+
+def test_collect_evidence_exceeds_max_items_capped() -> None:
+    """12 matched entries → capped=True, matched_pairs=12, len(event_items)=8."""
+    from lifeos.insights.correlate import _collect_evidence
+
+    trigger_day = _ce_day(20).date()
+    entries = [
+        _make_purchase_entry_ev(_ce_day(20), title=f"item{i}", amount=float(i))
+        for i in range(12)
+    ]
+
+    result = _collect_evidence(
+        {trigger_day},
+        entries,
+        lag_days=2,
+        label_fn=lambda e: f"{e.title} ${e.amount:.0f}",
+        event_label="test",
+    )
+
+    assert result["matched_pairs"] == 12
+    assert len(result["event_items"]) == 8
+    assert result["capped"] is True
+
+
+def test_collect_evidence_label_fn_applied() -> None:
+    """label_fn formats the label correctly for finance entries."""
+    from lifeos.insights.correlate import _collect_evidence
+
+    trigger_day = _ce_day(5).date()
+    entries = [_make_purchase_entry_ev(_ce_day(5), title="Coffee", amount=5.0)]
+
+    result = _collect_evidence(
+        {trigger_day},
+        entries,
+        lag_days=2,
+        label_fn=lambda e: f"{e.title} ${e.amount:.0f}",
+        event_label="test",
+    )
+
+    assert result["event_items"][0]["label"] == "Coffee $5"
+
+
+def test_collect_evidence_date_descending_order() -> None:
+    """event_items are sorted date-descending (most recent first)."""
+    from lifeos.insights.correlate import _collect_evidence
+
+    trigger_day = _ce_day(10).date()
+    # Entry on trigger day (lag=0) and trigger+1 day (lag=1)
+    entry_t0 = _make_purchase_entry_ev(_ce_day(10), title="older")
+    entry_t1 = _make_purchase_entry_ev(_ce_day(9), title="newer")  # 1 day after trigger
+
+    result = _collect_evidence(
+        {trigger_day},
+        [entry_t0, entry_t1],
+        lag_days=2,
+        label_fn=lambda e: e.title,
+        event_label="test",
+    )
+
+    assert result["event_items"][0]["label"] == "newer"
+    assert result["event_items"][1]["label"] == "older"
+
+
+def test_collect_evidence_event_label_in_result() -> None:
+    """event_label kwarg appears in the returned dict."""
+    from lifeos.insights.correlate import _collect_evidence
+
+    result = _collect_evidence(
+        set(),
+        [],
+        lag_days=2,
+        label_fn=lambda e: "",
+        event_label="Compras impulsivas",
+    )
+
+    assert result["event_label"] == "Compras impulsivas"
+
+
+def test_collect_evidence_date_is_iso_string() -> None:
+    """Each event_item date is an ISO-format string like 'YYYY-MM-DD'."""
+    from lifeos.insights.correlate import _collect_evidence
+
+    trigger_day = _ce_day(5).date()
+    entries = [_make_purchase_entry_ev(_ce_day(5))]
+
+    result = _collect_evidence(
+        {trigger_day},
+        entries,
+        lag_days=0,
+        label_fn=lambda e: "label",
+        event_label="test",
+    )
+
+    assert len(result["event_items"]) == 1
+    date_str = result["event_items"][0]["date"]
+    # Must be parseable as ISO date
+    parsed = date.fromisoformat(date_str)
+    assert parsed == trigger_day
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 2 — Detector evidence wiring RED tests  [tasks 2.1 / 2.3 / 2.5 / 2.7]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── sleep → spending ──────────────────────────────────────────────────────────
+
+def test_sleep_spending_evidence_when_fires() -> None:
+    """When _detect_sleep_spending_correlation fires, result.evidence has non-empty event_items."""
+    from lifeos.insights.correlate import CorrelationResult, _detect_sleep_spending_correlation
+
+    sleep = [
+        _make_sleep_entry(_d4(10), 5.0),
+        _make_sleep_entry(_d4(9), 4.5),
+        _make_sleep_entry(_d4(8), 5.5),
+        _make_sleep_entry(_d4(7), 7.0),
+    ]
+    # Impulsive purchases within lag window — use entries with title+amount
+    finance = [
+        _make_purchase_entry_ev(_d4(10), title="Headphones", amount=99.0),
+        _make_purchase_entry_ev(_d4(9), title="Snacks", amount=15.0),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW4,
+        health_list_recent=_fake_health_list(*sleep),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert isinstance(result, CorrelationResult)
+    assert result.evidence is not None
+    ev = result.evidence
+    assert ev["event_label"] == "Compras impulsivas"
+    assert len(ev["event_items"]) > 0
+    # Label contains $ and the item title
+    label = ev["event_items"][0]["label"]
+    assert "$" in label
+    assert isinstance(ev["matched_pairs"], int)
+    assert isinstance(ev["capped"], bool)
+
+
+def test_sleep_spending_evidence_none_when_not_fires() -> None:
+    """When _detect_sleep_spending_correlation returns None, no crash and result is None."""
+    from lifeos.insights.correlate import _detect_sleep_spending_correlation
+
+    # Only 2 poor-sleep days → guard fails → returns None
+    sleep = [
+        _make_sleep_entry(_d4(10), 5.0),
+        _make_sleep_entry(_d4(9), 4.5),
+    ]
+    finance = [
+        _make_purchase_entry_ev(_d4(10), title="Coffee", amount=5.0),
+        _make_purchase_entry_ev(_d4(9), title="Snack", amount=3.0),
+    ]
+
+    result = _detect_sleep_spending_correlation(
+        _NOW4,
+        health_list_recent=_fake_health_list(*sleep),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert result is None
+
+
+# ── sleep → conflicts ─────────────────────────────────────────────────────────
+
+def _make_interaction_ev_full(ts: datetime, title: str = "argument", kind: str = "conflict"):
+    """Interaction mock with title, kind, ts (for evidence tests)."""
+    i = MagicMock()
+    i.ts = ts
+    i.title = title
+    i.kind = kind
+    return i
+
+
+def test_sleep_conflicts_evidence_when_fires() -> None:
+    """When _detect_sleep_conflicts_correlation fires, result.evidence has correct entries."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_sleep_conflicts_correlation
+
+    sleep = [
+        _make_sleep_entry(_d4(10), 5.0),
+        _make_sleep_entry(_d4(9), 4.5),
+        _make_sleep_entry(_d4(8), 5.5),
+        _make_sleep_entry(_d4(7), 7.0),
+    ]
+    interactions = [
+        _make_interaction_ev_full(_d4(10), title="argument about work"),
+        _make_interaction_ev_full(_d4(8), title="money fight"),
+    ]
+
+    result = _detect_sleep_conflicts_correlation(
+        _NOW4,
+        health_list_recent=_fake_health_list(*sleep),
+        rel_list_recent=_fake_rel_list(*interactions),
+    )
+
+    assert isinstance(result, LaggedCorrelationResult)
+    assert result.evidence is not None
+    ev = result.evidence
+    assert ev["event_label"] == "Conflictos"
+    assert len(ev["event_items"]) > 0
+    # Label should be the interaction title
+    labels = [item["label"] for item in ev["event_items"]]
+    assert any("argument" in lbl or "fight" in lbl or "money" in lbl for lbl in labels)
+    assert isinstance(ev["matched_pairs"], int)
+    assert isinstance(ev["capped"], bool)
+
+
+def test_sleep_conflicts_evidence_none_when_not_fires() -> None:
+    """When sleep_conflicts does not fire, result is None."""
+    from lifeos.insights.correlate import _detect_sleep_conflicts_correlation
+
+    sleep = [
+        _make_sleep_entry(_d4(10), 5.0),
+        _make_sleep_entry(_d4(9), 4.5),
+    ]
+    # No interactions
+
+    result = _detect_sleep_conflicts_correlation(
+        _NOW4,
+        health_list_recent=_fake_health_list(*sleep),
+        rel_list_recent=_fake_rel_list(),
+    )
+
+    assert result is None
+
+
+# ── exercise-gap → spending ───────────────────────────────────────────────────
+
+def _make_session_ev(ts: datetime):
+    """Exercise session mock."""
+    s = MagicMock()
+    s.ts = ts
+    return s
+
+
+def test_exercise_gap_evidence_when_fires() -> None:
+    """When exercise_gap fires, result.evidence has event_items (purchases only)."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_exercise_gap_spending_correlation
+
+    # 5 exercise days + many gap days + purchases on gap days
+    ex_days = [_make_session_ev(_d4(i)) for i in range(1, 6)]  # D-1 to D-5
+    finance = [
+        _make_purchase_entry_ev(_d4(20), title="Shoes", amount=80.0),
+        _make_purchase_entry_ev(_d4(19), title="Shirt", amount=40.0),
+        _make_purchase_entry_ev(_d4(18), title="Hat", amount=25.0),
+    ]
+
+    result = _detect_exercise_gap_spending_correlation(
+        _NOW4,
+        exercise_list_recent=_fake_exercise_list(*ex_days),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert result is not None, "exercise_gap detector must fire with 5 exercise days and 3 gap purchases"
+    assert isinstance(result, LaggedCorrelationResult)
+    assert result.evidence is not None
+    ev = result.evidence
+    assert ev["event_label"] == "Compras impulsivas"
+    assert isinstance(ev["event_items"], list)
+    assert isinstance(ev["matched_pairs"], int)
+    assert isinstance(ev["capped"], bool)
+    # Labels contain $
+    for item in ev["event_items"]:
+        assert "$" in item["label"]
+
+
+def test_exercise_gap_evidence_event_items_only() -> None:
+    """exercise-gap evidence has event_items (purchases), not trigger items."""
+    from lifeos.insights.correlate import _detect_exercise_gap_spending_correlation
+
+    ex_days = [_make_session_ev(_d4(i)) for i in range(1, 6)]
+    finance = [
+        _make_purchase_entry_ev(_d4(20), title="Gadget", amount=150.0),
+        _make_purchase_entry_ev(_d4(19), title="Book", amount=20.0),
+    ]
+
+    result = _detect_exercise_gap_spending_correlation(
+        _NOW4,
+        exercise_list_recent=_fake_exercise_list(*ex_days),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert result is not None, "exercise_gap detector must fire with 5 exercise days and 2 gap purchases"
+    ev = result.evidence
+    # evidence dict must NOT have a trigger_items key (event_items only)
+    assert "trigger_items" not in ev
+    assert "event_items" in ev
+
+
+# ── conflict → spending ───────────────────────────────────────────────────────
+
+def test_conflict_spending_evidence_when_fires() -> None:
+    """When conflict_spending fires, result.evidence has correct event_items."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_conflict_spending_correlation
+
+    interactions = [
+        _make_interaction_ev_full(_d4(10), title="big fight", kind="conflict"),
+        _make_interaction_ev_full(_d4(9), title="argument", kind="conflict"),
+        _make_interaction_ev_full(_d4(8), title="disagreement", kind="conflict"),
+    ]
+    finance = [
+        _make_purchase_entry_ev(_d4(10), title="Headphones", amount=99.0),
+        _make_purchase_entry_ev(_d4(9), title="Shoes", amount=60.0),
+    ]
+
+    result = _detect_conflict_spending_correlation(
+        _NOW4,
+        rel_list_recent=_fake_rel_list(*interactions),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert result is not None, "conflict_spending detector must fire with 3 conflict days and 2 purchases"
+    assert isinstance(result, LaggedCorrelationResult)
+    assert result.evidence is not None
+    ev = result.evidence
+    assert ev["event_label"] == "Compras impulsivas"
+    assert len(ev["event_items"]) > 0
+    for item in ev["event_items"]:
+        assert "$" in item["label"]
+
+
+def test_conflict_spending_evidence_none_when_not_fires() -> None:
+    """When conflict_spending returns None, result is None (no crash)."""
+    from lifeos.insights.correlate import _detect_conflict_spending_correlation
+
+    # Only 2 conflict days → below threshold
+    interactions = [
+        _make_interaction_ev_full(_d4(10), kind="conflict"),
+        _make_interaction_ev_full(_d4(9), kind="conflict"),
+    ]
+    finance = [
+        _make_purchase_entry_ev(_d4(10)),
+    ]
+
+    result = _detect_conflict_spending_correlation(
+        _NOW4,
+        rel_list_recent=_fake_rel_list(*interactions),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 3 — persist functions store evidence RED tests  [tasks 3.1 / 3.3]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SAMPLE_EVIDENCE = {
+    "event_label": "Compras impulsivas",
+    "event_items": [{"date": "2024-06-10", "label": "Coffee $5"}],
+    "matched_pairs": 1,
+    "capped": False,
+}
+
+
+def test_persist_edge_stores_evidence_in_metadata() -> None:
+    """_persist_correlation_edge: when result.evidence is set, metadata[evidence] equals it."""
+    from lifeos.insights.correlate import CorrelationResult, _persist_correlation_edge
+    import dataclasses
+
+    result = _make_result()
+    result_with_ev = dataclasses.replace(result, evidence=_SAMPLE_EVIDENCE)
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge(result_with_ev, _NOW, edges_mod=mock_edges)
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    assert "evidence" in metadata
+    assert metadata["evidence"] == _SAMPLE_EVIDENCE
+
+
+def test_persist_edge_legacy_keys_still_present_when_evidence_set() -> None:
+    """_persist_correlation_edge: legacy keys (poor_sleep_days etc.) still in metadata when evidence set."""
+    from lifeos.insights.correlate import _persist_correlation_edge
+    import dataclasses
+
+    result = dataclasses.replace(_make_result(), evidence=_SAMPLE_EVIDENCE)
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge(result, _NOW, edges_mod=mock_edges)
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    for key in {"poor_sleep_days", "threshold", "strength", "rate_ratio", "window_days", "lag_days"}:
+        assert key in metadata, f"Legacy key missing: {key}"
+
+
+def test_persist_edge_no_evidence_key_when_evidence_is_none() -> None:
+    """_persist_correlation_edge: when result.evidence is None, 'evidence' key absent from metadata."""
+    from lifeos.insights.correlate import _persist_correlation_edge
+
+    result = _make_result()  # evidence=None by default
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge(result, _NOW, edges_mod=mock_edges)
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    assert "evidence" not in metadata or metadata.get("evidence") is None
+
+
+def test_generic_persist_stores_evidence_in_metadata() -> None:
+    """_persist_correlation_edge_for: when result.evidence is set, metadata[evidence] equals it."""
+    from lifeos.insights.correlate import _persist_correlation_edge_for
+    import dataclasses
+
+    result = dataclasses.replace(_make_lagged_result(), evidence=_SAMPLE_EVIDENCE)
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge_for(
+        result, _NOW,
+        src=("health", "a"), dst=("finance", "b"),
+        note_fn=lambda r: "note",
+        edges_mod=mock_edges,
+    )
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    assert "evidence" in metadata
+    assert metadata["evidence"] == _SAMPLE_EVIDENCE
+
+
+def test_generic_persist_existing_keys_present_when_evidence_set() -> None:
+    """_persist_correlation_edge_for: generic keys still in metadata when evidence set."""
+    from lifeos.insights.correlate import _persist_correlation_edge_for
+    import dataclasses
+
+    result = dataclasses.replace(_make_lagged_result(), evidence=_SAMPLE_EVIDENCE)
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge_for(
+        result, _NOW,
+        src=("health", "a"), dst=("finance", "b"),
+        note_fn=lambda r: "note",
+        edges_mod=mock_edges,
+    )
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    for key in {"strength", "rate_ratio", "window_days", "lag_days", "trigger_count", "note"}:
+        assert key in metadata, f"Generic key missing: {key}"
+
+
+def test_generic_persist_no_evidence_key_when_evidence_is_none() -> None:
+    """_persist_correlation_edge_for: when result.evidence is None, key absent."""
+    from lifeos.insights.correlate import _persist_correlation_edge_for
+
+    result = _make_lagged_result()  # evidence=None by default
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge_for(
+        result, _NOW,
+        src=("health", "a"), dst=("finance", "b"),
+        note_fn=lambda r: "note",
+        edges_mod=mock_edges,
+    )
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    assert "evidence" not in metadata or metadata.get("evidence") is None

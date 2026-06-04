@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Callable
 
@@ -77,6 +77,7 @@ class LaggedCorrelationResult:
     rate_ratio: float
     window_days: int
     lag_days: int
+    evidence: "dict | None" = None  # optional explainability dict, MUST be last
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class CorrelationResult:
     window_days: int
     lag_days: int
     threshold: float
+    evidence: "dict | None" = None  # optional explainability dict, MUST be last
 
 
 # ─── Pure lagged-correlation primitive ───────────────────────────────────────
@@ -241,7 +243,7 @@ def _detect_sleep_spending_correlation(
         return None
 
     # Map LaggedCorrelationResult → CorrelationResult (byte-identical public contract)
-    return CorrelationResult(
+    result = CorrelationResult(
         rate_ratio=lagged.rate_ratio,
         poor_sleep_days=lagged.trigger_count,
         ok_sleep_days=lagged.non_trigger_count,
@@ -252,6 +254,17 @@ def _detect_sleep_spending_correlation(
         lag_days=lagged.lag_days,
         threshold=_SLEEP_THRESHOLD,
     )
+
+    # Collect evidence from raw impulsive purchase entries
+    impulsive_entries = [e for e in finance_raw if "impulsive" in (e.tags or [])]
+    evidence = _collect_evidence(
+        trigger_days,
+        impulsive_entries,
+        _LAG_DAYS,
+        label_fn=lambda e: f"{e.title} ${e.amount:.0f}",
+        event_label="Compras impulsivas",
+    )
+    return replace(result, evidence=evidence)
 
 
 # ─── New helpers ─────────────────────────────────────────────────────────────
@@ -279,6 +292,52 @@ def _window_dates(now: datetime, window_days: int) -> "set[date]":
     """Return the set of UTC dates in the calendar window [today-window_days+1, today]."""
     today = now.astimezone(timezone.utc).date()
     return {today - timedelta(days=i) for i in range(window_days)}
+
+
+# ─── Evidence helper ──────────────────────────────────────────────────────────
+
+
+def _collect_evidence(
+    trigger_days: "set[date]",
+    event_entries: list,
+    lag_days: int,
+    *,
+    label_fn: "Callable",
+    event_label: str,
+    max_items: int = 8,
+) -> dict:
+    """Pure helper: collect matching event entries and return an evidence dict.
+
+    For each entry, its UTC date must fall within [t .. t+lag_days] for at
+    least one trigger day t (i.e. 0 <= (day - t).days <= lag_days).
+    Entries are sorted date-descending (most recent first) and capped at
+    max_items.  matched_pairs is the true count BEFORE capping.
+
+    Returns a dict with keys:
+        event_label  – domain label (Spanish string supplied by caller)
+        event_items  – list of {date: "YYYY-MM-DD", label: str}, <= max_items
+        matched_pairs – int, true total before cap
+        capped        – bool, True iff matched_pairs > max_items
+    """
+    matched: list = []
+    for e in event_entries:
+        day = e.ts.astimezone(timezone.utc).date()
+        if any(0 <= (day - t).days <= lag_days for t in trigger_days):
+            matched.append((e, day))
+
+    matched_pairs = len(matched)
+    matched.sort(key=lambda pair: pair[1], reverse=True)  # date desc
+    capped = matched_pairs > max_items
+    event_items = [
+        {"date": day.isoformat(), "label": label_fn(e)}
+        for e, day in matched[:max_items]
+    ]
+    return {
+        "event_label": event_label,
+        "event_items": event_items,
+        "matched_pairs": matched_pairs,
+        "capped": capped,
+    }
 
 
 # ─── Generic persist ──────────────────────────────────────────────────────────
@@ -315,22 +374,26 @@ def _persist_correlation_edge_for(
     expires_at = (now + timedelta(days=_TTL_DAYS)).isoformat()
     note = note_fn(result)
 
+    metadata: dict = {
+        "strength": round(result.rate_ratio, 2),
+        "rate_ratio": round(result.rate_ratio, 2),
+        "window_days": result.window_days,
+        "lag_days": result.lag_days,
+        "trigger_count": result.trigger_count,
+        "events_after_trigger": result.events_after_trigger,
+        "total_events": result.total_events,
+        "expires_at": expires_at,
+        "snapshot": True,
+        "note": note,
+    }
+    if result.evidence is not None:
+        metadata["evidence"] = result.evidence
+
     return edges_mod.create(
         src=src,
         dst=dst,
         rel="correlates-with",
-        metadata={
-            "strength": round(result.rate_ratio, 2),
-            "rate_ratio": round(result.rate_ratio, 2),
-            "window_days": result.window_days,
-            "lag_days": result.lag_days,
-            "trigger_count": result.trigger_count,
-            "events_after_trigger": result.events_after_trigger,
-            "total_events": result.total_events,
-            "expires_at": expires_at,
-            "snapshot": True,
-            "note": note,
-        },
+        metadata=metadata,
         created_by="correlation_snapshot",
     )
 
@@ -370,23 +433,27 @@ def _persist_correlation_edge(
         f"sueño (<6.5h), basado en {result.poor_sleep_days} días de sueño deficiente."
     )
 
+    metadata: dict = {
+        "strength": round(ratio, 2),
+        "rate_ratio": round(ratio, 2),
+        "window_days": result.window_days,
+        "lag_days": result.lag_days,
+        "poor_sleep_days": result.poor_sleep_days,
+        "impulsive_after_poor": result.impulsive_after_poor,
+        "total_impulsive": result.total_impulsive,
+        "threshold": result.threshold,
+        "expires_at": expires_at,
+        "snapshot": True,
+        "note": note,
+    }
+    if result.evidence is not None:
+        metadata["evidence"] = result.evidence
+
     return edges_mod.create(
         src=("health", "sleep_deficit_pattern"),
         dst=("finance", "impulsive_spending"),
         rel="correlates-with",
-        metadata={
-            "strength": round(ratio, 2),
-            "rate_ratio": round(ratio, 2),
-            "window_days": result.window_days,
-            "lag_days": result.lag_days,
-            "poor_sleep_days": result.poor_sleep_days,
-            "impulsive_after_poor": result.impulsive_after_poor,
-            "total_impulsive": result.total_impulsive,
-            "threshold": result.threshold,
-            "expires_at": expires_at,
-            "snapshot": True,
-            "note": note,
-        },
+        metadata=metadata,
         created_by="correlation_snapshot",
     )
 
@@ -446,12 +513,13 @@ def _detect_sleep_conflicts_correlation(
 
     trigger_days = {d for d, h in sleep_by_day.items() if h < _SLEEP_THRESHOLD}
     non_trigger_days = set(sleep_by_day) - trigger_days
-    event_days = _conflict_days(rel_raw)
+    conflict_interactions = [i for i in rel_raw if i.kind == "conflict"]
+    event_days = {i.ts.astimezone(timezone.utc).date() for i in conflict_interactions}
 
     if not event_days:
         return None
 
-    return _detect_lagged_correlation(
+    result = _detect_lagged_correlation(
         trigger_days=trigger_days,
         non_trigger_days=non_trigger_days,
         event_days=event_days,
@@ -464,6 +532,18 @@ def _detect_sleep_conflicts_correlation(
         min_rate_ratio=_MIN_RATE_RATIO,
         rate_floor=_OK_RATE_FLOOR,
     )
+
+    if result is None:
+        return None
+
+    evidence = _collect_evidence(
+        trigger_days,
+        conflict_interactions,
+        _LAG_DAYS,
+        label_fn=lambda i: i.title,
+        event_label="Conflictos",
+    )
+    return replace(result, evidence=evidence)
 
 
 def _detect_exercise_gap_spending_correlation(
@@ -499,9 +579,10 @@ def _detect_exercise_gap_spending_correlation(
     window = _window_dates(now, _WINDOW_DAYS)
     trigger_days = window - actual_exercise_days   # gap days (no exercise)
     non_trigger_days = actual_exercise_days & window  # exercise days in window
-    event_days = _impulsive_purchase_days(finance_raw)
+    impulsive_entries = [e for e in finance_raw if "impulsive" in (e.tags or [])]
+    event_days = {e.ts.astimezone(timezone.utc).date() for e in impulsive_entries}
 
-    return _detect_lagged_correlation(
+    result = _detect_lagged_correlation(
         trigger_days=trigger_days,
         non_trigger_days=non_trigger_days,
         event_days=event_days,
@@ -514,6 +595,18 @@ def _detect_exercise_gap_spending_correlation(
         min_rate_ratio=_MIN_RATE_RATIO,
         rate_floor=_OK_RATE_FLOOR,
     )
+
+    if result is None:
+        return None
+
+    evidence = _collect_evidence(
+        trigger_days,
+        impulsive_entries,
+        _LAG_DAYS,
+        label_fn=lambda e: f"{e.title} ${e.amount:.0f}",
+        event_label="Compras impulsivas",
+    )
+    return replace(result, evidence=evidence)
 
 
 def _detect_conflict_spending_correlation(
@@ -539,12 +632,13 @@ def _detect_conflict_spending_correlation(
     finance_raw = finance_list_recent(days=_WINDOW_DAYS, kind="big_purchase")
 
     conflict_days = _conflict_days(rel_raw)
-    event_days = _impulsive_purchase_days(finance_raw)
+    impulsive_entries = [e for e in finance_raw if "impulsive" in (e.tags or [])]
+    event_days = {e.ts.astimezone(timezone.utc).date() for e in impulsive_entries}
 
     trigger_days = conflict_days
     non_trigger_days = _window_dates(now, _WINDOW_DAYS) - conflict_days
 
-    return _detect_lagged_correlation(
+    result = _detect_lagged_correlation(
         trigger_days=trigger_days,
         non_trigger_days=non_trigger_days,
         event_days=event_days,
@@ -557,6 +651,18 @@ def _detect_conflict_spending_correlation(
         min_rate_ratio=_MIN_RATE_RATIO,
         rate_floor=_OK_RATE_FLOOR,
     )
+
+    if result is None:
+        return None
+
+    evidence = _collect_evidence(
+        trigger_days,
+        impulsive_entries,
+        _LAG_DAYS,
+        label_fn=lambda e: f"{e.title} ${e.amount:.0f}",
+        event_label="Compras impulsivas",
+    )
+    return replace(result, evidence=evidence)
 
 
 # ─── Detector registry ───────────────────────────────────────────────────────
