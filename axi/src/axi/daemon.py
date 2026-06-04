@@ -57,6 +57,14 @@ SOCK_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", str(Path.home() / ".local/sta
 # disarmed on any exit. Fires only if transcription stalls completely.
 WATCHDOG_TIMEOUT_S = 1200
 
+# Progress file written per-segment by whisper_server during long transcriptions.
+# The poller reads this file every PROGRESS_POLL_INTERVAL_S seconds and calls
+# _set_state("transcribing:NN") so the dashboard can show real-time %.
+PROGRESS_FILE = Path(
+    os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+) / "axi" / "whisper_progress.json"
+PROGRESS_POLL_INTERVAL_S = 2.0
+
 # P2.4 — Whisper restart-pending marker. Daemon clears it on startup; the
 # dashboard creates it when a user changes a Whisper config field. Keeping
 # the path here (vs importing from dashboard) avoids dragging FastAPI into
@@ -93,6 +101,45 @@ def _silence_rms_threshold() -> float:
     return float(get("silence_rms_threshold", DEFAULT_SILENCE_RMS_THRESHOLD))
 
 log = logging.getLogger("axi.daemon")
+
+
+class _ProgressPoller(threading.Thread):
+    """Background thread that reads the whisper progress file and updates daemon state.
+
+    Runs while the daemon is in a "transcribing*" state.  Reads PROGRESS_FILE
+    every PROGRESS_POLL_INTERVAL_S seconds and calls daemon._set_state with the
+    current percentage.  Missing or malformed files are silently ignored.
+
+    Instantiate, call start(), then signal stop_event and join() when done.
+    """
+
+    def __init__(self, daemon: "Daemon", stop_event: threading.Event) -> None:
+        super().__init__(daemon=True, name="axi-progress-poller")
+        self._daemon_ref = daemon
+        self._stop_event = stop_event
+
+    def run(self) -> None:
+        while not self._stop_event.wait(timeout=PROGRESS_POLL_INTERVAL_S):
+            if not self._daemon_ref.state.startswith("transcribing"):
+                break
+            self._poll()
+        # One final poll in case the transcription finished faster than the
+        # wait interval — harmless if state already left "transcribing".
+
+    def _poll(self) -> None:
+        try:
+            import json as _json
+            text = PROGRESS_FILE.read_text(encoding="utf-8")
+            data = _json.loads(text)
+            fraction = float(data["fraction"])
+            pct = int(fraction * 100)
+            if self._daemon_ref.state.startswith("transcribing"):
+                self._daemon_ref._set_state(f"transcribing:{pct}")
+        except (FileNotFoundError, KeyError, ValueError, OSError):
+            # Missing or malformed file → leave state as-is (generic "transcribing")
+            pass
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class Daemon:
@@ -356,10 +403,11 @@ class Daemon:
             )
             return f"error:{e}"
         finally:
-            # Guard: only force idle if still stuck in "transcribing".
+            # Guard: only force idle if still stuck in any "transcribing*" state
+            # (including "transcribing:NN" from the progress poller).
             # Happy path legitimately transitions to "thinking"→"speaking"→"idle"
             # via the TTS background thread — do NOT clobber those states.
-            if self.state == "transcribing":
+            if self.state.startswith("transcribing"):
                 self._set_state("idle")
 
     def _start(self) -> str:
@@ -395,7 +443,14 @@ class Daemon:
                 return "silence"
 
             notify("Axi", "Transcribiendo…", icon="view-refresh", transient=True, timeout_ms=2000)
-            raw, lang, prob = self.transcriber.transcribe(audio)
+            _progress_stop = threading.Event()
+            _poller = _ProgressPoller(self, _progress_stop)
+            _poller.start()
+            try:
+                raw, lang, prob = self.transcriber.transcribe(audio)
+            finally:
+                _progress_stop.set()
+                _poller.join(timeout=5.0)
             log.info("transcribed lang=%s prob=%.2f chars=%d", lang, prob, len(raw))
 
             if not raw:
@@ -483,10 +538,10 @@ class Daemon:
             )
             return f"error:{e}"
         finally:
-            # Safety net: if we are still stuck in "transcribing" (an unhandled
-            # exception escaped the except block, or a branch forgot to set idle),
-            # force idle. Does NOT clobber "thinking"/"speaking"/"idle".
-            if self.state == "transcribing":
+            # Safety net: if we are still stuck in any "transcribing*" state
+            # (including "transcribing:NN" set by the progress poller), force
+            # idle. Does NOT clobber "thinking"/"speaking"/"idle".
+            if self.state.startswith("transcribing"):
                 self._set_state("idle")
 
     def status(self) -> str:

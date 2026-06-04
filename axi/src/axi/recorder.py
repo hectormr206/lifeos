@@ -11,7 +11,9 @@ import os
 import subprocess
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 import sounddevice as sd
@@ -22,6 +24,19 @@ from axi.mic import pick_best
 SAMPLE_RATE = 16_000
 CHANNELS = 1
 DEBUG_DUMP = Path("/tmp/axi-last-recording.wav")
+
+# Persistent recordings directory.
+RECORDINGS_DIR = Path(
+    os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+) / "axi" / "recordings"
+
+# How many recordings to keep.  Oldest are pruned after each save.
+RECORDING_RETENTION = 10
+
+# Only save recordings that are at least this long (samples).  Short dictation
+# clips (< 2 min) are not archived by default to avoid filling the disk.
+# 16000 Hz × 120 s = 2 minutes (matches LONG_AUDIO_SAMPLES in whisper_server).
+RECORDING_MIN_SAMPLES = 16000 * 120
 # Keep recording briefly after the stop toggle. Users tap the hotkey *during*
 # the final stressed syllable (Spanish "aquí", "café", "acabó"), so the literal
 # end of the word arrives after their finger does. 400ms covers human latency
@@ -30,12 +45,15 @@ TAIL_BUFFER_S = 0.8
 
 
 class Recorder:
-    def __init__(self, dump_debug_wav: bool = True) -> None:
+    def __init__(self, dump_debug_wav: bool = True, save_recordings: bool = True) -> None:
         self._stream: sd.InputStream | None = None
         self._chunks: list[np.ndarray] = []
         self._lock = threading.Lock()
         self.active_source: str | None = None
         self.dump_debug_wav = dump_debug_wav
+        self.save_recordings = save_recordings
+        # Overrideable in tests to redirect saves to a tmp directory.
+        self._recordings_dir: Path = RECORDINGS_DIR
 
     @property
     def is_recording(self) -> bool:
@@ -98,4 +116,58 @@ class Recorder:
         rms = float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
         print(f"[recorder] dump={DEBUG_DUMP} samples={audio.size} peak={peak:.4f} rms={rms:.4f}", flush=True)
 
+        # Persist long recordings to the recordings directory (if enabled).
+        if self.save_recordings and audio.size >= RECORDING_MIN_SAMPLES:
+            self.save_recording(audio)
+
         return audio
+
+    def save_recording(self, audio: np.ndarray) -> Path | None:
+        """Persist audio as a uniquely-named WAV file in the recordings directory.
+
+        Filename: {iso8601}_{uuid4hex8}.wav  (e.g. 2026-06-04T09-11-03_a1b2c3d4.wav)
+        Atomic: writes to .wav.tmp then renames to final path.
+        Retention: keeps last RECORDING_RETENTION files; cleanup tolerates OSError.
+
+        Returns the final Path on success, or None if the write failed.
+        """
+        try:
+            recordings_dir = self._recordings_dir
+            recordings_dir.mkdir(parents=True, exist_ok=True)
+
+            ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+            uid = uuid4().hex[:8]
+            filename = f"{ts}_{uid}.wav"
+            final_path = recordings_dir / filename
+            tmp_path = recordings_dir / f"{filename}.tmp"
+
+            # Specify format explicitly so soundfile does not guess from the
+            # .tmp extension (which would fail since it is not ".wav").
+            sf.write(str(tmp_path), audio, SAMPLE_RATE, format="WAV", subtype="FLOAT")
+            os.replace(tmp_path, final_path)
+
+            self._apply_retention(recordings_dir)
+
+            return final_path
+        except OSError as e:
+            print(f"[recorder] save_recording failed: {e}", flush=True)
+            return None
+
+    def _apply_retention(self, recordings_dir: Path) -> None:
+        """Prune the recordings directory to keep at most RECORDING_RETENTION files.
+
+        Only considers *.wav files (ignores *.tmp in case of a prior crash).
+        Crash-safe: tolerates OSError on individual file deletions.
+        """
+        try:
+            wavs = sorted(recordings_dir.glob("*.wav"))
+            overage = len(wavs) - RECORDING_RETENTION
+            if overage <= 0:
+                return
+            for old in wavs[:overage]:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+        except OSError:
+            pass
