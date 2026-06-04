@@ -144,3 +144,46 @@ def test_insights_preview_includes_correlations_count(client) -> None:
     assert r.status_code == 200
     data = r.json()
     assert "correlations_count" in data
+
+
+def test_insights_context_evidence_survives_round_trip(client) -> None:
+    """Edge with metadata[evidence] serializes correctly through /api/insights/context."""
+    from lifeos.edges import Edge
+    from lifeos.insights.correlate import CorrelationBundle
+
+    evidence = {
+        "event_label": "Compras impulsivas",
+        "event_items": [{"date": "2025-01-01", "label": "Coffee $5"}],
+        "matched_pairs": 1,
+        "capped": False,
+    }
+    edge = Edge(
+        id="ev-edge-1",
+        src_id="sleep_deficit_pattern",
+        src_domain="health",
+        dst_id="impulsive_spending",
+        dst_domain="finance",
+        rel="correlates-with",
+        metadata={
+            "note": "Compras impulsivas 2.3x tras mal sueño.",
+            "strength": 2.3,
+            "evidence": evidence,
+        },
+    )
+    mock_bundle = CorrelationBundle(
+        active_patterns=[], relevant_edges=[edge],
+        edge_summary="Contexto de vida actual:",
+    )
+    with patch("lifeos.insights.correlate.build_bundle", return_value=mock_bundle):
+        r = client.get("/api/insights/context")
+
+    assert r.status_code == 200
+    edges_data = r.json()["edges"]
+    assert len(edges_data) == 1
+    meta = edges_data[0]["metadata"]
+    assert "evidence" in meta
+    ev = meta["evidence"]
+    assert ev["event_items"] == [{"date": "2025-01-01", "label": "Coffee $5"}]
+    assert ev["matched_pairs"] == 1
+    assert ev["capped"] is False
+    assert ev["event_label"] == "Compras impulsivas"
