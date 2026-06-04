@@ -49,7 +49,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-from faster_whisper import WhisperModel
+from faster_whisper import BatchedInferencePipeline, WhisperModel
 
 log = logging.getLogger("axi.whisper_server")
 
@@ -60,6 +60,11 @@ DEFAULT_COMPUTE = "float16"
 # Maximum audio payload accepted per request.
 # ~1.5h of fp32 16kHz mono is ~345MB; 400MB gives comfortable headroom.
 MAX_AUDIO_BYTES = 400 * 1024 * 1024
+
+# Audio length threshold (in samples) above which the batched inference path
+# is used.  16000 Hz × 120 s = 2 minutes.  The boundary is INCLUSIVE:
+# audio.size >= LONG_AUDIO_SAMPLES  →  batched (pipeline) path.
+LONG_AUDIO_SAMPLES = 16000 * 120
 
 # /run/user/$UID/axi/whisper.sock — same dir convention as axi voice.sock.
 RUNTIME_DIR = Path(
@@ -83,7 +88,37 @@ def _send_response(conn: socket.socket, obj: dict) -> None:
     conn.sendall(struct.pack("!I", len(payload)) + payload)
 
 
-def _handle(conn: socket.socket, model: WhisperModel, lock: threading.Lock) -> None:
+def _dispatch_transcription(
+    audio: np.ndarray,
+    params: dict,
+    *,
+    model: WhisperModel,
+    pipeline: BatchedInferencePipeline,
+    long_audio_samples: int = LONG_AUDIO_SAMPLES,
+):
+    """Route transcription to the appropriate backend based on audio length.
+
+    Long audio (audio.size >= long_audio_samples) uses the BatchedInferencePipeline
+    with VAD filtering and reduced beam size for speed.  Short audio uses the
+    legacy model.transcribe path unchanged.
+
+    Returns (segments_iterable, info) — identical shape for both paths.
+    """
+    if audio.size >= long_audio_samples:
+        language = params.get("language")
+        kwargs: dict = dict(
+            batch_size=8,
+            vad_filter=True,
+            beam_size=3,
+            condition_on_previous_text=True,
+        )
+        if language:
+            kwargs["language"] = language
+        return pipeline.transcribe(audio, **kwargs)
+    return model.transcribe(audio, **params)
+
+
+def _handle(conn: socket.socket, model: WhisperModel, pipeline: BatchedInferencePipeline, lock: threading.Lock) -> None:
     try:
         (params_len,) = struct.unpack("!I", _read_exact(conn, 4))
         if params_len > 64 * 1024:
@@ -104,7 +139,9 @@ def _handle(conn: socket.socket, model: WhisperModel, lock: threading.Lock) -> N
         params.pop("sr", None)
         t0 = time.monotonic()
         with lock:
-            segments, info = model.transcribe(audio, **params)
+            segments, info = _dispatch_transcription(
+                audio, params, model=model, pipeline=pipeline
+            )
             text = " ".join(s.text.strip() for s in segments).strip()
         dt_ms = (time.monotonic() - t0) * 1000.0
         log.debug(
@@ -143,6 +180,9 @@ def main() -> int:
     )
     log.info("loading Whisper (%s, %s, %s)…", model_name, device, compute)
     model = WhisperModel(model_name, device=device, compute_type=compute)
+    # Wrap in BatchedInferencePipeline for long-audio path (PR2).
+    # Construction is cheap (just wraps the model); reuse across all connections.
+    pipeline = BatchedInferencePipeline(model)
     # Warm with a 1 s silent buffer so the first real request is fast.
     list(model.transcribe(np.zeros(16000, dtype=np.float32), language="en", beam_size=1)[0])
     log.info("Whisper warmed")
@@ -181,7 +221,7 @@ def main() -> int:
             break
         threading.Thread(
             target=_handle,
-            args=(conn, model, lock),
+            args=(conn, model, pipeline, lock),
             daemon=True,
         ).start()
 
