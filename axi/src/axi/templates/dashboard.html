@@ -8,7 +8,7 @@
     <!-- ─── header strip: big state + clock + quick actions ─── -->
     <section class="panel p-6 flex flex-wrap items-center justify-between gap-6">
       <div class="flex items-center gap-4">
-        <span class="state-dot pulse" :class="'state-' + $store.snap.state" style="width:1.5rem;height:1.5rem"></span>
+        <span class="state-dot pulse" :class="'state-' + $store.snap.state.split(':')[0]" style="width:1.5rem;height:1.5rem"></span>
         <div>
           <div class="text-2xl font-semibold capitalize" x-text="stateLabel($store.snap.state)"></div>
           <div class="muted text-sm" x-text="$store.snap.now.human"></div>
@@ -242,10 +242,14 @@
 <script>
 function isBusy() {
   const s = Alpine.store('snap')?.state;
-  return ['recording', 'transcribing', 'thinking', 'speaking'].includes(s);
+  return ['recording', 'thinking', 'speaking'].includes(s) || s.startsWith('transcribing');
 }
 
 function stateLabel(s) {
+  if (s.startsWith('transcribing:')) {
+    const pct = parseInt(s.split(':')[1], 10);
+    return isNaN(pct) ? 'Transcribiendo' : `Transcribiendo ${pct}%`;
+  }
   return ({
     idle: 'Inactivo',
     recording: 'Grabando',
