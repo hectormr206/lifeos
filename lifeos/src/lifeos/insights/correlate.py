@@ -13,12 +13,14 @@ Public surface:
 
 from __future__ import annotations
 
+import functools
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
+    from datetime import date
     from apscheduler.schedulers.background import BackgroundScheduler
 
 log = logging.getLogger("lifeos.insights.correlate")
@@ -252,7 +254,88 @@ def _detect_sleep_spending_correlation(
     )
 
 
-# ─── Persist step ────────────────────────────────────────────────────────────
+# ─── New helpers ─────────────────────────────────────────────────────────────
+
+
+def _conflict_days(interactions) -> "set[date]":
+    """Return the set of UTC dates that have at least one conflict interaction."""
+    from datetime import date as _date  # noqa: PLC0415
+    days: set = set()
+    for i in interactions:
+        if i.kind == "conflict":
+            days.add(i.ts.astimezone(timezone.utc).date())
+    return days
+
+
+def _exercise_days(sessions) -> "set[date]":
+    """Return the set of UTC dates that have at least one exercise session."""
+    days: set = set()
+    for s in sessions:
+        days.add(s.ts.astimezone(timezone.utc).date())
+    return days
+
+
+def _window_dates(now: datetime, window_days: int) -> "set[date]":
+    """Return the set of UTC dates in the calendar window [today-window_days+1, today]."""
+    today = now.astimezone(timezone.utc).date()
+    return {today - timedelta(days=i) for i in range(window_days)}
+
+
+# ─── Generic persist ──────────────────────────────────────────────────────────
+
+
+def _persist_correlation_edge_for(
+    result: "LaggedCorrelationResult",
+    now: datetime,
+    *,
+    src: "tuple[str, str]",
+    dst: "tuple[str, str]",
+    note_fn: "Callable[[LaggedCorrelationResult], str]",
+    edges_mod=None,
+) -> "Edge":
+    """Generic dedup-then-write for any detector edge.
+
+    Deduplicates on src[1] / dst[1] within 'correlates-with' edges for the
+    given src_domain / dst_domain pair. Metadata uses generic keys.
+    """
+    if edges_mod is None:
+        from lifeos import edges as _edges  # noqa: PLC0415
+        edges_mod = _edges
+
+    # Dedup: remove any prior edge with the same logical identity
+    for e in edges_mod.by_relation(
+        "correlates-with",
+        src_domain=src[0],
+        dst_domain=dst[0],
+        limit=200,
+    ):
+        if e.src_id == src[1] and e.dst_id == dst[1]:
+            edges_mod.delete(e.id)
+
+    expires_at = (now + timedelta(days=_TTL_DAYS)).isoformat()
+    note = note_fn(result)
+
+    return edges_mod.create(
+        src=src,
+        dst=dst,
+        rel="correlates-with",
+        metadata={
+            "strength": round(result.rate_ratio, 2),
+            "rate_ratio": round(result.rate_ratio, 2),
+            "window_days": result.window_days,
+            "lag_days": result.lag_days,
+            "trigger_count": result.trigger_count,
+            "events_after_trigger": result.events_after_trigger,
+            "total_events": result.total_events,
+            "expires_at": expires_at,
+            "snapshot": True,
+            "note": note,
+        },
+        created_by="correlation_snapshot",
+    )
+
+
+# ─── Persist step (sleep bespoke wrapper) ─────────────────────────────────────
 
 
 def _persist_correlation_edge(
@@ -306,6 +389,165 @@ def _persist_correlation_edge(
         },
         created_by="correlation_snapshot",
     )
+
+
+# ─── Note functions for new detectors ────────────────────────────────────────
+
+
+def _sleep_conflicts_note(result: "LaggedCorrelationResult") -> str:
+    return (
+        f"Conflictos {result.rate_ratio:.1f}× más frecuentes tras noches de mal sueño "
+        f"(<6.5h), basado en {result.trigger_count} días de sueño deficiente."
+    )
+
+
+def _exercise_gap_note(result: "LaggedCorrelationResult") -> str:
+    return (
+        f"Compras impulsivas {result.rate_ratio:.1f}× más frecuentes en días sin ejercicio, "
+        f"basado en {result.trigger_count} días sin actividad física."
+    )
+
+
+# ─── New detectors ────────────────────────────────────────────────────────────
+
+
+def _detect_sleep_conflicts_correlation(
+    now: datetime,
+    *,
+    health_list_recent=None,
+    rel_list_recent=None,
+) -> "LaggedCorrelationResult | None":
+    """Detect whether poor-sleep days correlate with relationship conflict days.
+
+    Returns a LaggedCorrelationResult when all guards pass, otherwise None.
+    Inject `health_list_recent` / `rel_list_recent` callables for unit testing.
+    """
+    if health_list_recent is None:
+        from lifeos.health import entries as health_entries  # noqa: PLC0415
+        health_list_recent = health_entries.list_recent
+
+    if rel_list_recent is None:
+        from lifeos.relationships import interactions as rel_interactions  # noqa: PLC0415
+        rel_list_recent = rel_interactions.list_recent
+
+    sleep_raw = health_list_recent(days=_WINDOW_DAYS, kind="vital")
+    rel_raw = rel_list_recent(days=_WINDOW_DAYS)
+
+    sleep_by_day = _bucket_sleep_by_day(sleep_raw)
+    if not sleep_by_day:
+        return None
+
+    trigger_days = {d for d, h in sleep_by_day.items() if h < _SLEEP_THRESHOLD}
+    non_trigger_days = set(sleep_by_day) - trigger_days
+    event_days = _conflict_days(rel_raw)
+
+    if not event_days:
+        return None
+
+    return _detect_lagged_correlation(
+        trigger_days=trigger_days,
+        non_trigger_days=non_trigger_days,
+        event_days=event_days,
+        n_trigger_days=len(trigger_days),
+        n_non_trigger_days=len(non_trigger_days),
+        window_days=_WINDOW_DAYS,
+        lag_days=_LAG_DAYS,
+        min_trigger_days=_MIN_POOR_SLEEP_DAYS,
+        min_total_events=_MIN_TOTAL_IMPULSIVE,
+        min_rate_ratio=_MIN_RATE_RATIO,
+        rate_floor=_OK_RATE_FLOOR,
+    )
+
+
+def _detect_exercise_gap_spending_correlation(
+    now: datetime,
+    *,
+    exercise_list_recent=None,
+    finance_list_recent=None,
+) -> "LaggedCorrelationResult | None":
+    """Detect whether non-exercise days (gaps) correlate with impulsive spending.
+
+    Guard: user must have >=5 actual exercise days in the window to avoid
+    trivial fire for inactive/new users.
+
+    Returns a LaggedCorrelationResult when all guards pass, otherwise None.
+    """
+    if exercise_list_recent is None:
+        from lifeos.exercise import sessions as ex_sessions  # noqa: PLC0415
+        exercise_list_recent = ex_sessions.list_recent
+
+    if finance_list_recent is None:
+        from lifeos.finance import entries as finance_entries  # noqa: PLC0415
+        finance_list_recent = finance_entries.list_recent
+
+    ex_raw = exercise_list_recent(days=_WINDOW_DAYS)
+    finance_raw = finance_list_recent(days=_WINDOW_DAYS, kind="big_purchase")
+
+    actual_exercise_days = _exercise_days(ex_raw)
+
+    # Guard: require >=5 exercise days to avoid trivial fires for inactive users
+    if len(actual_exercise_days) < 5:
+        return None
+
+    window = _window_dates(now, _WINDOW_DAYS)
+    trigger_days = window - actual_exercise_days   # gap days (no exercise)
+    non_trigger_days = actual_exercise_days & window  # exercise days in window
+    event_days = _impulsive_purchase_days(finance_raw)
+
+    return _detect_lagged_correlation(
+        trigger_days=trigger_days,
+        non_trigger_days=non_trigger_days,
+        event_days=event_days,
+        n_trigger_days=len(trigger_days),
+        n_non_trigger_days=len(non_trigger_days),
+        window_days=_WINDOW_DAYS,
+        lag_days=_LAG_DAYS,
+        min_trigger_days=5,
+        min_total_events=2,
+        min_rate_ratio=_MIN_RATE_RATIO,
+        rate_floor=_OK_RATE_FLOOR,
+    )
+
+
+# ─── Detector registry ───────────────────────────────────────────────────────
+
+_DETECTORS: list[tuple] = [
+    # (detect_fn, cfg)
+    # Sleep → impulsive spending (bespoke legacy persist)
+    (
+        _detect_sleep_spending_correlation,
+        {
+            "name": "sleep_spending",
+            "persist": _persist_correlation_edge,
+        },
+    ),
+    # Sleep → relationship conflicts (generic persist)
+    (
+        _detect_sleep_conflicts_correlation,
+        {
+            "name": "sleep_conflicts",
+            "persist": functools.partial(
+                _persist_correlation_edge_for,
+                src=("health", "sleep_deficit_pattern"),
+                dst=("relationships", "conflict_pattern"),
+                note_fn=_sleep_conflicts_note,
+            ),
+        },
+    ),
+    # Exercise gap → impulsive spending (generic persist)
+    (
+        _detect_exercise_gap_spending_correlation,
+        {
+            "name": "exercise_gap_spending",
+            "persist": functools.partial(
+                _persist_correlation_edge_for,
+                src=("exercise", "inactivity_pattern"),
+                dst=("finance", "impulsive_spending"),
+                note_fn=_exercise_gap_note,
+            ),
+        },
+    ),
+]
 
 
 # ─── Data contract ────────────────────────────────────────────────────────────
@@ -497,13 +739,16 @@ def _run_correlation_snapshot() -> None:
 
     log.info("correlation_snapshot: %d active patterns persisted", len(active))
 
-    # ── Cross-domain correlation (sleep → impulsive spending) ───────────────
-    try:
-        corr_result = _detect_sleep_spending_correlation(now)
-        if corr_result is not None:
-            _persist_correlation_edge(corr_result, now)
-    except Exception:  # noqa: BLE001
-        log.warning("cross-domain correlation step failed", exc_info=True)
+    # ── Cross-domain correlations (all detectors via _DETECTORS loop) ────────
+    for detect_fn, cfg in _DETECTORS:
+        try:
+            result = detect_fn(now)
+            if result is not None:
+                cfg["persist"](result, now)
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "correlation detector '%s' failed", cfg.get("name", "?"), exc_info=True
+            )
 
 
 def register(scheduler) -> None:
