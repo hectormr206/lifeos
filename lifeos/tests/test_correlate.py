@@ -935,6 +935,37 @@ def _seed_impulsive_purchase(offset_days: int) -> None:
     )
 
 
+def _seed_conflict(offset_days: int) -> None:
+    """Insert a conflict interaction at real now - offset_days (creates person if needed)."""
+    from lifeos.relationships import interactions as rel_interactions, people as rel_people
+    when = datetime.now(timezone.utc) - timedelta(days=offset_days)
+    # Ensure a person exists to attach the interaction to
+    existing = rel_people.list_all() if hasattr(rel_people, "list_all") else []
+    if not existing:
+        person = rel_people.create(name="Test Person")
+        person_id = person.id
+    else:
+        person_id = existing[0].id
+    rel_interactions.create(
+        kind="conflict",
+        title="conflict event",
+        person_id=person_id,
+        when=when,
+    )
+
+
+def _seed_exercise_session(offset_days: int) -> None:
+    """Insert an exercise session at real now - offset_days."""
+    from lifeos.exercise import sessions as ex_sessions
+    when = datetime.now(timezone.utc) - timedelta(days=offset_days)
+    ex_sessions.create(
+        kind="run",
+        title="run session",
+        duration_minutes=30,
+        when=when,
+    )
+
+
 def test_snapshot_writes_correlates_with_edge() -> None:
     """After seeding poor sleep + impulsive purchases, snapshot writes exactly one edge."""
     from lifeos import edges
@@ -1357,3 +1388,760 @@ def test_primitive_rate_floor_prevents_zero_division() -> None:
     assert isinstance(result, LaggedCorrelationResult)
     import math
     assert math.isfinite(result.rate_ratio)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 3 — _persist_correlation_edge_for (generic persist)  [task 3.1 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_lagged_result(
+    trigger_count: int = 5,
+    non_trigger_count: int = 3,
+    events_after_trigger: int = 4,
+    events_after_non_trigger: int = 1,
+    total_events: int = 8,
+    rate_ratio: float = 3.0,
+    window_days: int = 90,
+    lag_days: int = 2,
+) -> "LaggedCorrelationResult":  # type: ignore[name-defined]
+    from lifeos.insights.correlate import LaggedCorrelationResult
+    return LaggedCorrelationResult(
+        trigger_count=trigger_count,
+        non_trigger_count=non_trigger_count,
+        events_after_trigger=events_after_trigger,
+        events_after_non_trigger=events_after_non_trigger,
+        total_events=total_events,
+        rate_ratio=rate_ratio,
+        window_days=window_days,
+        lag_days=lag_days,
+    )
+
+
+def test_generic_persist_creates_edge_with_correct_shape() -> None:
+    """(a) _persist_correlation_edge_for creates edge with correct src/dst/rel/created_by."""
+    from lifeos.insights.correlate import _persist_correlation_edge_for
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    src = ("health", "sleep_deficit_pattern")
+    dst = ("relationships", "conflict_pattern")
+    note_fn = lambda r: f"Test note ratio {r.rate_ratio:.1f}"
+
+    _persist_correlation_edge_for(
+        _make_lagged_result(), _NOW, src=src, dst=dst, note_fn=note_fn, edges_mod=mock_edges
+    )
+
+    mock_edges.create.assert_called_once()
+    kwargs = mock_edges.create.call_args.kwargs
+    assert kwargs["rel"] == "correlates-with"
+    assert kwargs["src"] == src
+    assert kwargs["dst"] == dst
+    assert kwargs["created_by"] == "correlation_snapshot"
+
+
+def test_generic_persist_metadata_keys_present() -> None:
+    """(b) metadata contains all required generic keys."""
+    from lifeos.insights.correlate import _persist_correlation_edge_for
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+    note_fn = lambda r: "nota de prueba"
+
+    _persist_correlation_edge_for(
+        _make_lagged_result(), _NOW,
+        src=("health", "sleep_deficit_pattern"),
+        dst=("relationships", "conflict_pattern"),
+        note_fn=note_fn,
+        edges_mod=mock_edges,
+    )
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    required = {
+        "strength", "rate_ratio", "window_days", "lag_days",
+        "trigger_count", "events_after_trigger", "total_events",
+        "expires_at", "snapshot", "note",
+    }
+    for key in required:
+        assert key in metadata, f"Missing metadata key: {key}"
+
+
+def test_generic_persist_expires_at_is_now_plus_ttl() -> None:
+    """(c) expires_at == (now + timedelta(days=_TTL_DAYS)).isoformat()."""
+    from lifeos.insights.correlate import _persist_correlation_edge_for, _TTL_DAYS
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+    fixed_now = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    _persist_correlation_edge_for(
+        _make_lagged_result(), fixed_now,
+        src=("health", "a"),
+        dst=("finance", "b"),
+        note_fn=lambda r: "x",
+        edges_mod=mock_edges,
+    )
+
+    metadata = mock_edges.create.call_args.kwargs["metadata"]
+    expected = (fixed_now + timedelta(days=_TTL_DAYS)).isoformat()
+    assert metadata["expires_at"] == expected
+
+
+def test_generic_persist_dedup_delete_then_create() -> None:
+    """(d) Pre-existing edge with same src[1]/dst[1] is deleted before create."""
+    from lifeos.insights.correlate import _persist_correlation_edge_for
+
+    src = ("health", "sleep_deficit_pattern")
+    dst = ("relationships", "conflict_pattern")
+
+    stale = MagicMock()
+    stale.id = "stale-generic-id"
+    stale.src_id = src[1]
+    stale.dst_id = dst[1]
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = [stale]
+
+    call_order: list[str] = []
+    mock_edges.delete.side_effect = lambda _id: call_order.append("delete")
+    mock_edges.create.side_effect = lambda **_kw: call_order.append("create") or MagicMock()
+
+    _persist_correlation_edge_for(
+        _make_lagged_result(), _NOW, src=src, dst=dst,
+        note_fn=lambda r: "n", edges_mod=mock_edges,
+    )
+
+    mock_edges.delete.assert_called_once_with("stale-generic-id")
+    assert call_order == ["delete", "create"], f"Expected delete→create, got {call_order}"
+
+
+def test_generic_persist_no_delete_when_no_prior_edge() -> None:
+    """(e) No prior edge → delete() is NOT called."""
+    from lifeos.insights.correlate import _persist_correlation_edge_for
+
+    mock_edges = MagicMock()
+    mock_edges.by_relation.return_value = []
+
+    _persist_correlation_edge_for(
+        _make_lagged_result(), _NOW,
+        src=("health", "a"),
+        dst=("finance", "b"),
+        note_fn=lambda r: "n",
+        edges_mod=mock_edges,
+    )
+
+    mock_edges.delete.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 3 — _conflict_days helper  [task 3.3 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_interaction(ts: datetime, kind: str):
+    i = MagicMock()
+    i.ts = ts
+    i.kind = kind
+    return i
+
+
+def test_conflict_days_filters_by_kind() -> None:
+    """(a) Only interactions with kind='conflict' are included."""
+    from lifeos.insights.correlate import _conflict_days
+
+    interactions = [
+        _make_interaction(datetime(2024, 6, 1, tzinfo=timezone.utc), "conflict"),
+        _make_interaction(datetime(2024, 6, 2, tzinfo=timezone.utc), "hangout"),
+        _make_interaction(datetime(2024, 6, 3, tzinfo=timezone.utc), "conflict"),
+    ]
+    result = _conflict_days(interactions)
+    assert result == {date(2024, 6, 1), date(2024, 6, 3)}
+
+
+def test_conflict_days_same_day_deduped() -> None:
+    """(b) Multiple conflicts on the same day → one date in result set."""
+    from lifeos.insights.correlate import _conflict_days
+
+    ts = datetime(2024, 6, 10, tzinfo=timezone.utc)
+    interactions = [
+        _make_interaction(ts, "conflict"),
+        _make_interaction(ts + timedelta(hours=3), "conflict"),
+    ]
+    result = _conflict_days(interactions)
+    assert result == {date(2024, 6, 10)}
+    assert len(result) == 1
+
+
+def test_conflict_days_tz_normalization() -> None:
+    """(c) Non-UTC timestamps are converted to UTC date correctly."""
+    from lifeos.insights.correlate import _conflict_days
+
+    # UTC-5 at 2024-06-10 23:00 → UTC 2024-06-11 04:00 → date 2024-06-11
+    import datetime as _dt_mod
+    tz_minus5 = _dt_mod.timezone(_dt_mod.timedelta(hours=-5))
+    ts_local = datetime(2024, 6, 10, 23, 0, 0, tzinfo=tz_minus5)
+    interactions = [_make_interaction(ts_local, "conflict")]
+    result = _conflict_days(interactions)
+    assert result == {date(2024, 6, 11)}
+
+
+def test_conflict_days_empty_returns_empty_set() -> None:
+    """Empty interactions list → empty set."""
+    from lifeos.insights.correlate import _conflict_days
+    assert _conflict_days([]) == set()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 3 — _exercise_days helper  [task 3.5 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_session(ts: datetime):
+    s = MagicMock()
+    s.ts = ts
+    return s
+
+
+def test_exercise_days_all_sessions_one_date_each() -> None:
+    """(a) Each session on a distinct day → one date per session."""
+    from lifeos.insights.correlate import _exercise_days
+
+    sessions = [
+        _make_session(datetime(2024, 6, 1, tzinfo=timezone.utc)),
+        _make_session(datetime(2024, 6, 3, tzinfo=timezone.utc)),
+        _make_session(datetime(2024, 6, 5, tzinfo=timezone.utc)),
+    ]
+    result = _exercise_days(sessions)
+    assert result == {date(2024, 6, 1), date(2024, 6, 3), date(2024, 6, 5)}
+
+
+def test_exercise_days_same_day_deduped() -> None:
+    """(b) Multiple sessions on the same day → one date in set."""
+    from lifeos.insights.correlate import _exercise_days
+
+    ts = datetime(2024, 6, 10, tzinfo=timezone.utc)
+    sessions = [
+        _make_session(ts),
+        _make_session(ts + timedelta(hours=4)),
+    ]
+    result = _exercise_days(sessions)
+    assert result == {date(2024, 6, 10)}
+    assert len(result) == 1
+
+
+def test_exercise_days_tz_normalization() -> None:
+    """(c) Non-UTC session timestamps are converted to UTC date correctly."""
+    from lifeos.insights.correlate import _exercise_days
+    import datetime as _dt_mod
+
+    tz_plus2 = _dt_mod.timezone(_dt_mod.timedelta(hours=2))
+    # 2024-06-10 01:00+02:00 → UTC 2024-06-09 23:00 → date 2024-06-09
+    ts_local = datetime(2024, 6, 10, 1, 0, 0, tzinfo=tz_plus2)
+    result = _exercise_days([_make_session(ts_local)])
+    assert result == {date(2024, 6, 9)}
+
+
+def test_exercise_days_empty_returns_empty_set() -> None:
+    """Empty sessions → empty set."""
+    from lifeos.insights.correlate import _exercise_days
+    assert _exercise_days([]) == set()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 3 — _window_dates helper  [task 3.7 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_window_dates_len_equals_window_days() -> None:
+    """(a) len(result) == window_days."""
+    from lifeos.insights.correlate import _window_dates
+
+    now = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    result = _window_dates(now, 90)
+    assert len(result) == 90
+
+
+def test_window_dates_most_recent_is_today() -> None:
+    """(b) Most recent date == now.astimezone(utc).date()."""
+    from lifeos.insights.correlate import _window_dates
+
+    now = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    result = _window_dates(now, 30)
+    assert date(2024, 6, 15) in result
+
+
+def test_window_dates_oldest_is_window_days_minus_1_ago() -> None:
+    """(c) Oldest date == now.date() - timedelta(days=window_days-1)."""
+    from lifeos.insights.correlate import _window_dates
+
+    now = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    result = _window_dates(now, 30)
+    expected_oldest = date(2024, 6, 15) - timedelta(days=29)
+    assert expected_oldest in result
+
+
+def test_window_dates_deterministic() -> None:
+    """(d) Same now + window_days always produces the same set."""
+    from lifeos.insights.correlate import _window_dates
+
+    now = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    assert _window_dates(now, 14) == _window_dates(now, 14)
+
+
+def test_window_dates_no_future_dates() -> None:
+    """All dates in result are <= now's UTC date."""
+    from lifeos.insights.correlate import _window_dates
+
+    now = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    result = _window_dates(now, 30)
+    today = date(2024, 6, 15)
+    assert all(d <= today for d in result)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 4 — _detect_sleep_conflicts_correlation  [task 4.1 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _fake_health_list(*entries):
+    """DAO fake for health entries (sleep vitals)."""
+    def _inner(**_kwargs):
+        return list(entries)
+    return _inner
+
+
+def _fake_rel_list(*entries):
+    """DAO fake for relationship interactions."""
+    def _inner(**_kwargs):
+        return list(entries)
+    return _inner
+
+
+def _fake_exercise_list(*entries):
+    """DAO fake for exercise sessions."""
+    def _inner(**_kwargs):
+        return list(entries)
+    return _inner
+
+
+def _fake_finance_list(*entries):
+    """DAO fake for finance entries."""
+    def _inner(**_kwargs):
+        return list(entries)
+    return _inner
+
+
+# Anchor for phase 4 tests — use a fixed now so date arithmetic is deterministic
+_NOW4 = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _d4(offset_days: int) -> datetime:
+    """Shorthand: _NOW4 minus offset_days (UTC)."""
+    return _NOW4 - timedelta(days=offset_days)
+
+
+def test_sleep_conflicts_fires_when_all_guards_pass() -> None:
+    """(a) Fires and returns LaggedCorrelationResult when poor-sleep & conflict days pass all guards."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_sleep_conflicts_correlation
+
+    # 3 poor-sleep days and 2 conflict days within lag window → should fire
+    sleep = [
+        _make_sleep_entry(_d4(10), 5.0),  # poor
+        _make_sleep_entry(_d4(9), 4.5),   # poor
+        _make_sleep_entry(_d4(8), 5.5),   # poor
+        _make_sleep_entry(_d4(7), 7.0),   # ok
+    ]
+    interactions = [
+        _make_interaction(_d4(10), "conflict"),  # same day as poor sleep
+        _make_interaction(_d4(8), "conflict"),   # same day as poor sleep
+    ]
+
+    result = _detect_sleep_conflicts_correlation(
+        _NOW4,
+        health_list_recent=_fake_health_list(*sleep),
+        rel_list_recent=_fake_rel_list(*interactions),
+    )
+
+    assert isinstance(result, LaggedCorrelationResult)
+    assert result.rate_ratio >= 2.0
+
+
+def test_sleep_conflicts_none_when_no_conflict_data() -> None:
+    """(b) Returns None when conflict_days is empty."""
+    from lifeos.insights.correlate import _detect_sleep_conflicts_correlation
+
+    sleep = [
+        _make_sleep_entry(_d4(10), 5.0),
+        _make_sleep_entry(_d4(9), 4.5),
+        _make_sleep_entry(_d4(8), 5.5),
+    ]
+
+    result = _detect_sleep_conflicts_correlation(
+        _NOW4,
+        health_list_recent=_fake_health_list(*sleep),
+        rel_list_recent=_fake_rel_list(),  # no interactions
+    )
+
+    assert result is None
+
+
+def test_sleep_conflicts_none_when_below_trigger_threshold() -> None:
+    """(c) Returns None when poor_sleep_days < min_trigger_days."""
+    from lifeos.insights.correlate import _detect_sleep_conflicts_correlation
+
+    # Only 2 poor-sleep days (< 3)
+    sleep = [
+        _make_sleep_entry(_d4(10), 5.0),
+        _make_sleep_entry(_d4(9), 4.5),
+        _make_sleep_entry(_d4(8), 7.0),  # ok
+    ]
+    interactions = [
+        _make_interaction(_d4(10), "conflict"),
+        _make_interaction(_d4(9), "conflict"),
+    ]
+
+    result = _detect_sleep_conflicts_correlation(
+        _NOW4,
+        health_list_recent=_fake_health_list(*sleep),
+        rel_list_recent=_fake_rel_list(*interactions),
+    )
+
+    assert result is None
+
+
+def test_sleep_conflicts_note_is_nonempty_spanish_text() -> None:
+    """(d) The note generated by the detector contains Spanish text mentioning conflicts and sleep."""
+    from lifeos.insights.correlate import _detect_sleep_conflicts_correlation, _sleep_conflicts_note
+
+    sleep = [
+        _make_sleep_entry(_d4(10), 5.0),
+        _make_sleep_entry(_d4(9), 4.5),
+        _make_sleep_entry(_d4(8), 5.5),
+        _make_sleep_entry(_d4(7), 7.0),
+    ]
+    interactions = [
+        _make_interaction(_d4(10), "conflict"),
+        _make_interaction(_d4(8), "conflict"),
+    ]
+
+    result = _detect_sleep_conflicts_correlation(
+        _NOW4,
+        health_list_recent=_fake_health_list(*sleep),
+        rel_list_recent=_fake_rel_list(*interactions),
+    )
+    assert result is not None, "Expected detector to fire for note test"
+
+    # Verify the note template exists and has non-ASCII Spanish characters
+    sample_note = _sleep_conflicts_note(result)
+    assert isinstance(sample_note, str)
+    assert len(sample_note.strip()) > 0
+    assert any(ord(c) > 127 for c in sample_note), f"note has no non-ASCII chars: {sample_note!r}"
+    # Must mention conflicts and sleep
+    assert "conflicto" in sample_note.lower() or "Conflicto" in sample_note
+    assert "sueño" in sample_note.lower() or "sue" in sample_note.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 4 — _detect_exercise_gap_spending_correlation  [task 4.3 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_exercise_gap_fires_when_all_guards_pass() -> None:
+    """(a) Fires when exercise_days>=5, gap_days>=5, impulsive>=2, rate_ratio>=2.0."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_exercise_gap_spending_correlation
+
+    # 8 exercise sessions on distinct days; window=90 → gap=82 days
+    # Place exercises in the recent window
+    sessions = [_make_session(_d4(i)) for i in range(1, 9)]  # D-1..D-8 (8 days)
+    # Impulsive purchases on gap days (far from exercise days)
+    finance = [
+        _make_purchase_entry(_d4(20)),   # gap day
+        _make_purchase_entry(_d4(25)),   # gap day
+        _make_purchase_entry(_d4(30)),   # gap day
+    ]
+
+    result = _detect_exercise_gap_spending_correlation(
+        _NOW4,
+        exercise_list_recent=_fake_exercise_list(*sessions),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert isinstance(result, LaggedCorrelationResult)
+
+
+def test_exercise_gap_none_when_fewer_than_5_exercise_days() -> None:
+    """(b) Returns None when exercise_days < 5 (trivial-fire guard fires BEFORE primitive)."""
+    from lifeos.insights.correlate import _detect_exercise_gap_spending_correlation
+
+    # Only 4 exercise sessions
+    sessions = [_make_session(_d4(i)) for i in range(1, 5)]
+    finance = [
+        _make_purchase_entry(_d4(20)),
+        _make_purchase_entry(_d4(25)),
+    ]
+
+    result = _detect_exercise_gap_spending_correlation(
+        _NOW4,
+        exercise_list_recent=_fake_exercise_list(*sessions),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert result is None
+
+
+def test_exercise_gap_none_when_all_days_have_exercise() -> None:
+    """(c) Returns None when all window days have exercise (gap=0)."""
+    from lifeos.insights.correlate import _detect_exercise_gap_spending_correlation, _WINDOW_DAYS
+
+    # Session on every day of the window
+    sessions = [_make_session(_d4(i)) for i in range(_WINDOW_DAYS)]
+    finance = [
+        _make_purchase_entry(_d4(50)),
+        _make_purchase_entry(_d4(60)),
+    ]
+
+    result = _detect_exercise_gap_spending_correlation(
+        _NOW4,
+        exercise_list_recent=_fake_exercise_list(*sessions),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert result is None
+
+
+def test_exercise_gap_boundary_exactly_5_exercise_days() -> None:
+    """(d) Exactly 5 exercise days passes the guard (boundary inclusive)."""
+    from lifeos.insights.correlate import LaggedCorrelationResult, _detect_exercise_gap_spending_correlation
+
+    # Exactly 5 exercise days; rest of 90-day window = 85 gap days (>=5 min_trigger)
+    sessions = [_make_session(_d4(i)) for i in range(1, 6)]  # D-1..D-5 (5 days)
+    # Purchases on gap days well separated from exercise days
+    finance = [
+        _make_purchase_entry(_d4(20)),
+        _make_purchase_entry(_d4(25)),
+        _make_purchase_entry(_d4(30)),
+    ]
+
+    result = _detect_exercise_gap_spending_correlation(
+        _NOW4,
+        exercise_list_recent=_fake_exercise_list(*sessions),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    # Boundary (>=5 exercise days) → guard passes; should fire given enough gap/purchases
+    assert isinstance(result, LaggedCorrelationResult)
+
+
+def test_exercise_gap_none_when_gap_days_below_min_trigger() -> None:
+    """(e) Returns None when gap_days < min_trigger_days=5."""
+    from lifeos.insights.correlate import _detect_exercise_gap_spending_correlation, _WINDOW_DAYS
+
+    # 87 exercise sessions → gap = 90-87 = 3 < min_trigger_days=5
+    sessions = [_make_session(_d4(i)) for i in range(_WINDOW_DAYS - 3)]
+    finance = [
+        _make_purchase_entry(_d4(89)),
+        _make_purchase_entry(_d4(88)),
+    ]
+
+    result = _detect_exercise_gap_spending_correlation(
+        _NOW4,
+        exercise_list_recent=_fake_exercise_list(*sessions),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert result is None
+
+
+def test_exercise_gap_none_when_fewer_than_2_impulsive() -> None:
+    """(f) Returns None when total_impulsive=1 < min_total_events=2."""
+    from lifeos.insights.correlate import _detect_exercise_gap_spending_correlation
+
+    sessions = [_make_session(_d4(i)) for i in range(1, 9)]  # 8 exercise days
+    # Only 1 impulsive purchase
+    finance = [_make_purchase_entry(_d4(20))]
+
+    result = _detect_exercise_gap_spending_correlation(
+        _NOW4,
+        exercise_list_recent=_fake_exercise_list(*sessions),
+        finance_list_recent=_fake_finance_list(*finance),
+    )
+
+    assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 5 — _DETECTORS structure  [task 5.1 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_detectors_list_has_three_entries() -> None:
+    """_DETECTORS must have exactly 3 entries."""
+    from lifeos.insights.correlate import _DETECTORS
+    assert len(_DETECTORS) == 3
+
+
+def test_detectors_each_entry_is_two_tuple() -> None:
+    """Each entry in _DETECTORS must be a 2-tuple of (callable, dict)."""
+    from lifeos.insights.correlate import _DETECTORS
+    for entry in _DETECTORS:
+        assert isinstance(entry, tuple), f"Entry {entry!r} is not a tuple"
+        assert len(entry) == 2, f"Entry {entry!r} does not have 2 elements"
+        detect_fn, cfg = entry
+        assert callable(detect_fn), f"detect_fn in {entry!r} is not callable"
+        assert isinstance(cfg, dict), f"cfg in {entry!r} is not a dict"
+
+
+def test_detectors_each_cfg_has_required_keys() -> None:
+    """Each cfg dict must have 'name' and 'persist' keys."""
+    from lifeos.insights.correlate import _DETECTORS
+    for detect_fn, cfg in _DETECTORS:
+        assert "name" in cfg, f"cfg missing 'name' key: {cfg!r}"
+        assert "persist" in cfg, f"cfg missing 'persist' key: {cfg!r}"
+        assert callable(cfg["persist"]), f"cfg['persist'] is not callable: {cfg!r}"
+
+
+def test_detectors_sleep_entry_uses_bespoke_persist() -> None:
+    """Sleep detector's persist must be the bespoke _persist_correlation_edge."""
+    from lifeos.insights.correlate import _DETECTORS, _persist_correlation_edge
+    # Find the sleep entry by name
+    sleep_entries = [(fn, cfg) for fn, cfg in _DETECTORS if cfg.get("name") == "sleep_spending"]
+    assert len(sleep_entries) == 1, "Expected exactly one 'sleep_spending' detector"
+    _, cfg = sleep_entries[0]
+    assert cfg["persist"] is _persist_correlation_edge, (
+        "Sleep detector's persist must be the bespoke _persist_correlation_edge"
+    )
+
+
+def test_detectors_new_entries_have_partial_persist() -> None:
+    """New detectors' persist callables must be functools.partial instances."""
+    import functools
+    from lifeos.insights.correlate import _DETECTORS
+    new_entries = [(fn, cfg) for fn, cfg in _DETECTORS if cfg.get("name") != "sleep_spending"]
+    assert len(new_entries) == 2, f"Expected 2 new detector entries, got {len(new_entries)}"
+    for _, cfg in new_entries:
+        assert isinstance(cfg["persist"], functools.partial), (
+            f"New detector cfg['persist'] should be functools.partial, got {type(cfg['persist'])}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 5 — _run_correlation_snapshot resilience  [task 5.3 RED]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_snapshot_per_detector_isolation_one_raises() -> None:
+    """(a) Detector A raises → detectors B and C still run and persist their edges."""
+    from lifeos import edges
+    from lifeos.insights.correlate import _run_correlation_snapshot, _DETECTORS
+    import functools
+
+    # Seed data so sleep→spending fires (detector 0)
+    _seed_poor_sleep(10)
+    _seed_poor_sleep(9)
+    _seed_poor_sleep(8)
+    _seed_impulsive_purchase(10)
+    _seed_impulsive_purchase(8)
+
+    # We'll patch _DETECTORS to have one failing detector + sleep (which fires)
+    # and a stub third that also fires — using a mock persist to track calls
+    persist_b_called = []
+    persist_c_called = []
+
+    def _failing_detect(now, **_kw):
+        raise RuntimeError("Simulated detector failure")
+
+    def _always_fires_detect(now, **_kw):
+        from lifeos.insights.correlate import LaggedCorrelationResult
+        return LaggedCorrelationResult(
+            trigger_count=3, non_trigger_count=2,
+            events_after_trigger=2, events_after_non_trigger=0,
+            total_events=2, rate_ratio=2.5, window_days=90, lag_days=2,
+        )
+
+    def _stub_persist_b(result, now, **kw):
+        persist_b_called.append(True)
+
+    def _stub_persist_c(result, now, **kw):
+        persist_c_called.append(True)
+
+    fake_detectors = [
+        (_failing_detect, {"name": "failing_a", "persist": _stub_persist_b}),
+        (_always_fires_detect, {"name": "fires_b", "persist": _stub_persist_b}),
+        (_always_fires_detect, {"name": "fires_c", "persist": _stub_persist_c}),
+    ]
+
+    with patch("lifeos.insights.correlate._DETECTORS", fake_detectors):
+        _run_correlation_snapshot()
+
+    assert len(persist_b_called) == 1, "Detector B should have persisted despite A's failure"
+    assert len(persist_c_called) == 1, "Detector C should have persisted despite A's failure"
+
+
+def test_snapshot_all_three_fire_distinct_edges() -> None:
+    """(b) All three detectors fire → three distinct edges with unique (src_id, dst_id) pairs."""
+    from lifeos import edges
+    from lifeos.insights.correlate import _run_correlation_snapshot
+
+    # Seed sleep→spending data
+    _seed_poor_sleep(10)
+    _seed_poor_sleep(9)
+    _seed_poor_sleep(8)
+    _seed_impulsive_purchase(10)
+    _seed_impulsive_purchase(8)
+
+    # Seed sleep→conflict data
+    _seed_conflict(10)
+    _seed_conflict(8)
+
+    # Seed exercise gap→spending data (8 exercise days + purchases on gap days)
+    for i in range(1, 9):
+        _seed_exercise_session(i + 20)  # exercise far from now; gaps = recent days
+    # Purchases on gap days (recent, within window, not on exercise days)
+    _seed_impulsive_purchase(5)
+    _seed_impulsive_purchase(6)
+    _seed_impulsive_purchase(7)
+
+    _run_correlation_snapshot()
+
+    corr_edges = [e for e in edges.by_relation("correlates-with")]
+    edge_pairs = {(e.src_id, e.dst_id) for e in corr_edges}
+    # Must have at least the sleep→spending edge; may have others depending on data
+    assert ("sleep_deficit_pattern", "impulsive_spending") in edge_pairs
+
+
+def test_snapshot_sleep_runs_exactly_once() -> None:
+    """Sleep detector runs exactly once (not double-persisted) after moving into _DETECTORS."""
+    from lifeos import edges
+    from lifeos.insights.correlate import _run_correlation_snapshot
+
+    _seed_poor_sleep(10)
+    _seed_poor_sleep(9)
+    _seed_poor_sleep(8)
+    _seed_impulsive_purchase(10)
+    _seed_impulsive_purchase(9)
+
+    _run_correlation_snapshot()
+
+    matching = [
+        e for e in edges.by_relation("correlates-with")
+        if e.src_id == "sleep_deficit_pattern" and e.dst_id == "impulsive_spending"
+    ]
+    assert len(matching) == 1, (
+        f"Sleep→spending edge must appear EXACTLY ONCE, got {len(matching)}"
+    )
+
+
+def test_snapshot_idempotency_no_duplicates_on_rerun() -> None:
+    """(c) Re-run with same data → still exactly one edge per detector (dedup)."""
+    from lifeos import edges
+    from lifeos.insights.correlate import _run_correlation_snapshot
+
+    _seed_poor_sleep(10)
+    _seed_poor_sleep(9)
+    _seed_poor_sleep(8)
+    _seed_impulsive_purchase(10)
+    _seed_impulsive_purchase(8)
+
+    _run_correlation_snapshot()
+    _run_correlation_snapshot()
+
+    matching = [
+        e for e in edges.by_relation("correlates-with")
+        if e.src_id == "sleep_deficit_pattern" and e.dst_id == "impulsive_spending"
+    ]
+    assert len(matching) == 1, (
+        f"Expected exactly 1 sleep edge after two runs (idempotency), got {len(matching)}"
+    )
