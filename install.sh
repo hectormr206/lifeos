@@ -144,6 +144,7 @@ PACMAN_PKGS=(
   tesseract tesseract-data-eng tesseract-data-spa
   cuda nvidia-utils
   kde-cli-tools
+  ydotool
 )
 
 install_pacman() {
@@ -326,6 +327,20 @@ download_models() {
 }
 
 # ---------------------------------------------------------------------------
+# input group — needed for ydotool to open /dev/uinput
+# ---------------------------------------------------------------------------
+setup_input_group() {
+  step "input group (ydotool /dev/uinput access)"
+  if id -nG | grep -qw input; then
+    ok "$USER is already in the 'input' group"
+  else
+    warn "Adding $USER to the 'input' group (needed for ydotool). Log out and back in for it to take effect."
+    sudo usermod -aG input "$USER"
+    ok "added $USER to 'input' group"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # systemd user services
 # ---------------------------------------------------------------------------
 # Services that never need a model and are always safe to enable.
@@ -400,6 +415,7 @@ main() {
   preflight
   install_pacman
   install_aur
+  setup_input_group
   install_uv
   sync_python
   setup_env
