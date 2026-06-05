@@ -334,7 +334,18 @@ download_models() {
 # input group — needed for ydotool to open /dev/uinput
 # ---------------------------------------------------------------------------
 setup_input_group() {
-  step "input group (ydotool /dev/uinput access)"
+  step "input group + uinput (ydotool /dev/uinput access)"
+  # ydotoold needs the uinput kernel module and /dev/uinput; on a fresh system
+  # the module is often not loaded, so ydotoold gets stuck "activating" with no
+  # socket. Ensure it loads now and on every boot.
+  if [ ! -f /etc/modules-load.d/uinput.conf ]; then
+    echo uinput | sudo tee /etc/modules-load.d/uinput.conf >/dev/null
+    ok "uinput will load on boot (/etc/modules-load.d/uinput.conf)"
+  fi
+  if [ ! -e /dev/uinput ]; then
+    sudo modprobe uinput 2>/dev/null && ok "loaded uinput module" \
+      || warn "could not load uinput now — it will load on next boot"
+  fi
   if id -nG | grep -qw input; then
     ok "$USER is already in the 'input' group"
   else
