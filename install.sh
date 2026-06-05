@@ -349,7 +349,7 @@ setup_input_group() {
   if id -nG | grep -qw input; then
     ok "$USER is already in the 'input' group"
   else
-    warn "Adding $USER to the 'input' group (needed for ydotool). Log out and back in for it to take effect."
+    warn "Adding $USER to the 'input' group (needed for ydotool). Reboot (or log out and back in) for it to take effect."
     sudo usermod -aG input "$USER"
     ok "added $USER to 'input' group"
   fi
@@ -359,7 +359,14 @@ setup_input_group() {
   # 0600 root:root and ydotoold cannot open it until a reboot.
   sudo udevadm control --reload-rules 2>/dev/null || true
   sudo udevadm trigger --name-match=uinput 2>/dev/null || true
-  ok "re-applied udev rules for /dev/uinput"
+  # The udev rule applies /dev/uinput's input:0660 perms via a static node at
+  # BOOT (systemd-tmpfiles); a runtime trigger does not re-apply it. Set the
+  # perms directly now too, so ydotoold can open /dev/uinput without a reboot.
+  if [ -e /dev/uinput ]; then
+    sudo chgrp input /dev/uinput 2>/dev/null && sudo chmod 0660 /dev/uinput 2>/dev/null \
+      && ok "/dev/uinput set to input:0660" \
+      || warn "could not set /dev/uinput perms now — a reboot will apply them"
+  fi
 }
 
 # ---------------------------------------------------------------------------
