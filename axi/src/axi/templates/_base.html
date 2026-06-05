@@ -222,8 +222,8 @@
            x-cloak
            class="state-dot event-critical-dot pulse"
            :title="'Eventos críticos sin leer: ' + ($store.snap?.unread_critical_events || 0)"></a>
-        <a href="/" class="font-semibold text-lg hover:opacity-80 transition"
-           title="Ir al dashboard">LifeOS</a>
+        <a href="/" class="font-semibold text-lg hover:opacity-80 transition flex items-center"
+           title="Ir al dashboard"><img src="/static/axi-mark.svg" alt="Axi" style="height:1.5rem;width:1.5rem;vertical-align:middle;margin-right:0.4rem;display:inline-block">LifeOS</a>
         <span class="muted text-sm" x-data x-text="$store.snap?.now?.time || '—'">—</span>
         <!-- P2.4 — Whisper restart-pending pill. Shown when the user changed
              whisper_model_name / whisper_beam_size / whisper_initial_prompt
