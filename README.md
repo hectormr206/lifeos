@@ -1,16 +1,18 @@
 # LifeOS
 
-> A private AI life companion that runs entirely on your own laptop. No cloud, no accounts, no telemetry — your voice, your screen, your health, your finances, your relationships never leave your machine.
+> **LifeOS** is a private, local-first life platform that runs entirely on your own laptop. **Axi** — a Mexican axolotl — is the AI agent that lives inside it: it sees, listens, remembers, and reasons across everything LifeOS holds. No cloud, no accounts, no telemetry — your voice, your screen, your health, your finances, your relationships never leave your machine.
 
 ![status](https://img.shields.io/badge/status-alpha-ffaa33)
 ![python](https://img.shields.io/badge/python-3.12-3776ab)
 ![tests](https://img.shields.io/badge/tests-945-22cc55)
 ![license](https://img.shields.io/badge/license-MIT-22cc55)
 
-LifeOS is two things working together:
+Think of it as a platform and its agent:
 
-- **Axi** — a voice-and-vision AI assistant. It listens through your microphone, sees your screen and camera, transcribes and remembers, runs a local LLM "brain", and frees your GPU with one click when you want to game.
-- **The life companion** — a set of personal-life domains (health, finance, reminders, exercise, relationships, and more) that share one local store, surface cross-domain correlations, and push you a daily digest.
+- **LifeOS — the platform.** Your life, structured and sovereign: health, finance, relationships, reminders, exercise, and memory, all in one local encrypted store. It turns what you say into structured records, surfaces cross-domain correlations, and pushes a daily digest — with a dashboard to see it all. This is the *where* — where your life lives.
+- **Axi — the agent.** The Mexican axolotl that lives inside LifeOS: voice and vision, a local LLM "brain", and a real-time interpreter. Axi is the *who* — what you talk to. It reasons across everything LifeOS holds to answer you, and frees your GPU with one click when you want to game.
+
+> **Install LifeOS. Talk to Axi.**
 
 Everything runs on a single laptop against **100% local models**. Nothing is sent to the internet by default.
 
@@ -30,7 +32,7 @@ This is the through-line of the project and it has never changed (see [The pivot
 
 ## What works today
 
-Axi (voice / vision / brain):
+### Axi — the agent (what you talk to)
 
 | Capability | How it works |
 |---|---|
@@ -38,11 +40,10 @@ Axi (voice / vision / brain):
 | 🧠 **Brain** | Qwen3.6-35B-A3B (MoE) on GPU via llama.cpp, with `--cpu-moe` offload so it fits a 12 GB card; in-app selector for multiple 2026 multimodal models with per-model parameter tuning |
 | 🌐 **Live interpreter** | Real-time EN→ES speech interpreting (Whisper → LLM → Piper), sub-3s latency |
 | 🎙️ **Meetings** | Dual capture (mic + system audio), incremental transcription, speaker diarization, LLM summaries |
-| 🧩 **Memory** | SQLite + FTS5 full-text search over conversations, with fact extraction and a memory graph |
+| 🧩 **Memory & recall** | Short-term working context plus long-term recall over your conversations, facts, and meeting notes — Axi keeps the thread and always has context. The durable, encrypted store underneath belongs to LifeOS. |
 | 🎮 **Game Guard** | Releases ~12 GB of VRAM on click and restores it when you're done |
-| 📊 **Dashboard** | Local FastAPI + Alpine.js web app, installable as a PWA, reachable from your phone over your own VPN |
 
-The life companion (personal domains, all in the dashboard):
+### LifeOS — the life platform (what it keeps)
 
 | Domain | What it tracks / does |
 |---|---|
@@ -53,8 +54,9 @@ The life companion (personal domains, all in the dashboard):
 | 👥 **Relationships** | People and interactions you want to stay on top of |
 | 🧘 **Spirituality / Posture / Learning** | Lightweight tracking for the rest of life |
 | 🔗 **Insights** | Cross-domain **correlations** with drill-down evidence (e.g. *poor sleep → impulsive purchases*), surfaced in a daily/weekly digest |
+| 📊 **Dashboard** | The local web app (FastAPI + Alpine.js, installable as a PWA) where your whole life lives — your domains plus Axi's chat, memory, and tools — reachable from your phone over your own VPN |
 
-> Tested: **945 tests** (375 for Axi, 570 for the companion).
+> Tested: **945 tests** (375 for Axi, 570 for LifeOS).
 
 ---
 
@@ -151,11 +153,11 @@ Planned, **not yet present**:
 ```
 lifeos/
 ├── install.sh          # one-command installer (CachyOS reference)
-├── axi/                # voice/vision assistant, dashboard, systemd units
+├── axi/                # Axi — the agent: voice/vision, brain, dashboard, systemd units
 │   ├── src/axi/        # daemon, brain, whisper, dashboard, doctor …
 │   ├── scripts/        # axi-toggle, axi-check, axi-llama-launch …
 │   └── systemd/        # user services
-└── lifeos/             # life-companion core (health, finance, insights …)
+└── lifeos/             # LifeOS — the life platform core (health, finance, insights …)
     └── src/lifeos/     # domains, scheduler, encrypted store, correlations
 ```
 
