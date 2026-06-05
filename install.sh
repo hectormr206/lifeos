@@ -353,6 +353,13 @@ setup_input_group() {
     sudo usermod -aG input "$USER"
     ok "added $USER to 'input' group"
   fi
+  # ydotool ships /usr/lib/udev/rules.d/80-uinput.rules (sets /dev/uinput to
+  # input:0660), but a freshly installed rule only applies to the existing
+  # device after a udev reload + re-trigger; without this /dev/uinput stays
+  # 0600 root:root and ydotoold cannot open it until a reboot.
+  sudo udevadm control --reload-rules 2>/dev/null || true
+  sudo udevadm trigger --name-match=uinput 2>/dev/null || true
+  ok "re-applied udev rules for /dev/uinput"
 }
 
 # ---------------------------------------------------------------------------
