@@ -163,7 +163,9 @@ install_pacman() {
   fi
   warn "missing: ${missing[*]}"
   if ask "Install ${#missing[@]} package(s) via sudo pacman -S --needed?" yes; then
-    sudo pacman -S --needed "${missing[@]}"
+    local pacman_args=(-S --needed)
+    [ "$ASSUME_YES" -eq 1 ] && pacman_args+=(--noconfirm)
+    sudo pacman "${pacman_args[@]}" "${missing[@]}"
   else
     warn "skipped — the system may not be fully functional"
   fi
@@ -204,7 +206,9 @@ install_aur() {
   ok "AUR helper: $helper"
   warn "missing: ${need[*]} (llama.cpp-cuda may take a while to build)"
   if ask "Install with $helper?" yes; then
-    "$helper" -S --needed "${need[@]}"
+    local helper_args=(-S --needed)
+    [ "$ASSUME_YES" -eq 1 ] && helper_args+=(--noconfirm)
+    "$helper" "${helper_args[@]}" "${need[@]}"
   else
     warn "skipped — voice/brain features will not work without these"
   fi
