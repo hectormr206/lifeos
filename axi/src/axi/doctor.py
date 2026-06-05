@@ -53,6 +53,7 @@ REQUIRED_MODULES = [
 
 REQUIRED_SERVICES = [
     "axi-voice.service",
+    "axi-whisper.service",
     "ydotoold.service", "axi-tray.service",
     "axi-dashboard.service",
 ]
@@ -78,6 +79,7 @@ OPTIONAL_FILES = [
 
 RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", str(Path.home() / ".local/state")))
 AXI_SOCK = RUNTIME_DIR / "axi" / "voice.sock"
+WHISPER_SOCK = RUNTIME_DIR / "axi" / "whisper.sock"
 YDOTOOL_SOCK = Path("/tmp/.ydotool_socket")
 
 
@@ -139,6 +141,14 @@ def check_axi_socket(r: Result) -> None:
             r.fail("axi-voice status", "respuesta vacía")
     except OSError as e:
         r.fail("axi-voice socket", str(e))
+
+
+def check_whisper_socket(r: Result) -> None:
+    print("\nwhisper socket")
+    if not WHISPER_SOCK.exists():
+        r.fail("axi-whisper socket", f"no existe en {WHISPER_SOCK}")
+        return
+    r.ok("axi-whisper socket", str(WHISPER_SOCK))
 
 
 def check_llama_server(r: Result) -> None:
@@ -287,6 +297,7 @@ def main() -> int:
     check_imports(r)
     check_services(r)
     check_axi_socket(r)
+    check_whisper_socket(r)
     check_llama_server(r)
     check_ydotool(r)
     check_db(r)

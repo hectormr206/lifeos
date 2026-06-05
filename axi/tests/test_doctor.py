@@ -1,6 +1,7 @@
 """Tests for axi.doctor health checks (PRD P2.2, P2.3)."""
 from __future__ import annotations
 
+import socket
 import sys
 import types
 
@@ -159,3 +160,36 @@ def test_llama_check_passes_when_brain_present_and_server_ok(tmp_path, monkeypat
     r = Result()
     doctor.check_llama_server(r)
     assert r.failures == [], "Expected no failures when brain present and /health returns 200"
+
+
+# ─────────────────────────── axi-whisper checks ───────────────────────
+
+
+def test_whisper_in_required_services():
+    """axi-whisper.service must be in REQUIRED_SERVICES (contract lock)."""
+    assert "axi-whisper.service" in doctor.REQUIRED_SERVICES
+
+
+def test_check_whisper_socket_fails_when_socket_absent(tmp_path, monkeypatch):
+    """check_whisper_socket must add a failure when the socket path does not exist."""
+    monkeypatch.setattr(doctor, "WHISPER_SOCK", tmp_path / "nonexistent.sock")
+    r = Result()
+    doctor.check_whisper_socket(r)
+    assert r.failures, "Expected a failure when whisper socket is absent"
+    assert any("whisper" in name.lower() or "whisper" in reason.lower()
+               for name, reason in r.failures)
+
+
+def test_check_whisper_socket_passes_when_socket_exists(tmp_path, monkeypatch):
+    """check_whisper_socket must NOT add a failure when a real AF_UNIX socket is present."""
+    sock_path = tmp_path / "whisper.sock"
+    # Bind a real Unix socket so the path exists as a socket file.
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(sock_path))
+    try:
+        monkeypatch.setattr(doctor, "WHISPER_SOCK", sock_path)
+        r = Result()
+        doctor.check_whisper_socket(r)
+        assert r.failures == [], f"Expected no failures but got: {r.failures}"
+    finally:
+        srv.close()
