@@ -280,24 +280,109 @@ hf_get() {
   ok "$base"
 }
 
+# ---------------------------------------------------------------------------
+# Brain model — hardware-aware automatic selection.
+#
+# Detects VRAM/RAM, picks the best-fitting catalog model + tuned llama-server
+# params, tells the user what was detected + chosen, downloads THAT model (with
+# consent for the large MoE brain), and writes the tuned config the launcher
+# reads (active_model.json + per-model overrides). Advanced override:
+#   AXI_BRAIN_MODEL=<catalog-id> ./install.sh
+# ---------------------------------------------------------------------------
+download_brain() {
+  local py="$VENV/bin/python"
+  [ -x "$py" ] || die "venv python missing at $py"
+
+  # Machine-readable recommendation (honors AXI_BRAIN_MODEL).
+  local rec_json
+  if ! rec_json="$(cd "$REPO_DIR/axi" && "$py" -m axi.install_brain --json 2>/dev/null)"; then
+    warn "brain auto-detection failed — skipping brain model selection"
+    return
+  fi
+
+  # Human report (detected → chosen → tuned params).
+  (cd "$REPO_DIR/axi" && "$py" -m axi.install_brain --report) | while IFS= read -r line; do
+    ok "$line"
+  done
+
+  # Parse the JSON plan with python (no jq dependency). Emits, per file:
+  #   <repo_id>\t<filename>\t<kind>
+  # plus a leading header line: MODEL\t<model_id>\t<dir>\t<local>\t<size_hint>
+  local plan
+  plan="$("$py" - "$rec_json" <<'PY'
+import json, sys
+rec = json.loads(sys.argv[1])
+local = "1" if rec.get("local") else "0"
+# Rough on-disk size hint for the consent prompt.
+size = "~22 GB" if rec["model_id"] == "qwen36-35b-a3b" else "a few GB"
+print(f"MODEL\t{rec['model_id']}\t{rec['dir']}\t{local}\t{size}")
+for f in rec["files"]:
+    print(f"{f['repo_id']}\t{f['filename']}\t{f['kind']}")
+PY
+)"
+
+  local model_id model_dir is_local size_hint
+  model_id="$(printf '%s\n' "$plan" | awk -F'\t' '$1=="MODEL"{print $2}')"
+  model_dir="$(printf '%s\n' "$plan" | awk -F'\t' '$1=="MODEL"{print $3}')"
+  is_local="$(printf '%s\n' "$plan" | awk -F'\t' '$1=="MODEL"{print $4}')"
+  size_hint="$(printf '%s\n' "$plan" | awk -F'\t' '$1=="MODEL"{print $5}')"
+  local dest="$MODELS_DIR/$model_dir"
+
+  if [ "$is_local" = "1" ]; then
+    # Legacy/local bundle (the Qwen3.6 MoE brain). Files ship with the original
+    # install; if present we just activate, otherwise pull from the known repo.
+    if [ -f "$dest/Qwen3.6-35B-A3B-MXFP4_MOE.gguf" ]; then
+      ok "brain model already present"
+    else
+      warn "Brain model: $model_id ($size_hint on disk). MoE with --cpu-moe offload."
+      if ask "Download the brain model now ($size_hint)?"; then
+        hf_get unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-MXFP4_MOE.gguf "$dest"
+        hf_get unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf "$dest"
+      else
+        warn "skipped — llama-server.service will not start until this model exists"
+        return
+      fi
+    fi
+  else
+    # Catalog model with real HF repos. Download every bundle file.
+    local first_gguf
+    first_gguf="$(printf '%s\n' "$plan" | awk -F'\t' '$3=="gguf"{print $2; exit}')"
+    if [ -n "$first_gguf" ] && [ -f "$dest/$first_gguf" ]; then
+      ok "brain model already present ($model_id)"
+    else
+      warn "Brain model: $model_id ($size_hint on disk), tuned for your hardware."
+      if ask "Download the recommended brain model now ($size_hint)?"; then
+        printf '%s\n' "$plan" | while IFS=$'\t' read -r repo fname kind; do
+          [ "$repo" = "MODEL" ] && continue
+          [ -z "$repo" ] && continue
+          hf_get "$repo" "$fname" "$dest"
+        done
+      else
+        warn "skipped — llama-server.service will not start until a brain model exists"
+        return
+      fi
+    fi
+  fi
+
+  # Write the tuned config (active_model.json + per-model overrides) so the
+  # launcher uses the hardware-matched params. No restart during install.
+  if (cd "$REPO_DIR/axi" && "$py" -m axi.install_brain --write-config >/dev/null); then
+    ok "wrote tuned brain config for $model_id (active_model.json)"
+  else
+    warn "could not write tuned brain config — defaults will apply"
+  fi
+}
+
 download_models() {
   step "Models"
   if [ "$SKIP_MODELS" -eq 1 ]; then warn "--skip-models: skipping all downloads"; return; fi
   [ -x "$HF" ] || die "hf CLI missing — run the Python sync step first"
 
-  # --- Brain (required, large) -------------------------------------------
-  local brain_dir="$MODELS_DIR/Qwen3.6-35B-A3B"
-  if [ -f "$brain_dir/Qwen3.6-35B-A3B-MXFP4_MOE.gguf" ]; then
-    ok "brain model already present"
-  else
-    warn "Brain model: Qwen3.6-35B-A3B (~22 GB on disk). MoE with --cpu-moe offload — runs on a 12 GB+ NVIDIA GPU (RTX 5070 Ti reference)."
-    if ask "Download the brain model now (~22 GB)?"; then
-      hf_get unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-MXFP4_MOE.gguf "$brain_dir"
-      hf_get unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf "$brain_dir"
-    else
-      warn "skipped — llama-server.service will not start until this model exists"
-    fi
-  fi
+  # --- Brain (required, large) — hardware-aware automatic selection ------
+  # Detect VRAM/RAM and pick the best-fitting catalog model + tuned params,
+  # so a fresh install ends up with the right brain for THIS machine with no
+  # manual decision. An advanced user can override with AXI_BRAIN_MODEL=<id>.
+  download_brain
 
   # --- Nano (optional) ----------------------------------------------------
   local nano_dir="$MODELS_DIR/qwen35-0_8b"
