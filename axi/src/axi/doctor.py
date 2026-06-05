@@ -52,16 +52,21 @@ REQUIRED_MODULES = [
 ]
 
 REQUIRED_SERVICES = [
-    "axi-voice.service", "llama-server.service",
+    "axi-voice.service",
     "ydotoold.service", "axi-tray.service",
     "axi-dashboard.service",
 ]
 # Optional services: presence is fine but absence is not an error. Used
 # only when explicitly activated (interpreter mode etc.).
 OPTIONAL_SERVICES = ["axi-translate.service"]
+
+# Brain model constants — defined at module level so tests can monkeypatch them.
+# llama-server is gated on BRAIN_MODEL existing: if the user deferred the
+# 22 GB download, we do NOT count it as a failure (check_llama_server below).
+BRAIN_MODEL = Path.home() / "LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf"
+BRAIN_MMPROJ = Path.home() / "LifeOS/models/Qwen3.6-35B-A3B/mmproj-BF16.gguf"
+
 REQUIRED_FILES = [
-    Path.home() / "LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf",
-    Path.home() / "LifeOS/models/Qwen3.6-35B-A3B/mmproj-BF16.gguf",
     Path.home() / "LifeOS/models/piper-voices/es_MX-claude/es_MX-claude-high.onnx",
 ]
 # Optional files: present is nice, absent is not a failure. The voice-clone
@@ -138,6 +143,19 @@ def check_axi_socket(r: Result) -> None:
 
 def check_llama_server(r: Result) -> None:
     print("\nllama-server brain")
+    # Gate the entire check on whether the brain model was downloaded.
+    # A user who ran ./install.sh --skip-models (or declined the brain prompt)
+    # deliberately deferred the download — that is not a failure.
+    if not BRAIN_MODEL.exists():
+        print(
+            f"  {YELLOW}○{RESET} brain model not downloaded — deferred "
+            f"{DIM}(run ./install.sh to add it){RESET}"
+        )
+        return
+    # Brain is present — now the full setup must be correct.
+    if not BRAIN_MMPROJ.exists():
+        r.fail("brain mmproj", f"missing — expected at {BRAIN_MMPROJ}")
+        return
     try:
         with urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=3) as resp:
             if resp.status == 200:

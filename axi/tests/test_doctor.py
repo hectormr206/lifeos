@@ -89,3 +89,73 @@ def test_audio_check_fails_when_sounddevice_missing(monkeypatch):
     r = Result()
     _check_audio_devices(r)
     assert any("import failed" in reason for _, reason in r.failures)
+
+
+# ─────────────────────────── BLOCKER-2 — llama-server gated on brain model ───
+
+
+def test_llama_server_not_in_required_services():
+    """llama-server.service must NOT be in REQUIRED_SERVICES (it is brain-gated)."""
+    assert "llama-server.service" not in doctor.REQUIRED_SERVICES
+
+
+def test_brain_gguf_not_in_required_files():
+    """Brain .gguf files must NOT be in REQUIRED_FILES (brain is optional at install)."""
+    required_names = {str(p) for p in doctor.REQUIRED_FILES}
+    assert not any("Qwen3.6-35B-A3B-MXFP4_MOE.gguf" in n for n in required_names)
+    assert not any("mmproj-BF16.gguf" in n for n in required_names)
+
+
+def test_llama_check_skipped_when_brain_absent(tmp_path, monkeypatch):
+    """When BRAIN_MODEL does not exist, check_llama_server must NOT call r.fail."""
+    monkeypatch.setattr(doctor, "BRAIN_MODEL", tmp_path / "nonexistent.gguf")
+    r = Result()
+    doctor.check_llama_server(r)
+    assert r.failures == [], "Expected no failures when brain model is absent (deferred install)"
+
+
+def test_llama_check_fails_when_brain_present_but_server_unreachable(tmp_path, monkeypatch):
+    """When BRAIN_MODEL exists but /health raises, check_llama_server must call r.fail."""
+    import urllib.error
+
+    brain = tmp_path / "Qwen3.6-35B-A3B-MXFP4_MOE.gguf"
+    brain.write_bytes(b"fake")
+    monkeypatch.setattr(doctor, "BRAIN_MODEL", brain)
+    # BRAIN_MMPROJ must also exist so the check doesn't fail on mmproj first
+    mmproj = tmp_path / "mmproj-BF16.gguf"
+    mmproj.write_bytes(b"fake")
+    monkeypatch.setattr(doctor, "BRAIN_MMPROJ", mmproj)
+
+    def fake_urlopen(url, timeout=None):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(doctor.urllib.request, "urlopen", fake_urlopen)
+    r = Result()
+    doctor.check_llama_server(r)
+    assert r.failures, "Expected a failure when brain present but /health is unreachable"
+
+
+def test_llama_check_passes_when_brain_present_and_server_ok(tmp_path, monkeypatch):
+    """When BRAIN_MODEL exists and /health returns 200, check_llama_server must not fail."""
+    import types
+
+    brain = tmp_path / "Qwen3.6-35B-A3B-MXFP4_MOE.gguf"
+    brain.write_bytes(b"fake")
+    monkeypatch.setattr(doctor, "BRAIN_MODEL", brain)
+    mmproj = tmp_path / "mmproj-BF16.gguf"
+    mmproj.write_bytes(b"fake")
+    monkeypatch.setattr(doctor, "BRAIN_MMPROJ", mmproj)
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(doctor.urllib.request, "urlopen", lambda url, timeout=None: FakeResponse())
+    r = Result()
+    doctor.check_llama_server(r)
+    assert r.failures == [], "Expected no failures when brain present and /health returns 200"
