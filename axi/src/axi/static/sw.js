@@ -122,7 +122,7 @@ async function staleWhileRevalidate(req) {
   return new Response(
     '<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
     '<style>body{font-family:system-ui;padding:2rem;text-align:center;color:#888}' +
-    'h1{color:#cc66ff}</style>' +
+    'h1{color:#FF6B9D}</style>' +
     '<h1>📡 Sin conexión</h1>' +
     '<p>Axi no puede comunicarse con la laptop ahora mismo.</p>' +
     '<p>Verificá la VPN o reintenta cuando estés en casa.</p>',

@@ -1,13 +1,13 @@
 {
-  "name": "Axi",
-  "short_name": "Axi",
-  "description": "Tu asistente personal de IA local-first",
+  "name": "LifeOS",
+  "short_name": "LifeOS",
+  "description": "Tu plataforma de vida local-first — salud, finanzas, relaciones y memoria, con Axi, tu agente de IA, adentro.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0e1116",
-  "theme_color": "#cc66ff",
+  "background_color": "#0F0F1B",
+  "theme_color": "#0F0F1B",
   "icons": [
     {"src": "/static/axi-192.png", "sizes": "192x192", "type": "image/png"},
     {"src": "/static/axi-512.png", "sizes": "512x512", "type": "image/png"},

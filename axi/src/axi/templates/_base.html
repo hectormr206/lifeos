@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <title>{% block title %}Axi Dashboard{% endblock %}</title>
+  <title>{% block title %}LifeOS{% endblock %}</title>
   <!-- PWA: manifest + theme color + apple-touch-icon. Service worker is
        registered at the bottom; it makes the page installable on Chrome. -->
   <link rel="manifest" href="/static/manifest.webmanifest">
-  <meta name="theme-color" content="#cc66ff">
+  <meta name="theme-color" content="#0F0F1B">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -21,7 +21,7 @@
     :root {
       --bg: #0e1116; --panel: #161b22; --panel2: #1c2129;
       --border: #2a2f37; --text: #e6edf3; --muted: #8b95a4;
-      --pink: #cc66ff; --green: #22cc55; --amber: #ffaa33;
+      --pink: #FF6B9D; --green: #22cc55; --amber: #ffaa33;
       --blue: #33aaff; --purple: #aa33ff; --red: #ee3333;
     }
     html, body { background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
@@ -45,9 +45,9 @@
     .btn { padding: 0.5rem 1rem; border-radius: 0.5rem; background: var(--panel2); border: 1px solid var(--border); transition: background 0.15s; cursor: pointer; outline: none; }
     .btn:hover { background: #252b35; }
     .btn:focus { outline: none; }
-    .btn:focus-visible { box-shadow: 0 0 0 2px rgba(204,102,255,0.4); }
-    .btn-primary { background: rgba(204,102,255,0.15); border-color: var(--pink); color: var(--pink); }
-    .btn-primary:hover { background: rgba(204,102,255,0.25); }
+    .btn:focus-visible { box-shadow: 0 0 0 2px rgba(255,107,157,0.4); }
+    .btn-primary { background: rgba(255,107,157,0.15); border-color: var(--pink); color: var(--pink); }
+    .btn-primary:hover { background: rgba(255,107,157,0.25); }
     /* Remove the persistent blue focus halo Chromium leaves on buttons after click */
     button:focus, a:focus { outline: none; }
     input:focus, select:focus, textarea:focus { outline: 2px solid var(--pink); outline-offset: 1px; }
@@ -223,7 +223,7 @@
            class="state-dot event-critical-dot pulse"
            :title="'Eventos críticos sin leer: ' + ($store.snap?.unread_critical_events || 0)"></a>
         <a href="/" class="font-semibold text-lg hover:opacity-80 transition"
-           title="Ir al dashboard">Axi</a>
+           title="Ir al dashboard">LifeOS</a>
         <span class="muted text-sm" x-data x-text="$store.snap?.now?.time || '—'">—</span>
         <!-- P2.4 — Whisper restart-pending pill. Shown when the user changed
              whisper_model_name / whisper_beam_size / whisper_initial_prompt
