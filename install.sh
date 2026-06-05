@@ -393,11 +393,14 @@ install_services() {
 run_doctor() {
   step "Health check (axi-doctor)"
   if [ -x "$VENV/bin/python" ]; then
-    ( cd "$REPO_DIR/axi" && "$VENV/bin/python" -m axi.doctor ) || \
-      warn "doctor reported issues — review above (a fresh install may need services to warm up first)"
-  else
-    warn "venv not ready — skipping doctor"
+    if ( cd "$REPO_DIR/axi" && "$VENV/bin/python" -m axi.doctor ); then
+      return 0
+    fi
+    warn "doctor reported issues — review above (a fresh install may need services to warm up first)"
+    return 1
   fi
+  warn "venv not ready — skipping doctor"
+  return 1
 }
 
 print_next_steps() {
@@ -423,8 +426,7 @@ main() {
 
   if [ "$CHECK_ONLY" -eq 1 ]; then
     preflight
-    run_doctor
-    exit 0
+    if run_doctor; then exit 0; else exit 1; fi
   fi
 
   preflight
@@ -436,7 +438,7 @@ main() {
   setup_env
   download_models
   install_services
-  run_doctor
+  run_doctor || true
   print_next_steps
 }
 
