@@ -24,6 +24,11 @@ dependencies = [
     "python-multipart>=0.0.20",
     "jinja2>=3.1.6",
     "huggingface-hub>=0.24",
+    # transformers is imported directly by axi.translate (pipeline, AutoTokenizer,
+    # etc.). Previously arrived transitively via pyannote.audio but that is not
+    # a declared path — declaring it here makes the dependency explicit and
+    # prevents a silent breakage if pyannote drops its own transitive dep.
+    "transformers>=4.40",
     # Resemblyzer is the V0 diarization fallback (used when pyannote V2
     # fails or isn't enabled). Must stay pinned so `uv pip install -e .`
     # never silently drops the fallback path again.
