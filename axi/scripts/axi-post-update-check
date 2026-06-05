@@ -23,7 +23,13 @@ set -u
 cd "$HOME/LifeOS/lifeos/axi"
 
 PY="$HOME/LifeOS/lifeos/axi/.venv/bin/python"
-DASHBOARD="https://127.0.0.1:8081"
+# Auto-detect TLS: mkcert cert lives under ~/.local/state/axi/tls.
+# Fall back to plain HTTP when no cert is installed (fresh machines).
+DASHBOARD="http://127.0.0.1:8081"
+if [ -d "$HOME/.local/state/axi/tls" ] && \
+   ls "$HOME/.local/state/axi/tls"/*-key.pem >/dev/null 2>&1; then
+    DASHBOARD="https://127.0.0.1:8081"
+fi
 LLAMA="http://127.0.0.1:8080"
 
 GREEN=$'\033[32m'
