@@ -103,11 +103,11 @@ def test_download_plan_lists_recommended_entry_files(monkeypatch):
 
 
 def test_download_plan_for_downloadable_model_has_repo_ids(monkeypatch):
-    """A non-legacy recommendation (CPU mid-RAM → qwen35-4b) yields real HF
+    """A non-legacy recommendation (CPU mid-RAM → gemma4-e4b-it) yields real HF
     repo ids the installer's hf_get can pull."""
     _cpu_only(monkeypatch, 16 * 1024 * 1024)
     rec = hp.recommend()
-    assert rec.model_id == "qwen35-4b"
+    assert rec.model_id == "gemma4-e4b-it"
     plan = install_brain.download_plan(rec)
     assert all(f["repo_id"] != "local" for f in plan["files"])
     assert any(f["filename"].endswith(".gguf") for f in plan["files"])
@@ -153,3 +153,38 @@ def test_cli_json_emits_machine_readable_recommendation(monkeypatch, capsys):
     assert data["compute_kind"] == "cuda"
     assert data["params"]["ngl"] == 999
     assert "files" in data
+
+
+# ────────────────────────── Gemma 4 forced-override plan ────────
+
+
+def test_forced_gemma4_e2b_produces_valid_download_plan(monkeypatch):
+    """AXI_BRAIN_MODEL=gemma4-e2b-it must resolve to real HF repo ids."""
+    _cuda_12gb(monkeypatch)
+    monkeypatch.setenv("AXI_BRAIN_MODEL", "gemma4-e2b-it")
+    rec = install_brain.resolve_recommendation()
+    assert rec.model_id == "gemma4-e2b-it"
+    plan = install_brain.download_plan(rec)
+    assert plan["model_id"] == "gemma4-e2b-it"
+    assert plan["local"] is False
+    assert any(f["filename"].endswith(".gguf") and f["kind"] == "gguf" for f in plan["files"])
+    # mmproj must be present (vision model)
+    assert any(f["kind"] == "mmproj" for f in plan["files"])
+    # repos must not be placeholder values
+    for f in plan["files"]:
+        assert f["repo_id"] not in ("", "local")
+
+
+def test_forced_gemma4_e4b_produces_valid_download_plan(monkeypatch):
+    """AXI_BRAIN_MODEL=gemma4-e4b-it must resolve to real HF repo ids."""
+    _cuda_12gb(monkeypatch)
+    monkeypatch.setenv("AXI_BRAIN_MODEL", "gemma4-e4b-it")
+    rec = install_brain.resolve_recommendation()
+    assert rec.model_id == "gemma4-e4b-it"
+    plan = install_brain.download_plan(rec)
+    assert plan["model_id"] == "gemma4-e4b-it"
+    assert plan["local"] is False
+    assert any(f["filename"].endswith(".gguf") and f["kind"] == "gguf" for f in plan["files"])
+    assert any(f["kind"] == "mmproj" for f in plan["files"])
+    for f in plan["files"]:
+        assert f["repo_id"] not in ("", "local")

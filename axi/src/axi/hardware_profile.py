@@ -177,28 +177,29 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
         compute_kind="cuda",
         min_budget_gb=6.0,
         label="6 GB VRAM",
-        model_id="qwen35-9b",
+        model_id="gemma4-e4b-it",
         params={"ngl": 999, "ctx": 16384, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "Below 8 GB the MoE attention+KV gets tight, so switch to the best "
-            "DENSE model: qwen35-9b Q4_K_M ≈ 6.0 GB weights. At 16384 ctx with "
-            "q8_0 KV (≈ 0.6 GB) the total ≈ 6.6 GB — right at the edge of 6 GB, "
-            "so this tier assumes a dedicated 6 GB card. DERIVED."
+            "Gemma 4 E4B Q4_K_M ≈ 4.5 GB weights + q8_0 KV at 16384 ctx "
+            "(≈ 0.5 GB) + ~0.5 GB CUDA overhead ≈ 5.5 GB < 6 GB. Better "
+            "quality + native multimodal vision vs the previous qwen35-9b "
+            "(≈ 6.6 GB, text-only at this budget). DERIVED."
         ),
     ),
     HardwareTier(
         compute_kind="cuda",
         min_budget_gb=4.0,
         label="4 GB VRAM",
-        model_id="qwen35-4b",
+        model_id="gemma4-e2b-it",
         params={"ngl": 999, "ctx": 16384, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "qwen35-4b Q4_K_M ≈ 3.0 GB weights + q8_0 KV at 16384 ctx (≈ 0.4 "
-            "GB) + ~0.5 GB overhead ≈ 3.9 GB < 4 GB. Best fit for a 4 GB card. "
+            "Gemma 4 E2B Q4_K_M ≈ 2.8 GB weights + q8_0 KV at 16384 ctx "
+            "(≈ 0.4 GB) + ~0.5 GB overhead ≈ 3.7 GB < 4 GB. Multimodal "
+            "vision included; beats qwen35-4b (text-only, similar VRAM). "
             "DERIVED."
         ),
     ),
@@ -206,14 +207,15 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
         compute_kind="cuda",
         min_budget_gb=0.0,  # safety floor: any usable CUDA VRAM below 4 GB
         label="<4 GB VRAM (smallest)",
-        model_id="qwen35-0_8b",
+        model_id="gemma4-e2b-it",
         params={"ngl": 999, "ctx": 8192, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
             "Floor tier so we never recommend a model that won't fit. "
-            "qwen35-0_8b Q4_K_M ≈ 1.0 GB + tiny KV at 8192 ctx fits any GPU "
-            "that reports usable VRAM. DERIVED."
+            "Gemma 4 E2B Q4_K_M ≈ 2.8 GB + tiny KV at 8192 ctx fits any "
+            "GPU that reports usable VRAM; delivers vision where qwen35-0_8b "
+            "was text-only. DERIVED."
         ),
     ),
     # ── CPU / RAM tiers (high → low) ────────────────────────────────
@@ -238,27 +240,28 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
         compute_kind="cpu",
         min_budget_gb=12.0,
         label="CPU, 12 GB+ RAM",
-        model_id="qwen35-4b",
+        model_id="gemma4-e4b-it",
         params={"ngl": 0, "ctx": 8192, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "Not enough RAM for the 22 GB MoE. Best dense CPU model: qwen35-4b "
-            "Q4_K_M ≈ 3.0 GB weights, comfortable in 12–16 GB RAM, usable "
-            "latency on CPU. DERIVED."
+            "Not enough RAM for the 22 GB MoE. Gemma 4 E4B Q4_K_M ≈ 4.5 GB "
+            "weights comfortably fits in 12–16 GB RAM; native multimodal vision "
+            "on CPU beats text-only qwen35-4b at the same footprint. DERIVED."
         ),
     ),
     HardwareTier(
         compute_kind="cpu",
         min_budget_gb=0.0,  # floor
         label="CPU, <12 GB RAM (smallest)",
-        model_id="qwen35-0_8b",
+        model_id="gemma4-e2b-it",
         params={"ngl": 0, "ctx": 8192, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "Constrained CPU floor: qwen35-0_8b ≈ 1.0 GB fits comfortably in a "
-            "few GB of RAM. Never returns nothing. DERIVED."
+            "Constrained CPU floor: Gemma 4 E2B Q4_K_M ≈ 2.8 GB fits in a few "
+            "GB of RAM and delivers vision where qwen35-0_8b was text-only. "
+            "Never returns nothing. DERIVED."
         ),
     ),
 )

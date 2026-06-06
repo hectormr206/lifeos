@@ -139,30 +139,31 @@ def test_select_8gb_uses_moe_offload():
     assert params["cpu_moe"] is True
 
 
-def test_select_6gb_returns_dense_9b():
+def test_select_6gb_returns_gemma4_e4b():
+    """6 GB tier: Gemma 4 E4B fits (≈5.5 GB budget) and adds vision over qwen35-9b."""
     model_id, params = hp.select_model(_cuda_profile(6.0))
-    assert model_id == "qwen35-9b"
+    assert model_id == "gemma4-e4b-it"
     assert params["ngl"] == 999
     assert params.get("cpu_moe", False) is False
 
 
-def test_select_4gb_returns_dense_4b():
+def test_select_4gb_returns_gemma4_e2b():
+    """4 GB tier: Gemma 4 E2B Q4_K_M ≈ 2.8 GB — fits with headroom, adds vision."""
     model_id, params = hp.select_model(_cuda_profile(4.0))
-    assert model_id == "qwen35-4b"
+    assert model_id == "gemma4-e2b-it"
     assert params["ngl"] == 999
 
 
 def test_select_between_tiers_picks_lower_fitting_tier():
-    """5 GB is below the 6 GB tier → must fall back to the 4 GB tier, never up."""
+    """5 GB is below the 6 GB tier → must fall back to the 4 GB (gemma4-e2b-it) tier."""
     model_id, _ = hp.select_model(_cuda_profile(5.0))
-    assert model_id == "qwen35-4b"
+    assert model_id == "gemma4-e2b-it"
 
 
-def test_select_tiny_vram_falls_back_to_smallest():
-    """2 GB GPU: nothing in the regular VRAM tiers fits cleanly except the
-    smallest model — never returns a model that won't fit."""
+def test_select_tiny_vram_falls_back_to_gemma4_e2b():
+    """2 GB GPU: Gemma 4 E2B Q4_K_M ≈ 2.8 GB — floor model, multimodal, fits tight VRAM."""
     model_id, params = hp.select_model(_cuda_profile(2.0))
-    assert model_id == "qwen35-0_8b"
+    assert model_id == "gemma4-e2b-it"
     assert params["ngl"] == 999
 
 
@@ -177,23 +178,56 @@ def test_select_cpu_high_ram_runs_moe_brain_on_cpu():
     assert params["cpu_moe"] is True
 
 
-def test_select_cpu_mid_ram_runs_dense_4b():
+def test_select_cpu_mid_ram_runs_gemma4_e4b():
+    """CPU 12 GB: Gemma 4 E4B ≈ 4.5 GB RAM — better quality + vision vs qwen35-4b."""
     model_id, params = hp.select_model(_cpu_profile(16.0))
-    assert model_id == "qwen35-4b"
+    assert model_id == "gemma4-e4b-it"
     assert params["ngl"] == 0
 
 
-def test_select_cpu_low_ram_runs_smallest():
+def test_select_cpu_low_ram_runs_gemma4_e2b():
+    """CPU constrained floor: Gemma 4 E2B ≈ 2.8 GB — multimodal, beats qwen35-0_8b."""
     model_id, params = hp.select_model(_cpu_profile(8.0))
-    assert model_id == "qwen35-0_8b"
+    assert model_id == "gemma4-e2b-it"
     assert params["ngl"] == 0
 
 
-def test_select_cpu_tiny_ram_still_returns_smallest():
-    """Even with absurdly little RAM we return the smallest model, never None."""
+def test_select_cpu_tiny_ram_still_returns_gemma4_e2b():
+    """Even with very little RAM we return the smallest model (gemma4-e2b-it), never None."""
     model_id, params = hp.select_model(_cpu_profile(2.0))
-    assert model_id == "qwen35-0_8b"
+    assert model_id == "gemma4-e2b-it"
     assert params["ngl"] == 0
+
+
+# ────────────────────────── Gemma 4 catalog presence ────────────
+
+
+def test_gemma4_e2b_in_catalog():
+    """gemma4-e2b-it must be resolvable from the catalog."""
+    entry = models_catalog.by_id("gemma4-e2b-it")
+    assert entry is not None
+    assert entry.gguf_file.repo_id != ""
+    assert entry.gguf_file.filename.endswith(".gguf")
+    assert entry.mmproj_file is not None
+
+
+def test_gemma4_e4b_in_catalog():
+    """gemma4-e4b-it must be resolvable from the catalog."""
+    entry = models_catalog.by_id("gemma4-e4b-it")
+    assert entry is not None
+    assert entry.gguf_file.repo_id != ""
+    assert entry.gguf_file.filename.endswith(".gguf")
+    assert entry.mmproj_file is not None
+
+
+def test_gemma4_e2b_has_vision_feature():
+    entry = models_catalog.by_id("gemma4-e2b-it")
+    assert "vision" in entry.features
+
+
+def test_gemma4_e4b_has_vision_feature():
+    entry = models_catalog.by_id("gemma4-e4b-it")
+    assert "vision" in entry.features
 
 
 # ────────────────────────── select_model contract ────────────────
