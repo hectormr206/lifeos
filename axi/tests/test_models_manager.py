@@ -28,20 +28,20 @@ def isolated_state(tmp_path, monkeypatch):
 def test_catalog_has_expected_entries():
     entries = models_catalog.catalog()
     ids = {e.id for e in entries}
-    # 9 total: qwen3.6 + qwen3.5 x4 + nemotron + gemma4 x3
-    assert len(entries) == 9
+    # 5 total: qwen3.6 + nemotron + gemma4 x3
+    assert len(entries) == 5
     # Kept from the legacy catalog.
     assert "qwen36-35b-a3b" in ids
-    # 2026-05 refresh — Qwen3.5 dense multimodal replaces Qwen3-VL.
-    assert "qwen35-0_8b" in ids
-    assert "qwen35-2b" in ids
-    assert "qwen35-4b" in ids
-    assert "qwen35-9b" in ids
-    # Other multimodal entries.
+    # 2026-06 refresh — small Qwen3.5 dense models removed; Gemma 4 covers small tiers.
+    assert "qwen35-0_8b" not in ids
+    assert "qwen35-2b" not in ids
+    assert "qwen35-4b" not in ids
+    assert "qwen35-9b" not in ids
+    # Current multimodal entries.
+    assert "gemma4-e2b-it" in ids
+    assert "gemma4-e4b-it" in ids
     assert "nemotron3-nano-omni-30b-a3b" in ids
     assert "gemma4-26b-a4b-it" in ids
-    assert "gemma4-e4b-it" in ids
-    assert "gemma4-e2b-it" in ids
     # Qwen3-VL family must be gone.
     assert "qwen3-vl-30b-a3b" not in ids
     assert "qwen3-vl-8b" not in ids
@@ -54,7 +54,7 @@ def test_catalog_ids_unique():
 
 
 def test_by_id_returns_entry_or_none():
-    assert models_catalog.by_id("qwen35-4b") is not None
+    assert models_catalog.by_id("gemma4-e2b-it") is not None
     assert models_catalog.by_id("does-not-exist") is None
 
 
@@ -68,7 +68,7 @@ def test_legacy_entry_path_uses_historical_dir(isolated_state):
 
 
 def test_is_installed_true_when_all_files_present(isolated_state):
-    entry = models_catalog.by_id("qwen35-4b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     for f in entry.files:
         path = models_manager.expected_path(entry, f)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,7 @@ def test_is_installed_true_when_all_files_present(isolated_state):
 
 
 def test_is_installed_false_when_files_missing(isolated_state):
-    entry = models_catalog.by_id("qwen35-4b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     assert not models_manager.is_installed(entry)
 
 
@@ -92,7 +92,7 @@ def test_is_installed_false_when_only_some_present(isolated_state):
 
 
 def test_write_active_round_trips(isolated_state):
-    entry = models_catalog.by_id("qwen35-4b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     # Pretend files exist so set_active wouldn't refuse — but here we call
     # write_active directly which has no install-check.
     models_manager.write_active(entry)
@@ -105,9 +105,9 @@ def test_write_active_round_trips(isolated_state):
 
 
 def test_get_active_id_reads_back(isolated_state):
-    entry = models_catalog.by_id("qwen35-9b")
+    entry = models_catalog.by_id("gemma4-e4b-it")
     models_manager.write_active(entry)
-    assert models_manager.get_active_id() == "qwen35-9b"
+    assert models_manager.get_active_id() == "gemma4-e4b-it"
 
 
 def test_get_active_id_returns_none_when_unset(isolated_state):
@@ -118,7 +118,7 @@ def test_download_writes_files_to_per_entry_dir(isolated_state, monkeypatch):
     """download() should hit hf_hub_download for each catalog file and end
     with the bundle marked installed. No network — hf_hub_download is mocked.
     """
-    entry = models_catalog.by_id("qwen35-4b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     dest = models_manager.model_dir(entry)
 
     def fake_hf_download(repo_id, filename, local_dir, token=None, **kw):
@@ -143,7 +143,7 @@ def test_download_writes_files_to_per_entry_dir(isolated_state, monkeypatch):
 
 
 def test_download_skips_already_present_files(isolated_state, monkeypatch):
-    entry = models_catalog.by_id("qwen35-4b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     for f in entry.files:
         p = models_manager.expected_path(entry, f)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -177,13 +177,13 @@ def test_legacy_download_when_missing_raises(isolated_state):
 
 
 def test_set_active_refuses_uninstalled(isolated_state):
-    entry = models_catalog.by_id("qwen35-4b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     with pytest.raises(FileNotFoundError):
         models_manager.set_active(entry, restart=False, wait_health=False)
 
 
 def test_set_active_writes_json_without_restart(isolated_state):
-    entry = models_catalog.by_id("qwen35-4b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     for f in entry.files:
         p = models_manager.expected_path(entry, f)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -194,16 +194,16 @@ def test_set_active_writes_json_without_restart(isolated_state):
 
 
 def test_catalog_status_marks_active(isolated_state):
-    entry = models_catalog.by_id("qwen35-4b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     for f in entry.files:
         p = models_manager.expected_path(entry, f)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b"x")
     models_manager.write_active(entry)
     rows = {s.entry.id: s for s in models_manager.catalog_status()}
-    assert rows["qwen35-4b"].is_active is True
-    assert rows["qwen35-4b"].installed is True
-    assert rows["qwen35-9b"].is_active is False
+    assert rows["gemma4-e2b-it"].is_active is True
+    assert rows["gemma4-e2b-it"].installed is True
+    assert rows["gemma4-e4b-it"].is_active is False
 
 
 def test_wait_for_llama_health_times_out_fast(monkeypatch):

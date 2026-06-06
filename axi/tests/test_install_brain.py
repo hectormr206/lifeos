@@ -128,9 +128,9 @@ def test_env_override_forces_specific_model(monkeypatch):
     """AXI_BRAIN_MODEL overrides hardware detection so an advanced user can
     pin any catalog model — but the tier still supplies sane tuned params."""
     _cuda_12gb(monkeypatch)
-    monkeypatch.setenv("AXI_BRAIN_MODEL", "qwen35-9b")
+    monkeypatch.setenv("AXI_BRAIN_MODEL", "gemma4-e2b-it")
     rec = install_brain.resolve_recommendation()
-    assert rec.model_id == "qwen35-9b"
+    assert rec.model_id == "gemma4-e2b-it"
     # params are still a coherent dict (ngl/ctx present).
     assert rec.params["ngl"] == 999
 

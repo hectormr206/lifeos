@@ -104,7 +104,7 @@ def test_validate_value_bool_coerces_strings():
 
 
 def test_is_applicable_filters_cpu_moe():
-    dense = models_catalog.by_id("qwen35-9b")
+    dense = models_catalog.by_id("gemma4-e2b-it")
     moe = models_catalog.by_id("qwen36-35b-a3b")
     spec = by_key("cpu_moe")
     assert is_applicable(spec, moe) is True
@@ -122,7 +122,7 @@ def test_is_applicable_filters_vision():
 
 
 def test_effective_params_uses_schema_defaults(isolated_state):
-    entry = models_catalog.by_id("qwen35-9b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     eff = models_manager.effective_params(entry, {})
     # Schema default temperature is 0.7 for entries without param_defaults.
     assert eff["temperature"] == pytest.approx(0.7)
@@ -151,7 +151,7 @@ def test_effective_params_overrides_win():
 
 
 def test_save_load_overrides_round_trip(isolated_state):
-    payload = {"qwen35-9b": {"temperature": 0.5, "ctx": 16384}}
+    payload = {"gemma4-e2b-it": {"temperature": 0.5, "ctx": 16384}}
     models_manager.save_overrides(payload)
     assert models_manager.load_overrides() == payload
 
@@ -214,14 +214,14 @@ def test_merge_keeps_unmanaged_sentinel_flags():
 
 
 def test_merge_adds_bool_flag_when_enabled():
-    entry = models_catalog.by_id("qwen35-9b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     # mlock not in dense baseline; enabling it adds the token.
     merged = models_manager.merge_extra_args(entry, {"mlock": True})
     assert "--mlock" in merged
 
 
 def test_build_extra_args_renders_known_params():
-    entry = models_catalog.by_id("qwen35-9b")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     args = models_manager.build_extra_args(entry, {
         "temperature": 0.5,
         "top_p": 0.9,
@@ -262,7 +262,7 @@ def test_get_params_returns_schema_and_effective(client):
 
 
 def test_get_params_dense_marks_cpu_moe_not_applicable(client):
-    r = client.get("/api/models/qwen35-9b/params")
+    r = client.get("/api/models/gemma4-e2b-it/params")
     assert r.status_code == 200
     schema = r.json()["schema"]
     cpu_moe = next(r for r in schema if r["key"] == "cpu_moe")
@@ -271,7 +271,7 @@ def test_get_params_dense_marks_cpu_moe_not_applicable(client):
 
 def test_put_params_validates_bounds(client):
     r = client.put(
-        "/api/models/qwen35-9b/params",
+        "/api/models/gemma4-e2b-it/params",
         json={"overrides": {"temperature": 99.0}},
     )
     assert r.status_code == 400
@@ -279,7 +279,7 @@ def test_put_params_validates_bounds(client):
 
 def test_put_params_rejects_unknown_key(client):
     r = client.put(
-        "/api/models/qwen35-9b/params",
+        "/api/models/gemma4-e2b-it/params",
         json={"overrides": {"banana": 1}},
     )
     assert r.status_code == 400
@@ -287,7 +287,7 @@ def test_put_params_rejects_unknown_key(client):
 
 def test_put_params_persists_and_no_restart_when_inactive(client):
     r = client.put(
-        "/api/models/qwen35-9b/params",
+        "/api/models/gemma4-e2b-it/params",
         json={"overrides": {"temperature": 0.5, "ctx": 16384}},
     )
     assert r.status_code == 200
@@ -296,13 +296,13 @@ def test_put_params_persists_and_no_restart_when_inactive(client):
     assert body["restarted"] is False
     # Round-trip via load_overrides.
     loaded = models_manager.load_overrides()
-    assert loaded["qwen35-9b"]["temperature"] == pytest.approx(0.5)
-    assert loaded["qwen35-9b"]["ctx"] == 16384
+    assert loaded["gemma4-e2b-it"]["temperature"] == pytest.approx(0.5)
+    assert loaded["gemma4-e2b-it"]["ctx"] == 16384
 
 
 def test_put_params_restarts_when_active(client, monkeypatch):
-    # Make qwen35-9b "installed" and active first.
-    entry = models_catalog.by_id("qwen35-9b")
+    # Make gemma4-e2b-it "installed" and active first.
+    entry = models_catalog.by_id("gemma4-e2b-it")
     for f in entry.files:
         p = models_manager.expected_path(entry, f)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -312,7 +312,7 @@ def test_put_params_restarts_when_active(client, monkeypatch):
     models_manager.set_active(entry, restart=False, wait_health=False)
 
     r = client.put(
-        "/api/models/qwen35-9b/params",
+        "/api/models/gemma4-e2b-it/params",
         json={"overrides": {"temperature": 0.4}},
     )
     assert r.status_code == 200
@@ -328,8 +328,8 @@ def test_put_params_restarts_when_active(client, monkeypatch):
 
 def test_delete_params_clears_overrides(client):
     # Seed an override first.
-    models_manager.save_overrides({"qwen35-9b": {"temperature": 0.3}})
-    r = client.delete("/api/models/qwen35-9b/params")
+    models_manager.save_overrides({"gemma4-e2b-it": {"temperature": 0.3}})
+    r = client.delete("/api/models/gemma4-e2b-it/params")
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
@@ -338,7 +338,7 @@ def test_delete_params_clears_overrides(client):
 
 
 def test_delete_params_idempotent_when_absent(client):
-    r = client.delete("/api/models/qwen35-9b/params")
+    r = client.delete("/api/models/gemma4-e2b-it/params")
     assert r.status_code == 200
     assert r.json()["had_overrides"] is False
 

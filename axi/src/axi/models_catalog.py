@@ -5,13 +5,12 @@ MoE with `--cpu-moe` offload (the current 35B-A3B pattern). Entries are
 GGUF-only; mmproj companions are listed alongside the main weights when the
 model supports vision.
 
-Refreshed 2026-05-15: Qwen3-VL family rejected in favor of Qwen3.5 dense
-multimodal (hybrid-thinking, 256K context, 201 languages). Catalog now
-combines:
+Refreshed 2026-06-05: Small Qwen3.5 dense models (0.8B/2B/4B/9B) removed;
+hardware tier selector now uses Gemma 4 E2B/E4B for the small tiers (multimodal
++ better quality at the same VRAM budget). Catalog now combines:
 - Qwen3.6 35B-A3B MoE (current default, local)
-- Qwen3.5 dense multimodal at 0.8B / 2B / 4B / 9B (Apr 2026)
 - NVIDIA Nemotron-3 Nano Omni (late 2025+)
-- Gemma 4 family (April 2026)
+- Gemma 4 family (April 2026): E2B, E4B, 26B-A4B
 
 Every entry below has been verified against the upstream HuggingFace repo
 via `huggingface_hub.list_repo_files` at authoring time; if you add a new
@@ -279,121 +278,6 @@ CATALOG: tuple[ModelEntry, ...] = (
     # ------------------------------------------------------------------ #
     # Dense multimodal entries (full GPU residency).                     #
     # ------------------------------------------------------------------ #
-    ModelEntry(
-        id="qwen35-0_8b",
-        name="Qwen3.5 0.8B (vision)",
-        family="Qwen",
-        params="0.8B",
-        features=("vision", "tools"),
-        description=(
-            "Qwen3.5 0.8B denso multimodal (abril 2026). El más chico de "
-            "la familia Qwen3.5: hybrid-thinking, contexto 256K, soporte "
-            "para 201 idiomas, visión via mmproj-F16. Q4_K_M ~1 GB VRAM "
-            "— ideal para correr junto a otros servicios en background."
-        ),
-        files=(
-            ModelFile(
-                repo_id="unsloth/Qwen3.5-0.8B-GGUF",
-                filename="Qwen3.5-0.8B-Q4_K_M.gguf",
-                kind="gguf",
-            ),
-            ModelFile(
-                repo_id="unsloth/Qwen3.5-0.8B-GGUF",
-                filename="mmproj-F16.gguf",
-                kind="mmproj",
-            ),
-        ),
-        ctx=32768,
-        ngl=999,
-        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3.5-0.8B"),
-        vram_estimate_gb=1.0,
-    ),
-    ModelEntry(
-        id="qwen35-2b",
-        name="Qwen3.5 2B (vision)",
-        family="Qwen",
-        params="2B",
-        features=("vision", "tools"),
-        description=(
-            "Qwen3.5 2B denso multimodal (abril 2026). Hybrid-thinking, "
-            "contexto 256K, 201 idiomas, visión via mmproj-F16. Q4_K_M "
-            "~1.8 GB VRAM — pareja chica con buena calidad/latencia."
-        ),
-        files=(
-            ModelFile(
-                repo_id="unsloth/Qwen3.5-2B-GGUF",
-                filename="Qwen3.5-2B-Q4_K_M.gguf",
-                kind="gguf",
-            ),
-            ModelFile(
-                repo_id="unsloth/Qwen3.5-2B-GGUF",
-                filename="mmproj-F16.gguf",
-                kind="mmproj",
-            ),
-        ),
-        ctx=32768,
-        ngl=999,
-        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3.5-2B"),
-        vram_estimate_gb=1.8,
-    ),
-    ModelEntry(
-        id="qwen35-4b",
-        name="Qwen3.5 4B (vision)",
-        family="Qwen",
-        params="4B",
-        features=("vision", "tools"),
-        description=(
-            "Qwen3.5 4B denso multimodal (abril 2026). Hybrid-thinking, "
-            "contexto 256K, 201 idiomas, visión via mmproj-F16. Q4_K_M "
-            "~3 GB VRAM — deja headroom para Whisper + translate en paralelo."
-        ),
-        files=(
-            ModelFile(
-                repo_id="unsloth/Qwen3.5-4B-GGUF",
-                filename="Qwen3.5-4B-Q4_K_M.gguf",
-                kind="gguf",
-            ),
-            ModelFile(
-                repo_id="unsloth/Qwen3.5-4B-GGUF",
-                filename="mmproj-F16.gguf",
-                kind="mmproj",
-            ),
-        ),
-        ctx=32768,
-        ngl=999,
-        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3.5-4B"),
-        vram_estimate_gb=3.0,
-    ),
-    ModelEntry(
-        id="qwen35-9b",
-        name="Qwen3.5 9B (vision)",
-        family="Qwen",
-        params="9B",
-        features=("vision", "tools"),
-        description=(
-            "Qwen3.5 9B denso multimodal (abril 2026). El más grande de "
-            "la familia densa: hybrid-thinking, contexto 256K, 201 "
-            "idiomas, visión via mmproj-F16. Q4_K_M ~6 GB VRAM — la mejor "
-            "calidad denso/GPU del catálogo cuando no querés MoE. "
-            "Confirmado funcionando en GGUF."
-        ),
-        files=(
-            ModelFile(
-                repo_id="unsloth/Qwen3.5-9B-GGUF",
-                filename="Qwen3.5-9B-Q4_K_M.gguf",
-                kind="gguf",
-            ),
-            ModelFile(
-                repo_id="unsloth/Qwen3.5-9B-GGUF",
-                filename="mmproj-F16.gguf",
-                kind="mmproj",
-            ),
-        ),
-        ctx=32768,
-        ngl=999,
-        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3.5-9B"),
-        vram_estimate_gb=6.0,
-    ),
     ModelEntry(
         id="gemma4-e4b-it",
         name="Gemma 4 E4B IT (vision)",
