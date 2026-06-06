@@ -5,12 +5,14 @@ MoE with `--cpu-moe` offload (the current 35B-A3B pattern). Entries are
 GGUF-only; mmproj companions are listed alongside the main weights when the
 model supports vision.
 
-Refreshed 2026-06-05: Small Qwen3.5 dense models (0.8B/2B/4B/9B) removed;
-hardware tier selector now uses Gemma 4 E2B/E4B for the small tiers (multimodal
-+ better quality at the same VRAM budget). Catalog now combines:
+Refreshed 2026-06-05 (rev 2): Added back Qwen3.5-9B; added Granite 4.0-H-1B
+and LFM2-1.2B-Extract as nano-agent/extraction tier. Catalog now combines:
 - Qwen3.6 35B-A3B MoE (current default, local)
 - NVIDIA Nemotron-3 Nano Omni (late 2025+)
 - Gemma 4 family (April 2026): E2B, E4B, 26B-A4B
+- Qwen3.5 9B dense multimodal (April 2026)
+- IBM Granite 4.0-H-1B (nano-agent / structured extraction)
+- Liquid AI LFM2-1.2B-Extract (extraction / RAG)
 
 Every entry below has been verified against the upstream HuggingFace repo
 via `huggingface_hub.list_repo_files` at authoring time; if you add a new
@@ -336,6 +338,97 @@ CATALOG: tuple[ModelEntry, ...] = (
         extra_args=_GPU_DEFAULT_ARGS + ("-a", "gemma-4-E2B-it"),
         vram_estimate_gb=2.8,
         notes="mmproj DEBE ser BF16 — los quants del projector están rotos en upstream.",
+    ),
+
+    # ------------------------------------------------------------------ #
+    # Dense multimodal — Qwen3.5 9B (restored).                          #
+    # ------------------------------------------------------------------ #
+    ModelEntry(
+        id="qwen35-9b",
+        name="Qwen3.5 9B (vision)",
+        family="Qwen",
+        params="9B",
+        features=("vision", "tools"),
+        description=(
+            "Qwen3.5 9B denso multimodal (abril 2026). El más grande de "
+            "la familia densa: hybrid-thinking, contexto 256K, 201 "
+            "idiomas, visión via mmproj-F16. Q4_K_M ~6 GB VRAM — la mejor "
+            "calidad denso/GPU del catálogo cuando no querés MoE. "
+            "Confirmado funcionando en GGUF."
+        ),
+        files=(
+            ModelFile(
+                repo_id="unsloth/Qwen3.5-9B-GGUF",
+                filename="Qwen3.5-9B-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+            ModelFile(
+                repo_id="unsloth/Qwen3.5-9B-GGUF",
+                filename="mmproj-F16.gguf",
+                kind="mmproj",
+            ),
+        ),
+        ctx=32768,
+        ngl=999,
+        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3.5-9B"),
+        vram_estimate_gb=6.0,
+    ),
+
+    # ------------------------------------------------------------------ #
+    # Nano-agent / structured-extraction tier (CPU-friendly, ≤1 GB).     #
+    # ------------------------------------------------------------------ #
+    ModelEntry(
+        id="granite-4.0-h-1b",
+        name="Granite 4.0-H 1B (nano-agent)",
+        family="Granite",
+        params="1B",
+        features=("tools",),
+        description=(
+            "IBM Granite 4.0 Hybrid-SSM 1B (Apache 2.0). Arquitectura "
+            "híbrida Mamba-2 + Transformer — mejor eficiencia en CPU que "
+            "modelos puramente transformer del mismo tamaño. Q4_K_M ~901 MB. "
+            "Mejor tool-calling/function-calling en su clase (BFCLv3, IFEval). "
+            "Ideal para nano-agent, extracción estructurada y clasificación "
+            "donde la latencia importa más que la calidad de razonamiento."
+        ),
+        files=(
+            ModelFile(
+                repo_id="ibm-granite/granite-4.0-h-1b-GGUF",
+                filename="granite-4.0-h-1b-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+        ),
+        ctx=8192,
+        ngl=999,
+        extra_args=_GPU_DEFAULT_ARGS + ("-a", "granite-4.0-h-1b"),
+        vram_estimate_gb=1.0,
+        notes="No vision/mmproj — text-only extraction model. Apache 2.0.",
+    ),
+    ModelEntry(
+        id="lfm2-1.2b-extract",
+        name="LFM2 1.2B Extract (extraction/RAG)",
+        family="LFM",
+        params="1.2B",
+        features=("tools",),
+        description=(
+            "Liquid AI LFM2 1.2B Extract (CC-BY-4.0). Liquid Foundation Model "
+            "state-space hybrid especializado en extracción/RAG/agentes. "
+            "Q4_K_M ~731 MB. 2× más rápido en decode/prefill vs Qwen3 del "
+            "mismo tamaño en CPU. Function calling nativo (OpenAI tool spec). "
+            "Checkpoint dedicado para extracción — distinto al instruct base."
+        ),
+        files=(
+            ModelFile(
+                repo_id="LiquidAI/LFM2-1.2B-Extract-GGUF",
+                filename="LFM2-1.2B-Extract-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+        ),
+        ctx=8192,
+        ngl=999,
+        extra_args=_GPU_DEFAULT_ARGS + ("-a", "LFM2-1.2B-Extract"),
+        vram_estimate_gb=0.8,
+        notes="No vision/mmproj — text-only extraction model. CC-BY-4.0.",
     ),
 )
 

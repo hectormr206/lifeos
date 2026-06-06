@@ -28,20 +28,24 @@ def isolated_state(tmp_path, monkeypatch):
 def test_catalog_has_expected_entries():
     entries = models_catalog.catalog()
     ids = {e.id for e in entries}
-    # 5 total: qwen3.6 + nemotron + gemma4 x3
-    assert len(entries) == 5
+    # 8 total: qwen3.6 + nemotron + gemma4 x3 + qwen35-9b + granite-4.0-h-1b + lfm2-1.2b-extract
+    assert len(entries) == 8
     # Kept from the legacy catalog.
     assert "qwen36-35b-a3b" in ids
-    # 2026-06 refresh — small Qwen3.5 dense models removed; Gemma 4 covers small tiers.
+    # 2026-06 refresh — tiny Qwen3.5 dense models (0.8B/2B/4B) removed; Gemma 4 covers small tiers.
     assert "qwen35-0_8b" not in ids
     assert "qwen35-2b" not in ids
     assert "qwen35-4b" not in ids
-    assert "qwen35-9b" not in ids
+    # 9B restored as best dense/6 GB option.
+    assert "qwen35-9b" in ids
     # Current multimodal entries.
     assert "gemma4-e2b-it" in ids
     assert "gemma4-e4b-it" in ids
     assert "nemotron3-nano-omni-30b-a3b" in ids
     assert "gemma4-26b-a4b-it" in ids
+    # Nano-agent / extraction tier.
+    assert "granite-4.0-h-1b" in ids
+    assert "lfm2-1.2b-extract" in ids
     # Qwen3-VL family must be gone.
     assert "qwen3-vl-30b-a3b" not in ids
     assert "qwen3-vl-8b" not in ids
