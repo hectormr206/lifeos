@@ -113,9 +113,12 @@ def test_is_applicable_filters_cpu_moe():
 
 def test_is_applicable_filters_vision():
     spec = by_key("image_min_tokens")
-    # All catalog entries have "vision" feature today, so this should be True.
+    # Only vision-capable entries should pass; text-only entries must not.
     for e in models_catalog.catalog():
-        assert is_applicable(spec, e) is True
+        expected = "vision" in e.features
+        assert is_applicable(spec, e) is expected, (
+            f"is_applicable mismatch for {e.id}: expected {expected}"
+        )
 
 
 # ─── effective_params + overrides ────────────────────────────────────────
