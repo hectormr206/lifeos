@@ -43,10 +43,14 @@ class ExtractionResult:
     title: str | None = None
     kind: str | None = None
     # Structured vitals — only populated when domain=health and kind=vital
-    # and the model detected a blood pressure reading.
+    # and the model detected a specific vital reading.
     systolic: int | None = None
     diastolic: int | None = None
     pulse_bpm: int | None = None
+    # Non-BP vitals (Task 2: sleep, weight, glucose)
+    sleep_hours: float | None = None
+    weight_kg: float | None = None
+    glucose_mg_dl: float | None = None
     raw_json: str | None = None      # for debugging
     confidence: float = 0.6          # nano agents start at moderate confidence
 
@@ -69,7 +73,10 @@ _SYSTEM_PROMPT = """Sos un extractor de entidades para LifeOS. Recibís un mensa
   "kind": string|null,
   "systolic": number|null,
   "diastolic": number|null,
-  "pulse_bpm": number|null
+  "pulse_bpm": number|null,
+  "sleep_hours": number|null,
+  "weight_kg": number|null,
+  "glucose_mg_dl": number|null
 }
 
 Reglas de DOMAIN (uno solo, no listes opciones):
@@ -84,6 +91,9 @@ Reglas de DOMAIN (uno solo, no listes opciones):
   IMPORTANTE: números como "122/81" o "113, 82" son presión arterial (health),
   NO son fechas ni eventos. Si aparece "pulso", "pulsos" o "pulsaciones"
   junto a números de presión, es siempre "health" con kind="vital".
+  Sueño (dormí, me dormí, me acosté → desperté): kind="vital", sleep_hours=horas estimadas.
+  Peso corporal (pesé, peso X kg): kind="vital", weight_kg=número.
+  Glucosa (glucosa X, azúcar X): kind="vital", glucose_mg_dl=número.
 - Aniversario, cumple, fecha importante a futuro: "events".
 - Reflexión espiritual, agradecimiento, meditación: "spirituality".
 - Nada aplica claramente: null.
@@ -109,6 +119,12 @@ Reglas de OTROS campos:
 - systolic / diastolic / pulse_bpm: SOLO cuando domain=health y kind=vital
   y el mensaje contiene una lectura de presión arterial. Extraé los valores
   enteros exactos. Si no hay lectura de presión, ponelos null.
+- sleep_hours: SOLO cuando domain=health y kind=vital y hay info de sueño.
+  Calculá las horas (número decimal). Si no hay dato de sueño, null.
+- weight_kg: SOLO cuando domain=health y kind=vital y hay peso corporal en kg.
+  Si no hay dato de peso, null.
+- glucose_mg_dl: SOLO cuando domain=health y kind=vital y hay glucosa en mg/dL.
+  Si no hay dato de glucosa, null.
 - Si un campo no aplica, ponelo null o [] (NUNCA lo omitas).
 
 Ejemplos:
@@ -138,13 +154,22 @@ INPUT: "Mi esposa Daniela y yo nos casamos el 15 de junio de 2018"
 OUTPUT: {"domain":"events","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":["15 de junio de 2018"],"duration_minutes":null,"items":[],"title":"casamiento con Daniela","kind":"milestone","systolic":null,"diastolic":null,"pulse_bpm":null}
 
 INPUT: "122/81 53 pulsos"
-OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"presión 122/81, pulso 53","kind":"vital","systolic":122,"diastolic":81,"pulse_bpm":53}
+OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"presión 122/81, pulso 53","kind":"vital","systolic":122,"diastolic":81,"pulse_bpm":53,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "113, 82 y 55 de pulso."
-OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"presión 113/82, pulso 55","kind":"vital","systolic":113,"diastolic":82,"pulse_bpm":55}
+OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"presión 113/82, pulso 55","kind":"vital","systolic":113,"diastolic":82,"pulse_bpm":55,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "me duele mucho la cabeza desde esta mañana"
-OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":["esta mañana"],"duration_minutes":null,"items":[],"title":"dolor de cabeza","kind":"symptom","systolic":null,"diastolic":null,"pulse_bpm":null}
+OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":["esta mañana"],"duration_minutes":null,"items":[],"title":"dolor de cabeza","kind":"symptom","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "Me dormí a las 11 pm y acabo de despertar"
+OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"registro de sueño","kind":"note","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "dormí ocho horas"
+OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"dormí 8h","kind":"vital","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":8.0,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "pesé 64.5 kg hoy en ayunas, glucosa 95"
+OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":["hoy"],"duration_minutes":null,"items":[],"title":"peso 64.5 kg, glucosa 95","kind":"vital","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":64.5,"glucose_mg_dl":95.0}
 
 Respondé EXCLUSIVAMENTE con el JSON. Nada más."""
 
@@ -292,6 +317,14 @@ def extract(
         except (TypeError, ValueError):
             return None
 
+    def _float_or_none(v) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
     return ExtractionResult(
         domain=str(domain),
         amount=amount,
@@ -306,6 +339,9 @@ def extract(
         systolic=_int_or_none(parsed.get("systolic")),
         diastolic=_int_or_none(parsed.get("diastolic")),
         pulse_bpm=_int_or_none(parsed.get("pulse_bpm")),
+        sleep_hours=_float_or_none(parsed.get("sleep_hours")),
+        weight_kg=_float_or_none(parsed.get("weight_kg")),
+        glucose_mg_dl=_float_or_none(parsed.get("glucose_mg_dl")),
         raw_json=r.content[:1000],
         confidence=0.65,
     )

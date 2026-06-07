@@ -164,3 +164,69 @@ def test_extraction_result_vitals_absent_for_non_vital(monkeypatch):
     assert result.systolic is None
     assert result.diastolic is None
     assert result.pulse_bpm is None
+
+
+# ── Task 2: new structured vitals fields (sleep, weight, glucose) ─────────────
+
+_SLEEP_VITAL_JSON = (
+    '{"domain":"health","amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":"sueño 8h","kind":"vital",'
+    '"systolic":null,"diastolic":null,"pulse_bpm":null,'
+    '"sleep_hours":8.0,"weight_kg":null,"glucose_mg_dl":null}'
+)
+
+_WEIGHT_VITAL_JSON = (
+    '{"domain":"health","amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":"peso 64.5 kg","kind":"vital",'
+    '"systolic":null,"diastolic":null,"pulse_bpm":null,'
+    '"sleep_hours":null,"weight_kg":64.5,"glucose_mg_dl":null}'
+)
+
+_GLUCOSE_VITAL_JSON = (
+    '{"domain":"health","amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":"glucosa 95 mg/dL","kind":"vital",'
+    '"systolic":null,"diastolic":null,"pulse_bpm":null,'
+    '"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":95.0}'
+)
+
+
+def test_extraction_result_carries_sleep_hours(monkeypatch):
+    """ExtractionResult exposes sleep_hours when nano returns it."""
+    rec = _Recorder([_ok(_SLEEP_VITAL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+    result = extractor.extract("Me dormí a las 11 pm y acabo de despertar")
+    assert result is not None
+    assert result.domain == "health"
+    assert result.sleep_hours == 8.0
+
+
+def test_extraction_result_carries_weight_kg(monkeypatch):
+    """ExtractionResult exposes weight_kg when nano returns it."""
+    rec = _Recorder([_ok(_WEIGHT_VITAL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+    result = extractor.extract("pesé 64.5 kg hoy en ayunas")
+    assert result is not None
+    assert result.weight_kg == 64.5
+
+
+def test_extraction_result_carries_glucose(monkeypatch):
+    """ExtractionResult exposes glucose_mg_dl when nano returns it."""
+    rec = _Recorder([_ok(_GLUCOSE_VITAL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+    result = extractor.extract("glucosa en 95 esta mañana")
+    assert result is not None
+    assert result.glucose_mg_dl == 95.0
+
+
+def test_extraction_result_new_fields_nullable(monkeypatch):
+    """When sleep/weight/glucose are absent (BP-only entry), they are None."""
+    rec = _Recorder([_ok(_BP_VITAL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+    result = extractor.extract("122/81 53 pulsos")
+    assert result is not None
+    assert result.sleep_hours is None
+    assert result.weight_kg is None
+    assert result.glucose_mg_dl is None
