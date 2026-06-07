@@ -42,6 +42,11 @@ class ExtractionResult:
     items: list[dict[str, Any]] = field(default_factory=list)
     title: str | None = None
     kind: str | None = None
+    # Structured vitals — only populated when domain=health and kind=vital
+    # and the model detected a blood pressure reading.
+    systolic: int | None = None
+    diastolic: int | None = None
+    pulse_bpm: int | None = None
     raw_json: str | None = None      # for debugging
     confidence: float = 0.6          # nano agents start at moderate confidence
 
@@ -61,7 +66,10 @@ _SYSTEM_PROMPT = """Sos un extractor de entidades para LifeOS. Recibís un mensa
   "duration_minutes": number|null,
   "items": [{"name": string, "amount": number|null, "category": string|null}],
   "title": string|null,
-  "kind": string|null
+  "kind": string|null,
+  "systolic": number|null,
+  "diastolic": number|null,
+  "pulse_bpm": number|null
 }
 
 Reglas de DOMAIN (uno solo, no listes opciones):
@@ -73,6 +81,9 @@ Reglas de DOMAIN (uno solo, no listes opciones):
   secundario de otra actividad.
 - Aprender, estudiar, leer libro, idea: "learning".
 - Síntoma, medicación, vital (presión, glucosa, peso, sueño): "health".
+  IMPORTANTE: números como "122/81" o "113, 82" son presión arterial (health),
+  NO son fechas ni eventos. Si aparece "pulso", "pulsos" o "pulsaciones"
+  junto a números de presión, es siempre "health" con kind="vital".
 - Aniversario, cumple, fecha importante a futuro: "events".
 - Reflexión espiritual, agradecimiento, meditación: "spirituality".
 - Nada aplica claramente: null.
@@ -95,33 +106,45 @@ Reglas de OTROS campos:
   tiene name (obligatorio), amount (opcional), category (opcional).
 - dates_text: copia el texto LITERAL de cada fecha (no normalices).
 - duration_minutes: total en minutos (1 hora = 60).
+- systolic / diastolic / pulse_bpm: SOLO cuando domain=health y kind=vital
+  y el mensaje contiene una lectura de presión arterial. Extraé los valores
+  enteros exactos. Si no hay lectura de presión, ponelos null.
 - Si un campo no aplica, ponelo null o [] (NUNCA lo omitas).
 
 Ejemplos:
 
 INPUT: "Hablé con Diego en la oficina ayer"
-OUTPUT: {"domain":"relationships","amount":null,"currency":null,"merchant":null,"people":["Diego"],"dates_text":["ayer"],"duration_minutes":null,"items":[],"title":"conversación con Diego","kind":"conversation"}
+OUTPUT: {"domain":"relationships","amount":null,"currency":null,"merchant":null,"people":["Diego"],"dates_text":["ayer"],"duration_minutes":null,"items":[],"title":"conversación con Diego","kind":"conversation","systolic":null,"diastolic":null,"pulse_bpm":null}
 
 INPUT: "Tuve una discusión fuerte con mi mamá esta tarde"
-OUTPUT: {"domain":"relationships","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":["esta tarde"],"duration_minutes":null,"items":[],"title":"discusión con mi mamá","kind":"conflict"}
+OUTPUT: {"domain":"relationships","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":["esta tarde"],"duration_minutes":null,"items":[],"title":"discusión con mi mamá","kind":"conflict","systolic":null,"diastolic":null,"pulse_bpm":null}
 
 INPUT: "Gasté 1850 en Aurrera: 320 detergente, 450 papel higiénico, 500 cable HDMI"
-OUTPUT: {"domain":"finance","amount":1850,"currency":"MXN","merchant":"Aurrera","people":[],"dates_text":[],"duration_minutes":null,"items":[{"name":"detergente","amount":320,"category":"hogar"},{"name":"papel higiénico","amount":450,"category":"hogar"},{"name":"cable HDMI","amount":500,"category":"electrónica"}],"title":"compra en Aurrera","kind":"expense"}
+OUTPUT: {"domain":"finance","amount":1850,"currency":"MXN","merchant":"Aurrera","people":[],"dates_text":[],"duration_minutes":null,"items":[{"name":"detergente","amount":320,"category":"hogar"},{"name":"papel higiénico","amount":450,"category":"hogar"},{"name":"cable HDMI","amount":500,"category":"electrónica"}],"title":"compra en Aurrera","kind":"expense","systolic":null,"diastolic":null,"pulse_bpm":null}
 
 INPUT: "Caminé en el parque con mi esposa Daniela durante 45 minutos"
-OUTPUT: {"domain":"exercise","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":[],"duration_minutes":45,"items":[],"title":"caminata en el parque","kind":"walk"}
+OUTPUT: {"domain":"exercise","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":[],"duration_minutes":45,"items":[],"title":"caminata en el parque","kind":"walk","systolic":null,"diastolic":null,"pulse_bpm":null}
 
 INPUT: "Hicimos una caminata familiar de 1 hora en el parque"
-OUTPUT: {"domain":"exercise","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":60,"items":[],"title":"caminata familiar","kind":"walk"}
+OUTPUT: {"domain":"exercise","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":60,"items":[],"title":"caminata familiar","kind":"walk","systolic":null,"diastolic":null,"pulse_bpm":null}
 
 INPUT: "Estoy aprendiendo Claude Code para LifeOS"
-OUTPUT: {"domain":"learning","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"aprendiendo Claude Code","kind":"study"}
+OUTPUT: {"domain":"learning","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"aprendiendo Claude Code","kind":"study","systolic":null,"diastolic":null,"pulse_bpm":null}
 
 INPUT: "Empecé el libro Atomic Habits de James Clear"
-OUTPUT: {"domain":"learning","amount":null,"currency":null,"merchant":null,"people":["James Clear"],"dates_text":[],"duration_minutes":null,"items":[],"title":"Atomic Habits","kind":"book"}
+OUTPUT: {"domain":"learning","amount":null,"currency":null,"merchant":null,"people":["James Clear"],"dates_text":[],"duration_minutes":null,"items":[],"title":"Atomic Habits","kind":"book","systolic":null,"diastolic":null,"pulse_bpm":null}
 
 INPUT: "Mi esposa Daniela y yo nos casamos el 15 de junio de 2018"
-OUTPUT: {"domain":"events","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":["15 de junio de 2018"],"duration_minutes":null,"items":[],"title":"casamiento con Daniela","kind":"milestone"}
+OUTPUT: {"domain":"events","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":["15 de junio de 2018"],"duration_minutes":null,"items":[],"title":"casamiento con Daniela","kind":"milestone","systolic":null,"diastolic":null,"pulse_bpm":null}
+
+INPUT: "122/81 53 pulsos"
+OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"presión 122/81, pulso 53","kind":"vital","systolic":122,"diastolic":81,"pulse_bpm":53}
+
+INPUT: "113, 82 y 55 de pulso."
+OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"presión 113/82, pulso 55","kind":"vital","systolic":113,"diastolic":82,"pulse_bpm":55}
+
+INPUT: "me duele mucho la cabeza desde esta mañana"
+OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":["esta mañana"],"duration_minutes":null,"items":[],"title":"dolor de cabeza","kind":"symptom","systolic":null,"diastolic":null,"pulse_bpm":null}
 
 Respondé EXCLUSIVAMENTE con el JSON. Nada más."""
 
@@ -261,6 +284,14 @@ def extract(
     except (TypeError, ValueError):
         dur = None
 
+    def _int_or_none(v) -> int | None:
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
     return ExtractionResult(
         domain=str(domain),
         amount=amount,
@@ -272,6 +303,9 @@ def extract(
         items=_items(parsed.get("items")),
         title=(str(parsed.get("title")).strip() if parsed.get("title") else None),
         kind=(str(parsed.get("kind")).strip() if parsed.get("kind") else None),
+        systolic=_int_or_none(parsed.get("systolic")),
+        diastolic=_int_or_none(parsed.get("diastolic")),
+        pulse_bpm=_int_or_none(parsed.get("pulse_bpm")),
         raw_json=r.content[:1000],
         confidence=0.65,
     )

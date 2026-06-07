@@ -96,3 +96,71 @@ def test_no_retry_when_retries_zero(monkeypatch):
 
     assert result is None
     assert rec.calls == 1  # retries=0 disables the retry entirely
+
+
+# ── Layer 3 — structured vitals fields in ExtractionResult ───────────────────
+# These tests verify that the extractor correctly parses and surfaces the new
+# systolic / diastolic / pulse_bpm fields from JSON returned by the nano model.
+# The HTTP call is stubbed via monkeypatch — no real server required.
+
+_BP_VITAL_JSON = (
+    '{"domain":"health","amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":"presión 122/81, pulso 53","kind":"vital",'
+    '"systolic":122,"diastolic":81,"pulse_bpm":53}'
+)
+
+_BP_NO_PULSE_JSON = (
+    '{"domain":"health","amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":"presión 120/80","kind":"vital",'
+    '"systolic":120,"diastolic":80,"pulse_bpm":null}'
+)
+
+_SYMPTOM_JSON = (
+    '{"domain":"health","amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":"dolor de cabeza","kind":"symptom",'
+    '"systolic":null,"diastolic":null,"pulse_bpm":null}'
+)
+
+
+def test_extraction_result_carries_vitals_fields(monkeypatch):
+    """When nano returns systolic/diastolic/pulse_bpm, ExtractionResult exposes them."""
+    rec = _Recorder([_ok(_BP_VITAL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("122/81 53 pulsos")
+
+    assert result is not None
+    assert result.domain == "health"
+    assert result.systolic == 122
+    assert result.diastolic == 81
+    assert result.pulse_bpm == 53
+
+
+def test_extraction_result_vitals_nullable(monkeypatch):
+    """When pulse_bpm is null in JSON, ExtractionResult.pulse_bpm is None."""
+    rec = _Recorder([_ok(_BP_NO_PULSE_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("presión 120/80")
+
+    assert result is not None
+    assert result.systolic == 120
+    assert result.diastolic == 80
+    assert result.pulse_bpm is None
+
+
+def test_extraction_result_vitals_absent_for_non_vital(monkeypatch):
+    """Non-BP health entries have systolic/diastolic/pulse_bpm = None."""
+    rec = _Recorder([_ok(_SYMPTOM_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("tengo dolor de cabeza")
+
+    assert result is not None
+    assert result.domain == "health"
+    assert result.systolic is None
+    assert result.diastolic is None
+    assert result.pulse_bpm is None
