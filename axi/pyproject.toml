@@ -59,6 +59,7 @@ dependencies = [
     # `-wheels` fork ships a working binary install. Keep both: resemblyzer
     # still depends on `webrtcvad`, and `-wheels` overrides the import.
     "webrtcvad-wheels>=2.0.14",
+    "freezegun>=1.5.5",
 ]
 
 [build-system]

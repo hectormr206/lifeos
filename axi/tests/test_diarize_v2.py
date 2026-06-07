@@ -203,6 +203,13 @@ def test_v2_happy_path_with_mocked_pipeline(tmp_path, monkeypatch):
         (_Turn(0.0, 1.0), "_", "SPEAKER_00"),
         (_Turn(1.0, 2.0), "_", "SPEAKER_01"),
     ])
+    # pyannote.audio 4.x wraps the annotation inside DiarizeOutput as
+    # `.speaker_diarization`. The production code does:
+    #   diarization = getattr(result, "speaker_diarization", result)
+    # A plain MagicMock auto-creates `.speaker_diarization` as a new child
+    # mock, so `.itertracks` is bypassed. Point the attribute back to self
+    # so the unwrap returns the same stubbed object on both 3.x and 4.x.
+    fake_diarization.speaker_diarization = fake_diarization
 
     fake_pipeline = MagicMock()
     fake_pipeline.return_value = fake_diarization
