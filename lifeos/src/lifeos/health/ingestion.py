@@ -84,9 +84,21 @@ _GLUCOSE_RE = re.compile(
 #   (2) "120/80" or "116, 84" with optional "y pulso N" appended — bare numbers
 #       only triggers when the numbers fall in physiological ranges to avoid
 #       false positives on accounting/dimensions/codes.
-_BP_RE = re.compile(
+_BP_RE_WITH_PULSE = re.compile(
+    # "presión 120/80 pulso 72" / "presión 122 81, 53 pulsos" — keyword + sys/dia
+    # + optional pulse. Separator between sys and dia: "/" or space. Pulse follows
+    # after optional separator and pulse keyword OR as bare number with "pulsos?".
     r"\b(?:presi[oó]n(?:\s+arterial)?|p\.?a\.?)\s*(?:de|:)?\s*"
-    r"(\d{2,3})\s*/\s*(\d{2,3})\b",
+    r"(?P<bpws>\d{2,3})\s*(?:/\s*|\s+)(?P<bpwd>\d{2,3})"
+    r"(?:[,;]?\s*(?:y\s+)?(?:(?:pulsos?|fc|frecuencia\s+card[íi]aca)\s*[:=]?\s*(?P<bpwp1>\d{2,3})"
+    r"|(?P<bpwp2>\d{2,3})\s*pulsos?))?",
+    re.IGNORECASE,
+)
+_BP_RE = re.compile(
+    # Explicit keyword + digits. Separator between sys and dia can be "/" (typed)
+    # or a plain space (output of normalize_numbers_es word→digit pass).
+    r"\b(?:presi[oó]n(?:\s+arterial)?|p\.?a\.?)\s*(?:de|:)?\s*"
+    r"(\d{2,3})\s*(?:/\s*|\s+)(\d{2,3})\b",
     re.IGNORECASE,
 )
 _BP_PULSE_BARE_RE = re.compile(
@@ -94,7 +106,9 @@ _BP_PULSE_BARE_RE = re.compile(
     # /  "132/83, pulsos 58" (plural). Both sides have to be plausible
     # (sys >= 80; dia >= 40) to avoid eating "150, 200" type non-medical
     # numbers — checked in Python.
-    r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})"
+    # Separator between sys and dia: comma, slash, or plain space (the last
+    # covers normalize_numbers_es output from word-form BP phrases).
+    r"^\s*(\d{2,3})\s*[,/ ]\s*(\d{2,3})"
     r"(?:\s+y\s+|\s*,?\s+|\s*[.;]\s+)?"
     r"(?:pulsos?|fc|frecuencia\s+card[íi]aca|hr)\s*[:=]?\s*(\d{2,3})\b",
     re.IGNORECASE,
@@ -102,42 +116,44 @@ _BP_PULSE_BARE_RE = re.compile(
 _BP_PULSE_TRAILING_RE = re.compile(
     # Pulse number BEFORE the word: "132, 83, 58 pulsos" / "118, 83, 52
     # pulsos." — three bare numbers (sys, dia, pulse) closed by "pulso(s)".
-    # Also handles "122/81 53 pulsos" where diastolic and pulse are separated
-    # by plain whitespace (no comma/slash between diastolic and pulse number).
-    # The first separator (sys→dia) allows only comma or slash [,/]; the second
-    # separator (dia→pulse) is intentionally wider: comma, slash, or a plain
-    # space [,/ ] — but NOT tab or newline (tightened from \s).
+    # Also handles "122/81 53 pulsos" and "122 81 53 pulsos" (space-sep output
+    # from normalize_numbers_es word→digit pass).
+    # The first separator (sys→dia) allows comma, slash, or plain space [,/ ];
+    # the second separator (dia→pulse) is also wide: comma, slash, or space.
     # Same physiological plausibility gate applies (checked in Python).
-    r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})\s*[,/ ]\s*(\d{2,3})\s*pulsos?\b",
+    r"^\s*(\d{2,3})\s*[,/ ]\s*(\d{2,3})\s*[,/ ]\s*(\d{2,3})\s*pulsos?\b",
     re.IGNORECASE,
 )
 _BP_PULSE_DE_PULSO_RE = re.compile(
     # "113, 82 y 55 de pulso." / "120, 80 y 60 de pulsos." /
-    # "120, 80 y 60 de pulsaciones." — pulse number comes before "de pulso(s)"
-    # or "de pulsaciones".  The separator between sys and dia can be [,/]
-    # and between dia and pulse can be ", y", " y", " " etc.
-    r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})"
+    # "120, 80 y 60 de pulsaciones." / "122 81 y 53 de pulsaciones." —
+    # pulse number comes before "de pulso(s)" or "de pulsaciones".
+    # Separator between sys and dia: comma, slash, or plain space.
+    r"^\s*(\d{2,3})\s*[,/ ]\s*(\d{2,3})"
     r"(?:\s*,?\s+y\s+|\s*,\s+|\s+)"
     r"(\d{2,3})\s+de\s+pulsaciones?\b",
     re.IGNORECASE,
 )
 _BP_PULSE_DE_PULSO_WORD_RE = re.compile(
     # Same shape but ends with "de pulso" or "de pulsos" (no "pulsaciones").
-    r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})"
+    # Separator between sys and dia: comma, slash, or plain space.
+    r"^\s*(\d{2,3})\s*[,/ ]\s*(\d{2,3})"
     r"(?:\s*,?\s+y\s+|\s*,\s+|\s+)"
     r"(\d{2,3})\s+de\s+pulsos?\b",
     re.IGNORECASE,
 )
 _WEIGHT_RE = re.compile(
-    # "peso 75", "peso de 70.5kg", "me pesé/pese 65", "weight 64" (EN alias).
-    # `pes[éeo]` allows the past tense with or without accent (Héctor often
-    # writes "me pese" without accent) plus the present "me peso".
-    r"\b(?:peso(?:\s+actual)?|me\s+pes[éeo]|weight)\s*(?:de|:|=)?\s*"
+    # "peso 75", "peso de 70.5kg", "me pesé/pese 65", "pesé 65", "weight 64".
+    # `pes[éeo]` allows past tense with/without accent and present "me peso".
+    # Also matches standalone "pesé N" without "me" (e.g. voice dictation).
+    r"\b(?:peso(?:\s+actual)?|(?:me\s+)?pes[éeo]|weight)\s*(?:de|:|=)?\s*"
     r"(\d{2,3}(?:\.\d{1,2})?)\s*(kg|kilos?)?\b",
     re.IGNORECASE,
 )
 _SLEEP_HOURS_RE = re.compile(
-    r"\bdorm[íi]\s*(?:unas?\s+)?(\d{1,2}(?:\.\d{1,2})?)\s*(?:horas?|hrs?|h)\b",
+    # "dormí 6 horas", "dormí 6.5 horas", "dormí 6 horas y media"
+    r"\bdorm[íi]\s*(?:unas?\s+)?(\d{1,2}(?:\.\d{1,2})?)\s*(?:horas?|hrs?|h)"
+    r"(?:\s+y\s+media)?\b",
     re.IGNORECASE,
 )
 # Spanish number words 1-12 for clock hours. "media" handled separately.
@@ -149,22 +165,36 @@ _SP_HOUR_WORDS = {
 # number 1. We only accept it in the clock context here.
 
 # Natural-language sleep with named groups for readability. Handles:
-#   me dormí (a/como a las) X (:MM | y media | y cuarto | y N)
+#   me dormí / me acosté / me fui a dormir|cama
+#     (a/como a las) X (:MM | y media | y cuarto | y N)
 #       (de la noche/mañana/tarde/madrugada | am | pm | h)
-#   ... desperté/me levanté/acabo de despertar
+#   ... desperté/me levanté/acabo de despertar(me)/levantarme
 #   (ahorita | a las Y (:MM | y media | y cuarto | y N))
+#
+# Also handles: "dormí de X (a|hasta) Y"
 _HOUR_WORD_ALT = "|".join(_SP_HOUR_WORDS.keys())
+# Shared hour+minute fragment used in both onset and end groups.
+_HOUR_MIN_FRAG = (
+    rf"(?P<{{h}}>\d{{{{1,2}}}}|{_HOUR_WORD_ALT})"
+    r"(?:"
+    r"  :(?P<{min_d}>\d{2})"
+    r"  | \s+y\s+(?P<{min_w}>media|cuarto|\d{1,2})"
+    r")?"
+)
+
 _SLEEP_FROM_TO_RE = re.compile(
-    r"\bme\s+dorm[íi]\s*"
+    # Onset verb: "me dormí", "me acosté", "me fui a dormir|cama"
+    r"\b(?:me\s+(?:dorm[íi]|acost[eé])|me\s+fui\s+a\s+(?:dormir|la\s+cama))\s*"
     r"(?:como\s+)?(?:a\s+)?(?:la\s+|las\s+)?"
     rf"(?P<start_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
     r"(?:"
     r"  :(?P<start_min>\d{2})"
     r"  | \s+y\s+(?P<start_min_word>media|cuarto|\d{1,2})"
     r")?\s*"
-    r"(?:de\s+la\s+(?P<period>noche|ma[ñn]ana|tarde|madrugada)|am|pm|h)?"
+    r"(?:de\s+la\s+(?P<period>noche|ma[ñn]ana|tarde|madrugada)|(?P<ampm>am|pm))?"
     r".{1,120}?"
-    r"(?:desp[eé]rt[éo]|me\s+levant[éo]|acabo\s+de\s+(?:despertar|levantar))"
+    # Wake verb: desperté, me levanté, acabo de despertar(me)|levantarme
+    r"(?:desp[eé]rt[éo]|me\s+levant[éo]|acabo\s+de\s+(?:despertar(?:me)?|levantarme))"
     r"(?:.{0,40}?"
     r"(?:"
     r"  (?P<now>ahorita|ya|reci[eé]n)"
@@ -174,8 +204,28 @@ _SLEEP_FROM_TO_RE = re.compile(
     r"    :(?P<end_min>\d{2})"
     r"    | \s+y\s+(?P<end_min_word>media|cuarto|\d{1,2})"
     r"  )?"
+    r"  (?:\s*(?:de\s+la\s+(?P<end_period>noche|ma[ñn]ana|tarde|madrugada)|(?P<end_ampm>am|pm)))?"
     r"))?",
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
+)
+
+# "dormí de X a Y" / "dormí de X hasta Y"
+_SLEEP_DE_X_A_Y_RE = re.compile(
+    r"\bdorm[íi]\s+de\s+(?:la\s+|las\s+)?"
+    rf"(?P<start_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
+    r"(?:"
+    r"  :(?P<start_min>\d{2})"
+    r"  | \s+y\s+(?P<start_min_word>media|cuarto|\d{1,2})"
+    r")?\s*"
+    r"(?:de\s+la\s+(?P<period>noche|ma[ñn]ana|tarde|madrugada)|(?P<ampm>am|pm))?"
+    r"\s+(?:a|hasta)\s+(?:la\s+|las\s+)?"
+    rf"(?P<end_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
+    r"(?:"
+    r"  :(?P<end_min>\d{2})"
+    r"  | \s+y\s+(?P<end_min_word>media|cuarto|\d{1,2})"
+    r")?"
+    r"(?:\s*(?:de\s+la\s+(?P<end_period>noche|ma[ñn]ana|tarde|madrugada)|(?P<end_ampm>am|pm)))?",
+    re.IGNORECASE | re.VERBOSE,
 )
 
 
@@ -328,70 +378,140 @@ def _try_body_composition(text: str) -> HealthIntent | None:
     )
 
 
-def _try_natural_sleep(text: str) -> HealthIntent | None:
-    """Parse natural-language sleep like 'me dormí a la una de la madrugada
-    y acabo de despertar ahorita'. Returns a sleep_hours vital with the
-    computed duration. Falls back to None on ambiguous input.
+def _resolve_hour_24(h: int, period: str, ampm: str, wake: bool = False) -> int:
+    """Convert a 12-hour token + spoken period or am/pm marker to 24h.
 
-    Two cases:
-      A) Explicit end time: 'desperté a las 8' → end_hour = 8
-      B) 'ahorita' / 'recién' → end = now in local TZ at call time
+    period: 'noche'|'madrugada'|'tarde'|'mañana'|''
+    ampm:   'am'|'pm'|''
+    wake:   True when resolving the wake-up end time (heuristic differs from onset)
+    """
+    p = period.lower().strip()
+    a = ampm.lower().strip()
+    if a == "pm":
+        return h + 12 if h < 12 else h
+    if a == "am":
+        return h if h != 12 else 0
+    if p == "madrugada":
+        # madrugada: h <= 6 stay AM; 12 → midnight; others + 12
+        if h <= 6:
+            return h
+        if h == 12:
+            return 0
+        return h + 12 if h < 12 else h
+    if p == "noche":
+        # noche: h <= 3 treated as madrugada-style AM (e.g. "3 de la noche" = 3:00)
+        # h 4-11 → PM (+ 12); h == 12 → midnight (0)
+        if h <= 3:
+            return h
+        if h == 12:
+            return 0
+        return h + 12 if h < 12 else h
+    if p == "tarde":
+        return h + 12 if h < 12 else h
+    if p in ("mañana",):
+        # h == 12 with "de la mañana" → noon (12:00), not midnight
+        return h if h <= 12 else 0
+    if wake:
+        # Wake-up heuristic: no period given. Hours 1-12 are assumed morning (AM).
+        # Hours 13-23 are already in 24h form (rare but valid).
+        return h if h <= 12 else h
+    # Sleep-onset heuristic: h ≤ 6 → AM (madrugada), else PM (evening).
+    return h if h <= 6 else (h + 12 if h < 12 else h)
+
+
+def _try_natural_sleep(
+    text: str,
+    now: "datetime | None" = None,  # injectable for tests and dashboard
+) -> "HealthIntent | None":
+    """Parse natural-language sleep phrases. Returns a sleep_hours vital or None.
+
+    Handles:
+      • me dormí / me acosté / me fui a dormir  … desperté/me levanté/acabo de despertar
+      • dormí de X a Y / dormí de X hasta Y
+
+    `now` lets callers pass the original send timestamp instead of wall time.
+    Defaults to datetime.now(Mexico_City) when None.
     """
     from datetime import datetime
     from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/Mexico_City")
+    if now is None:
+        now = datetime.now(tz)
+    elif now.tzinfo is not None:
+        # Caller passed a tz-aware datetime (e.g. UTC from the dashboard).
+        # Convert to local time so hour/minute reflect CDMX, not UTC.
+        now = now.astimezone(tz)
+
+    # ── Try "dormí de X a Y" first (no onset verb needed) ────────────────
+    m2 = _SLEEP_DE_X_A_Y_RE.search(text)
+    if m2:
+        start_h = _parse_hour_token(m2.group("start_h"))
+        end_h_tok = m2.group("end_h")
+        end_h = _parse_hour_token(end_h_tok) if end_h_tok else None
+        if start_h is not None and end_h is not None:
+            start_min = (int(m2.group("start_min")) if m2.group("start_min")
+                         else _parse_minutes_word(m2.group("start_min_word")))
+            end_min = (int(m2.group("end_min")) if m2.group("end_min")
+                       else _parse_minutes_word(m2.group("end_min_word")))
+            period = (m2.group("period") or "").lower()
+            ampm = (m2.group("ampm") or "").lower()
+            end_period = (m2.group("end_period") or "").lower()
+            end_ampm = (m2.group("end_ampm") or "").lower()
+            sh24 = _resolve_hour_24(start_h, period, ampm)
+            eh24 = _resolve_hour_24(end_h, end_period, end_ampm, wake=True)
+            delta = (eh24 * 60 + end_min) - (sh24 * 60 + start_min)
+            if delta < 0:
+                delta += 24 * 60
+            hours = round(delta / 60, 1)
+            if 0.5 <= hours <= 16:
+                return HealthIntent(
+                    kind="vital",
+                    title=f"dormí {hours}h",
+                    data={
+                        "type": "sleep_hours",
+                        "value": hours,
+                        "unit": "h",
+                        "start_hour_24": sh24,
+                        "start_minute": start_min,
+                        "end_hour_24": eh24,
+                        "end_minute": end_min,
+                    },
+                    confidence=0.80,
+                )
+
+    # ── Try "me dormí / me acosté / me fui a dormir … desperté …" ────────
     m = _SLEEP_FROM_TO_RE.search(text)
     if not m:
         return None
     start_h = _parse_hour_token(m.group("start_h"))
     if start_h is None:
         return None
-    # Minutes can come either as ':MM' digits or as 'y media|cuarto|N'.
-    start_min = int(m.group("start_min")) if m.group("start_min") else \
-                _parse_minutes_word(m.group("start_min_word"))
+    start_min = (int(m.group("start_min")) if m.group("start_min")
+                 else _parse_minutes_word(m.group("start_min_word")))
     period = (m.group("period") or "").lower()
+    ampm = (m.group("ampm") or "").lower()
     end_phrase = (m.group("now") or "").lower()
     end_h_token = m.group("end_h")
     end_min_str = m.group("end_min")
     end_min_word = m.group("end_min_word")
 
-    # Disambiguate AM/PM from the spoken period when possible.
-    # "a la una de la noche/madrugada" → 1:00 AM
-    # "a las once de la noche" → 23:00
-    # "a las 8 de la mañana" → 8:00
-    if period in ("noche", "madrugada"):
-        # 1..6 → AM (1-6 AM, madrugada); 7..12 → PM (night)
-        if start_h <= 6 or start_h == 12:
-            sh24 = start_h if start_h != 12 else 0
-        else:
-            sh24 = start_h + 12 if start_h < 12 else start_h
-    elif period == "tarde":
-        sh24 = start_h + 12 if start_h < 12 else start_h
-    elif period == "mañana":
-        sh24 = start_h if start_h < 12 else 0
-    else:
-        # No period given. Reasonable default: if start_h <= 6 → AM (early
-        # sleep onset = madrugada), else PM (night sleep onset).
-        sh24 = start_h if start_h <= 6 else (start_h + 12 if start_h < 12 else start_h)
+    sh24 = _resolve_hour_24(start_h, period, ampm)
 
-    # End time: explicit, or now.
-    tz = ZoneInfo("America/Mexico_City")  # match the rest of LifeOS default
-    now = datetime.now(tz)
+    # End time: explicit clock, "ahorita/ya/recién" (= now), or bare wake verb
+    # with no time qualifier — in the last case we use `now` as the wake time.
     if end_h_token:
         eh_parsed = _parse_hour_token(end_h_token)
         if eh_parsed is None:
             return None
-        eh24 = eh_parsed
-        # End minutes can also come as digit OR "y media|cuarto|N".
+        end_period = (m.group("end_period") or "").lower()
+        end_ampm = (m.group("end_ampm") or "").lower()
+        eh24 = _resolve_hour_24(eh_parsed, end_period, end_ampm, wake=True)
         em = (int(end_min_str) if end_min_str
               else _parse_minutes_word(end_min_word))
-        # Heuristic: if explicit end_hour < start_hour, assume next day.
-        # If no period given for end, assume morning if eh24 ≤ 11.
-    elif "ahorita" in end_phrase or "ya" in end_phrase or "recién" in end_phrase:
+    else:
+        # "ahorita"/"ya"/"recién" OR bare wake verb with no end time → use now
         eh24 = now.hour
         em = now.minute
-    else:
-        # Couldn't determine end time
-        return None
 
     # Compute hours, allowing the night to wrap past midnight.
     start_min_total = sh24 * 60 + start_min
@@ -426,6 +546,28 @@ def _try_vital(text: str) -> HealthIntent | None:
             kind="vital",
             title=f"glucosa {v} mg/dL",
             data={"type": "glucose", "value": v, "unit": "mg/dL"},
+        )
+    # Keyword BP with optional pulse: "presión 122 81, 53 pulsos".
+    m = _BP_RE_WITH_PULSE.search(text)
+    if m:
+        sys, dia = int(m.group("bpws")), int(m.group("bpwd"))
+        pulse_raw = m.group("bpwp1") or m.group("bpwp2")
+        if pulse_raw is not None:
+            pulse = int(pulse_raw)
+            if 80 <= sys <= 220 and 40 <= dia <= 130 and 30 <= pulse <= 220:
+                return HealthIntent(
+                    kind="vital",
+                    title=f"presión {sys}/{dia}, pulso {pulse}",
+                    data={"type": "blood_pressure", "systolic": sys, "diastolic": dia,
+                          "pulse_bpm": pulse, "unit": "mmHg"},
+                    confidence=0.80,
+                )
+        # Fallback: keyword with only sys/dia, no pulse.
+        return HealthIntent(
+            kind="vital",
+            title=f"presión {sys}/{dia}",
+            data={"type": "blood_pressure", "systolic": sys, "diastolic": dia,
+                  "unit": "mmHg"},
         )
     m = _BP_RE.search(text)
     if m:
@@ -470,6 +612,10 @@ def _try_vital(text: str) -> HealthIntent | None:
     m = _SLEEP_HOURS_RE.search(text)
     if m:
         v = float(m.group(1))
+        # "dormí 6 horas y media" → add 0.5; the regex matched the optional
+        # " y media" tail so check if it's present in the matched text.
+        if "y media" in m.group(0).lower():
+            v += 0.5
         return HealthIntent(
             kind="vital",
             title=f"dormí {v}h",
@@ -575,8 +721,14 @@ _PARSERS = (
 )
 
 
-def parse_health(text: str) -> HealthIntent | None:
+def parse_health(
+    text: str,
+    now: "datetime | None" = None,
+) -> "HealthIntent | None":
     """Try to extract a health entry from `text`. Returns None on no match.
+
+    `now` is passed to natural-sleep parsers so dashboard can supply the
+    original client send time instead of wall time.
 
     Caller falls back to the brain for everything that returns None. The
     rule is "high precision over high recall": false positives in a
@@ -587,7 +739,10 @@ def parse_health(text: str) -> HealthIntent | None:
         return None
     for parser in _PARSERS:
         try:
-            res = parser(text)
+            if parser is _try_natural_sleep:
+                res = parser(text, now=now)
+            else:
+                res = parser(text)
             if res is not None:
                 return res
         except Exception as e:  # noqa: BLE001
