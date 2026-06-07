@@ -367,6 +367,188 @@ def test_natural_sleep_y_cuarto() -> None:
     assert h.data["start_minute"] == 15
 
 
+# ── Task 1: extended sleep natural-language coverage ───────────────────────
+
+
+def test_sleep_hours_y_media_half_hour() -> None:
+    """'dormí 6 horas y media' must parse as 6.5, not 6.0."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("anoche dormí 6 horas y media")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 6.5
+
+
+def test_sleep_onset_me_dormi_wake_acabo_de_despertar() -> None:
+    """'Me dormí a las 11 pm y acabo de despertar' — wake = now.
+    Freeze at UTC 15:00 = 09:00 CDMX (UTC-6), so 23:00→09:00 = 10h.
+    """
+    from freezegun import freeze_time
+    from lifeos.health.ingestion import parse_health
+    with freeze_time("2026-06-07 15:00:00"):  # 15:00 UTC = 09:00 CDMX
+        h = parse_health("Me dormí a las 11 pm y acabo de despertar")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "sleep_hours"
+    # 23:00 → 09:00 CDMX = 10h
+    assert h.data["value"] == 10.0
+
+
+def test_sleep_onset_lowercase_no_accent_wake_now() -> None:
+    """'me dormí a las 11 y acabo de despertar' (no pm, bare hour).
+    Freeze at UTC 13:00 = 07:00 CDMX, so 23:00→07:00 = 8h.
+    """
+    from freezegun import freeze_time
+    from lifeos.health.ingestion import parse_health
+    with freeze_time("2026-06-07 13:00:00"):  # 13:00 UTC = 07:00 CDMX
+        h = parse_health("me dormí a las 11 y acabo de despertar")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    # 23:00 → 07:00 CDMX = 8h
+    assert h.data["value"] == 8.0
+
+
+def test_sleep_onset_me_dormi_levantarme() -> None:
+    """'Me dormí a las 11 pm y acabo de levantarme' — 'levantarme' as wake.
+    Freeze at UTC 13:30 = 07:30 CDMX, so 23:00→07:30 = 8.5h.
+    """
+    from freezegun import freeze_time
+    from lifeos.health.ingestion import parse_health
+    with freeze_time("2026-06-07 13:30:00"):  # 13:30 UTC = 07:30 CDMX
+        h = parse_health("Me dormí a las 11 pm y acabo de levantarme")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 8.5
+
+
+def test_sleep_me_acosté_wake_me_levanté() -> None:
+    """'me acosté a las 11 y me levanté a las 7'."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("me acosté a las 11 y me levanté a las 7")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 8.0
+
+
+def test_sleep_dormi_de_x_a_y() -> None:
+    """'dormí de 11 a 7' — de X a Y pattern."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("dormí de 11 a 7")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 8.0
+
+
+def test_sleep_me_fui_a_dormir_desperte() -> None:
+    """'me fui a dormir a las 11 y desperté a las 7'."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("me fui a dormir a las 11 y desperté a las 7")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 8.0
+
+
+def test_sleep_plausibility_gate_too_long() -> None:
+    """Duration > 16h must be rejected (implausible).
+    'dormí de las 10 de la noche a las 3 de la mañana' = only 5h — this tests
+    plausibility passes for normal duration.
+    For > 16h: 'me acosté a la 1 de la tarde y me levanté a las 6 am' = 17h.
+    """
+    from lifeos.health.ingestion import parse_health
+    # 13:00 → 06:00 next day = 17h — should fail the 0.5-16h gate
+    h = parse_health("me acosté a la 1 de la tarde y me levanté a las 6 de la mañana")
+    # Either None or not a vital sleep_hours
+    assert h is None or h.data.get("type") != "sleep_hours"
+
+
+# ── Issue 1: UTC hour used for sleep wake-time ───────────────────────────────
+
+
+def test_sleep_wake_now_uses_local_time_not_utc() -> None:
+    """When now= is a UTC-aware datetime, _try_natural_sleep must convert to
+    Mexico_City before extracting hour/minute for the wake time.
+
+    14:30 UTC == 08:30 CDMX (UTC-6 in winter).
+    Slept at 11 pm → 23:00. Woke at 08:30 CDMX → delta = 9.5h.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from lifeos.health.ingestion import parse_health
+
+    now_utc = datetime(2026, 1, 1, 14, 30, tzinfo=ZoneInfo("UTC"))
+    h = parse_health(
+        "me dormí a las 11 y acabo de despertar",
+        now=now_utc,
+    )
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["end_hour_24"] == 8
+    assert h.data["end_minute"] == 30
+    assert abs(h.data["value"] - 9.5) < 0.1
+
+
+# ── Issue 2: "12 de la mañana" → noon not midnight ───────────────────────────
+
+
+def test_sleep_twelve_manana_is_noon_from_to() -> None:
+    """'dormí de 2 a 12 de la mañana' — 12 mañana must be noon (12:00), not 0."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("dormí de 2 de la mañana a 12 de la mañana")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["end_hour_24"] == 12  # noon, NOT midnight (0)
+
+
+def test_sleep_twelve_manana_is_noon_from_to_pattern() -> None:
+    """'dormí de las 2 a las 12 de la mañana' via _SLEEP_FROM_TO_RE path."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("me dormí a las 2 de la mañana y me levanté a las 12 de la mañana")
+    assert h is not None
+    assert h.data["end_hour_24"] == 12  # noon, NOT 0
+
+
+# ── Issue 3: hours 4/5/6 "de la noche" must be PM ────────────────────────────
+
+
+def test_sleep_six_noche_is_18() -> None:
+    """'me dormí a las 6 de la noche' — 6 PM = 18:00, not 6 AM.
+    Wake at 2 de la madrugada (2:00) = 8h sleep from 18:00.
+    """
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("me dormí a las 6 de la noche y me levanté a las 2 de la madrugada")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["start_hour_24"] == 18  # was returning 6 (bug)
+    assert h.data["value"] == 8.0
+
+
+def test_sleep_four_noche_is_16() -> None:
+    """'dormí de 4 de la noche a 12 de la noche' — 4 PM = 16:00, midnight = 0."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("dormí de 4 de la noche a 12 de la noche")
+    assert h is not None
+    assert h.data["start_hour_24"] == 16
+    assert h.data["end_hour_24"] == 0  # midnight
+    assert h.data["value"] == 8.0
+
+
+def test_sleep_three_noche_stays_am() -> None:
+    """Hours <= 3 with 'de la noche' are kept as AM (madrugada convention)."""
+    from lifeos.health.ingestion import parse_health
+
+    # 3 de la noche = 3:00 AM (03:00), 7 de la mañana wake = 7h sleep
+    h = parse_health("me dormí a las 3 de la noche y me levanté a las 7")
+    assert h is not None
+    assert h.data["start_hour_24"] == 3  # madrugada-style AM
+
+
 def test_body_composition_plausibility_rejects_extreme() -> None:
     """A field value outside physiological range is DROPPED (whole entry
     not rejected — other plausible fields are kept)."""
