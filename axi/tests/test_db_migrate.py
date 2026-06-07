@@ -124,7 +124,8 @@ def test_migrate_plaintext_preserves_data(tmp_path, monkeypatch):
     assert _opens_as_plain_sqlite(backups[0])
 
     # Data is intact through the normal (encrypted) store API.
-    store._conn = None
+    # Reset the connection so _connect() re-opens with the encryption key.
+    store.close()
     assert store.conversation_count() == 2
     rows = store.recent_conversations(limit=10)
     assert [r["user_text"] for r in rows] == ["hola", "hora?"]
@@ -142,7 +143,7 @@ def test_migrate_preserves_fts_search(tmp_path, monkeypatch):
 
     db_migrate.migrate_to_encrypted()
 
-    store._conn = None
+    store.close()
     hits = store.search_nodes_fts("Axi")
     assert len(hits) == 1
     assert "Axi" in hits[0]["label"]
