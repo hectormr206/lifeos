@@ -130,3 +130,102 @@ def test_chat_page_renders(client):
     r = client.get("/chat")
     assert r.status_code == 200
     assert "Chat con Axi" in r.text
+
+
+# ─── Issue 6: nano path must persist original text, not normalized text ────
+
+
+def test_nano_try_extract_uses_original_text_for_body(monkeypatch):
+    """_try_nano_extract must use original_text for body= fields, not the
+    normalized parse_text.  We test the function directly to avoid having
+    to work around the regex fast-path that catches many health phrases first.
+    """
+    from axi import dashboard
+    from lifeos.health import entries as _he
+
+    original = "gasté doscientos pesos en algo"
+    normalized = "gasté 200 pesos en algo"
+
+    captured_body: list[str] = []
+    real_create = _he.create
+
+    def spy_create(**kwargs):
+        captured_body.append(kwargs.get("body", ""))
+        return real_create(**kwargs)
+
+    import lifeos.health.entries as _he_mod
+    monkeypatch.setattr(_he_mod, "create", spy_create)
+
+    from lifeos.agents import extractor as nano_extractor
+
+    class _FakeHealthResult:
+        domain = "health"
+        kind = "note"
+        title = "nota"
+        systolic = None
+        diastolic = None
+        pulse_bpm = None
+        sleep_hours = None
+        weight_kg = None
+        glucose_mg_dl = None
+        confidence = 0.7
+
+    monkeypatch.setattr(nano_extractor, "extract", lambda text, **kw: _FakeHealthResult())
+
+    result = dashboard._try_nano_extract(
+        normalized,
+        location_tag=None,
+        original_text=original,
+    )
+    assert result is not None
+    assert result["domain"] == "health"
+    # The persisted body must be the original text, not the normalized form.
+    assert len(captured_body) >= 1
+    assert captured_body[0] == original
+    assert "doscientos" in captured_body[0]
+
+
+# ─── Issue 7: nano few-shot — onset-only sleep yields null sleep_hours ─────
+
+
+def test_nano_sleep_onset_only_falls_to_note(monkeypatch):
+    """When nano returns kind=note and sleep_hours=null (onset-only message),
+    _try_nano_extract must persist a note entry, NOT an empty vital.
+    """
+    from axi import dashboard
+    from lifeos.agents import extractor as nano_extractor
+    from lifeos.health import entries as _he
+
+    captured_kind: list[str] = []
+    real_create = _he.create
+
+    def spy_create(**kwargs):
+        captured_kind.append(kwargs.get("kind", ""))
+        return real_create(**kwargs)
+
+    import lifeos.health.entries as _he_mod
+    monkeypatch.setattr(_he_mod, "create", spy_create)
+
+    class _FakeOnsetResult:
+        domain = "health"
+        kind = "note"
+        title = "registro de sueño"
+        systolic = None
+        diastolic = None
+        pulse_bpm = None
+        sleep_hours = None
+        weight_kg = None
+        glucose_mg_dl = None
+        confidence = 0.7
+
+    monkeypatch.setattr(nano_extractor, "extract", lambda text, **kw: _FakeOnsetResult())
+
+    result = dashboard._try_nano_extract(
+        "Me dormí a las 11 pm y acabo de despertar",
+        location_tag=None,
+    )
+    assert result is not None
+    assert result["domain"] == "health"
+    # Must persist as note (not vital) since sleep_hours is null and kind is note.
+    assert len(captured_kind) >= 1
+    assert captured_kind[0] == "note"

@@ -405,3 +405,209 @@ def test_nano_health_note_stays_note(monkeypatch, health_isolated_db):
     assert entry.kind == "note"
     # data is None or empty when no structured fields were set
     assert not entry.data
+
+
+def test_nano_health_title_none_uses_original_text(monkeypatch, health_isolated_db):
+    """When nano returns title=None for a health entry, the persisted entry title
+    must use the ORIGINAL (pre-normalization) user text, not the normalized text."""
+    from lifeos.agents import extractor as nano_extractor
+    from axi.dashboard import _try_nano_extract
+
+    # title=None forces the fallback; kind="note" avoids BP plausibility branch.
+    fake = _make_extraction_result(
+        domain="health", kind="note", title=None,
+        systolic=None, diastolic=None,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    original = "Me duele la cabeza desde las 2hs"
+    normalized = "me duele la cabeza desde las 02:00"  # different from original
+
+    out = _try_nano_extract(normalized, None, original_text=original)
+
+    assert out is not None
+    from lifeos.health import entries as _he
+    eid = out["entry_ids"][0]
+    entry = _he.get(eid)
+    # Title must be derived from original_text, not the normalized text.
+    assert entry.title.startswith(original[:20])
+
+
+# ── Task 2: sleep/weight/glucose nano health vitals ───────────────────────────
+
+
+def test_nano_health_sleep_creates_structured_vital(monkeypatch, health_isolated_db):
+    """When nano returns sleep_hours, health branch stores a structured sleep vital."""
+    from lifeos.agents import extractor as nano_extractor
+    from lifeos.agents.extractor import ExtractionResult
+    from axi.dashboard import _try_nano_extract
+
+    fake = ExtractionResult(
+        domain="health", kind="vital", title="sueño 8h",
+        sleep_hours=8.0, weight_kg=None, glucose_mg_dl=None,
+        systolic=None, diastolic=None, pulse_bpm=None,
+        confidence=0.65,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    out = _try_nano_extract("Me dormí a las 11 pm y acabo de despertar", None)
+
+    assert out is not None
+    assert out["domain"] == "health"
+    from lifeos.health import entries as _he
+    entry = _he.get(out["entry_ids"][0])
+    assert entry.kind == "vital"
+    assert entry.data["type"] == "sleep_hours"
+    assert entry.data["value"] == 8.0
+    assert entry.data["unit"] == "h"
+
+
+def test_nano_health_sleep_implausible_falls_to_note(monkeypatch, health_isolated_db):
+    """sleep_hours outside 0.5-16 range must downgrade to note."""
+    from lifeos.agents import extractor as nano_extractor
+    from lifeos.agents.extractor import ExtractionResult
+    from axi.dashboard import _try_nano_extract
+
+    fake = ExtractionResult(
+        domain="health", kind="vital", title="sueño 20h",
+        sleep_hours=20.0,  # implausible
+        weight_kg=None, glucose_mg_dl=None,
+        systolic=None, diastolic=None, pulse_bpm=None,
+        confidence=0.65,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    out = _try_nano_extract("dormí 20 horas", None)
+
+    assert out is not None
+    from lifeos.health import entries as _he
+    entry = _he.get(out["entry_ids"][0])
+    assert entry.kind == "note"
+
+
+def test_nano_health_weight_creates_structured_vital(monkeypatch, health_isolated_db):
+    """When nano returns weight_kg, health branch stores a structured weight vital."""
+    from lifeos.agents import extractor as nano_extractor
+    from lifeos.agents.extractor import ExtractionResult
+    from axi.dashboard import _try_nano_extract
+
+    fake = ExtractionResult(
+        domain="health", kind="vital", title="peso 64.5 kg",
+        weight_kg=64.5, sleep_hours=None, glucose_mg_dl=None,
+        systolic=None, diastolic=None, pulse_bpm=None,
+        confidence=0.65,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    out = _try_nano_extract("pesé 64.5 kg hoy en ayunas", None)
+
+    assert out is not None
+    from lifeos.health import entries as _he
+    entry = _he.get(out["entry_ids"][0])
+    assert entry.kind == "vital"
+    assert entry.data["type"] == "weight"
+    assert entry.data["value"] == 64.5
+    assert entry.data["unit"] == "kg"
+
+
+def test_nano_health_glucose_creates_structured_vital(monkeypatch, health_isolated_db):
+    """When nano returns glucose_mg_dl, health branch stores a structured glucose vital."""
+    from lifeos.agents import extractor as nano_extractor
+    from lifeos.agents.extractor import ExtractionResult
+    from axi.dashboard import _try_nano_extract
+
+    fake = ExtractionResult(
+        domain="health", kind="vital", title="glucosa 95 mg/dL",
+        glucose_mg_dl=95.0, sleep_hours=None, weight_kg=None,
+        systolic=None, diastolic=None, pulse_bpm=None,
+        confidence=0.65,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    out = _try_nano_extract("glucosa en 95 esta mañana", None)
+
+    assert out is not None
+    from lifeos.health import entries as _he
+    entry = _he.get(out["entry_ids"][0])
+    assert entry.kind == "vital"
+    assert entry.data["type"] == "glucose"
+    assert entry.data["value"] == 95.0
+    assert entry.data["unit"] == "mg/dL"
+
+
+# ── Task 3: client_ts plumbing ────────────────────────────────────────────────
+
+
+def test_chat_ask_client_ts_persists_as_entry_when(client, monkeypatch, health_isolated_db):
+    """When client_ts is sent, the health entry is stored with that timestamp."""
+    from datetime import datetime, timezone
+    from lifeos.agents import extractor as nano_extractor
+    from lifeos.agents.extractor import ExtractionResult
+
+    past_ts = "2026-06-01T10:00:00Z"
+    past_dt = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    # Intercept nano so health fast-path fires
+    fake = ExtractionResult(
+        domain="health", kind="vital", title="glucosa 95",
+        glucose_mg_dl=95.0, sleep_hours=None, weight_kg=None,
+        systolic=None, diastolic=None, pulse_bpm=None,
+        confidence=0.65,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    # Also mock the regex path to NOT match (so nano fires)
+    from lifeos.health import ingestion as hi_mod
+    monkeypatch.setattr(hi_mod, "parse_health", lambda *_a, **_kw: None)
+
+    r = client.post("/api/chat/ask", json={
+        "text": "glucosa en 95 esta mañana",
+        "client_ts": past_ts,
+    })
+    assert r.status_code == 200
+
+    from lifeos.health import entries as _he
+    all_entries = _he.list_recent(days=30)
+    # Find the glucose entry we just created
+    glucose_entry = next(
+        (e for e in all_entries if e.data and e.data.get("type") == "glucose"),
+        None,
+    )
+    assert glucose_entry is not None
+    assert glucose_entry.ts == past_dt
+
+
+def test_chat_ask_client_ts_future_is_rejected(client, monkeypatch, health_isolated_db):
+    """client_ts more than 2 minutes in the future must be silently ignored."""
+    from datetime import datetime, timezone
+    from lifeos.agents import extractor as nano_extractor
+    from lifeos.agents.extractor import ExtractionResult
+
+    future_ts = "2099-12-31T23:59:59Z"
+
+    fake = ExtractionResult(
+        domain="health", kind="vital", title="glucosa 80",
+        glucose_mg_dl=80.0, sleep_hours=None, weight_kg=None,
+        systolic=None, diastolic=None, pulse_bpm=None,
+        confidence=0.65,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    from lifeos.health import ingestion as hi_mod
+    monkeypatch.setattr(hi_mod, "parse_health", lambda *_a, **_kw: None)
+
+    r = client.post("/api/chat/ask", json={
+        "text": "glucosa en 80 esta mañana",
+        "client_ts": future_ts,
+    })
+    assert r.status_code == 200
+
+    from lifeos.health import entries as _he
+    all_entries = _he.list_recent(days=30)
+    glucose_entry = next(
+        (e for e in all_entries if e.data and e.data.get("type") == "glucose"),
+        None,
+    )
+    assert glucose_entry is not None
+    # Entry timestamp must NOT be in 2099 — must use server time instead
+    assert glucose_entry.ts.year != 2099
