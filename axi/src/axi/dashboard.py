@@ -1954,24 +1954,64 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
 
         # ─── health (conversacional, regex prioritizes structured) ──
         if domain == "health":
-            # The regex parser handles structured cases (presión X/Y, RM N,
-            # IMC N, dormí Xh, etc.) — anything that gets here is the
-            # ambiguous tail. We persist a kind="note" entry with body=text
-            # so it's at least visible in /health. The user can edit later.
+            # The regex parser handles most structured cases (presión X/Y,
+            # RM N, IMC N, dormí Xh, etc.). When nano reaches here it may
+            # have detected a blood pressure vital — if it extracted
+            # systolic+diastolic, persist a structured vital entry with the
+            # same data shape that the regex path (_try_vital) produces so
+            # both sources are queryable the same way. Otherwise fall back
+            # to a plain note entry so the message is at least visible.
             from lifeos.health import entries as _he
             kind_map = {"symptom": "symptom", "vital": "vital",
                         "medication": "medication", "condition": "condition",
                         "note": "note", None: "note"}
+            entry_kind = kind_map.get(result.kind, "note")
+            entry_data: dict | None = None
+            entry_title = result.title or text[:80]
+            # When nano surfaced a blood pressure reading with plausible
+            # values, build the structured vital data matching _try_vital's
+            # output shape (type, systolic, diastolic, unit, pulse_bpm).
+            # If nano said "vital" but the plausibility gate fails (or vitals
+            # fields are absent), force "note" so no empty vital is persisted —
+            # mirrors the regex path where _try_vital returns None on bad values.
+            if (
+                result.systolic is not None
+                and result.diastolic is not None
+                and 80 <= result.systolic <= 220
+                and 40 <= result.diastolic <= 130
+            ):
+                entry_kind = "vital"
+                bp_data: dict = {
+                    "type": "blood_pressure",
+                    "systolic": result.systolic,
+                    "diastolic": result.diastolic,
+                    "unit": "mmHg",
+                }
+                if result.pulse_bpm is not None and 30 <= result.pulse_bpm <= 220:
+                    bp_data["pulse_bpm"] = result.pulse_bpm
+                    entry_title = (
+                        f"presión {result.systolic}/{result.diastolic},"
+                        f" pulso {result.pulse_bpm}"
+                    )
+                else:
+                    entry_title = f"presión {result.systolic}/{result.diastolic}"
+                entry_data = bp_data
+            elif entry_kind == "vital":
+                # Nano mapped to "vital" but vitals fields are absent or
+                # outside the plausibility gate — downgrade to "note" so
+                # no structured-looking-but-empty vital entry is persisted.
+                entry_kind = "note"
             entry = _he.create(
-                kind=kind_map.get(result.kind, "note"),
-                title=(result.title or text[:80]),
+                kind=entry_kind,
+                title=entry_title,
                 when=now_utc, body=text,
+                data=entry_data,
                 tags=extra_tags or None,
                 source="chat", confidence=result.confidence,
             )
             return {
                 "domain": "health",
-                "answer": f'Anotado en salud (nano, nota): "{result.title or text[:60]}".',
+                "answer": f'Anotado en salud (nano): "{entry_title}".',
                 "entry_ids": [entry.id],
             }
 

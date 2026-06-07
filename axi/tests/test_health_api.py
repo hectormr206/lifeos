@@ -284,3 +284,124 @@ def test_patch_missing_required_fields_returns_400(client):
     # Missing title and ts
     r = client.patch(f"/api/health/entries/{eid}", json={"kind": "note"})
     assert r.status_code == 400
+
+
+# ── _try_nano_extract health branch — structured BP vitals ────────────────────
+# Tests call the function directly (no HTTP) to keep setup minimal.
+# The nano HTTP call is mocked via monkeypatch; the health DB is isolated
+# via the health_isolated_db fixture already defined above.
+
+
+def _make_extraction_result(**kwargs):
+    """Build an ExtractionResult with health-domain defaults."""
+    from lifeos.agents.extractor import ExtractionResult
+    defaults = {
+        "domain": "health",
+        "kind": "vital",
+        "title": None,
+        "systolic": None,
+        "diastolic": None,
+        "pulse_bpm": None,
+        "confidence": 0.65,
+    }
+    defaults.update(kwargs)
+    return ExtractionResult(**defaults)
+
+
+def test_nano_health_bp_creates_structured_vital(monkeypatch, health_isolated_db):
+    """When nano returns systolic+diastolic, the health branch stores a
+    structured blood_pressure vital (same data shape as the regex path)."""
+    from lifeos.agents import extractor as nano_extractor
+    from axi.dashboard import _try_nano_extract
+
+    fake = _make_extraction_result(
+        title="presión 122/81, pulso 53",
+        systolic=122, diastolic=81, pulse_bpm=53,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    out = _try_nano_extract("122/81 53 pulsos", None)
+
+    assert out is not None
+    assert out["domain"] == "health"
+    assert "122/81" in out["answer"]
+
+    # Verify the DB entry has the structured vital data
+    from lifeos.health import entries as _he
+    eid = out["entry_ids"][0]
+    entry = _he.get(eid)
+    assert entry is not None
+    assert entry.kind == "vital"
+    assert entry.data is not None
+    assert entry.data["type"] == "blood_pressure"
+    assert entry.data["systolic"] == 122
+    assert entry.data["diastolic"] == 81
+    assert entry.data["pulse_bpm"] == 53
+    assert entry.data["unit"] == "mmHg"
+
+
+def test_nano_health_bp_without_pulse(monkeypatch, health_isolated_db):
+    """BP vital without pulse_bpm: entry data has no pulse_bpm key."""
+    from lifeos.agents import extractor as nano_extractor
+    from axi.dashboard import _try_nano_extract
+
+    fake = _make_extraction_result(
+        title="presión 120/80", systolic=120, diastolic=80, pulse_bpm=None,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    out = _try_nano_extract("presión 120/80", None)
+
+    assert out is not None
+    eid = out["entry_ids"][0]
+    from lifeos.health import entries as _he
+    entry = _he.get(eid)
+    assert entry.kind == "vital"
+    assert entry.data["systolic"] == 120
+    assert "pulse_bpm" not in entry.data
+
+
+def test_nano_health_implausible_bp_falls_back_to_note(monkeypatch, health_isolated_db):
+    """Implausible BP values (outside physiological range) must force kind="note",
+    not create a vital entry with empty/missing BP data."""
+    from lifeos.agents import extractor as nano_extractor
+    from axi.dashboard import _try_nano_extract
+
+    # sys=30 is below the 80 threshold; nano reports kind="vital" but values
+    # fail the plausibility gate — the entry must be downgraded to "note".
+    fake = _make_extraction_result(
+        title="algo", kind="vital", systolic=30, diastolic=20,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    out = _try_nano_extract("30/20", None)
+
+    assert out is not None
+    eid = out["entry_ids"][0]
+    from lifeos.health import entries as _he
+    entry = _he.get(eid)
+    # Must be downgraded to "note" — no structured-looking vital with empty data
+    assert entry.kind == "note"
+    assert entry.data is None or entry.data.get("type") != "blood_pressure"
+
+
+def test_nano_health_note_stays_note(monkeypatch, health_isolated_db):
+    """A health note (no BP numbers) is persisted without structured data."""
+    from lifeos.agents import extractor as nano_extractor
+    from axi.dashboard import _try_nano_extract
+
+    fake = _make_extraction_result(
+        domain="health", kind="note", title="me siento cansado",
+        systolic=None, diastolic=None,
+    )
+    monkeypatch.setattr(nano_extractor, "extract", lambda *_a, **_k: fake)
+
+    out = _try_nano_extract("me siento cansado hoy", None)
+
+    assert out is not None
+    eid = out["entry_ids"][0]
+    from lifeos.health import entries as _he
+    entry = _he.get(eid)
+    assert entry.kind == "note"
+    # data is None or empty when no structured fields were set
+    assert not entry.data
