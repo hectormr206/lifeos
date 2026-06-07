@@ -1751,7 +1751,12 @@ def _resolve_role_alias(text: str):
     return None
 
 
-def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
+def _try_nano_extract(
+    text: str,
+    location_tag: str | None,
+    entry_when: "datetime | None" = None,
+    original_text: str | None = None,
+) -> dict | None:
     """Last resort before the main brain: ask the nano entity extractor
     what this message is about. If it returns a structured result with a
     known domain, persist it to the corresponding store and build a chat
@@ -1759,7 +1764,15 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
 
     Cost: ~1.5-2.5s on CPU. Worth it because the brain costs 2-5s AND
     can't actually persist anything.
+
+    `text` is the normalized text used for parsing/extraction.
+    `original_text` is the raw user text used for all body= and memory fields.
+    When None, falls back to `text` (preserves backward compatibility).
+    `entry_when` is the canonical timestamp to use for the persisted entry.
+    When None, defaults to datetime.now(UTC).
     """
+    # Use original_text for body/memory persistence; text for extraction only.
+    body_text = original_text if original_text is not None else text
     try:
         from lifeos.agents import extractor as nano_extractor
     except Exception as e:  # noqa: BLE001
@@ -1774,7 +1787,7 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
     if result is None or not result.domain:
         return None
 
-    now_utc = datetime.now(ZoneInfo("UTC"))
+    now_utc = entry_when if entry_when is not None else datetime.now(ZoneInfo("UTC"))
     domain = result.domain
     extra_tags = [location_tag] if location_tag else []
 
@@ -1804,7 +1817,7 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
                         kind=base_kind, title=str(it["name"]),
                         amount=float(it["amount"]),
                         when=now_utc, currency=currency,
-                        category=cat, merchant=merchant, body=text,
+                        category=cat, merchant=merchant, body=body_text,
                         tags=tags or None, source="chat",
                         confidence=result.confidence,
                     )
@@ -1816,7 +1829,7 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
                     kind=base_kind, title=(result.title or "gasto"),
                     amount=float(result.amount),
                     when=now_utc, currency=currency,
-                    merchant=merchant, body=text,
+                    merchant=merchant, body=body_text,
                     tags=extra_tags or None, source="chat",
                     confidence=result.confidence,
                 )
@@ -1843,7 +1856,7 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
                 kind=kind_map.get(result.kind, "other"),
                 title=(result.title or "sesión de ejercicio"),
                 duration_minutes=int(result.duration_minutes),
-                when=now_utc, body=text,
+                when=now_utc, body=body_text,
                 tags=extra_tags or None, source="chat",
                 confidence=result.confidence,
             )
@@ -1864,13 +1877,13 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
             author = result.people[0] if result.people else None
             le = _le.create(
                 kind=kind_map.get(result.kind, "idea"),
-                title=(result.title or text[:80]),
-                when=now_utc, body=text, author=author,
+                title=(result.title or body_text[:80]),
+                when=now_utc, body=body_text, author=author,
                 source="chat", confidence=result.confidence,
             )
             return {
                 "domain": "learning",
-                "answer": f'Anotado en aprendizaje (nano): "{result.title or text[:60]}".',
+                "answer": f'Anotado en aprendizaje (nano): "{result.title or body_text[:60]}".',
                 "entry_ids": [le.id],
             }
 
@@ -1899,16 +1912,16 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
                     pass
             ev = _ev.create(
                 kind=kind_map.get(result.kind, "milestone"),
-                title=(result.title or text[:80]),
+                title=(result.title or body_text[:80]),
                 when=when,
                 people=result.people or None,
-                body=text,
+                body=body_text,
                 tags=extra_tags or None,
                 source="chat", confidence=result.confidence,
             )
             return {
                 "domain": "events",
-                "answer": f'Anotado evento (nano): "{result.title or text[:60]}".',
+                "answer": f'Anotado evento (nano): "{result.title or body_text[:60]}".',
                 "entry_ids": [ev.id],
             }
 
@@ -1943,7 +1956,7 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
                 person_id=person.id,
                 kind=kind,
                 title=(result.title or f"interacción con {person.name}"),
-                when=now_utc, body=text,
+                when=now_utc, body=body_text,
                 source="chat", confidence=result.confidence,
             )
             return {
@@ -1967,7 +1980,7 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
                         "note": "note", None: "note"}
             entry_kind = kind_map.get(result.kind, "note")
             entry_data: dict | None = None
-            entry_title = result.title or text[:80]
+            entry_title = result.title or body_text[:80]
             # When nano surfaced a blood pressure reading with plausible
             # values, build the structured vital data matching _try_vital's
             # output shape (type, systolic, diastolic, unit, pulse_bpm).
@@ -1996,6 +2009,30 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
                 else:
                     entry_title = f"presión {result.systolic}/{result.diastolic}"
                 entry_data = bp_data
+            elif result.sleep_hours is not None and 0.5 <= result.sleep_hours <= 16:
+                entry_kind = "vital"
+                entry_data = {
+                    "type": "sleep_hours",
+                    "value": result.sleep_hours,
+                    "unit": "h",
+                }
+                entry_title = f"dormí {result.sleep_hours}h"
+            elif result.weight_kg is not None and 20 <= result.weight_kg <= 300:
+                entry_kind = "vital"
+                entry_data = {
+                    "type": "weight",
+                    "value": result.weight_kg,
+                    "unit": "kg",
+                }
+                entry_title = f"peso {result.weight_kg} kg"
+            elif result.glucose_mg_dl is not None and 30 <= result.glucose_mg_dl <= 600:
+                entry_kind = "vital"
+                entry_data = {
+                    "type": "glucose",
+                    "value": result.glucose_mg_dl,
+                    "unit": "mg/dL",
+                }
+                entry_title = f"glucosa {result.glucose_mg_dl} mg/dL"
             elif entry_kind == "vital":
                 # Nano mapped to "vital" but vitals fields are absent or
                 # outside the plausibility gate — downgrade to "note" so
@@ -2004,14 +2041,18 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
             entry = _he.create(
                 kind=entry_kind,
                 title=entry_title,
-                when=now_utc, body=text,
+                when=now_utc, body=body_text,
                 data=entry_data,
                 tags=extra_tags or None,
                 source="chat", confidence=result.confidence,
             )
+            if entry_kind == "vital":
+                answer_text = f"Anotado en salud como vital: {entry_title}."
+            else:
+                answer_text = f'Anotado en salud (nano): "{entry_title}".'
             return {
                 "domain": "health",
-                "answer": f'Anotado en salud (nano): "{entry_title}".',
+                "answer": answer_text,
                 "entry_ids": [entry.id],
             }
 
@@ -2030,13 +2071,13 @@ def _try_nano_extract(text: str, location_tag: str | None) -> dict | None:
                         "retro": "retro", None: "reflection"}
             entry = _se.create(
                 kind=kind_map.get(result.kind, "reflection"),
-                title=(result.title or text[:80]),
-                when=now_utc, body=text,
+                title=(result.title or body_text[:80]),
+                when=now_utc, body=body_text,
                 source="chat", confidence=result.confidence,
             )
             return {
                 "domain": "spirituality",
-                "answer": f'Anotado en espiritualidad (nano): "{result.title or text[:60]}".',
+                "answer": f'Anotado en espiritualidad (nano): "{result.title or body_text[:60]}".',
                 "entry_ids": [entry.id],
             }
 
@@ -2075,6 +2116,25 @@ async def api_chat_ask(request: Request):
             log.info("chat call with location: %s", location_tag)
         except (TypeError, ValueError):
             location_tag = None
+    # Optional client send timestamp (ISO 8601, trailing Z accepted).
+    # Allows queued offline messages to be stored with their original send time.
+    # Validity guard: ignore if unparseable, more than 2 min in the future,
+    # or older than 7 days — clock-skew / garbage protection.
+    _now_for_ts = datetime.now(ZoneInfo("UTC"))
+    entry_when: datetime = _now_for_ts
+    raw_client_ts = body.get("client_ts")
+    if raw_client_ts and isinstance(raw_client_ts, str):
+        try:
+            cts = datetime.fromisoformat(raw_client_ts.replace("Z", "+00:00"))
+            if cts.tzinfo is None:
+                cts = cts.replace(tzinfo=ZoneInfo("UTC"))
+            delta_s = (_now_for_ts - cts).total_seconds()
+            if -120 <= delta_s <= 7 * 24 * 3600:  # within 2min future OR up to 7 days past
+                entry_when = cts
+            else:
+                log.debug("client_ts out of valid range (%.0fs delta), ignoring", delta_s)
+        except (ValueError, TypeError) as e:
+            log.debug("client_ts parse failed (%s), ignoring", e)
     if not text and not image_b64:
         raise HTTPException(400, "text or image_b64 is required")
     if not text and image_b64:
@@ -2090,6 +2150,18 @@ async def api_chat_ask(request: Request):
     mem = _get_chat_memory()
     history = mem.messages()
     start = time.monotonic()
+
+    # Normalize spoken/dictated number words to digits once, before ALL fast-path
+    # parsers. This converts "ciento veintidós ochenta y uno" → "122 81" so the
+    # existing digit-only regexes can match Whisper voice output. Original text
+    # is preserved for persistence (body, chat history) — only parse_text is
+    # passed to parsers and the nano extractor.
+    try:
+        from lifeos.text.normalize import normalize_numbers_es as _normalize_numbers
+        parse_text = _normalize_numbers(text) if text else text
+    except Exception as _norm_exc:  # noqa: BLE001
+        log.debug("normalize_numbers_es failed (%s), using raw text", _norm_exc)
+        parse_text = text
 
     # Fast-path instrumentation. Each branch that successfully handles the
     # call sets stage_holder[0] then calls _record_metric() before returning.
@@ -2117,7 +2189,7 @@ async def api_chat_ask(request: Request):
         # BEFORE finance ingestion or "comprar" gets misread as a purchase
         # log.
         try:
-            qi = decide_query_parser.parse_query(text)
+            qi = decide_query_parser.parse_query(parse_text)
         except Exception:  # noqa: BLE001
             qi = None
         if isinstance(qi, decide_query_parser.PurchaseConsultIntent):
@@ -2155,7 +2227,7 @@ async def api_chat_ask(request: Request):
 
         # Exercise fast-path: "caminé 30 min", "corrí 5 km", "gym 60 min", etc.
         try:
-            ei = ex_ingestion.parse_exercise(text)
+            ei = ex_ingestion.parse_exercise(parse_text)
         except Exception:  # noqa: BLE001
             ei = None
         if ei is not None:
@@ -2163,7 +2235,7 @@ async def api_chat_ask(request: Request):
                 sess = ex_sessions.create(
                     kind=ei.kind, title=ei.title,
                     duration_minutes=ei.duration_minutes,
-                    when=datetime.now(ZoneInfo("UTC")),
+                    when=entry_when,
                     location=ei.location, body=text,
                     data=ei.data or None,
                     source="chat", confidence=ei.confidence,
@@ -2208,14 +2280,14 @@ async def api_chat_ask(request: Request):
         # Spirituality fast-path: "hoy agradezco X", "medité N min",
         # "reflexión: X". Conservative parser — high precision over recall.
         try:
-            si = spirit_ingestion.parse_spirituality(text)
+            si = spirit_ingestion.parse_spirituality(parse_text)
         except Exception:  # noqa: BLE001
             si = None
         if si is not None:
             try:
                 se = spirit_entries.create(
                     kind=si.kind, title=si.title,
-                    when=datetime.now(ZoneInfo("UTC")),
+                    when=entry_when,
                     body=si.body or text, data=si.data or None,
                     source="chat", confidence=si.confidence,
                 )
@@ -2254,14 +2326,14 @@ async def api_chat_ask(request: Request):
         # Learning fast-path: "empecé 'X'", "leí 'X'", "idea: X",
         # "investigar X". Conservative — quotes or explicit prefix required.
         try:
-            li = learn_ingestion.parse_learning(text)
+            li = learn_ingestion.parse_learning(parse_text)
         except Exception:  # noqa: BLE001
             li = None
         if li is not None:
             try:
                 le = learn_entries.create(
                     kind=li.kind, title=li.title, status=li.status,
-                    when=datetime.now(ZoneInfo("UTC")),
+                    when=entry_when,
                     body=li.body or None, author=li.author or None,
                     data=li.data or None,
                     source="chat", confidence=li.confidence,
@@ -2307,7 +2379,7 @@ async def api_chat_ask(request: Request):
         # Events fast-path: "cumple X DATE" / "aniversario DATE" only.
         # Other event kinds use the /events form.
         try:
-            evi = events_ingestion.parse_event(text)
+            evi = events_ingestion.parse_event(parse_text)
         except Exception:  # noqa: BLE001
             evi = None
         if evi is not None:
@@ -2349,13 +2421,13 @@ async def api_chat_ask(request: Request):
         # store and acknowledges briefly. Per PRD §9.5 default: silent + a
         # weekly review push (the review is P2.x; for now we just confirm).
         try:
-            hi = health_ingestion.parse_health(text)
+            hi = health_ingestion.parse_health(parse_text, now=entry_when)
         except Exception:  # noqa: BLE001
             hi = None
         if hi is not None:
             try:
                 entry = health_entries.create(
-                    kind=hi.kind, title=hi.title, when=datetime.now(ZoneInfo("UTC")),
+                    kind=hi.kind, title=hi.title, when=entry_when,
                     body=text, data=hi.data or None, tags=hi.tags or None,
                     source="chat", confidence=hi.confidence,
                 )
@@ -2408,7 +2480,7 @@ async def api_chat_ask(request: Request):
         # We try this BEFORE finance because both can mention amounts but only
         # one has a person + verb structure.
         try:
-            ri_rel = rel_ingestion.parse_interaction(text)
+            ri_rel = rel_ingestion.parse_interaction(parse_text)
         except Exception:  # noqa: BLE001
             ri_rel = None
         if ri_rel is not None:
@@ -2417,7 +2489,7 @@ async def api_chat_ask(request: Request):
                 interaction = rel_interactions.create(
                     person_id=person.id, kind=ri_rel.kind,
                     title=ri_rel.title, body=text,
-                    when=datetime.now(ZoneInfo("UTC")),
+                    when=entry_when,
                     tags=ri_rel.tags or None,
                     source="chat", confidence=ri_rel.confidence,
                 )
@@ -2500,7 +2572,7 @@ async def api_chat_ask(request: Request):
 
         # Finance fast-path: "gasté 250 en gasolina", "compré X por N", etc.
         try:
-            fi = finance_ingestion.parse_finance(text)
+            fi = finance_ingestion.parse_finance(parse_text)
         except Exception:  # noqa: BLE001
             fi = None
         if fi is not None:
@@ -2511,7 +2583,7 @@ async def api_chat_ask(request: Request):
                     merged_tags.append(location_tag)
                 fe = finance_entries.create(
                     kind=fi.kind, title=fi.title, amount=fi.amount,
-                    when=datetime.now(ZoneInfo("UTC")),
+                    when=entry_when,
                     currency=fi.currency, category=fi.category,
                     merchant=fi.merchant, body=text,
                     tags=merged_tags or None,
@@ -2564,7 +2636,7 @@ async def api_chat_ask(request: Request):
         try:
             from lifeos.parser import parse_reminder
             from axi.reminder_brain import parse_when_brain
-            ri = parse_reminder(text, brain_fallback=parse_when_brain)
+            ri = parse_reminder(parse_text, brain_fallback=parse_when_brain)
         except Exception:  # noqa: BLE001
             ri = None
         if ri is not None:
@@ -2609,9 +2681,13 @@ async def api_chat_ask(request: Request):
     # for the extractor to recover and trigger spurious classifications
     # (the model defaults to "spirituality" on near-empty text). Skip
     # straight to the brain instead of burning ~4s on noise.
-    if not image_b64 and len(text.strip()) >= 12:
+    if not image_b64 and len(parse_text.strip()) >= 12:
         try:
-            nano_out = _try_nano_extract(text, location_tag)
+            nano_out = _try_nano_extract(
+                parse_text, location_tag,
+                entry_when=entry_when,
+                original_text=text,
+            )
         except Exception as e:  # noqa: BLE001
             log.exception("nano-extract wrapper failed: %s", e)
             nano_out = None
