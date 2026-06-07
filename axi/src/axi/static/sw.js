@@ -210,6 +210,7 @@ async function drainChatQueue() {
           image_b64: item.image_b64 || null,
           speak: false,
           location: item.location || undefined,
+          client_ts: item.created_at,
         }),
       });
       if (r.ok) {

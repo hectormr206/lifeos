@@ -341,6 +341,16 @@ function chatApp() {
         }
       });
       await this._refreshQueuedCount();
+      // Drain on load. If the reachability probe resolved BEFORE the
+      // listener above was registered (fast VPN: probe starts at script
+      // parse, init() is still awaiting loadHistory), the 'axi-reachability'
+      // event was missed and will never re-fire — and the 'online' event
+      // never fires when device connectivity never changed. Without this
+      // nudge, queued messages stay stuck until the user toggles airplane
+      // mode. Background Sync alone can't recover either: the browser
+      // drops the sync registration after a few failed retries while the
+      // laptop is off.
+      if (window.AXI_REACHABLE === true) this._tryDrainQueue();
 
       // Listen for SW messages (sync results).
       if ('serviceWorker' in navigator) {
@@ -815,6 +825,7 @@ function chatApp() {
             image_b64: image_b64 || null,
             speak: this.speakOn,
             location: location || undefined,
+            client_ts: new Date().toISOString(),
           }),
         });
         if (!r.ok) {
