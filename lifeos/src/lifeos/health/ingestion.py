@@ -102,8 +102,30 @@ _BP_PULSE_BARE_RE = re.compile(
 _BP_PULSE_TRAILING_RE = re.compile(
     # Pulse number BEFORE the word: "132, 83, 58 pulsos" / "118, 83, 52
     # pulsos." — three bare numbers (sys, dia, pulse) closed by "pulso(s)".
+    # Also handles "122/81 53 pulsos" where diastolic and pulse are separated
+    # by plain whitespace (no comma/slash between diastolic and pulse number).
+    # The first separator (sys→dia) allows only comma or slash [,/]; the second
+    # separator (dia→pulse) is intentionally wider: comma, slash, or a plain
+    # space [,/ ] — but NOT tab or newline (tightened from \s).
     # Same physiological plausibility gate applies (checked in Python).
-    r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})\s*[,/]\s*(\d{2,3})\s*pulsos?\b",
+    r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})\s*[,/ ]\s*(\d{2,3})\s*pulsos?\b",
+    re.IGNORECASE,
+)
+_BP_PULSE_DE_PULSO_RE = re.compile(
+    # "113, 82 y 55 de pulso." / "120, 80 y 60 de pulsos." /
+    # "120, 80 y 60 de pulsaciones." — pulse number comes before "de pulso(s)"
+    # or "de pulsaciones".  The separator between sys and dia can be [,/]
+    # and between dia and pulse can be ", y", " y", " " etc.
+    r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})"
+    r"(?:\s*,?\s+y\s+|\s*,\s+|\s+)"
+    r"(\d{2,3})\s+de\s+pulsaciones?\b",
+    re.IGNORECASE,
+)
+_BP_PULSE_DE_PULSO_WORD_RE = re.compile(
+    # Same shape but ends with "de pulso" or "de pulsos" (no "pulsaciones").
+    r"^\s*(\d{2,3})\s*[,/]\s*(\d{2,3})"
+    r"(?:\s*,?\s+y\s+|\s*,\s+|\s+)"
+    r"(\d{2,3})\s+de\s+pulsos?\b",
     re.IGNORECASE,
 )
 _WEIGHT_RE = re.compile(
@@ -414,10 +436,16 @@ def _try_vital(text: str) -> HealthIntent | None:
             data={"type": "blood_pressure", "systolic": sys, "diastolic": dia,
                   "unit": "mmHg"},
         )
-    # Bare BP + pulse: "116, 84 y pulso 72" / "116/84 pulso 72". Only fires
-    # when the numbers fall in physiological ranges (sys 80-220, dia 40-130,
-    # pulse 30-220) to avoid false positives on dimensions/codes/accounting.
-    m = _BP_PULSE_BARE_RE.search(text) or _BP_PULSE_TRAILING_RE.search(text)
+    # Bare BP + pulse: "116, 84 y pulso 72" / "116/84 pulso 72" /
+    # "122/81 53 pulsos" / "113, 82 y 55 de pulso." etc.  Only fires when
+    # numbers fall in physiological ranges (sys 80-220, dia 40-130, pulse
+    # 30-220) to avoid false positives on dimensions/codes/accounting.
+    m = (
+        _BP_PULSE_BARE_RE.search(text)
+        or _BP_PULSE_TRAILING_RE.search(text)
+        or _BP_PULSE_DE_PULSO_WORD_RE.search(text)
+        or _BP_PULSE_DE_PULSO_RE.search(text)
+    )
     if m:
         sys, dia, pulse = int(m.group(1)), int(m.group(2)), int(m.group(3))
         if 80 <= sys <= 220 and 40 <= dia <= 130 and 30 <= pulse <= 220:

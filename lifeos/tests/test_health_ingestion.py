@@ -189,6 +189,72 @@ def test_bp_plural_pulsos_still_rejects_implausible() -> None:
     assert h is None or h.data.get("type") != "blood_pressure"
 
 
+# ── New failing patterns from real chat history (2026-06-06) ─────────────────
+# "122/81 53 pulsos" — slash BP, then a plain space before the pulse number
+# (no comma between diastolic and pulse value).
+
+def test_bp_slash_space_pulsos() -> None:
+    """'122/81 53 pulsos' — N/N <space> N pulsos (no comma before pulse)."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("122/81 53 pulsos")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 122
+    assert h.data["diastolic"] == 81
+    assert h.data["pulse_bpm"] == 53
+
+
+def test_bp_slash_space_pulsos_rejects_implausible() -> None:
+    """Plain-space variant still applies the physiological plausibility gate."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("30/20 200 pulsos")  # all out of range
+    assert h is None or h.data.get("type") != "blood_pressure"
+
+
+# "113, 82 y 55 de pulso." — "N de pulso/pulsos/pulsaciones" shape.
+
+def test_bp_de_pulso_y_shape() -> None:
+    """'113, 82 y 55 de pulso.' — sys, dia, then pulse with 'de pulso' suffix."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("113, 82 y 55 de pulso.")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 113
+    assert h.data["diastolic"] == 82
+    assert h.data["pulse_bpm"] == 55
+
+
+def test_bp_de_pulsos_plural() -> None:
+    """'120, 80 y 60 de pulsos.' — plural form 'de pulsos'."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("120, 80 y 60 de pulsos.")
+    assert h is not None
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 120
+    assert h.data["diastolic"] == 80
+    assert h.data["pulse_bpm"] == 60
+
+
+def test_bp_de_pulsaciones() -> None:
+    """'120, 80 y 60 de pulsaciones.' — 'de pulsaciones' variant."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("120, 80 y 60 de pulsaciones.")
+    assert h is not None
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 120
+    assert h.data["diastolic"] == 80
+    assert h.data["pulse_bpm"] == 60
+
+
+def test_three_bare_numbers_no_keyword_rejected() -> None:
+    """Three bare numbers with NO pulse keyword must NOT parse (too ambiguous)."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("113, 82, 55")
+    assert h is None or h.data.get("type") != "blood_pressure"
+
+
 def test_body_composition_full_inbody_string() -> None:
     """Real user input from Inbody scale: 6 fields in one message."""
     from lifeos.health.ingestion import parse_health
