@@ -1,5 +1,5 @@
 [Unit]
-Description=llama.cpp server — nano-agents (Qwen3.5-0.8B on port 8090)
+Description=llama.cpp server — nano-agents (model from active_nano_model.json via axi-nano-launch)
 After=graphical-session.target
 PartOf=graphical-session.target
 
@@ -11,17 +11,15 @@ Type=simple
 # CUDA_VISIBLE_DEVICES="" hides the GPU completely from the process so
 # llama-server can never touch VRAM regardless of flags.
 # The main brain (port 8080) keeps its full GPU access — they don't share.
+# The wrapper reads $XDG_STATE_HOME/axi/active_nano_model.json (created on
+# first launch with the historical Qwen3.5-0.8B defaults) and execs
+# llama-server with the assembled args.
 Environment="CUDA_VISIBLE_DEVICES="
-ExecStart=/usr/bin/llama-server \
-  -m %h/LifeOS/models/qwen35-0_8b/Qwen3.5-0.8B-Q4_K_M.gguf \
-  --port 8090 --host 127.0.0.1 \
-  -c 4096 -ngl 0 --jinja \
-  -t 4 --no-mmap -np 1 \
-  -a Qwen3.5-0.8B-nano
+ExecStart=%h/LifeOS/lifeos/axi/scripts/axi-nano-launch
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=30
-# 1.5GB RAM cap — model + cache fits in this.
+# 2 GB RAM cap — largest nano model (LFM2 1.2B) + KV cache fits here.
 MemoryMax=2G
 
 [Install]

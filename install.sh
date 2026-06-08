@@ -384,13 +384,53 @@ download_models() {
   # manual decision. An advanced user can override with AXI_BRAIN_MODEL=<id>.
   download_brain
 
-  # --- Nano (optional) ----------------------------------------------------
-  local nano_dir="$MODELS_DIR/qwen35-0_8b"
-  if [ -f "$nano_dir/Qwen3.5-0.8B-Q4_K_M.gguf" ]; then
-    ok "nano model already present"
-  elif ask "Download the optional nano model Qwen3.5-0.8B (~740 MB)?"; then
-    hf_get unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q4_K_M.gguf "$nano_dir"
-    hf_get unsloth/Qwen3.5-0.8B-GGUF mmproj-F16.gguf "$nano_dir"
+  # --- Nano (optional) — catalog-driven ------------------------------------
+  # The active nano model is read from active_nano_model.json (or falls back
+  # to the default Qwen3.5-0.8B). Override with AXI_NANO_MODEL=<catalog-id>.
+  local py="$VENV/bin/python"
+  local nano_plan
+  nano_plan="$("$py" - <<'PY'
+import json, os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "axi", "src"))
+try:
+    from axi.nano_catalog import by_id, catalog
+except ImportError:
+    # Fallback: default entry description if the package is not yet installed.
+    print("qwen35-0_8b\tunsloth/Qwen3.5-0.8B-GGUF\tQwen3.5-0.8B-Q4_K_M.gguf\tgguf")
+    print("qwen35-0_8b\tunsloth/Qwen3.5-0.8B-GGUF\tmmproj-F16.gguf\tmmproj")
+    sys.exit(0)
+
+override = os.environ.get("AXI_NANO_MODEL", "").strip()
+entry = by_id(override) if override else None
+if entry is None:
+    entry = catalog()[0]  # default: qwen35-0_8b
+
+# Emit: <entry_id> TAB <repo_id> TAB <filename> TAB <kind>
+for f in entry.files:
+    print(f"{entry.id}\t{f.repo_id}\t{f.filename}\t{f.kind}")
+PY
+)"
+
+  # Parse the plan. Each line: <entry_id> TAB <repo_id> TAB <filename> TAB <kind>
+  local nano_id nano_dest first_gguf
+  nano_id="$(printf '%s\n' "$nano_plan" | awk -F'\t' 'NR==1{print $1}')"
+  nano_dest="$MODELS_DIR/$nano_id"
+  first_gguf="$(printf '%s\n' "$nano_plan" | awk -F'\t' '$4=="gguf"{print $3; exit}')"
+
+  if [ -n "$first_gguf" ] && [ -f "$nano_dest/$first_gguf" ]; then
+    ok "nano model already present ($nano_id)"
+  elif ask "Download the optional nano model $nano_id (~750 MB)?"; then
+    printf '%s\n' "$nano_plan" | while IFS=$'\t' read -r _id repo fname _kind; do
+      [ -z "$repo" ] && continue
+      hf_get "$repo" "$fname" "$nano_dest"
+    done
+    ok "nano model downloaded: $nano_id"
+    # Write the active config so the launcher knows which model to use.
+    if (cd "$REPO_DIR/axi" && "$py" -m axi.install_nano --write-config >/dev/null 2>&1); then
+      ok "wrote nano config (active_nano_model.json)"
+    else
+      warn "could not write nano config — defaults will apply on first launch"
+    fi
   else
     warn "skipped nano model (llama-nano.service stays optional)"
   fi
@@ -476,7 +516,22 @@ install_services() {
 
   local to_enable=("${SERVICES_BASE[@]}")
   [ -f "$MODELS_DIR/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf" ] && to_enable+=(llama-server.service)
-  [ -f "$MODELS_DIR/qwen35-0_8b/Qwen3.5-0.8B-Q4_K_M.gguf" ] && to_enable+=(llama-nano.service)
+  # Check if the active nano model gguf is present; fall back to the default.
+  local nano_gguf
+  nano_gguf="$("$VENV/bin/python" - <<'PY' 2>/dev/null
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "axi", "src"))
+try:
+    from axi import nano_manager
+    data = nano_manager.read_active_nano() or nano_manager.DEFAULT_NANO
+    print(data.get("gguf", ""))
+except Exception:
+    # Absolute fallback: historical default path.
+    print(str(Path.home() / "LifeOS/models/qwen35-0_8b/Qwen3.5-0.8B-Q4_K_M.gguf"))
+PY
+)"
+  [ -n "$nano_gguf" ] && [ -f "$nano_gguf" ] && to_enable+=(llama-nano.service)
 
   if ask "Enable and start ${#to_enable[@]} service(s) now?" yes; then
     systemctl --user enable --now "${to_enable[@]}"
