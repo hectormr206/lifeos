@@ -540,12 +540,16 @@ def test_nano_health_glucose_creates_structured_vital(monkeypatch, health_isolat
 
 def test_chat_ask_client_ts_persists_as_entry_when(client, monkeypatch, health_isolated_db):
     """When client_ts is sent, the health entry is stored with that timestamp."""
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
     from lifeos.agents import extractor as nano_extractor
     from lifeos.agents.extractor import ExtractionResult
 
-    past_ts = "2026-06-01T10:00:00Z"
-    past_dt = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+    # Use a date RELATIVE to now (2 days ago) so the test stays inside the
+    # production client_ts acceptance window (within 2min future OR 7 days
+    # past). A hardcoded calendar date silently drifts out of that window as
+    # real time passes and the test starts failing on a clock, not a regression.
+    past_dt = (datetime.now(timezone.utc) - timedelta(days=2)).replace(microsecond=0)
+    past_ts = past_dt.isoformat().replace("+00:00", "Z")
 
     # Intercept nano so health fast-path fires
     fake = ExtractionResult(
