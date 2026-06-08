@@ -1,23 +1,39 @@
 #!/usr/bin/env bash
 # Restore the GPU-backed axi stack after a gaming session.
-# Starts llama-server (Qwen, GPU) and axi-voice (Whisper, GPU).
+# Removes the CPU drop-ins written by axi-game-on (so services go back to GPU)
+# and the game-mode marker, then restarts the affected services on GPU.
 
 set -u
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/axi"
 MARKER="$STATE_DIR/game-mode.lock"
+UNIT_DIR="$HOME/.config/systemd/user"
 rm -f "$MARKER"
 
-# Safety: ensure no leftover CPU drop-in is biasing the restart.
-rm -f ~/.config/systemd/user/llama-server.service.d/cpu-exec.conf
-rm -f ~/.config/systemd/user/llama-server.service.d/cpu-override.conf
-rm -f ~/.config/systemd/user/axi-voice.service.d/cpu-env.conf
-rmdir ~/.config/systemd/user/llama-server.service.d 2>/dev/null || true
-rmdir ~/.config/systemd/user/axi-voice.service.d 2>/dev/null || true
+echo "[axi-game-off] removing CPU drop-ins…"
+# Current drop-ins written by axi-game-on.
+rm -f "$UNIT_DIR/axi-whisper.service.d/game-cpu.conf"
+rm -f "$UNIT_DIR/llama-server.service.d/game-cpu.conf"
+rm -f "$UNIT_DIR/axi-translate.service.d/game-cpu.conf"
+# Legacy drop-in names from earlier versions of these scripts.
+rm -f "$UNIT_DIR/llama-server.service.d/cpu-exec.conf"
+rm -f "$UNIT_DIR/llama-server.service.d/cpu-override.conf"
+rm -f "$UNIT_DIR/axi-voice.service.d/cpu-env.conf"
+# Drop empty *.service.d dirs (ignore non-empty, e.g. translate.service.d may
+# hold unrelated user drop-ins).
+rmdir "$UNIT_DIR/axi-whisper.service.d" 2>/dev/null || true
+rmdir "$UNIT_DIR/llama-server.service.d" 2>/dev/null || true
+rmdir "$UNIT_DIR/axi-translate.service.d" 2>/dev/null || true
+rmdir "$UNIT_DIR/axi-voice.service.d" 2>/dev/null || true
+
 systemctl --user daemon-reload
 
-echo "[axi-game-off] starting llama-server (Qwen → GPU)…"
-systemctl --user start llama-server.service || true
+# Use restart (not start): in relocate mode llama-server stays RUNNING on CPU,
+# so `start` would be a no-op and the process would keep its -ngl 0 /
+# CUDA_VISIBLE_DEVICES= config. restart forces it to re-exec on GPU now that
+# the drop-in is gone.
+echo "[axi-game-off] restarting llama-server (Qwen → GPU)…"
+systemctl --user restart llama-server.service || true
 
 echo "[axi-game-off] waiting for llama-server /health…"
 for i in $(seq 1 30); do
@@ -28,8 +44,16 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-echo "[axi-game-off] starting axi-voice (Whisper → GPU)…"
-systemctl --user start axi-voice.service || true
+echo "[axi-game-off] restarting axi-whisper (Whisper → GPU)…"
+systemctl --user restart axi-whisper.service || true
+
+# Ensure the voice/meetings daemon is online (it holds no VRAM; a legacy
+# game-on may have left it stopped). `start` is idempotent.
+echo "[axi-game-off] ensuring axi-voice daemon is online…"
+systemctl --user start axi-voice.service 2>/dev/null || true
+
+# Restore interpreter mode only if it was running.
+systemctl --user try-restart axi-translate.service 2>/dev/null || true
 
 if command -v nvidia-smi >/dev/null 2>&1; then
     sleep 2
@@ -38,4 +62,4 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     echo "[axi-game-off] GPU VRAM: ${USED} / ${TOTAL} MiB usado"
 fi
 
-echo "[axi-game-off] axi restaurado."
+echo "[axi-game-off] axi restaurado en GPU."

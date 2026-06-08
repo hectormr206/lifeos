@@ -1,56 +1,108 @@
 #!/usr/bin/env bash
-# Game Guard (total): free ALL GPU VRAM for demanding games by stopping
-# every axi service that holds a CUDA context. Unlike a "CPU-relocate"
-# approach, this also reclaims the ~2.4 GB of CUDA context overhead that
-# stays loaded as long as a CUDA-using process lives. Reverse with
-# `axi-game-off`.
+# Game Mode (CPU relocate) — free ALL GPU VRAM for demanding games WITHOUT
+# taking axi offline. Every axi service that would otherwise hold a CUDA
+# context is relocated to CPU + RAM via persistent systemd drop-ins, so the
+# feature keeps working (voice, brain, interpreter) — just slower.
 #
-# Tradeoff: Axi is OFFLINE during gaming. You cannot talk to it, brain
-# does not answer, voice does not work. Use this when you need 100% of
-# VRAM for the game (RE Requiem, Cyberpunk RT, etc.).
+# Why drop-ins instead of `stop`: the drop-in files under
+# ~/.config/systemd/user/<svc>.service.d/ PERSIST across reboot/shutdown.
+# If you leave game mode active and reboot, systemd starts each service
+# already pinned to CPU, so NOTHING loads into VRAM until `axi-game-off`
+# removes the drop-ins. The game-mode.lock marker is the on/off source of
+# truth; the drop-ins do the actual relocation.
 #
-# VRAM freed on the RTX 5070 Ti (12 GB):
-#   axi-translate (if active): ~2.3 GB
-#   axi-voice (Whisper):       ~2.2 GB
-#   llama-server (Qwen):       ~7.8 GB
-#   Total reclaimed:           ~10–12 GB (effectively all of it).
+# Usage:
+#   axi-game-on             # relocate everything to CPU/RAM (axi stays online)
+#   axi-game-on --offline   # legacy max-FPS mode: also STOP the heavy LLM so
+#                           # zero CPU is spent on it during the game. Whisper
+#                           # and translate still relocate to CPU. The LLM is
+#                           # restored (on GPU) by axi-game-off.
 #
-# The tray icon stays alive (Wants=, not Requires=).
+# VRAM holders on the RTX 5070 Ti (12 GB) and where they go in CPU mode:
+#   axi-whisper  (Whisper large-v3-turbo): ~2.3 GB VRAM  -> RAM (int8, CPU)
+#   llama-server (Qwen3.6-35B-A3B):        ~GPU layers    -> RAM (-ngl 0)
+#   axi-translate (Opus/NLLB):             already CPU by default
+#   Result: ~0 MiB VRAM used by axi (effectively all 12 GB free for the game).
 
 set -u
 
+OFFLINE=0
+[ "${1:-}" = "--offline" ] && OFFLINE=1
+
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/axi"
 MARKER="$STATE_DIR/game-mode.lock"
+UNIT_DIR="$HOME/.config/systemd/user"
 mkdir -p "$STATE_DIR"
-touch "$MARKER"
 
-# Clean any CPU-mode drop-ins from prior runs / interpreter mode so the
-# next axi-game-off restart restores the normal GPU configuration.
-rm -f ~/.config/systemd/user/llama-server.service.d/cpu-exec.conf
-rm -f ~/.config/systemd/user/llama-server.service.d/cpu-override.conf
-rm -f ~/.config/systemd/user/axi-voice.service.d/cpu-env.conf
-rmdir ~/.config/systemd/user/llama-server.service.d 2>/dev/null || true
-rmdir ~/.config/systemd/user/axi-voice.service.d 2>/dev/null || true
+# Marker records the active sub-mode so axi-game-off (and the tray/status)
+# can tell relocate from offline.
+if [ "$OFFLINE" -eq 1 ]; then echo "offline" > "$MARKER"; else echo "relocate" > "$MARKER"; fi
+
+write_dropin() {
+    # write_dropin <unit> <conf-body>
+    local unit="$1" body="$2" dir="$UNIT_DIR/$1.service.d"
+    mkdir -p "$dir"
+    printf '%s\n' "$body" > "$dir/game-cpu.conf"
+}
+
+echo "[axi-game-on] writing CPU drop-ins (persist across reboot)…"
+
+# Whisper: faster-whisper honours AXI_WHISPER_DEVICE; int8 is the CPU default.
+write_dropin axi-whisper "[Service]
+Environment=AXI_WHISPER_DEVICE=cpu
+Environment=AXI_WHISPER_COMPUTE_TYPE=int8"
+
+# llama-server: clear the GPU ExecStart and re-point it at the --cpu launcher
+# (forces -ngl 0). Leading empty ExecStart= is required to override.
+# CUDA_VISIBLE_DEVICES= hides the GPU entirely so the CUDA-built llama-server
+# does NOT create a ~150 MiB CUDA context — true 0 VRAM, not just 0 layers.
+write_dropin llama-server "[Service]
+Environment=CUDA_VISIBLE_DEVICES=
+ExecStart=
+ExecStart=%h/LifeOS/lifeos/axi/scripts/axi-llama-launch --cpu"
+
+# translate: already CPU by default, but pin it so a cuda override also relocates.
+write_dropin axi-translate "[Service]
+Environment=AXI_OPUS_DEVICE=cpu
+Environment=AXI_NLLB_DEVICE=cpu"
+
 systemctl --user daemon-reload
 
-echo "[axi-game-on] stopping axi-translate (if active)…"
-systemctl --user stop axi-translate.service 2>/dev/null || true
+# Restart whisper now: it is the always-on shared server and the current VRAM
+# holder, so it must reload on CPU immediately to free the 2.3 GB.
+echo "[axi-game-on] relocating axi-whisper to CPU…"
+systemctl --user restart axi-whisper.service 2>/dev/null || true
 
-echo "[axi-game-on] stopping axi-voice (releases Whisper + CUDA ctx)…"
-systemctl --user stop axi-voice.service 2>/dev/null || true
+# translate: relocate only if currently active (interpreter mode on demand).
+systemctl --user try-restart axi-translate.service 2>/dev/null || true
 
-echo "[axi-game-on] stopping llama-server (releases Qwen + CUDA ctx)…"
-systemctl --user stop llama-server.service 2>/dev/null || true
+if [ "$OFFLINE" -eq 1 ]; then
+    echo "[axi-game-on] --offline: stopping llama-server (LLM uses 0 CPU during game)…"
+    systemctl --user stop llama-server.service 2>/dev/null || true
+else
+    # relocate the brain to CPU only if it is already running; do not force the
+    # 22 GB model on if the user did not have it loaded.
+    echo "[axi-game-on] relocating llama-server to CPU (if active)…"
+    systemctl --user try-restart llama-server.service 2>/dev/null || true
+fi
 
-# Give the kernel a moment to actually release the GPU memory.
+# axi-voice is the daemon (voice + meetings) — it is a Whisper CLIENT, holds NO
+# VRAM, and must stay online so meetings/commands keep working in game mode.
+# `start` is idempotent; this also self-heals if a legacy game-on stopped it.
+echo "[axi-game-on] ensuring axi-voice daemon is online (CPU, no VRAM)…"
+systemctl --user start axi-voice.service 2>/dev/null || true
+
 sleep 1
-
 if command -v nvidia-smi >/dev/null 2>&1; then
     USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)
     TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits)
     echo "[axi-game-on] GPU VRAM: ${USED} / ${TOTAL} MiB usado"
 fi
 
-echo "[axi-game-on] MODO JUEGO TOTAL activo — toda la VRAM es tuya."
-echo "  Axi está OFFLINE durante el juego (no responde voz ni cerebro)."
-echo "  Para volver:  axi-game-off"
+if [ "$OFFLINE" -eq 1 ]; then
+    echo "[axi-game-on] MODO JUEGO (offline LLM) activo — VRAM libre, brain detenido."
+else
+    echo "[axi-game-on] MODO JUEGO (CPU) activo — VRAM libre, axi sigue ONLINE en CPU."
+fi
+echo "  Persiste tras reiniciar/apagar: nada se carga en VRAM hasta 'axi-game-off'."
+echo "  Para volver a GPU:  axi-game-off"
