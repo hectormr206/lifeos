@@ -83,6 +83,10 @@ Reglas de DOMAIN (uno solo, no listes opciones):
 - Actividad física (caminé, corrí, gym, ejercicio, entrenar): "exercise"
   AUNQUE mencione personas o lugares.
 - Dinero / compras (gasté, compré, pagué, costó): "finance".
+  Servicios del hogar en contexto mexicano (gas, luz/CFE, agua, internet,
+  teléfono, renta): kind="bill", category="servicios". Gasolina/combustible
+  sigue siendo "expense" con category="transporte". merchant= nombre del
+  servicio (Gas, CFE, Telmex, etc.), NO el texto completo del mensaje.
 - Interacción humana (hablé, discutí, conocí, casarse, llamé): "relationships".
   PERO solo si hay foco en la INTERACCIÓN, no si la persona es contexto
   secundario de otra actividad.
@@ -95,7 +99,14 @@ Reglas de DOMAIN (uno solo, no listes opciones):
   Peso corporal (pesé, peso X kg): kind="vital", weight_kg=número.
   Glucosa (glucosa X, azúcar X): kind="vital", glucose_mg_dl=número.
 - Aniversario, cumple, fecha importante a futuro: "events".
-- Reflexión espiritual, agradecimiento, meditación: "spirituality".
+- Reflexión espiritual, agradecimiento, meditación, oración, "gracias a Dios",
+  "qué hermosa vida", expresión de gratitud o paz interior: "spirituality".
+  NO confundas con salud: "me siento bien/en paz/agradecido" sin síntoma
+  físico → spirituality, NO health.
+- Texto sin contenido de dominio vital (saludos, risas, fillers como "ok",
+  "jajaja", "sí claro", "jeje que raro", confirmaciones de conversación,
+  números sueltos sin contexto): null. Si dudás entre un dominio y null,
+  elegí null.
 - Nada aplica claramente: null.
 
 Reglas CRÍTICAS de PEOPLE — leelas dos veces:
@@ -130,28 +141,43 @@ Reglas de OTROS campos:
 Ejemplos:
 
 INPUT: "Hablé con Diego en la oficina ayer"
-OUTPUT: {"domain":"relationships","amount":null,"currency":null,"merchant":null,"people":["Diego"],"dates_text":["ayer"],"duration_minutes":null,"items":[],"title":"conversación con Diego","kind":"conversation","systolic":null,"diastolic":null,"pulse_bpm":null}
+OUTPUT: {"domain":"relationships","amount":null,"currency":null,"merchant":null,"people":["Diego"],"dates_text":["ayer"],"duration_minutes":null,"items":[],"title":"conversación con Diego","kind":"conversation","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "Tuve una discusión fuerte con mi mamá esta tarde"
-OUTPUT: {"domain":"relationships","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":["esta tarde"],"duration_minutes":null,"items":[],"title":"discusión con mi mamá","kind":"conflict","systolic":null,"diastolic":null,"pulse_bpm":null}
+OUTPUT: {"domain":"relationships","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":["esta tarde"],"duration_minutes":null,"items":[],"title":"discusión con mi mamá","kind":"conflict","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "Gasté 1850 en Aurrera: 320 detergente, 450 papel higiénico, 500 cable HDMI"
-OUTPUT: {"domain":"finance","amount":1850,"currency":"MXN","merchant":"Aurrera","people":[],"dates_text":[],"duration_minutes":null,"items":[{"name":"detergente","amount":320,"category":"hogar"},{"name":"papel higiénico","amount":450,"category":"hogar"},{"name":"cable HDMI","amount":500,"category":"electrónica"}],"title":"compra en Aurrera","kind":"expense","systolic":null,"diastolic":null,"pulse_bpm":null}
+OUTPUT: {"domain":"finance","amount":1850,"currency":"MXN","merchant":"Aurrera","people":[],"dates_text":[],"duration_minutes":null,"items":[{"name":"detergente","amount":320,"category":"hogar"},{"name":"papel higiénico","amount":450,"category":"hogar"},{"name":"cable HDMI","amount":500,"category":"electrónica"}],"title":"compra en Aurrera","kind":"expense","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "Caminé en el parque con mi esposa Daniela durante 45 minutos"
-OUTPUT: {"domain":"exercise","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":[],"duration_minutes":45,"items":[],"title":"caminata en el parque","kind":"walk","systolic":null,"diastolic":null,"pulse_bpm":null}
+OUTPUT: {"domain":"exercise","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":[],"duration_minutes":45,"items":[],"title":"caminata en el parque","kind":"walk","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "Hicimos una caminata familiar de 1 hora en el parque"
-OUTPUT: {"domain":"exercise","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":60,"items":[],"title":"caminata familiar","kind":"walk","systolic":null,"diastolic":null,"pulse_bpm":null}
+OUTPUT: {"domain":"exercise","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":60,"items":[],"title":"caminata familiar","kind":"walk","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "Estoy aprendiendo Claude Code para LifeOS"
-OUTPUT: {"domain":"learning","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"aprendiendo Claude Code","kind":"study","systolic":null,"diastolic":null,"pulse_bpm":null}
+OUTPUT: {"domain":"learning","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"aprendiendo Claude Code","kind":"study","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "Empecé el libro Atomic Habits de James Clear"
-OUTPUT: {"domain":"learning","amount":null,"currency":null,"merchant":null,"people":["James Clear"],"dates_text":[],"duration_minutes":null,"items":[],"title":"Atomic Habits","kind":"book","systolic":null,"diastolic":null,"pulse_bpm":null}
+OUTPUT: {"domain":"learning","amount":null,"currency":null,"merchant":null,"people":["James Clear"],"dates_text":[],"duration_minutes":null,"items":[],"title":"Atomic Habits","kind":"book","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "Mi esposa Daniela y yo nos casamos el 15 de junio de 2018"
-OUTPUT: {"domain":"events","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":["15 de junio de 2018"],"duration_minutes":null,"items":[],"title":"casamiento con Daniela","kind":"milestone","systolic":null,"diastolic":null,"pulse_bpm":null}
+OUTPUT: {"domain":"events","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":["15 de junio de 2018"],"duration_minutes":null,"items":[],"title":"casamiento con Daniela","kind":"milestone","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "jajaja sí claro"
+OUTPUT: {"domain":null,"amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":null,"kind":null,"systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "gracias a Dios por este día"
+OUTPUT: {"domain":"spirituality","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"agradecimiento del día","kind":"gratitude","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "pagué el gas, 580 pesos"
+OUTPUT: {"domain":"finance","amount":580,"currency":"MXN","merchant":"Gas","people":[],"dates_text":[],"duration_minutes":null,"items":[{"name":"gas","amount":580,"category":"servicios"}],"title":"pago de gas","kind":"bill","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "pagué la luz, 340"
+OUTPUT: {"domain":"finance","amount":340,"currency":"MXN","merchant":"CFE","people":[],"dates_text":[],"duration_minutes":null,"items":[{"name":"luz","amount":340,"category":"servicios"}],"title":"pago de luz","kind":"bill","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "cargué gasolina, 800 pesos"
+OUTPUT: {"domain":"finance","amount":800,"currency":"MXN","merchant":"Gasolinera","people":[],"dates_text":[],"duration_minutes":null,"items":[{"name":"gasolina","amount":800,"category":"transporte"}],"title":"gasolina","kind":"expense","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "122/81 53 pulsos"
 OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":"presión 122/81, pulso 53","kind":"vital","systolic":122,"diastolic":81,"pulse_bpm":53,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
