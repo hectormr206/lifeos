@@ -467,3 +467,70 @@ def test_gracias_a_dios_still_routes_to_spirituality(monkeypatch):
         f"Expected spirituality, got {result.domain!r}"
     )
     assert rec.calls == 1
+
+
+# ── Deterministic ack/filler short-circuit (no nano call) ─────────────────────
+# Bare conversational acks carry no life-domain data. They must resolve to null
+# WITHOUT a nano call — both to save latency and to avoid model misclassification
+# at the prompt-capacity ceiling (e.g. "dale" → spirituality). This is the cheap
+# deterministic layer that keeps us from growing the 0.8B monolith prompt.
+
+@pytest.mark.parametrize("ack", [
+    "ok", "OK", "dale", "Dale.", "va", "bueno", "listo", "perfecto",
+    "perfecto gracias", "gracias", "joya", "genial", "sí", "claro",
+    "jajaja", "  ok  ", "Listo!", "dale!!",
+])
+def test_ack_filler_short_circuits_without_nano(monkeypatch, ack):
+    """A bare ack/filler returns null and never touches the nano service."""
+    rec = _Recorder([_ok(_NULL_FULL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract(ack)
+
+    assert result is None, f"ack {ack!r} must return null"
+    assert rec.calls == 0, f"ack {ack!r} must NOT call the nano"
+
+
+@pytest.mark.parametrize("text,expected_domain", [
+    ("dale, gasté 200 pesos", "finance"),
+    ("ok dormí ocho horas", "health"),
+    ("perfecto, salí a correr", "exercise"),
+])
+def test_ack_prefix_with_content_still_reaches_nano(monkeypatch, text, expected_domain):
+    """A message that merely STARTS with an ack but carries content is NOT
+    short-circuited — it must reach the nano and extract its real domain."""
+    json_by_domain = {
+        "finance": _FINANCE_JSON,
+        "health": _HEALTH_SLEEP_JSON,
+        "exercise": _EXERCISE_JSON,
+    }
+    rec = _Recorder([_ok(json_by_domain[expected_domain])])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract(text)
+
+    assert rec.calls == 1, f"{text!r} must reach the nano, not be short-circuited"
+    assert result is not None
+    assert result.domain == expected_domain
+
+
+_FINANCE_JSON = (
+    '{"domain":"finance","amount":200,"currency":"MXN","merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":"gasto","kind":"expense","systolic":null,"diastolic":null,'
+    '"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}'
+)
+
+_HEALTH_SLEEP_JSON = (
+    '{"domain":"health","amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":"sueño","kind":"vital","systolic":null,"diastolic":null,'
+    '"pulse_bpm":null,"sleep_hours":8.0,"weight_kg":null,"glucose_mg_dl":null}'
+)
+
+_EXERCISE_JSON = (
+    '{"domain":"exercise","amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":30,"items":[],'
+    '"title":"trote","kind":"run","systolic":null,"diastolic":null,'
+    '"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}'
+)

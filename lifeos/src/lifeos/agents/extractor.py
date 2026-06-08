@@ -243,6 +243,37 @@ def _try_parse_json(content: str) -> dict | None:
     return None
 
 
+# Deterministic conversational acks/fillers. A standalone message that is
+# nothing but one of these carries no life-domain data, so we short-circuit to
+# null BEFORE paying for a nano call. This is the cheap deterministic layer the
+# 0.8B prompt should NOT grow to cover: e.g. "dale" → spirituality was a model
+# quirk at the prompt-capacity ceiling (~3900 tokens), and patching it into the
+# monolith would just trade one regression for another. Whole-message match
+# only — "dale" filters, but "dale, gasté 200" still reaches the model.
+_ACK_FILLERS = frozenset({
+    "ok", "okay", "okey", "oka", "ok ya", "ya", "dale", "va", "bueno",
+    "listo", "perfecto", "perfecto gracias", "ok gracias", "gracias",
+    "de una", "sale", "vale", "joya", "barbaro", "genial", "claro",
+    "si", "sí", "si claro", "sí claro", "no", "aja", "ajá", "ah",
+    "jaja", "jajaja", "jeje", "jejeje", "jiji", "jaj", "jajaj",
+})
+
+# Leading/trailing punctuation and whitespace to peel off before matching.
+_ACK_STRIP = " \t\n\r.,;:!¡¿?…\"'"
+
+
+def _is_ack_filler(text: str) -> bool:
+    """True when the whole message is just a conversational ack/filler.
+
+    Normalizes case, strips surrounding punctuation, and collapses internal
+    whitespace, then checks membership in the closed `_ACK_FILLERS` set. Any
+    message carrying real content (extra tokens, internal punctuation) falls
+    through to the model unchanged.
+    """
+    norm = " ".join(text.lower().strip(_ACK_STRIP).split())
+    return norm in _ACK_FILLERS
+
+
 def extract(
     text: str,
     *,
@@ -269,6 +300,12 @@ def extract(
     answer (parse failure, null domain) is NOT retried — that's a real
     decision and burning a 15s retry on it would only add latency."""
     if not text or not text.strip():
+        return None
+
+    # Deterministic short-circuit: a bare ack/filler ("ok", "dale", "listo")
+    # has no life-domain data. Resolve it here instead of spending a nano call
+    # and risking a model misclassification at the prompt-capacity ceiling.
+    if _is_ack_filler(text):
         return None
 
     r = runtime.call_nano(
