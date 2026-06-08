@@ -24,7 +24,7 @@ from axi.brain import ask as brain_ask
 from axi.clean import clean as clean_text
 from axi.extractor import extract_and_store
 from axi.eyes import capture_b64 as webcam_capture_b64
-from axi.meeting import MeetingSession, process_meeting
+from axi.meeting import MeetingSession, process_meeting, recover_interrupted_meetings
 from axi.memory import ConversationMemory
 from axi.output import notify, save_last, save_last_answer, to_clipboard, type_to_focused
 from axi.speak import speak as speak_text
@@ -687,6 +687,25 @@ class Daemon:
         return f"recording:{s['meeting_id']}:{s['duration_s']}s:mic={s['mic_chunks']}:sys={s['system_chunks']}:screens={s['screens']}"
 
 
+def _start_recovery_thread(daemon: "Daemon") -> None:
+    """Spawn a non-blocking background daemon thread that runs startup recovery.
+
+    Provides a testable seam so tests can assert thread behaviour without
+    running the full socket accept loop.
+    """
+    def _run_recovery() -> None:
+        log.info("startup recovery: scanning for interrupted meetings...")
+        try:
+            ids = recover_interrupted_meetings(
+                daemon.transcriber, daemon.brain_ask, active_meeting_id=None
+            )
+            log.info("startup recovery done: recovered %s", ids)
+        except Exception as e:  # noqa: BLE001
+            log.warning("startup recovery crashed: %s", e)
+
+    threading.Thread(target=_run_recovery, name="meeting-recovery", daemon=True).start()
+
+
 def _handle_cmd(daemon: Daemon, cmd: str) -> tuple[str, bool]:
     cmd = cmd.strip()
     if cmd == "toggle":
@@ -734,6 +753,8 @@ def serve() -> int:
     sock.listen(4)
     os.chmod(SOCK_PATH, 0o600)
     log.info("listening on %s", SOCK_PATH)
+
+    _start_recovery_thread(daemon)
 
     stop_signal = {"raised": False}
 

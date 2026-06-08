@@ -16,6 +16,7 @@ modules / a dashboard.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -25,6 +26,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+
+log = logging.getLogger("axi.store")
 
 import sqlcipher3
 
@@ -282,6 +285,14 @@ def init_db() -> None:
         c = _connect()
         c.executescript(_SCHEMA)
         c.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', '1')")
+
+
+def checkpoint() -> None:
+    """Flush the WAL into the main DB file. Non-fatal: logs and swallows errors."""
+    try:
+        _connect().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as e:  # noqa: BLE001
+        log.warning("wal_checkpoint failed: %s", e)
 
 
 @contextmanager

@@ -896,3 +896,83 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
             except OSError as e:
                 log.warning("could not delete %s: %s", wav, e)
         log.info("raw audio cleaned up for meeting %d", meeting_id)
+
+    # Flush WAL to main DB file so the result survives a daemon restart.
+    # Non-fatal — store.checkpoint() swallows and logs its own errors by contract.
+    store.checkpoint()
+
+
+def recover_interrupted_meetings(
+    transcriber,
+    brain_ask,
+    *,
+    active_meeting_id: int | None = None,
+) -> list[int]:
+    """Rebuild meetings left interrupted by a crash or daemon restart.
+
+    Selects meetings with status IN ('recording', 'processing') whose data_dir
+    exists and has at least one *.wav chunk last modified >= 90 s ago (mid-write
+    guard). If end_time is NULL it is set from the newest chunk mtime. Then
+    process_meeting() is called; on failure the row is marked 'recovery_failed'
+    (terminal — never retried). Returns the list of recovered meeting ids.
+    """
+    _MIDWRITE_THRESHOLD_S = 90
+
+    c = store._connect()
+    rows = c.execute(
+        "SELECT id, data_dir, end_time FROM meetings WHERE status IN ('recording','processing')"
+    ).fetchall()
+
+    log.info("recovery: starting — %d candidate(s) to inspect", len(rows))
+    recovered: list[int] = []
+    for row in rows:
+        meeting_id = int(row["id"])
+        end_time = row["end_time"]
+
+        if meeting_id == active_meeting_id:
+            log.info("recovery: skipping active meeting %d", meeting_id)
+            continue
+
+        data_dir = Path(row["data_dir"])
+        if not data_dir.exists():
+            log.info("recovery: skipping meeting %d — data_dir missing (%s)", meeting_id, data_dir)
+            continue
+
+        chunks = sorted(data_dir.glob("*.wav"))
+        if not chunks:
+            log.info("recovery: skipping meeting %d — no *.wav chunks", meeting_id)
+            continue
+
+        newest_mtime = max(p.stat().st_mtime for p in chunks)
+        if time.time() - newest_mtime < _MIDWRITE_THRESHOLD_S:
+            log.info(
+                "recovery: skipping meeting %d — newest chunk modified %.0f s ago (< %d s threshold)",
+                meeting_id, time.time() - newest_mtime, _MIDWRITE_THRESHOLD_S,
+            )
+            continue
+
+        if end_time is None:
+            with store._tx() as txc:  # noqa: SLF001
+                txc.execute(
+                    "UPDATE meetings SET end_time = ? WHERE id = ?",
+                    (newest_mtime, meeting_id),
+                )
+            log.info("recovery: set end_time for meeting %d from chunk mtime", meeting_id)
+
+        try:
+            process_meeting(meeting_id, transcriber, brain_ask)
+            recovered.append(meeting_id)
+            log.info("recovery: meeting %d rebuilt successfully", meeting_id)
+        except Exception as e:  # noqa: BLE001
+            log.warning("recovery: meeting %d failed — marking recovery_failed: %s", meeting_id, e)
+            try:
+                with store._tx() as txc:  # noqa: SLF001
+                    txc.execute(
+                        "UPDATE meetings SET status = 'recovery_failed' WHERE id = ?",
+                        (meeting_id,),
+                    )
+            except Exception as inner:  # noqa: BLE001
+                log.warning("recovery: could not mark meeting %d as recovery_failed: %s", meeting_id, inner)
+
+    log.info("recovery: finished — rebuilt meetings: %s", recovered)
+    return recovered
