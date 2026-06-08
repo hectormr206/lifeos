@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# axi-nano-launch — ExecStart entry point for llama-nano.service.
+#
+# Reads the active nano model from $XDG_STATE_HOME/axi/active_nano_model.json
+# (creates it with the historical Qwen3.5-0.8B defaults if missing — so a
+# fresh install behaves byte-identical to the pre-selector configuration),
+# then execs /usr/bin/llama-server with the assembled argv.
+#
+# The nano service always runs CPU-only (CUDA_VISIBLE_DEVICES="" is set by
+# the systemd unit). This script never passes --cpu because ngl is always 0
+# in the active_nano_model.json for every nano catalog entry.
+#
+# AXI_DRY_RUN=1 prints the would-be command and exits without exec'ing
+# (used by tests and smoke checks).
+
+set -u
+exec python3 - <<'PY'
+import json, os, sys
+from pathlib import Path
+
+state_root = os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))
+state = os.path.join(state_root, "axi", "active_nano_model.json")
+
+# Default = exact current production args for Qwen3.5-0.8B (CPU-only) so
+# dropping this launcher in front of llama-nano.service is a no-op the first
+# time and for any machine that never touches the config.
+#
+# SYNC NOTE: This dict is intentionally duplicated from nano_manager._make_default()
+# (axi/src/axi/nano_manager.py). The launcher cannot import Python packages, so
+# duplication is unavoidable. nano_manager is AUTHORITATIVE — any change to the
+# default config MUST be mirrored here.
+HOME = str(Path.home())
+DEFAULT = {
+    "id": "qwen35-0_8b",
+    "gguf": HOME + "/LifeOS/models/qwen35-0_8b/Qwen3.5-0.8B-Q4_K_M.gguf",
+    # mmproj intentionally absent: the historical service unit never loaded it.
+    # The runtime only calls /v1/chat/completions (text) — no vision.
+    # Add "mmproj": "<path>" to active_nano_model.json to enable vision.
+    "ctx": 4096,
+    "ngl": 0,
+    "port": 8090,
+    # extra_args: model-specific tuning only; --jinja, -c, -ngl, --host,
+    # --port are assembled below from the config fields so they are never
+    # duplicated between the fixed block and extra_args.
+    "extra_args": [
+        "-t", "4",
+        "--no-mmap",
+        "-np", "1",
+        "-a", "Qwen3.5-0.8B-nano",
+    ],
+}
+
+if not os.path.exists(state):
+    os.makedirs(os.path.dirname(state), exist_ok=True)
+    with open(state, "w") as f:
+        json.dump(DEFAULT, f, indent=2)
+
+# W1: wrap read in try/except — corrupt JSON falls back to DEFAULT instead
+# of crashing the service into a systemd restart-loop.
+try:
+    with open(state) as f:
+        cfg = json.load(f)
+except (json.JSONDecodeError, OSError) as exc:
+    print(f"WARNING: could not read {state}: {exc}; using DEFAULT config", file=sys.stderr)
+    cfg = DEFAULT
+
+# W2: missing "gguf" key would crash at cfg["gguf"] below — fall back to DEFAULT.
+if "gguf" not in cfg:
+    print(f"WARNING: active_nano_model.json has no 'gguf' key; using DEFAULT config", file=sys.stderr)
+    cfg = DEFAULT
+
+ngl = int(cfg.get("ngl", 0))
+port = str(cfg.get("port", 8090))
+ctx = int(cfg.get("ctx", 4096))
+
+args = ["/usr/bin/llama-server", "-m", cfg["gguf"]]
+if cfg.get("mmproj"):
+    args += ["--mmproj", cfg["mmproj"]]
+args += [
+    "-ngl", str(ngl),
+    "--jinja",
+    "-c", str(ctx),
+    "--host", "127.0.0.1",
+    "--port", port,
+]
+# C1(a): dedupe flags already injected above so a hand-crafted extra_args
+# cannot produce duplicates (e.g. --jinja appearing twice).
+_FIXED_FLAGS = {"--jinja"}
+args += [a for a in cfg.get("extra_args", []) if a not in _FIXED_FLAGS]
+
+# AXI_DRY_RUN=1 prints the would-be command and exits (tests + smoke).
+if os.environ.get("AXI_DRY_RUN") == "1":
+    print(" ".join(args))
+    sys.exit(0)
+
+os.execvp(args[0], args)
+PY
