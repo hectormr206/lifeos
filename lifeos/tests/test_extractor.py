@@ -197,7 +197,7 @@ def test_extraction_result_carries_sleep_hours(monkeypatch):
     """ExtractionResult exposes sleep_hours when nano returns it."""
     rec = _Recorder([_ok(_SLEEP_VITAL_JSON)])
     monkeypatch.setattr(runtime, "call_nano", rec)
-    result = extractor.extract("Me dormí a las 11 pm y acabo de despertar")
+    result = extractor.extract("dormí 8 horas")
     assert result is not None
     assert result.domain == "health"
     assert result.sleep_hours == 8.0
@@ -230,3 +230,156 @@ def test_extraction_result_new_fields_nullable(monkeypatch):
     assert result.sleep_hours is None
     assert result.weight_kg is None
     assert result.glucose_mg_dl is None
+
+
+# ── Prompt-gap fixes (2026-06-07 benchmark) ──────────────────────────────────
+# These tests verify the three prompt gaps found in the 30-case Spanish
+# benchmark: (1) garbage inputs, (2) spirituality vs health boundary,
+# (3) utility bill categorization.
+#
+# The nano endpoint is mocked — tests pin the *extractor parser behaviour*
+# given the corrected model output, AND verify that null/none responses take
+# the cheap "no domain" path rather than burning a retry.
+
+
+# ── Gap 1: garbage / meaningless inputs must map to null ─────────────────────
+
+@pytest.mark.parametrize("garbage_text", [
+    "jajaja sí claro",       # laughter filler (14 chars, passes 12-char guard)
+    "jeje que raro",          # filler with no life-domain content (13 chars)
+    "sí claro que sí",        # agreement filler (15 chars)
+    "ok ya entendí todo",     # conversational ack (18 chars)
+])
+def test_garbage_input_returns_null_domain(monkeypatch, garbage_text):
+    """Garbage/filler inputs should produce null from the model.
+    The extractor must return None (no retry — it's a clean null, not a transport failure)."""
+    rec = _Recorder([_ok('{"domain": null}')])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract(garbage_text)
+
+    assert result is None
+    assert rec.calls == 1, "null domain must NOT trigger a retry — cheap path only"
+
+
+def test_garbage_null_domain_in_full_json(monkeypatch):
+    """Null domain returned in full JSON envelope is still treated as 'no extract'."""
+    full_null = (
+        '{"domain":null,"amount":null,"currency":null,"merchant":null,'
+        '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+        '"title":null,"kind":null,"systolic":null,"diastolic":null,'
+        '"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}'
+    )
+    rec = _Recorder([_ok(full_null)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("jajaja sí claro")
+
+    assert result is None
+    assert rec.calls == 1
+
+
+# ── Gap 2: spirituality vs health — gratitude must NOT route to health ────────
+
+_SPIRITUALITY_JSON = (
+    '{"domain":"spirituality","amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":"agradecimiento","kind":"gratitude","systolic":null,"diastolic":null,'
+    '"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}'
+)
+
+
+@pytest.mark.parametrize("spiritual_text", [
+    "gracias a Dios por este día",
+    "hoy me desperté agradecido por todo lo que tengo",
+    "me siento en paz y agradecido con la vida",
+])
+def test_gratitude_routes_to_spirituality_not_health(monkeypatch, spiritual_text):
+    """Gratitude / spiritual reflection must come back as spirituality, never health."""
+    rec = _Recorder([_ok(_SPIRITUALITY_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract(spiritual_text)
+
+    assert result is not None
+    assert result.domain == "spirituality", (
+        f"Expected spirituality, got {result.domain!r} for {spiritual_text!r}"
+    )
+    assert result.systolic is None
+    assert result.diastolic is None
+    assert result.pulse_bpm is None
+
+
+# ── Gap 3: utility bills — finance/bill with category=servicios ──────────────
+
+_GAS_BILL_JSON = (
+    '{"domain":"finance","amount":580,"currency":"MXN","merchant":"Gas","people":[],'
+    '"dates_text":[],"duration_minutes":null,"items":[{"name":"gas","amount":580,'
+    '"category":"servicios"}],"title":"pago de gas","kind":"bill",'
+    '"systolic":null,"diastolic":null,"pulse_bpm":null,'
+    '"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}'
+)
+
+_LUZ_BILL_JSON = (
+    '{"domain":"finance","amount":340,"currency":"MXN","merchant":"CFE","people":[],'
+    '"dates_text":[],"duration_minutes":null,"items":[{"name":"luz","amount":340,'
+    '"category":"servicios"}],"title":"pago de luz","kind":"bill",'
+    '"systolic":null,"diastolic":null,"pulse_bpm":null,'
+    '"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}'
+)
+
+
+def test_utility_gas_bill_routes_to_finance_bill(monkeypatch):
+    """'pagué el gas, 580 pesos' — gas is a utility bill in MX context.
+    Expects domain=finance, kind=bill, items[0].category=servicios."""
+    rec = _Recorder([_ok(_GAS_BILL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("pagué el gas, 580 pesos")
+
+    assert result is not None
+    assert result.domain == "finance"
+    assert result.kind == "bill"
+    assert result.amount == 580.0
+    # items should have servicios category (not hogar / electrónica / transporte)
+    assert result.items, "expected at least one item"
+    assert result.items[0]["category"] == "servicios"
+
+
+def test_utility_luz_bill_routes_to_finance_bill(monkeypatch):
+    """'pagué la luz, 340' — luz (CFE) is a utility bill in MX context."""
+    rec = _Recorder([_ok(_LUZ_BILL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("pagué la luz, 340")
+
+    assert result is not None
+    assert result.domain == "finance"
+    assert result.kind == "bill"
+    assert result.items
+    assert result.items[0]["category"] == "servicios"
+
+
+@pytest.mark.parametrize("utility_text,expected_kind", [
+    ("pagué el internet, 450 pesos", "bill"),
+    ("pagué el agua, 220 pesos", "bill"),
+    ("pagué el gas natural, 580 pesos", "bill"),
+])
+def test_utility_bills_generic(monkeypatch, utility_text, expected_kind):
+    """Common Mexican utility payments produce kind=bill, domain=finance."""
+    bill_json = (
+        '{"domain":"finance","amount":450,"currency":"MXN","merchant":"Servicio",'
+        '"people":[],"dates_text":[],"duration_minutes":null,'
+        '"items":[{"name":"servicio","amount":450,"category":"servicios"}],'
+        '"title":"pago de servicio","kind":"bill",'
+        '"systolic":null,"diastolic":null,"pulse_bpm":null,'
+        '"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}'
+    )
+    rec = _Recorder([_ok(bill_json)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract(utility_text)
+
+    assert result is not None
+    assert result.domain == "finance"
+    assert result.kind == expected_kind
