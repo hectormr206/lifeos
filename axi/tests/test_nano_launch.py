@@ -48,7 +48,7 @@ def test_launcher_dry_run_uses_default_model(isolated_nano_env):
     assert cmd.count("-ngl") == 1
     # --jinja must appear exactly once (not duplicated) and -c must appear
     assert cmd.count("--jinja") == 1
-    assert "-c 4096" in cmd
+    assert "-c 8192" in cmd
 
 
 def test_launcher_creates_default_config(isolated_nano_env):
@@ -96,7 +96,7 @@ def test_launcher_includes_mmproj_when_config_has_it(isolated_nano_env):
         "id": "qwen35-0_8b",
         "gguf": f"{home}/LifeOS/models/qwen35-0_8b/Qwen3.5-0.8B-Q4_K_M.gguf",
         "mmproj": f"{home}/LifeOS/models/qwen35-0_8b/mmproj-F16.gguf",
-        "ctx": 4096,
+        "ctx": 8192,
         "ngl": 0,
         "port": 8090,
         # --jinja is NOT in extra_args: the catalog never produces it there;
@@ -120,7 +120,7 @@ def test_launcher_dedupes_jinja_from_manual_extra_args(isolated_nano_env):
     cfg = {
         "id": "qwen35-0_8b",
         "gguf": f"{home}/LifeOS/models/qwen35-0_8b/Qwen3.5-0.8B-Q4_K_M.gguf",
-        "ctx": 4096,
+        "ctx": 8192,
         "ngl": 0,
         "port": 8090,
         "extra_args": ["--jinja", "-a", "Qwen3.5-0.8B-nano"],

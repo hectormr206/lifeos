@@ -45,7 +45,7 @@ def _make_default() -> dict:
         # mmproj intentionally absent: the historical service unit never loaded it.
         # The runtime only calls /v1/chat/completions (text) — no vision.
         # Add "mmproj": "<path>" to active_nano_model.json to enable vision.
-        "ctx": 4096,
+        "ctx": 8192,
         "ngl": 0,
         "port": 8090,
         "extra_args": [
@@ -159,7 +159,7 @@ def build_nano_launch_args(cfg: dict) -> list[str]:
     only (so none of those flags appear twice).
     """
     ngl = int(cfg.get("ngl", 0))
-    ctx = int(cfg.get("ctx", 4096))
+    ctx = int(cfg.get("ctx", 8192))
     port = str(cfg.get("port", 8090))
     args = ["/usr/bin/llama-server", "-m", cfg["gguf"]]
     if cfg.get("mmproj"):

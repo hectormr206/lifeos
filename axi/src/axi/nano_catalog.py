@@ -111,7 +111,7 @@ NANO_CATALOG: tuple[NanoModelEntry, ...] = (
                 kind="mmproj",
             ),
         ),
-        ctx=4096,
+        ctx=8192,
         ngl=0,
         port=8090,
         extra_args=_CPU_ARGS + ("-a", "Qwen3.5-0.8B-nano"),
