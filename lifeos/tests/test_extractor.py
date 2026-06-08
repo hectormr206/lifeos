@@ -383,3 +383,87 @@ def test_utility_bills_generic(monkeypatch, utility_text, expected_kind):
     assert result is not None
     assert result.domain == "finance"
     assert result.kind == expected_kind
+
+
+# ── Null boundary: ambient/weather, world-fact, bare-number (2026-06-07) ──────
+# These tests document the three null-boundary failure categories found in the
+# 30-case Spanish benchmark. The model must return domain=null for:
+#   (a) ambient/weather observations  — ephemeral, not a user action or state
+#   (b) world/general facts           — true of the world, not personal events
+#   (c) bare numbers / meaningless fragments without life-domain context
+#
+# All three MUST take the cheap no-retry path: domain=null is a clean answer,
+# not a transient infra failure, so retries must never fire on a clean null.
+#
+# The null-JSON fixture below mirrors the full 17-field schema the model emits.
+
+_NULL_FULL_JSON = (
+    '{"domain":null,"amount":null,"currency":null,"merchant":null,'
+    '"people":[],"dates_text":[],"duration_minutes":null,"items":[],'
+    '"title":null,"kind":null,"systolic":null,"diastolic":null,'
+    '"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}'
+)
+
+
+def test_ambient_weather_returns_null(monkeypatch):
+    """Ambient weather observations are not a user life-domain event → null.
+
+    E.g. 'hace mucho calor hoy': the user is noting ambient temperature,
+    not recording a personal action, state, or decision.
+    """
+    rec = _Recorder([_ok(_NULL_FULL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("hace mucho calor hoy")
+
+    assert result is None, "weather observation must produce null domain"
+    assert rec.calls == 1, "null domain must NOT trigger a retry"
+
+
+def test_world_fact_returns_null(monkeypatch):
+    """General world facts unrelated to the user's life are → null.
+
+    E.g. 'el sol sale por el este': a geographic/astronomical fact,
+    not a personal event or state.
+    """
+    rec = _Recorder([_ok(_NULL_FULL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("el sol sale por el este")
+
+    assert result is None, "world fact must produce null domain"
+    assert rec.calls == 1, "null domain must NOT trigger a retry"
+
+
+def test_bare_number_returns_null(monkeypatch):
+    """A bare number with no life-domain context must return null, not health.
+
+    E.g. '42': no units, no context — it cannot be reliably assigned any
+    domain without hallucinating one.
+    """
+    rec = _Recorder([_ok(_NULL_FULL_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("42")
+
+    assert result is None, "bare number without context must produce null domain"
+    assert rec.calls == 1, "null domain must NOT trigger a retry"
+
+
+def test_gracias_a_dios_still_routes_to_spirituality(monkeypatch):
+    """Regression guard: explicit faith/gratitude-to-God must still → spirituality.
+
+    The null-boundary tightening must not suppress valid spiritual inputs.
+    'gracias a Dios' is the canonical example: explicit invocation of God,
+    not a weather observation or world fact.
+    """
+    rec = _Recorder([_ok(_SPIRITUALITY_JSON)])
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    result = extractor.extract("gracias a Dios por este día")
+
+    assert result is not None
+    assert result.domain == "spirituality", (
+        f"Expected spirituality, got {result.domain!r}"
+    )
+    assert rec.calls == 1

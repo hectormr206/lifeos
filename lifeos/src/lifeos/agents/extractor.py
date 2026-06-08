@@ -99,14 +99,20 @@ Reglas de DOMAIN (uno solo, no listes opciones):
   Peso corporal (pesé, peso X kg): kind="vital", weight_kg=número.
   Glucosa (glucosa X, azúcar X): kind="vital", glucose_mg_dl=número.
 - Aniversario, cumple, fecha importante a futuro: "events".
-- Reflexión espiritual, agradecimiento, meditación, oración, "gracias a Dios",
-  "qué hermosa vida", expresión de gratitud o paz interior: "spirituality".
-  NO confundas con salud: "me siento bien/en paz/agradecido" sin síntoma
-  físico → spirituality, NO health.
+- Reflexión espiritual, agradecimiento EXPLÍCITO a Dios/lo divino, meditación,
+  oración, "gracias a Dios", expresión de fe o paz interior deliberada:
+  "spirituality". SOLO cuando el texto expresa fe, oración o gratitud espiritual
+  EXPLÍCITA del usuario. NO confundas con salud: "me siento bien/en paz/agradecido"
+  sin síntoma físico → spirituality si hay intención espiritual; health solo si
+  hay síntoma o vital. IMPORTANTE — NO es spirituality: observaciones del clima
+  o temperatura ("hace calor", "llueve", "el cielo está nublado"), hechos del
+  mundo no personales ("el sol sale por el este", "el agua hierve a 100°C"),
+  ni datos sin contexto. Esos son null.
 - Texto sin contenido de dominio vital (saludos, risas, fillers como "ok",
   "jajaja", "sí claro", "jeje que raro", confirmaciones de conversación,
-  números sueltos sin contexto): null. Si dudás entre un dominio y null,
-  elegí null.
+  números sueltos sin contexto, observaciones ambientales del clima, hechos
+  generales del mundo sin participación personal): null. Si dudás entre un
+  dominio y null, elegí null.
 - Nada aplica claramente: null.
 
 Reglas CRÍTICAS de PEOPLE — leelas dos veces:
@@ -165,6 +171,15 @@ INPUT: "Mi esposa Daniela y yo nos casamos el 15 de junio de 2018"
 OUTPUT: {"domain":"events","amount":null,"currency":null,"merchant":null,"people":["Daniela"],"dates_text":["15 de junio de 2018"],"duration_minutes":null,"items":[],"title":"casamiento con Daniela","kind":"milestone","systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "jajaja sí claro"
+OUTPUT: {"domain":null,"amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":null,"kind":null,"systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "hace mucho calor hoy"
+OUTPUT: {"domain":null,"amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":null,"kind":null,"systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "el sol sale por el este"
+OUTPUT: {"domain":null,"amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":null,"kind":null,"systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
+
+INPUT: "42"
 OUTPUT: {"domain":null,"amount":null,"currency":null,"merchant":null,"people":[],"dates_text":[],"duration_minutes":null,"items":[],"title":null,"kind":null,"systolic":null,"diastolic":null,"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}
 
 INPUT: "gracias a Dios por este día"
