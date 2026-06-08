@@ -514,6 +514,15 @@ install_services() {
 
   systemctl --user daemon-reload
 
+  # Re-apply changed unit definitions to services that are already running.
+  # A daemon-reload alone does NOT restart a live unit whose ExecStart changed
+  # (e.g. an upgraded llama-nano context window), silently leaving the old
+  # command running — the "stale unit" trap. try-restart is a no-op for
+  # inactive units, so this only touches services that are currently up.
+  for unit in "$REPO_DIR"/axi/systemd/*.service; do
+    systemctl --user try-restart "$(basename "$unit")" 2>/dev/null || true
+  done
+
   local to_enable=("${SERVICES_BASE[@]}")
   [ -f "$MODELS_DIR/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf" ] && to_enable+=(llama-server.service)
   # Check if the active nano model gguf is present; fall back to the default.
