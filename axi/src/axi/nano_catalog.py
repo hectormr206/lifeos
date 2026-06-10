@@ -119,35 +119,6 @@ NANO_CATALOG: tuple[NanoModelEntry, ...] = (
     ),
 
     # ------------------------------------------------------------------ #
-    # Nano-agent / extraction tier — IBM Granite 4.0-H-1B.               #
-    # ------------------------------------------------------------------ #
-    NanoModelEntry(
-        id="granite-4.0-h-1b",
-        name="Granite 4.0-H 1B (nano-agent)",
-        family="Granite",
-        params="1B",
-        features=("tools",),
-        description=(
-            "IBM Granite 4.0 Hybrid-SSM 1B (Apache 2.0). Hybrid Mamba-2 + "
-            "Transformer architecture — better CPU efficiency than pure "
-            "transformer models of the same size. Q4_K_M ~901 MB. Best "
-            "tool-calling in its class (BFCLv3, IFEval). Text-only: no mmproj."
-        ),
-        files=(
-            NanoModelFile(
-                repo_id="ibm-granite/granite-4.0-h-1b-GGUF",
-                filename="granite-4.0-h-1b-Q4_K_M.gguf",
-                kind="gguf",
-            ),
-        ),
-        ctx=8192,
-        ngl=0,
-        port=8090,
-        extra_args=_CPU_ARGS + ("-a", "granite-4.0-h-1b"),
-        notes="No mmproj — text-only extraction model. Apache 2.0.",
-    ),
-
-    # ------------------------------------------------------------------ #
     # Nano-agent / extraction tier — Liquid AI LFM2 1.2B.                #
     # ------------------------------------------------------------------ #
     NanoModelEntry(

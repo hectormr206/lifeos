@@ -30,9 +30,9 @@ def test_resolve_nano_entry_default_is_qwen35_0_8b(monkeypatch):
 
 
 def test_resolve_nano_entry_honors_override(monkeypatch):
-    monkeypatch.setenv("AXI_NANO_MODEL", "granite-4.0-h-1b")
+    monkeypatch.setenv("AXI_NANO_MODEL", "lfm2-1.2b-extract")
     entry = install_nano.resolve_nano_entry()
-    assert entry.id == "granite-4.0-h-1b"
+    assert entry.id == "lfm2-1.2b-extract"
 
 
 def test_resolve_nano_entry_ignores_unknown_override(monkeypatch):
@@ -55,11 +55,11 @@ def test_download_plan_qwen35_0_8b(isolated_nano):
     assert "mmproj" in kinds
 
 
-def test_download_plan_granite_single_file(isolated_nano):
-    entry = nano_catalog.by_id("granite-4.0-h-1b")
+def test_download_plan_lfm2_single_file(isolated_nano):
+    entry = nano_catalog.by_id("lfm2-1.2b-extract")
     assert entry is not None
     plan = install_nano.download_plan(entry)
-    assert plan["model_id"] == "granite-4.0-h-1b"
+    assert plan["model_id"] == "lfm2-1.2b-extract"
     assert len(plan["files"]) == 1
     assert plan["files"][0]["kind"] == "gguf"
 
