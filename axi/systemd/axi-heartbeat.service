@@ -1,0 +1,20 @@
+[Unit]
+Description=Axi heartbeat — self-healing supervisor (the corazon of LifeOS)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=%h/LifeOS/lifeos/axi/.venv/bin/python -m axi.heartbeat
+# systemd is the heart's life force: NEVER allowed to give up on itself.
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=0
+# Liveness spine: a healthy cycle beats sd_notify(WATCHDOG=1). No beat in 90s
+# (3x the 30s poll interval, > worst-case cycle) => systemd kills+restarts us.
+# This catches the lethal hung-but-running case that Restart=always cannot.
+WatchdogSec=90
+
+[Install]
+WantedBy=default.target
