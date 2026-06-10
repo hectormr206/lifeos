@@ -139,10 +139,10 @@ def test_select_8gb_uses_moe_offload():
     assert params["cpu_moe"] is True
 
 
-def test_select_6gb_returns_gemma4_e4b():
-    """6 GB tier: Gemma 4 E4B fits (≈5.5 GB budget) and adds vision over qwen35-9b."""
+def test_select_6gb_returns_gemma4_e2b():
+    """6 GB VRAM: no dedicated 6 GB tier — falls to 4 GB tier (gemma4-e2b-it, 3342 MiB measured)."""
     model_id, params = hp.select_model(_cuda_profile(6.0))
-    assert model_id == "gemma4-e4b-it"
+    assert model_id == "gemma4-e2b-it"
     assert params["ngl"] == 999
     assert params.get("cpu_moe", False) is False
 

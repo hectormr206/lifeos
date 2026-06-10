@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
-# Game Mode (CPU relocate) — free ALL GPU VRAM for demanding games WITHOUT
-# taking axi offline. Every axi service that would otherwise hold a CUDA
-# context is relocated to CPU + RAM via persistent systemd drop-ins, so the
-# feature keeps working (voice, brain, interpreter) — just slower.
+# Game Mode — free ALL GPU VRAM for demanding games.
+#
+# DEFAULT (relocate / co-pilot mode):
+#   Swaps the active brain to gemma4-e2b-it on CPU (~4.6 GB RAM, ~28 tok/s).
+#   The game owns all 12 GB VRAM; a fast, light Gemma co-pilot stays available
+#   in RAM. The previous brain id is saved to $STATE_DIR/game-pre-model so
+#   axi-game-off can restore it exactly.
+#
+# --offline (max-FPS, no co-pilot):
+#   Stops llama-server entirely (zero CPU for LLM during game). Still saves
+#   game-pre-model for restore. Whisper and translate still relocate to CPU.
 #
 # Why drop-ins instead of `stop`: the drop-in files under
 # ~/.config/systemd/user/<svc>.service.d/ PERSIST across reboot/shutdown.
@@ -12,15 +19,12 @@
 # truth; the drop-ins do the actual relocation.
 #
 # Usage:
-#   axi-game-on             # relocate everything to CPU/RAM (axi stays online)
-#   axi-game-on --offline   # legacy max-FPS mode: also STOP the heavy LLM so
-#                           # zero CPU is spent on it during the game. Whisper
-#                           # and translate still relocate to CPU. The LLM is
-#                           # restored (on GPU) by axi-game-off.
+#   axi-game-on             # load gemma4-e2b co-pilot on CPU; VRAM free
+#   axi-game-on --offline   # max-FPS: stop co-pilot entirely (0 CPU for LLM)
 #
-# VRAM holders on the RTX 5070 Ti (12 GB) and where they go in CPU mode:
+# VRAM holders on the RTX 5070 Ti (12 GB) and where they go in game mode:
 #   axi-whisper  (Whisper large-v3-turbo): ~2.3 GB VRAM  -> RAM (int8, CPU)
-#   llama-server (Qwen3.6-35B-A3B):        ~GPU layers    -> RAM (-ngl 0)
+#   llama-server (co-pilot gemma4-e2b):    ~0 VRAM        -> RAM (--cpu, ngl=0)
 #   axi-translate (Opus/NLLB):             already CPU by default
 #   Result: ~0 MiB VRAM used by axi (effectively all 12 GB free for the game).
 
@@ -31,8 +35,40 @@ OFFLINE=0
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/axi"
 MARKER="$STATE_DIR/game-mode.lock"
+PRE_MODEL_FILE="$STATE_DIR/game-pre-model"
 UNIT_DIR="$HOME/.config/systemd/user"
+# Python interpreter used by axi scripts.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AXI_PYTHON="$SCRIPT_DIR/../.venv/bin/python"
 mkdir -p "$STATE_DIR"
+
+# Guard: if a backup already exists, game-on was already run; do NOT clobber it.
+if [ -f "$PRE_MODEL_FILE" ]; then
+    echo "[axi-game-on] WARNING: game-pre-model already exists — game-on may have been run twice."
+    echo "  Skipping model backup to avoid clobbering the original brain id."
+    echo "  Run 'axi-game-off' first if you want to reset."
+else
+    # Capture the current active model id before swapping.
+    # Fail loudly if AXI_PYTHON is missing so we don't silently write an empty backup.
+    if ! PREV_MODEL=$("$AXI_PYTHON" -m axi.models_manager get-active 2>&1); then
+        echo "[axi-game-on] ERROR: could not read active model via '$AXI_PYTHON' — aborting." >&2
+        exit 1
+    fi
+    printf '%s\n' "${PREV_MODEL:-}" > "$PRE_MODEL_FILE"
+    echo "[axi-game-on] saved previous brain: '${PREV_MODEL:-<none>}' -> $PRE_MODEL_FILE"
+fi
+
+# In relocate mode: swap to the game co-pilot brain (gemma4-e2b-it).
+# The CPU drop-in below ensures it loads with ngl=0 / CUDA hidden.
+if [ "$OFFLINE" -eq 0 ]; then
+    echo "[axi-game-on] swapping brain to gemma4-e2b-it (game co-pilot)…"
+    if ! "$AXI_PYTHON" -m axi.models_manager set-active gemma4-e2b-it; then
+        echo "[axi-game-on] ERROR: set-active gemma4-e2b-it failed — aborting game-on." >&2
+        # Restore the backup file since we are not entering game mode.
+        rm -f "$PRE_MODEL_FILE"
+        exit 1
+    fi
+fi
 
 # Marker records the active sub-mode so axi-game-off (and the tray/status)
 # can tell relocate from offline.
@@ -56,6 +92,8 @@ Environment=AXI_WHISPER_COMPUTE_TYPE=int8"
 # (forces -ngl 0). Leading empty ExecStart= is required to override.
 # CUDA_VISIBLE_DEVICES= hides the GPU entirely so the CUDA-built llama-server
 # does NOT create a ~150 MiB CUDA context — true 0 VRAM, not just 0 layers.
+# In co-pilot mode active_model.json now points at gemma4-e2b-it (~2.5 GB file,
+# ~4.6 GB RAM at ngl=0), so VRAM usage is effectively 0.
 write_dropin llama-server "[Service]
 Environment=CUDA_VISIBLE_DEVICES=
 ExecStart=
@@ -77,12 +115,12 @@ systemctl --user restart axi-whisper.service 2>/dev/null || true
 systemctl --user try-restart axi-translate.service 2>/dev/null || true
 
 if [ "$OFFLINE" -eq 1 ]; then
-    echo "[axi-game-on] --offline: stopping llama-server (LLM uses 0 CPU during game)…"
+    echo "[axi-game-on] --offline: co-pilot disabled — stopping llama-server (0 CPU for LLM)…"
     systemctl --user stop llama-server.service 2>/dev/null || true
 else
-    # relocate the brain to CPU only if it is already running; do not force the
-    # 22 GB model on if the user did not have it loaded.
-    echo "[axi-game-on] relocating llama-server to CPU (if active)…"
+    # Restart with the co-pilot brain (gemma4-e2b-it) on CPU.
+    # try-restart: only if already running (don't force it on for the first time).
+    echo "[axi-game-on] loading gemma4-e2b co-pilot on CPU (if llama-server was active)…"
     systemctl --user try-restart llama-server.service 2>/dev/null || true
 fi
 
@@ -100,9 +138,9 @@ if command -v nvidia-smi >/dev/null 2>&1; then
 fi
 
 if [ "$OFFLINE" -eq 1 ]; then
-    echo "[axi-game-on] MODO JUEGO (offline LLM) activo — VRAM libre, brain detenido."
+    echo "[axi-game-on] MODO JUEGO (offline) activo — co-pilot disabled, VRAM libre."
 else
-    echo "[axi-game-on] MODO JUEGO (CPU) activo — VRAM libre, axi sigue ONLINE en CPU."
+    echo "[axi-game-on] MODO JUEGO (co-pilot) activo — gemma4-e2b en CPU, VRAM libre."
 fi
 echo "  Persiste tras reiniciar/apagar: nada se carga en VRAM hasta 'axi-game-off'."
 echo "  Para volver a GPU:  axi-game-off"

@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Restore the GPU-backed axi stack after a gaming session.
-# Removes the CPU drop-ins written by axi-game-on (so services go back to GPU)
-# and the game-mode marker, then restarts the affected services on GPU.
+# Removes the CPU drop-ins written by axi-game-on, restores the original brain
+# (saved in $STATE_DIR/game-pre-model by axi-game-on), and restarts services
+# on GPU.
 
 set -u
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/axi"
 MARKER="$STATE_DIR/game-mode.lock"
+PRE_MODEL_FILE="$STATE_DIR/game-pre-model"
 UNIT_DIR="$HOME/.config/systemd/user"
+# Python interpreter used by axi scripts.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AXI_PYTHON="$SCRIPT_DIR/../.venv/bin/python"
 rm -f "$MARKER"
 
 echo "[axi-game-off] removing CPU drop-ins…"
@@ -28,11 +33,31 @@ rmdir "$UNIT_DIR/axi-voice.service.d" 2>/dev/null || true
 
 systemctl --user daemon-reload
 
+# Restore the original brain before restarting llama-server.
+if [ -f "$PRE_MODEL_FILE" ]; then
+    PREV_MODEL=$(cat "$PRE_MODEL_FILE")
+    if [ -n "$PREV_MODEL" ]; then
+        echo "[axi-game-off] restoring brain: '$PREV_MODEL'…"
+        if "$AXI_PYTHON" -m axi.models_manager set-active "$PREV_MODEL"; then
+            rm -f "$PRE_MODEL_FILE"
+        else
+            echo "[axi-game-off] WARNING: set-active '$PREV_MODEL' failed — active_model.json unchanged." >&2
+            echo "  You may need to run: $AXI_PYTHON -m axi.models_manager set-active <id>" >&2
+        fi
+    else
+        # Backup was empty (no active model before game-on); leave as-is.
+        echo "[axi-game-off] no previous brain recorded — leaving active_model.json unchanged."
+        rm -f "$PRE_MODEL_FILE"
+    fi
+else
+    echo "[axi-game-off] NOTE: game-pre-model not found — active_model.json not changed (fallback)."
+fi
+
 # Use restart (not start): in relocate mode llama-server stays RUNNING on CPU,
 # so `start` would be a no-op and the process would keep its -ngl 0 /
 # CUDA_VISIBLE_DEVICES= config. restart forces it to re-exec on GPU now that
-# the drop-in is gone.
-echo "[axi-game-off] restarting llama-server (Qwen → GPU)…"
+# the drop-in is gone and active_model.json is restored.
+echo "[axi-game-off] restarting llama-server (restored brain → GPU)…"
 systemctl --user restart llama-server.service || true
 
 echo "[axi-game-off] waiting for llama-server /health…"

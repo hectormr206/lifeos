@@ -555,3 +555,63 @@ __all__ = [
     "wait_for_llama_health",
     "write_active",
 ]
+
+
+# ────────────────────────── CLI (for shell scripts) ────────────────
+
+
+def _cli_main() -> None:
+    """Minimal scriptable CLI used by axi-game-on / axi-game-off.
+
+    Subcommands:
+      get-active           Print current active model id to stdout (empty line if
+                           none set). Exit 0.
+      set-active <id>      Write active_model.json for the given catalog id WITHOUT
+                           restarting llama-server (the caller owns the restart).
+                           Exit 0 on success, 1 if id unknown in catalog.
+
+    Usage (from scripts):
+      python -m axi.models_manager get-active
+      python -m axi.models_manager set-active gemma4-e2b-it
+    """
+    import sys
+
+    args = sys.argv[1:]
+    if not args:
+        print("usage: python -m axi.models_manager <get-active|set-active> [id]",
+              file=sys.stderr)
+        sys.exit(1)
+
+    subcmd = args[0]
+
+    if subcmd == "get-active":
+        current = get_active_id()
+        print(current or "")
+        sys.exit(0)
+
+    elif subcmd == "set-active":
+        if len(args) < 2:
+            print("set-active requires a model id", file=sys.stderr)
+            sys.exit(1)
+        model_id = args[1]
+        entry = by_id(model_id)
+        if entry is None:
+            print(f"error: model id '{model_id}' not found in catalog", file=sys.stderr)
+            sys.exit(1)
+        if not is_installed(entry):
+            print(f"error: model '{model_id}' is not installed on disk; download it first",
+                  file=sys.stderr)
+            sys.exit(1)
+        # write_active loads on-disk overrides automatically (overrides=None path).
+        # Does NOT restart llama-server — the caller (game scripts) owns the restart.
+        write_active(entry)
+        print(f"active model set to: {model_id}")
+        sys.exit(0)
+
+    else:
+        print(f"unknown subcommand: {subcmd}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    _cli_main()
