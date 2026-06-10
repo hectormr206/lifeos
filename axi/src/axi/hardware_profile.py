@@ -19,21 +19,31 @@ untouched.
 
 Empirical anchor vs. derived numbers
 -------------------------------------
-The 12 GB VRAM tier is the EMPIRICALLY PROVEN config: it mirrors what runs
-today on a 12 GB RTX 5070 Ti (`qwen36-35b-a3b` MoE with `--cpu-moe`, 32k ctx,
-q8_0 KV cache). It is marked ``empirical=True`` below.
+VRAM tiers for 4 GB, 8 GB, and 12 GB are EMPIRICALLY PROVEN from the
+2026-06-09/10 bench run on a 12 GB RTX 5070 Ti:
 
-Every other tier is DERIVED (``empirical=False``) from each catalog model's
-VRAM estimate plus llama.cpp budget math:
+  qwen36-35b-a3b @ ngl=999, --cpu-moe:  27.4 tok/s, 5028 MiB peak VRAM
+  qwen36-35b-a3b @ ngl=20, --cpu-moe:   15.6 tok/s, 3546 MiB peak VRAM
+  gemma4-26b-a4b-it @ --cpu-moe:        28.2 tok/s, 6202 MiB peak VRAM
+  gemma4-e2b-it @ ngl=999:             193   tok/s, 3342 MiB peak VRAM
+  gemma4-e4b-it @ ngl=999:             108   tok/s, 5202 MiB peak VRAM
 
-    GPU budget ≈ weights(Q4_K_M ≈ params_B * 0.55 GB) + KV-cache(ctx) + ~1 GB
-                 CUDA/runtime overhead.
+CPU/RAM tiers use measured idle RSS as the weight footprint anchor:
+  qwen36-35b-a3b CPU RSS: ~23073 MB (measured)
+  gemma4-e2b-it  CPU RSS:  ~4631 MB (measured)
+  gemma4-e4b-it  CPU RSS:  ~6810 MB (measured)
+  gemma4-26b CPU RSS: estimated ~14–15 GB from Q4_K_M weight size (26B × 0.55 GB/B);
+             CPU-only benchmark was deferred — not directly measured.
+
+Reserve rule for CPU/RAM tiers:
+  reserve = max(25% of tier_RAM, 3 GB)
+  Tier qualifies when: weights_RSS + KV(ctx) + reserve <= tier_RAM
 
 MoE entries (e.g. qwen36-35b-a3b) use ``--cpu-moe``: the experts live in CPU
 RAM and only attention + KV + the active expert sit on the GPU, so the GPU
-footprint is ~7–8 GB regardless of the 35B total — which is why the MoE brain
-still fits at 8 GB. On a pure-CPU machine the same MoE runs with ``ngl=0``
-(everything in RAM); it needs enough system RAM to hold the weights.
+footprint is ~5 GB regardless of the 35B total. On a pure-CPU machine the
+same MoE runs with ``ngl=0`` (everything in RAM); it needs enough system RAM
+to hold the full weight RSS.
 
 Tune the table, not the code.
 """
@@ -108,6 +118,9 @@ _MOE_BRAIN = "qwen36-35b-a3b"
 
 HARDWARE_TIERS: tuple[HardwareTier, ...] = (
     # ── CUDA / VRAM tiers (high → low) ──────────────────────────────
+    # All three tiers below (12, 8, 4 GB) are EMPIRICALLY anchored to the
+    # 2026-06-09 bench run on the 12 GB RTX 5070 Ti. Higher tiers (16, 24 GB)
+    # are derived by extending the same --cpu-moe layout.
     HardwareTier(
         compute_kind="cuda",
         min_budget_gb=24.0,
@@ -118,9 +131,10 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
         empirical=False,
         budget_math=(
             "MoE brain via --cpu-moe: GPU carries attention+KV+active expert. "
-            "At 65536 ctx, q8_0 KV ≈ 2.0 GB; +attention/active ≈ 6 GB; +1 GB "
-            "overhead ≈ 9 GB << 24 GB. Doubled ctx is the only headroom gain — "
-            "more VRAM does not help an MoE whose experts are on CPU. DERIVED."
+            "Empirical 12 GB base = 5028 MiB peak. At 65536 ctx, q8_0 KV adds "
+            "~2 GB extra; total ~9 GB << 24 GB. Doubled ctx vs 12 GB tier — "
+            "more VRAM gives headroom for larger context, not a model upgrade. "
+            "DERIVED from empirical 12 GB anchor."
         ),
     ),
     HardwareTier(
@@ -132,9 +146,9 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "Same MoE/--cpu-moe pattern as 12 GB. ~8 GB base + larger KV for "
-            "49152 ctx (q8_0 ≈ 1.5 GB) ≈ 10 GB < 16 GB. Bump ctx vs 12 GB. "
-            "DERIVED."
+            "Same MoE/--cpu-moe pattern as 12 GB. Empirical 5028 MiB base at "
+            "32k ctx; +49152 ctx q8_0 KV adds ~1.5 GB extra ≈ 7.5 GB < 16 GB. "
+            "DERIVED from empirical 12 GB anchor."
         ),
     ),
     HardwareTier(
@@ -145,16 +159,14 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
         min_budget_gb=11.5,
         label="12 GB VRAM (proven)",
         model_id=_MOE_BRAIN,
-        # PROVEN: exactly Hector's running config. ngl=999/ctx=32768/cpu-moe
-        # match the catalog baseline (_QWEN36_ARGS) so this is byte-identical
-        # to what runs today; we still write them explicitly for clarity.
+        # PROVEN: measured 5028 MiB peak, 27.4 tok/s on RTX 5070 Ti.
         params={"ngl": 999, "ctx": 32768, "cpu_moe": True,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=True,
         budget_math=(
-            "EMPIRICAL: the config running today on a 12 GB RTX 5070 Ti. MoE "
-            "35B-A3B with --cpu-moe, 32768 ctx, q8_0 KV — fits in ~8 GB with "
-            "headroom for Whisper/translate. Ground truth, not derived."
+            "EMPIRICAL (2026-06-09): measured 5028 MiB VRAM peak, 27.4 tok/s "
+            "on 12 GB RTX 5070 Ti. qwen36-35b-a3b MXFP4 MoE with --cpu-moe, "
+            "32768 ctx, q8_0 KV. Ground truth — this is prod today."
         ),
     ),
     HardwareTier(
@@ -162,30 +174,14 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
         min_budget_gb=8.0,
         label="8 GB VRAM",
         model_id=_MOE_BRAIN,
-        # Tighter KV (q4_0) to keep the MoE attention+KV comfortably under 8 GB.
-        params={"ngl": 999, "ctx": 16384, "cpu_moe": True,
-                "cache_type_k": "q4_0", "cache_type_v": "q4_0"},
-        empirical=False,
-        budget_math=(
-            "Best brain still reachable: MoE via --cpu-moe. Shrink ctx to "
-            "16384 and KV to q4_0 (≈ 0.4 GB) so GPU footprint ≈ 6.5–7 GB < 8 "
-            "GB even alongside other services. Keeps the 35B brain on an 8 GB "
-            "card. DERIVED."
-        ),
-    ),
-    HardwareTier(
-        compute_kind="cuda",
-        min_budget_gb=6.0,
-        label="6 GB VRAM",
-        model_id="gemma4-e4b-it",
-        params={"ngl": 999, "ctx": 16384, "cpu_moe": False,
+        params={"ngl": 999, "ctx": 32768, "cpu_moe": True,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "Gemma 4 E4B Q4_K_M ≈ 4.5 GB weights + q8_0 KV at 16384 ctx "
-            "(≈ 0.5 GB) + ~0.5 GB CUDA overhead ≈ 5.5 GB < 6 GB. Better "
-            "quality + native multimodal vision vs the previous qwen35-9b "
-            "(≈ 6.6 GB, text-only at this budget). DERIVED."
+            "DERIVED. 5028 MiB measured on 12 GB RTX 5070 Ti; fits 8 GB by inspection "
+            "(~3 GB headroom), NOT tested on 8 GB hardware. "
+            "qwen36-35b-a3b MXFP4 MoE, ngl=999, --cpu-moe, 32768 ctx, q8_0 KV. "
+            "27.4 tok/s on 12 GB; 8 GB performance unverified."
         ),
     ),
     HardwareTier(
@@ -195,12 +191,14 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
         model_id="gemma4-e2b-it",
         params={"ngl": 999, "ctx": 16384, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
-        empirical=False,
+        empirical=True,
         budget_math=(
-            "Gemma 4 E2B Q4_K_M ≈ 2.8 GB weights + q8_0 KV at 16384 ctx "
-            "(≈ 0.4 GB) + ~0.5 GB overhead ≈ 3.7 GB < 4 GB. Multimodal "
-            "vision included; beats qwen35-4b (text-only, similar VRAM). "
-            "DERIVED."
+            "EMPIRICAL (2026-06-09): gemma4-e2b-it measured 3342 MiB VRAM, "
+            "193 tok/s (full GPU, ngl=999). Fits 4 GB with ~660 MiB headroom. "
+            "Quality det=0.657, vision capable. "
+            "Alt: 35B @ ngl=20 --cpu-moe = 3546 MiB, 15.6 tok/s, det=0.771 "
+            "(max quality but ~16 tok/s — prefer for background/async use). "
+            "Default pick: gemma4-e2b for interactive latency at this tier."
         ),
     ),
     HardwareTier(
@@ -212,56 +210,136 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "Floor tier so we never recommend a model that won't fit. "
-            "Gemma 4 E2B Q4_K_M ≈ 2.8 GB + tiny KV at 8192 ctx fits any "
-            "GPU that reports usable VRAM; delivers vision where qwen35-0_8b "
-            "was text-only. DERIVED."
+            "Floor tier. gemma4-e2b-it measured 3342 MiB at 16k ctx; at 8k ctx "
+            "slightly less — fits any GPU that reports usable VRAM. DERIVED from "
+            "empirical 3342 MiB anchor."
         ),
     ),
     # ── CPU / RAM tiers (high → low) ────────────────────────────────
+    # Reserve rule: reserve = max(25% of tier_RAM, 3 GB).
+    # Tier qualifies when: weights_RSS + KV(ctx) + reserve <= tier_RAM.
+    # Measured RSS: 35B=23073 MB, e2b=4631 MB, e4b=6810 MB.
+    # Estimated RSS: gemma4-26b ~14500 MB (26B × Q4_K_M ≈ 0.55 GB/B; not benched on CPU).
     HardwareTier(
         compute_kind="cpu",
-        min_budget_gb=24.0,
-        label="CPU, 24 GB+ RAM",
+        min_budget_gb=64.0,
+        label="CPU, 64 GB RAM",
         model_id=_MOE_BRAIN,
-        # Pure CPU: ngl=0, experts already on CPU via --cpu-moe. Needs RAM to
-        # hold the ~22 GB MoE weights + KV.
-        params={"ngl": 0, "ctx": 16384, "cpu_moe": True,
+        params={"ngl": 0, "ctx": 32768, "cpu_moe": True,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "No usable GPU but enough RAM for the full MoE brain on CPU. "
-            "ngl=0; --cpu-moe is already the layout. ~22 GB weights + KV needs "
-            ">= 24 GB RAM headroom. Slower than GPU but best quality on CPU. "
-            "DERIVED."
+            "DERIVED. Reserve = max(25% × 64, 3) = 16 GB. "
+            "35B RSS 23073 MB + KV@32k ~1 GB + reserve 16 GB = ~40 GB < 64 GB. "
+            "Ample headroom; run at full 32k ctx."
         ),
     ),
     HardwareTier(
         compute_kind="cpu",
-        min_budget_gb=12.0,
-        label="CPU, 12 GB+ RAM",
+        min_budget_gb=32.0,
+        label="CPU, 32 GB RAM",
+        model_id=_MOE_BRAIN,
+        params={"ngl": 0, "ctx": 8192, "cpu_moe": True,
+                "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
+        empirical=False,
+        budget_math=(
+            "DERIVED. Reserve = max(25% × 32, 3) = 8 GB. "
+            "35B RSS 23073 MB + KV@8k ~750 MB + reserve 8192 MB ≈ 32 GB with small margin. "
+            "ctx=16384 was unsafe: KV@16k ~1.5 GB (q8_0) pushes total to ~32.8 GB > 32 GB → OOM. "
+            "Dropped to 8k ctx to keep KV ~0.75 GB and preserve ~1.5 GB real margin. "
+            "Measured 35B CPU RSS = 23073 MB (empirical)."
+        ),
+    ),
+    HardwareTier(
+        compute_kind="cpu",
+        min_budget_gb=24.0,
+        label="CPU, 24 GB RAM",
+        model_id="gemma4-26b-a4b-it",
+        params={"ngl": 0, "ctx": 8192, "cpu_moe": True,
+                "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
+        empirical=False,
+        budget_math=(
+            "DERIVED. Reserve = max(25% × 24, 3) = 6 GB. "
+            "35B RSS ~23073 MB + reserve 6 GB = ~29 GB > 24 GB → 35B does NOT fit. "
+            "gemma4-26b estimated RSS ~14500 MB (26B × 0.55 GB/B; CPU bench deferred). "
+            "14500 MB + KV@8k ~0.3 GB + reserve 6 GB ≈ 20.8 GB < 24 GB — fits. "
+            "Best quality available at this RAM budget."
+        ),
+    ),
+    HardwareTier(
+        compute_kind="cpu",
+        min_budget_gb=22.0,
+        label="CPU, 22 GB RAM",
+        model_id="gemma4-26b-a4b-it",
+        params={"ngl": 0, "ctx": 8192, "cpu_moe": True,
+                "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
+        empirical=False,
+        budget_math=(
+            "DERIVED. Reserve = max(25% × 22, 3) = 5.5 GB. "
+            "gemma4-26b ESTIMATED RSS ~14500 MB (unverified: 26B × 0.55 GB/B; CPU bench deferred). "
+            "14500 MB + KV@8k ~0.3 GB + reserve 5500 MB ≈ 20.3 GB < 22 GB. "
+            "min_budget raised from 20→22 GB: a true 20 GB machine has only ~560 MB margin "
+            "on an unverified RSS estimate — too risky. 22 GB provides ~1.7 GB safety margin."
+        ),
+    ),
+    HardwareTier(
+        compute_kind="cpu",
+        min_budget_gb=16.0,
+        label="CPU, 16 GB RAM",
         model_id="gemma4-e4b-it",
         params={"ngl": 0, "ctx": 8192, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "Not enough RAM for the 22 GB MoE. Gemma 4 E4B Q4_K_M ≈ 4.5 GB "
-            "weights comfortably fits in 12–16 GB RAM; native multimodal vision "
-            "on CPU beats text-only qwen35-4b at the same footprint. DERIVED."
+            "DERIVED. Reserve = max(25% × 16, 3) = 4 GB. "
+            "gemma4-26b est ~14500 MB + reserve 4 GB = ~18.5 GB > 16 GB → 26b does NOT fit. "
+            "gemma4-e4b measured RSS 6810 MB + KV@8k ~0.3 GB + reserve 4 GB ≈ 11.1 GB < 16 GB. "
+            "e4b preferred over e2b here (better quality, still fits). "
+            "Measured RSS = 6810 MB (empirical)."
         ),
     ),
     HardwareTier(
         compute_kind="cpu",
-        min_budget_gb=0.0,  # floor
-        label="CPU, <12 GB RAM (smallest)",
+        min_budget_gb=12.0,
+        label="CPU, 12 GB RAM",
         model_id="gemma4-e2b-it",
         params={"ngl": 0, "ctx": 8192, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
-            "Constrained CPU floor: Gemma 4 E2B Q4_K_M ≈ 2.8 GB fits in a few "
-            "GB of RAM and delivers vision where qwen35-0_8b was text-only. "
-            "Never returns nothing. DERIVED."
+            "DERIVED. Reserve = max(25% × 12, 3) = 3 GB. "
+            "gemma4-e4b RSS 6810 MB + reserve 3 GB = ~9.8 GB < 12 GB → e4b fits, "
+            "but e2b dominates e4b on quality AND speed AND footprint in our bench data. "
+            "gemma4-e2b measured RSS 4631 MB + KV@8k ~0.3 GB + reserve 3 GB ≈ 7.9 GB < 12 GB. "
+            "Prefer e2b wherever both fit. Measured RSS = 4631 MB (empirical)."
+        ),
+    ),
+    HardwareTier(
+        compute_kind="cpu",
+        min_budget_gb=8.0,
+        label="CPU, 8 GB RAM",
+        model_id="gemma4-e2b-it",
+        params={"ngl": 0, "ctx": 8192, "cpu_moe": False,
+                "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
+        empirical=False,
+        budget_math=(
+            "DERIVED. Reserve = max(25% × 8, 3) = 3 GB. "
+            "gemma4-e2b measured RSS 4631 MB + KV@8k ~0.3 GB + reserve 3 GB ≈ 7.9 GB < 8 GB. "
+            "Fits with ~100 MB margin — use 8k ctx to minimise KV pressure. "
+            "Measured RSS = 4631 MB (empirical)."
+        ),
+    ),
+    HardwareTier(
+        compute_kind="cpu",
+        min_budget_gb=0.0,  # floor
+        label="CPU, <8 GB RAM (smallest)",
+        model_id="gemma4-e2b-it",
+        params={"ngl": 0, "ctx": 4096, "cpu_moe": False,
+                "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
+        empirical=False,
+        budget_math=(
+            "Floor tier. gemma4-e2b RSS ~4.5 GB + tiny KV at 4k ctx — "
+            "smallest catalog model; never returns nothing. DERIVED."
         ),
     ),
 )

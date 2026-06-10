@@ -28,24 +28,24 @@ def isolated_state(tmp_path, monkeypatch):
 def test_catalog_has_expected_entries():
     entries = models_catalog.catalog()
     ids = {e.id for e in entries}
-    # 8 total: qwen3.6 + nemotron + gemma4 x3 + qwen35-9b + granite-4.0-h-1b + lfm2-1.2b-extract
-    assert len(entries) == 8
+    # 4 total: qwen3.6 (prod) + gemma4-26b + gemma4-e4b + gemma4-e2b.
+    # Cut: nemotron3-nano-omni-30b-a3b, qwen35-9b, granite-4.0-h-1b, lfm2-1.2b-extract.
+    assert len(entries) == 4
     # Kept from the legacy catalog.
     assert "qwen36-35b-a3b" in ids
-    # 2026-06 refresh — tiny Qwen3.5 dense models (0.8B/2B/4B) removed; Gemma 4 covers small tiers.
+    # Gemma 4 bench-proven KEEP set.
+    assert "gemma4-e2b-it" in ids
+    assert "gemma4-e4b-it" in ids
+    assert "gemma4-26b-a4b-it" in ids
+    # CUT models must be absent from the brain catalog.
+    assert "nemotron3-nano-omni-30b-a3b" not in ids
+    assert "qwen35-9b" not in ids
+    assert "granite-4.0-h-1b" not in ids
+    assert "lfm2-1.2b-extract" not in ids
+    # Tiny Qwen3.5 dense models also absent.
     assert "qwen35-0_8b" not in ids
     assert "qwen35-2b" not in ids
     assert "qwen35-4b" not in ids
-    # 9B restored as best dense/6 GB option.
-    assert "qwen35-9b" in ids
-    # Current multimodal entries.
-    assert "gemma4-e2b-it" in ids
-    assert "gemma4-e4b-it" in ids
-    assert "nemotron3-nano-omni-30b-a3b" in ids
-    assert "gemma4-26b-a4b-it" in ids
-    # Nano-agent / extraction tier.
-    assert "granite-4.0-h-1b" in ids
-    assert "lfm2-1.2b-extract" in ids
     # Qwen3-VL family must be gone.
     assert "qwen3-vl-30b-a3b" not in ids
     assert "qwen3-vl-8b" not in ids
@@ -219,3 +219,107 @@ def test_wait_for_llama_health_times_out_fast(monkeypatch):
     elapsed = time.time() - start
     assert ok is False
     assert elapsed < 5.0
+
+
+# ────────────────────── CLI (__main__) round-trip ──────────────────────────
+
+
+def test_cli_get_active_empty(isolated_state, capsys):
+    """get-active prints an empty line when no active model is set."""
+    import sys
+    import importlib
+
+    monkeypatch_args = ["axi.models_manager", "get-active"]
+    # Invoke via _cli_main directly (avoids subprocess; same XDG patch applies).
+    with pytest.raises(SystemExit) as exc:
+        with _patch_argv(monkeypatch_args):
+            models_manager._cli_main()
+    assert exc.value.code == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == ""
+
+
+def test_cli_set_active_and_get_active_round_trip(isolated_state, capsys):
+    """set-active gemma4-e2b-it → get-active must return 'gemma4-e2b-it'."""
+    # Plant model files so the install guard passes.
+    entry = models_catalog.by_id("gemma4-e2b-it")
+    for f in entry.files:
+        p = models_manager.expected_path(entry, f)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"dummy")
+
+    # set-active
+    with pytest.raises(SystemExit) as exc:
+        with _patch_argv(["axi.models_manager", "set-active", "gemma4-e2b-it"]):
+            models_manager._cli_main()
+    assert exc.value.code == 0
+    capsys.readouterr()  # discard stdout
+
+    # get-active
+    with pytest.raises(SystemExit) as exc:
+        with _patch_argv(["axi.models_manager", "get-active"]):
+            models_manager._cli_main()
+    assert exc.value.code == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "gemma4-e2b-it"
+
+    # active_model.json must contain --reasoning off
+    data = json.loads(models_manager.active_model_path().read_text())
+    assert data["id"] == "gemma4-e2b-it"
+    extra = data["extra_args"]
+    # gemma4-e2b-it entry has `--reasoning off` in its extra_args
+    assert "--reasoning" in extra
+    idx = extra.index("--reasoning")
+    assert extra[idx + 1] == "off"
+
+    # Round-trip back to qwen36-35b-a3b (plant its files too so the guard passes).
+    qwen_entry = models_catalog.by_id("qwen36-35b-a3b")
+    for f in qwen_entry.files:
+        p = models_manager.expected_path(qwen_entry, f)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"dummy")
+    with pytest.raises(SystemExit) as exc:
+        with _patch_argv(["axi.models_manager", "set-active", "qwen36-35b-a3b"]):
+            models_manager._cli_main()
+    assert exc.value.code == 0
+    data2 = json.loads(models_manager.active_model_path().read_text())
+    assert data2["id"] == "qwen36-35b-a3b"
+
+
+def test_cli_set_active_unknown_id_exits_nonzero(isolated_state, capsys):
+    """set-active with an unknown id must exit 1 and print an error."""
+    with pytest.raises(SystemExit) as exc:
+        with _patch_argv(["axi.models_manager", "set-active", "no-such-model"]):
+            models_manager._cli_main()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "not found in catalog" in captured.err
+
+
+def test_cli_set_active_uninstalled_exits_nonzero(isolated_state, capsys):
+    """set-active a known-catalog model whose files are NOT on disk must exit 1."""
+    # isolated_state provides an empty models dir — no files present.
+    with pytest.raises(SystemExit) as exc:
+        with _patch_argv(["axi.models_manager", "set-active", "gemma4-e2b-it"]):
+            models_manager._cli_main()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "not installed" in captured.err
+
+
+class _patch_argv:
+    """Context manager: temporarily replace sys.argv."""
+
+    def __init__(self, args: list[str]):
+        self._args = args
+        self._orig: list[str] = []
+
+    def __enter__(self):
+        import sys
+        self._orig = sys.argv[:]
+        sys.argv = self._args
+        return self
+
+    def __exit__(self, *_):
+        import sys
+        sys.argv = self._orig

@@ -45,23 +45,25 @@ def test_get_models_returns_catalog(client):
     assert r.status_code == 200
     rows = r.json()
     ids = {row["id"] for row in rows}
+    # 4 bench-proven KEEP models.
     assert {
-        "qwen36-35b-a3b", "gemma4-e4b-it", "gemma4-e2b-it",
-        "nemotron3-nano-omni-30b-a3b", "gemma4-26b-a4b-it",
-        "qwen35-9b", "granite-4.0-h-1b", "lfm2-1.2b-extract",
+        "qwen36-35b-a3b", "gemma4-e4b-it", "gemma4-e2b-it", "gemma4-26b-a4b-it",
     } <= ids
+    # CUT models must be absent.
+    assert "nemotron3-nano-omni-30b-a3b" not in ids
+    assert "qwen35-9b" not in ids
+    assert "granite-4.0-h-1b" not in ids
+    assert "lfm2-1.2b-extract" not in ids
     # Removed tiny Qwen3.5 models (0.8B/2B/4B) must be absent.
     assert "qwen35-0_8b" not in ids
     assert "qwen35-2b" not in ids
     assert "qwen35-4b" not in ids
-    # 9B is restored.
-    assert "qwen35-9b" in ids
     # Old Qwen3-VL ids must be absent.
     assert "qwen3-vl-30b-a3b" not in ids
     assert "qwen3-vl-8b" not in ids
     assert "qwen3-vl-4b" not in ids
-    # Total catalog count: 8 entries
-    assert len(rows) == 8
+    # Total catalog count: 4 entries
+    assert len(rows) == 4
     for row in rows:
         for k in ("name", "family", "params", "features", "installed", "is_active"):
             assert k in row
