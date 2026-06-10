@@ -256,3 +256,81 @@ def test_capture_screen_busy_returns_503(client, monkeypatch):
     assert r.status_code == 503
     data = r.json()
     assert data.get("busy") is True
+
+
+# ─────────────────────────── axi-living-avatar: frontend / CSS layer ────────
+
+
+def test_teal_token_in_rendered_html(client):
+    """Task 2.1/2.2 — --teal CSS custom property present in rendered page."""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "--teal" in r.text
+    assert "#00D4AA" in r.text
+
+
+def test_pink_token_unchanged(client):
+    """Task 2.3 — --pink unchanged after teal addition."""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "--pink" in r.text
+    assert "#FF6B9D" in r.text
+
+
+def test_heart_keyframes_present(client):
+    """Task 2.5/2.6 — @keyframes heartbeat referenced on organ-heart alive rule."""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "@keyframes heartbeat" in r.text
+    # Confirm the organ-heart alive rule references the heartbeat keyframe
+    assert "heartbeat" in r.text
+
+
+# ─────────────────────────── axi-living-avatar: SVG organ widget ─────────────
+
+
+def test_inline_svg_with_organ_ids(client):
+    """Task 3.1/3.2 — inline SVG with all six organ group IDs present."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert "<svg" in html
+    for organ_id in ("organ-heart", "organ-brain", "organ-ears", "organ-mouth",
+                     "eye-screen", "eye-webcam"):
+        assert organ_id in html, f"Missing organ id: {organ_id}"
+
+
+def test_organ_alpine_bindings_present(client):
+    """Task 3.3/3.4 — organ-heart element carries Alpine class binding referencing axi-heartbeat."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert "organ-heart" in html
+    assert "axi-heartbeat" in html
+
+
+def test_eye_organ_binding_references_capability(client):
+    """Task 3.5/3.6 — eye element binding references webcam or screen capability key."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert "webcam" in html or "screen" in html
+
+
+def test_popover_markup_present(client):
+    """Task 3.7/3.9 — popover-heart with x-show attribute present."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert "popover-heart" in html
+    assert "x-show" in html
+
+
+def test_brain_popover_has_llm_bindings(client):
+    """Task 3.8/3.9 — popover-brain with llm.model and llm.vram_used_gb bindings."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert "popover-brain" in html
+    # Brain popover should reference vram data from the snapshot
+    assert "vram" in html
