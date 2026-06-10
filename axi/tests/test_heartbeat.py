@@ -31,8 +31,10 @@ def clear_revivals():
     """Reset per-service rate-cap state between tests."""
     from axi import heartbeat
     heartbeat._revivals.clear()
+    heartbeat._alerted.clear()
     yield
     heartbeat._revivals.clear()
+    heartbeat._alerted.clear()
 
 
 # ===========================================================================
@@ -158,7 +160,7 @@ def test_under_cap_allows_first_three():
 
 
 def test_under_cap_prunes_old():
-    """Revivals outside the 3600s window are pruned; cap resets."""
+    """Revivals outside the 3600s window are pruned; cap resets at exactly 3600s."""
     from axi import heartbeat
 
     svc = "axi-voice.service"
@@ -167,8 +169,8 @@ def test_under_cap_prunes_old():
     for _ in range(3):
         heartbeat.record_revival(svc, now=0.0)
 
-    # At t=3601 the window has expired → under cap again
-    assert heartbeat.under_cap(svc, now=3601.0) is True
+    # At t=3600 exactly the window has expired → under cap again (boundary is inclusive)
+    assert heartbeat.under_cap(svc, now=3600.0) is True
 
 
 # ===========================================================================
@@ -259,7 +261,7 @@ def test_run_cycle_revives_failed_service(monkeypatch):
 
     monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
 
-    heartbeat.run_cycle(now=0.0)
+    list(heartbeat.run_cycle(now=0.0))  # consume generator
 
     # reset-failed and start were called for axi-voice.service
     reset_calls = [a for a in recorded if "reset-failed" in a]
@@ -290,7 +292,7 @@ def test_run_cycle_game_mode_blocks_brains(monkeypatch, tmp_path):
     monkeypatch.setattr(heartbeat.subprocess, "run", fake_run)
     monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
 
-    heartbeat.run_cycle(now=0.0)
+    list(heartbeat.run_cycle(now=0.0))  # consume generator
 
     for call in recorded:
         if "reset-failed" in call or (len(call) > 2 and call[2] == "start"):
@@ -328,7 +330,7 @@ def test_run_cycle_cap_exceeded_alerts_no_revive(monkeypatch):
 
     monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
 
-    heartbeat.run_cycle(now=0.0)
+    list(heartbeat.run_cycle(now=0.0))  # consume generator
 
     # notify-send must have been called
     assert any("notify-send" in a for a in sp_recorded)
@@ -354,7 +356,7 @@ def test_run_cycle_inactive_not_revived(monkeypatch):
     monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
     monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
 
-    heartbeat.run_cycle(now=0.0)
+    list(heartbeat.run_cycle(now=0.0))  # consume generator
 
     for call in recorded:
         assert "reset-failed" not in call
@@ -362,26 +364,111 @@ def test_run_cycle_inactive_not_revived(monkeypatch):
             assert call[2] != "start"
 
 
-def test_watchdog_beat_only_after_clean_cycle(monkeypatch):
-    """When run_cycle raises, _sd_notify(WATCHDOG=1) is NOT called."""
+def test_run_cycle_yields_per_service(monkeypatch):
+    """run_cycle yields once per watched service (generator contract)."""
     from axi import heartbeat
-    import time
+
+    monkeypatch.setattr(heartbeat.subprocess, "run",
+                        lambda argv, **kw: _sp_result("inactive\n", 1))
+    monkeypatch.setattr(heartbeat, "_game_lock_path",
+                        lambda: Path("/nonexistent/game-mode.lock"))
+
+    services = heartbeat.watched_services(game_active=False)
+    yields = list(heartbeat.run_cycle(now=0.0))
+    assert len(yields) == len(services), (
+        f"Expected {len(services)} yields, got {len(yields)}"
+    )
+
+
+def test_run_cycle_exception_stops_yields(monkeypatch):
+    """If processing service N raises, yields for N and after are not emitted."""
+    from axi import heartbeat
+
+    services = heartbeat.watched_services(game_active=False)
+    crash_on = services[2]  # third service
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            svc = argv[3]
+            if svc == crash_on:
+                raise RuntimeError("simulated subprocess hang")
+            return _sp_result("inactive\n", 1)
+        return _sp_result("", 0)
+
+    monkeypatch.setattr(heartbeat.subprocess, "run", fake_run)
+    monkeypatch.setattr(heartbeat, "_game_lock_path",
+                        lambda: Path("/nonexistent/game-mode.lock"))
+
+    yields_before_crash = 0
+    try:
+        for _ in heartbeat.run_cycle(now=0.0):
+            yields_before_crash += 1
+    except RuntimeError:
+        pass
+
+    # Should have yielded for the 2 services processed before the crash
+    assert yields_before_crash == 2, (
+        f"Expected 2 yields before crash, got {yields_before_crash}"
+    )
+
+
+def test_main_beats_per_service(monkeypatch):
+    """main() emits WATCHDOG=1 once per service in a clean cycle."""
+    from axi import heartbeat
+
+    services = heartbeat.watched_services(game_active=False)
+    expected_beats = len(services)
+
+    # run_cycle that yields len(services) times then exits main via SystemExit
+    iteration = [0]
+
+    def fake_run_cycle(now=None):
+        for _ in services:
+            yield
+        iteration[0] += 1
+        if iteration[0] >= 1:
+            raise SystemExit(0)
+
+    sd_calls = []
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: sd_calls.append(s))
+    monkeypatch.setattr(heartbeat, "run_cycle", fake_run_cycle)
+    monkeypatch.setattr(heartbeat.time, "sleep", lambda _: None)
+
+    try:
+        heartbeat.main()
+    except SystemExit:
+        pass
+
+    watchdog_beats = sd_calls.count("WATCHDOG=1")
+    assert watchdog_beats == expected_beats, (
+        f"Expected {expected_beats} WATCHDOG=1 beats, got {watchdog_beats}"
+    )
+
+
+def test_main_no_beat_on_exception(monkeypatch):
+    """When run_cycle raises on first service, WATCHDOG=1 is never emitted."""
+    from axi import heartbeat
 
     def raising_run_cycle(now=None):
         raise RuntimeError("simulated stall")
+        yield  # make it a generator that never yields
 
     sd_calls = []
     monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: sd_calls.append(s))
     monkeypatch.setattr(heartbeat, "run_cycle", raising_run_cycle)
+    monkeypatch.setattr(heartbeat.time, "sleep", lambda _: None)
 
-    # Simulate the main loop body for one iteration
+    # main() should propagate the exception (no swallow)
     try:
-        heartbeat.run_cycle()
-        heartbeat.notify_watchdog()
+        heartbeat.main()
     except RuntimeError:
-        pass  # expected
+        pass
+    except SystemExit:
+        pass
 
-    assert "WATCHDOG=1" not in sd_calls
+    assert "WATCHDOG=1" not in sd_calls, (
+        f"WATCHDOG=1 should not be emitted when run_cycle raises: {sd_calls}"
+    )
 
 
 def test_ready_emitted_once_before_first_cycle(monkeypatch):
@@ -413,6 +500,156 @@ def test_ready_emitted_once_before_first_cycle(monkeypatch):
 
     assert len(ready_indices) == 1, f"READY=1 called {len(ready_indices)} times, expected 1"
     assert ready_indices[0] < cycle_indices[0], "READY=1 must be emitted before first cycle"
+
+
+def test_alert_cap_exceeded_deduplicated(monkeypatch):
+    """notify-send fires once per cap-exceeded episode, not every cycle."""
+    from axi import heartbeat
+
+    svc = "axi-voice.service"
+    # Pre-fill 3 revivals so cap is exceeded from the start
+    for _ in range(3):
+        heartbeat.record_revival(svc, now=0.0)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            s = argv[3]
+            return _sp_result("failed\n" if s == svc else "inactive\n", 0)
+        return _sp_result("", 0)
+
+    sp_recorded: list[list[str]] = []
+
+    def recording_run(argv, **kw):
+        sp_recorded.append(argv)
+        return fake_run(argv, **kw)
+
+    monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    # Run cycle twice — notify-send must fire exactly once
+    list(heartbeat.run_cycle(now=0.0))
+    list(heartbeat.run_cycle(now=1.0))
+
+    notify_calls = [a for a in sp_recorded if "notify-send" in a]
+    assert len(notify_calls) == 1, (
+        f"Expected notify-send once, got {len(notify_calls)} times"
+    )
+
+
+def test_alert_dedup_resets_on_recovery(monkeypatch):
+    """After a capped service recovers, the alert guard resets so it fires again on next cap episode."""
+    from axi import heartbeat
+
+    svc = "axi-voice.service"
+    for _ in range(3):
+        heartbeat.record_revival(svc, now=0.0)
+
+    is_failed_flag = [True]
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            s = argv[3]
+            if s == svc:
+                return _sp_result("failed\n" if is_failed_flag[0] else "inactive\n", 0)
+            return _sp_result("inactive\n", 1)
+        return _sp_result("", 0)
+
+    sp_recorded: list[list[str]] = []
+
+    def recording_run(argv, **kw):
+        sp_recorded.append(argv)
+        return fake_run(argv, **kw)
+
+    monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    # Cycle 1: capped → alert fires
+    list(heartbeat.run_cycle(now=0.0))
+    notify_calls_1 = [a for a in sp_recorded if "notify-send" in a]
+    assert len(notify_calls_1) == 1
+
+    # Service recovers: is-failed returns inactive
+    is_failed_flag[0] = False
+    sp_recorded.clear()
+    list(heartbeat.run_cycle(now=1.0))  # recovery cycle
+
+    # Service fails again with fresh window (different svc to avoid reusing old state)
+    # Reset revivals manually and make it fail + capped again
+    is_failed_flag[0] = True
+    heartbeat._revivals.clear()
+    for _ in range(3):
+        heartbeat.record_revival(svc, now=5000.0)
+    sp_recorded.clear()
+    list(heartbeat.run_cycle(now=5001.0))
+
+    notify_calls_2 = [a for a in sp_recorded if "notify-send" in a]
+    assert len(notify_calls_2) == 1, (
+        "Expected alert to fire again after recovery; alert guard not reset"
+    )
+
+
+def test_game_mode_lock_midcycle_blocks_brain_revival(monkeypatch, tmp_path):
+    """Game-mode lock appearing mid-cycle prevents GAME_BRAIN revival.
+
+    game_mode_active() returns False at cycle start (so brains are watched),
+    then True when re-checked immediately before reviving a brain service.
+    The brain must NOT be revived.
+    """
+    from axi import heartbeat
+
+    lock = tmp_path / "game-mode.lock"
+    # Lock does NOT exist at cycle start → brains are included in watchlist
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: lock)
+
+    brain_svc = heartbeat.GAME_BRAINS[0]  # llama-server.service
+    core_svc = heartbeat.HEARTBEAT_SERVICES[0]  # axi-voice.service
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            # Both core and brain service are failed
+            return _sp_result("failed\n", 0)
+        return _sp_result("", 0)
+
+    sp_recorded: list[list[str]] = []
+
+    def recording_run(argv, **kw):
+        sp_recorded.append(argv)
+        return fake_run(argv, **kw)
+
+    monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    # Game-mode lock appears after cycle starts (mid-cycle) — simulate by
+    # creating the lock file so it exists when brain is about to be processed.
+    # We do this by patching is_failed to create the lock right before the brain call.
+    original_is_failed = heartbeat.is_failed
+    call_count = [0]
+
+    def side_effecting_is_failed(svc):
+        result = original_is_failed(svc)
+        call_count[0] += 1
+        # After processing all core services, game starts → lock appears
+        if call_count[0] >= len(heartbeat.HEARTBEAT_SERVICES):
+            lock.touch()
+        return result
+
+    monkeypatch.setattr(heartbeat, "is_failed", side_effecting_is_failed)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    revive_calls = [a for a in sp_recorded if "reset-failed" in a or
+                    (len(a) > 2 and a[2] == "start")]
+    revived_svcs = {a[-1] for a in revive_calls}
+
+    assert brain_svc not in revived_svcs, (
+        f"{brain_svc} was revived despite game-mode lock appearing mid-cycle"
+    )
+    # Core service should still have been revived (it was processed before lock appeared)
+    assert core_svc in revived_svcs, (
+        f"{core_svc} should have been revived (processed before game lock)"
+    )
 
 
 # ===========================================================================

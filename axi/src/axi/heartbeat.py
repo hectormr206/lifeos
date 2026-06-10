@@ -57,6 +57,10 @@ assert STARTUP_GRACE_SEC < _WATCHDOG_SEC, (
 
 _revivals: dict[str, deque] = defaultdict(deque)
 
+# Per-service alert dedup: set of service names that have already received a
+# cap-exceeded notification this episode. Reset when the service recovers.
+_alerted: set[str] = set()
+
 
 # ---------------------------------------------------------------------------
 # sd_notify — vendored ~15-line socket helper (no python-systemd dep)
@@ -146,7 +150,7 @@ def under_cap(svc: str, now: float) -> bool:
     """
     dq = _revivals[svc]
     cutoff = now - RATE_WINDOW_SEC
-    while dq and dq[0] < cutoff:
+    while dq and dq[0] <= cutoff:
         dq.popleft()
     return len(dq) < RATE_CAP
 
@@ -173,7 +177,14 @@ def revive(svc: str) -> None:
 
 
 def alert_cap_exceeded(svc: str) -> None:
-    """Emit a desktop notification when a service has exceeded its revival cap."""
+    """Emit a desktop notification when a service has exceeded its revival cap.
+
+    Fires at most once per cap-exceeded episode; subsequent calls for the same
+    service are no-ops until the service recovers (is removed from _alerted).
+    """
+    if svc in _alerted:
+        return
+    _alerted.add(svc)
     subprocess.run(
         [
             "notify-send",
@@ -189,39 +200,46 @@ def alert_cap_exceeded(svc: str) -> None:
 # The spine — run_cycle(now)
 # ---------------------------------------------------------------------------
 
-def run_cycle(now: float | None = None) -> None:
-    """Execute one poll cycle.
+def run_cycle(now: float | None = None):
+    """Execute one poll cycle as a generator.
 
-    Detects failed services, applies game-mode guard and rate cap, then
-    either revives the service or emits a desktop alert.
+    Yields once after each service is successfully processed. The caller
+    (main) emits a watchdog beat on each yield, so a beat is produced
+    per-service rather than once per full cycle.
 
-    Returns normally only when the entire cycle completes without an
-    unhandled exception. An exception here means no watchdog beat is emitted,
-    which causes systemd to kill and restart the process via WatchdogSec.
+    Invariant: a yield is emitted ONLY after a healthy step. An unhandled
+    exception inside this generator stops the yields, which causes main()
+    to stop beating, which causes systemd to kill and restart the process
+    via WatchdogSec.
     """
     now = time.time() if now is None else now
     game = game_mode_active()
     for svc in watched_services(game):
         if not is_failed(svc):
-            continue
-        if under_cap(svc, now):
+            # Service recovered — reset alert guard so a future episode fires again.
+            _alerted.discard(svc)
+        elif svc in GAME_BRAINS and game_mode_active():
+            # Game mode started mid-cycle — skip revival to protect the GPU.
+            pass
+        elif under_cap(svc, now):
             revive(svc)
             record_revival(svc, now)
         else:
             alert_cap_exceeded(svc)
+        yield  # beat opportunity: one per service, only if we reach here
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main() -> int:
-    notify_ready()                   # tell systemd init is done
-    time.sleep(STARTUP_GRACE_SEC)    # let services settle after boot
+def main() -> None:
+    notify_ready()                        # tell systemd init is done
+    time.sleep(STARTUP_GRACE_SEC)         # let services settle after boot
     while True:
-        run_cycle()                  # may raise → no beat → watchdog reaps us
-        notify_watchdog()            # beat only after a clean cycle
-        time.sleep(POLL_INTERVAL_SEC)
+        for _ in run_cycle():             # generator: yields once per service
+            notify_watchdog()             # beat after each healthy service step
+        time.sleep(POLL_INTERVAL_SEC)     # wait until next cycle
 
 
 if __name__ == "__main__":
