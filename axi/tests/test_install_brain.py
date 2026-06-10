@@ -103,11 +103,11 @@ def test_download_plan_lists_recommended_entry_files(monkeypatch):
 
 
 def test_download_plan_for_downloadable_model_has_repo_ids(monkeypatch):
-    """A non-legacy recommendation (CPU mid-RAM → gemma4-e4b-it) yields real HF
+    """A non-legacy recommendation (CPU mid-RAM → gemma4-e2b-it) yields real HF
     repo ids the installer's hf_get can pull."""
     _cpu_only(monkeypatch, 16 * 1024 * 1024)
     rec = hp.recommend()
-    assert rec.model_id == "gemma4-e4b-it"
+    assert rec.model_id == "gemma4-e2b-it"
     plan = install_brain.download_plan(rec)
     assert all(f["repo_id"] != "local" for f in plan["files"])
     assert any(f["filename"].endswith(".gguf") for f in plan["files"])
@@ -175,16 +175,10 @@ def test_forced_gemma4_e2b_produces_valid_download_plan(monkeypatch):
         assert f["repo_id"] not in ("", "local")
 
 
-def test_forced_gemma4_e4b_produces_valid_download_plan(monkeypatch):
-    """AXI_BRAIN_MODEL=gemma4-e4b-it must resolve to real HF repo ids."""
+def test_forced_unknown_model_falls_back_to_hardware(monkeypatch):
+    """AXI_BRAIN_MODEL=gemma4-e4b-it (cut model) falls back to hardware detection."""
     _cuda_12gb(monkeypatch)
     monkeypatch.setenv("AXI_BRAIN_MODEL", "gemma4-e4b-it")
     rec = install_brain.resolve_recommendation()
-    assert rec.model_id == "gemma4-e4b-it"
-    plan = install_brain.download_plan(rec)
-    assert plan["model_id"] == "gemma4-e4b-it"
-    assert plan["local"] is False
-    assert any(f["filename"].endswith(".gguf") and f["kind"] == "gguf" for f in plan["files"])
-    assert any(f["kind"] == "mmproj" for f in plan["files"])
-    for f in plan["files"]:
-        assert f["repo_id"] not in ("", "local")
+    # e4b is no longer in catalog — env override is ignored, hardware wins.
+    assert rec.model_id == "qwen36-35b-a3b"

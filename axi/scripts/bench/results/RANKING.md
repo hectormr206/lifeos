@@ -75,6 +75,17 @@ New dense 12B candidate (`unsloth/gemma-4-12b-it-GGUF`, Q4_K_M + vision mmproj) 
 
 ---
 
+## Lineup consolidation (2026-06-10)
+
+Final brain catalog: **qwen36-35b-a3b** (prod/quality) + **gemma4-e2b-it** (universal small/fast/vision).
+
+- **gemma4-e4b-it cut**: strictly dominated by gemma4-e2b-it — e2b scores higher (0.698 vs 0.665), runs faster (193 vs 108 tok/s GPU), and uses less VRAM (3342 vs 5202 MiB). No tier where e4b is a better pick.
+- **gemma4-26b-a4b-it cut**: measured CPU RSS = 18.5 GB (gguf ~16 GB). With reserve = max(25%×tier, 3 GB), it fails the 22 GB tier (18.5+5.5=24>22) and the 24 GB tier (18.5+6=24.5>24). Its only safe niche (~26–31 GB RAM) is bordered immediately by the 35B at 32 GB. Good quality (det=0.766) but owns no common hardware tier.
+
+The two remaining models together cover all CUDA tiers (≥8 GB → 35B, <8 GB → e2b) and all CPU/RAM tiers (≥32 GB → 35B, else → e2b).
+
+---
+
 ## Key Findings
 
 ### 2026-06-09 — challenger ranking

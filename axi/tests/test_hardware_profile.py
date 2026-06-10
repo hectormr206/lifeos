@@ -178,10 +178,10 @@ def test_select_cpu_high_ram_runs_moe_brain_on_cpu():
     assert params["cpu_moe"] is True
 
 
-def test_select_cpu_mid_ram_runs_gemma4_e4b():
-    """CPU 12 GB: Gemma 4 E4B ≈ 4.5 GB RAM — better quality + vision vs qwen35-4b."""
+def test_select_cpu_mid_ram_runs_gemma4_e2b():
+    """CPU 16 GB: gemma4-e2b-it (e4b cut — e2b dominates on quality, speed, footprint)."""
     model_id, params = hp.select_model(_cpu_profile(16.0))
-    assert model_id == "gemma4-e4b-it"
+    assert model_id == "gemma4-e2b-it"
     assert params["ngl"] == 0
 
 
@@ -211,23 +211,19 @@ def test_gemma4_e2b_in_catalog():
     assert entry.mmproj_file is not None
 
 
-def test_gemma4_e4b_in_catalog():
-    """gemma4-e4b-it must be resolvable from the catalog."""
-    entry = models_catalog.by_id("gemma4-e4b-it")
-    assert entry is not None
-    assert entry.gguf_file.repo_id != ""
-    assert entry.gguf_file.filename.endswith(".gguf")
-    assert entry.mmproj_file is not None
-
-
 def test_gemma4_e2b_has_vision_feature():
     entry = models_catalog.by_id("gemma4-e2b-it")
     assert "vision" in entry.features
 
 
-def test_gemma4_e4b_has_vision_feature():
-    entry = models_catalog.by_id("gemma4-e4b-it")
-    assert "vision" in entry.features
+def test_gemma4_e4b_not_in_catalog():
+    """gemma4-e4b-it was cut (dominated by e2b) — must not be in the catalog."""
+    assert models_catalog.by_id("gemma4-e4b-it") is None
+
+
+def test_gemma4_26b_not_in_catalog():
+    """gemma4-26b-a4b-it was cut (18.5 GB RSS fails 22/24 GB tiers) — must not be in catalog."""
+    assert models_catalog.by_id("gemma4-26b-a4b-it") is None
 
 
 # ────────────────────────── select_model contract ────────────────
