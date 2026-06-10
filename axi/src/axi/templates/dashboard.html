@@ -20,6 +20,148 @@
       </div>
     </section>
 
+    <!-- ─── Axi living avatar ─────────────────────────────────────────── -->
+    <section class="panel p-4 flex justify-center" x-data="avatarWidget()">
+
+      <!-- Inline axolotl SVG — organs are stable <g id> groups bound by Alpine.
+           viewBox 0 0 64 80 (taller than the mark to include a soft chest).
+           Palette: gills #FF6B9D/#FFA6C4, body --pink, brain halo --teal,
+           eyes #14131F + white catchlight, blush #FF4D88@.55.
+           Layer order (back→front): brain halo, gills/ears, body, blush,
+           heart, left eye (screen), right eye (webcam), mouth. -->
+      <svg id="axi-avatar" viewBox="0 0 64 80" width="96" height="120"
+           xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="Axi — agente vivo"
+           style="overflow:visible">
+
+        <!-- 1. Brain halo — soft teal glow above the head (symbolic, not anatomical) -->
+        <g id="organ-brain" class="organ"
+           :class="organClass($store.snap.services['llama-server'])"
+           @click="open = open === 'brain' ? null : 'brain'"
+           style="cursor:pointer">
+          <ellipse cx="32" cy="17" rx="13" ry="5.5"
+                   fill="var(--teal)" opacity="0.25" style="filter:blur(4px)"/>
+          <ellipse cx="32" cy="17" rx="8" ry="3.2"
+                   fill="var(--teal)" opacity="0.45" style="filter:blur(2px)"/>
+        </g>
+
+        <!-- 2. Gills / ears — verbatim from axi-mark.svg, wrapped as organ -->
+        <g id="organ-ears" class="organ"
+           :class="organClass($store.snap.services['axi-whisper'])"
+           @click="open = open === 'ears' ? null : 'ears'"
+           style="cursor:pointer">
+          <g transform="translate(25,34)">
+            <g transform="rotate(-52)"><ellipse cx="0" cy="-8.5" rx="3.3" ry="8.5" fill="#FF6B9D"/><ellipse cx="0" cy="-11.5" rx="1.7" ry="3.6" fill="#FFA6C4"/></g>
+            <g transform="rotate(-30)"><ellipse cx="0" cy="-9.5" rx="3.5" ry="9.5" fill="#FF6B9D"/><ellipse cx="0" cy="-12.8" rx="1.8" ry="3.8" fill="#FFA6C4"/></g>
+            <g transform="rotate(-10)"><ellipse cx="0" cy="-8.5" rx="3.2" ry="8.5" fill="#FF6B9D"/><ellipse cx="0" cy="-11.5" rx="1.6" ry="3.5" fill="#FFA6C4"/></g>
+          </g>
+          <g transform="translate(39,34)">
+            <g transform="rotate(10)"><ellipse cx="0" cy="-8.5" rx="3.2" ry="8.5" fill="#FF6B9D"/><ellipse cx="0" cy="-11.5" rx="1.6" ry="3.5" fill="#FFA6C4"/></g>
+            <g transform="rotate(30)"><ellipse cx="0" cy="-9.5" rx="3.5" ry="9.5" fill="#FF6B9D"/><ellipse cx="0" cy="-12.8" rx="1.8" ry="3.8" fill="#FFA6C4"/></g>
+            <g transform="rotate(52)"><ellipse cx="0" cy="-8.5" rx="3.3" ry="8.5" fill="#FF6B9D"/><ellipse cx="0" cy="-11.5" rx="1.7" ry="3.6" fill="#FFA6C4"/></g>
+          </g>
+        </g>
+
+        <!-- 3. Head + soft chest body -->
+        <ellipse cx="32" cy="43" rx="14" ry="12.5" fill="#FF6B9D"/>
+        <ellipse cx="32" cy="58" rx="10" ry="8" fill="#FF6B9D" opacity="0.7"/>
+
+        <!-- 4. Blush -->
+        <circle cx="23" cy="47" r="2.6" fill="#FF4D88" opacity="0.55"/>
+        <circle cx="41" cy="47" r="2.6" fill="#FF4D88" opacity="0.55"/>
+
+        <!-- 5. Heart (on chest — symbolic rounded heart shape) -->
+        <g id="organ-heart" class="organ"
+           :class="organClass($store.snap.services['axi-heartbeat'])"
+           @click="open = open === 'heart' ? null : 'heart'"
+           style="cursor:pointer; transform-origin: 32px 62px">
+          <circle cx="29.5" cy="61" r="2.8" fill="#FF6B9D"/>
+          <circle cx="34.5" cy="61" r="2.8" fill="#FF6B9D"/>
+          <path d="M26.5 62 Q32 68 37.5 62" fill="#FF6B9D"/>
+          <circle cx="30.2" cy="60" r="0.9" fill="rgba(255,255,255,0.4)"/>
+        </g>
+
+        <!-- 6. Left eye = screen capture (cx≈26.8) -->
+        <g id="eye-screen" class="organ eye"
+           :class="eyeClass($store.snap.eyes &amp;&amp; $store.snap.eyes.screen)"
+           @click="captureEye('screen')"
+           style="cursor:pointer; transform-origin: 26.8px 42px">
+          <circle cx="26.8" cy="42" r="3.2" fill="#14131F"/>
+          <circle cx="27.6" cy="41.2" r="1.0" fill="#FFFFFF"/>
+        </g>
+
+        <!-- 7. Right eye = webcam (cx≈37.2) -->
+        <g id="eye-webcam" class="organ eye"
+           :class="eyeClass($store.snap.eyes &amp;&amp; $store.snap.eyes.webcam)"
+           @click="captureEye('webcam')"
+           style="cursor:pointer; transform-origin: 37.2px 42px">
+          <circle cx="37.2" cy="42" r="3.2" fill="#14131F"/>
+          <circle cx="38.0" cy="41.2" r="1.0" fill="#FFFFFF"/>
+        </g>
+
+        <!-- 8. Mouth / smile -->
+        <g id="organ-mouth" class="organ"
+           :class="organClass($store.snap.services['axi-voice'])"
+           @click="open = open === 'mouth' ? null : 'mouth'"
+           style="cursor:pointer; transform-origin: 32px 48px">
+          <path d="M26.5 47.5 Q32 52.5 37.5 47.5" stroke="#14131F" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+        </g>
+      </svg>
+
+      <!-- ── Organ popovers ──────────────────────────────────────────── -->
+
+      <!-- Heart popover -->
+      <div id="popover-heart" x-show="open === 'heart'" @click.outside="open = null"
+           @keydown.escape.window="open = null"
+           class="panel2 p-3 text-sm absolute z-50 mt-2"
+           style="min-width:180px; display:none">
+        <div class="font-semibold mb-1" style="color:var(--pink)">❤ Corazón</div>
+        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['axi-heartbeat']"></span></div>
+      </div>
+
+      <!-- Brain popover -->
+      <div id="popover-brain" x-show="open === 'brain'" @click.outside="open = null"
+           @keydown.escape.window="open = null"
+           class="panel2 p-3 text-sm absolute z-50 mt-2"
+           style="min-width:220px; display:none">
+        <div class="font-semibold mb-1" style="color:var(--teal)">🧠 Cerebro (LLM)</div>
+        <div class="muted text-xs">Modelo: <span x-text="$store.snap.models &amp;&amp; $store.snap.models.mode || '—'"></span></div>
+        <div class="muted text-xs">VRAM: <span x-text="$store.snap.vram &amp;&amp; ($store.snap.vram.used_mb / 1024).toFixed(1) + ' GB' || '—'"></span> usada</div>
+      </div>
+
+      <!-- Ears popover -->
+      <div id="popover-ears" x-show="open === 'ears'" @click.outside="open = null"
+           @keydown.escape.window="open = null"
+           class="panel2 p-3 text-sm absolute z-50 mt-2"
+           style="min-width:180px; display:none">
+        <div class="font-semibold mb-1" style="color:var(--pink)">👂 Oídos (Whisper)</div>
+        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['axi-whisper']"></span></div>
+      </div>
+
+      <!-- Mouth popover -->
+      <div id="popover-mouth" x-show="open === 'mouth'" @click.outside="open = null"
+           @keydown.escape.window="open = null"
+           class="panel2 p-3 text-sm absolute z-50 mt-2"
+           style="min-width:180px; display:none">
+        <div class="font-semibold mb-1" style="color:var(--pink)">💬 Boca (voz)</div>
+        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['axi-voice']"></span></div>
+      </div>
+
+      <!-- Eye capture popover (shared for both eyes) -->
+      <div id="popover-eye" x-show="open === 'eye-screen' || open === 'eye-webcam'"
+           @click.outside="open = null" @keydown.escape.window="open = null"
+           class="panel2 p-3 text-sm absolute z-50 mt-2"
+           style="min-width:240px; display:none">
+        <div class="font-semibold mb-2" style="color:var(--teal)"
+             x-text="open === 'eye-webcam' ? '📷 Lo que Axi ve (cámara)' : '🖥 Lo que Axi ve (pantalla)'"></div>
+        <div x-show="eyeLoading" class="muted text-xs">Capturando...</div>
+        <img x-show="eyeImg" :src="'data:image/png;base64,' + eyeImg"
+             alt="Lo que Axi ve ahora" style="max-width:220px; border-radius:0.5rem; margin-top:0.5rem"/>
+        <div x-show="eyeImg" class="muted text-xs mt-1">Lo que Axi ve ahora</div>
+        <div x-show="eyeError" x-text="eyeError" class="text-xs" style="color:var(--amber)"></div>
+      </div>
+    </section>
+
     <!-- ─── quick actions ─── -->
     <section class="panel p-4">
       <div class="text-sm muted mb-3">Acciones rápidas</div>
@@ -320,6 +462,64 @@ function fmtBytes(b) {
   let i = 0;
   while (b > 1024 && i < u.length - 1) { b /= 1024; i++; }
   return b.toFixed(1) + u[i];
+}
+
+/* ── Axi avatar widget — organ click + eye live capture ───────────────── */
+function avatarWidget() {
+  return {
+    open: null,
+    eyeImg: null,
+    eyeLoading: false,
+    eyeError: null,
+
+    /* Returns CSS class string for a service organ based on its is-active state. */
+    organClass(s) {
+      return s === 'active' ? 'organ--alive' : 'organ--still';
+    },
+
+    /* Returns CSS class string for an eye organ based on capability availability. */
+    eyeClass(avail) {
+      return avail ? 'eye eye--alive' : 'eye organ--still';
+    },
+
+    /* Capture a live image from webcam or screen — only called on user click,
+       NEVER on init or poll. Handles 503 busy/unavailable gracefully. */
+    async captureEye(which) {
+      this.open = 'eye-' + which;
+      this.eyeImg = null;
+      this.eyeError = null;
+      this.eyeLoading = true;
+      const url = which === 'webcam'
+        ? '/api/chat/capture-camera'
+        : '/api/chat/capture-screen';
+      try {
+        const r = await fetch(url, { method: 'POST' });
+        if (r.status === 503) {
+          const d = await r.json().catch(() => ({}));
+          const detail = d.error || d.detail || '';
+          if (detail.startsWith('busy') || d.busy) {
+            this.eyeError = which === 'webcam'
+              ? 'La cámara está en uso por otra app'
+              : 'La pantalla no está disponible ahora';
+          } else if (detail === 'no-device') {
+            this.eyeError = 'No se detectó cámara en este equipo';
+          } else {
+            this.eyeError = 'No pude capturar ahora mismo';
+          }
+        } else if (r.ok) {
+          const data = await r.json();
+          this.eyeImg = data.image_b64 || null;
+          if (!this.eyeImg) this.eyeError = 'Imagen vacía';
+        } else {
+          this.eyeError = 'No pude capturar ahora mismo';
+        }
+      } catch (e) {
+        this.eyeError = 'Sin conexión';
+      } finally {
+        this.eyeLoading = false;
+      }
+    },
+  };
 }
 </script>
 {% endblock %}
