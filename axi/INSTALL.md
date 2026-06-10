@@ -59,3 +59,33 @@ Probar: tap Super+Space → notificación "🎤 Escuchando". Hablar. Tap otra ve
 systemctl --user stop axi-voice.service
 systemctl --user disable axi-voice.service
 ```
+
+## 6. Heartbeat — auto-healing supervisor (corazon)
+
+The heartbeat service watches all core Axi services and revives them if they
+enter the `failed` state. It is rate-capped at 3 revivals per service per hour
+and skips GPU-heavy services (`llama-server`, `llama-nano`) while game mode is
+active. The game-mode lock path is `$XDG_STATE_HOME/axi/game-mode.lock`
+(default: `~/.local/state/axi/game-mode.lock`).
+
+Install and enable:
+
+```fish
+cp ~/LifeOS/lifeos/axi/systemd/axi-heartbeat.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now axi-heartbeat.service
+systemctl --user status axi-heartbeat.service
+```
+
+View live logs:
+
+```fish
+journalctl --user -u axi-heartbeat -f
+```
+
+Stop / disable:
+
+```fish
+systemctl --user stop axi-heartbeat.service
+systemctl --user disable axi-heartbeat.service
+```
