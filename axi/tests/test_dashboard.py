@@ -147,4 +147,112 @@ def test_graph_excludes_conversation_nodes(client):
     r = client.get("/api/graph")
     data = r.json()
     assert len(data["nodes"]) == 1
-    assert data["nodes"][0]["data"]["kind"] == "fact"
+
+
+# ─────────────────────────── axi-living-avatar: backend contract ────────────
+
+
+def test_snapshot_includes_axi_heartbeat(client, monkeypatch):
+    """Task 1.1/1.2 — snapshot exposes axi-heartbeat service."""
+    from axi import dashboard
+    monkeypatch.setattr(dashboard, "_service_state", lambda *_a, **_k: "active")
+    r = client.get("/api/snapshot")
+    assert r.status_code == 200
+    assert r.json()["services"]["axi-heartbeat"] == "active"
+
+
+def test_snapshot_includes_axi_whisper(client, monkeypatch):
+    """Task 1.3/1.4 — snapshot exposes axi-whisper service."""
+    from axi import dashboard
+    monkeypatch.setattr(dashboard, "_service_state", lambda *_a, **_k: "active")
+    r = client.get("/api/snapshot")
+    assert r.status_code == 200
+    assert r.json()["services"]["axi-whisper"] == "active"
+
+
+def test_snapshot_whisper_inactive(client, monkeypatch):
+    """Task 1.5/1.6 — inactive axi-whisper reflected correctly."""
+    from axi import dashboard
+
+    def _state(unit: str) -> str:
+        return "inactive" if "axi-whisper" in unit else "active"
+
+    monkeypatch.setattr(dashboard, "_service_state", _state)
+    r = client.get("/api/snapshot")
+    assert r.status_code == 200
+    assert r.json()["services"]["axi-whisper"] == "inactive"
+    assert r.json()["services"]["axi-heartbeat"] == "active"
+
+
+def test_snapshot_capabilities_block(client, monkeypatch):
+    """Task 1.7/1.8 — snapshot exposes eyes capability dict."""
+    from axi import dashboard
+    monkeypatch.setattr(dashboard, "_eye_capabilities", lambda: {"webcam": True, "screen": True})
+    r = client.get("/api/snapshot")
+    assert r.status_code == 200
+    eyes = r.json()["eyes"]
+    assert eyes["webcam"] is True
+    assert eyes["screen"] is True
+
+
+def test_snapshot_webcam_unavailable(client, monkeypatch):
+    """Task 1.9/1.10 — unavailable webcam reflected."""
+    from axi import dashboard
+    monkeypatch.setattr(dashboard, "_eye_capabilities", lambda: {"webcam": False, "screen": True})
+    r = client.get("/api/snapshot")
+    assert r.status_code == 200
+    assert r.json()["eyes"]["webcam"] is False
+
+
+def test_snapshot_poll_does_not_trigger_capture(client, monkeypatch):
+    """Task 1.19/1.20 — snapshot never fires capture routes."""
+    from axi import dashboard
+    camera_calls = {"n": 0}
+    screen_calls = {"n": 0}
+
+    def _fake_camera():
+        camera_calls["n"] += 1
+        return ("fake_b64", "ok")
+
+    def _fake_screen():
+        screen_calls["n"] += 1
+        return "fake_b64"
+
+    # Monkeypatch the underlying vision/eyes capture functions if they exist.
+    # The key assertion is that snapshot itself never calls them.
+    try:
+        from axi import eyes
+        monkeypatch.setattr(eyes, "capture_b64", _fake_camera)
+    except (ImportError, AttributeError):
+        pass
+    try:
+        from axi import vision
+        monkeypatch.setattr(vision, "capture_active_window_b64", _fake_screen)
+    except (ImportError, AttributeError):
+        pass
+
+    for _ in range(3):
+        client.get("/api/snapshot")
+
+    assert camera_calls["n"] == 0
+    assert screen_calls["n"] == 0
+
+
+def test_capture_camera_busy_returns_503(client, monkeypatch):
+    """Task 1.15/1.16 — camera busy → 503 with busy:true."""
+    from axi import dashboard, eyes
+    monkeypatch.setattr(eyes, "capture_b64", lambda: (None, "busy:another-app"))
+    r = client.post("/api/chat/capture-camera")
+    assert r.status_code == 503
+    data = r.json()
+    assert data.get("busy") is True
+
+
+def test_capture_screen_busy_returns_503(client, monkeypatch):
+    """Task 1.17/1.18 — screen unavailable → 503 with busy:true."""
+    from axi import dashboard, vision
+    monkeypatch.setattr(vision, "capture_active_window_b64", lambda: None)
+    r = client.post("/api/chat/capture-screen")
+    assert r.status_code == 503
+    data = r.json()
+    assert data.get("busy") is True

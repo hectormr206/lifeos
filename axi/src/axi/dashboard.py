@@ -349,6 +349,20 @@ def _service_state(unit: str) -> str:
         return "unknown"
 
 
+def _eye_capabilities() -> dict[str, bool]:
+    """Probe whether webcam and screen-capture tools are available.
+
+    Detection mirrors eyes.py WEBCAM_DEV check and vision.py spectacle check.
+    Does NOT capture anything — purely device/binary presence check.
+    """
+    import shutil
+    from pathlib import Path as _Path
+    return {
+        "webcam": _Path("/dev/video0").exists(),
+        "screen": shutil.which("spectacle") is not None,
+    }
+
+
 def _llama_alive() -> bool:
     try:
         import urllib.request
@@ -641,6 +655,9 @@ def snapshot():
         "llama-server": _service_state("llama-server.service"),
         "ydotoold": _service_state("ydotoold.service"),
         "axi-dashboard": _service_state("axi-dashboard.service"),
+        # avatar organ services (axi-living-avatar)
+        "axi-heartbeat": _service_state("axi-heartbeat.service"),
+        "axi-whisper": _service_state("axi-whisper.service"),
     }
     return {
         "now": _temporal_now(),
@@ -652,6 +669,7 @@ def snapshot():
         "ram": _ram_snapshot(),
         "cpu_pct": _cpu_pct(),
         "models": _models_snapshot(),
+        "eyes": _eye_capabilities(),
         "memory": {
             "conversation_turns": store.conversation_count(),
             "facts_count": _fact_count(),
@@ -2793,7 +2811,10 @@ async def api_chat_ask(request: Request):
 @app.post("/api/chat/capture-screen")
 def api_chat_capture_screen():
     """Take a screenshot of the focused window (PNG, base64). Falls back to
-    a full-screen capture if the active-window path can't get a frame."""
+    a full-screen capture if the active-window path can't get a frame.
+    Returns 503 {"error": ..., "busy": true} when capture device is unavailable
+    so the avatar eye popover can surface a friendly message.
+    """
     from axi import vision  # noqa: PLC0415
     b64 = vision.capture_active_window_b64()
     if not b64:
@@ -2801,14 +2822,18 @@ def api_chat_capture_screen():
             events.log_warning("chat.capture", "screen capture returned no data")
         except Exception:  # noqa: BLE001
             pass
-        raise HTTPException(503, detail="screen capture failed")
+        return JSONResponse(
+            {"error": "screen capture failed", "busy": True}, status_code=503
+        )
     return {"image_b64": b64, "status": "ok"}
 
 
 @app.post("/api/chat/capture-camera")
 def api_chat_capture_camera():
     """Take a webcam photo (PNG, base64). Surfaces 'busy' / 'no-device' as 503
-    so the UI can show a useful message without parsing nested JSON."""
+    so the avatar eye popover can show a useful message without parsing nested JSON.
+    Returns 503 {"error": ..., "busy": true} when the device is unavailable.
+    """
     from axi import eyes  # noqa: PLC0415
     b64, status = eyes.capture_b64()
     if not b64:
@@ -2816,7 +2841,9 @@ def api_chat_capture_camera():
             events.log_warning("chat.capture", f"camera capture failed: {status}")
         except Exception:  # noqa: BLE001
             pass
-        raise HTTPException(503, detail=status or "camera capture failed")
+        return JSONResponse(
+            {"error": status or "camera capture failed", "busy": True}, status_code=503
+        )
     return {"image_b64": b64, "status": status}
 
 
