@@ -24,16 +24,19 @@ VRAM tiers for 4 GB, 8 GB, and 12 GB are EMPIRICALLY PROVEN from the
 
   qwen36-35b-a3b @ ngl=999, --cpu-moe:  27.4 tok/s, 5028 MiB peak VRAM
   qwen36-35b-a3b @ ngl=20, --cpu-moe:   15.6 tok/s, 3546 MiB peak VRAM
-  gemma4-26b-a4b-it @ --cpu-moe:        28.2 tok/s, 6202 MiB peak VRAM
   gemma4-e2b-it @ ngl=999:             193   tok/s, 3342 MiB peak VRAM
-  gemma4-e4b-it @ ngl=999:             108   tok/s, 5202 MiB peak VRAM
 
 CPU/RAM tiers use measured idle RSS as the weight footprint anchor:
   qwen36-35b-a3b CPU RSS: ~23073 MB (measured)
   gemma4-e2b-it  CPU RSS:  ~4631 MB (measured)
-  gemma4-e4b-it  CPU RSS:  ~6810 MB (measured)
-  gemma4-26b CPU RSS: estimated ~14–15 GB from Q4_K_M weight size (26B × 0.55 GB/B);
-             CPU-only benchmark was deferred — not directly measured.
+
+Cut from catalog (2026-06-10):
+  gemma4-e4b-it: dominated by gemma4-e2b-it (e2b quality 0.698>0.665, faster,
+    smaller) — no tier where e4b is strictly better.
+  gemma4-26b-a4b-it: measured CPU RSS = 18.5 GB (gguf 16 GB). With
+    reserve=max(25%×tier,3GB) it fails 22 GB (18.5+5.5=24>22) and
+    24 GB (18.5+6=24.5>24). Its only safe niche (~26–31 GB) is bordered by
+    the 35B at 32 GB — owns no common tier.
 
 Reserve rule for CPU/RAM tiers:
   reserve = max(25% of tier_RAM, 3 GB)
@@ -218,8 +221,8 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
     # ── CPU / RAM tiers (high → low) ────────────────────────────────
     # Reserve rule: reserve = max(25% of tier_RAM, 3 GB).
     # Tier qualifies when: weights_RSS + KV(ctx) + reserve <= tier_RAM.
-    # Measured RSS: 35B=23073 MB, e2b=4631 MB, e4b=6810 MB.
-    # Estimated RSS: gemma4-26b ~14500 MB (26B × Q4_K_M ≈ 0.55 GB/B; not benched on CPU).
+    # Measured RSS: 35B=23073 MB, e2b=4631 MB.
+    # gemma4-26b (18.5 GB RSS) and gemma4-e4b-it removed — see module docstring.
     HardwareTier(
         compute_kind="cpu",
         min_budget_gb=64.0,
@@ -254,48 +257,31 @@ HARDWARE_TIERS: tuple[HardwareTier, ...] = (
         compute_kind="cpu",
         min_budget_gb=24.0,
         label="CPU, 24 GB RAM",
-        model_id="gemma4-26b-a4b-it",
-        params={"ngl": 0, "ctx": 8192, "cpu_moe": True,
+        model_id="gemma4-e2b-it",
+        params={"ngl": 0, "ctx": 8192, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
             "DERIVED. Reserve = max(25% × 24, 3) = 6 GB. "
             "35B RSS ~23073 MB + reserve 6 GB = ~29 GB > 24 GB → 35B does NOT fit. "
-            "gemma4-26b estimated RSS ~14500 MB (26B × 0.55 GB/B; CPU bench deferred). "
-            "14500 MB + KV@8k ~0.3 GB + reserve 6 GB ≈ 20.8 GB < 24 GB — fits. "
-            "Best quality available at this RAM budget."
-        ),
-    ),
-    HardwareTier(
-        compute_kind="cpu",
-        min_budget_gb=22.0,
-        label="CPU, 22 GB RAM",
-        model_id="gemma4-26b-a4b-it",
-        params={"ngl": 0, "ctx": 8192, "cpu_moe": True,
-                "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
-        empirical=False,
-        budget_math=(
-            "DERIVED. Reserve = max(25% × 22, 3) = 5.5 GB. "
-            "gemma4-26b ESTIMATED RSS ~14500 MB (unverified: 26B × 0.55 GB/B; CPU bench deferred). "
-            "14500 MB + KV@8k ~0.3 GB + reserve 5500 MB ≈ 20.3 GB < 22 GB. "
-            "min_budget raised from 20→22 GB: a true 20 GB machine has only ~560 MB margin "
-            "on an unverified RSS estimate — too risky. 22 GB provides ~1.7 GB safety margin."
+            "gemma4-26b (measured RSS ~18.5 GB) also fails: 18.5+6=24.5 GB > 24 GB. "
+            "gemma4-e2b measured RSS 4631 MB + KV@8k ~0.3 GB + reserve 6 GB ≈ 10.9 GB < 24 GB. "
+            "Fits with large headroom. 26b removed (18.5 GB RSS exceeds 22/24 GB tiers with reserve)."
         ),
     ),
     HardwareTier(
         compute_kind="cpu",
         min_budget_gb=16.0,
         label="CPU, 16 GB RAM",
-        model_id="gemma4-e4b-it",
+        model_id="gemma4-e2b-it",
         params={"ngl": 0, "ctx": 8192, "cpu_moe": False,
                 "cache_type_k": "q8_0", "cache_type_v": "q8_0"},
         empirical=False,
         budget_math=(
             "DERIVED. Reserve = max(25% × 16, 3) = 4 GB. "
-            "gemma4-26b est ~14500 MB + reserve 4 GB = ~18.5 GB > 16 GB → 26b does NOT fit. "
-            "gemma4-e4b measured RSS 6810 MB + KV@8k ~0.3 GB + reserve 4 GB ≈ 11.1 GB < 16 GB. "
-            "e4b preferred over e2b here (better quality, still fits). "
-            "Measured RSS = 6810 MB (empirical)."
+            "gemma4-e2b measured RSS 4631 MB + KV@8k ~0.3 GB + reserve 4 GB ≈ 8.9 GB < 16 GB. "
+            "e4b (cut) is dominated by e2b on quality and footprint — e2b is the strict improvement. "
+            "Measured RSS = 4631 MB (empirical)."
         ),
     ),
     HardwareTier(

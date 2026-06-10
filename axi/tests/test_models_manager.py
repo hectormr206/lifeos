@@ -28,16 +28,16 @@ def isolated_state(tmp_path, monkeypatch):
 def test_catalog_has_expected_entries():
     entries = models_catalog.catalog()
     ids = {e.id for e in entries}
-    # 4 total: qwen3.6 (prod) + gemma4-26b + gemma4-e4b + gemma4-e2b.
-    # Cut: nemotron3-nano-omni-30b-a3b, qwen35-9b, granite-4.0-h-1b, lfm2-1.2b-extract.
-    assert len(entries) == 4
-    # Kept from the legacy catalog.
+    # 2 total: qwen3.6 (prod/quality) + gemma4-e2b-it (universal small/fast/vision).
+    # Cut (2026-06-10): gemma4-e4b-it (dominated by e2b), gemma4-26b-a4b-it (18.5 GB RSS
+    # fails 22/24 GB tiers with reserve, owns no common tier).
+    assert len(entries) == 2
+    # Both kept models must be present.
     assert "qwen36-35b-a3b" in ids
-    # Gemma 4 bench-proven KEEP set.
     assert "gemma4-e2b-it" in ids
-    assert "gemma4-e4b-it" in ids
-    assert "gemma4-26b-a4b-it" in ids
-    # CUT models must be absent from the brain catalog.
+    # Cut models must be absent.
+    assert "gemma4-e4b-it" not in ids
+    assert "gemma4-26b-a4b-it" not in ids
     assert "nemotron3-nano-omni-30b-a3b" not in ids
     assert "qwen35-9b" not in ids
     assert "granite-4.0-h-1b" not in ids
@@ -86,7 +86,7 @@ def test_is_installed_false_when_files_missing(isolated_state):
 
 
 def test_is_installed_false_when_only_some_present(isolated_state):
-    entry = models_catalog.by_id("gemma4-e4b-it")
+    entry = models_catalog.by_id("gemma4-e2b-it")
     # Create only the gguf, not the mmproj.
     f = entry.files[0]
     p = models_manager.expected_path(entry, f)
@@ -109,9 +109,9 @@ def test_write_active_round_trips(isolated_state):
 
 
 def test_get_active_id_reads_back(isolated_state):
-    entry = models_catalog.by_id("gemma4-e4b-it")
+    entry = models_catalog.by_id("qwen36-35b-a3b")
     models_manager.write_active(entry)
-    assert models_manager.get_active_id() == "gemma4-e4b-it"
+    assert models_manager.get_active_id() == "qwen36-35b-a3b"
 
 
 def test_get_active_id_returns_none_when_unset(isolated_state):
@@ -207,7 +207,7 @@ def test_catalog_status_marks_active(isolated_state):
     rows = {s.entry.id: s for s in models_manager.catalog_status()}
     assert rows["gemma4-e2b-it"].is_active is True
     assert rows["gemma4-e2b-it"].installed is True
-    assert rows["gemma4-e4b-it"].is_active is False
+    assert rows["qwen36-35b-a3b"].is_active is False
 
 
 def test_wait_for_llama_health_times_out_fast(monkeypatch):

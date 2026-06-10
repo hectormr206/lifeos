@@ -5,12 +5,17 @@ MoE with `--cpu-moe` offload (the current 35B-A3B pattern). Entries are
 GGUF-only; mmproj companions are listed alongside the main weights when the
 model supports vision.
 
-Refreshed 2026-06-10 (rev 3): Catalog cut to the 4 bench-proven KEEP models.
-Removed: nemotron3-nano-omni-30b-a3b, qwen35-9b, granite-4.0-h-1b,
-lfm2-1.2b-extract. Granite and LFM2 remain in nano_catalog.py (port-8090
-nano tier). Catalog now combines:
-- Qwen3.6 35B-A3B MoE (current default, local)
-- Gemma 4 family (April 2026): E2B, E4B, 26B-A4B
+Refreshed 2026-06-10 (rev 4): Consolidated to 2 models.
+- qwen36-35b-a3b: production default (quality, local)
+- gemma4-e2b-it: universal small/fast/vision tier
+
+Cut:
+- gemma4-e4b-it: strictly dominated by gemma4-e2b-it (e2b quality 0.698 > e4b
+  0.665, faster, smaller). No tier where e4b is a better pick.
+- gemma4-26b-a4b-it: measured CPU RSS = 18.5 GB (gguf 16 GB). With
+  reserve = max(25%×tier, 3 GB) it fails both 22 GB (18.5+5.5=24>22) and
+  24 GB (18.5+6=24.5>24). Its only safe niche (~26–31 GB RAM) is bordered by
+  the 35B at 32 GB, so it owns no common tier.
 
 Every entry below has been verified against the upstream HuggingFace repo
 via `huggingface_hub.list_repo_files` at authoring time; if you add a new
@@ -95,29 +100,6 @@ _GPU_DEFAULT_ARGS: tuple[str, ...] = (
     "--top-p", "0.95",
     "--top-k", "20",
     "-np", "1",
-)
-
-
-# Shared MoE tuning (CPU experts + GPU attention via --cpu-moe). Mirrors
-# the qwen3.6 production layout for the smaller A3B / A4B MoE entries that
-# don't need the ultra-aggressive batching of qwen3.6.
-_MOE_DEFAULT_ARGS: tuple[str, ...] = (
-    "--cpu-moe",
-    "--jinja",
-    "--reasoning-format", "auto",
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
-    "-fa", "on",
-    "-b", "4096",
-    "-ub", "2048",
-    "-t", "8",
-    "-tb", "16",
-    "--temp", "0.7",
-    "--top-p", "0.95",
-    "--top-k", "20",
-    "-np", "1",
-    "--no-mmap",
-    "--mlock",
 )
 
 
@@ -224,71 +206,8 @@ CATALOG: tuple[ModelEntry, ...] = (
     ),
 
     # ------------------------------------------------------------------ #
-    # MoE multimodal entries (--cpu-moe, ~7–8 GB VRAM).                  #
+    # Small/fast/vision tier (full GPU residency).                       #
     # ------------------------------------------------------------------ #
-    ModelEntry(
-        id="gemma4-26b-a4b-it",
-        name="Gemma 4 26B-A4B IT (vision)",
-        family="Gemma",
-        params="26B-A4B",
-        features=("vision", "tools"),
-        description=(
-            "Google Gemma 4 Instruct MoE (April 2026). 26B total / 4B "
-            "active, corre vía --cpu-moe. Vision con mmproj BF16 (los "
-            "quants del mmproj tienen un bug conocido — usar SIEMPRE BF16)."
-        ),
-        files=(
-            ModelFile(
-                repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
-                filename="gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
-                kind="gguf",
-            ),
-            ModelFile(
-                repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
-                filename="mmproj-BF16.gguf",
-                kind="mmproj",
-            ),
-        ),
-        ctx=32768,
-        ngl=999,
-        extra_args=_strip_reasoning_format(_MOE_DEFAULT_ARGS) + ("--reasoning", "off", "-a", "gemma-4-26B-A4B-it"),
-        vram_estimate_gb=8.5,
-        notes="mmproj DEBE ser BF16 — los quants del projector están rotos en upstream.",
-    ),
-
-    # ------------------------------------------------------------------ #
-    # Dense multimodal entries (full GPU residency).                     #
-    # ------------------------------------------------------------------ #
-    ModelEntry(
-        id="gemma4-e4b-it",
-        name="Gemma 4 E4B IT (vision)",
-        family="Gemma",
-        params="E4B",
-        features=("vision", "tools"),
-        description=(
-            "Google Gemma 4 E4B Instruct (April 2026). Denso ~4 GB VRAM "
-            "en Q4_K_M, multimodal (visión hoy, audio cuando llama.cpp "
-            "lo soporte). Prompt style Gemma — buena pareja para A/B "
-            "frente a Qwen3.5."
-        ),
-        files=(
-            ModelFile(
-                repo_id="unsloth/gemma-4-E4B-it-GGUF",
-                filename="gemma-4-E4B-it-Q4_K_M.gguf",
-                kind="gguf",
-            ),
-            ModelFile(
-                repo_id="unsloth/gemma-4-E4B-it-GGUF",
-                filename="mmproj-BF16.gguf",
-                kind="mmproj",
-            ),
-        ),
-        ctx=32768,
-        ngl=999,
-        extra_args=_strip_reasoning_format(_GPU_DEFAULT_ARGS) + ("--reasoning", "off", "-a", "gemma-4-E4B-it"),
-        vram_estimate_gb=4.5,
-        notes="mmproj DEBE ser BF16 — los quants del projector están rotos en upstream.",
-    ),
     ModelEntry(
         id="gemma4-e2b-it",
         name="Gemma 4 E2B IT (vision)",
