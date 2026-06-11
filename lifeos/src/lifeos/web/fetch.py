@@ -18,6 +18,15 @@ from lifeos.web.port import FETCH_TIMEOUT, MAX_PAGE_BYTES, MAX_PAGE_CHARS, PageT
 
 log = logging.getLogger("lifeos.web.fetch")
 
+# A realistic desktop User-Agent. Many sites (Wikipedia, python.org, news
+# outlets) serve a block/consent page or 403 to the default "Python-urllib/x.y"
+# agent, which leaves trafilatura nothing to extract. A standard browser UA
+# gets the real article HTML.
+_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
 
 def read(
     url: str,
@@ -39,7 +48,7 @@ def read(
         PageText(url, "", ok=False)   on any fetch/extraction failure.
     """
     try:
-        req = urllib.request.Request(url)
+        req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
         with urlopen(req, timeout=timeout) as resp:
             raw = resp.read(max_bytes)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
