@@ -66,6 +66,7 @@
       #organ-ears.organ--alive  { animation: gillFloat 3.6s ease-in-out infinite; transform-origin: bottom center; }
       #organ-mouth.organ--alive { animation: smileBreathe 4s ease-in-out infinite; transform-origin: center; }
       .eye.eye--alive           { animation: blink 6s ease-in-out infinite; transform-origin: center; }
+      .axi-tail                 { animation: tailWag 4.5s ease-in-out infinite; }
 
       @keyframes heartbeat {
         0%,18%,30%,100% { transform: scale(1); }
@@ -88,11 +89,15 @@
         0%,92%,100% { transform: scaleY(1); }
         96%         { transform: scaleY(0.1); }
       }
+      @keyframes tailWag {
+        0%,100% { transform: rotate(-3deg); }
+        50%     { transform: rotate(7deg); }
+      }
     }
     /* Under prefers-reduced-motion: reduce, all organ animations are off but
        alive vs down is still distinguishable via color (still = grayscale). */
     @media (prefers-reduced-motion: reduce) {
-      #organ-heart, #organ-brain, #organ-ears, #organ-mouth, .eye { animation: none; }
+      #organ-heart, #organ-brain, #organ-ears, #organ-mouth, .eye, .axi-tail { animation: none; }
     }
     /* ──────────────────────────────────────────────────────────────────── */
 
