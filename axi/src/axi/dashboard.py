@@ -396,23 +396,6 @@ if STATIC_DIR.exists():
 # tells the model not to claim, this code GUARANTEES it doesn't matter
 # if the model still does.
 
-# Phrases that indicate the brain is claiming it persisted something.
-# Curated from observed hallucinations in chat memory.
-_PERSISTENCE_CLAIM_RE = re.compile(
-    r"\b("
-    r"anotad[oa]s?|anot[éeé]|anotando|"
-    r"registrad[oa]s?|registr[éeé]|registrando|"
-    r"guardad[oa]s?|guard[éeé]|guardando|"
-    r"agregad[oa]s?|agregu[ée]|agregando|añadid[oa]s?|añad[íi]|"
-    r"apuntad[oa]s?|apunt[éeé]|apuntando|"
-    r"ya\s+est[áa]\s+(?:en|guardad|registrad|anotad)|"
-    r"lo\s+(?:guard[éeé]|registr[éeé]|anot[éeé]|apunt[éeé]|met[íi]|agregu[éeé])|"
-    r"queda(?:ron)?\s+(?:guardad|registrad|anotad)"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
 # Web research command parser — compiled once at module load.
 # Matches /busca or /investiga followed by whitespace+query OR end-of-string.
 # Requires the command token to end at a word boundary so /buscalo and
@@ -421,14 +404,6 @@ _WEB_CMD_RE = re.compile(
     r"^(/busca|/investiga)(?:\s+(.+))?$",
     re.IGNORECASE | re.DOTALL,
 )
-
-
-def _looks_like_persistence_claim(text: str) -> bool:
-    """True iff `text` claims data was persisted. Used to detect brain
-    hallucinations when the ingestion fast-path actually missed."""
-    if not text:
-        return False
-    return bool(_PERSISTENCE_CLAIM_RE.search(text))
 
 
 # Map of keywords → suggested format. When the user's message contains
@@ -2307,7 +2282,11 @@ async def api_chat_ask(request: Request):
     # When False (default) the big brain converses freely with internet access
     # and WITHOUT the persistence guardrail. Unambiguous regex fast-paths always
     # auto-save regardless of this flag.
-    logging_mode: bool = bool(body.get("logging_mode", False))
+    # F4: only a real JSON boolean True activates logging mode. String "true"
+    # and any other non-bool value are treated as False to prevent the
+    # bool("true") == True footgun (any non-empty string is truthy in Python).
+    _lm = body.get("logging_mode", False)
+    logging_mode: bool = _lm if isinstance(_lm, bool) else False
     # PWA optional fields — captured by the chat UI when the user toggles
     # the corresponding affordances. None when absent. We log them and pass
     # to the relevant domain create() as ad-hoc tag/data fields.
@@ -2392,6 +2371,24 @@ async def api_chat_ask(request: Request):
     # priority over regex classifiers that might misread "busca X" as finance.
     # Degrades gracefully: SearXNG down → friendly Spanish message (HTTP 200).
     _web_cmd_match = _WEB_CMD_RE.match(text)
+    # F3: When logging_mode=True and the user types /busca, return a clear
+    # "internet disabled" message immediately — BEFORE the nano path. Without
+    # this gate, /busca falls through to nano which returns the "couldn't save"
+    # format hint, which is nonsensical for a search command.
+    if _web_cmd_match and not image_b64 and logging_mode:
+        _disabled_msg = (
+            "La búsqueda en internet está deshabilitada en modo registro. "
+            "Cambiá a modo charla (💬) para buscar."
+        )
+        latency_ms = round((time.monotonic() - start) * 1000)
+        try:
+            mem.add(text, _disabled_msg, has_screenshot=False)
+        except Exception:  # noqa: BLE001
+            pass
+        stage_holder[0] = "web_cmd_logging_mode_disabled"
+        _record_metric()
+        return {"answer": _disabled_msg, "latency_ms": latency_ms,
+                "spoke": False, "audio_b64": None}
     # Web research is only available outside logging mode. In logging mode the
     # user is in data-entry mode: no internet, nano agents handle the text.
     if _web_cmd_match and not image_b64 and not logging_mode:
@@ -2518,11 +2515,15 @@ async def api_chat_ask(request: Request):
         # consult using finance history + impulse classification. MUST run
         # BEFORE finance ingestion or "comprar" gets misread as a purchase
         # log.
+        # F2: gate on `not logging_mode` — purchase-consult calls brain.ask
+        # internally (via build_bundle + decide_purchase.consult), which
+        # violates the invariant "brain NOT called in logging mode". In
+        # logging mode the text falls through to the nano/logging path instead.
         try:
             qi = decide_query_parser.parse_query(parse_text)
         except Exception:  # noqa: BLE001
             qi = None
-        if isinstance(qi, decide_query_parser.PurchaseConsultIntent):
+        if isinstance(qi, decide_query_parser.PurchaseConsultIntent) and not logging_mode:
             try:
                 from axi import brain as _brain
                 from lifeos.insights.correlate import build_bundle  # noqa: PLC0415
@@ -3095,12 +3096,13 @@ async def api_chat_ask(request: Request):
                 except (TypeError, ValueError):
                     pass
             answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64)
-            # NOTE: The persistence guardrail (_looks_like_persistence_claim) is
-            # intentionally NOT applied here. In conversation mode the brain
-            # answers freely and may legitimately use persistence verbs without
-            # having saved anything (e.g., "ya tenés anotado ese plan"). The
-            # guardrail now lives exclusively in the logging_mode=True path where
-            # it serves as the honest "couldn't parse" reply — not a clobber.
+            # NOTE: No persistence guardrail is applied here. In conversation
+            # mode the brain answers freely and may legitimately use words like
+            # "anotado" or "guardé" without having saved anything. The old
+            # guardrail (_looks_like_persistence_claim) has been removed because
+            # it is no longer called anywhere — the logging_mode=True path
+            # returns _suggested_format_message() directly as the honest
+            # "couldn't parse" reply, not a clobber of the brain's answer.
         except Exception as e:  # noqa: BLE001
             log.exception("chat ask failed")
             try:
