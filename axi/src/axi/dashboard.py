@@ -2849,6 +2849,25 @@ def api_chat_capture_camera():
     return {"image_b64": b64, "status": status}
 
 
+@app.post("/api/chat/say")
+async def api_chat_say(request: Request):
+    """Make Axi speak a phrase out loud via Piper TTS (the avatar's mouth).
+    Speaks in a background thread so the request returns immediately."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    text = (body.get("text") or "").strip() if isinstance(body, dict) else ""
+    if not text:
+        text = "¡Hola! Soy Axi, tu axolote de LifeOS."
+    import threading  # noqa: PLC0415
+
+    from axi import speak as _axi_speak  # noqa: PLC0415
+
+    threading.Thread(target=_axi_speak.speak, args=(text,), daemon=True).start()
+    return {"status": "ok", "text": text}
+
+
 # Audio chunks for transcription land in this directory as temp files. Daemon
 # reads them off disk so we avoid pushing 100-500 KB through the small Unix
 # socket recv buffer. Files are deleted right after transcription.

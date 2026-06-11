@@ -20,211 +20,156 @@
       </div>
     </section>
 
-    <!-- ─── Axi living avatar ─────────────────────────────────────────── -->
-    <section class="panel p-4 flex justify-center" x-data="avatarWidget()">
-
-      <!-- Inline axolotl SVG — organs are stable <g id> groups bound by Alpine.
-           viewBox 0 0 64 80 (taller than the mark to include a soft chest).
-           Palette: gills #FF6B9D/#FFA6C4, body --pink, brain halo --teal,
-           eyes #14131F + white catchlight, blush #FF4D88@.55.
-           Layer order (back→front): brain halo, gills/ears, body, blush,
-           heart, left eye (screen), right eye (webcam), mouth. -->
-      <svg id="axi-avatar" viewBox="0 0 64 80" width="240" height="300"
-           xmlns="http://www.w3.org/2000/svg" role="img"
-           aria-label="Axi — agente vivo"
+    <!-- ─── Axi living avatar — organs react + click actions ─── -->
+    <section class="panel p-4 flex justify-center" x-data="avatarWidget()" @click.outside="open = null" @keydown.escape.window="open = null" style="position:relative">
+      <svg id="axi-avatar" viewBox="0 0 64 80" width="220" height="275"
+           xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Axi — agente vivo"
            style="overflow:visible">
+        <style>
+          @keyframes blink { 0%,92%,100%{transform:scaleY(1)} 96%{transform:scaleY(0.1)} }
+          @keyframes gillFloat { 0%,100%{transform:rotate(-2deg)} 50%{transform:rotate(2deg)} }
+          @keyframes heartbeat { 0%,18%,30%,100%{transform:scale(1)} 9%{transform:scale(1.18)} 24%{transform:scale(1.12)} }
+          @keyframes tailWag { 0%,100%{transform:rotate(-3deg)} 50%{transform:rotate(7deg)} }
+          #axi-avatar .eye   { animation: blink 5.5s ease-in-out infinite; cursor:pointer; }
+          #axi-avatar .ears  { animation: gillFloat 4s ease-in-out infinite; transform-origin: 32px 40px; cursor:pointer; }
+          #axi-avatar .heart { animation: heartbeat 2s ease-in-out infinite; transform-origin: 32px 58px; cursor:pointer; }
+          #axi-avatar .heart.stopped { animation: none; filter: grayscale(1) opacity(0.55); }
+          #axi-avatar .tail  { animation: tailWag 4.5s ease-in-out infinite; transform-origin: 41px 59px; }
+          #axi-avatar .clk   { cursor:pointer; }
+          @media (prefers-reduced-motion: reduce){ #axi-avatar * { animation:none !important; } }
+        </style>
 
-        <!-- 1. Brain halo — soft teal glow above the head (symbolic, not anatomical) -->
-        <g id="organ-brain" class="organ"
-           :class="organClass($store.snap.services['llama-server'])"
-           @click="open = open === 'brain' ? null : 'brain'"
-           style="cursor:pointer">
-          <ellipse cx="32" cy="12" rx="13" ry="5.5"
-                   fill="var(--teal)" opacity="0.22" style="filter:blur(4px)"/>
-          <ellipse cx="32" cy="12" rx="7.5" ry="3"
-                   fill="var(--teal)" opacity="0.42" style="filter:blur(2px)"/>
-        </g>
-
-        <!-- Outline backing — white sticker rim for the STATIC parts only
-             (feet, body, head). Gills, tail and hands carry their own rim so
-             it travels with them when they animate. -->
-        <g fill="#FFF1F5" stroke="#FFF1F5" stroke-width="2.6" stroke-linejoin="round">
-          <ellipse cx="26" cy="67" rx="3.6" ry="2.7"/>
-          <ellipse cx="38" cy="67" rx="3.6" ry="2.7"/>
-          <ellipse cx="32" cy="56" rx="11.5" ry="11.5"/>
-          <ellipse cx="32" cy="38" rx="16.5" ry="14"/>
-        </g>
-
-        <!-- 2. Tail — own white rim + dark outline; gently wags via .axi-tail -->
-        <g class="axi-tail" style="transform-origin:42px 60px">
-          <path d="M40 57 Q52 54 54 63 Q52 70 45 67 Q41 62 40 57 Z"
-                fill="#FFF1F5" stroke="#FFF1F5" stroke-width="2.6" stroke-linejoin="round"/>
-          <path d="M40 57 Q52 54 54 63 Q52 70 45 67 Q41 62 40 57 Z"
-                fill="#FF6B9D" stroke="#241019" stroke-width="0.7" stroke-linejoin="round"/>
-          <path d="M44 60 Q50 59 51 65" stroke="#E0558A" stroke-width="1"
-                fill="none" stroke-linecap="round" opacity="0.8"/>
-        </g>
-
-        <!-- 3. Gills / ears — 3 frills each side, fanning out from the head sides -->
-        <g id="organ-ears" class="organ"
-           :class="organClass($store.snap.services['axi-whisper'])"
-           @click="open = open === 'ears' ? null : 'ears'"
-           style="cursor:pointer">
-          <!-- each gill: a FEATHER — pink spine + filaments fading to teal tip,
-               echoing a real axolotl's plume while encoding the LifeOS brand
-               duality (pink Axi -> teal LifeOS). Defined once via <use>. -->
-          <defs>
-            <ellipse id="axi-gill-bg" cx="0" cy="-8.5" rx="3.8" ry="10.6"/>
-            <g id="axi-gill">
-              <!-- white sticker rim FIRST so it moves with the gill when it floats -->
-              <ellipse cx="0" cy="-8.5" rx="3.8" ry="10.6" fill="#FFF1F5" stroke="#FFF1F5" stroke-width="2.6" stroke-linejoin="round"/>
-              <!-- soft pink frond w/ dark outline; teal tip has a THINNER dark line -->
-              <ellipse cx="0" cy="-8.5" rx="3.8" ry="10.6" fill="#FF6B9D" stroke="#241019" stroke-width="0.6"/>
-              <path d="M0 -16.2 Q-3.2 -12 -2.6 -7.2 Q0 -8.6 2.6 -7.2 Q3.2 -12 0 -16.2 Z" fill="#00D4AA" stroke="#241019" stroke-width="0.42" stroke-linejoin="round"/>
-              <ellipse cx="-0.4" cy="-8.8" rx="1.6" ry="5" fill="#FFA6C4" opacity="0.65"/>
-              <ellipse cx="-0.8" cy="-13.2" rx="0.8" ry="2.2" fill="#FFFFFF" opacity="0.6"/>
-            </g>
-          </defs>
-          <use href="#axi-gill" transform="translate(23,32) rotate(-42) scale(0.84)"/>
-          <use href="#axi-gill" transform="translate(20,37) rotate(-63) scale(0.9)"/>
-          <use href="#axi-gill" transform="translate(20,43) rotate(-84) scale(0.84)"/>
-          <use href="#axi-gill" transform="translate(41,32) rotate(42) scale(0.84)"/>
-          <use href="#axi-gill" transform="translate(44,37) rotate(63) scale(0.9)"/>
-          <use href="#axi-gill" transform="translate(44,43) rotate(84) scale(0.84)"/>
-        </g>
-
-        <!-- 4. Body — chubby belly, little arms and feet -->
-        <!-- Hands (manos) = ydotoold — arm stubs at the body sides, drawn BEHIND the
-             body so they merge into the silhouette; only the outer part sticks out
-             (still its own click target). Reaching slightly down and out. -->
-        <g id="organ-hands" class="organ"
-           :class="organClass($store.snap.services['ydotoold'])"
-           @click="open = open === 'hands' ? null : 'hands'"
-           style="cursor:pointer">
-          <g fill="#FFF1F5" stroke="#FFF1F5" stroke-width="2.6" stroke-linejoin="round">
-            <ellipse cx="22" cy="53" rx="3" ry="4.3" transform="rotate(32 22 53)"/>
-            <ellipse cx="42" cy="53" rx="3" ry="4.3" transform="rotate(-32 42 53)"/>
+        <defs>
+          <g id="axi-gill">
+            <ellipse cx="0" cy="-8.5" rx="3.8" ry="10.6" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+            <path d="M0 -16.2 Q-3.2 -12 -2.6 -7.2 Q0 -8.6 2.6 -7.2 Q3.2 -12 0 -16.2 Z" fill="#00D4AA" stroke="#241019" stroke-width="0.42" stroke-linejoin="round"/>
           </g>
-          <ellipse cx="22" cy="53" rx="3" ry="4.3" fill="#FF6B9D" stroke="#241019" stroke-width="0.7" transform="rotate(32 22 53)"/>
-          <ellipse cx="42" cy="53" rx="3" ry="4.3" fill="#FF6B9D" stroke="#241019" stroke-width="0.7" transform="rotate(-32 42 53)"/>
-        </g>
-        <ellipse cx="26" cy="67" rx="3.6" ry="2.7" fill="#FF6B9D" stroke="#241019" stroke-width="0.7"/>
-        <ellipse cx="38" cy="67" rx="3.6" ry="2.7" fill="#FF6B9D" stroke="#241019" stroke-width="0.7"/>
-        <ellipse cx="32" cy="56" rx="11.5" ry="11.5" fill="#FF6B9D" stroke="#241019" stroke-width="0.7"/>
-        <ellipse cx="32" cy="58" rx="7" ry="7.6" fill="#FFC2D6" opacity="0.7" stroke="#241019" stroke-width="0.45"/>
+        </defs>
 
-        <!-- 5. Head — broad rounded axolotl head (dark outline delimits it from the body) -->
-        <ellipse cx="32" cy="38" rx="16.5" ry="14" fill="#FF6B9D" stroke="#241019" stroke-width="0.7"/>
-        <!-- freckles / motas — authentic axolotl speckles -->
-        <g fill="#FF4D88" opacity="0.4">
-          <circle cx="27" cy="31" r="0.6"/><circle cx="31" cy="29.6" r="0.5"/>
-          <circle cx="36" cy="30.6" r="0.6"/><circle cx="24.5" cy="34" r="0.5"/>
-          <circle cx="39" cy="33.6" r="0.55"/><circle cx="33.5" cy="32.6" r="0.45"/>
+        <!-- Orejas / branquias = Oído (axi-whisper) -->
+        <g id="organ-ears" class="ears" @click="open = open === 'ears' ? null : 'ears'">
+          <use href="#axi-gill" transform="translate(23,32) rotate(-56) scale(0.94)"/>
+          <use href="#axi-gill" transform="translate(20,37) rotate(-79) scale(0.95)"/>
+          <use href="#axi-gill" transform="translate(22,43) rotate(-95) scale(0.9)"/>
+          <use href="#axi-gill" transform="translate(41,32) rotate(56) scale(0.94)"/>
+          <use href="#axi-gill" transform="translate(44,37) rotate(79) scale(0.95)"/>
+          <use href="#axi-gill" transform="translate(42,43) rotate(95) scale(0.9)"/>
         </g>
 
-        <!-- 6. Blush -->
-        <circle cx="20" cy="42" r="2.9" fill="#FF4D88" opacity="0.5"/>
-        <circle cx="44" cy="42" r="2.9" fill="#FF4D88" opacity="0.5"/>
-
-        <!-- 7. Heart (on belly — symbolic rounded heart) -->
-        <g id="organ-heart" class="organ"
-           :class="organClass($store.snap.services['axi-heartbeat'])"
-           @click="open = open === 'heart' ? null : 'heart'"
-           style="cursor:pointer; transform-origin: 32px 58px">
-          <circle cx="29.4" cy="57" r="2.9" fill="#FF4D88"/>
-          <circle cx="34.6" cy="57" r="2.9" fill="#FF4D88"/>
-          <path d="M26.3 58.2 Q32 64.5 37.7 58.2" fill="#FF4D88"/>
-          <circle cx="30.1" cy="56" r="0.95" fill="rgba(255,255,255,0.5)"/>
+        <!-- Cola (se menea) -->
+        <g class="tail">
+          <path d="M40 57 Q52 54 57 63 Q52 70 45 65 Q41 62 40 57 Z" fill="#fe8faf" stroke="#241019" stroke-width="0.9" stroke-linejoin="round"/>
+          <path d="M44 58 Q50 58 55 63" stroke="#241019" stroke-width="0.45" fill="none" stroke-linecap="round" opacity="0.5"/>
+          <path d="M44 62 Q49 64 55 63" stroke="#241019" stroke-width="0.45" fill="none" stroke-linecap="round" opacity="0.4"/>
         </g>
 
-        <!-- 8. Left eye = screen capture -->
-        <g id="eye-screen" class="organ eye"
-           :class="eyeClass($store.snap.eyes &amp;&amp; $store.snap.eyes.screen)"
-           @click="captureEye('screen')"
-           style="cursor:pointer; transform-origin: 26px 38px">
-          <circle cx="26" cy="38" r="3.4" fill="#14131F"/>
-          <circle cx="26.9" cy="37.0" r="1.1" fill="#FFFFFF"/>
+        <!-- Manos = ydotoold -->
+        <g id="organ-hands" class="clk" @click="open = open === 'hands' ? null : 'hands'">
+          <ellipse cx="21" cy="53" rx="3" ry="4.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9" transform="rotate(32 22 53)"/>
+          <ellipse cx="43" cy="53" rx="3" ry="4.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9" transform="rotate(-32 42 53)"/>
         </g>
 
-        <!-- 9. Right eye = webcam -->
-        <g id="eye-webcam" class="organ eye"
-           :class="eyeClass($store.snap.eyes &amp;&amp; $store.snap.eyes.webcam)"
-           @click="captureEye('webcam')"
-           style="cursor:pointer; transform-origin: 38px 38px">
-          <circle cx="38" cy="38" r="3.4" fill="#14131F"/>
-          <circle cx="38.9" cy="37.0" r="1.1" fill="#FFFFFF"/>
+        <!-- Pies -->
+        <ellipse cx="25.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+        <ellipse cx="38.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+
+        <!-- Cuerpo + pancita -->
+        <ellipse cx="32" cy="57" rx="12.5" ry="12" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+        <ellipse cx="32" cy="59" rx="7.6" ry="7.8" fill="#FFC2D6" opacity="0.7"/>
+
+        <!-- Cara -->
+        <ellipse cx="32" cy="38" rx="15.5" ry="13.5" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+
+        <!-- Chapitas -->
+        <circle cx="21.5" cy="42" r="2.2" fill="#FF4D88" opacity="0.5"/>
+        <circle cx="42.5" cy="42" r="2.2" fill="#FF4D88" opacity="0.5"/>
+
+        <!-- Ojo izquierdo = pantalla (clic captura la pantalla) -->
+        <g id="eye-screen" class="eye" @click="captureEye('screen')" style="transform-origin:26px 38px">
+          <circle cx="26" cy="38" r="2.6" fill="#14131F"/>
+          <circle cx="26.9" cy="37.2" r="0.9" fill="#FFFFFF"/>
+        </g>
+        <!-- Ojo derecho = cámara (clic toma una foto) -->
+        <g id="eye-webcam" class="eye" @click="captureEye('webcam')" style="transform-origin:38px 38px">
+          <circle cx="38" cy="38" r="2.6" fill="#14131F"/>
+          <circle cx="38.9" cy="37.2" r="0.9" fill="#FFFFFF"/>
         </g>
 
-        <!-- 10. Mouth — wide happy axolotl smile -->
-        <g id="organ-mouth" class="organ"
-           :class="organClass($store.snap.services['axi-voice'])"
-           @click="open = open === 'mouth' ? null : 'mouth'"
-           style="cursor:pointer; transform-origin: 32px 44px">
-          <path d="M25 43 Q32 49.5 39 43" stroke="#14131F" stroke-width="2.3" stroke-linecap="round" fill="none"/>
+        <!-- Boca (clic = Axi habla en voz alta) -->
+        <g id="organ-mouth" class="clk" @click="speak()">
+          <path d="M26 43 Q32 48 38 43" stroke="#14131F" stroke-width="1" stroke-linecap="round" fill="none"/>
+        </g>
+
+        <!-- Corazón = axi-heartbeat REAL. Late solo si el servicio está vivo; si
+             muere, se detiene y se grisea (sincronizado con el latido verdadero). -->
+        <g id="organ-heart" class="heart"
+           :class="($store.snap.services['axi-heartbeat'] === 'active') ? '' : 'stopped'"
+           @click="open = open === 'heart' ? null : 'heart'">
+          <circle cx="29.4" cy="58" r="2.9" fill="#FF4D88"/>
+          <circle cx="34.6" cy="58" r="2.9" fill="#FF4D88"/>
+          <path d="M26.7 59.2 Q32 69 37.3 59.2" fill="#FF4D88"/>
         </g>
       </svg>
 
-      <!-- ── Organ popovers ──────────────────────────────────────────── -->
-
-      <!-- Heart popover -->
-      <div id="popover-heart" x-show="open === 'heart'" @click.outside="open = null"
-           @keydown.escape.window="open = null"
-           class="panel2 p-3 text-sm absolute z-50 mt-2"
-           style="min-width:180px; display:none">
-        <div class="font-semibold mb-1" style="color:var(--pink)">❤ Corazón</div>
-        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['axi-heartbeat']"></span></div>
+      <!-- Popovers -->
+      <div id="popover-heart" x-show="open === 'heart'"
+           class="panel2 p-3 text-sm absolute z-50" style="min-width:200px; display:none; top:1rem; right:1rem">
+        <div class="font-semibold mb-1" style="color:var(--pink)">❤ Corazón (axi-heartbeat)</div>
+        <div class="muted text-xs">Late en sincronía con el supervisor real.</div>
+        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['axi-heartbeat'] || '—'"></span></div>
       </div>
-
-      <!-- Brain popover -->
-      <div id="popover-brain" x-show="open === 'brain'" @click.outside="open = null"
-           @keydown.escape.window="open = null"
-           class="panel2 p-3 text-sm absolute z-50 mt-2"
-           style="min-width:220px; display:none">
-        <div class="font-semibold mb-1" style="color:var(--teal)">🧠 Cerebro (LLM)</div>
-        <div class="muted text-xs">Modelo: <span x-text="$store.snap.models &amp;&amp; $store.snap.models.mode || '—'"></span></div>
-        <div class="muted text-xs">VRAM: <span x-text="$store.snap.vram &amp;&amp; ($store.snap.vram.used_mb / 1024).toFixed(1) + ' GB' || '—'"></span> usada</div>
+      <div id="popover-ears" x-show="open === 'ears'"
+           class="panel2 p-3 text-sm absolute z-50" style="min-width:200px; display:none; top:1rem; right:1rem">
+        <div class="font-semibold mb-1" style="color:var(--pink)">👂 Oídos (axi-whisper)</div>
+        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['axi-whisper'] || '—'"></span></div>
       </div>
-
-      <!-- Ears popover -->
-      <div id="popover-ears" x-show="open === 'ears'" @click.outside="open = null"
-           @keydown.escape.window="open = null"
-           class="panel2 p-3 text-sm absolute z-50 mt-2"
-           style="min-width:180px; display:none">
-        <div class="font-semibold mb-1" style="color:var(--pink)">👂 Oídos (Whisper)</div>
-        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['axi-whisper']"></span></div>
-      </div>
-
-      <!-- Hands popover -->
-      <div id="popover-hands" x-show="open === 'hands'" @click.outside="open = null"
-           @keydown.escape.window="open = null"
-           class="panel2 p-3 text-sm absolute z-50 mt-2"
-           style="min-width:180px; display:none">
+      <div id="popover-hands" x-show="open === 'hands'"
+           class="panel2 p-3 text-sm absolute z-50" style="min-width:200px; display:none; top:1rem; right:1rem">
         <div class="font-semibold mb-1" style="color:var(--pink)">🤚 Manos (ydotoold)</div>
-        <div class="muted text-xs">Cómo Axi actúa: inyección de teclas</div>
-        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['ydotoold']"></span></div>
+        <div class="muted text-xs">Cómo Axi actúa: inyección de teclas.</div>
+        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['ydotoold'] || '—'"></span></div>
       </div>
-
-      <!-- Mouth popover -->
-      <div id="popover-mouth" x-show="open === 'mouth'" @click.outside="open = null"
-           @keydown.escape.window="open = null"
-           class="panel2 p-3 text-sm absolute z-50 mt-2"
-           style="min-width:180px; display:none">
-        <div class="font-semibold mb-1" style="color:var(--pink)">💬 Boca (voz)</div>
-        <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['axi-voice']"></span></div>
+      <div id="popover-mouth" x-show="open === 'mouth'"
+           class="panel2 p-3 text-sm absolute z-50" style="min-width:220px; display:none; top:1rem; right:1rem">
+        <div class="font-semibold mb-1" style="color:var(--pink)">💬 Axi dice</div>
+        <div x-show="speaking" class="muted text-xs">Hablando… 🔊</div>
+        <div x-text="speakText" class="text-xs mt-1"></div>
       </div>
-
-      <!-- Eye capture popover (shared for both eyes) -->
       <div id="popover-eye" x-show="open === 'eye-screen' || open === 'eye-webcam'"
-           @click.outside="open = null" @keydown.escape.window="open = null"
-           class="panel2 p-3 text-sm absolute z-50 mt-2"
-           style="min-width:240px; display:none">
+           class="panel2 p-3 text-sm absolute z-50" style="min-width:240px; display:none; top:1rem; right:1rem">
         <div class="font-semibold mb-2" style="color:var(--teal)"
              x-text="open === 'eye-webcam' ? '📷 Lo que Axi ve (cámara)' : '🖥 Lo que Axi ve (pantalla)'"></div>
-        <div x-show="eyeLoading" class="muted text-xs">Capturando...</div>
-        <img x-show="eyeImg" :src="'data:image/png;base64,' + eyeImg"
-             alt="Lo que Axi ve ahora" style="max-width:220px; border-radius:0.5rem; margin-top:0.5rem"/>
-        <div x-show="eyeImg" class="muted text-xs mt-1">Lo que Axi ve ahora</div>
+        <div x-show="eyeLoading" class="muted text-xs">Capturando…</div>
+        <img x-show="eyeImg" :src="'data:image/png;base64,' + eyeImg" alt="Lo que Axi ve ahora"
+             style="max-width:220px; border-radius:0.5rem; margin-top:0.25rem"/>
         <div x-show="eyeError" x-text="eyeError" class="text-xs" style="color:var(--amber)"></div>
+      </div>
+    </section>
+
+    <!-- ─── Axi SVG builder (OCULTO — para ajustes futuros del símbolo) ─── -->
+    <section class="panel p-4" x-data="axiBuilder()" style="display:none">
+      <div class="text-sm muted mb-3">🧪 Axi — constructor del símbolo (referencia · preview · editor)</div>
+      <div class="flex flex-wrap gap-3" style="align-items:stretch">
+
+        <!-- 1) Referencia -->
+        <div class="flex-1" style="min-width:220px;background:#fff;border-radius:10px;display:flex;align-items:center;justify-content:center;padding:10px;min-height:320px">
+          <img src="/static/ref-axolotl.png" alt="Referencia" style="max-width:100%;max-height:320px"/>
+        </div>
+
+        <!-- 2) Preview del SVG en vivo (vacío hasta que escribamos) -->
+        <div class="flex-1" style="min-width:220px;background:#ffffff;border-radius:10px;display:flex;align-items:center;justify-content:center;padding:10px;min-height:320px;position:relative">
+          <div x-ref="preview" style="width:260px;height:320px;display:flex;align-items:center;justify-content:center"></div>
+          <div x-show="!code.trim()" class="text-xs" style="position:absolute;color:#999">preview del SVG…</div>
+        </div>
+
+        <!-- 3) Editor en vivo -->
+        <div class="flex-1" style="min-width:280px;display:flex;flex-direction:column;gap:6px">
+          <textarea x-model="code" @input="render()" spellcheck="false"
+                    placeholder="Pegá o escribí el SVG acá — se renderiza en vivo →"
+                    style="flex:1;min-height:320px;background:#0b0e13;color:#cfe;border:1px solid #243;border-radius:8px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.45;padding:10px;resize:vertical"></textarea>
+          <div class="text-xs" style="color:var(--amber)" x-text="err"></div>
+        </div>
+
       </div>
     </section>
 
@@ -531,6 +476,94 @@ function fmtBytes(b) {
 }
 
 /* ── Axi avatar widget — organ click + eye live capture ───────────────── */
+function axiBuilder(){return{
+  code:`<svg viewBox="0 0 64 80" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    @keyframes blink { 0%,92%,100%{transform:scaleY(1)} 96%{transform:scaleY(0.1)} }
+    @keyframes gillFloat { 0%,100%{transform:rotate(-2deg)} 50%{transform:rotate(2deg)} }
+    @keyframes heartbeat { 0%,18%,30%,100%{transform:scale(1)} 9%{transform:scale(1.18)} 24%{transform:scale(1.12)} }
+    @keyframes tailWag { 0%,100%{transform:rotate(-3deg)} 50%{transform:rotate(7deg)} }
+    .eye   { animation: blink 5.5s ease-in-out infinite; }
+    .ears  { animation: gillFloat 4s ease-in-out infinite; transform-origin: 32px 40px; }
+    .heart { animation: heartbeat 2s ease-in-out infinite; transform-origin: 32px 58px; }
+    .tail  { animation: tailWag 4.5s ease-in-out infinite; transform-origin: 41px 59px; }
+  </style>
+
+  <!-- 6 orejas / branquias (detrás de la cara, se mecen juntas) -->
+  <defs>
+    <g id="axi-gill">
+      <ellipse cx="0" cy="-8.5" rx="3.8" ry="10.6" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+      <path d="M0 -16.2 Q-3.2 -12 -2.6 -7.2 Q0 -8.6 2.6 -7.2 Q3.2 -12 0 -16.2 Z" fill="#00D4AA" stroke="#241019" stroke-width="0.42" stroke-linejoin="round"/>
+    </g>
+  </defs>
+  <g class="ears">
+    <use href="#axi-gill" transform="translate(23,32) rotate(-56) scale(0.94)"/>
+    <use href="#axi-gill" transform="translate(20,37) rotate(-79) scale(0.95)"/>
+    <use href="#axi-gill" transform="translate(22,43) rotate(-95) scale(0.9)"/>
+    <use href="#axi-gill" transform="translate(41,32) rotate(56) scale(0.94)"/>
+    <use href="#axi-gill" transform="translate(44,37) rotate(79) scale(0.95)"/>
+    <use href="#axi-gill" transform="translate(42,43) rotate(95) scale(0.9)"/>
+  </g>
+
+  <!-- Cola (se menea) -->
+  <g class="tail">
+    <path d="M40 57 Q52 54 57 63 Q52 70 45 65 Q41 62 40 57 Z" fill="#fe8faf" stroke="#241019" stroke-width="0.9" stroke-linejoin="round"/>
+    <path d="M44 58 Q50 58 55 63" stroke="#241019" stroke-width="0.45" fill="none" stroke-linecap="round" opacity="0.5"/>
+    <path d="M44 62 Q49 64 55 63" stroke="#241019" stroke-width="0.45" fill="none" stroke-linecap="round" opacity="0.4"/>
+  </g>
+
+  <!-- Manos (detrás del cuerpo, asoman a los costados) -->
+  <ellipse cx="21" cy="53" rx="3" ry="4.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9" transform="rotate(32 22 53)"/>
+  <ellipse cx="43" cy="53" rx="3" ry="4.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9" transform="rotate(-32 42 53)"/>
+
+  <!-- Pies (redonditos) -->
+  <ellipse cx="25.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+  <ellipse cx="38.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+
+  <!-- Cuerpo (más boludito) -->
+  <ellipse cx="32" cy="57" rx="12.5" ry="12" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+  <!-- Pancita -->
+  <ellipse cx="32" cy="59" rx="7.6" ry="7.8" fill="#FFC2D6" opacity="0.7"/>
+
+  <!-- Cara — óvalo con contorno negro -->
+  <ellipse cx="32" cy="38" rx="15.5" ry="13.5" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+
+  <!-- Chapitas (blush) -->
+  <circle cx="21.5" cy="42" r="2.2" fill="#FF4D88" opacity="0.5"/>
+  <circle cx="42.5" cy="42" r="2.2" fill="#FF4D88" opacity="0.5"/>
+
+  <!-- Ojos (parpadean) -->
+  <g class="eye" style="transform-origin:26px 38px">
+    <circle cx="26" cy="38" r="2.6" fill="#14131F"/>
+    <circle cx="26.9" cy="37.2" r="0.9" fill="#FFFFFF"/>
+  </g>
+  <g class="eye" style="transform-origin:38px 38px">
+    <circle cx="38" cy="38" r="2.6" fill="#14131F"/>
+    <circle cx="38.9" cy="37.2" r="0.9" fill="#FFFFFF"/>
+  </g>
+
+  <!-- Boca — sonrisa -->
+  <path d="M26 43 Q32 48 38 43" stroke="#14131F" stroke-width="1" stroke-linecap="round" fill="none"/>
+
+  <!-- Corazón (late) -->
+  <g class="heart">
+    <circle cx="29.4" cy="58" r="2.9" fill="#FF4D88"/>
+    <circle cx="34.6" cy="58" r="2.9" fill="#FF4D88"/>
+    <path d="M26.7 59.2 Q32 69 37.3 59.2" fill="#FF4D88"/>
+  </g>
+</svg>`,
+  err:"",
+  init(){ this.render(); },
+  render(){
+    try{
+      this.$refs.preview.innerHTML = this.code;
+      const s = this.$refs.preview.querySelector('svg');
+      if(s){ s.removeAttribute('width'); s.removeAttribute('height'); s.style.width='240px'; s.style.height='300px'; }
+      this.err='';
+    }catch(e){ this.err = String(e.message||e); }
+  }
+};}
+
 function avatarWidget() {
   return {
     open: null,
@@ -584,6 +617,32 @@ function avatarWidget() {
       } finally {
         this.eyeLoading = false;
       }
+    },
+
+    /* Mouth click — Axi speaks a friendly phrase OUT LOUD (Piper TTS) and
+       shows what it's saying. A real action, like the eyes capturing. */
+    speaking: false,
+    speakText: null,
+    async speak() {
+      const phrases = [
+        '¡Hola! Soy Axi, tu axolote de LifeOS.',
+        'Aquí estoy, cuidando tu LifeOS.',
+        'Mientras mi corazón late, sigo vivo.',
+        '¿En qué te puedo ayudar hoy?',
+        'Soy Axi. Me regenero, como un ajolote.',
+      ];
+      const text = phrases[Math.floor(Math.random() * phrases.length)];
+      this.speakText = text;
+      this.open = 'mouth';
+      this.speaking = true;
+      try {
+        await fetch('/api/chat/say', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+      } catch (e) { /* offline — silent */ }
+      finally { this.speaking = false; }
     },
   };
 }
