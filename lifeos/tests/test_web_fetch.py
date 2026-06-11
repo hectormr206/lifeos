@@ -91,6 +91,32 @@ def test_read_non_html_empty_extraction(monkeypatch):
     assert result.text == ""
 
 
+def test_read_sends_browser_user_agent(monkeypatch):
+    """read() must send a real browser User-Agent.
+
+    Many sites (Wikipedia, python.org, news outlets) serve a block/consent
+    page or 403 to the default ``Python-urllib/x.y`` agent, leaving
+    trafilatura nothing to extract. Caught only by real end-to-end fetching;
+    the mocked transport never exercised request headers before.
+    """
+    import lifeos.web.fetch as fetch_mod
+    import trafilatura
+
+    monkeypatch.setattr(trafilatura, "extract", lambda html, **kw: "text")  # noqa: ARG005
+
+    captured: dict[str, str | None] = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["ua"] = req.get_header("User-agent")
+        return _FakeResp(FAKE_HTML)
+
+    fetch_mod.read("http://example.com", urlopen=fake_urlopen)
+
+    ua = captured["ua"]
+    assert ua, "read() sent no User-Agent header"
+    assert "python-urllib" not in ua.lower(), "must not use the default urllib UA"
+
+
 def test_read_size_cap(monkeypatch):
     """H2: resp.read() must be called with max_bytes as its argument (bounded call).
 
