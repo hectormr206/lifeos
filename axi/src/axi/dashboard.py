@@ -790,6 +790,11 @@ def snapshot():
             "active": bool(config.get("autonomous_enabled", False))
             and not meeting_status.startswith("recording:"),
         },
+        # capability toggles surfaced so the avatar can show on/off per sense
+        "capabilities": {
+            "vision_enabled": bool(config.get("vision_enabled", True)),
+            "tts_enabled": bool(config.get("tts_enabled", True)),
+        },
         "memory": {
             "conversation_turns": store.conversation_count(),
             "facts_count": _fact_count(),
@@ -836,6 +841,33 @@ def cmd(name: str):
         raise HTTPException(400, f"unknown command: {name}")
     response = _daemon_cmd(name)
     return {"ok": True, "response": response}
+
+
+# Senses the user can start/stop from the avatar. Deliberately EXCLUDES
+# axi-heartbeat (the self-healing heart) and the store (memory) — those are
+# vital and must not be toggled off from a casual click.
+_TOGGLEABLE_SERVICES = {"llama-server", "axi-whisper", "ydotoold"}
+
+
+@app.post("/api/service/{action}/{name}")
+def service_toggle(action: str, name: str):
+    """Start/stop a sense's systemd user service (brain/ears/hands). Whitelisted.
+    A manually-stopped service goes 'inactive' (not 'failed'), so the heartbeat
+    supervisor will NOT auto-revive it — the user's choice sticks."""
+    if action not in ("start", "stop"):
+        raise HTTPException(400, "action must be 'start' or 'stop'")
+    if name not in _TOGGLEABLE_SERVICES:
+        raise HTTPException(403, f"service not toggleable from the avatar: {name}")
+    import subprocess  # noqa: PLC0415
+
+    try:
+        subprocess.run(
+            ["systemctl", "--user", action, f"{name}.service"],
+            check=True, timeout=15, capture_output=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, f"systemctl {action} {name} failed: {e}")
+    return {"ok": True, "service": name, "action": action}
 
 
 # ────────── meetings ──────────
