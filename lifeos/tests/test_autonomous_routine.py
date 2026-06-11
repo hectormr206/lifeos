@@ -323,3 +323,142 @@ def test_trim_routine_records_missing_file_noop(tmp_path: Path) -> None:
 
     kept = trim_routine_records(tmp_path / "no_file.jsonl", days=90, now_ts=_NOW_TS)
     assert kept == 0
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — activity_descriptor allowlist sanitization at write boundary
+# ---------------------------------------------------------------------------
+
+_COARSE_ALLOWED = {
+    "screen+present",
+    "screen+unknown",
+    "screen+away",
+    "no-screen+unknown",
+    "no-screen+present",
+    "no-screen+away",
+}
+
+
+def test_write_routine_record_pii_descriptor_replaced_with_other(tmp_path: Path) -> None:
+    """Free-text activity_descriptor is replaced with 'other'; PII string absent from JSONL."""
+    from lifeos.autonomous.routine import write_routine_record
+
+    pii_value = "coding on HealthRecords.py weight 82kg"
+    p = tmp_path / "routine.jsonl"
+    write_routine_record(
+        p,
+        ts=1.0,
+        weekday=2,
+        hour=10,
+        presence="present",
+        activity_descriptor=pii_value,
+        outcome="pushed",
+    )
+
+    raw = p.read_text()
+    assert pii_value not in raw, "PII string must NOT appear in the JSONL"
+    rec = json.loads(raw.splitlines()[0])
+    assert rec["activity_descriptor"] == "other", (
+        f"Expected 'other', got {rec['activity_descriptor']!r}"
+    )
+
+
+def test_write_routine_record_coarse_tokens_pass_through_unchanged(tmp_path: Path) -> None:
+    """All known coarse tokens pass through write_routine_record unchanged."""
+    from lifeos.autonomous.routine import write_routine_record
+
+    p = tmp_path / "routine.jsonl"
+    for token in sorted(_COARSE_ALLOWED):
+        write_routine_record(
+            p,
+            ts=1.0,
+            weekday=0,
+            hour=8,
+            presence="unknown",
+            activity_descriptor=token,
+            outcome="esperar",
+        )
+
+    lines = p.read_text().splitlines()
+    assert len(lines) == len(_COARSE_ALLOWED)
+    written_tokens = {json.loads(line)["activity_descriptor"] for line in lines}
+    assert written_tokens == _COARSE_ALLOWED, (
+        f"Expected {_COARSE_ALLOWED}, got {written_tokens}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 — cold-start prompt byte-identity
+# ---------------------------------------------------------------------------
+
+
+def test_cold_start_prompt_byte_identity() -> None:
+    """_build_prompt with routine_hint=None is BYTE-FOR-BYTE identical to call without the param."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from lifeos.autonomous.cron import _build_prompt, _NO_PERCEPTION
+
+    MX = ZoneInfo("America/Mexico_City")
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=MX)
+    digest = "Héctor corrió 5 km hoy."
+    edge = "Sin correlaciones."
+
+    prompt_explicit_none = _build_prompt(now, digest, edge, _NO_PERCEPTION, routine_hint=None)
+    prompt_no_kwarg = _build_prompt(now, digest, edge, _NO_PERCEPTION)
+    assert prompt_explicit_none == prompt_no_kwarg, (
+        "Prompt with routine_hint=None must be byte-identical to call without routine_hint"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fix 3 — trim must DROP corrupt lines, not keep them
+# ---------------------------------------------------------------------------
+
+
+def test_trim_drops_corrupt_lines(tmp_path: Path) -> None:
+    """Corrupt line + recent valid lines → after trim, corrupt line gone, valid lines kept."""
+    from lifeos.autonomous.routine import trim_routine_records
+
+    p = tmp_path / "routine.jsonl"
+    now_ts = _NOW_TS
+    recent_ts = now_ts - 5 * _DAY
+    corrupt_line = "this-is-not-json\n"
+    valid_rec = {"ts": recent_ts, "weekday": 1, "hour": 9, "presence": "present", "activity_descriptor": "screen+present", "outcome": "pushed"}
+    p.write_text(corrupt_line + json.dumps(valid_rec) + "\n")
+
+    kept = trim_routine_records(p, days=90, now_ts=now_ts)
+    remaining = p.read_text().splitlines()
+
+    assert "this-is-not-json" not in p.read_text(), "Corrupt line must be dropped"
+    # The 1 valid line is kept
+    assert len(remaining) == 1
+    assert json.loads(remaining[0])["ts"] == recent_ts
+    assert kept == 1
+
+
+# ---------------------------------------------------------------------------
+# Fix 4 — trim must not leave orphaned .tmp on os.replace failure
+# ---------------------------------------------------------------------------
+
+
+def test_trim_cleans_tmp_file_on_replace_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If os.replace raises, no .tmp file is left in the directory."""
+    import os as _os
+    from lifeos.autonomous.routine import trim_routine_records
+
+    p = tmp_path / "routine.jsonl"
+    now_ts = _NOW_TS
+    _write_line(p, ts=now_ts - 5 * _DAY, weekday=0, hour=8, presence="present",
+                activity_descriptor="screen+present", outcome="pushed")
+
+    def _failing_replace(src, dst):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(_os, "replace", _failing_replace)
+    # Must not raise
+    kept = trim_routine_records(p, days=90, now_ts=now_ts)
+    assert kept == 0  # returns 0 on failure
+
+    # No .tmp files left in tmp_path
+    tmp_files = list(tmp_path.glob("*.tmp"))
+    assert tmp_files == [], f"Orphaned .tmp files found: {tmp_files}"
