@@ -149,6 +149,7 @@ def _dispatch_transcription(
     model: WhisperModel,
     pipeline: BatchedInferencePipeline,
     long_audio_samples: int = LONG_AUDIO_SAMPLES,
+    vad: bool = True,
 ):
     """Route transcription to the appropriate backend based on audio length.
 
@@ -162,7 +163,7 @@ def _dispatch_transcription(
         language = params.get("language")
         kwargs: dict = dict(
             batch_size=8,
-            vad_filter=True,
+            vad_filter=vad,
             beam_size=3,
             condition_on_previous_text=True,
         )
@@ -208,6 +209,15 @@ def _handle(conn: socket.socket, model: WhisperModel, pipeline: BatchedInference
                     frac = _progress_fraction(seg.end, info.duration)
                     _write_progress(frac, " ".join(parts)[-200:])
                 text = " ".join(parts).strip()
+                # VAD can over-aggressively strip an entire long dictation (quiet
+                # or fast speech) and leave empty text. Recover by retrying the
+                # same audio once WITHOUT VAD before giving up.
+                if not text:
+                    log.info("long-audio VAD removed all speech; retrying without VAD")
+                    segments, info = _dispatch_transcription(
+                        audio, params, model=model, pipeline=pipeline, vad=False
+                    )
+                    text = " ".join(s.text.strip() for s in segments).strip()
             else:
                 # Short path — eager join, no progress file written.
                 text = " ".join(s.text.strip() for s in segments).strip()
