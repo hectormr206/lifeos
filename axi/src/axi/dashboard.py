@@ -99,6 +99,9 @@ from lifeos.posture import store as posture_store
 # P7 — Autonomous reflection tick (proactive thought, disabled by default).
 from lifeos.autonomous import cron as autonomous_cron
 from lifeos.insights import correlate as insights_correlate
+# P8 — Web research (SearXNG + trafilatura; local-only, no cloud APIs).
+import lifeos.web as web_research
+from lifeos.web.port import TOP_N, MAX_SNIPPET_CHARS, MAX_PAGE_CHARS
 # Nano-agents PRD — fast-path instrumentation. Records which stage handled
 # each chat call + latency, so we can decide empirically whether nano-agents
 # are worth building. Stores metadata only (no text content).
@@ -336,6 +339,23 @@ async def lifespan(_app: FastAPI):
         )
     except Exception:  # noqa: BLE001
         log.exception("lifeos autonomous cron failed to start")
+
+    # P8 — Web research: wire SearXNGAdapter + fetch.read into the DI module.
+    # Mirrors the autonomous_cron.configure() pattern above. axi owns config +
+    # wiring; lifeos/web stays axi-free (pure functions / hexagonal port).
+    try:
+        from lifeos.web.searxng import SearXNGAdapter  # noqa: PLC0415
+        import lifeos.web.fetch as _web_fetch         # noqa: PLC0415
+        _searxng_base = str(config.get("searxng_url", web_research.SEARXNG_URL))
+        _searxng = SearXNGAdapter(base_url=_searxng_base)
+        web_research.configure(
+            search_fn=_searxng.search,
+            read_fn=_web_fetch.read,
+            enabled_fn=lambda: bool(config.get("web_research_enabled", True)),
+        )
+        log.info("web research configured: base_url=%s", _searxng_base)
+    except Exception:  # noqa: BLE001
+        log.exception("web research failed to configure — feature disabled")
 
     yield
 
@@ -2350,6 +2370,129 @@ async def api_chat_ask(request: Request):
             )
         except Exception:  # noqa: BLE001
             log.warning("fastpath metric record failed", exc_info=True)
+
+    # ─── Web research fast-path (/busca, /investiga) ────────────────────────
+    # Must run BEFORE any domain parsers — explicit command tokens take
+    # priority over regex classifiers that might misread "busca X" as finance.
+    # Degrades gracefully: SearXNG down → friendly Spanish message (HTTP 200).
+    _WEB_CMD_RE = re.compile(
+        r"^(/busca|/investiga)\s*(.*)", re.IGNORECASE | re.DOTALL
+    )
+    _web_cmd_match = _WEB_CMD_RE.match(text)
+    if _web_cmd_match and not image_b64:
+        _web_query = _web_cmd_match.group(2).strip()
+        if not _web_query:
+            # Empty query — return a friendly prompt instead of crashing.
+            _empty_answer = (
+                "Decime qué querés que busque. "
+                "Ejemplo: /busca python async o /investiga historia del café."
+            )
+            latency_ms = round((time.monotonic() - start) * 1000)
+            try:
+                mem.add(text, _empty_answer, has_screenshot=False)
+            except Exception:  # noqa: BLE001
+                pass
+            stage_holder[0] = "web_research_empty_query"
+            _record_metric()
+            return {"answer": _empty_answer, "latency_ms": latency_ms,
+                    "spoke": False, "audio_b64": None}
+
+        if web_research.is_enabled():
+            try:
+                _search_fn = web_research.get_search_fn()
+                _read_fn = web_research.get_read_fn()
+                _results = _search_fn(_web_query)[:TOP_N] if _search_fn else []
+
+                if not _results:
+                    # SearXNG down or no hits → graceful degraded message.
+                    _degraded = (
+                        "No pude buscar eso ahora mismo — el servicio de búsqueda "
+                        "no está disponible en este momento. Intentalo de nuevo en unos minutos."
+                    )
+                    latency_ms = round((time.monotonic() - start) * 1000)
+                    try:
+                        mem.add(text, _degraded, has_screenshot=False)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    stage_holder[0] = "web_research_degraded"
+                    _record_metric()
+                    return {"answer": _degraded, "latency_ms": latency_ms,
+                            "spoke": False, "audio_b64": None}
+
+                # Build research context block from search results.
+                _research_lines: list[str] = [
+                    f"Resultados de búsqueda para: {_web_query}\n"
+                ]
+                for _i, _r in enumerate(_results, 1):
+                    _snippet = _r.snippet[:MAX_SNIPPET_CHARS]
+                    _research_lines.append(
+                        f"[{_i}] {_r.title}\n"
+                        f"    URL: {_r.url}\n"
+                        f"    Resumen: {_snippet}"
+                    )
+
+                # Attempt to read full text of the top result (best-effort).
+                _page_text = ""
+                if _read_fn and _results:
+                    try:
+                        _page = _read_fn(_results[0].url)
+                        if _page.ok and _page.text:
+                            _page_text = _page.text[:MAX_PAGE_CHARS]
+                    except Exception:  # noqa: BLE001
+                        pass  # page read failure is non-fatal; snippets suffice
+
+                if _page_text:
+                    _research_lines.append(
+                        f"\nContenido completo de [{_results[0].url}]:\n{_page_text}"
+                    )
+
+                _source_urls = [_r.url for _r in _results]
+                _fuentes_block = "\n\nFuentes:\n" + "\n".join(
+                    f"- {_u}" for _u in _source_urls
+                )
+
+                # Enrich the brain prompt with research context.
+                _research_block = "\n".join(_research_lines)
+                _enriched_prompt = (
+                    f"{_research_block}\n\n"
+                    f"Usando los resultados de búsqueda anteriores, "
+                    f"responde la siguiente consulta de forma precisa y cita las URLs fuente:\n"
+                    f"{_web_query}"
+                )
+
+                # Call brain with enriched prompt (same system / history as normal).
+                brain_system = brain.SYSTEM_PROMPT
+                _raw_answer = brain.ask(
+                    _enriched_prompt,
+                    system=brain_system,
+                    history=history,
+                    image_b64=None,
+                )
+                # Deterministically append source citations so they never depend
+                # on model behavior.
+                answer = _raw_answer + _fuentes_block
+
+                # Guardrail: still applies on research answers.
+                if _looks_like_persistence_claim(answer):
+                    log.warning(
+                        "brain hallucinated persistence claim on research text=%r — overriding",
+                        text[:120],
+                    )
+                    answer = _suggested_format_message(text)
+
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception:  # noqa: BLE001
+                    pass
+                stage_holder[0] = "web_research"
+                _record_metric()
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "research": {"urls": _source_urls}}
+            except Exception:  # noqa: BLE001
+                log.exception("web research branch failed — falling through to brain")
+                # Fall through to normal brain path on unexpected errors.
 
     # LifeOS reminder fast-path: if the user said "recordame X mañana a las 9",
     # we handle it deterministically without bothering the brain. Saves ~3s
