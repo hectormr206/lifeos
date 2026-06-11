@@ -62,16 +62,6 @@ def _reset_web_research(monkeypatch):
 
 
 @pytest.fixture
-def client(monkeypatch):
-    from axi import dashboard
-    monkeypatch.setattr(dashboard, "_chat_memory", None)
-    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
-    # Disable nano extractor so tests don't hit real model ports and run fast
-    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
-    return TestClient(dashboard.app)
-
-
-@pytest.fixture
 def research_client(monkeypatch):
     """Client with web research fully configured (search + read succeed)."""
     from axi import brain, dashboard
@@ -130,7 +120,7 @@ def test_busca_triggers_research(research_client, monkeypatch):
     assert "answer" in body
 
     # The prompt passed to brain.ask must contain search context
-    assert "captured" in captured or "prompt" in captured, "brain.ask was never called"
+    assert "prompt" in captured, "brain.ask was never called"
     enriched = captured.get("prompt", "")
     assert "Python async guide" in enriched or "asyncio" in enriched, (
         f"Enriched prompt missing search content: {enriched[:300]}"
@@ -182,7 +172,7 @@ def test_busca_case_insensitive(research_client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_empty_query_returns_friendly_message(client, monkeypatch):
+def test_empty_query_returns_friendly_message(monkeypatch):
     """/busca with whitespace-only query → graceful message, search not called."""
     import lifeos.web as web_research
     from axi import brain, dashboard
@@ -223,7 +213,7 @@ def test_empty_query_returns_friendly_message(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_searxng_down_degraded_message(client, monkeypatch):
+def test_searxng_down_degraded_message(monkeypatch):
     """search_fn returns [] → degraded message, HTTP 200, no 500."""
     import lifeos.web as web_research
     from axi import brain, dashboard
@@ -258,7 +248,7 @@ def test_searxng_down_degraded_message(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_read_failure_falls_back_to_snippets(client, monkeypatch):
+def test_read_failure_falls_back_to_snippets(monkeypatch):
     """read_fn returns ok=False → still enriches from snippets, no crash."""
     import lifeos.web as web_research
     from axi import brain, dashboard
@@ -294,12 +284,21 @@ def test_read_failure_falls_back_to_snippets(client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Task 5.1e — guardrail still fires on research path
+# Task 5.1e — research path is NOT subject to the persistence guardrail
+# (renamed from test_guardrail_fires_on_research_answer — behavior inverted)
 # ---------------------------------------------------------------------------
 
 
-def test_guardrail_fires_on_research_answer(client, monkeypatch):
-    """If brain returns a persistence claim after research, guardrail still fires."""
+def test_research_answers_not_subject_to_persistence_guardrail(monkeypatch):
+    """Research answer containing a persistence verb must be returned unchanged.
+
+    The persistence guardrail exists to stop the brain from lying about saving
+    data to Axi's memory on the data-entry path. On the research path, nothing
+    is persisted by design — the answer is read-only research. A legitimate
+    answer about databases, journalism, or records that incidentally contains
+    'registré'/'guardé'/'anoté' must NOT be clobbered with the generic
+    'no se guardó' message.
+    """
     import lifeos.web as web_research
     from axi import brain, dashboard
 
@@ -312,17 +311,114 @@ def test_guardrail_fires_on_research_answer(client, monkeypatch):
     monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
     monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
 
-    # Brain claims to have persisted something — guardrail must intercept this
-    monkeypatch.setattr(brain, "ask", lambda p, **kw: "Anotado y registré tu búsqueda en la base de datos.")
+    # Brain returns a research answer that incidentally contains persistence verbs
+    # (e.g., "anotado en el sistema" describes a logging system — legitimate research
+    # content that happens to match the persistence-claim regex).
+    # Under the current (buggy) code this gets clobbered. After the fix it must not.
+    persistence_flavored_answer = "El sistema de logging tiene todo anotado en el sistema de archivos."
+    monkeypatch.setattr(brain, "ask", lambda p, **kw: persistence_flavored_answer)
 
     tc = TestClient(dashboard.app)
     r = tc.post("/api/chat/ask", json={"text": "/busca python"})
     assert r.status_code == 200
     body = r.json()
     answer = body.get("answer", "")
-    # The guardrail must have replaced the persistence-claim answer
-    assert "registré" not in answer or "Anotado" not in answer, (
-        f"Guardrail did NOT fire on research path — answer was: {answer}"
+    # The answer must contain the brain's response (with Fuentes appended),
+    # NOT be replaced by the suggested-format generic message.
+    assert "anotado" in answer, (
+        f"Research answer was clobbered by guardrail — got: {answer!r}"
+    )
+    assert "Fuentes" in answer, (
+        f"Expected Fuentes block appended to research answer, got: {answer!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 5.1g — /buscalo / /investigalo do NOT hijack the research command
+# ---------------------------------------------------------------------------
+
+
+def test_buscalo_is_not_a_research_command(monkeypatch):
+    """/buscalo en internet must NOT trigger the research branch.
+
+    The regex '^(/busca|/investiga)\\s*(.*)' (current buggy form) matches
+    '/buscalo en internet' → query='lo en internet'. The fixed regex requires
+    whitespace or end-of-string after the command token, so '/buscalo' falls
+    through to the normal brain path.
+    """
+    import lifeos.web as web_research
+    from axi import brain, dashboard
+
+    search_called = []
+
+    web_research.configure(
+        search_fn=lambda q, **kw: search_called.append(q) or [],
+        read_fn=lambda url: _PAGE_FAIL,
+        enabled_fn=lambda: True,
+    )
+    monkeypatch.setattr(dashboard, "_chat_memory", None)
+    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
+    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+    monkeypatch.setattr(brain, "ask", lambda p, **kw: "respuesta normal")
+
+    tc = TestClient(dashboard.app)
+    r = tc.post("/api/chat/ask", json={"text": "/buscalo en internet"})
+    assert r.status_code == 200
+    assert search_called == [], (
+        f"search_fn was called for /buscalo — it hijacked the command: {search_called}"
+    )
+
+
+def test_investigalo_is_not_a_research_command(monkeypatch):
+    """/investigalo algo must NOT trigger the research branch."""
+    import lifeos.web as web_research
+    from axi import brain, dashboard
+
+    search_called = []
+
+    web_research.configure(
+        search_fn=lambda q, **kw: search_called.append(q) or [],
+        read_fn=lambda url: _PAGE_FAIL,
+        enabled_fn=lambda: True,
+    )
+    monkeypatch.setattr(dashboard, "_chat_memory", None)
+    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
+    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+    monkeypatch.setattr(brain, "ask", lambda p, **kw: "respuesta normal")
+
+    tc = TestClient(dashboard.app)
+    r = tc.post("/api/chat/ask", json={"text": "/investigalo algo"})
+    assert r.status_code == 200
+    assert search_called == [], (
+        f"search_fn was called for /investigalo — it hijacked the command: {search_called}"
+    )
+
+
+def test_busca_alone_returns_friendly_message(monkeypatch):
+    """/busca with no trailing text → friendly 'tell me what to search' message."""
+    import lifeos.web as web_research
+    from axi import brain, dashboard
+
+    search_called = []
+
+    web_research.configure(
+        search_fn=lambda q, **kw: search_called.append(q) or [],
+        read_fn=lambda url: _PAGE_FAIL,
+        enabled_fn=lambda: True,
+    )
+    monkeypatch.setattr(dashboard, "_chat_memory", None)
+    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
+    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+    monkeypatch.setattr(brain, "ask", lambda p, **kw: "fallback")
+
+    tc = TestClient(dashboard.app)
+    r = tc.post("/api/chat/ask", json={"text": "/busca"})
+    assert r.status_code == 200
+    body = r.json()
+    assert search_called == [], f"search_fn called with empty /busca: {search_called}"
+    answer = body.get("answer", "")
+    assert any(word in answer.lower() for word in ["busca", "qué", "que", "consulta"]), (
+        f"Expected friendly prompt for bare /busca, got: {answer}"
     )
 
 
@@ -331,7 +427,7 @@ def test_guardrail_fires_on_research_answer(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_non_research_message_unaffected(client, monkeypatch):
+def test_non_research_message_unaffected(monkeypatch):
     """A plain message does NOT trigger search — existing flow unchanged."""
     import lifeos.web as web_research
     from axi import brain, dashboard
