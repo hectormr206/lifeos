@@ -73,6 +73,7 @@ _NO_PERCEPTION = PerceptionContext()
 
 Outcome = Literal[
     "pushed",
+    "push-failed",
     "esperar",
     "nada",
     "skipped-disabled",
@@ -288,15 +289,21 @@ def run_tick(now: datetime) -> TickResult:
 
     # Act
     if verdict == "msg" and message:
+        push_ok = True
         try:
             if _push_fn is not None:
                 _push_fn("Axi", message)
         except Exception:  # noqa: BLE001
-            log.exception("autonomous: push_fn raised an exception")
-        if _spoke_write_fn is not None:
-            _spoke_write_fn(today_iso)
-        _log("pushed", ctx, message_len=len(message))
-        return TickResult("pushed", message=message)
+            push_ok = False
+            log.exception("autonomous: push_fn raised an exception — slot NOT burned")
+        if push_ok:
+            if _spoke_write_fn is not None:
+                _spoke_write_fn(today_iso)
+            _log("pushed", ctx, message_len=len(message))
+            return TickResult("pushed", message=message)
+        else:
+            _log("push-failed", ctx, message_len=len(message))
+            return TickResult("push-failed", message=message)
 
     if verdict == "nada":
         # NADA means silent for the rest of the day (Decision B: mark spoke)
@@ -382,6 +389,8 @@ def run_tick_now(*, source: str = "manual") -> TickResult:
     """Convenience wrapper: run_tick(now_fn()). Respects enabled gate."""
     if _now_fn is None:
         raise RuntimeError("autonomous cron not configured — call configure() first")
+    if _is_enabled_fn is not None and not _is_enabled_fn():
+        return TickResult("skipped-disabled", reason=f"disabled (source={source})")
     return run_tick(_now_fn())
 
 
