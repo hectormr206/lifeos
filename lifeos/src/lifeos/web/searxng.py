@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from typing import Callable
 
-from lifeos.web.port import MAX_SNIPPET_CHARS, SEARCH_TIMEOUT, TOP_N, SearchResult
+from lifeos.web.port import MAX_SEARCH_BYTES, MAX_SNIPPET_CHARS, SEARCH_TIMEOUT, TOP_N, SearchResult
 
 log = logging.getLogger("lifeos.web.searxng")
 
@@ -51,24 +51,27 @@ class SearXNGAdapter:
         req = urllib.request.Request(url)
         try:
             with self._urlopen(req, timeout=self._timeout) as resp:
-                raw = resp.read()
+                raw = resp.read(MAX_SEARCH_BYTES)
             data = json.loads(raw)
+            if not isinstance(data, dict):
+                return []
+            raw_results = data.get("results", [])
+            out: list[SearchResult] = []
+            for item in raw_results[:limit]:
+                if not isinstance(item, dict):
+                    continue
+                snippet = (item.get("content") or "")[:MAX_SNIPPET_CHARS]
+                out.append(
+                    SearchResult(
+                        title=item.get("title") or "",
+                        url=item.get("url") or "",
+                        snippet=snippet,
+                    )
+                )
+            return out
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
             log.debug("SearXNG search failed: %s", exc)
             return []
         except Exception as exc:  # noqa: BLE001
             log.warning("SearXNG search unexpected error: %s", exc)
             return []
-
-        raw_results = data.get("results", [])
-        out: list[SearchResult] = []
-        for item in raw_results[:limit]:
-            snippet = (item.get("content") or "")[:MAX_SNIPPET_CHARS]
-            out.append(
-                SearchResult(
-                    title=item.get("title") or "",
-                    url=item.get("url") or "",
-                    snippet=snippet,
-                )
-            )
-        return out

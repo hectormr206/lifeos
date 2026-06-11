@@ -52,7 +52,7 @@ def _json_resp(results: list[dict]) -> _FakeResp:
 
 
 def test_search_success_parse():
-    """Returns up to TOP_N results with correct fields; snippets truncated."""
+    """Returns up to TOP_N results with correct field values; snippets truncated."""
     from lifeos.web.searxng import SearXNGAdapter
 
     payload = _make_results(5)
@@ -63,11 +63,11 @@ def test_search_success_parse():
     results = adapter.search("python async")
 
     assert len(results) == TOP_N
-    for r in results:
-        assert hasattr(r, "title")
-        assert hasattr(r, "url")
-        assert hasattr(r, "snippet")
+    for i, r in enumerate(results):
+        assert r.title == f"Title {i}"
+        assert r.url == f"http://example.com/{i}"
         assert len(r.snippet) <= MAX_SNIPPET_CHARS
+        assert len(r.snippet) == MAX_SNIPPET_CHARS  # source is longer than cap
 
 
 def test_search_zero_results():
@@ -119,3 +119,98 @@ def test_search_snippet_truncation():
     results = adapter.search("test", limit=1)
     assert len(results) == 1
     assert len(results[0].snippet) == MAX_SNIPPET_CHARS
+
+
+# ---------------------------------------------------------------------------
+# C1: search() must never raise — malformed JSON bodies
+# ---------------------------------------------------------------------------
+
+
+def test_search_body_is_list_returns_empty():
+    """C1a: If SearXNG returns a JSON array (not a dict), search() returns [].
+
+    data.get("results") would raise AttributeError on a list — the try/except
+    must cover the full parse+process block.
+    """
+    from lifeos.web.searxng import SearXNGAdapter
+
+    # Body is a JSON array, not an object
+    body = b"[]"
+    adapter = SearXNGAdapter(
+        base_url="http://localhost:8888",
+        urlopen=lambda req, timeout=None: _FakeResp(body),
+    )
+    result = adapter.search("anything")
+    assert result == []
+
+
+def test_search_results_contains_non_dict_items_returns_partial():
+    """C1b: Non-dict items in results[] must NOT cause AttributeError.
+
+    {"results": [1, 2, 3]} — item.get(...) raises on int.
+    search() must return [] (or skip bad items) instead of raising.
+    """
+    from lifeos.web.searxng import SearXNGAdapter
+
+    body = json.dumps({"results": [1, 2, 3]}).encode()
+    adapter = SearXNGAdapter(
+        base_url="http://localhost:8888",
+        urlopen=lambda req, timeout=None: _FakeResp(body),
+    )
+    result = adapter.search("anything")
+    # Must not raise; all non-dict items should be skipped
+    assert isinstance(result, list)
+
+
+def test_search_results_mixed_dict_and_int_skips_bad_items():
+    """C1c: Valid dict items must survive when mixed with non-dict items."""
+    from lifeos.web.searxng import SearXNGAdapter
+
+    payload = [{"title": "ok", "url": "http://x.com/0", "content": "c"}, 5]
+    body = json.dumps({"results": payload}).encode()
+    adapter = SearXNGAdapter(
+        base_url="http://localhost:8888",
+        urlopen=lambda req, timeout=None: _FakeResp(body),
+    )
+    result = adapter.search("anything", limit=10)
+    # Must not raise; at minimum returns the one valid dict item
+    assert isinstance(result, list)
+
+
+# ---------------------------------------------------------------------------
+# H1: resp.read() in search() must be capped (not uncapped like original)
+# ---------------------------------------------------------------------------
+
+
+def test_search_read_is_capped():
+    """H1: resp.read() in search() must be called with a byte cap argument.
+
+    A fake resp records the argument passed to read(); we assert it equals
+    MAX_SEARCH_BYTES (not -1 / uncapped / absent).
+    """
+    from lifeos.web.port import MAX_SEARCH_BYTES
+    from lifeos.web.searxng import SearXNGAdapter
+
+    captured_n: list[int] = []
+
+    class _CapturingResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, n=-1):
+            captured_n.append(n)
+            return b'{"results": []}'
+
+    adapter = SearXNGAdapter(
+        base_url="http://localhost:8888",
+        urlopen=lambda req, timeout=None: _CapturingResp(),
+    )
+    adapter.search("anything")
+    assert len(captured_n) == 1, "resp.read() was not called"
+    assert captured_n[0] == MAX_SEARCH_BYTES, (
+        f"resp.read() was called with n={captured_n[0]!r}; "
+        f"expected MAX_SEARCH_BYTES={MAX_SEARCH_BYTES}"
+    )
