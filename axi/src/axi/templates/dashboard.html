@@ -121,7 +121,7 @@
              cabeza. Brilla y pulsa si está ACTIVADA, tenue si OFF. Clic = toggle. -->
         <g id="organ-mind"
            :class="($store.snap.autonomous && $store.snap.autonomous.enabled) ? 'mind-on' : 'mind-off'"
-           @click="toggleAutonomous()">
+           @click="open = open === 'mind' ? null : 'mind'">
           <ellipse cx="32" cy="16" rx="13" ry="9" fill="#ffffff" fill-opacity="0"/>
           <ellipse class="mind-aura" cx="32" cy="19" rx="11" ry="4.5" fill="#00D4AA" opacity="0.4" style="filter:blur(2.5px)"/>
           <circle class="mind-spark" cx="25" cy="16" r="1.1" fill="#7FF0E0"/>
@@ -142,7 +142,7 @@
         <div class="font-semibold mb-1" style="color:var(--teal)">🧠 Mente autónoma</div>
         <div class="text-xs" x-text="($store.snap.autonomous && $store.snap.autonomous.enabled) ? '✅ Activada — Axi piensa solo' : '⏸ Desactivada'"></div>
         <div class="muted text-xs" x-show="$store.snap.autonomous && $store.snap.autonomous.enabled && !$store.snap.autonomous.active">⏸ En pausa (reunión activa)</div>
-        <div class="muted text-xs mt-1">Clic en el aura 🧠 para activar / desactivar.</div>
+        <div class="muted text-xs mt-1">El aura brilla cuando Axi piensa solo. Se activa/desactiva en <a class="underline" href="/setup">/setup</a>.</div>
       </div>
       <div id="popover-ears" x-show="open === 'ears'"
            class="panel2 p-3 text-sm absolute z-50" style="min-width:200px; display:none; top:1rem; right:1rem">
