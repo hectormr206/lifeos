@@ -287,6 +287,59 @@ def test_send_to_all_budget_integration(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 # ---------------------------------------------------------------------------
+# evaluate — proactive priority (TASK-1A + TASK-1B)
+# ---------------------------------------------------------------------------
+
+def test_proactive_allowed_when_ambient_cap_full() -> None:
+    """5 ambient 'sent' rows for today → proactive evaluate still returns send."""
+    from lifeos.notif_budget import evaluate, record
+
+    for i in range(5):
+        record(title=f"T{i}", body=f"B{i}", priority="ambient", outcome="sent")
+
+    d = evaluate("Axi", "Tienes cita mañana.", priority="proactive")
+    assert d.action == "send"
+
+
+def test_proactive_suppressed_after_one_today() -> None:
+    """1 proactive 'sent' row for today → second proactive returns suppressed."""
+    from lifeos.notif_budget import evaluate, record
+
+    record(title="Axi", body="Cita médica mañana.", priority="proactive", outcome="sent")
+
+    d = evaluate("Axi", "Otro mensaje proactivo.", priority="proactive")
+    assert d.action == "suppress"
+    assert d.reason == "proactive-cap"
+
+
+def test_proactive_rows_do_not_inflate_ambient_count() -> None:
+    """1 proactive 'sent' + 4 ambient 'sent' → 5th ambient is still allowed."""
+    from lifeos.notif_budget import evaluate, record
+
+    record(title="Axi", body="Proactive msg", priority="proactive", outcome="sent")
+    for i in range(4):
+        record(title=f"T{i}", body=f"B{i}", priority="ambient", outcome="sent")
+
+    # 5th ambient slot should still be free (proactive row doesn't count toward ambient)
+    d = evaluate("T4", "B4", priority="ambient")
+    assert d.action == "send"
+
+
+def test_critical_still_bypasses_all() -> None:
+    """Critical priority always returns send regardless of proactive/ambient state."""
+    from lifeos.notif_budget import evaluate, record
+
+    # Fill proactive cap
+    record(title="Axi", body="Proactive msg", priority="proactive", outcome="sent")
+    # Fill ambient cap
+    for i in range(5):
+        record(title=f"T{i}", body=f"B{i}", priority="ambient", outcome="sent")
+
+    d = evaluate("URGENT", "Critical!", priority="critical")
+    assert d.action == "send"
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
