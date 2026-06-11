@@ -80,12 +80,27 @@
         <ellipse cx="25.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
         <ellipse cx="38.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
 
-        <!-- Cuerpo + pancita -->
+        <!-- Cuerpo -->
         <ellipse cx="32" cy="57" rx="12.5" ry="12" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
-        <ellipse cx="32" cy="59" rx="7.6" ry="7.8" fill="#FFC2D6" opacity="0.7"/>
+
+        <!-- 💾 Memoria = lo que Axi guarda adentro (la pancita-núcleo; el corazón
+             vive SOBRE ella). Anillos suaves = capas de recuerdos. Clic = ver. -->
+        <g id="organ-memory" class="clk" @click="open = open === 'memory' ? null : 'memory'">
+          <ellipse cx="32" cy="59" rx="7.6" ry="7.8" fill="#FFC2D6" opacity="0.7"/>
+          <ellipse cx="32" cy="59" rx="5.4" ry="5.6" fill="none" stroke="#FF6B9D" stroke-width="0.4" opacity="0.3"/>
+          <ellipse cx="32" cy="59" rx="3.3" ry="3.5" fill="none" stroke="#FF6B9D" stroke-width="0.4" opacity="0.35"/>
+        </g>
 
         <!-- Cara -->
         <ellipse cx="32" cy="38" rx="15.5" ry="13.5" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+        <!-- 🧠 Cerebro = llama-server (el modelo que razona), dentro de la cabeza.
+             Brillo teal + neuronas en la frente. Clic = modelo / VRAM / estado. -->
+        <g id="organ-brain" class="clk" @click="open = open === 'brain' ? null : 'brain'">
+          <ellipse cx="32" cy="31" rx="7" ry="3.3" fill="#00D4AA" opacity="0.16" style="filter:blur(1.5px)"/>
+          <circle cx="29" cy="31" r="0.6" fill="#00D4AA" opacity="0.5"/>
+          <circle cx="32" cy="29.8" r="0.7" fill="#00D4AA" opacity="0.55"/>
+          <circle cx="35" cy="31" r="0.6" fill="#00D4AA" opacity="0.5"/>
+        </g>
 
         <!-- Chapitas -->
         <circle cx="21.5" cy="42" r="2.2" fill="#FF4D88" opacity="0.5"/>
@@ -142,7 +157,22 @@
         <div class="font-semibold mb-1" style="color:var(--teal)">🧠 Mente autónoma</div>
         <div class="text-xs" x-text="($store.snap.autonomous && $store.snap.autonomous.enabled) ? '✅ Activada — Axi piensa solo' : '⏸ Desactivada'"></div>
         <div class="muted text-xs" x-show="$store.snap.autonomous && $store.snap.autonomous.enabled && !$store.snap.autonomous.active">⏸ En pausa (reunión activa)</div>
-        <div class="muted text-xs mt-1">El aura brilla cuando Axi piensa solo. Se activa/desactiva en <a class="underline" href="/setup">/setup</a>.</div>
+        <div class="muted text-xs mt-1">El aura brilla cuando Axi piensa solo.</div>
+        <button class="btn mt-2" style="padding:3px 12px;font-size:0.75rem" @click="toggleAutonomous()"
+                x-text="($store.snap.autonomous && $store.snap.autonomous.enabled) ? 'Desactivar' : 'Activar'"></button>
+      </div>
+      <div id="popover-brain" x-show="open === 'brain'"
+           class="panel2 p-3 text-sm absolute z-50" style="min-width:210px; display:none; top:1rem; right:1rem">
+        <div class="font-semibold mb-1" style="color:var(--teal)">🧠 Cerebro (llama-server)</div>
+        <div class="muted text-xs">Modelo: <span x-text="($store.snap.models && $store.snap.models.mode) || '—'"></span></div>
+        <div class="muted text-xs">VRAM: <span x-text="$store.snap.vram ? (($store.snap.vram.used_mb/1024).toFixed(1) + ' GB') : '—'"></span></div>
+        <div class="muted text-xs">Estado: <span x-text="$store.snap.services['llama-server'] || '—'"></span></div>
+      </div>
+      <div id="popover-memory" x-show="open === 'memory'"
+           class="panel2 p-3 text-sm absolute z-50" style="min-width:210px; display:none; top:1rem; right:1rem">
+        <div class="font-semibold mb-1" style="color:var(--pink)">💾 Memoria</div>
+        <div class="muted text-xs">Hechos recordados: <span x-text="($store.snap.memory && $store.snap.memory.facts_count) || 0"></span></div>
+        <div class="muted text-xs">Conversaciones: <span x-text="($store.snap.memory && $store.snap.memory.conversation_turns) || 0"></span></div>
       </div>
       <div id="popover-ears" x-show="open === 'ears'"
            class="panel2 p-3 text-sm absolute z-50" style="min-width:200px; display:none; top:1rem; right:1rem">
