@@ -13,12 +13,13 @@ from typing import Callable, Protocol
 # Budgeting constants
 # ---------------------------------------------------------------------------
 
-TOP_N: int = 3                  # max search results to request / process
-MAX_SNIPPET_CHARS: int = 300    # max chars per snippet in the brain prompt
-MAX_PAGE_CHARS: int = 3000      # max chars of extracted page text in the prompt
-MAX_PAGE_BYTES: int = 2_000_000 # max raw bytes to read from a fetched page
-SEARCH_TIMEOUT: float = 5.0     # SearXNG HTTP request timeout (seconds)
-FETCH_TIMEOUT: float = 8.0      # page fetch HTTP request timeout (seconds)
+TOP_N: int = 3                     # max search results to request / process
+MAX_SNIPPET_CHARS: int = 300       # max chars per snippet in the brain prompt
+MAX_PAGE_CHARS: int = 3000         # max chars of extracted page text in the prompt
+MAX_PAGE_BYTES: int = 2_000_000    # max raw bytes to read from a fetched page
+MAX_SEARCH_BYTES: int = 1_000_000  # max raw bytes to read from a SearXNG response
+SEARCH_TIMEOUT: float = 5.0        # SearXNG HTTP request timeout (seconds)
+FETCH_TIMEOUT: float = 8.0         # page fetch HTTP request timeout (seconds)
 
 # ---------------------------------------------------------------------------
 # Value objects
