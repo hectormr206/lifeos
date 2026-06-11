@@ -843,10 +843,11 @@ def cmd(name: str):
     return {"ok": True, "response": response}
 
 
-# Senses the user can start/stop from the avatar. Deliberately EXCLUDES
-# axi-heartbeat (the self-healing heart) and the store (memory) — those are
-# vital and must not be toggled off from a casual click.
-_TOGGLEABLE_SERVICES = {"llama-server", "axi-whisper", "ydotoold"}
+# Senses the user can start/stop from the avatar. Deliberately EXCLUDES the
+# VITAL organs — axi-heartbeat (self-healing heart), llama-server (brain /
+# reasoning) and the store (memory) — those must not be toggled off from a
+# casual click.
+_TOGGLEABLE_SERVICES = {"axi-whisper", "ydotoold"}
 
 
 @app.post("/api/service/{action}/{name}")
