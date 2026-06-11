@@ -47,6 +47,17 @@ _PRIVACY_BANNED_KEYS = {
     "digest", "body", "content", "data",
 }
 
+# Allowlist of coarse activity tokens that may be written to the JSONL.
+# Any value NOT in this set is replaced with "other" before writing.
+_ACTIVITY_ALLOWLIST: frozenset[str] = frozenset({
+    "screen+present",
+    "screen+unknown",
+    "screen+away",
+    "no-screen+unknown",
+    "no-screen+present",
+    "no-screen+away",
+})
+
 
 # ---------------------------------------------------------------------------
 # write_routine_record
@@ -69,12 +80,15 @@ def write_routine_record(
     Thread-safety: on Linux, a single write() to an O_APPEND fd with payload
     < PIPE_BUF (~4 096 bytes) is atomic. Records are ~120-160 bytes — safe.
     """
+    # Sanitize at write boundary: only coarse tokens from the allowlist may
+    # be persisted; any free-text value (e.g. a window title) becomes "other".
+    safe_descriptor = activity_descriptor if activity_descriptor in _ACTIVITY_ALLOWLIST else "other"
     rec = {
         "ts": ts,
         "weekday": weekday,
         "hour": hour,
         "presence": presence,
-        "activity_descriptor": activity_descriptor,
+        "activity_descriptor": safe_descriptor,
         "outcome": outcome,
     }
     try:
@@ -234,9 +248,11 @@ def trim_routine_records(
             if float(rec["ts"]) >= cutoff:
                 survivors.append(stripped + "\n")
         except (KeyError, ValueError, TypeError):
-            # Keep corrupt lines (they were written, so preserve them)
-            survivors.append(line if line.endswith("\n") else line + "\n")
+            # Drop corrupt lines: build_presence_profile already ignores them,
+            # so keeping them only lets them accumulate forever.
+            pass
 
+    tmp_name: str | None = None
     try:
         dir_path = path.parent
         with tempfile.NamedTemporaryFile(
@@ -245,8 +261,15 @@ def trim_routine_records(
             tmp_name = tmp.name
             tmp.writelines(survivors)
         os.replace(tmp_name, path)
+        tmp_name = None  # replace succeeded; file was renamed, nothing to clean up
     except OSError:
         log.warning("autonomous: could not write trimmed routine JSONL", exc_info=True)
         return 0
+    finally:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
 
     return len(survivors)
