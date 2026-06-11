@@ -32,7 +32,7 @@
           @keyframes tailWag { 0%,100%{transform:rotate(-3deg)} 50%{transform:rotate(7deg)} }
           #axi-avatar .eye   { animation: blink 5.5s ease-in-out infinite; cursor:pointer; }
           #axi-avatar .ears  { animation: gillFloat 4s ease-in-out infinite; transform-origin: 32px 40px; cursor:pointer; }
-          #axi-avatar .heart { animation: heartbeat 2s ease-in-out infinite; transform-origin: 32px 58px; cursor:pointer; }
+          #axi-avatar .heart { animation: heartbeat 2s ease-in-out infinite; transform-origin: 33.5px 56px; cursor:pointer; }
           #axi-avatar .heart.stopped { animation: none; filter: grayscale(1) opacity(0.55); }
           #axi-avatar .tail  { animation: tailWag 4.5s ease-in-out infinite; transform-origin: 41px 59px; }
           #axi-avatar .clk   { cursor:pointer; }
@@ -96,10 +96,10 @@
         <!-- 🧠 Cerebro = llama-server (el modelo que razona), dentro de la cabeza.
              Brillo teal + neuronas en la frente. Clic = modelo / VRAM / estado. -->
         <g id="organ-brain" class="clk" @click="open = open === 'brain' ? null : 'brain'">
-          <ellipse cx="32" cy="31" rx="7" ry="3.3" fill="#00D4AA" opacity="0.16" style="filter:blur(1.5px)"/>
-          <circle cx="29" cy="31" r="0.6" fill="#00D4AA" opacity="0.5"/>
-          <circle cx="32" cy="29.8" r="0.7" fill="#00D4AA" opacity="0.55"/>
-          <circle cx="35" cy="31" r="0.6" fill="#00D4AA" opacity="0.5"/>
+          <ellipse cx="32" cy="30.5" rx="7" ry="3.6" fill="#000000" fill-opacity="0"/>
+          <circle cx="29" cy="31" r="0.6" fill="#FF2D55"/>
+          <circle cx="32" cy="29.8" r="0.7" fill="#FF2D55"/>
+          <circle cx="35" cy="31" r="0.6" fill="#FF2D55"/>
         </g>
 
         <!-- Chapitas -->
@@ -127,9 +127,9 @@
         <g id="organ-heart" class="heart"
            :class="($store.snap.services['axi-heartbeat'] === 'active') ? '' : 'stopped'"
            @click="open = open === 'heart' ? null : 'heart'">
-          <circle cx="29.4" cy="58" r="2.9" fill="#FF4D88"/>
-          <circle cx="34.6" cy="58" r="2.9" fill="#FF4D88"/>
-          <path d="M26.7 59.2 Q32 69 37.3 59.2" fill="#FF4D88"/>
+          <circle cx="32.2" cy="55" r="1.45" fill="#FF4D88"/>
+          <circle cx="34.8" cy="55" r="1.45" fill="#FF4D88"/>
+          <path d="M30.85 55.6 Q33.5 60.5 36.15 55.6" fill="#FF4D88"/>
         </g>
 
         <!-- 🧠 Mente autónoma — aura teal + chispitas de pensamiento sobre la
@@ -167,6 +167,9 @@
         <div class="muted text-xs">Modelo: <span x-text="($store.snap.models && $store.snap.models.mode) || '—'"></span></div>
         <div class="muted text-xs">VRAM: <span x-text="$store.snap.vram ? (($store.snap.vram.used_mb/1024).toFixed(1) + ' GB') : '—'"></span></div>
         <div class="muted text-xs">Estado: <span x-text="$store.snap.services['llama-server'] || '—'"></span></div>
+        <button class="btn mt-2" style="padding:3px 12px;font-size:0.75rem"
+                @click="toggleService('llama-server', $store.snap.services['llama-server']==='active')"
+                x-text="$store.snap.services['llama-server']==='active' ? 'Desactivar' : 'Activar'"></button>
       </div>
       <div id="popover-memory" x-show="open === 'memory'"
            class="panel2 p-3 text-sm absolute z-50" style="min-width:210px; display:none; top:1rem; right:1rem">
@@ -178,18 +181,27 @@
            class="panel2 p-3 text-sm absolute z-50" style="min-width:200px; display:none; top:1rem; right:1rem">
         <div class="font-semibold mb-1" style="color:var(--pink)">👂 Oídos (axi-whisper)</div>
         <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['axi-whisper'] || '—'"></span></div>
+        <button class="btn mt-2" style="padding:3px 12px;font-size:0.75rem"
+                @click="toggleService('axi-whisper', $store.snap.services['axi-whisper']==='active')"
+                x-text="$store.snap.services['axi-whisper']==='active' ? 'Desactivar' : 'Activar'"></button>
       </div>
       <div id="popover-hands" x-show="open === 'hands'"
            class="panel2 p-3 text-sm absolute z-50" style="min-width:200px; display:none; top:1rem; right:1rem">
         <div class="font-semibold mb-1" style="color:var(--pink)">🤚 Manos (ydotoold)</div>
         <div class="muted text-xs">Cómo Axi actúa: inyección de teclas.</div>
         <div class="muted text-xs">Servicio: <span x-text="$store.snap.services['ydotoold'] || '—'"></span></div>
+        <button class="btn mt-2" style="padding:3px 12px;font-size:0.75rem"
+                @click="toggleService('ydotoold', $store.snap.services['ydotoold']==='active')"
+                x-text="$store.snap.services['ydotoold']==='active' ? 'Desactivar' : 'Activar'"></button>
       </div>
       <div id="popover-mouth" x-show="open === 'mouth'"
            class="panel2 p-3 text-sm absolute z-50" style="min-width:220px; display:none; top:1rem; right:1rem">
         <div class="font-semibold mb-1" style="color:var(--pink)">💬 Axi dice</div>
         <div x-show="speaking" class="muted text-xs">Hablando… 🔊</div>
         <div x-text="speakText" class="text-xs mt-1"></div>
+        <button class="btn mt-2" style="padding:3px 12px;font-size:0.75rem"
+                @click="toggleConfig('tts_enabled', $store.snap.capabilities && $store.snap.capabilities.tts_enabled)"
+                x-text="($store.snap.capabilities && $store.snap.capabilities.tts_enabled) ? 'Desactivar voz' : 'Activar voz'"></button>
       </div>
       <div id="popover-eye" x-show="open === 'eye-screen' || open === 'eye-webcam'"
            class="panel2 p-3 text-sm absolute z-50" style="min-width:240px; display:none; top:1rem; right:1rem">
@@ -199,6 +211,9 @@
         <img x-show="eyeImg" :src="'data:image/png;base64,' + eyeImg" alt="Lo que Axi ve ahora"
              style="max-width:220px; border-radius:0.5rem; margin-top:0.25rem"/>
         <div x-show="eyeError" x-text="eyeError" class="text-xs" style="color:var(--amber)"></div>
+        <button class="btn mt-2" style="padding:3px 12px;font-size:0.75rem"
+                @click="toggleConfig('vision_enabled', $store.snap.capabilities && $store.snap.capabilities.vision_enabled)"
+                x-text="($store.snap.capabilities && $store.snap.capabilities.vision_enabled) ? 'Desactivar visión' : 'Activar visión'"></button>
       </div>
     </section>
 
@@ -714,6 +729,26 @@ function avatarWidget() {
           body: JSON.stringify({ autonomous_enabled: next }),
         });
         if (a) a.enabled = next;  // optimistic; poll reconciles in ~1s
+      } catch (e) { /* offline — silent */ }
+    },
+
+    /* Toggle a config-backed sense capability (eyes=vision_enabled, mouth=tts_enabled). */
+    async toggleConfig(key, current) {
+      try {
+        await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [key]: !current }),
+        });
+        if (this.$store.snap && this.$store.snap.capabilities) this.$store.snap.capabilities[key] = !current;
+      } catch (e) { /* offline — silent */ }
+    },
+
+    /* Start/stop a service-backed sense (brain=llama-server, ears=axi-whisper, hands=ydotoold). */
+    async toggleService(name, active) {
+      try {
+        await fetch('/api/service/' + (active ? 'stop' : 'start') + '/' + name, { method: 'POST' });
+        if (this.$store.snap && this.$store.snap.services) this.$store.snap.services[name] = active ? 'inactive' : 'active';
       } catch (e) { /* offline — silent */ }
     },
   };
