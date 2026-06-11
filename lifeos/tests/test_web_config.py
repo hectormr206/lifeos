@@ -5,7 +5,10 @@ TDD Phase 4.1 RED: asserts the DI/configure surface of the web __init__.py.
 from __future__ import annotations
 
 import importlib
-import os
+
+import pytest
+
+from lifeos.web.port import PageText
 
 
 def _reload_web():
@@ -15,15 +18,33 @@ def _reload_web():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _reset_web_globals():
+    """Reset lifeos.web module globals before and after every test.
+
+    Prevents state leakage between tests that call configure() or
+    those that rely on the default (unconfigured) module state.
+    """
+    import lifeos.web as web_mod
+    # Reset to pristine state before the test
+    web_mod._search_fn = None
+    web_mod._read_fn = None
+    web_mod._enabled_fn = None
+    yield
+    # Reset again after the test so the next test starts clean
+    web_mod._search_fn = None
+    web_mod._read_fn = None
+    web_mod._enabled_fn = None
+
+
 def test_configure_sets_injected_fns():
     """After configure(), _search_fn and _read_fn are the injected callables."""
     import lifeos.web as web_mod
 
-    def fake_search(query):  # noqa: ARG001
+    def fake_search(query: str) -> list:  # noqa: ARG001
         return []
 
-    def fake_read(url):  # noqa: ARG001
-        from lifeos.web.port import PageText
+    def fake_read(url: str) -> PageText:  # noqa: ARG001
         return PageText(url=url, text="", ok=False)
 
     web_mod.configure(search_fn=fake_search, read_fn=fake_read)
@@ -38,12 +59,18 @@ def test_configure_sets_enabled_fn():
 
     flag = [True]
 
-    def fake_enabled():
+    def fake_enabled() -> bool:
         return flag[0]
 
+    def fake_search(query: str) -> list:  # noqa: ARG001
+        return []
+
+    def fake_read(url: str) -> PageText:  # noqa: ARG001
+        return PageText(url=url, text="", ok=False)
+
     web_mod.configure(
-        search_fn=lambda q: [],
-        read_fn=lambda u: None,  # type: ignore[arg-type]
+        search_fn=fake_search,
+        read_fn=fake_read,
         enabled_fn=fake_enabled,
     )
 
