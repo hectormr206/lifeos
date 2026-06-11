@@ -2823,7 +2823,8 @@ def api_chat_capture_screen():
         except Exception:  # noqa: BLE001
             pass
         return JSONResponse(
-            {"error": "screen capture failed", "busy": True}, status_code=503
+            {"detail": "screen capture failed", "error": "screen capture failed", "busy": True},
+            status_code=503,
         )
     return {"image_b64": b64, "status": "ok"}
 
@@ -2841,8 +2842,9 @@ def api_chat_capture_camera():
             events.log_warning("chat.capture", f"camera capture failed: {status}")
         except Exception:  # noqa: BLE001
             pass
+        reason = status or "camera capture failed"
         return JSONResponse(
-            {"error": status or "camera capture failed", "busy": True}, status_code=503
+            {"detail": reason, "error": reason, "busy": True}, status_code=503
         )
     return {"image_b64": b64, "status": status}
 
