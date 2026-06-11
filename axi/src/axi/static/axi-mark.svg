@@ -1,26 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
-  <title id="title">Axi mark</title>
-  <desc id="desc">Axi, the Mexican axolotl mascot of LifeOS — transparent mark for placing on dark UI.</desc>
-
-  <!-- gills: feathery fronds fanning UP like a crown, behind the head -->
-  <g transform="translate(25,28)">
-    <g transform="rotate(-52)"><ellipse cx="0" cy="-8.5" rx="3.3" ry="8.5" fill="#FF6B9D"/><ellipse cx="0" cy="-11.5" rx="1.7" ry="3.6" fill="#FFA6C4"/></g>
-    <g transform="rotate(-30)"><ellipse cx="0" cy="-9.5" rx="3.5" ry="9.5" fill="#FF6B9D"/><ellipse cx="0" cy="-12.8" rx="1.8" ry="3.8" fill="#FFA6C4"/></g>
-    <g transform="rotate(-10)"><ellipse cx="0" cy="-8.5" rx="3.2" ry="8.5" fill="#FF6B9D"/><ellipse cx="0" cy="-11.5" rx="1.6" ry="3.5" fill="#FFA6C4"/></g>
-  </g>
-  <g transform="translate(39,28)">
-    <g transform="rotate(10)"><ellipse cx="0" cy="-8.5" rx="3.2" ry="8.5" fill="#FF6B9D"/><ellipse cx="0" cy="-11.5" rx="1.6" ry="3.5" fill="#FFA6C4"/></g>
-    <g transform="rotate(30)"><ellipse cx="0" cy="-9.5" rx="3.5" ry="9.5" fill="#FF6B9D"/><ellipse cx="0" cy="-12.8" rx="1.8" ry="3.8" fill="#FFA6C4"/></g>
-    <g transform="rotate(52)"><ellipse cx="0" cy="-8.5" rx="3.3" ry="8.5" fill="#FF6B9D"/><ellipse cx="0" cy="-11.5" rx="1.7" ry="3.6" fill="#FFA6C4"/></g>
-  </g>
-
-  <!-- head / body -->
-  <ellipse cx="32" cy="37" rx="14" ry="12.5" fill="#FF6B9D"/>
-  <circle cx="23" cy="41" r="2.6" fill="#FF4D88" opacity="0.55"/>
-  <circle cx="41" cy="41" r="2.6" fill="#FF4D88" opacity="0.55"/>
-  <circle cx="26.8" cy="36" r="2.4" fill="#14131F"/>
-  <circle cx="37.2" cy="36" r="2.4" fill="#14131F"/>
-  <circle cx="27.6" cy="35.2" r="0.85" fill="#FFFFFF"/>
-  <circle cx="38.0" cy="35.2" r="0.85" fill="#FFFFFF"/>
-  <path d="M26.5 41.5 Q32 46.5 37.5 41.5" stroke="#14131F" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+<svg viewBox="1 19 62 37" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Axi">
+  <defs>
+    <g id="m-gill">
+      <ellipse cx="0" cy="-8.5" rx="3.8" ry="10.6" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+      <path d="M0 -16.2 Q-3.2 -12 -2.6 -7.2 Q0 -8.6 2.6 -7.2 Q3.2 -12 0 -16.2 Z" fill="#00D4AA" stroke="#241019" stroke-width="0.42" stroke-linejoin="round"/>
+    </g>
+  </defs>
+  <use href="#m-gill" transform="translate(23,32) rotate(-56) scale(0.94)"/>
+  <use href="#m-gill" transform="translate(20,37) rotate(-79) scale(0.95)"/>
+  <use href="#m-gill" transform="translate(22,43) rotate(-95) scale(0.9)"/>
+  <use href="#m-gill" transform="translate(41,32) rotate(56) scale(0.94)"/>
+  <use href="#m-gill" transform="translate(44,37) rotate(79) scale(0.95)"/>
+  <use href="#m-gill" transform="translate(42,43) rotate(95) scale(0.9)"/>
+  <ellipse cx="32" cy="38" rx="15.5" ry="13.5" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+  <circle cx="21.5" cy="42" r="2.2" fill="#FF4D88" opacity="0.5"/>
+  <circle cx="42.5" cy="42" r="2.2" fill="#FF4D88" opacity="0.5"/>
+  <circle cx="26" cy="38" r="2.6" fill="#14131F"/><circle cx="26.9" cy="37.2" r="0.9" fill="#FFFFFF"/>
+  <circle cx="38" cy="38" r="2.6" fill="#14131F"/><circle cx="38.9" cy="37.2" r="0.9" fill="#FFFFFF"/>
+  <path d="M26 43 Q32 48 38 43" stroke="#14131F" stroke-width="1" stroke-linecap="round" fill="none"/>
 </svg>

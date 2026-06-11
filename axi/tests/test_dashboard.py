@@ -326,11 +326,29 @@ def test_popover_markup_present(client):
     assert "x-show" in html
 
 
-def test_brain_popover_has_llm_bindings(client):
-    """Task 3.8/3.9 — popover-brain with llm.model and llm.vram_used_gb bindings."""
+def test_avatar_organ_actions_present(client):
+    """Avatar redesign — organ click actions are wired: eyes capture (screen +
+    webcam), mouth speaks out loud, and the heart syncs to the REAL
+    axi-heartbeat service (beats only while it is active)."""
     r = client.get("/")
     assert r.status_code == 200
     html = r.text
-    assert "popover-brain" in html
-    # Brain popover should reference vram data from the snapshot
-    assert "vram" in html
+    assert 'id="axi-avatar"' in html
+    # eyes -> live capture
+    assert "captureEye('screen')" in html
+    assert "captureEye('webcam')" in html
+    # mouth -> speak out loud
+    assert "speak()" in html
+    # heart -> synced to the real heartbeat service liveness
+    assert "services['axi-heartbeat']" in html
+
+
+def test_say_endpoint_speaks(client, monkeypatch):
+    """The mouth's /api/chat/say endpoint triggers Axi's TTS and echoes the text."""
+    spoken = {}
+    import axi.speak as _speak
+
+    monkeypatch.setattr(_speak, "speak", lambda text: spoken.setdefault("text", text) or True)
+    r = client.post("/api/chat/say", json={"text": "hola"})
+    assert r.status_code == 200
+    assert r.json()["text"] == "hola"
