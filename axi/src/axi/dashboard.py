@@ -297,13 +297,27 @@ async def lifespan(_app: FastAPI):
                 webcam_ok=webcam_ok,
             )
 
+        def _autonomous_enabled() -> bool:
+            # Master opt-in toggle.
+            if not bool(config.get("autonomous_enabled", False)):
+                return False
+            # Suppress while a meeting is recording — Axi must NOT interrupt a
+            # meeting. The config stays ON; this is a live runtime guard, so the
+            # autonomous mind resumes automatically once the meeting ends.
+            try:
+                if (_daemon_cmd("meeting_status") or "idle").startswith("recording:"):
+                    return False
+            except Exception:  # noqa: BLE001 — daemon unreachable: don't block on this check
+                pass
+            return True
+
         autonomous_cron.configure(
             brain_ask=_axi_brain_auto.ask,
             digest_fn=_auto_digest,
             correlate_fn=_auto_correlate,
             push_fn=_auto_push,
             now_fn=lambda: datetime.now(tz_auto),
-            is_enabled_fn=lambda: bool(config.get("autonomous_enabled", False)),
+            is_enabled_fn=_autonomous_enabled,
             alive_fn=_axi_brain_auto.is_alive,
             spoke_read_fn=autonomous_cron.read_last_pushed,
             spoke_write_fn=autonomous_cron.write_last_pushed,
