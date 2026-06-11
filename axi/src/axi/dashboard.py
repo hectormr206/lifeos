@@ -413,6 +413,16 @@ _PERSISTENCE_CLAIM_RE = re.compile(
 )
 
 
+# Web research command parser — compiled once at module load.
+# Matches /busca or /investiga followed by whitespace+query OR end-of-string.
+# Requires the command token to end at a word boundary so /buscalo and
+# /investigalo do NOT match (they are different commands, not typos).
+_WEB_CMD_RE = re.compile(
+    r"^(/busca|/investiga)(?:\s+(.+))?$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _looks_like_persistence_claim(text: str) -> bool:
     """True iff `text` claims data was persisted. Used to detect brain
     hallucinations when the ingestion fast-path actually missed."""
@@ -2375,12 +2385,9 @@ async def api_chat_ask(request: Request):
     # Must run BEFORE any domain parsers — explicit command tokens take
     # priority over regex classifiers that might misread "busca X" as finance.
     # Degrades gracefully: SearXNG down → friendly Spanish message (HTTP 200).
-    _WEB_CMD_RE = re.compile(
-        r"^(/busca|/investiga)\s*(.*)", re.IGNORECASE | re.DOTALL
-    )
     _web_cmd_match = _WEB_CMD_RE.match(text)
     if _web_cmd_match and not image_b64:
-        _web_query = _web_cmd_match.group(2).strip()
+        _web_query = (_web_cmd_match.group(2) or "").strip()
         if not _web_query:
             # Empty query — return a friendly prompt instead of crashing.
             _empty_answer = (
@@ -2452,12 +2459,14 @@ async def api_chat_ask(request: Request):
                 )
 
                 # Enrich the brain prompt with research context.
+                # _research_lines[0] already starts with "Resultados de búsqueda
+                # para: {_web_query}" so the trailing instruction below does NOT
+                # repeat the query — it only adds the answering directive.
                 _research_block = "\n".join(_research_lines)
                 _enriched_prompt = (
                     f"{_research_block}\n\n"
                     f"Usando los resultados de búsqueda anteriores, "
-                    f"responde la siguiente consulta de forma precisa y cita las URLs fuente:\n"
-                    f"{_web_query}"
+                    f"responde la consulta de forma precisa y cita las URLs fuente."
                 )
 
                 # Call brain with enriched prompt (same system / history as normal).
@@ -2472,13 +2481,12 @@ async def api_chat_ask(request: Request):
                 # on model behavior.
                 answer = _raw_answer + _fuentes_block
 
-                # Guardrail: still applies on research answers.
-                if _looks_like_persistence_claim(answer):
-                    log.warning(
-                        "brain hallucinated persistence claim on research text=%r — overriding",
-                        text[:120],
-                    )
-                    answer = _suggested_format_message(text)
+                # NOTE: The persistence-claim guardrail is intentionally NOT applied
+                # here. The research path is read-only — nothing is persisted.
+                # Legitimate research answers about databases, journalism, or logging
+                # may incidentally contain persistence verbs ("anotado", "registrado")
+                # and must NOT be clobbered with the "no se guardó" message.
+                # The guardrail lives on the data-entry brain path (~line 3061) only.
 
                 latency_ms = round((time.monotonic() - start) * 1000)
                 try:
