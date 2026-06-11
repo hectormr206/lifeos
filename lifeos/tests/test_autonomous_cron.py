@@ -1091,3 +1091,222 @@ def test_no_image_bytes_in_log_data_brain_exception() -> None:
         data_str = str(data)
         assert FAKE_IMAGE not in data_str, "Image bytes must NOT be logged on brain-exception (privacy invariant)"
         assert "screen_b64" not in data
+
+
+# ---------------------------------------------------------------------------
+# axi-routine-learning: Phase 5 — configure() accepts routine_path
+# ---------------------------------------------------------------------------
+
+def test_configure_accepts_routine_path(tmp_path: Path) -> None:
+    """configure(routine_path=...) + run_tick → JSONL at that path has exactly 1 line."""
+    from lifeos.autonomous import cron
+
+    rp = tmp_path / "routine.jsonl"
+    _default_configure(routine_path=rp)
+    cron.run_tick(_now())
+    assert rp.exists(), "routine JSONL was not created"
+    lines = rp.read_text().splitlines()
+    assert len(lines) == 1
+
+
+# ---------------------------------------------------------------------------
+# axi-routine-learning: Phase 6 — _log writes one record per outcome + trim
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("outcome_setup", [
+    {"brain_ask": lambda *a, **kw: "Tienes cita médica mañana."},          # pushed
+    {"brain_ask": lambda *a, **kw: "ESPERAR"},                              # esperar
+    {"brain_ask": lambda *a, **kw: "NADA"},                                 # nada
+    {"digest_fn": lambda: "", "correlate_fn": lambda: ""},                  # skipped-empty
+])
+def test_tick_writes_one_record_per_outcome(tmp_path: Path, outcome_setup: dict) -> None:
+    """Every non-window-skip outcome writes exactly one routine record."""
+    from lifeos.autonomous import cron
+
+    rp = tmp_path / "routine.jsonl"
+    _default_configure(routine_path=rp, **outcome_setup)
+    cron.run_tick(_now())
+    assert rp.exists()
+    lines = rp.read_text().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert isinstance(rec["weekday"], int)
+    assert isinstance(rec["hour"], int)
+    assert isinstance(rec["presence"], str)
+    assert isinstance(rec["outcome"], str)
+
+
+def test_tick_writes_one_record_skipped_outcomes(tmp_path: Path) -> None:
+    """skipped-outside-window also writes a record."""
+    from lifeos.autonomous import cron
+
+    rp = tmp_path / "routine.jsonl"
+    _default_configure(routine_path=rp)
+    cron.run_tick(_now(hour=6))  # outside window
+    assert rp.exists()
+    lines = rp.read_text().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["outcome"] == "skipped-outside-window"
+
+
+def test_trim_fires_at_window_start_hour(tmp_path: Path) -> None:
+    """Tick at hour==8 trims old records (>90d) from the routine JSONL."""
+    import json as _json
+
+    from lifeos.autonomous import cron
+
+    rp = tmp_path / "routine.jsonl"
+    _NOW = _now(hour=8)
+    now_ts = _NOW.timestamp()
+    # Pre-seed: one old record (>90d) and one recent record (5d)
+    with open(rp, "w") as fh:
+        fh.write(_json.dumps({"ts": now_ts - 100 * 86400, "weekday": 0, "hour": 9, "presence": "present", "activity_descriptor": "x", "outcome": "pushed"}) + "\n")
+        fh.write(_json.dumps({"ts": now_ts - 5 * 86400,   "weekday": 1, "hour": 10, "presence": "present", "activity_descriptor": "x", "outcome": "pushed"}) + "\n")
+
+    _default_configure(routine_path=rp, brain_ask=lambda *a, **kw: "ESPERAR")
+    cron.run_tick(_NOW)
+
+    # After tick, old record should be gone (trim fired), only recent + new tick record remain
+    remaining = rp.read_text().splitlines()
+    tses = [_json.loads(line)["ts"] for line in remaining]
+    cutoff = now_ts - 90 * 86400
+    assert all(ts >= cutoff for ts in tses), f"Old record not trimmed: {tses}"
+
+
+def test_write_failure_does_not_abort_tick(tmp_path: Path) -> None:
+    """Unwritable routine_path → tick completes normally (graceful degrade)."""
+    from lifeos.autonomous import cron
+
+    # Point to a directory (not writable as a file)
+    bad_rp = tmp_path / "unwritable_dir"
+    bad_rp.mkdir()
+
+    _default_configure(routine_path=bad_rp)
+    # Should NOT raise
+    result = cron.run_tick(_now())
+    assert result.outcome is not None
+
+
+# ---------------------------------------------------------------------------
+# axi-routine-learning: Phase 7 — run_tick reads profile + _build_prompt hint
+# ---------------------------------------------------------------------------
+
+def test_cold_start_prompt_unchanged(tmp_path: Path) -> None:
+    """< 10 records in JSONL → prompt is byte-identical to pre-change format (no 'Patrón' / 'suele')."""
+    from lifeos.autonomous import cron
+
+    rp = tmp_path / "routine.jsonl"
+    # Seed < 10 records
+    import json as _json
+    now_ref = _now(hour=12)
+    now_ts = now_ref.timestamp()
+    with open(rp, "w") as fh:
+        for i in range(5):
+            fh.write(_json.dumps({"ts": now_ts - i * 86400, "weekday": 2, "hour": 12, "presence": "present", "activity_descriptor": "x", "outcome": "pushed"}) + "\n")
+
+    captured_prompts: list[str] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_prompts.append(prompt)
+        return "ESPERAR"
+
+    _default_configure(brain_ask=_spy_brain, routine_path=rp)
+    cron.run_tick(now_ref)
+
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    assert "Patrón" not in prompt
+    assert "suele" not in prompt
+
+
+def test_warm_prompt_contains_hint(tmp_path: Path) -> None:
+    """>=10 records with high presence at current (weekday, hour) → prompt contains hint."""
+    from lifeos.autonomous import cron
+    import json as _json
+
+    rp = tmp_path / "routine.jsonl"
+    now_ref = _now(hour=12)  # Wednesday hour=12, weekday=2 for 2026-06-10
+    now_ts = now_ref.timestamp()
+    now_wd = now_ref.weekday()
+
+    # Seed 15 present records at current (weekday, hour)
+    with open(rp, "w") as fh:
+        for i in range(15):
+            fh.write(_json.dumps({
+                "ts": now_ts - i * 86400,
+                "weekday": now_wd,
+                "hour": 12,
+                "presence": "present",
+                "activity_descriptor": "x",
+                "outcome": "pushed",
+            }) + "\n")
+
+    captured_prompts: list[str] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_prompts.append(prompt)
+        return "ESPERAR"
+
+    _default_configure(brain_ask=_spy_brain, routine_path=rp)
+    cron.run_tick(now_ref)
+
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    assert "Patrón habitual" in prompt
+
+
+def test_corrupt_jsonl_tick_proceeds(tmp_path: Path) -> None:
+    """JSONL with only corrupt lines → tick completes normally, prompt in pre-change format."""
+    from lifeos.autonomous import cron
+
+    rp = tmp_path / "routine.jsonl"
+    rp.write_text("not-json\nalso-not-json\n{broken\n")
+
+    captured_prompts: list[str] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_prompts.append(prompt)
+        return "ESPERAR"
+
+    _default_configure(brain_ask=_spy_brain, routine_path=rp)
+    result = cron.run_tick(_now())
+    assert result.outcome is not None
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    assert "Patrón" not in prompt
+    assert "suele" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# axi-routine-learning: Phase 8 — Privacy integration test
+# ---------------------------------------------------------------------------
+
+def test_privacy_jsonl_never_contains_life_data(tmp_path: Path) -> None:
+    """10 ticks with varied outcomes → every JSONL line has exactly 6 allowed keys, no life-data keys."""
+    from lifeos.autonomous import cron
+
+    rp = tmp_path / "routine.jsonl"
+    BANNED = {"message", "text", "image", "screen", "name", "digest", "body", "content", "data"}
+    ALLOWED = {"ts", "weekday", "hour", "presence", "activity_descriptor", "outcome"}
+
+    setups = [
+        {"brain_ask": lambda *a, **kw: "Tienes cita médica."},  # pushed
+        {"brain_ask": lambda *a, **kw: "ESPERAR"},              # esperar
+        {"brain_ask": lambda *a, **kw: "NADA"},                 # nada
+        {"digest_fn": lambda: "", "correlate_fn": lambda: ""},  # skipped-empty
+        {"alive_fn": lambda: False},                            # skipped-brain-down
+    ]
+    hours = [12, 13, 14, 15, 16, 8, 9, 10, 11, 17]
+
+    for i, (setup, hour) in enumerate(zip(setups * 2, hours)):
+        _default_configure(routine_path=rp, **setup)
+        cron.run_tick(_now(hour=hour))
+
+    lines = rp.read_text().splitlines()
+    assert len(lines) >= 5, f"Expected >= 5 records, got {len(lines)}"
+
+    for line in lines:
+        rec = json.loads(line)
+        assert set(rec.keys()) == ALLOWED, f"Unexpected keys: {set(rec.keys()) - ALLOWED}"
+        assert not BANNED.intersection(rec.keys()), f"Banned keys found: {BANNED.intersection(rec.keys())}"

@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.triggers.cron import CronTrigger
 
 from lifeos.scheduler import get_scheduler
+import lifeos.autonomous.routine as routine
 
 log = logging.getLogger("lifeos.autonomous.cron")
 
@@ -118,6 +119,17 @@ _max_message_chars: int = 120
 _language: str = "es-MX"
 _window_start_hour: int = 8
 _window_end_hour: int = 22
+_routine_path: Path | None = None
+
+
+def _routine_path_default() -> Path:
+    """Path to the routine JSONL file. Mirrors _state_path() convention."""
+    base = Path(
+        os.environ.get("LIFEOS_STATE_DIR")
+        or (Path.home() / ".local" / "state" / "lifeos")
+    )
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "autonomous_routine.jsonl"
 
 
 def configure(
@@ -138,6 +150,7 @@ def configure(
     language: str = "es-MX",
     window_start_hour: int = 8,
     window_end_hour: int = 22,
+    routine_path: Path | None = None,
 ) -> None:
     """Inject all callables. Calling configure() resets state completely."""
     global _brain_ask, _digest_fn, _correlate_fn, _push_fn, _now_fn
@@ -145,6 +158,7 @@ def configure(
     global _perceive_fn
     global _ask_timeout, _max_message_chars, _language
     global _window_start_hour, _window_end_hour
+    global _routine_path
 
     _brain_ask = brain_ask
     _digest_fn = digest_fn
@@ -162,6 +176,7 @@ def configure(
     _language = language
     _window_start_hour = int(window_start_hour)
     _window_end_hour = int(window_end_hour)
+    _routine_path = routine_path
 
 
 # ---------------------------------------------------------------------------
@@ -228,9 +243,27 @@ def run_tick(now: datetime) -> TickResult:
         raise RuntimeError("autonomous cron not configured — call configure() first")
 
     def _log(outcome: Outcome, ctx: PerceptionContext = _NO_PERCEPTION, **extra) -> None:
-        data = {"outcome": outcome, **_perception_log_fields(ctx), **extra}
+        fields = _perception_log_fields(ctx)
+        data = {"outcome": outcome, **fields, **extra}
         if _log_fn is not None:
             _log_fn("autonomous.tick", f"reflection tick: {outcome}", data=data)
+        # Routine record — best-effort, never breaks a tick
+        try:
+            rp = _routine_path or _routine_path_default()
+            routine.write_routine_record(
+                rp,
+                ts=now.timestamp(),
+                weekday=now.weekday(),
+                hour=now.hour,
+                presence=ctx.presence,
+                activity_descriptor=fields["activity_descriptor"],
+                outcome=outcome,
+            )
+            # Once-per-day trim at window start hour (08:00)
+            if now.hour == _window_start_hour:
+                routine.trim_routine_records(rp, days=90)
+        except Exception:  # noqa: BLE001
+            log.warning("autonomous: routine record write failed", exc_info=True)
 
     # Guard: waking window
     if now.hour < _window_start_hour or now.hour >= _window_end_hour:
@@ -267,8 +300,19 @@ def run_tick(now: datetime) -> TickResult:
             log.warning("autonomous: perceive_fn raised; degrading to _NO_PERCEPTION")
             ctx = _NO_PERCEPTION
 
-    # Build enriched prompt (presence text + optional screen instruction)
-    prompt = _build_prompt(now, digest_body, edge_summary, ctx)
+    # Build routine hint (once per tick; degrade silently on any failure)
+    routine_hint: str | None = None
+    try:
+        rp = _routine_path or _routine_path_default()
+        profile = routine.build_presence_profile(rp, days=30, now_ts=now.timestamp())
+        routine_hint = routine.format_routine_hint(
+            profile, now_weekday=now.weekday(), now_hour=now.hour
+        )
+    except Exception:  # noqa: BLE001
+        routine_hint = None
+
+    # Build enriched prompt (presence text + optional screen instruction + routine hint)
+    prompt = _build_prompt(now, digest_body, edge_summary, ctx, routine_hint=routine_hint)
 
     # Reflect: ask brain (with exception guard), pass screen image when available
     try:
@@ -322,11 +366,17 @@ def _build_prompt(
     digest_body: str,
     edge_summary: str,
     ctx: PerceptionContext = _NO_PERCEPTION,
+    routine_hint: str | None = None,
 ) -> str:
     """Build the reflection prompt per design §4 / §6 (perception enrichment).
 
     When ctx is _NO_PERCEPTION (no perceive_fn injected), the prompt is
     functionally identical to the pre-perception version — back-compat preserved.
+
+    When routine_hint is None, the prompt is BYTE-FOR-BYTE identical to the
+    pre-routine-learning format (cold-start zero-regression invariant).
+    When routine_hint is a non-None string, it is injected as its own paragraph
+    BETWEEN the presence_line and the screen_block.
     """
     max_chars = _max_message_chars
 
@@ -351,12 +401,16 @@ def _build_prompt(
             "decide solo con el contexto de vida."
         )
 
+    # Routine hint block: empty string when None → byte-identical to pre-change prompt
+    routine_block = f"\n{routine_hint}\n" if routine_hint else ""
+
     return (
         f"Es {now.strftime('%H:%M')} ({now.strftime('%A')}). "
         "Este es el contexto de vida de Héctor ahora mismo:\n\n"
         f"{digest_body}\n\n"
         f"{edge_summary}\n\n"
         f"{presence_line}\n"
+        f"{routine_block}"
         f"{screen_block}\n\n"
         "Tu tarea: decidir si ESTE es el buen momento para decirle UNA sola cosa, "
         "la MÁS importante que merece su atención. Considera la hora del día.\n"
