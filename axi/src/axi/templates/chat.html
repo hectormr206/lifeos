@@ -237,6 +237,28 @@
       >
         <span x-text="speakOn ? '🔊' : '🔇'"></span>
       </button>
+      <!-- Logging mode toggle. ON = data-entry (nano agents, no internet).
+           OFF (default) = free conversation with the big brain. -->
+      <button
+        type="button"
+        @click="toggleLoggingMode()"
+        :disabled="pending"
+        class="btn"
+        :style="loggingMode
+          ? 'min-height: 2.5rem; min-width: 2.75rem; background: rgba(255,107,157,0.2); border-color: var(--pink, #ff6b9d);'
+          : 'min-height: 2.5rem; min-width: 2.75rem;'"
+        :title="loggingMode
+          ? 'Modo registro ON — guardando datos (nano). Clic para cambiar a charla.'
+          : 'Modo charla — hablando con Axi. Clic para cambiar a registro de datos.'"
+      >
+        <span x-text="loggingMode ? '💾' : '💬'"></span>
+      </button>
+    </div>
+    <!-- Mode hint strip -->
+    <div x-show="loggingMode" x-cloak
+         class="text-xs muted mb-1 px-1"
+         style="color: var(--pink, #ff6b9d);">
+      Modo registro — los nano-agentes guardan tus datos. Sin internet.
     </div>
 
     <form @submit.prevent="send()" class="flex gap-2 items-end">
@@ -273,6 +295,7 @@ function chatApp() {
     loading: true,
     error: null,
     lastLatencyMs: null,
+    loggingMode: false,   // true = registro de datos; false = charla libre
 
     // Multimodal state
     pendingImage: null,    // base64 PNG to attach to next /api/chat/ask
@@ -300,6 +323,8 @@ function chatApp() {
         this.speakOn = stored === '1';
         const locStored = localStorage.getItem('axi_chat_location');
         this.locationOn = locStored === '1';
+        const logStored = localStorage.getItem('axi_chat_logging_mode');
+        this.loggingMode = logStored === '1';
       } catch (e) { /* private mode etc. */ }
       await this.loadHistory();
       // CRITICAL: restore any pending/error items from IDB queue as
@@ -633,6 +658,12 @@ function chatApp() {
       try { localStorage.setItem('axi_chat_speak', this.speakOn ? '1' : '0'); } catch (e) {}
     },
 
+    toggleLoggingMode() {
+      this.loggingMode = !this.loggingMode;
+      try { localStorage.setItem('axi_chat_logging_mode', this.loggingMode ? '1' : '0'); } catch (e) {}
+      if (navigator.vibrate) navigator.vibrate(30);
+    },
+
     async captureScreen() {
       if (this.capturing) return;
       this.capturing = 'screen';
@@ -826,6 +857,7 @@ function chatApp() {
             speak: this.speakOn,
             location: location || undefined,
             client_ts: new Date().toISOString(),
+            logging_mode: this.loggingMode,
           }),
         });
         if (!r.ok) {
