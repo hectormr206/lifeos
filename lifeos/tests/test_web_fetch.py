@@ -92,28 +92,37 @@ def test_read_non_html_empty_extraction(monkeypatch):
 
 
 def test_read_size_cap(monkeypatch):
-    """Reads at most max_bytes bytes, even when the response is larger."""
+    """H2: resp.read() must be called with max_bytes as its argument (bounded call).
+
+    Captures the exact `n` passed to resp.read() and asserts it equals
+    MAX_PAGE_BYTES — not uncapped (n=-1), not too small (e.g. 1), not too
+    large.  A 1-byte cap or argless read() would both fail this test.
+    """
     import lifeos.web.fetch as fetch_mod
     import trafilatura
 
-    captured_html: list[str] = []
+    monkeypatch.setattr(trafilatura, "extract", lambda html, **kw: "some text")  # noqa: ARG005
 
-    def capture_extract(html, **kw):  # noqa: ARG001
-        captured_html.append(html)
-        return "some text"
+    captured_n: list[int] = []
 
-    monkeypatch.setattr(trafilatura, "extract", capture_extract)
+    class _CapturingResp:
+        def __enter__(self):
+            return self
 
-    large_body = b"X" * (MAX_PAGE_BYTES + 1_000_000)
+        def __exit__(self, *_):
+            return False
+
+        def read(self, n=-1):
+            captured_n.append(n)
+            return b"<html><body><p>hello</p></body></html>"
 
     def fake_urlopen(req, timeout=None):
-        return _FakeResp(large_body)
+        return _CapturingResp()
 
     result = fetch_mod.read("http://example.com", urlopen=fake_urlopen)
 
-    # Must not crash; bytes passed to extract must be <= max_bytes
-    assert len(captured_html) == 1
-    html_bytes = captured_html[0].encode("latin-1", errors="replace")
-    assert len(html_bytes) <= MAX_PAGE_BYTES
-    # Result ok can be True or False depending on extraction; what matters is no crash.
+    assert len(captured_n) == 1, "resp.read() was not called"
+    assert captured_n[0] == MAX_PAGE_BYTES, (
+        f"resp.read() called with n={captured_n[0]!r}; expected MAX_PAGE_BYTES={MAX_PAGE_BYTES}"
+    )
     assert result.url == "http://example.com"
