@@ -4498,6 +4498,7 @@ def api_setup_status():
             "language": str(config.get("language", "es-MX")),
             "timezone": str(config.get("timezone", "America/Mexico_City")),
             "user_name": str(config.get("user_name", "Héctor")),
+            "autonomous_enabled": bool(config.get("autonomous_enabled", False)),
             "posture_enabled": bool(config.get("posture_enabled", False)),
             "chat_enabled": bool(config.get("chat_enabled", True)),
             "vision_enabled": bool(config.get("vision_enabled", True)),
