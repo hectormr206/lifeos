@@ -283,6 +283,14 @@ FIELDS: tuple[ConfigField, ...] = (
         "Puerto del dashboard. Reinicio del dashboard requerido.",
         minimum=1024, maximum=65535,
     ),
+    # ─────── Axi autonomous agent (proactive thought) ───────
+    ConfigField(
+        "autonomous_enabled", "boolean", False,
+        "Master toggle for Axi's autonomous proactive thought: a reflection tick "
+        "that perceives presence (webcam) + activity (screen), decides when to "
+        "surface the one thing that most deserves your attention, and sends at "
+        "most one proactive notification per day. Read-only, opt-in. Live (no restart).",
+    ),
     # ─────── lifeos posture (P6.2) ───────
     ConfigField(
         "posture_enabled", "boolean", False,
