@@ -93,6 +93,29 @@ def evaluate(title: str, body: str, priority: str = "ambient") -> Decision:
     if priority == "critical":
         return Decision("send")
 
+    if priority == "proactive":
+        # 1 guaranteed slot/day, OUTSIDE the 5/day ambient cap.
+        # Second proactive push in the same calendar day is suppressed.
+        now = datetime.utcnow()
+        today = now.date()
+        with store.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT sent_at FROM notif_log
+                WHERE priority = 'proactive'
+                  AND outcome = 'sent'
+                  AND sent_at >= ?
+                """,
+                ((now - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S"),),
+            ).fetchall()
+        spoke = sum(
+            1 for r in rows
+            if datetime.strptime(r["sent_at"], "%Y-%m-%d %H:%M:%S").date() == today
+        )
+        if spoke >= 1:
+            return Decision("suppress", reason="proactive-cap")
+        return Decision("send")
+
     cfg = load_config()
     now = datetime.utcnow()
     window_cutoff = now - timedelta(minutes=cfg.dedup_window_minutes)
