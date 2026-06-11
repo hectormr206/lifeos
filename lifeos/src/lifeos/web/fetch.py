@@ -49,11 +49,9 @@ def read(
         log.warning("fetch unexpected error for %s: %s", url, exc)
         return PageText(url=url, text="", ok=False)
 
-    # Decode best-effort; trafilatura handles encoding detection from the HTML.
-    try:
-        html = raw.decode("utf-8", errors="replace")
-    except Exception:  # noqa: BLE001
-        html = raw.decode("latin-1", errors="replace")
+    # Decode best-effort; errors="replace" never raises, so no try/except needed.
+    # trafilatura handles encoding detection from the HTML internally.
+    html = raw.decode("utf-8", errors="replace")
 
     extracted = trafilatura.extract(html)
     if not extracted:
