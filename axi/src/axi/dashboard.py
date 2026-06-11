@@ -784,6 +784,12 @@ def snapshot():
         "cpu_pct": _cpu_pct(),
         "models": _models_snapshot(),
         "eyes": _eye_capabilities(),
+        "autonomous": {
+            "enabled": bool(config.get("autonomous_enabled", False)),
+            # actively thinking = enabled AND not suppressed by a recording meeting
+            "active": bool(config.get("autonomous_enabled", False))
+            and not meeting_status.startswith("recording:"),
+        },
         "memory": {
             "conversation_turns": store.conversation_count(),
             "facts_count": _fact_count(),
