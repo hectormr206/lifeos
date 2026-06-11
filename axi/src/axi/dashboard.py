@@ -253,6 +253,50 @@ async def lifespan(_app: FastAPI):
             except Exception:  # noqa: BLE001
                 return ""
 
+        # P7.1 — Real perceive_fn: compose webcam presence + screen activity.
+        # Swallows ALL capture errors so the tick is never broken by sensor failures.
+        # Images are in-memory only → local brain → discarded; never written to disk.
+        from axi import eyes as _axi_eyes_auto  # noqa: PLC0415
+        from axi import vision as _axi_vision_auto  # noqa: PLC0415
+        from lifeos.autonomous.cron import PerceptionContext  # noqa: PLC0415
+
+        def _auto_perceive() -> PerceptionContext:
+            """Capture webcam presence + active-window screen; return PerceptionContext.
+
+            Contract: MUST NOT raise. All errors degrade to _NO_PERCEPTION fields.
+            Privacy: images are in-memory only, passed to local brain, never logged.
+            """
+            try:
+                _webcam_b64, status = _axi_eyes_auto.capture_b64()
+            except Exception:  # noqa: BLE001
+                status = "failed"
+
+            # Map webcam status to presence enum
+            # busy:<who> means a video call is using the camera — user IS present
+            if status == "ok":
+                presence = "present"
+                webcam_ok = True
+            elif status.startswith("busy:"):
+                presence = "present"   # call IS presence (design §2)
+                webcam_ok = False      # we did not capture a frame ourselves
+            else:
+                # no-device / failed / dark / lid-closed → unknown
+                presence = "unknown"
+                webcam_ok = False
+
+            # Capture active window screen (None on any failure)
+            screen_b64: str | None = None
+            try:
+                screen_b64 = _axi_vision_auto.capture_active_window_b64()
+            except Exception:  # noqa: BLE001
+                screen_b64 = None
+
+            return PerceptionContext(
+                presence=presence,
+                screen_b64=screen_b64,
+                webcam_ok=webcam_ok,
+            )
+
         autonomous_cron.configure(
             brain_ask=_axi_brain_auto.ask,
             digest_fn=_auto_digest,
@@ -264,6 +308,7 @@ async def lifespan(_app: FastAPI):
             spoke_read_fn=autonomous_cron.read_last_pushed,
             spoke_write_fn=autonomous_cron.write_last_pushed,
             log_fn=_axi_events.log_info,
+            perceive_fn=_auto_perceive,
             ask_timeout=float(config.get("autonomous_ask_timeout", 20.0)),
             max_message_chars=int(config.get("autonomous_max_chars", 120)),
             language=str(config.get("language", "es-MX")),

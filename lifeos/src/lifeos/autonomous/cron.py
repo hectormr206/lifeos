@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
@@ -46,6 +46,30 @@ LogFn        = Callable[..., None]              # events.log_info-compatible
 SpokeReadFn  = Callable[[], str | None]         # -> ISO date of last push, or None
 SpokeWriteFn = Callable[[str], None]            # mark spoke-today (ISO date)
 AliveFn      = Callable[[], bool]               # brain.is_alive
+
+# ---------------------------------------------------------------------------
+# Perception types (TASK-P0)
+# ---------------------------------------------------------------------------
+
+# 'away' is reserved for future face-absence detection; v1 emits present/unknown only.
+Presence = Literal["present", "away", "unknown"]
+
+
+@dataclass(frozen=True, slots=True)
+class PerceptionContext:
+    """Result of the perceive_fn() call. All fields have safe defaults so the
+    no-perception path (perceive_fn not injected) is a single shared instance."""
+    presence: Presence = "unknown"
+    screen_b64: str | None = None   # active-window PNG base64, or None on failure
+    webcam_ok: bool = False          # True iff a webcam frame was actually captured
+    activity_hint: str | None = None # optional cheap descriptor; usually None in v1
+
+
+PerceiveFn = Callable[[], "PerceptionContext"]
+
+# Shared sentinel used when no perceive_fn is injected.
+# Single frozen instance → zero allocation, easily assertable in tests.
+_NO_PERCEPTION = PerceptionContext()
 
 Outcome = Literal[
     "pushed",
@@ -87,6 +111,7 @@ _alive_fn: AliveFn | None = None
 _spoke_read_fn: SpokeReadFn | None = None
 _spoke_write_fn: SpokeWriteFn | None = None
 _log_fn: LogFn | None = None
+_perceive_fn: PerceiveFn | None = None
 _ask_timeout: float = 20.0
 _max_message_chars: int = 120
 _language: str = "es-MX"
@@ -106,6 +131,7 @@ def configure(
     spoke_read_fn: SpokeReadFn,
     spoke_write_fn: SpokeWriteFn,
     log_fn: LogFn,
+    perceive_fn: PerceiveFn | None = None,
     ask_timeout: float = 20.0,
     max_message_chars: int = 120,
     language: str = "es-MX",
@@ -115,6 +141,7 @@ def configure(
     """Inject all callables. Calling configure() resets state completely."""
     global _brain_ask, _digest_fn, _correlate_fn, _push_fn, _now_fn
     global _is_enabled_fn, _alive_fn, _spoke_read_fn, _spoke_write_fn, _log_fn
+    global _perceive_fn
     global _ask_timeout, _max_message_chars, _language
     global _window_start_hour, _window_end_hour
 
@@ -128,6 +155,7 @@ def configure(
     _spoke_read_fn = spoke_read_fn
     _spoke_write_fn = spoke_write_fn
     _log_fn = log_fn
+    _perceive_fn = perceive_fn
     _ask_timeout = float(ask_timeout)
     _max_message_chars = int(max_message_chars)
     _language = language
@@ -165,6 +193,25 @@ def parse_reply(reply: str, max_chars: int) -> tuple[Literal["msg", "esperar", "
 # Pure decision core
 # ---------------------------------------------------------------------------
 
+def _perception_log_fields(ctx: PerceptionContext) -> dict:
+    """Build the perception-related fields that are safe to log.
+
+    Privacy invariant: this function MUST NOT include any image bytes.
+    Only derived, scalar context is returned.
+    """
+    activity_descriptor = ctx.activity_hint or (
+        "screen+present" if (ctx.screen_b64 is not None and ctx.presence == "present")
+        else "no-screen+unknown" if ctx.screen_b64 is None
+        else f"screen+{ctx.presence}"
+    )
+    return {
+        "presence": ctx.presence,
+        "webcam_ok": ctx.webcam_ok,
+        "screen_available": ctx.screen_b64 is not None,
+        "activity_descriptor": activity_descriptor,
+    }
+
+
 def run_tick(now: datetime) -> TickResult:
     """Pure decision core. Order of guards:
     1. Not configured → RuntimeError (programming error, not a runtime skip)
@@ -172,14 +219,15 @@ def run_tick(now: datetime) -> TickResult:
     3. Already spoke today → skipped-already-spoke
     4. Brain not alive → skipped-brain-down
     5. Digest + correlate both empty → skipped-empty
-    6. brain_ask (with exception guard) → 3-way parse → act
+    6. perceive_fn() → PerceptionContext (degrade on error)
+    7. brain_ask (with exception guard, image_b64=ctx.screen_b64) → 3-way parse → act
     Every path logs exactly once via log_fn.
     """
     if _brain_ask is None:
         raise RuntimeError("autonomous cron not configured — call configure() first")
 
-    def _log(outcome: Outcome, **extra) -> None:
-        data = {"outcome": outcome, **extra}
+    def _log(outcome: Outcome, ctx: PerceptionContext = _NO_PERCEPTION, **extra) -> None:
+        data = {"outcome": outcome, **_perception_log_fields(ctx), **extra}
         if _log_fn is not None:
             _log_fn("autonomous.tick", f"reflection tick: {outcome}", data=data)
 
@@ -208,15 +256,31 @@ def run_tick(now: datetime) -> TickResult:
         _log("skipped-empty")
         return TickResult("skipped-empty")
 
-    # Build prompt
-    prompt = _build_prompt(now, digest_body, edge_summary)
+    # Perceive: call perceive_fn, degrade gracefully on any error.
+    # perceive_fn contract: MUST NOT raise; but we guard defensively here.
+    ctx: PerceptionContext = _NO_PERCEPTION
+    if _perceive_fn is not None:
+        try:
+            ctx = _perceive_fn()
+        except Exception:  # noqa: BLE001
+            log.warning("autonomous: perceive_fn raised; degrading to _NO_PERCEPTION")
+            ctx = _NO_PERCEPTION
 
-    # Reflect: ask brain (with exception guard)
+    # Build enriched prompt (presence text + optional screen instruction)
+    prompt = _build_prompt(now, digest_body, edge_summary, ctx)
+
+    # Reflect: ask brain (with exception guard), pass screen image when available
     try:
-        reply = _brain_ask(prompt, max_tokens=150, think=False, timeout=_ask_timeout)
+        reply = _brain_ask(
+            prompt,
+            max_tokens=150,
+            think=False,
+            timeout=_ask_timeout,
+            image_b64=ctx.screen_b64,
+        )
     except Exception:  # noqa: BLE001
         log.exception("autonomous: brain_ask raised an exception")
-        _log("skipped-brain-down")
+        _log("skipped-brain-down", ctx)
         return TickResult("skipped-brain-down")
 
     # Parse
@@ -231,29 +295,62 @@ def run_tick(now: datetime) -> TickResult:
             log.exception("autonomous: push_fn raised an exception")
         if _spoke_write_fn is not None:
             _spoke_write_fn(today_iso)
-        _log("pushed", message_len=len(message))
+        _log("pushed", ctx, message_len=len(message))
         return TickResult("pushed", message=message)
 
     if verdict == "nada":
         # NADA means silent for the rest of the day (Decision B: mark spoke)
         if _spoke_write_fn is not None:
             _spoke_write_fn(today_iso)
-        _log("nada")
+        _log("nada", ctx)
         return TickResult("nada")
 
     # verdict == "esperar": wait for a better moment; don't mark spoke
-    _log("esperar")
+    _log("esperar", ctx)
     return TickResult("esperar")
 
 
-def _build_prompt(now: datetime, digest_body: str, edge_summary: str) -> str:
-    """Build the reflection prompt per design §4."""
+def _build_prompt(
+    now: datetime,
+    digest_body: str,
+    edge_summary: str,
+    ctx: PerceptionContext = _NO_PERCEPTION,
+) -> str:
+    """Build the reflection prompt per design §4 / §6 (perception enrichment).
+
+    When ctx is _NO_PERCEPTION (no perceive_fn injected), the prompt is
+    functionally identical to the pre-perception version — back-compat preserved.
+    """
     max_chars = _max_message_chars
+
+    # Perception block: presence line + screen instruction
+    if ctx.presence == "present":
+        presence_line = "Estado de presencia: Héctor está presente frente a la pantalla."
+    else:
+        presence_line = (
+            "Estado de presencia: no se pudo confirmar su presencia "
+            "(cámara ocupada, apagada o bloqueada)."
+        )
+
+    if ctx.screen_b64 is not None:
+        screen_block = (
+            "Abajo va una captura de su pantalla activa. "
+            "Mírala: ¿qué está haciendo? "
+            "¿Es buen momento para interrumpir con UNA cosa, o conviene esperar?"
+        )
+    else:
+        screen_block = (
+            "No hay captura de pantalla disponible; "
+            "decide solo con el contexto de vida."
+        )
+
     return (
         f"Es {now.strftime('%H:%M')} ({now.strftime('%A')}). "
         "Este es el contexto de vida de Héctor ahora mismo:\n\n"
         f"{digest_body}\n\n"
         f"{edge_summary}\n\n"
+        f"{presence_line}\n"
+        f"{screen_block}\n\n"
         "Tu tarea: decidir si ESTE es el buen momento para decirle UNA sola cosa, "
         "la MÁS importante que merece su atención. Considera la hora del día.\n"
         f"- Si SÍ es el momento: responde SOLO con esa frase, máx {max_chars} caracteres, "
