@@ -267,7 +267,7 @@ async def lifespan(_app: FastAPI):
             Privacy: images are in-memory only, passed to local brain, never logged.
             """
             try:
-                _webcam_b64, status = _axi_eyes_auto.capture_b64()
+                _, status = _axi_eyes_auto.capture_b64()
             except Exception:  # noqa: BLE001
                 status = "failed"
 

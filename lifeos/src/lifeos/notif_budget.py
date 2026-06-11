@@ -19,7 +19,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from lifeos import store
@@ -96,7 +96,7 @@ def evaluate(title: str, body: str, priority: str = "ambient") -> Decision:
     if priority == "proactive":
         # 1 guaranteed slot/day, OUTSIDE the 5/day ambient cap.
         # Second proactive push in the same calendar day is suppressed.
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         today = now.date()
         with store.connect() as conn:
             rows = conn.execute(
@@ -117,7 +117,7 @@ def evaluate(title: str, body: str, priority: str = "ambient") -> Decision:
         return Decision("send")
 
     cfg = load_config()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     window_cutoff = now - timedelta(minutes=cfg.dedup_window_minutes)
     today = now.date()
 
@@ -200,7 +200,7 @@ def record(*, title: str, body: str, priority: str, outcome: str) -> None:
 
 def cleanup_old(days: int = 7) -> int:
     """Delete notif_log rows older than `days` days. Returns count deleted."""
-    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     with store.connect() as conn:
         cursor = conn.execute(
             "DELETE FROM notif_log WHERE sent_at < ?", (cutoff,)

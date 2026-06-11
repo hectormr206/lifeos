@@ -856,3 +856,238 @@ def test_no_image_bytes_in_log_data() -> None:
     assert FAKE_IMAGE not in data_str, "Image bytes must NOT be logged (privacy invariant)"
     # Also assert screen_b64 key itself is not in logged data
     assert "screen_b64" not in data
+
+
+# ---------------------------------------------------------------------------
+# FIX-H2: Push failure must NOT burn the day's slot
+# ---------------------------------------------------------------------------
+
+def test_push_failure_does_not_mark_spoke() -> None:
+    """push_fn raises → spoke_write_fn NOT called; outcome reflects push failure."""
+    from lifeos.autonomous import cron
+
+    spoke_write_spy = MagicMock()
+    log_spy = MagicMock()
+
+    def _failing_push(title: str, body: str, **kw):
+        raise OSError("push service down")
+
+    _default_configure(
+        brain_ask=lambda *a, **kw: "Tienes una cita médica mañana.",
+        push_fn=_failing_push,
+        spoke_write_fn=spoke_write_spy,
+        log_fn=log_spy,
+    )
+    result = cron.run_tick(_now())
+    # Slot must NOT be burned on push failure
+    spoke_write_spy.assert_not_called()
+    # Outcome should reflect the failure (push-failed)
+    assert result.outcome == "push-failed"
+
+
+def test_push_failure_allows_retry_on_next_tick() -> None:
+    """After push_fn raises, subsequent tick (same day) can push again."""
+    from lifeos.autonomous import cron
+
+    call_count = 0
+
+    def _push_that_fails_first(*a, **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise OSError("transient failure")
+        return {"sent": 1}
+
+    spoke_write_spy = MagicMock()
+    _default_configure(
+        brain_ask=lambda *a, **kw: "Tienes una cita médica mañana.",
+        push_fn=_push_that_fails_first,
+        spoke_write_fn=spoke_write_spy,
+    )
+    # First tick: push fails, slot NOT burned
+    result1 = cron.run_tick(_now())
+    assert result1.outcome == "push-failed"
+    spoke_write_spy.assert_not_called()
+
+    # Second tick (same day): push succeeds, slot IS burned
+    result2 = cron.run_tick(_now())
+    assert result2.outcome == "pushed"
+    spoke_write_spy.assert_called_once_with(_today())
+
+
+# ---------------------------------------------------------------------------
+# FIX-H1: run_tick_now must respect the enabled gate
+# ---------------------------------------------------------------------------
+
+def test_run_tick_now_respects_disabled_gate() -> None:
+    """run_tick_now when is_enabled_fn returns False → no brain call, no push, outcome skipped-disabled."""
+    from lifeos.autonomous import cron
+
+    brain_spy = MagicMock()
+    push_spy = MagicMock()
+
+    _default_configure(
+        brain_ask=brain_spy,
+        push_fn=push_spy,
+        is_enabled_fn=lambda: False,
+    )
+    result = cron.run_tick_now()
+    assert result.outcome == "skipped-disabled"
+    brain_spy.assert_not_called()
+    push_spy.assert_not_called()
+
+
+def test_run_tick_now_proceeds_when_enabled() -> None:
+    """run_tick_now when is_enabled_fn returns True → tick runs normally."""
+    from lifeos.autonomous import cron
+
+    brain_spy = MagicMock(return_value="Tienes una cita.")
+    _default_configure(
+        brain_ask=brain_spy,
+        is_enabled_fn=lambda: True,
+    )
+    result = cron.run_tick_now()
+    # run_tick proceeds; brain is called
+    brain_spy.assert_called_once()
+    assert result.outcome in ("pushed", "esperar", "nada", "skipped-already-spoke", "skipped-brain-down", "skipped-empty", "skipped-outside-window")
+
+
+# ---------------------------------------------------------------------------
+# FIX-W1/L1: Read-only invariant test — REAL enforcement
+# ---------------------------------------------------------------------------
+
+def test_no_domain_write_called_on_any_tick_path_real() -> None:
+    """No domain store writes happen on any tick path — enforced via import analysis.
+
+    cron.py must not import any domain-write module: health.entries, finance.entries,
+    relationships.interactions, learning.entries, events.entries, spirituality.entries,
+    exercise.sessions, reminders (write path), lifeos.store (write path).
+    """
+    import ast
+    import importlib.util
+    from pathlib import Path as _Path
+
+    # Find cron.py source
+    spec = importlib.util.find_spec("lifeos.autonomous.cron")
+    assert spec is not None, "lifeos.autonomous.cron not found"
+    assert spec.origin is not None
+    source = _Path(spec.origin).read_text()
+    tree = ast.parse(source)
+
+    # Collect all imported module names (top-level and from-imports)
+    imported_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported_names.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imported_names.add(node.module)
+
+    # Domain-write surfaces: any import of these would be a violation
+    forbidden_write_modules = {
+        "lifeos.health.entries",
+        "lifeos.finance.entries",
+        "lifeos.finance.ingestion",
+        "lifeos.relationships.interactions",
+        "lifeos.learning.entries",
+        "lifeos.events.entries",
+        "lifeos.spirituality.entries",
+        "lifeos.exercise.sessions",
+        "lifeos.reminders",
+        "lifeos.store",
+    }
+
+    violations = imported_names & forbidden_write_modules
+    assert not violations, (
+        f"cron.py imports domain-write module(s): {violations}. "
+        "The tick must be read-only — no domain writes allowed."
+    )
+
+
+# ---------------------------------------------------------------------------
+# FIX-L2: Privacy invariant extended across all outcomes
+# ---------------------------------------------------------------------------
+
+def test_no_image_bytes_in_log_data_esperar() -> None:
+    """Privacy invariant: no image bytes in log data on 'esperar' outcome."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    all_log_calls: list[dict] = []
+
+    def _capturing_log(event: str, msg: str, *, data: dict) -> None:
+        all_log_calls.append(data)
+
+    FAKE_IMAGE = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+    fake_ctx = PerceptionContext(presence="present", screen_b64=FAKE_IMAGE, webcam_ok=True)
+
+    _default_configure(
+        brain_ask=lambda *a, **kw: "ESPERAR",
+        log_fn=_capturing_log,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+
+    assert len(all_log_calls) >= 1
+    for data in all_log_calls:
+        data_str = str(data)
+        assert FAKE_IMAGE not in data_str, "Image bytes must NOT be logged on esperar (privacy invariant)"
+        assert "screen_b64" not in data
+
+
+def test_no_image_bytes_in_log_data_nada() -> None:
+    """Privacy invariant: no image bytes in log data on 'nada' outcome."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    all_log_calls: list[dict] = []
+
+    def _capturing_log(event: str, msg: str, *, data: dict) -> None:
+        all_log_calls.append(data)
+
+    FAKE_IMAGE = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+    fake_ctx = PerceptionContext(presence="present", screen_b64=FAKE_IMAGE, webcam_ok=True)
+
+    _default_configure(
+        brain_ask=lambda *a, **kw: "NADA",
+        log_fn=_capturing_log,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+
+    assert len(all_log_calls) >= 1
+    for data in all_log_calls:
+        data_str = str(data)
+        assert FAKE_IMAGE not in data_str, "Image bytes must NOT be logged on nada (privacy invariant)"
+        assert "screen_b64" not in data
+
+
+def test_no_image_bytes_in_log_data_brain_exception() -> None:
+    """Privacy invariant: no image bytes in log data when brain_ask raises (brain-exception path)."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    all_log_calls: list[dict] = []
+
+    def _capturing_log(event: str, msg: str, *, data: dict) -> None:
+        all_log_calls.append(data)
+
+    def _bad_brain(*a, **kw):
+        raise RuntimeError("brain exploded")
+
+    FAKE_IMAGE = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+    fake_ctx = PerceptionContext(presence="present", screen_b64=FAKE_IMAGE, webcam_ok=True)
+
+    _default_configure(
+        brain_ask=_bad_brain,
+        log_fn=_capturing_log,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+
+    assert len(all_log_calls) >= 1
+    for data in all_log_calls:
+        data_str = str(data)
+        assert FAKE_IMAGE not in data_str, "Image bytes must NOT be logged on brain-exception (privacy invariant)"
+        assert "screen_b64" not in data
