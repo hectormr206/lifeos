@@ -183,6 +183,23 @@ def test_dispatch_at_threshold_uses_pipeline():
     assert len(model.calls) == 0
 
 
+def test_dispatch_long_respects_vad_flag():
+    """The long (batched) path passes vad_filter=vad. Default True; vad=False is
+    the no-VAD retry the server uses to recover when VAD strips a whole
+    dictation (faster_whisper VAD can remove 100% of quiet/fast speech)."""
+    from axi.whisper_server import _dispatch_transcription
+
+    audio = _long_audio()
+
+    p_on = _RecordingPipeline()
+    _dispatch_transcription(audio, {"language": "es"}, model=_RecordingModel(), pipeline=p_on)
+    assert p_on.calls[0]["vad_filter"] is True  # default keeps VAD (meetings)
+
+    p_off = _RecordingPipeline()
+    _dispatch_transcription(audio, {"language": "es"}, model=_RecordingModel(), pipeline=p_off, vad=False)
+    assert p_off.calls[0]["vad_filter"] is False  # fallback disables VAD
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 2.1.4 — both paths return identical (segments, info) shape
 # ─────────────────────────────────────────────────────────────────────────────
