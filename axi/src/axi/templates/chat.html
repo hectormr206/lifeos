@@ -238,7 +238,9 @@
         <span x-text="speakOn ? '🔊' : '🔇'"></span>
       </button>
       <!-- Logging mode toggle. ON = data-entry (nano agents, no internet).
-           OFF (default) = free conversation with the big brain. -->
+           OFF (default) = free conversation with the big brain.
+           F1: tooltips and hint strip clearly explain what each mode does and
+           what data is (or is not) saved automatically. -->
       <button
         type="button"
         @click="toggleLoggingMode()"
@@ -248,17 +250,22 @@
           ? 'min-height: 2.5rem; min-width: 2.75rem; background: rgba(255,107,157,0.2); border-color: var(--pink, #ff6b9d);'
           : 'min-height: 2.5rem; min-width: 2.75rem;'"
         :title="loggingMode
-          ? 'Modo registro ON — guardando datos (nano). Clic para cambiar a charla.'
-          : 'Modo charla — hablando con Axi. Clic para cambiar a registro de datos.'"
+          ? '💾 Modo registro activo — Sin internet · nano-agentes guardan tus datos estructurados. Clic para volver a modo charla (💬).'
+          : '💬 Modo charla — hablás con Axi (con internet). Solo datos con formato claro (presión 120/80, glucosa 95) se guardan solos. Para registrar otros datos activá 💾 Modo registro.'"
       >
         <span x-text="loggingMode ? '💾' : '💬'"></span>
       </button>
     </div>
-    <!-- Mode hint strip -->
+    <!-- Mode hint strip: shown in charla mode (default) to explain the design;
+         also shown in registro mode to confirm the active state. -->
     <div x-show="loggingMode" x-cloak
-         class="text-xs muted mb-1 px-1"
+         class="text-xs mb-1 px-1"
          style="color: var(--pink, #ff6b9d);">
-      Modo registro — los nano-agentes guardan tus datos. Sin internet.
+      💾 Modo registro — nano-agentes guardan tus datos. Sin internet. Clic en 💾 para volver a charla.
+    </div>
+    <div x-show="!loggingMode" x-cloak
+         class="text-xs muted mb-1 px-1">
+      💬 Modo charla — hablás con Axi con internet. Solo datos con formato claro (ej: presión 120/80, glucosa 95) se guardan automáticamente. Para registrar otros datos, activá 💾.
     </div>
 
     <form @submit.prevent="send()" class="flex gap-2 items-end">
@@ -323,8 +330,11 @@ function chatApp() {
         this.speakOn = stored === '1';
         const locStored = localStorage.getItem('axi_chat_location');
         this.locationOn = locStored === '1';
-        const logStored = localStorage.getItem('axi_chat_logging_mode');
-        this.loggingMode = logStored === '1';
+        // F5: logging mode is intentionally NOT restored from localStorage.
+        // It defaults to OFF (charla) on every fresh page load. This prevents
+        // the "zombie logging mode" problem where the user forgets they left it
+        // ON and every future conversation gets routed to nano instead of brain.
+        // Logging mode is a deliberate per-session opt-in gesture.
       } catch (e) { /* private mode etc. */ }
       await this.loadHistory();
       // CRITICAL: restore any pending/error items from IDB queue as
@@ -660,7 +670,8 @@ function chatApp() {
 
     toggleLoggingMode() {
       this.loggingMode = !this.loggingMode;
-      try { localStorage.setItem('axi_chat_logging_mode', this.loggingMode ? '1' : '0'); } catch (e) {}
+      // F5: logging mode is kept in-memory only (not persisted to localStorage).
+      // Every page load starts in charla mode (OFF) — intentional per-session opt-in.
       if (navigator.vibrate) navigator.vibrate(30);
     },
 
