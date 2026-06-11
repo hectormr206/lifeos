@@ -96,6 +96,9 @@ from lifeos.insights import patterns as insights_patterns
 from lifeos.posture import cron as posture_cron
 from lifeos.posture import scans as posture_scans
 from lifeos.posture import store as posture_store
+# P7 — Autonomous reflection tick (proactive thought, disabled by default).
+from lifeos.autonomous import cron as autonomous_cron
+from lifeos.insights import correlate as insights_correlate
 # Nano-agents PRD — fast-path instrumentation. Records which stage handled
 # each chat call + latency, so we can decide empirically whether nano-agents
 # are worth building. Stores metadata only (no text content).
@@ -222,6 +225,58 @@ async def lifespan(_app: FastAPI):
         )
     except Exception:  # noqa: BLE001
         log.exception("lifeos posture cron failed to start")
+    try:
+        # P7 — Autonomous reflection tick.
+        # Register-always, fire-time gate via is_enabled_fn (matches posture/insights pattern).
+        # Default: autonomous_enabled=False → ships dark, opt-in only.
+        from axi import brain as _axi_brain_auto
+        from axi import events as _axi_events
+        tz_auto = ZoneInfo("America/Mexico_City")
+
+        def _auto_push(title: str, body: str) -> dict:
+            return lifeos_push.send_to_all(
+                title=title, body=body,
+                url="/insights",
+                tag="lifeos-autonomous",
+                priority="proactive",
+            )
+
+        def _auto_digest() -> str:
+            return insights_digest.compose(cadence="daily").body
+
+        def _auto_correlate() -> str:
+            # build_bundle() is a planned API; until it ships, return empty
+            # (the run_tick empty-digest guard only skips when BOTH digest AND
+            # correlate are empty, so a non-empty digest still proceeds).
+            try:
+                return insights_correlate.render_summary([], [])
+            except Exception:  # noqa: BLE001
+                return ""
+
+        autonomous_cron.configure(
+            brain_ask=_axi_brain_auto.ask,
+            digest_fn=_auto_digest,
+            correlate_fn=_auto_correlate,
+            push_fn=_auto_push,
+            now_fn=lambda: datetime.now(tz_auto),
+            is_enabled_fn=lambda: bool(config.get("autonomous_enabled", False)),
+            alive_fn=_axi_brain_auto.is_alive,
+            spoke_read_fn=autonomous_cron.read_last_pushed,
+            spoke_write_fn=autonomous_cron.write_last_pushed,
+            log_fn=_axi_events.log_info,
+            ask_timeout=float(config.get("autonomous_ask_timeout", 20.0)),
+            max_message_chars=int(config.get("autonomous_max_chars", 120)),
+            language=str(config.get("language", "es-MX")),
+            window_start_hour=int(config.get("autonomous_start_hour", 8)),
+            window_end_hour=int(config.get("autonomous_end_hour", 22)),
+        )
+        autonomous_cron.start_jobs(
+            cadence_minutes=int(config.get("autonomous_cadence_minutes", 45)),
+            start_hour=int(config.get("autonomous_start_hour", 8)),
+            end_hour=int(config.get("autonomous_end_hour", 22)),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("lifeos autonomous cron failed to start")
 
     yield
 
