@@ -591,6 +591,14 @@
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/static/sw.js').catch(() => {/* offline ok */});
       });
+      // When a new SW takes control (after a version bump), reload ONCE so the
+      // page picks up the fresh shell immediately — no manual unregister needed.
+      let _swReloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (_swReloaded) return;
+        _swReloaded = true;
+        window.location.reload();
+      });
     }
 
     // Markdown → HTML helper. Used by meeting summaries, fact details, etc.

@@ -18,7 +18,7 @@
 //   - The OS decides WHEN to fire — typically within minutes of reconnecting.
 //   - Each sync event has ~12s CPU budget; large queues may need multiple fires.
 
-const CACHE_VERSION = 'axi-shell-v8';
+const CACHE_VERSION = 'axi-shell-v9';
 const SHELL_URLS = [
   '/',
   '/chat',
@@ -73,13 +73,12 @@ self.addEventListener('fetch', (event) => {
   // go straight to network.
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // Navigation requests (HTML pages): stale-while-revalidate.
-  // Serves cached shell IMMEDIATELY (so the app loads instant even when
-  // the VPN is down and fetch would otherwise hang for 10-30s waiting
-  // for a TCP timeout). The fresh response is fetched in background and
-  // replaces the cache for the NEXT visit.
+  // Navigation requests (HTML pages): NETWORK-FIRST with a short timeout.
+  // Always serve FRESH HTML when the laptop is reachable (localhost = instant),
+  // so the user NEVER sees a stale page. Falls back to cache only if the
+  // network is slow/down (flaky VPN from the phone), so it never hangs.
   if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
-    event.respondWith(staleWhileRevalidate(req));
+    event.respondWith(networkFirstWithTimeout(req, 3000));
     return;
   }
 
@@ -91,6 +90,32 @@ self.addEventListener('fetch', (event) => {
 
   // API GETs (no special handling — page itself decides how to degrade).
 });
+
+// network-first with a short timeout for navigations: fresh when reachable,
+// cache fallback only when the network is slow/down (so it never hangs).
+async function networkFirstWithTimeout(req, timeoutMs) {
+  const cache = await caches.open(CACHE_VERSION);
+  try {
+    const fresh = await Promise.race([
+      fetch(req),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs)),
+    ]);
+    if (fresh) {
+      if (fresh.ok) cache.put(req, fresh.clone()).catch(() => {});
+      return fresh;
+    }
+  } catch (e) { /* network slow/down → fall back to cache below */ }
+  const cached = await cache.match(req);
+  if (cached) return cached;
+  const home = await cache.match('/');
+  if (home) return home;
+  return new Response(
+    '<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
+    '<style>body{font-family:system-ui;padding:2rem;text-align:center;color:#888}h1{color:#FF6B9D}</style>' +
+    '<h1>📡 Sin conexión</h1><p>Axi no puede comunicarse con la laptop ahora mismo.</p>',
+    { headers: { 'Content-Type': 'text/html; charset=utf-8' }, status: 503 }
+  );
+}
 
 // stale-while-revalidate: return cached IMMEDIATELY if we have it. Fire
 // a fresh fetch in background to update the cache for next visit. If no
