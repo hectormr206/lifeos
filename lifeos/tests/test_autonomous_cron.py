@@ -457,3 +457,402 @@ def test_brain_ask_called_with_expected_prompt_shape() -> None:
     assert "ESPERAR" in prompt
     assert "NADA" in prompt
     assert "120" in prompt  # max chars hint
+
+
+# ---------------------------------------------------------------------------
+# TASK-P0: PerceptionContext types are importable and have correct defaults
+# ---------------------------------------------------------------------------
+
+def test_perception_context_defaults() -> None:
+    """PerceptionContext() defaults: presence=unknown, screen_b64=None, webcam_ok=False."""
+    from lifeos.autonomous.cron import PerceptionContext, _NO_PERCEPTION
+    ctx = PerceptionContext()
+    assert ctx.presence == "unknown"
+    assert ctx.screen_b64 is None
+    assert ctx.webcam_ok is False
+    assert ctx.activity_hint is None
+    # _NO_PERCEPTION is the shared frozen instance
+    assert _NO_PERCEPTION == ctx
+
+
+def test_perception_context_is_frozen() -> None:
+    """PerceptionContext is frozen — mutation raises."""
+    from lifeos.autonomous.cron import PerceptionContext
+    ctx = PerceptionContext(presence="present", webcam_ok=True)
+    with pytest.raises((AttributeError, TypeError)):
+        ctx.presence = "unknown"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# TASK-P1A RED → TASK-P1B GREEN: perceive_fn threading into brain_ask
+# ---------------------------------------------------------------------------
+
+def test_perceive_fn_screen_b64_passed_to_brain_ask() -> None:
+    """configure(perceive_fn=fake) → run_tick passes ctx.screen_b64 as image_b64 to brain_ask."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    captured_kwargs: list[dict] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_kwargs.append(kw)
+        return "ESPERAR"
+
+    fake_ctx = PerceptionContext(presence="present", screen_b64="FAKESCREEN64", webcam_ok=True)
+
+    _default_configure(
+        brain_ask=_spy_brain,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0].get("image_b64") == "FAKESCREEN64"
+
+
+def test_no_perceive_fn_brain_ask_image_b64_is_none() -> None:
+    """When perceive_fn is NOT injected, brain_ask receives image_b64=None (back-compat)."""
+    from lifeos.autonomous import cron
+
+    captured_kwargs: list[dict] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_kwargs.append(kw)
+        return "ESPERAR"
+
+    # Do NOT pass perceive_fn
+    _default_configure(brain_ask=_spy_brain)
+    cron.run_tick(_now())
+    assert len(captured_kwargs) == 1
+    # image_b64 should be None (or absent — both mean the same)
+    assert captured_kwargs[0].get("image_b64") is None
+
+
+def test_perceive_fn_with_none_screen_b64_passes_none_to_brain() -> None:
+    """ctx.screen_b64=None → brain_ask still called, image_b64=None (graceful degrade)."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    captured_kwargs: list[dict] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_kwargs.append(kw)
+        return "Tienes una cita."
+
+    fake_ctx = PerceptionContext(presence="present", screen_b64=None, webcam_ok=False)
+    _default_configure(
+        brain_ask=_spy_brain,
+        perceive_fn=lambda: fake_ctx,
+    )
+    result = cron.run_tick(_now())
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0].get("image_b64") is None
+    # tick must complete — not crash
+    assert result.outcome in ("pushed", "esperar", "nada")
+
+
+# ---------------------------------------------------------------------------
+# TASK-P2A RED → TASK-P2B GREEN: _build_prompt includes perception block
+# ---------------------------------------------------------------------------
+
+def test_build_prompt_includes_presence_present_text() -> None:
+    """Prompt includes presence=present text when ctx.presence=='present'."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    captured_prompt: list[str] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_prompt.append(prompt)
+        return "ESPERAR"
+
+    fake_ctx = PerceptionContext(presence="present", screen_b64="FAKEDATA", webcam_ok=True)
+    _default_configure(
+        brain_ask=_spy_brain,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+    assert len(captured_prompt) == 1
+    # Should contain some presence indicator text
+    assert "presente" in captured_prompt[0].lower() or "presencia" in captured_prompt[0].lower()
+
+
+def test_build_prompt_includes_presence_unknown_text() -> None:
+    """Prompt mentions camera/presence uncertainty when ctx.presence=='unknown'."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    captured_prompt: list[str] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_prompt.append(prompt)
+        return "ESPERAR"
+
+    fake_ctx = PerceptionContext(presence="unknown", screen_b64=None, webcam_ok=False)
+    _default_configure(
+        brain_ask=_spy_brain,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+    assert len(captured_prompt) == 1
+    prompt = captured_prompt[0]
+    # Should contain uncertainty / no-presence words
+    assert any(kw in prompt.lower() for kw in ("no se pudo", "cámara", "bloqueada", "apagada", "desconocida", "confirm"))
+
+
+def test_build_prompt_includes_screen_instruction_when_screen_present() -> None:
+    """Prompt includes screen-description instruction when screen_b64 is set."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    captured_prompt: list[str] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_prompt.append(prompt)
+        return "ESPERAR"
+
+    fake_ctx = PerceptionContext(presence="present", screen_b64="SCREENDATA", webcam_ok=True)
+    _default_configure(
+        brain_ask=_spy_brain,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+    assert len(captured_prompt) == 1
+    prompt = captured_prompt[0]
+    # Should contain an instruction to look at screen / decide if good moment
+    assert any(kw in prompt.lower() for kw in ("pantalla", "mirá", "mira", "captura", "haciendo", "interrumpir"))
+
+
+def test_build_prompt_no_screen_instruction_when_no_screen() -> None:
+    """When screen_b64 is None, prompt says activity is unknown."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    captured_prompt: list[str] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_prompt.append(prompt)
+        return "ESPERAR"
+
+    fake_ctx = PerceptionContext(presence="unknown", screen_b64=None, webcam_ok=False)
+    _default_configure(
+        brain_ask=_spy_brain,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+    assert len(captured_prompt) == 1
+    prompt = captured_prompt[0]
+    # Should say no screen / decide with life context only
+    assert any(kw in prompt.lower() for kw in ("no hay captura", "sin captura", "solo con el contexto", "no disponible", "contexto de vida"))
+
+
+# ---------------------------------------------------------------------------
+# TASK-P3A RED → TASK-P3B GREEN: behavior matrix
+# ---------------------------------------------------------------------------
+
+def test_presence_present_receptive_brain_pushes() -> None:
+    """present + receptive brain reply → pushed outcome."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    push_spy = MagicMock(return_value={"sent": 1})
+    fake_ctx = PerceptionContext(presence="present", screen_b64="SCREEN", webcam_ok=True)
+    _default_configure(
+        brain_ask=lambda *a, **kw: "Tienes una cita médica mañana a las 10.",
+        push_fn=push_spy,
+        perceive_fn=lambda: fake_ctx,
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "pushed"
+    push_spy.assert_called_once()
+
+
+def test_presence_present_brain_esperar_no_push() -> None:
+    """present + brain returns ESPERAR → esperar outcome, no push."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    push_spy = MagicMock()
+    fake_ctx = PerceptionContext(presence="present", screen_b64="SCREEN", webcam_ok=True)
+    _default_configure(
+        brain_ask=lambda *a, **kw: "ESPERAR",
+        push_fn=push_spy,
+        perceive_fn=lambda: fake_ctx,
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "esperar"
+    push_spy.assert_not_called()
+
+
+def test_presence_unknown_brain_esperar_no_push() -> None:
+    """unknown presence + brain returns ESPERAR → esperar outcome, no push."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    push_spy = MagicMock()
+    fake_ctx = PerceptionContext(presence="unknown", screen_b64=None, webcam_ok=False)
+    _default_configure(
+        brain_ask=lambda *a, **kw: "ESPERAR",
+        push_fn=push_spy,
+        perceive_fn=lambda: fake_ctx,
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "esperar"
+    push_spy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TASK-P4A RED → TASK-P4B GREEN: capture-failure degradation
+# ---------------------------------------------------------------------------
+
+def test_screen_capture_failure_tick_completes_text_only() -> None:
+    """ctx.screen_b64=None → tick completes normally; image_b64=None to brain."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    captured_kwargs: list[dict] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured_kwargs.append(kw)
+        return "Algo importante."
+
+    # Screen capture failed → screen_b64=None
+    fake_ctx = PerceptionContext(presence="present", screen_b64=None, webcam_ok=True)
+    _default_configure(
+        brain_ask=_spy_brain,
+        perceive_fn=lambda: fake_ctx,
+    )
+    result = cron.run_tick(_now())
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0].get("image_b64") is None
+    # Tick must complete successfully (pushed/esperar/nada, not a crash)
+    assert result.outcome in ("pushed", "esperar", "nada")
+
+
+def test_perceive_fn_raising_does_not_break_tick() -> None:
+    """perceive_fn that raises must not break the tick (handled outside run_tick per design).
+
+    NOTE: per design, perceive_fn MUST NOT raise. This test documents the expected
+    behavior at the run_tick level — if someone passes a buggy perceive_fn that
+    does raise, run_tick should degrade to _NO_PERCEPTION (or the dashboard wiring
+    should swallow errors). This test verifies run_tick-level safety."""
+    from lifeos.autonomous import cron
+
+    captured_results: list = []
+
+    def _bad_perceive():
+        raise OSError("camera exploded")
+
+    push_spy = MagicMock(return_value={"sent": 1})
+    _default_configure(
+        brain_ask=lambda *a, **kw: "Tienes cita.",
+        push_fn=push_spy,
+        perceive_fn=_bad_perceive,
+    )
+    # run_tick must NOT raise; it should degrade and complete
+    result = cron.run_tick(_now())
+    assert result.outcome in ("pushed", "esperar", "nada", "skipped-brain-down")
+
+
+# ---------------------------------------------------------------------------
+# TASK-P6A RED → TASK-P6B GREEN: log enrichment with perception fields
+# ---------------------------------------------------------------------------
+
+def test_log_enriched_with_perception_fields_on_push() -> None:
+    """On 'pushed' outcome, log data includes presence, webcam_ok, screen_available, activity_descriptor."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    log_spy = MagicMock()
+    fake_ctx = PerceptionContext(
+        presence="present",
+        screen_b64="SCREENDATA",
+        webcam_ok=True,
+        activity_hint="coding",
+    )
+    _default_configure(
+        brain_ask=lambda *a, **kw: "Tienes una cita médica mañana.",
+        log_fn=log_spy,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+    assert log_spy.call_count == 1
+    data = log_spy.call_args[1]["data"]
+    assert data["outcome"] == "pushed"
+    assert data["presence"] == "present"
+    assert data["webcam_ok"] is True
+    assert data["screen_available"] is True
+    assert "activity_descriptor" in data
+
+
+def test_log_enriched_on_esperar() -> None:
+    """On 'esperar' outcome, log data includes perception fields."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    log_spy = MagicMock()
+    fake_ctx = PerceptionContext(presence="unknown", screen_b64=None, webcam_ok=False)
+    _default_configure(
+        brain_ask=lambda *a, **kw: "ESPERAR",
+        log_fn=log_spy,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+    assert log_spy.call_count == 1
+    data = log_spy.call_args[1]["data"]
+    assert data["outcome"] == "esperar"
+    assert data["presence"] == "unknown"
+    assert data["webcam_ok"] is False
+    assert data["screen_available"] is False
+    assert "activity_descriptor" in data
+
+
+def test_log_enriched_on_nada() -> None:
+    """On 'nada' outcome, log data includes perception fields."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    log_spy = MagicMock()
+    fake_ctx = PerceptionContext(presence="present", screen_b64="SCREEN", webcam_ok=True)
+    _default_configure(
+        brain_ask=lambda *a, **kw: "NADA",
+        log_fn=log_spy,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+    assert log_spy.call_count == 1
+    data = log_spy.call_args[1]["data"]
+    assert data["outcome"] == "nada"
+    assert data["presence"] == "present"
+    assert "activity_descriptor" in data
+
+
+def test_no_image_bytes_in_log_data() -> None:
+    """Privacy invariant: log data must NOT contain image bytes (screen_b64 or webcam b64)."""
+    from lifeos.autonomous import cron
+    from lifeos.autonomous.cron import PerceptionContext
+
+    all_log_calls: list[dict] = []
+
+    def _capturing_log(event: str, msg: str, *, data: dict) -> None:
+        all_log_calls.append(data)
+
+    FAKE_IMAGE = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+    fake_ctx = PerceptionContext(
+        presence="present",
+        screen_b64=FAKE_IMAGE,
+        webcam_ok=True,
+    )
+    _default_configure(
+        brain_ask=lambda *a, **kw: "Tienes una cita.",
+        log_fn=_capturing_log,
+        perceive_fn=lambda: fake_ctx,
+    )
+    cron.run_tick(_now())
+
+    assert len(all_log_calls) == 1
+    data = all_log_calls[0]
+    # Serialize as string and assert the image payload is not in it
+    data_str = str(data)
+    assert FAKE_IMAGE not in data_str, "Image bytes must NOT be logged (privacy invariant)"
+    # Also assert screen_b64 key itself is not in logged data
+    assert "screen_b64" not in data
