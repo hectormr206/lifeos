@@ -567,6 +567,8 @@ def test_chat_ask_client_ts_persists_as_entry_when(client, monkeypatch, health_i
     r = client.post("/api/chat/ask", json={
         "text": "glucosa en 95 esta mañana",
         "client_ts": past_ts,
+        # Nano extractor only runs in logging_mode=True (data-entry mode).
+        "logging_mode": True,
     })
     assert r.status_code == 200
 
@@ -603,6 +605,8 @@ def test_chat_ask_client_ts_future_is_rejected(client, monkeypatch, health_isola
     r = client.post("/api/chat/ask", json={
         "text": "glucosa en 80 esta mañana",
         "client_ts": future_ts,
+        # Nano extractor only runs in logging_mode=True.
+        "logging_mode": True,
     })
     assert r.status_code == 200
 

@@ -2302,6 +2302,12 @@ async def api_chat_ask(request: Request):
     text = (body.get("text") or "").strip()
     image_b64 = body.get("image_b64") or None
     want_speak = bool(body.get("speak", False))
+    # logging_mode: when True the user is in data-entry mode (nano extractor,
+    # no internet, guardrail as honest "couldn't parse" reply).
+    # When False (default) the big brain converses freely with internet access
+    # and WITHOUT the persistence guardrail. Unambiguous regex fast-paths always
+    # auto-save regardless of this flag.
+    logging_mode: bool = bool(body.get("logging_mode", False))
     # PWA optional fields — captured by the chat UI when the user toggles
     # the corresponding affordances. None when absent. We log them and pass
     # to the relevant domain create() as ad-hoc tag/data fields.
@@ -2386,7 +2392,9 @@ async def api_chat_ask(request: Request):
     # priority over regex classifiers that might misread "busca X" as finance.
     # Degrades gracefully: SearXNG down → friendly Spanish message (HTTP 200).
     _web_cmd_match = _WEB_CMD_RE.match(text)
-    if _web_cmd_match and not image_b64:
+    # Web research is only available outside logging mode. In logging mode the
+    # user is in data-entry mode: no internet, nano agents handle the text.
+    if _web_cmd_match and not image_b64 and not logging_mode:
         _web_query = (_web_cmd_match.group(2) or "").strip()
         if not _web_query:
             # Empty query — return a friendly prompt instead of crashing.
@@ -2995,24 +3003,36 @@ async def api_chat_ask(request: Request):
             except Exception as e:  # noqa: BLE001
                 log.warning("lifeos reminder fast-path failed: %s — falling back to brain", e)
 
-    # ─── Nano-agent fallback (BEFORE the main brain) ────────────────
-    # All regex parsers missed. Try the entity extractor (Qwen3.5-0.8B
-    # on port 8090). If it identifies a domain and we successfully
-    # persist, return that. Otherwise fall through to the main brain.
-    # Min-length guard: very short inputs (<12 chars) have no structure
-    # for the extractor to recover and trigger spurious classifications
-    # (the model defaults to "spirituality" on near-empty text). Skip
-    # straight to the brain instead of burning ~4s on noise.
-    if not image_b64 and len(parse_text.strip()) >= 12:
-        try:
-            nano_out = _try_nano_extract(
-                parse_text, location_tag,
-                entry_when=entry_when,
-                original_text=text,
-            )
-        except Exception as e:  # noqa: BLE001
-            log.exception("nano-extract wrapper failed: %s", e)
-            nano_out = None
+    # ─── Fallback routing (logging_mode controls the path) ─────────────
+    #
+    # logging_mode=True  → DATA-ENTRY path: nano extractor first. If nano
+    #   saves something, return that. If nano can't parse, return the honest
+    #   _suggested_format_message (the guardrail is now the legit "couldn't
+    #   parse" reply, not a clobber). Brain is NOT called. No internet.
+    #
+    # logging_mode=False → CONVERSATION path (default): skip nano auto-save,
+    #   go to brain.ask for free conversation. The persistence guardrail is
+    #   NOT applied here — the brain answers freely. Internet is available.
+    #
+    # Invariant: unambiguous regex fast-paths above this block always save
+    # regardless of logging_mode (so Héctor never loses a vital by forgetting
+    # to flip the toggle).
+
+    if logging_mode:
+        # ── Logging mode: nano extractor ──────────────────────────────────
+        # Min-length guard: very short inputs (<12 chars) have no structure
+        # for the extractor to recover and trigger spurious classifications.
+        nano_out = None
+        if not image_b64 and len(parse_text.strip()) >= 12:
+            try:
+                nano_out = _try_nano_extract(
+                    parse_text, location_tag,
+                    entry_when=entry_when,
+                    original_text=text,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.exception("nano-extract wrapper failed: %s", e)
+                nano_out = None
         if nano_out is not None:
             latency_ms = round((time.monotonic() - start) * 1000)
             try:
@@ -3028,57 +3048,66 @@ async def api_chat_ask(request: Request):
                 "nano_domain": nano_out["domain"],
                 "entry_ids": nano_out.get("entry_ids", []),
             }
-
-    try:
-        # If the PWA captured GPS at send time, inject it into the system
-        # prompt so the brain "sees" it instead of denying knowledge. We
-        # only mention it (no reverse-geocoding) — coordinates are private
-        # data and the user can interpret them.
-        brain_system = brain.SYSTEM_PROMPT
-        if raw_location:
-            try:
-                _lat = float(raw_location.get("lat"))
-                _lng = float(raw_location.get("lng"))
-                _acc = raw_location.get("accuracy_m")
-                acc_str = f", precisión ≈{int(_acc)}m" if _acc else ""
-                brain_system = (
-                    brain_system
-                    + f"\n\n--- CONTEXTO EN VIVO (importante) ---\n"
-                    + f"El usuario compartió SU UBICACIÓN ACTUAL desde el dispositivo "
-                    + f"vía GPS del navegador: lat={_lat:.5f}, lng={_lng:.5f}{acc_str}.\n"
-                    + f"Esta información VIENE DIRECTAMENTE del GPS de su dispositivo "
-                    + f"en este momento. NO digas que no tenés acceso — SÍ lo tenés. "
-                    + f"Si te pregunta dónde está, mencioná las coordenadas o decile "
-                    + f"que no podés convertirlas a un nombre de lugar todavía."
-                )
-                log.info("brain: injecting location context (lat=%.5f, lng=%.5f)", _lat, _lng)
-            except (TypeError, ValueError):
-                pass
-        answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64)
-        # ─── Anti-hallucination guardrail (two-step verification) ──────
-        #
-        # Reaching this code path means NONE of the fast-path ingestion
-        # branches matched. So NOTHING was actually persisted. If the
-        # brain's response nonetheless claims persistence ("anotado",
-        # "registré", "guardé", etc.) it's hallucinating — confusing the
-        # user into thinking data was saved when it wasn't.
-        #
-        # The system prompt already instructs the brain not to do this,
-        # but small models hallucinate anyway. This is the deterministic
-        # guardrail that ALWAYS works regardless of model behavior.
-        if _looks_like_persistence_claim(answer):
-            log.warning(
-                "brain hallucinated persistence claim on text=%r — overriding",
-                text[:120],
-            )
-            answer = _suggested_format_message(text)
-    except Exception as e:  # noqa: BLE001
-        log.exception("chat ask failed")
+        # Nano could not parse anything. Return the honest format hint — this
+        # is now the legitimate logging-mode "couldn't parse" response, not a
+        # guardrail clobber. Brain is NOT called in logging mode.
+        log.info("logging_mode: nano extract returned None for text=%r — returning format hint", text[:80])
+        answer = _suggested_format_message(text)
+        latency_ms = round((time.monotonic() - start) * 1000)
         try:
-            events.log_error("chat", f"brain.ask failed: {e}")
-        except Exception:  # noqa: BLE001
-            pass
-        raise HTTPException(502, f"brain error: {e}")
+            mem.add(text, answer, has_screenshot=False)
+        except Exception as e:  # noqa: BLE001
+            log.warning("chat memory.add failed: %s", e)
+        stage_holder[0] = "logging_mode_no_parse"
+        _record_metric()
+        return {"answer": answer, "latency_ms": latency_ms, "spoke": False, "audio_b64": None}
+
+    else:
+        # ── Conversation mode: brain.ask (no guardrail) ───────────────────
+        # The nano extractor is intentionally skipped here. The user is in
+        # free-conversation mode — routing to nano would silently save data
+        # when the user is only talking, which is the original problem.
+        # The persistence guardrail is also skipped: the brain may incidentally
+        # use words like "anotado"/"registré" in a legitimate conversational
+        # answer (e.g., "ya tenés anotado ese plan de gym"). Clobbering those
+        # answers was the false-positive that motivated this feature.
+        try:
+            # If the PWA captured GPS at send time, inject it into the system
+            # prompt so the brain "sees" it instead of denying knowledge.
+            brain_system = brain.SYSTEM_PROMPT
+            if raw_location:
+                try:
+                    _lat = float(raw_location.get("lat"))
+                    _lng = float(raw_location.get("lng"))
+                    _acc = raw_location.get("accuracy_m")
+                    acc_str = f", precisión ≈{int(_acc)}m" if _acc else ""
+                    brain_system = (
+                        brain_system
+                        + f"\n\n--- CONTEXTO EN VIVO (importante) ---\n"
+                        + f"El usuario compartió SU UBICACIÓN ACTUAL desde el dispositivo "
+                        + f"vía GPS del navegador: lat={_lat:.5f}, lng={_lng:.5f}{acc_str}.\n"
+                        + f"Esta información VIENE DIRECTAMENTE del GPS de su dispositivo "
+                        + f"en este momento. NO digas que no tenés acceso — SÍ lo tenés. "
+                        + f"Si te pregunta dónde está, mencioná las coordenadas o decile "
+                        + f"que no podés convertirlas a un nombre de lugar todavía."
+                    )
+                    log.info("brain: injecting location context (lat=%.5f, lng=%.5f)", _lat, _lng)
+                except (TypeError, ValueError):
+                    pass
+            answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64)
+            # NOTE: The persistence guardrail (_looks_like_persistence_claim) is
+            # intentionally NOT applied here. In conversation mode the brain
+            # answers freely and may legitimately use persistence verbs without
+            # having saved anything (e.g., "ya tenés anotado ese plan"). The
+            # guardrail now lives exclusively in the logging_mode=True path where
+            # it serves as the honest "couldn't parse" reply — not a clobber.
+        except Exception as e:  # noqa: BLE001
+            log.exception("chat ask failed")
+            try:
+                events.log_error("chat", f"brain.ask failed: {e}")
+            except Exception:  # noqa: BLE001
+                pass
+            raise HTTPException(502, f"brain error: {e}")
     latency_ms = round((time.monotonic() - start) * 1000)
     try:
         # Tag the stored user turn so history rendering can show the image
