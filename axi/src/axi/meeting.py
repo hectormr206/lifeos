@@ -250,6 +250,49 @@ def clean_segment_text(text: str) -> str:
     return _strip_known_prefixes(text).strip()
 
 
+def _transcribe_voiced_chunk(
+    transcribe_fn: Callable[[np.ndarray], tuple[str, str, float]],
+    data: np.ndarray,
+    *,
+    label: str,
+    logger: logging.Logger,
+    attempts: int = 2,
+) -> str:
+    """Transcribe a non-silent meeting chunk with one retry.
+
+    Whisper can transiently return an empty string when the shared service is
+    cold, busy, or briefly unavailable. For chunks that already passed the RMS
+    speech gate, silently dropping that output creates false-empty meetings.
+    """
+    last_text = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            text, lang, prob = transcribe_fn(data)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("transcription failed for %s attempt %d/%d: %s", label, attempt, attempts, e)
+            text = ""
+            lang = ""
+            prob = 0.0
+        text = (text or "").strip()
+        last_text = text
+        if text and not _is_hallucination(text):
+            if attempt > 1:
+                logger.info("transcription recovered for %s on attempt %d", label, attempt)
+            return clean_segment_text(text)
+        logger.warning(
+            "empty/unusable transcript for voiced chunk %s attempt %d/%d (lang=%s prob=%.3f text=%r)",
+            label,
+            attempt,
+            attempts,
+            lang,
+            float(prob or 0.0),
+            text[:120],
+        )
+        if attempt < attempts:
+            time.sleep(0.5)
+    return clean_segment_text(last_text) if last_text and not _is_hallucination(last_text) else ""
+
+
 class MeetingSession:
     """Encapsulates an active recording. Created on start, destroyed on stop."""
 
@@ -359,6 +402,31 @@ class MeetingSession:
                 pass
         log.info("sleep inhibitor released")
         self._inhibitor = None
+
+    def _cleanup_partial_start(self) -> None:
+        """Best-effort cleanup for failures during start().
+
+        start() launches OS resources before the DB row is created. If the DB
+        insert fails, the daemon must not leave ffmpeg or sleep-inhibitor
+        processes running behind a non-active meeting.
+        """
+        self._screen_stop.set()
+        self._transcribe_stop.set()
+        for proc, label in [(self.mic_proc, "mic"), (self.system_proc, "system")]:
+            if proc is None:
+                continue
+            try:
+                proc.send_signal(signal.SIGINT)
+                proc.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            log.info("ffmpeg %s cleaned after failed meeting start", label)
+        self.mic_proc = None
+        self.system_proc = None
+        self._stop_inhibitor()
 
     # ────────────────── audio recording ──────────────────
 
@@ -490,18 +558,17 @@ class MeetingSession:
         if channel == "mic" and self.chunk_overlaps_dictation(chunk_start_ts, chunk_end_ts):
             log.info("mic chunk %s overlaps dictation window, skipping for meeting", chunk.name)
             return
-        try:
-            text, _lang, _prob = self.transcribe_fn(data)  # type: ignore[misc]
-        except Exception as e:  # noqa: BLE001
-            log.warning("transcription failed for %s: %s", chunk.name, e)
-            return
-        text = text.strip()
-        if not text or _is_hallucination(text):
+        text = _transcribe_voiced_chunk(
+            self.transcribe_fn,  # type: ignore[arg-type]
+            data,
+            label=f"{channel}/{chunk.name}",
+            logger=log,
+        )
+        if not text:
             log.info("dropped %s/%s: %s",
                      channel, chunk.name,
-                     "hallucination" if text else "empty")
+                     "empty-or-unusable-transcript")
             return
-        text = clean_segment_text(text)
         idx = int(chunk.stem.split("-")[-1])
         start_ms = idx * _chunk_seconds() * 1000
         end_ms = start_ms + int(len(data) / sr * 1000)
@@ -524,24 +591,28 @@ class MeetingSession:
         minimum — caller (daemon) catches it and returns a failure string
         without crashing.
         """
-        _check_disk_space_before_meeting()
-        self._start_inhibitor()
-        self.mic_proc = self._ffmpeg_capture(self.mic_source, "mic")
-        self.system_proc = self._ffmpeg_capture(self.system_monitor, "system")
-        self._screen_thread = threading.Thread(target=self._screen_loop, daemon=True)
-        self._screen_thread.start()
+        try:
+            _check_disk_space_before_meeting()
+            self._start_inhibitor()
+            self.mic_proc = self._ffmpeg_capture(self.mic_source, "mic")
+            self.system_proc = self._ffmpeg_capture(self.system_monitor, "system")
+            self._screen_thread = threading.Thread(target=self._screen_loop, daemon=True)
+            self._screen_thread.start()
 
-        with store._tx() as c:  # noqa: SLF001
-            cur = c.execute(
-                "INSERT INTO meetings(start_time, source, data_dir, status, mic_source, system_sink, created_at) "
-                "VALUES (?, 'manual', ?, 'recording', ?, ?, ?)",
-                (self.start_time, str(self.dir), self.mic_source, self.system_monitor, time.time()),
-            )
-            self.meeting_id = cur.lastrowid
+            with store._tx() as c:  # noqa: SLF001
+                cur = c.execute(
+                    "INSERT INTO meetings(start_time, source, data_dir, status, mic_source, system_sink, created_at) "
+                    "VALUES (?, 'manual', ?, 'recording', ?, ?, ?)",
+                    (self.start_time, str(self.dir), self.mic_source, self.system_monitor, time.time()),
+                )
+                self.meeting_id = cur.lastrowid
 
-        if config.get("meeting_incremental_transcribe", True) and self.transcribe_fn is not None:
-            self._transcribe_thread = threading.Thread(target=self._transcribe_loop, daemon=True)
-            self._transcribe_thread.start()
+            if config.get("meeting_incremental_transcribe", True) and self.transcribe_fn is not None:
+                self._transcribe_thread = threading.Thread(target=self._transcribe_loop, daemon=True)
+                self._transcribe_thread.start()
+        except Exception:
+            self._cleanup_partial_start()
+            raise
 
         return self.meeting_id
 
@@ -773,6 +844,8 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
     done = {r["chunk_path"] for r in done_rows}
 
     # Flush any chunks the incremental thread didn't reach.
+    voiced_chunks_seen = 0
+    unusable_voiced_chunks = 0
     for channel in ("mic", "system"):
         for chunk in sorted(data_dir.glob(f"{channel}-*.wav")):
             rel = str(chunk.relative_to(data_dir))
@@ -788,6 +861,7 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
             rms = float(np.sqrt(np.mean(data ** 2)))
             if rms < silence_rms:
                 continue
+            voiced_chunks_seen += 1
             # Exclude mic chunks overlapping Héctor's dictations to Axi.
             if channel == "mic" and session is not None:
                 idx = int(chunk.stem.split("-")[-1])
@@ -796,11 +870,15 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
                 if session.chunk_overlaps_dictation(chunk_start_ts, chunk_end_ts):
                     log.info("excluding %s (dictation overlap)", chunk.name)
                     continue
-            text, _lang, _prob = transcriber.transcribe(data)
-            text = text.strip()
-            if not text or _is_hallucination(text):
+            text = _transcribe_voiced_chunk(
+                transcriber.transcribe,
+                data,
+                label=f"{channel}/{chunk.name}",
+                logger=log,
+            )
+            if not text:
+                unusable_voiced_chunks += 1
                 continue
-            text = clean_segment_text(text)
             idx = int(chunk.stem.split("-")[-1])
             start_ms = idx * _chunk_seconds() * 1000
             end_ms = start_ms + int(len(data) / sr * 1000)
@@ -873,12 +951,22 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
 
     summary = _hierarchical_summary(brain_ask, segments, meeting_id=meeting_id) if segments else ""
 
+    final_status = "done"
+    if voiced_chunks_seen > 0 and len(segments) == 0:
+        final_status = "failed"
+        log.warning(
+            "meeting %d had %d voiced chunks but produced no transcript segments (%d unusable)",
+            meeting_id,
+            voiced_chunks_seen,
+            unusable_voiced_chunks,
+        )
+
     with store._tx() as txc:  # noqa: SLF001
         txc.execute(
-            "UPDATE meetings SET transcript = ?, summary = ?, status = 'done' WHERE id = ?",
-            (transcript, summary, meeting_id),
+            "UPDATE meetings SET transcript = ?, summary = ?, status = ? WHERE id = ?",
+            (transcript, summary, final_status, meeting_id),
         )
-    log.info("meeting %d done: %d segments, summary %d chars", meeting_id, len(segments), len(summary))
+    log.info("meeting %d %s: %d segments, summary %d chars", meeting_id, final_status, len(segments), len(summary))
 
     # P1.1 — rebuild FTS index for this meeting so /api/meetings/search can find it.
     try:
