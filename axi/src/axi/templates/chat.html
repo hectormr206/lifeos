@@ -239,8 +239,8 @@
       </button>
       <!-- Logging mode toggle. ON = data-entry (nano agents, no internet).
            OFF (default) = free conversation with the big brain.
-           F1: tooltips and hint strip clearly explain what each mode does and
-           what data is (or is not) saved automatically. -->
+           F1: tooltips and hint strip clearly explain the active mode without
+           leaking registro/data-format guidance into free conversation. -->
       <button
         type="button"
         @click="toggleLoggingMode()"
@@ -251,7 +251,7 @@
           : 'min-height: 2.5rem; min-width: 2.75rem;'"
         :title="loggingMode
           ? '💾 Modo registro activo — Sin internet · nano-agentes guardan tus datos estructurados. Clic para volver a modo charla (💬).'
-          : '💬 Modo charla — hablás con Axi (con internet). Solo datos con formato claro (presión 120/80, glucosa 95) se guardan solos. Para registrar otros datos activá 💾 Modo registro.'"
+          : '💬 Modo charla — hablás con Axi con internet. Clic para activar 💾 Modo registro.'"
       >
         <span x-text="loggingMode ? '💾' : '💬'"></span>
       </button>
@@ -265,7 +265,7 @@
     </div>
     <div x-show="!loggingMode" x-cloak
          class="text-xs muted mb-1 px-1">
-      💬 Modo charla — hablás con Axi con internet. Solo datos con formato claro (ej: presión 120/80, glucosa 95) se guardan automáticamente. Para registrar otros datos, activá 💾.
+      💬 Modo charla — hablás con Axi con internet. Para cargar datos estructurados, activá 💾.
     </div>
 
     <form @submit.prevent="send()" class="flex gap-2 items-end">
