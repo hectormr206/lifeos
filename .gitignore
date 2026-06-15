@@ -13,3 +13,5 @@
 
 # Funding workspace — grant correspondence stays local-only
 docs/funding/
+
+.pi/
