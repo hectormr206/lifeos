@@ -6,6 +6,8 @@ so they run in <1 s without spinning up the rest of the stack.
 """
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -96,6 +98,36 @@ def test_cmd_accepts_known_command(client):
     r = client.post("/api/cmd/toggle")
     assert r.status_code == 200
     assert r.json()["ok"] is True
+
+
+def test_cmd_logs_every_invocation(client, caplog):
+    with caplog.at_level(logging.INFO, logger="axi.dashboard"):
+        client.post("/api/cmd/toggle")
+
+    assert "/api/cmd/toggle invoked" in caplog.text
+
+
+def test_meeting_start_empty_daemon_response_returns_503(client, monkeypatch):
+    from axi import dashboard
+
+    monkeypatch.setattr(dashboard, "_daemon_cmd", lambda *_a, **_k: "")
+    r = client.post("/api/cmd/meeting_start")
+
+    assert r.status_code == 503
+    data = r.json()
+    assert data["ok"] is False
+    assert data["response"] == ""
+    assert "empty response" in data["error"]
+
+
+def test_meeting_stop_failed_daemon_response_returns_503(client, monkeypatch):
+    from axi import dashboard
+
+    monkeypatch.setattr(dashboard, "_daemon_cmd", lambda *_a, **_k: "failed:boom")
+    r = client.post("/api/cmd/meeting_stop")
+
+    assert r.status_code == 503
+    assert r.json() == {"ok": False, "response": "failed:boom", "error": "failed:boom"}
 
 
 def test_meetings_list_empty(client):
@@ -267,6 +299,17 @@ def test_teal_token_in_rendered_html(client):
     assert r.status_code == 200
     assert "--teal" in r.text
     assert "#00D4AA" in r.text
+
+
+def test_meeting_command_feedback_js_present(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert "commandFeedback" in html
+    assert "await r.json()" in html
+    assert "started:" in html
+    assert "already-recording:" in html
+    assert "await this.refresh();" in html
 
 
 def test_pink_token_unchanged(client):
