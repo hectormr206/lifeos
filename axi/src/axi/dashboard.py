@@ -683,7 +683,11 @@ def _fmt_ts(unix_ts: float) -> str:
 
 
 def _recent_conversations(limit: int = 10) -> list[dict[str, Any]]:
-    rows = store.recent_conversations(limit)
+    try:
+        rows = store.recent_conversations(limit)
+    except Exception as e:  # noqa: BLE001
+        log.warning("recent conversations unavailable: %s", e)
+        return []
     return [
         {
             "id": r["id"],
@@ -801,7 +805,7 @@ def snapshot():
             "tts_enabled": bool(config.get("tts_enabled", True)),
         },
         "memory": {
-            "conversation_turns": store.conversation_count(),
+            "conversation_turns": _safe_conversation_count(),
             "facts_count": _fact_count(),
         },
         "recent_conversations": _recent_conversations(10),
@@ -834,6 +838,14 @@ def _parse_meeting_status(raw: str) -> dict[str, Any]:
     return {"active": False, "raw": raw}
 
 
+def _safe_conversation_count() -> int:
+    try:
+        return store.conversation_count()
+    except Exception as e:  # noqa: BLE001
+        log.warning("conversation count unavailable: %s", e)
+        return 0
+
+
 def _fact_count() -> int:
     c = store._connect()  # noqa: SLF001
     return c.execute("SELECT COUNT(*) AS n FROM nodes WHERE kind='fact'").fetchone()["n"]
@@ -841,10 +853,22 @@ def _fact_count() -> int:
 
 @app.post("/api/cmd/{name}")
 def cmd(name: str):
+    log.info("/api/cmd/%s invoked", name)
     allowed = {"toggle", "ask", "look", "meeting_start", "meeting_stop", "clear"}
     if name not in allowed:
+        log.warning("/api/cmd/%s rejected: unknown command", name)
         raise HTTPException(400, f"unknown command: {name}")
     response = _daemon_cmd(name)
+    if name in {"meeting_start", "meeting_stop"} and (
+        not response or response == "failed" or response.startswith("failed:")
+    ):
+        error = response or "daemon returned empty response"
+        log.warning("/api/cmd/%s failed: %s", name, error)
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "response": response, "error": error},
+        )
+    log.info("/api/cmd/%s response: %s", name, response or "<empty>")
     return {"ok": True, "response": response}
 
 

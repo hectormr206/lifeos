@@ -574,6 +574,24 @@
   </div>
 
   <main class="max-w-7xl mx-auto px-3 md:px-6 py-3 md:py-6" x-data="dashboardStore()">
+    <template x-if="commandFeedback">
+      <div class="panel p-3 text-sm flex items-center gap-2 mb-4"
+           x-transition.opacity
+           :role="commandFeedback.type === 'error' ? 'alert' : 'status'"
+           aria-live="polite"
+           :style="commandFeedback.type === 'error'
+             ? 'background: rgba(238, 51, 51, 0.10); border-color: var(--red);'
+             : 'background: rgba(102, 204, 102, 0.10); border-color: var(--green);'">
+        <span style="font-size: 1.25rem" x-text="commandFeedback.type === 'error' ? '⚠️' : '✓'"></span>
+        <div class="flex-1 min-w-0">
+          <strong :style="commandFeedback.type === 'error' ? 'color: var(--red)' : 'color: var(--green)'"
+                  x-text="commandFeedback.title"></strong>
+          <span class="muted" x-text="commandFeedback.message"></span>
+        </div>
+        <button class="btn text-xs" @click="commandFeedback = null"
+                style="padding: 0.25rem 0.5rem;" title="Cerrar">✕</button>
+      </div>
+    </template>
     {% block content %}{% endblock %}
   </main>
 
@@ -615,15 +633,77 @@
 
     function dashboardStore() {
       return {
+        commandFeedback: null,
+        _commandFeedbackTimer: null,
         async refresh() {
           try {
             const r = await fetch('/api/snapshot');
             if (r.ok) Alpine.store('snap', await r.json());
           } catch (e) { /* keep last good snapshot */ }
         },
+        showCommandFeedback(type, title, message) {
+          if (this._commandFeedbackTimer) clearTimeout(this._commandFeedbackTimer);
+          this.commandFeedback = { type, title, message };
+          this._commandFeedbackTimer = setTimeout(() => {
+            this.commandFeedback = null;
+            this._commandFeedbackTimer = null;
+          }, 7000);
+        },
+        meetingCommandFeedback(name, data, httpOk) {
+          const response = data && typeof data.response === 'string' ? data.response : '';
+          const serverError = data && typeof data.error === 'string' ? data.error : '';
+          if (!httpOk || (data && data.ok === false)) {
+            return {
+              type: 'error',
+              title: name === 'meeting_start' ? 'No pude iniciar la reunión' : 'No pude detener la reunión',
+              message: ' — ' + (serverError || response || 'sin respuesta del daemon'),
+            };
+          }
+          if (name === 'meeting_start') {
+            if (response.startsWith('started:')) {
+              const id = response.slice('started:'.length) || '?';
+              return { type: 'success', title: 'Reunión iniciada', message: ' — grabando reunión #' + id + '.' };
+            }
+            if (response.startsWith('already-recording:')) {
+              const id = response.slice('already-recording:'.length) || '?';
+              return { type: 'success', title: 'Reunión ya activa', message: ' — la reunión #' + id + ' ya estaba grabándose.' };
+            }
+            return {
+              type: 'error',
+              title: 'Inicio no confirmado',
+              message: ' — respuesta inesperada del daemon: ' + (response || 'vacía'),
+            };
+          }
+          if (response.startsWith('stopped:')) {
+            const id = response.slice('stopped:'.length) || '?';
+            return { type: 'success', title: 'Reunión detenida', message: ' — reunión #' + id + ' en procesamiento.' };
+          }
+          if (response === 'not-recording') {
+            return { type: 'error', title: 'No había reunión activa', message: ' — no hay nada para detener.' };
+          }
+          return {
+            type: 'error',
+            title: 'Detención no confirmada',
+            message: ' — respuesta inesperada del daemon: ' + (response || 'vacía'),
+          };
+        },
         async cmd(name) {
-          await fetch('/api/cmd/' + name, { method: 'POST' });
-          this.refresh();
+          const isMeetingCommand = name === 'meeting_start' || name === 'meeting_stop';
+          try {
+            const r = await fetch('/api/cmd/' + name, { method: 'POST' });
+            let data = {};
+            try { data = await r.json(); } catch (e) { data = { ok: false, error: 'respuesta JSON inválida' }; }
+            if (isMeetingCommand) {
+              const feedback = this.meetingCommandFeedback(name, data, r.ok);
+              this.showCommandFeedback(feedback.type, feedback.title, feedback.message);
+            }
+          } catch (e) {
+            if (isMeetingCommand) {
+              this.showCommandFeedback('error', 'No pude comunicarme con el dashboard', ' — ' + (e && e.message ? e.message : e));
+            }
+          } finally {
+            await this.refresh();
+          }
         },
         init() {
           this.refresh();
