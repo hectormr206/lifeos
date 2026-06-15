@@ -13,7 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from axi import config
@@ -59,21 +59,32 @@ Si no sabes algo, lo dices directo. No inventas.
 Tu respuesta va a ser leída por voz o mostrada en una notificación corta:
 evita listas largas o Markdown elaborado, prosa breve.
 
-CRÍTICO — NO INVENTAR ACCIONES QUE NO PODÉS HACER:
-- Vos NO tenés acceso directo a las bases de datos de LifeOS (salud, finanzas,
-  ejercicio, etc.). NO podés ejecutar funciones, NO podés guardar entries.
-- Cuando vos respondés, llegaste acá porque NINGÚN regex de ingesta agarró
+Capacidad de internet:
+- Axi tiene búsqueda web local en el dashboard cuando el usuario usa el flujo
+  de búsqueda/investigación en modo charla.
+- Tú no navegas por tu cuenta dentro de esta llamada: solo puedes usar internet
+  cuando el sistema te entrega resultados de búsqueda en el prompt.
+- Si el usuario pregunta si puedes entrar a internet, no respondas "no tengo
+  internet". Di que Axi puede buscar en internet desde el modo charla, y que
+  para información actual necesitas que se active una búsqueda.
+- Si te piden noticias o información actual pero no recibiste resultados web,
+  no inventes datos y no digas "no tengo acceso a internet": pedí activar la
+  búsqueda o usar /busca.
+
+CRÍTICO — NO INVENTAR ACCIONES QUE NO PUEDES HACER:
+- Tú NO tienes acceso directo a las bases de datos de LifeOS (salud, finanzas,
+  ejercicio, etc.). NO puedes ejecutar funciones, NO puedes guardar entries.
+- Cuando tú respondes, llegaste acá porque NINGÚN regex de ingesta agarró
   lo que dijo el usuario. Eso significa que los datos NO se guardaron.
 - POR ESO: NUNCA digas "anotado X", "registré tu Y", "guardé tus signos vitales",
   ni nada parecido. Eso sería una alucinación que confunde gravemente al usuario.
-- Cuando el usuario te comparta datos de salud/finanza/ejercicio/etc. y vos no
-  puedas confirmarlos por una vía estructurada, decile honesto: "no pude
-  registrar esto automáticamente — el formato no lo detectó la ingesta. Anotalo
-  manual en /health (o el dominio que corresponda)". Sugerí formato que SÍ
-  funciona si lo conocés (ej: "presión 120/80", "dormí 7h").
+- Si el usuario pregunta explícitamente si algo quedó guardado, sé honesto:
+  tú no puedes confirmarlo ni registrarlo desde esta capa. No conviertas la
+  conversación libre en una advertencia de formato; si hace falta, sugerí usar
+  el modo registro/datos estructurados.
 - Si el usuario dice algo que sí parece haberse guardado (el sistema te enviaría
   contexto si fuera así, hoy no lo hace), igual NUNCA reclames haberlo hecho
-  vos. Lo guarda otra capa, no vos.
+  tú. Lo guarda otra capa, no tú.
 
 Razonamiento temporal sobre la memoria:
 - Cada hecho que tienes sobre Héctor viene con su fecha y hora exactas en su zona horaria.
@@ -83,6 +94,8 @@ Razonamiento temporal sobre la memoria:
   ("según lo que me contaste el martes pasado…") pero no satures con timestamps."""
 
 log = logging.getLogger("axi.brain")
+
+ToolHandler = Callable[[dict[str, Any]], Any]
 
 
 def is_alive(timeout: float = 2.0) -> bool:
@@ -152,6 +165,57 @@ def _record_metric_async(
         log.warning("brain metric thread spawn failed: %s", e)
 
 
+def _build_messages(
+    prompt: str,
+    system: str,
+    image_b64: str | None = None,
+    history: list[dict] | None = None,
+) -> list[dict[str, Any]]:
+    """Build OpenAI-compatible chat messages with Axi's live context."""
+    if image_b64:
+        user_content: str | list[dict[str, Any]] = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+        ]
+    else:
+        user_content = prompt
+
+    full_system = f"{system}\n\n{temporal_context()}"
+    messages: list[dict[str, Any]] = [{"role": "system", "content": full_system}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_content})
+    return messages
+
+
+def _post_chat_completion(payload_obj: dict[str, Any], timeout: float) -> dict[str, Any]:
+    payload = json.dumps(payload_obj).encode("utf-8")
+    req = urllib.request.Request(
+        f"{ENDPOINT}/v1/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _base_payload(messages: list[dict[str, Any]], max_tokens: int, think: bool) -> dict[str, Any]:
+    return {
+        "messages": messages,
+        # 0.3 chosen after A/B: equivalent chat quality vs 0.6, 100% vs 50%
+        # on strict logic puzzles. Lower it per-call if a caller wants more
+        # creative variance.
+        "temperature": 0.3,
+        "top_p": 0.95,
+        "top_k": 20,
+        "max_tokens": max_tokens,
+        "stream": False,
+        # Qwen3-specific: passed through llama-server's --jinja templating.
+        "chat_template_kwargs": {"enable_thinking": think},
+    }
+
+
 def _ask_impl(
     prompt: str,
     system: str = SYSTEM_PROMPT,
@@ -172,45 +236,13 @@ def _ask_impl(
     model spent the whole budget thinking and never reached the answer. We
     retry ONCE with a much larger budget so callers don't get empty strings.
     """
-    if image_b64:
-        user_content = [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
-        ]
-    else:
-        user_content = prompt
-
-    # Compose system prompt: persona + live temporal stamp. This is rebuilt on
-    # every call so 'ahora' / 'hoy' anchor to real time, not training-data time.
-    full_system = f"{system}\n\n{temporal_context()}"
-    messages: list[dict] = [{"role": "system", "content": full_system}]
-    if history:
-        messages.extend(history)
-    messages.append({"role": "user", "content": user_content})
-
+    messages = _build_messages(prompt, system=system, image_b64=image_b64, history=history)
     effective_max_tokens = _retry_budget if _retry_budget is not None else max_tokens
-    payload = json.dumps({
-        "messages": messages,
-        # 0.3 chosen after A/B: equivalent chat quality vs 0.6, 100% vs 50%
-        # on strict logic puzzles. Lower it per-call if a caller wants more
-        # creative variance.
-        "temperature": 0.3,
-        "top_p": 0.95,
-        "top_k": 20,
-        "max_tokens": effective_max_tokens,
-        "stream": False,
-        # Qwen3-specific: passed through llama-server's --jinja templating.
-        "chat_template_kwargs": {"enable_thinking": think},
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        f"{ENDPOINT}/v1/chat/completions",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        data = _post_chat_completion(
+            _base_payload(messages, max_tokens=effective_max_tokens, think=think),
+            timeout=timeout,
+        )
         choice = data["choices"][0]
         message = choice["message"]
         content = (message.get("content") or "").strip()
@@ -237,6 +269,143 @@ def _ask_impl(
         return f"[Axi brain devolvió algo raro: {e}]", None
     except TimeoutError:
         return "[Axi brain tardó demasiado en responder]", None
+
+
+def _tool_result_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def _run_tool_call(tool_call: dict[str, Any], tool_handlers: dict[str, ToolHandler]) -> dict[str, Any]:
+    call_id = str(tool_call.get("id") or "tool_call")
+    raw_function = tool_call.get("function")
+    function: dict[str, Any] = raw_function if isinstance(raw_function, dict) else {}
+    name = str(function.get("name") or "")
+    raw_args = function.get("arguments") or "{}"
+    if name not in tool_handlers:
+        content = f"Tool error: unknown tool '{name}'."
+    else:
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            if not isinstance(args, dict):
+                raise ValueError("tool arguments must be a JSON object")
+            content = _tool_result_content(tool_handlers[name](args))
+        except Exception as e:  # noqa: BLE001 — tool failures become model-visible results, not 500s
+            content = f"Tool error in {name}: {e}"
+    return {"role": "tool", "tool_call_id": call_id, "name": name, "content": content}
+
+
+def _ask_with_tools_impl(
+    prompt: str,
+    *,
+    tools: list[dict[str, Any]],
+    tool_handlers: dict[str, ToolHandler],
+    system: str = SYSTEM_PROMPT,
+    max_tokens: int = 2048,
+    timeout: float = 120.0,
+    think: bool = False,
+    history: list[dict] | None = None,
+    tool_choice: str | dict[str, Any] = "auto",
+    max_tool_rounds: int = 2,
+) -> tuple[str, dict[str, Any] | None]:
+    """Run a small OpenAI tool-calling loop against local llama-server."""
+    tool_system = (
+        system
+        + "\n\nHERRAMIENTAS ACTIVAS:\n"
+        + "- En esta llamada sí puedes usar las herramientas locales declaradas en tools.\n"
+        + "- Si una herramienta devuelve resultados, trátalos como información real provista por el sistema.\n"
+        + "- No digas que necesitas /busca si ya recibiste resultados de una herramienta web_search.\n"
+        + "- Si los resultados son insuficientes, dilo con precisión y cita lo que sí hay."
+    )
+    messages = _build_messages(prompt, system=tool_system, image_b64=None, history=history)
+    last_data: dict[str, Any] | None = None
+    try:
+        for _round in range(max_tool_rounds + 1):
+            payload = _base_payload(messages, max_tokens=max_tokens, think=think)
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice
+            data = _post_chat_completion(payload, timeout=timeout)
+            last_data = data
+            choice = data["choices"][0]
+            message = choice["message"]
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": message.get("content") or "",
+                    "tool_calls": tool_calls,
+                }
+                messages.append(assistant_msg)
+                for tool_call in tool_calls:
+                    if isinstance(tool_call, dict):
+                        messages.append(_run_tool_call(tool_call, tool_handlers))
+                continue
+            return (message.get("content") or "").strip(), data
+        return "[Axi no pudo completar la llamada a herramientas]", last_data
+    except urllib.error.URLError as e:
+        log.error("brain tools unreachable: %s", e)
+        return "[Axi brain no responde — ¿está corriendo llama-server?]", None
+    except (json.JSONDecodeError, KeyError) as e:
+        log.error("brain tools malformed response: %s", e)
+        return f"[Axi brain devolvió algo raro: {e}]", None
+    except TimeoutError:
+        return "[Axi brain tardó demasiado en responder]", None
+
+
+def ask_with_tools(
+    prompt: str,
+    *,
+    tools: list[dict[str, Any]],
+    tool_handlers: dict[str, ToolHandler],
+    system: str = SYSTEM_PROMPT,
+    max_tokens: int = 2048,
+    timeout: float = 120.0,
+    think: bool = False,
+    history: list[dict] | None = None,
+    tool_choice: str | dict[str, Any] = "auto",
+    max_tool_rounds: int = 2,
+) -> str:
+    """Ask the local brain with whitelisted OpenAI-compatible tools.
+
+    Tool handlers receive parsed JSON arguments and return a string or JSON-ish
+    value. Unknown tools, invalid arguments, and handler exceptions are returned
+    to the model as tool-result errors instead of raising into FastAPI.
+    """
+    start = time.monotonic()
+    err_obj: BaseException | None = None
+    response_data: dict[str, Any] | None = None
+    try:
+        text, response_data = _ask_with_tools_impl(
+            prompt,
+            tools=tools,
+            tool_handlers=tool_handlers,
+            system=system,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            think=think,
+            history=history,
+            tool_choice=tool_choice,
+            max_tool_rounds=max_tool_rounds,
+        )
+        return text
+    except BaseException as e:  # noqa: BLE001
+        err_obj = e
+        raise
+    finally:
+        try:
+            latency_ms = round((time.monotonic() - start) * 1000)
+            _record_metric_async(
+                latency_ms=latency_ms,
+                ok=err_obj is None,
+                error=(str(err_obj)[:300] if err_obj is not None else None),
+                response_data=response_data,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("brain metric scheduling failed: %s", e)
 
 
 def ask(
