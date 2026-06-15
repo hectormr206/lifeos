@@ -170,7 +170,7 @@ def test_conversation_mode_busca_triggers_web_research(monkeypatch):
     """logging_mode=False + /busca → web research IS available."""
     from axi import brain, dashboard
     import lifeos.web as web_research
-    from lifeos.web.port import SearchResult
+    from lifeos.web.port import PageText, SearchResult
 
     monkeypatch.setattr(dashboard, "_chat_memory", None)
     monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
@@ -182,9 +182,7 @@ def test_conversation_mode_busca_triggers_web_research(monkeypatch):
         search_fn=lambda q, **kw: (search_called.append(q), [
             SearchResult(title="Python docs", url="https://docs.python.org", snippet="Python docs.")
         ])[1],
-        read_fn=lambda url: __import__("lifeos.web.port", fromlist=["PageText"]).PageText(
-            url=url, text="", ok=False
-        ),
+        read_fn=lambda url: PageText(url=url, text="", ok=False),
         enabled_fn=lambda: True,
     )
     monkeypatch.setattr(brain, "ask", lambda p, **kw: "respuesta con fuente")
@@ -196,6 +194,208 @@ def test_conversation_mode_busca_triggers_web_research(monkeypatch):
     })
     assert r.status_code == 200
     assert search_called, "search_fn NOT called — web research unavailable in conversation mode"
+
+
+def test_conversation_mode_natural_news_triggers_web_research(monkeypatch):
+    """Natural current-news wording must use internet research, not brain fallback."""
+    from axi import brain, dashboard
+    import lifeos.web as web_research
+    from lifeos.web.port import PageText, SearchResult
+
+    monkeypatch.setattr(dashboard, "_chat_memory", None)
+    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
+    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+
+    search_called = []
+    brain_prompts = []
+    web_research.configure(
+        search_fn=lambda q, **kw: (search_called.append(q), [
+            SearchResult(title="Noticia 1", url="https://news.example/1", snippet="Resumen 1."),
+            SearchResult(title="Noticia 2", url="https://news.example/2", snippet="Resumen 2."),
+            SearchResult(title="Noticia 3", url="https://news.example/3", snippet="Resumen 3."),
+        ])[1],
+        read_fn=lambda url: PageText(url=url, text="Texto ampliado.", ok=True),
+        enabled_fn=lambda: True,
+    )
+    monkeypatch.setattr(
+        brain,
+        "ask",
+        lambda prompt, **kw: (brain_prompts.append(prompt), "Estas son las 3 noticias.")[1],
+    )
+
+    tc = TestClient(dashboard.app)
+    r = tc.post("/api/chat/ask", json={
+        "text": "Dime las ultimas 3 noticias de hoy",
+        "logging_mode": False,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert len(search_called) == 1
+    assert search_called[0].startswith("noticias principales hoy México ")
+    assert brain_prompts and "Resultados de búsqueda" in brain_prompts[0]
+    assert "resumen corto" in brain_prompts[0]
+    assert "No devuelvas solo una lista de fuentes ni solo titulares" in brain_prompts[0]
+    assert body.get("research", {}).get("urls") == [
+        "https://news.example/1",
+        "https://news.example/2",
+        "https://news.example/3",
+    ]
+    assert "Fuentes:" in body["answer"]
+
+
+def test_default_mode_natural_news_triggers_web_research(monkeypatch):
+    """Absent logging_mode defaults to conversation, so current news can search."""
+    from axi import brain, dashboard
+    import lifeos.web as web_research
+    from lifeos.web.port import PageText, SearchResult
+
+    monkeypatch.setattr(dashboard, "_chat_memory", None)
+    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
+    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+
+    search_called = []
+    web_research.configure(
+        search_fn=lambda q, **kw: (search_called.append(q), [
+            SearchResult(title="Noticia", url="https://news.example/1", snippet="Resumen.")
+        ])[1],
+        read_fn=lambda url: PageText(url=url, text="", ok=False),
+        enabled_fn=lambda: True,
+    )
+    monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "respuesta con fuente")
+
+    tc = TestClient(dashboard.app)
+    r = tc.post("/api/chat/ask", json={"text": "noticias de hoy"})
+    assert r.status_code == 200
+    assert len(search_called) == 1
+    assert search_called[0].startswith("noticias principales hoy México ")
+    assert r.json().get("research", {}).get("urls") == ["https://news.example/1"]
+
+
+def test_english_current_news_triggers_web_research(monkeypatch):
+    """English current-news wording should also route to web research."""
+    from axi import brain, dashboard
+    import lifeos.web as web_research
+    from lifeos.web.port import PageText, SearchResult
+
+    monkeypatch.setattr(dashboard, "_chat_memory", None)
+    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
+    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+
+    search_called = []
+    web_research.configure(
+        search_fn=lambda q, **kw: (search_called.append(q), [
+            SearchResult(title="News", url="https://news.example/en", snippet="Summary.")
+        ])[1],
+        read_fn=lambda url: PageText(url=url, text="", ok=False),
+        enabled_fn=lambda: True,
+    )
+    monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "answer with source")
+
+    tc = TestClient(dashboard.app)
+    for query in ["latest news", "breaking news"]:
+        r = tc.post("/api/chat/ask", json={"text": query})
+        assert r.status_code == 200
+    assert len(search_called) == 2
+    assert all(q.startswith("noticias principales hoy México ") for q in search_called)
+
+
+def test_logging_mode_natural_news_no_web_research(monkeypatch):
+    """logging_mode=True keeps internet disabled for natural news requests."""
+    from axi import brain, dashboard
+    import lifeos.web as web_research
+    from lifeos.web.port import PageText
+
+    monkeypatch.setattr(dashboard, "_chat_memory", None)
+    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
+    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+
+    search_called = []
+    brain_called = []
+    web_research.configure(
+        search_fn=lambda q, **kw: (search_called.append(q), [])[1],
+        read_fn=lambda url: PageText(url=url, text="", ok=False),
+        enabled_fn=lambda: True,
+    )
+    monkeypatch.setattr(brain, "ask", lambda p, **kw: (brain_called.append(p), "brain")[1])
+
+    tc = TestClient(dashboard.app)
+    r = tc.post("/api/chat/ask", json={
+        "text": "Dime las ultimas 3 noticias de hoy",
+        "logging_mode": True,
+    })
+    assert r.status_code == 200
+    assert not search_called
+    assert not brain_called
+    answer = r.json().get("answer", "")
+    assert "internet" in answer.lower()
+    assert "registro" in answer.lower()
+
+
+def test_ordinary_today_conversation_does_not_trigger_deterministic_web_research(monkeypatch):
+    """The implicit detector must stay narrow; ordinary 'hoy' is conversation."""
+    from axi import brain, dashboard
+    import lifeos.web as web_research
+    from lifeos.web.port import PageText
+
+    monkeypatch.setattr(dashboard, "_chat_memory", None)
+    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
+    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+
+    search_called = []
+    brain_called = []
+    web_research.configure(
+        search_fn=lambda q, **kw: (search_called.append(q), [])[1],
+        read_fn=lambda url: PageText(url=url, text="", ok=False),
+        enabled_fn=lambda: False,
+    )
+    monkeypatch.setattr(brain, "ask", lambda p, **kw: (brain_called.append(p), "brain")[1])
+
+    tc = TestClient(dashboard.app)
+    r = tc.post("/api/chat/ask", json={
+        "text": "me siento cansado hoy",
+        "logging_mode": False,
+    })
+    assert r.status_code == 200
+    assert not search_called
+    assert brain_called
+
+
+def test_conversation_mode_uses_brain_tools_when_web_enabled(monkeypatch):
+    """General conversation mode exposes web_search to the big brain as a tool."""
+    from axi import brain, dashboard
+    import lifeos.web as web_research
+    from lifeos.web.port import PageText, SearchResult
+
+    monkeypatch.setattr(dashboard, "_chat_memory", None)
+    monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
+    monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+
+    web_research.configure(
+        search_fn=lambda q, **kw: [SearchResult(title="Doc", url="https://example.test", snippet="Snippet")],
+        read_fn=lambda url: PageText(url=url, text="", ok=False),
+        enabled_fn=lambda: True,
+    )
+    ask_called = []
+    tool_called = []
+
+    def fake_ask_with_tools(prompt, **kw):
+        ask_called.append({"prompt": prompt, "kw": kw})
+        tool_called.append(kw["tool_handlers"]["web_search"]({"query": "python latest"}))
+        return "tool answer"
+
+    monkeypatch.setattr(brain, "ask", lambda *a, **kw: "plain brain")
+    monkeypatch.setattr(brain, "ask_with_tools", fake_ask_with_tools)
+
+    tc = TestClient(dashboard.app)
+    r = tc.post("/api/chat/ask", json={
+        "text": "qué versión actual tiene python",
+        "logging_mode": False,
+    })
+    assert r.status_code == 200
+    assert r.json()["answer"] == "tool answer"
+    assert ask_called
+    assert ask_called[0]["kw"]["tools"][0]["function"]["name"] == "web_search"
+    assert tool_called[0]["results"][0]["url"] == "https://example.test"
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +489,7 @@ def test_logging_mode_busca_no_web_research(monkeypatch):
 
     search_called = []
     web_research.configure(
-        search_fn=lambda q, **kw: (search_called.append(q), []),
+        search_fn=lambda q, **kw: (search_called.append(q), [])[1],
         read_fn=lambda url: __import__("lifeos.web.port", fromlist=["PageText"]).PageText(
             url=url, text="", ok=False
         ),
@@ -466,7 +666,7 @@ def test_busca_in_logging_mode_returns_disabled_message(monkeypatch):
 
     search_called = []
     web_research.configure(
-        search_fn=lambda q, **kw: (search_called.append(q), []),
+        search_fn=lambda q, **kw: (search_called.append(q), [])[1],
         read_fn=lambda url: __import__("lifeos.web.port", fromlist=["PageText"]).PageText(
             url=url, text="", ok=False
         ),

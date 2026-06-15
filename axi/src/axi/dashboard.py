@@ -405,6 +405,76 @@ _WEB_CMD_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+_CURRENT_NEWS_RE = re.compile(
+    r"\b("
+    r"(?:[uú]ltim(?:a|o|as|os)|principales|recientes)\s+noticias|"
+    r"noticias\s+(?:de\s+)?hoy|"
+    r"(?:latest|breaking)\s+(?:news|headlines)|"
+    r"(?:news|headlines)\s+(?:today|latest)|"
+    r"qu[eé]\s+pas[oó]\s+hoy"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_WEB_RESEARCH_DISABLED_MSG = (
+    "La búsqueda en internet está deshabilitada en modo registro. "
+    "Cambiá a modo charla (💬) para buscar."
+)
+
+
+def _implicit_web_research_query(user_text: str) -> str | None:
+    """Return a web query when a natural-language request needs fresh web data.
+
+    Keep this intentionally narrow: it catches current-news/current-events
+    wording without treating generic "dime" or every use of "hoy" as internet
+    research. For current news, search with a clean dated query instead of the
+    raw instruction; SearXNG ranks article pages better that way.
+    """
+    text = user_text.strip()
+    if not text:
+        return None
+    if _CURRENT_NEWS_RE.search(text):
+        today = datetime.now(ZoneInfo(str(config.get("timezone", "America/Mexico_City")))).strftime("%Y-%m-%d")
+        return f"noticias principales hoy México {today}"
+    return None
+
+
+_WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Busca en internet con SearXNG local para información actual o verificable.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Consulta de búsqueda web."},
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+
+def _web_search_tool_handler(args: dict[str, Any]) -> dict[str, Any]:
+    """Whitelisted local web_search tool for the big brain."""
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"ok": False, "error": "query is required", "results": []}
+    if not web_research.is_enabled():
+        return {"ok": False, "error": "web research is disabled", "results": []}
+    search_fn = web_research.get_search_fn()
+    if search_fn is None:
+        return {"ok": False, "error": "search provider is unavailable", "results": []}
+    results = search_fn(query)[:TOP_N]
+    packed: list[dict[str, str]] = []
+    for item in results:
+        packed.append({
+            "title": item.title,
+            "url": item.url,
+            "snippet": item.snippet[:MAX_SNIPPET_CHARS],
+        })
+    return {"ok": bool(packed), "query": query, "results": packed}
+
 
 # Map of keywords → suggested format. When the user's message contains
 # one of these keywords AND the brain hallucinated persistence, we
@@ -2390,33 +2460,35 @@ async def api_chat_ask(request: Request):
         except Exception:  # noqa: BLE001
             log.warning("fastpath metric record failed", exc_info=True)
 
-    # ─── Web research fast-path (/busca, /investiga) ────────────────────────
-    # Must run BEFORE any domain parsers — explicit command tokens take
-    # priority over regex classifiers that might misread "busca X" as finance.
+    # ─── Web research fast-path (/busca, /investiga, current news) ──────────
+    # Must run BEFORE any domain parsers — explicit command tokens and narrow
+    # natural current-news intents take priority over regex classifiers that
+    # might misread "dime las últimas noticias" as a reminder/logging command.
     # Degrades gracefully: SearXNG down → friendly Spanish message (HTTP 200).
     _web_cmd_match = _WEB_CMD_RE.match(text)
-    # F3: When logging_mode=True and the user types /busca, return a clear
-    # "internet disabled" message immediately — BEFORE the nano path. Without
-    # this gate, /busca falls through to nano which returns the "couldn't save"
-    # format hint, which is nonsensical for a search command.
-    if _web_cmd_match and not image_b64 and logging_mode:
-        _disabled_msg = (
-            "La búsqueda en internet está deshabilitada en modo registro. "
-            "Cambiá a modo charla (💬) para buscar."
-        )
+    _implicit_web_query = None if _web_cmd_match else _implicit_web_research_query(text)
+    _has_web_intent = bool(_web_cmd_match or _implicit_web_query)
+    # F3: When logging_mode=True and the user requests web research, return a
+    # clear "internet disabled" message immediately — BEFORE the nano path.
+    # Without this gate, search-shaped text falls through to nano which returns
+    # the "couldn't save" format hint, which is nonsensical for a search request.
+    if _has_web_intent and not image_b64 and logging_mode:
         latency_ms = round((time.monotonic() - start) * 1000)
         try:
-            mem.add(text, _disabled_msg, has_screenshot=False)
+            mem.add(text, _WEB_RESEARCH_DISABLED_MSG, has_screenshot=False)
         except Exception:  # noqa: BLE001
             pass
-        stage_holder[0] = "web_cmd_logging_mode_disabled"
+        stage_holder[0] = "web_intent_logging_mode_disabled"
         _record_metric()
-        return {"answer": _disabled_msg, "latency_ms": latency_ms,
+        return {"answer": _WEB_RESEARCH_DISABLED_MSG, "latency_ms": latency_ms,
                 "spoke": False, "audio_b64": None}
     # Web research is only available outside logging mode. In logging mode the
     # user is in data-entry mode: no internet, nano agents handle the text.
-    if _web_cmd_match and not image_b64 and not logging_mode:
-        _web_query = (_web_cmd_match.group(2) or "").strip()
+    if _has_web_intent and not image_b64 and not logging_mode:
+        _web_query = (
+            (_web_cmd_match.group(2) or "").strip()
+            if _web_cmd_match else (_implicit_web_query or "").strip()
+        )
         if not _web_query:
             # Empty query — return a friendly prompt instead of crashing.
             _empty_answer = (
@@ -2492,14 +2564,35 @@ async def api_chat_ask(request: Request):
                 # para: {_web_query}" so the trailing instruction below does NOT
                 # repeat the query — it only adds the answering directive.
                 _research_block = "\n".join(_research_lines)
+                _news_instruction = ""
+                if _implicit_web_query:
+                    _news_instruction = (
+                        "\n\nComo esta es una consulta de noticias actuales, responde con "
+                        "exactamente 3 noticias cuando haya información suficiente. "
+                        "Para cada una usa este formato: titular, resumen corto "
+                        "de 1-2 frases, y fuente. No devuelvas solo una lista de "
+                        "fuentes ni solo titulares. Si la evidencia disponible para "
+                        "alguna noticia es limitada, acláralo en su resumen."
+                    )
                 _enriched_prompt = (
                     f"{_research_block}\n\n"
                     f"Usando los resultados de búsqueda anteriores, "
-                    f"responde la consulta de forma precisa y cita las URLs fuente."
+                    f"responde la consulta de forma precisa. No agregues una sección "
+                    f"final de fuentes: el sistema la añade automáticamente."
+                    f"{_news_instruction}"
                 )
 
-                # Call brain with enriched prompt (same system / history as normal).
-                brain_system = brain.SYSTEM_PROMPT
+                # Call brain with enriched prompt. The base system prompt is
+                # conservative about direct internet access; this branch has
+                # already fetched sources deterministically, so make the
+                # capability explicit for this answer.
+                brain_system = (
+                    brain.SYSTEM_PROMPT
+                    + "\n\nBÚSQUEDA WEB ACTIVA:\n"
+                    + "- En esta respuesta YA recibiste resultados de búsqueda web locales.\n"
+                    + "- No digas que no tienes acceso a internet. Usa las fuentes provistas.\n"
+                    + "- Si los resultados son insuficientes, dilo con precisión y cita lo que sí hay."
+                )
                 _raw_answer = brain.ask(
                     _enriched_prompt,
                     system=brain_system,
@@ -3119,7 +3212,24 @@ async def api_chat_ask(request: Request):
                     log.info("brain: injecting location context (lat=%.5f, lng=%.5f)", _lat, _lng)
                 except (TypeError, ValueError):
                     pass
-            answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64)
+            if image_b64 or not web_research.is_enabled():
+                answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64)
+            else:
+                tool_system = (
+                    brain_system
+                    + "\n\nUSO DE INTERNET EN MODO CHARLA:\n"
+                    + "- Tienes disponible la herramienta web_search para consultas actuales, verificables o donde necesites fuentes.\n"
+                    + "- Decide tú cuándo usarla. Úsala para noticias, precios, versiones, documentación reciente, eventos actuales o datos que puedan haber cambiado.\n"
+                    + "- No la uses para charla personal, razonamiento general o información estable que ya sabes."
+                )
+                answer = brain.ask_with_tools(
+                    text,
+                    system=tool_system,
+                    history=history,
+                    tools=[_WEB_SEARCH_TOOL],
+                    tool_handlers={"web_search": _web_search_tool_handler},
+                    tool_choice="auto",
+                )
             # NOTE: No persistence guardrail is applied here. In conversation
             # mode the brain answers freely and may legitimately use words like
             # "anotado" or "guardé" without having saved anything. The old

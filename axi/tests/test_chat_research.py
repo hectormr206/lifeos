@@ -14,6 +14,8 @@ handler — no unit-testing the internal helper functions in isolation.
 """
 from __future__ import annotations
 
+# pyright: reportAttributeAccessIssue=false, reportMissingImports=false
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -92,8 +94,8 @@ def research_client(monkeypatch):
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "La respuesta del brain.")
 
     tc = TestClient(dashboard.app)
-    tc._search_calls = search_calls
-    tc._read_calls = read_calls
+    setattr(tc, "_search_calls", search_calls)
+    setattr(tc, "_read_calls", read_calls)
     return tc
 
 
@@ -443,6 +445,7 @@ def test_non_research_message_unaffected(monkeypatch):
     monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
     monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
     monkeypatch.setattr(brain, "ask", lambda p, **kw: "respuesta normal")
+    monkeypatch.setattr(brain, "ask_with_tools", lambda p, **kw: "respuesta normal")
 
     tc = TestClient(dashboard.app)
     r = tc.post("/api/chat/ask", json={"text": "hola, ¿cómo estás?"})
