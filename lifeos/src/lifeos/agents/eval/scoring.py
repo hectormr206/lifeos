@@ -1,8 +1,9 @@
 """Pure scoring utilities for the nano-agent domain-classification eval harness.
 
 All functions in this module are PURE — no I/O, no network, no side-effects
-beyond reading a file in `load_golden_set`. They accept predictions from any
-system (nano extractor, regex baseline, brain), so A/B comparisons are trivial.
+beyond reading a file in ``load_golden_set`` / ``load_extraction_golden_set``.
+They accept predictions from any system (nano extractor, regex baseline,
+brain), so A/B comparisons are trivial.
 
 Null domains are modelled as the string "null" internally so they participate
 in per-class metrics like any other label. Callers and data files use Python
@@ -27,7 +28,7 @@ production layer is responsible for handling the input:
     - Text shorter than 12 chars → nano is never called.
     - Spirituality result with no title/kind on text < 20 chars → discarded.
 
-Public API:
+Public API — domain classification:
     GoldenCase                       — dataclass for one labeled eval example
     DomainScore                      — dataclass holding all scoring outputs
     load_golden_set(path)            — read a .jsonl file into list[GoldenCase]
@@ -35,6 +36,13 @@ Public API:
     score_by_layer(preds, golds)     -> dict[str, DomainScore]
     format_report(score)             -> str
     format_segmented_report(scores, golds) -> str
+
+Public API — extraction quality:
+    ExtractionCase                   — dataclass for one extraction eval example
+    ExtractionScore                  — dataclass holding all extraction scoring outputs
+    load_extraction_golden_set(path) — read a .jsonl file into list[ExtractionCase]
+    score_extraction(preds, cases)   -> ExtractionScore
+    format_extraction_report(score)  -> str
 """
 
 from __future__ import annotations
@@ -440,4 +448,468 @@ def format_segmented_report(
         lines.append("  No nano-layer cases found in golden set.")
     lines.append("=" * 62)
 
+    return "\n".join(lines)
+
+
+# ===========================================================================
+# Extraction-quality scoring
+# ===========================================================================
+#
+# Rules per field type (implemented in _score_field):
+#
+#   Numeric int  (systolic, diastolic, pulse_bpm):
+#       exact == after int coercion.
+#
+#   Numeric float (amount, duration_minutes, sleep_hours, weight_kg,
+#                  glucose_mg_dl):
+#       abs(a - b) <= max(0.01, 0.01 * abs(gold))   — 1 % or 0.01 floor.
+#
+#   Lists, set-equality, case-insensitive (people):
+#       {p.lower() for p in pred} == {g.lower() for g in gold}
+#
+#   items: order-insensitive; match by name (lowercased) — set equality.
+#       amount agreement reported as sub-metric.
+#       category agreement reported separately as sub_metric
+#       "items_category_agreement"; does NOT affect the headline metric.
+#
+#   Enum exact, case-insensitive (domain, currency):
+#       (pred or "").lower() == (gold or "").lower()
+#
+#   kind: case-insensitive + ALIAS MAP.  Unknown kinds fall back to
+#       case-insensitive comparison.
+#
+#   dates_text: set-equality, EXACT strings (no normalization).
+#
+#   title: EXCLUDED from scoring entirely.
+#
+# Absent-field rule:
+#   If a field is absent from the ``expected`` dict, it is NOT scored.
+#   An explicit null in ``expected`` IS scored — pred must also be null.
+#
+# Fuzzy-field rule:
+#   Fields listed in ``fuzzy_fields`` are scored separately and do NOT
+#   contribute to the headline ``field_accuracy`` or ``case_pass_rate``.
+#   They appear only in ``fuzzy_field_accuracy``.
+#
+# ===========================================================================
+
+# Fields excluded from extraction scoring entirely.
+_EXCLUDED_FIELDS: frozenset[str] = frozenset({"title"})
+
+# Numeric-int fields — exact match after int coercion.
+_NUMERIC_INT_FIELDS: frozenset[str] = frozenset({"systolic", "diastolic", "pulse_bpm"})
+
+# Numeric-float fields — 1% tolerance.
+_NUMERIC_FLOAT_FIELDS: frozenset[str] = frozenset(
+    {"amount", "duration_minutes", "sleep_hours", "weight_kg", "glucose_mg_dl"}
+)
+
+# List fields with set-equality (case-insensitive elements).
+_LIST_SET_CI_FIELDS: frozenset[str] = frozenset({"people"})
+
+# Enum fields — case-insensitive exact match.
+_ENUM_FIELDS: frozenset[str] = frozenset({"domain", "currency"})
+
+# dates_text — set equality, exact strings.
+_DATES_TEXT_FIELDS: frozenset[str] = frozenset({"dates_text"})
+
+# kind field — case-insensitive + alias map.
+_KIND_ALIASES: dict[str, str] = {
+    # Spanish → English canonical
+    "caminata": "walk",
+    "correr": "run",
+    "estudio": "study",
+    "cumpleaños": "birthday",
+    "cita": "appointment",
+    # reverse (English → English; harmless identity entries omitted)
+}
+
+
+def _normalise_kind(k: str | None) -> str | None:
+    """Normalise a kind value through the alias map then lowercase."""
+    if k is None:
+        return None
+    lower = k.lower()
+    return _KIND_ALIASES.get(lower, lower)
+
+
+def _float_match(pred_val: object, gold_val: float) -> bool:
+    """Return True when pred_val is within 1% (floor 0.01) of gold_val."""
+    try:
+        pf = float(pred_val)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    tolerance = max(0.01, 0.01 * abs(gold_val))
+    return abs(pf - gold_val) <= tolerance
+
+
+def _score_field(
+    field_name: str,
+    pred_val: object,
+    gold_val: object,
+) -> tuple[bool, dict[str, float]]:
+    """Score one field.  Returns (matched: bool, sub_metrics: dict).
+
+    sub_metrics is non-empty only for the 'items' field, where it reports
+    category and amount agreement separately.
+    """
+    sub_metrics: dict[str, float] = {}
+
+    # --- Excluded -----------------------------------------------------------
+    if field_name in _EXCLUDED_FIELDS:
+        # Should never be called for excluded fields, but guard anyway.
+        return True, sub_metrics
+
+    # --- Numeric int --------------------------------------------------------
+    if field_name in _NUMERIC_INT_FIELDS:
+        if gold_val is None:
+            return pred_val is None, sub_metrics
+        if pred_val is None:
+            return False, sub_metrics
+        try:
+            return int(pred_val) == int(gold_val), sub_metrics  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return False, sub_metrics
+
+    # --- Numeric float ------------------------------------------------------
+    if field_name in _NUMERIC_FLOAT_FIELDS:
+        if gold_val is None:
+            return pred_val is None, sub_metrics
+        if pred_val is None:
+            return False, sub_metrics
+        return _float_match(pred_val, float(gold_val)), sub_metrics  # type: ignore[arg-type]
+
+    # --- List set-equality (people) ----------------------------------------
+    if field_name in _LIST_SET_CI_FIELDS:
+        gold_set = {g.lower() for g in (gold_val or [])}  # type: ignore[union-attr]
+        pred_set = {p.lower() for p in (pred_val or [])}  # type: ignore[union-attr]
+        return gold_set == pred_set, sub_metrics
+
+    # --- items --------------------------------------------------------------
+    if field_name == "items":
+        gold_items: list[dict] = gold_val or []  # type: ignore[assignment]
+        pred_items: list[dict] = pred_val or []  # type: ignore[assignment]
+        gold_names = {(i.get("name") or "").lower() for i in gold_items}
+        pred_names = {(i.get("name") or "").lower() for i in pred_items}
+        name_match = gold_names == pred_names
+
+        # Secondary: category agreement (fraction of gold items whose category
+        # the prediction also got right — matched by name).
+        if gold_items:
+            pred_by_name = {
+                (i.get("name") or "").lower(): i for i in pred_items
+            }
+            cat_correct = 0
+            cat_total = 0
+            for gi in gold_items:
+                gname = (gi.get("name") or "").lower()
+                gcategory = gi.get("category")
+                if gcategory is not None:
+                    cat_total += 1
+                    pi = pred_by_name.get(gname, {})
+                    if (pi.get("category") or "").lower() == (gcategory or "").lower():
+                        cat_correct += 1
+            if cat_total > 0:
+                sub_metrics["items_category_agreement"] = cat_correct / cat_total
+        else:
+            # No gold items — nothing to compare for category
+            if not pred_items:
+                sub_metrics["items_category_agreement"] = 1.0
+
+        return name_match, sub_metrics
+
+    # --- Enum exact, case-insensitive (domain, currency) --------------------
+    if field_name in _ENUM_FIELDS:
+        g = (gold_val or "").lower() if gold_val is not None else None  # type: ignore[union-attr]
+        p = (pred_val or "").lower() if pred_val is not None else None  # type: ignore[union-attr]
+        return g == p, sub_metrics
+
+    # --- kind ---------------------------------------------------------------
+    if field_name == "kind":
+        return _normalise_kind(gold_val) == _normalise_kind(pred_val), sub_metrics  # type: ignore[arg-type]
+
+    # --- dates_text (set equality, exact strings) ---------------------------
+    if field_name in _DATES_TEXT_FIELDS:
+        gold_set2 = set(gold_val or [])  # type: ignore[arg-type]
+        pred_set2 = set(pred_val or [])  # type: ignore[arg-type]
+        return gold_set2 == pred_set2, sub_metrics
+
+    # --- Fallback: equality ------------------------------------------------
+    return gold_val == pred_val, sub_metrics
+
+
+@dataclass
+class ExtractionCase:
+    """One labeled example for the extraction-quality eval.
+
+    Attributes:
+        text: The raw input text.
+        expected: Dict of fields the gold asserts.  A field absent from this
+            dict is NOT scored.  An explicit ``null`` value IS scored (pred
+            must also be null).
+        fuzzy_fields: Field names that are scored in a separate fuzzy bucket
+            and do NOT affect the headline metric or ``case_pass_rate``.
+        note: Optional free-text annotation.
+        layer: Pipeline layer (default ``"nano"``).
+    """
+
+    text: str
+    expected: dict
+    fuzzy_fields: list[str] = field(default_factory=list)
+    note: str = ""
+    layer: str = "nano"
+
+
+@dataclass
+class ExtractionScore:
+    """Scoring results for one extraction eval run.
+
+    Attributes:
+        field_accuracy: Per-field accuracy over non-fuzzy asserted fields.
+            ``{field_name: fraction_correct}`` — averaged across all cases
+            that assert that field.
+        fuzzy_field_accuracy: Same but for fuzzy fields only.
+        case_pass_rate: Fraction of cases where ALL non-fuzzy asserted fields
+            matched.
+        per_case: ``[{"text": str, "passed": bool, "mismatches": list[str]}]``
+        sub_metrics: Secondary metrics that don't affect headline scores.
+            Currently: ``"items_category_agreement"`` (float).
+        total: Total number of cases evaluated.
+    """
+
+    field_accuracy: dict[str, float]
+    fuzzy_field_accuracy: dict[str, float]
+    case_pass_rate: float
+    per_case: list[dict]
+    sub_metrics: dict[str, float]
+    total: int
+
+
+def load_extraction_golden_set(path: Union[str, Path]) -> list[ExtractionCase]:
+    """Read a ``.jsonl`` file and return a list of :class:`ExtractionCase`.
+
+    Each non-blank, non-comment line must be a valid JSON object with at least:
+      - ``text``: str
+      - ``expected``: dict
+
+    Optional fields:
+      - ``fuzzy_fields``: list[str]  (defaults to ``[]``)
+      - ``note``:         str  (defaults to ``""``)
+      - ``layer``:        str  (defaults to ``"nano"``)
+      - Any other key (e.g. ``origin``) is silently ignored.
+
+    Lines starting with ``//`` or ``#`` (after optional whitespace) are
+    treated as comments and skipped. Blank lines are also skipped.
+
+    Raises:
+        ValueError: When a non-comment, non-blank line contains invalid JSON,
+            citing the 1-based line number.
+    """
+    cases: list[ExtractionCase] = []
+    for lineno, raw in enumerate(
+        Path(path).read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("//") or stripped.startswith("#"):
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"line {lineno}: invalid JSON in extraction golden-set file "
+                f"{path!r}: {exc}"
+            ) from exc
+        cases.append(
+            ExtractionCase(
+                text=obj["text"],
+                expected=obj["expected"],
+                fuzzy_fields=obj.get("fuzzy_fields", []),
+                note=obj.get("note", ""),
+                layer=obj.get("layer", "nano"),
+            )
+        )
+    return cases
+
+
+def score_extraction(
+    predictions: list[dict],
+    cases: list[ExtractionCase],
+) -> ExtractionScore:
+    """Score extraction predictions against labeled golden cases.
+
+    Each element of ``predictions`` is a dict with the same keys as
+    :class:`~lifeos.agents.extractor.ExtractionResult` (or a superset).
+    Each element of ``cases`` is an :class:`ExtractionCase` whose
+    ``expected`` dict declares exactly which fields to assert.
+
+    Field-scoring rules:
+    - Only fields present in ``expected`` are evaluated.  Absent fields are
+      skipped (they are NOT penalised).
+    - An explicit ``null`` in ``expected`` IS evaluated; pred must be null.
+    - Fields in ``fuzzy_fields`` are scored only in a separate fuzzy bucket
+      and do NOT affect ``field_accuracy`` or ``case_pass_rate``.
+    - ``title`` is always excluded from scoring.
+
+    Args:
+        predictions: One dict per case (same order as ``cases``).
+        cases: Labeled golden cases.
+
+    Returns:
+        An :class:`ExtractionScore` with aggregated and per-case results.
+
+    Raises:
+        ValueError: When ``len(predictions) != len(cases)``.
+    """
+    if len(predictions) != len(cases):
+        raise ValueError(
+            f"predictions length ({len(predictions)}) != cases length ({len(cases)})"
+        )
+
+    # Accumulators for non-fuzzy fields: {field: [correct, total]}
+    field_hits: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    # Accumulators for fuzzy fields
+    fuzzy_hits: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    # Sub-metrics accumulators: {metric: [sum, count]}
+    sub_acc: dict[str, list[float]] = defaultdict(lambda: [0.0, 0])
+
+    cases_passed = 0
+    per_case: list[dict] = []
+
+    for pred_dict, case in zip(predictions, cases):
+        fuzzy_set = set(case.fuzzy_fields)
+        case_mismatches: list[str] = []
+        case_passed = True  # assume pass; flip on any non-fuzzy mismatch
+
+        for field_name, gold_val in case.expected.items():
+            # Excluded fields are never scored.
+            if field_name in _EXCLUDED_FIELDS:
+                continue
+
+            pred_val = pred_dict.get(field_name)
+            matched, sub = _score_field(field_name, pred_val, gold_val)
+
+            # Accumulate sub-metrics (e.g. category agreement)
+            for sm_key, sm_val in sub.items():
+                sub_acc[sm_key][0] += sm_val
+                sub_acc[sm_key][1] += 1
+
+            is_fuzzy = field_name in fuzzy_set
+            if is_fuzzy:
+                fuzzy_hits[field_name][1] += 1
+                if matched:
+                    fuzzy_hits[field_name][0] += 1
+            else:
+                field_hits[field_name][1] += 1
+                if matched:
+                    field_hits[field_name][0] += 1
+                else:
+                    case_passed = False
+                    case_mismatches.append(field_name)
+
+        if case_passed:
+            cases_passed += 1
+
+        per_case.append({
+            "text": case.text,
+            "passed": case_passed,
+            "mismatches": case_mismatches,
+        })
+
+    total = len(cases)
+
+    # Aggregate field accuracy
+    field_accuracy = {
+        fname: (hits[0] / hits[1]) if hits[1] > 0 else 0.0
+        for fname, hits in field_hits.items()
+    }
+    fuzzy_field_accuracy = {
+        fname: (hits[0] / hits[1]) if hits[1] > 0 else 0.0
+        for fname, hits in fuzzy_hits.items()
+    }
+
+    # Aggregate sub-metrics
+    sub_metrics = {
+        sm_key: (vals[0] / vals[1]) if vals[1] > 0 else 0.0
+        for sm_key, vals in sub_acc.items()
+    }
+
+    return ExtractionScore(
+        field_accuracy=field_accuracy,
+        fuzzy_field_accuracy=fuzzy_field_accuracy,
+        case_pass_rate=cases_passed / total if total > 0 else 0.0,
+        per_case=per_case,
+        sub_metrics=sub_metrics,
+        total=total,
+    )
+
+
+def format_extraction_report(score: ExtractionScore) -> str:
+    """Render a human-readable text report from an :class:`ExtractionScore`.
+
+    The report includes:
+    1. Overall case pass-rate.
+    2. Per-field accuracy table (non-fuzzy only), sorted worst → best so the
+       weakest fields appear first.
+    3. Fuzzy-field accuracy table (when non-empty), clearly labelled to show
+       it does NOT affect the headline numbers.
+    4. Secondary sub-metrics (e.g. items_category_agreement).
+
+    Args:
+        score: Output from :func:`score_extraction`.
+
+    Returns:
+        A multi-line string suitable for printing to a terminal.
+    """
+    lines: list[str] = []
+    sep = "=" * 66
+
+    # ── Header ──────────────────────────────────────────────────────────────
+    lines.append(sep)
+    lines.append("  Extraction Quality Eval Report")
+    lines.append(sep)
+    correct_cases = round(score.case_pass_rate * score.total)
+    lines.append(
+        f"  Case pass rate : {score.case_pass_rate:.1%}"
+        f"  ({correct_cases}/{score.total} cases all-fields-match)"
+    )
+    lines.append("")
+
+    # ── Per-field accuracy (non-fuzzy) ──────────────────────────────────────
+    if score.field_accuracy:
+        lines.append("  Per-field accuracy (non-fuzzy, worst → best):")
+        header = f"  {'Field':<22} {'Accuracy':>10}  {'(correct/total)':>16}"
+        lines.append(header)
+        lines.append("  " + "-" * 52)
+        # Sort worst → best so the weakest fields appear at the top.
+        sorted_fields = sorted(score.field_accuracy.items(), key=lambda kv: kv[1])
+        for fname, acc in sorted_fields:
+            # Recompute correct/total for display
+            # (we don't store raw counts in ExtractionScore, so approximate)
+            lines.append(f"  {fname:<22} {acc:>10.1%}")
+    else:
+        lines.append("  (No non-fuzzy fields scored.)")
+    lines.append("")
+
+    # ── Fuzzy-field accuracy ─────────────────────────────────────────────────
+    if score.fuzzy_field_accuracy:
+        lines.append("─" * 66)
+        lines.append("  Fuzzy-field accuracy  (NOT included in headline numbers):")
+        header2 = f"  {'Field':<22} {'Accuracy':>10}"
+        lines.append(header2)
+        lines.append("  " + "-" * 34)
+        for fname, acc in sorted(score.fuzzy_field_accuracy.items(), key=lambda kv: kv[1]):
+            lines.append(f"  {fname:<22} {acc:>10.1%}")
+        lines.append("")
+
+    # ── Sub-metrics ──────────────────────────────────────────────────────────
+    if score.sub_metrics:
+        lines.append("─" * 66)
+        lines.append("  Secondary sub-metrics:")
+        for sm_key, sm_val in sorted(score.sub_metrics.items()):
+            lines.append(f"  {sm_key:<30} {sm_val:.1%}")
+        lines.append("")
+
+    lines.append(sep)
     return "\n".join(lines)
