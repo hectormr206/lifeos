@@ -36,7 +36,7 @@ class _Recorder:
         self.timeouts: list[float] = []
         self.calls = 0
 
-    def __call__(self, *, system, user, temperature, max_tokens, timeout_s):
+    def __call__(self, *, system, user, temperature, max_tokens, timeout_s, **_):
         self.timeouts.append(timeout_s)
         self.calls += 1
         # Repeat the last scripted result if we run past the script.
@@ -534,3 +534,80 @@ _EXERCISE_JSON = (
     '"title":"trote","kind":"run","systolic":null,"diastolic":null,'
     '"pulse_bpm":null,"sleep_hours":null,"weight_kg":null,"glucose_mg_dl":null}'
 )
+
+
+# ── Deterministic eval overrides: temperature + seed forwarding ───────────────
+# These tests verify that extract() forwards caller-supplied temperature and
+# seed to call_nano, enabling deterministic eval runs without changing the
+# production default (temperature=0.1, seed=None).
+#
+# TDD cycle: written RED first — tests fail until extract() and call_nano
+# accept and forward both params.
+
+
+class _FullRecorder:
+    """Spy on call_nano — records ALL kwargs passed on every call."""
+
+    def __init__(self, result):
+        self._result = result
+        self.calls: list[dict] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return self._result
+
+
+def test_extract_forwards_custom_temperature_to_call_nano(monkeypatch):
+    """extract(temperature=0.0) must pass temperature=0.0 to BOTH call_nano calls
+    (primary + retry) so callers can override the 0.1 production default."""
+    rec = _FullRecorder(_ok(_VALID_JSON))
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    extractor.extract("me tomé la presión, 120/80", temperature=0.0)
+
+    assert rec.calls, "call_nano must have been called"
+    for call in rec.calls:
+        assert call["temperature"] == 0.0, (
+            f"Expected temperature=0.0 forwarded to call_nano, got {call['temperature']}"
+        )
+
+
+def test_extract_default_temperature_is_unchanged(monkeypatch):
+    """When no temperature override is passed, extract() uses the 0.1 default
+    so production behavior is unchanged."""
+    rec = _FullRecorder(_ok(_VALID_JSON))
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    extractor.extract("me tomé la presión, 120/80")
+
+    assert rec.calls, "call_nano must have been called"
+    assert rec.calls[0]["temperature"] == 0.1, (
+        f"Default temperature must be 0.1, got {rec.calls[0]['temperature']}"
+    )
+
+
+def test_extract_forwards_seed_to_call_nano(monkeypatch):
+    """extract(seed=0) must pass seed=0 to call_nano for reproducible sampling."""
+    rec = _FullRecorder(_ok(_VALID_JSON))
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    extractor.extract("me tomé la presión, 120/80", seed=0)
+
+    assert rec.calls, "call_nano must have been called"
+    for call in rec.calls:
+        assert call.get("seed") == 0, (
+            f"Expected seed=0 forwarded to call_nano, got {call.get('seed')!r}"
+        )
+
+
+def test_extract_default_seed_is_none(monkeypatch):
+    """When no seed is passed, extract() passes seed=None (no seed constraint)."""
+    rec = _FullRecorder(_ok(_VALID_JSON))
+    monkeypatch.setattr(runtime, "call_nano", rec)
+
+    extractor.extract("me tomé la presión, 120/80")
+
+    assert rec.calls, "call_nano must have been called"
+    assert rec.calls[0].get("seed") is None, (
+        f"Default seed must be None, got {rec.calls[0].get('seed')!r}"
+    )

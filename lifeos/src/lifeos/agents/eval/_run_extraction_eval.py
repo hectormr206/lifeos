@@ -37,10 +37,21 @@ _GOLDEN_SET_PATH = (
 def _extract_as_dict(text: str) -> dict:
     """Call extractor.extract() and return the result as a plain dict.
 
+    Uses temperature=0.0 and seed=0 for deterministic, reproducible eval runs.
+    timeout_s=30 and retry_timeout_s=60 give the CPU nano server enough
+    headroom for the full 12K-char system prompt.
+    Production default (temperature=0.1, seed=None) is not changed.
+
     Returns a dict with all ExtractionResult fields; domain=None when the
     extractor returns None (no extraction).
     """
-    result = extractor.extract(text)
+    result = extractor.extract(
+        text,
+        temperature=0.0,
+        seed=0,
+        timeout_s=30.0,
+        retry_timeout_s=60.0,
+    )
     if result is None:
         return {
             "domain": None,

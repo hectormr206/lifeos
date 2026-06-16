@@ -51,6 +51,7 @@ def call_nano(
     max_tokens: int = 800,
     timeout_s: float = NANO_DEFAULT_TIMEOUT_S,
     disable_thinking: bool = True,
+    seed: int | None = None,
 ) -> NanoResult:
     """Single chat completion call to the nano llama-server.
 
@@ -63,6 +64,9 @@ def call_nano(
     budget). 800 leaves enough margin for structured JSON outputs.
     disable_thinking=True passes chat_template_kwargs.enable_thinking=False
     so the Qwen "thinking mode" doesn't activate.
+    seed: when provided, passed to llama-server for reproducible sampling
+    (deterministic eval runs). Default None leaves sampling unconstrained
+    (production behavior unchanged).
     """
     import time
     start = time.monotonic()
@@ -74,6 +78,8 @@ def call_nano(
         "temperature": float(temperature),
         "max_tokens": int(max_tokens),
     }
+    if seed is not None:
+        body["seed"] = int(seed)
     if disable_thinking:
         body["chat_template_kwargs"] = {"enable_thinking": False}
     try:
