@@ -611,3 +611,17 @@ def test_extract_default_seed_is_none(monkeypatch):
     assert rec.calls[0].get("seed") is None, (
         f"Default seed must be None, got {rec.calls[0].get('seed')!r}"
     )
+
+
+def test_default_timeouts_sized_for_cpu_inference():
+    """The nano always runs CPU-only (ngl=0); a multi-field extraction over the
+    ~3.5k-token prompt takes ~14-18s on a typical CPU. Guard the defaults so
+    they are never lowered back toward the old 5s, which made every rich
+    extraction time out on its first attempt and burn a doomed retry."""
+    import inspect
+
+    sig = inspect.signature(extractor.extract)
+    primary = sig.parameters["timeout_s"].default
+    retry = sig.parameters["retry_timeout_s"].default
+    assert primary >= 15.0, f"primary timeout too short for CPU nano: {primary}s"
+    assert retry >= primary, f"retry budget {retry}s must be >= primary {primary}s"
