@@ -277,8 +277,8 @@ def _is_ack_filler(text: str) -> bool:
 def extract(
     text: str,
     *,
-    timeout_s: float = 5.0,
-    retry_timeout_s: float = 15.0,
+    timeout_s: float = 20.0,
+    retry_timeout_s: float = 30.0,
     retries: int = 1,
     temperature: float = 0.1,
     seed: int | None = None,
@@ -300,7 +300,14 @@ def extract(
     the user's data. So on `r.ok == False` we retry up to `retries` times
     with the larger `retry_timeout_s` budget before giving up. A clean
     answer (parse failure, null domain) is NOT retried — that's a real
-    decision and burning a 15s retry on it would only add latency."""
+    decision and burning the retry budget on it would only add latency.
+
+    Timeout sizing: the nano always runs CPU-only (ngl=0), and a multi-field
+    input over the ~3.5k-token prompt takes ~14-18s on a typical CPU. The
+    defaults (20s primary, 30s retry) are sized to that reality so a normal
+    extraction succeeds on the first attempt instead of always burning a
+    doomed short attempt before the retry. Hardware-specific tuning can lower
+    these via the explicit args."""
     if not text or not text.strip():
         return None
 
