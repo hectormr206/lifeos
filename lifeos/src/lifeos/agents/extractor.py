@@ -95,7 +95,7 @@ Reglas de DOMAIN (uno solo, no listes opciones):
   IMPORTANTE: números como "122/81" o "113, 82" son presión arterial (health),
   NO son fechas ni eventos. Si aparece "pulso", "pulsos" o "pulsaciones"
   junto a números de presión, es siempre "health" con kind="vital".
-  Sueño (dormí, me dormí, me acosté → desperté): kind="vital", sleep_hours=horas estimadas.
+  Sueño (dormí, me dormí, me acosté → desperté): kind="vital", sleep_hours=horas SI Y SOLO SI el usuario DIJO EXPLÍCITAMENTE cuántas horas (ej. "dormí 8 horas" → 8.0). Si solo da horarios de entrada/salida (ej. "me dormí a las 11, desperté a las 7"), sleep_hours=null — NO calcules la diferencia.
   Peso corporal (pesé, peso X kg): kind="vital", weight_kg=número.
   Glucosa (glucosa X, azúcar X): kind="vital", glucose_mg_dl=número.
 - Aniversario, cumple, fecha importante a futuro: "events".
