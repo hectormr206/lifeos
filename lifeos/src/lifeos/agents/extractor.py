@@ -245,7 +245,7 @@ _WEEKDAY_NAMES: frozenset[str] = frozenset({
 _RELATIVE_DATE_TOKENS: frozenset[str] = frozenset({
     "hoy", "ayer", "anteayer", "mañana", "manana", "anoche",
     "el otro día", "el otro dia",
-    "tarde", "madrugada",  # time-of-day qualifiers
+    "tarde", "noche", "madrugada",  # time-of-day qualifiers
     "mediodía", "mediodia",
     # temporal-proximity markers
     "próximo", "proximo", "siguiente", "pasado",
@@ -255,7 +255,8 @@ _RELATIVE_DATE_TOKENS: frozenset[str] = frozenset({
     " am", " pm",
     "este mes", "esta semana",
     # temporal span nouns (used in relative date expressions like "hace un mes")
-    " mes", " semana", " año", " dia", " día", " hora",
+    # Note: "semana" has no leading-space guard — "semana pasada" (no article) must match.
+    " mes", "semana", " año", " dia", " día", " hora",
 })
 
 # Regex patterns compiled once for performance.
