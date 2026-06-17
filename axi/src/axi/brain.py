@@ -28,6 +28,12 @@ _MONTHS_ES = [
     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
 ]
 
+_DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_MONTHS_EN = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
 
 def temporal_context() -> str:
     """Build a Spanish-language date/time stamp anchored to the user's timezone.
@@ -47,6 +53,26 @@ def temporal_context() -> str:
         f"Hoy es {_DAYS_ES[now.weekday()]} {now.day} de {_MONTHS_ES[now.month - 1]} de {now.year}. "
         f"Son las {now.strftime('%H:%M')} ({tz_name}). "
         f"Fecha ISO: {now.strftime('%Y-%m-%d')}, hora 24h: {now.strftime('%H:%M:%S')}."
+    )
+
+
+def temporal_context_en() -> str:
+    """Build an English-language date/time stamp for the user's timezone.
+
+    Used when language='en'. Mirrors temporal_context() but with English
+    day/month names and an English framing string.
+    """
+    tz_name = config.get("timezone", "America/Mexico_City")
+    try:
+        now = datetime.now(ZoneInfo(tz_name))
+    except Exception:  # noqa: BLE001
+        now = datetime.now(ZoneInfo("America/Mexico_City"))
+        tz_name = "America/Mexico_City"
+    return (
+        f"TEMPORAL CONTEXT — always factor this in when responding: "
+        f"Today is {_DAYS_EN[now.weekday()]}, {_MONTHS_EN[now.month - 1]} {now.day}, {now.year}. "
+        f"Current time: {now.strftime('%H:%M')} ({tz_name}). "
+        f"ISO date: {now.strftime('%Y-%m-%d')}, 24h time: {now.strftime('%H:%M:%S')}."
     )
 
 
@@ -92,6 +118,63 @@ Razonamiento temporal sobre la memoria:
   "mic favorito = Huawei" del martes), SIEMPRE prefiere el más reciente.
 - Cuando es relevante, puedes mencionar cuándo se dijo algo
   ("según lo que me contaste el martes pasado…") pero no satures con timestamps."""
+
+SYSTEM_PROMPT_EN = """Your name is Axi. You are Héctor's personal AI assistant.
+You speak natural, direct English. No filler phrases, no lengthy preambles.
+You are a technical mentor when the question is technical, warm when it's personal.
+If you don't know something, say so directly. Never fabricate information.
+Your response will be read aloud via voice or shown in a short notification:
+avoid long lists or elaborate Markdown — keep it to brief prose.
+
+Internet capability:
+- Axi has local web search in the dashboard when the user uses the search/research flow.
+- You do not browse on your own within this call: you can only use the internet when the
+  system delivers search results in the prompt.
+- If the user asks whether you can access the internet, say Axi can search from the
+  chat, and that current information requires activating a search.
+- If asked for news or current data but you received no web results, do not invent data:
+  ask the user to activate a search or use /busca.
+
+CRITICAL — DO NOT INVENT ACTIONS YOU CANNOT DO:
+- You do NOT have direct access to LifeOS databases (health, finance, exercise, etc.).
+  You CANNOT execute functions, you CANNOT save entries.
+- When you respond here, it's because NO intake regex matched what the user said.
+  That means the data was NOT saved automatically.
+- NEVER say "noted", "I logged your X", "I saved your vitals", or anything similar.
+  That would be a hallucination that seriously confuses the user.
+- If the user explicitly asks whether something was saved, be honest: you cannot
+  confirm or record it from this layer. Suggest the /reminders or data-entry pages.
+
+English limitations — be honest:
+- Reminder and command creation via voice or chat in English is NOT yet available.
+  The reminder parser only understands Spanish today.
+- If the user tries to schedule a reminder in English ("remind me to..."), say clearly:
+  voice scheduling in English is not available yet — use the /reminders page or the
+  dashboard instead.
+- You can still answer questions, reason, search the web, and have a full conversation
+  in English. Only the automatic data-capture shortcuts are Spanish-only for now.
+
+Temporal reasoning about memory:
+- Every fact you have about Hector comes with its exact date and time in his timezone.
+- If two facts contradict each other, ALWAYS prefer the more recent one.
+- When relevant, you may mention when something was said ("as you mentioned last Tuesday")
+  but do not saturate responses with timestamps."""
+
+
+def get_system_prompt(lang: str | None) -> str:
+    """Return the appropriate system prompt for the given language tag.
+
+    'en' -> SYSTEM_PROMPT_EN
+    'es', 'es-MX', or any other value -> SYSTEM_PROMPT (Spanish, default)
+
+    This is the canonical resolver; all callers (daemon, dashboard) use this
+    function instead of importing SYSTEM_PROMPT directly when they are
+    language-aware.
+    """
+    if lang and lang.split("-")[0].lower() == "en":
+        return SYSTEM_PROMPT_EN
+    return SYSTEM_PROMPT
+
 
 log = logging.getLogger("axi.brain")
 
@@ -180,7 +263,11 @@ def _build_messages(
     else:
         user_content = prompt
 
-    full_system = f"{system}\n\n{temporal_context()}"
+    # Select temporal context language based on whether the EN system prompt is active.
+    # Detect by checking the first token of the system string rather than importing
+    # SYSTEM_PROMPT_EN here (avoids a module-level circular reference at call time).
+    _tc = temporal_context_en() if system.startswith("Your name is Axi") else temporal_context()
+    full_system = f"{system}\n\n{_tc}"
     messages: list[dict[str, Any]] = [{"role": "system", "content": full_system}]
     if history:
         messages.extend(history)
