@@ -400,3 +400,218 @@ def test_localize_silence_dictation_en_is_english():
     result = msg("silence_dictation", "en")
     assert result
     assert "silencio" not in result.lower()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 9. FIX 1 — wakeword path threads lang to brain_ask (CRITICAL)
+# RED: these fail until _wakeword_ask reads config language and passes lang=
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_wakeword_ask_passes_lang_to_brain_en(monkeypatch):
+    """When language='en', _wakeword_ask must pass lang='en' to brain_ask.
+
+    This is the CRITICAL regression: the wakeword path previously called
+    brain_ask without lang=, so EN users got the Spanish temporal context.
+    """
+    import axi.daemon as d
+    from axi.daemon import Daemon
+    from axi.memory import ConversationMemory
+
+    captured = {}
+
+    def fake_brain(prompt, *, system="", image_b64=None, history=None, lang=None, **kw):
+        captured["lang"] = lang
+        return "answer"
+
+    monkeypatch.setattr(d, "notify", lambda *a, **kw: None)
+    monkeypatch.setattr(d, "save_last_answer", lambda *a, **kw: None)
+    monkeypatch.setattr(d, "to_clipboard", lambda *a, **kw: None)
+    monkeypatch.setattr(d, "speak_text", lambda *a, **kw: None)
+    monkeypatch.setattr(d, "_game_mode_active", lambda: False)
+
+    import axi.config as cfg
+    monkeypatch.setattr(cfg, "get", lambda key, default=None: {"language": "en"}.get(key, default))
+
+    daemon = Daemon(
+        recorder=None,
+        transcriber=None,
+        memory=ConversationMemory(),
+        brain_ask=fake_brain,
+        vision_capture=lambda: None,
+        eyes_capture=lambda: (None, "ok"),
+        meeting_factory=lambda **kw: None,
+    )
+    daemon._wakeword_ask("hello Axi", None)
+
+    assert "lang" in captured, "_wakeword_ask never called brain_ask"
+    lang_val = captured["lang"]
+    assert lang_val is not None, "lang passed to brain_ask was None (missing threading)"
+    assert lang_val.lower().startswith("en"), f"Expected EN lang, got: {lang_val!r}"
+
+
+def test_wakeword_ask_passes_lang_to_brain_es(monkeypatch):
+    """When language='es-MX', _wakeword_ask must pass lang='es-MX' (Spanish unchanged)."""
+    import axi.daemon as d
+    from axi.daemon import Daemon
+    from axi.memory import ConversationMemory
+
+    captured = {}
+
+    def fake_brain(prompt, *, system="", image_b64=None, history=None, lang=None, **kw):
+        captured["lang"] = lang
+        return "respuesta"
+
+    monkeypatch.setattr(d, "notify", lambda *a, **kw: None)
+    monkeypatch.setattr(d, "save_last_answer", lambda *a, **kw: None)
+    monkeypatch.setattr(d, "to_clipboard", lambda *a, **kw: None)
+    monkeypatch.setattr(d, "speak_text", lambda *a, **kw: None)
+    monkeypatch.setattr(d, "_game_mode_active", lambda: False)
+
+    import axi.config as cfg
+    monkeypatch.setattr(cfg, "get", lambda key, default=None: {"language": "es-MX"}.get(key, default))
+
+    daemon = Daemon(
+        recorder=None,
+        transcriber=None,
+        memory=ConversationMemory(),
+        brain_ask=fake_brain,
+        vision_capture=lambda: None,
+        eyes_capture=lambda: (None, "ok"),
+        meeting_factory=lambda **kw: None,
+    )
+    daemon._wakeword_ask("hola Axi", None)
+
+    assert captured.get("lang") == "es-MX", (
+        f"Spanish lang must pass through unchanged, got: {captured.get('lang')!r}"
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 10. FIX 2 — tool_system block is language-conditional (MEDIUM)
+# RED: these fail until _ask_with_tools_impl branches on lang
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_ask_with_tools_impl_tool_system_spanish_when_no_lang():
+    """With lang=None (default), tool_system must contain the Spanish HERRAMIENTAS block."""
+    import axi.brain as brain
+    from unittest.mock import patch, MagicMock
+
+    captured = {}
+
+    def fake_post(payload, *, timeout):
+        captured["messages"] = payload.get("messages", [])
+        # Return a minimal valid response that ends the loop immediately.
+        return {
+            "choices": [{
+                "message": {"role": "assistant", "content": "ok", "tool_calls": []},
+                "finish_reason": "stop",
+            }]
+        }
+
+    with patch.object(brain, "_post_chat_completion", side_effect=fake_post):
+        brain._ask_with_tools_impl(
+            "test",
+            tools=[],
+            tool_handlers={},
+            system=brain.SYSTEM_PROMPT,
+            lang=None,
+        )
+
+    sys_content = captured["messages"][0]["content"]
+    assert "HERRAMIENTAS ACTIVAS" in sys_content, "Spanish tool block missing for lang=None"
+    assert "ACTIVE TOOLS" not in sys_content, "EN tool block must not appear for lang=None"
+
+
+def test_ask_with_tools_impl_tool_system_spanish_when_lang_es():
+    """With lang='es-MX', tool_system must be the Spanish block (regression guard)."""
+    import axi.brain as brain
+    from unittest.mock import patch
+
+    captured = {}
+
+    def fake_post(payload, *, timeout):
+        captured["messages"] = payload.get("messages", [])
+        return {
+            "choices": [{
+                "message": {"role": "assistant", "content": "ok", "tool_calls": []},
+                "finish_reason": "stop",
+            }]
+        }
+
+    with patch.object(brain, "_post_chat_completion", side_effect=fake_post):
+        brain._ask_with_tools_impl(
+            "test",
+            tools=[],
+            tool_handlers={},
+            system=brain.SYSTEM_PROMPT,
+            lang="es-MX",
+        )
+
+    sys_content = captured["messages"][0]["content"]
+    assert "HERRAMIENTAS ACTIVAS" in sys_content, "Spanish tool block must be unchanged for es-MX"
+    assert "ACTIVE TOOLS" not in sys_content
+
+
+def test_ask_with_tools_impl_tool_system_english_when_lang_en():
+    """With lang='en', tool_system must inject an English ACTIVE TOOLS block, not Spanish."""
+    import axi.brain as brain
+    from unittest.mock import patch
+
+    captured = {}
+
+    def fake_post(payload, *, timeout):
+        captured["messages"] = payload.get("messages", [])
+        return {
+            "choices": [{
+                "message": {"role": "assistant", "content": "ok", "tool_calls": []},
+                "finish_reason": "stop",
+            }]
+        }
+
+    with patch.object(brain, "_post_chat_completion", side_effect=fake_post):
+        brain._ask_with_tools_impl(
+            "test",
+            tools=[],
+            tool_handlers={},
+            system=brain.SYSTEM_PROMPT_EN,
+            lang="en",
+        )
+
+    sys_content = captured["messages"][0]["content"]
+    assert "ACTIVE TOOLS" in sys_content, "EN tool block must appear for lang='en'"
+    assert "HERRAMIENTAS ACTIVAS" not in sys_content, "Spanish tool block must NOT appear for lang='en'"
+
+
+def test_ask_with_tools_impl_en_tool_system_content():
+    """EN tool_system must faithfully mirror the Spanish content in English."""
+    import axi.brain as brain
+    from unittest.mock import patch
+
+    captured = {}
+
+    def fake_post(payload, *, timeout):
+        captured["messages"] = payload.get("messages", [])
+        return {
+            "choices": [{
+                "message": {"role": "assistant", "content": "ok", "tool_calls": []},
+                "finish_reason": "stop",
+            }]
+        }
+
+    with patch.object(brain, "_post_chat_completion", side_effect=fake_post):
+        brain._ask_with_tools_impl(
+            "test",
+            tools=[],
+            tool_handlers={},
+            system=brain.SYSTEM_PROMPT_EN,
+            lang="en",
+        )
+
+    sys_content = captured["messages"][0]["content"]
+    # Must communicate "tools available" concept in English
+    assert any(w in sys_content for w in ["tool", "Tool", "TOOL"]), \
+        "EN tool block must mention tools"
+    # Must tell the model not to claim it needs to search if results already arrived
+    assert any(phrase in sys_content for phrase in [
+        "web_search", "already received", "already have", "results",
+    ]), "EN tool block must address the web_search result-received case"

@@ -409,14 +409,24 @@ def _ask_with_tools_impl(
     lang: str | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
     """Run a small OpenAI tool-calling loop against local llama-server."""
-    tool_system = (
-        system
-        + "\n\nHERRAMIENTAS ACTIVAS:\n"
-        + "- En esta llamada sí puedes usar las herramientas locales declaradas en tools.\n"
-        + "- Si una herramienta devuelve resultados, trátalos como información real provista por el sistema.\n"
-        + "- No digas que necesitas /busca si ya recibiste resultados de una herramienta web_search.\n"
-        + "- Si los resultados son insuficientes, dilo con precisión y cita lo que sí hay."
-    )
+    _is_en = lang is not None and lang.split("-")[0].lower() == "en"
+    if _is_en:
+        _tool_instructions = (
+            "\n\nACTIVE TOOLS:\n"
+            "- In this call you can use the local tools declared in the tools list.\n"
+            "- If a tool returns results, treat them as real information provided by the system.\n"
+            "- Do not claim you need to search if you already received results from a web_search tool.\n"
+            "- If the results are insufficient, say so precisely and cite what you do have."
+        )
+    else:
+        _tool_instructions = (
+            "\n\nHERRAMIENTAS ACTIVAS:\n"
+            "- En esta llamada sí puedes usar las herramientas locales declaradas en tools.\n"
+            "- Si una herramienta devuelve resultados, trátalos como información real provista por el sistema.\n"
+            "- No digas que necesitas /busca si ya recibiste resultados de una herramienta web_search.\n"
+            "- Si los resultados son insuficientes, dilo con precisión y cita lo que sí hay."
+        )
+    tool_system = system + _tool_instructions
     messages = _build_messages(prompt, system=tool_system, image_b64=None, history=history, lang=lang)
     last_data: dict[str, Any] | None = None
     try:
