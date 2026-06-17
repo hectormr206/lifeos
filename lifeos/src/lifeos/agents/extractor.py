@@ -215,6 +215,123 @@ OUTPUT: {"domain":"health","amount":null,"currency":null,"merchant":null,"people
 Respondé EXCLUSIVAMENTE con el JSON. Nada más."""
 
 
+# ---------------------------------------------------------------------------
+# Phantom-date post-filter
+# ---------------------------------------------------------------------------
+#
+# The 0.8B model occasionally "invents" date entries by copying a phrase that
+# has no real date/time content (e.g. "llamé a mi suegra" → dates_text=[…]).
+# This deterministic post-processor drops any entry from dates_text that
+# contains NONE of the recognised Spanish date/time signals.
+#
+# Conservative design: keep an entry if it matches ANY signal pattern.
+# A wrongly-dropped TRUE date hurts recall; the ruler will catch it.
+# This filter is scope-limited to dates_text and cannot affect any other field.
+
+# Spanish month names (lowercase; match is case-insensitive).
+_MONTH_NAMES: frozenset[str] = frozenset({
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+})
+
+# Spanish weekday names (lowercase; match is case-insensitive).
+_WEEKDAY_NAMES: frozenset[str] = frozenset({
+    "lunes", "martes", "miércoles", "miercoles",
+    "jueves", "viernes", "sábado", "sabado", "domingo",
+})
+
+# Relative-date and time-of-day words/phrases (lowercase).
+# Checked as word-boundary substrings.
+_RELATIVE_DATE_TOKENS: frozenset[str] = frozenset({
+    "hoy", "ayer", "anteayer", "mañana", "manana", "anoche",
+    "el otro día", "el otro dia",
+    "tarde", "madrugada",  # time-of-day qualifiers
+    "mediodía", "mediodia",
+    # temporal-proximity markers
+    "próximo", "proximo", "siguiente", "pasado",
+    # approximate time pointer
+    "a las", "como a las", "las ",
+    # Spanish time suffixes
+    " am", " pm",
+    "este mes", "esta semana",
+    # temporal span nouns (used in relative date expressions like "hace un mes")
+    " mes", " semana", " año", " dia", " día", " hora",
+})
+
+# Regex patterns compiled once for performance.
+import re as _re  # noqa: E402  (already imported at top, alias here for clarity)
+
+# Any digit sequence — covers years, day numbers, clock times, "el 5", etc.
+_RE_HAS_DIGIT = _re.compile(r"\d")
+
+# "a las" or "las " (introduces time-of-day expressions)
+_RE_A_LAS = _re.compile(r"\b(a\s+las?|las?)\s+\d", _re.IGNORECASE)
+
+# HH:MM clock pattern
+_RE_CLOCK = _re.compile(r"\b\d{1,2}:\d{2}\b")
+
+# am / pm (word-boundary aware)
+_RE_AMPM = _re.compile(r"\b(am|pm)\b", _re.IGNORECASE)
+
+
+def _has_date_signal(entry: str) -> bool:
+    """Return True if *entry* contains at least one real date/time signal.
+
+    Checked in order from cheapest to most specific.  The rule set is
+    intentionally conservative: any match keeps the entry.
+    """
+    text = entry.strip()
+    if not text:
+        return False
+
+    # 1. Any digit → could be a day, year, hour, clock time.
+    if _RE_HAS_DIGIT.search(text):
+        return True
+
+    lower = text.lower()
+
+    # 2. Month names
+    for month in _MONTH_NAMES:
+        if month in lower:
+            return True
+
+    # 3. Weekday names
+    for day in _WEEKDAY_NAMES:
+        if day in lower:
+            return True
+
+    # 4. Relative-date tokens (simple substring match on lowercase)
+    for token in _RELATIVE_DATE_TOKENS:
+        if token in lower:
+            return True
+
+    # 5. am/pm pattern
+    if _RE_AMPM.search(text):
+        return True
+
+    return False
+
+
+def _strip_phantom_dates(entries: list[str]) -> list[str]:
+    """Remove phantom entries from a dates_text list.
+
+    A phantom is an entry that contains NO recognisable date/time signal.
+    Genuine date fragments (relative words, weekday/month names, digits,
+    time patterns) pass through unchanged.
+
+    This is a pure function with no side effects.  It is independently
+    unit-tested and safe to call even when entries is empty.
+
+    Args:
+        entries: The raw dates_text list produced by the nano extractor.
+
+    Returns:
+        A filtered list containing only entries with at least one date/time
+        signal.  Insertion order of kept entries is preserved.
+    """
+    return [e for e in entries if _has_date_signal(e)]
+
+
 def _try_parse_json(content: str) -> dict | None:
     """Extract the first {...} block from the model's response and parse it.
     The model sometimes wraps the JSON in markdown fences or adds trailing
@@ -422,7 +539,7 @@ def extract(
         currency=(str(parsed.get("currency")).strip() if parsed.get("currency") else None),
         merchant=(str(parsed.get("merchant")).strip() if parsed.get("merchant") else None),
         people=_str_list(parsed.get("people")),
-        dates_text=_str_list(parsed.get("dates_text")),
+        dates_text=_strip_phantom_dates(_str_list(parsed.get("dates_text"))),
         duration_minutes=dur,
         items=_items(parsed.get("items")),
         title=(str(parsed.get("title")).strip() if parsed.get("title") else None),
