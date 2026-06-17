@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Callable
 
 from axi import config
-from axi.brain import ask as brain_ask, SYSTEM_PROMPT
+from axi.brain import ask as brain_ask, SYSTEM_PROMPT, get_system_prompt as _get_system_prompt
+from lifeos.localize import msg as _loc_msg
 from axi.clean import clean as clean_text
 from axi.extractor import extract_and_store
 from axi.eyes import capture_b64 as webcam_capture_b64
@@ -53,18 +54,19 @@ _GAME_COPILOT_MAX_TOKENS = 256
 def _select_ask_params(
     game_active: bool,
     copilot_enabled: bool,
+    lang: str | None = None,
 ) -> tuple[str, int]:
     """Return (system_prompt, max_tokens) for the current ask invocation.
 
     Pure function — no I/O, no side effects.  Testable in isolation.
 
     When game-mode is active AND the co-pilot config flag is on, returns the
-    game-aware prompt and a brevity cap.  Otherwise returns the default
-    SYSTEM_PROMPT and standard max_tokens unchanged.
+    game-aware prompt and a brevity cap.  Otherwise returns the language-aware
+    system prompt and standard max_tokens.
     """
     if game_active and copilot_enabled:
         return _GAME_COPILOT_SYSTEM_PROMPT, _GAME_COPILOT_MAX_TOKENS
-    return SYSTEM_PROMPT, 2048
+    return _get_system_prompt(lang), 2048
 
 
 # ───────── default DI helpers ─────────
@@ -337,21 +339,22 @@ class Daemon:
         self._set_state("transcribing")
         try:
             audio = self.recorder.stop()
+            _ui_lang = str(config.get("language", "es-MX"))
             if audio is None or len(audio) < _min_record_samples():
                 self._set_state("idle")
-                notify("Axi", "Pregunta muy corta", icon="dialog-warning", timeout_ms=2000)
+                notify("Axi", _loc_msg("too_short", _ui_lang), icon="dialog-warning", timeout_ms=2000)
                 return "too-short"
             import numpy as _np
             rms = float(_np.sqrt(_np.mean(audio**2)))
             if rms < _silence_rms_threshold():
                 self._set_state("idle")
                 log.info("ask silence gate: rms=%.5f", rms)
-                notify("Axi", "No oí pregunta", icon="dialog-warning", timeout_ms=2000)
+                notify("Axi", _loc_msg("silence", _ui_lang), icon="dialog-warning", timeout_ms=2000)
                 return "silence"
             raw, lang, _prob = self.transcriber.transcribe(audio)
             if not raw:
                 self._set_state("idle")
-                notify("Axi", "No oí nada", icon="dialog-warning", timeout_ms=2000)
+                notify("Axi", _loc_msg("no_audio", _ui_lang), icon="dialog-warning", timeout_ms=2000)
                 return "empty"
             question = clean_text(raw)
             log.info("question: %s", question)
@@ -364,18 +367,20 @@ class Daemon:
             facts = self.memory.relevant_facts(question, limit=5)
             notify(
                 "Axi",
-                f"🧠{vision_note} Pensando… (mem: {len(history)//2} turnos, {len(facts)} facts)",
+                f"🧠{vision_note} {_loc_msg('thinking', _ui_lang)} (mem: {len(history)//2} turns, {len(facts)} facts)",
                 icon="view-refresh",
                 transient=True,
                 timeout_ms=3000,
             )
             # Select system prompt and token budget based on game-mode state.
             # In game-mode with co-pilot enabled → game-aware prompt + brevity cap.
-            # In normal mode → standard SYSTEM_PROMPT + default max_tokens. (Slice 1)
+            # In normal mode → language-aware system prompt + default max_tokens.
             _copilot_on = bool(config.get("game_copilot_enabled", True))
+            _lang = str(config.get("language", "es-MX"))
             base_system, ask_max_tokens = _select_ask_params(
                 game_active=_game_mode_active(),
                 copilot_enabled=_copilot_on,
+                lang=_lang,
             )
             # Inject relevant long-term facts into the system layer so the answer
             # is grounded in what Axi actually knows about Héctor.
@@ -464,7 +469,8 @@ class Daemon:
         # exclude it from the meeting transcript.
         self._dictation_start_ts = time.time() if self.meeting is not None else None
         self._set_state("recording")
-        notify("Axi", f"🎤 Escuchando · {source}", transient=True, timeout_ms=1200)
+        _ui_lang = str(config.get("language", "es-MX"))
+        notify("Axi", f"🎤 {_loc_msg('listening', _ui_lang)} · {source}", transient=True, timeout_ms=1200)
         return "recording"
 
     def _stop_and_transcribe(self) -> str:
@@ -476,10 +482,11 @@ class Daemon:
                 self.meeting.register_dictation(self._dictation_start_ts, time.time())
                 self._dictation_start_ts = None
             audio = self.recorder.stop()
+            _ui_lang2 = str(config.get("language", "es-MX"))
             min_samples = _min_record_samples()
             if audio is None or len(audio) < min_samples:
                 self._set_state("idle")
-                notify("Axi", "Grabación muy corta", icon="dialog-warning", timeout_ms=2000)
+                notify("Axi", _loc_msg("too_short_recording", _ui_lang2), icon="dialog-warning", timeout_ms=2000)
                 return "too-short"
             import numpy as _np
             rms = float(_np.sqrt(_np.mean(audio**2)))
@@ -487,10 +494,10 @@ class Daemon:
             if rms < threshold:
                 self._set_state("idle")
                 log.info("silence gate triggered: rms=%.5f < %.5f", rms, threshold)
-                notify("Axi", "No oí nada (silencio)", icon="dialog-warning", timeout_ms=2000)
+                notify("Axi", _loc_msg("no_audio", _ui_lang2), icon="dialog-warning", timeout_ms=2000)
                 return "silence"
 
-            notify("Axi", "Transcribiendo…", icon="view-refresh", transient=True, timeout_ms=2000)
+            notify("Axi", _loc_msg("transcribing", _ui_lang2), icon="view-refresh", transient=True, timeout_ms=2000)
             _progress_stop = threading.Event()
             _poller = _ProgressPoller(self, _progress_stop)
             _poller.start()
@@ -503,7 +510,7 @@ class Daemon:
 
             if not raw:
                 self._set_state("idle")
-                notify("Axi", "Nada que transcribir", icon="dialog-warning", timeout_ms=2000)
+                notify("Axi", _loc_msg("nothing_to_transcribe", _ui_lang2), icon="dialog-warning", timeout_ms=2000)
                 return "empty"
 
             text = clean_text(raw)

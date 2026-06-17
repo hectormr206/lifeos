@@ -2423,7 +2423,13 @@ async def api_chat_ask(request: Request):
     if not text and image_b64:
         # When the user attaches an image without typing, default to a
         # short descriptive prompt so the vision model has something to do.
-        text = "Describe lo que ves en esta imagen."
+        _img_lang = str(config.get("language", "es-MX"))
+        _img_lang_fam = _img_lang.split("-")[0].lower()
+        text = (
+            "Describe what you see in this image."
+            if _img_lang_fam == "en"
+            else "Describe lo que ves en esta imagen."
+        )
     if len(text) > 8000:
         raise HTTPException(400, "text too long (max 8000 chars)")
     if image_b64 and not isinstance(image_b64, str):
@@ -2589,8 +2595,9 @@ async def api_chat_ask(request: Request):
                 # conservative about direct internet access; this branch has
                 # already fetched sources deterministically, so make the
                 # capability explicit for this answer.
+                _web_lang = str(config.get("language", "es-MX"))
                 brain_system = (
-                    brain.SYSTEM_PROMPT
+                    brain.get_system_prompt(_web_lang)
                     + "\n\nBÚSQUEDA WEB ACTIVA:\n"
                     + "- En esta respuesta YA recibiste resultados de búsqueda web locales.\n"
                     + "- No digas que no tienes acceso a internet. Usa las fuentes provistas.\n"
@@ -3195,7 +3202,8 @@ async def api_chat_ask(request: Request):
         try:
             # If the PWA captured GPS at send time, inject it into the system
             # prompt so the brain "sees" it instead of denying knowledge.
-            brain_system = brain.SYSTEM_PROMPT
+            _chat_lang = str(config.get("language", "es-MX"))
+            brain_system = brain.get_system_prompt(_chat_lang)
             if raw_location:
                 try:
                     _lat = float(raw_location.get("lat"))

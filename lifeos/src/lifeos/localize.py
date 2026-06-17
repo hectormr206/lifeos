@@ -49,6 +49,13 @@ def format_local_when(dt: datetime, lang: str | None = None) -> str:
     return f"{wd} {dt.day} {mo} {dt.strftime('%H:%M')}"
 
 
+# Daemon voice-loop notification strings.
+# Keys: (message_key, lang_family).
+# Added for i18n EN MVP (Approach B): daemon.py uses these instead of
+# hardcoded Spanish strings so EN users see English feedback notifications.
+#
+# ES strings must be byte-for-byte identical to the originals in daemon.py.
+
 # Reminder confirmation templates.
 # Keys: ('reminder_one_shot' | 'reminder_recurring', lang_family).
 _TEMPLATES: dict[tuple[str, str], str] = {
@@ -68,6 +75,23 @@ _TEMPLATES: dict[tuple[str, str], str] = {
         "Got it. Recurring reminder set ({cron}). "
         "First time: {when}. I'll ping your laptop and phone."
     ),
+    # Daemon voice-loop feedback notifications
+    ("too_short", "es"): "Pregunta muy corta",
+    ("too_short", "en"): "Too short — try again",
+    ("silence", "es"): "No oí pregunta",
+    ("silence", "en"): "No audio detected",
+    ("no_audio", "es"): "No oí nada",
+    ("no_audio", "en"): "Nothing heard",
+    ("thinking", "es"): "Pensando…",
+    ("thinking", "en"): "Thinking…",
+    ("listening", "es"): "Escuchando",
+    ("listening", "en"): "Listening",
+    ("too_short_recording", "es"): "Grabación muy corta",
+    ("too_short_recording", "en"): "Recording too short",
+    ("transcribing", "es"): "Transcribiendo…",
+    ("transcribing", "en"): "Transcribing…",
+    ("nothing_to_transcribe", "es"): "Nada que transcribir",
+    ("nothing_to_transcribe", "en"): "Nothing to transcribe",
 }
 
 
