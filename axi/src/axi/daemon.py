@@ -793,9 +793,11 @@ class Daemon:
             history = self.memory.messages()
             facts = self.memory.relevant_facts(question, limit=5)
             _copilot_on = bool(config.get("game_copilot_enabled", True))
+            _lang = str(config.get("language", "es-MX"))
             base_system, ask_max_tokens = _select_ask_params(
                 game_active=_game_mode_active(),
                 copilot_enabled=_copilot_on,
+                lang=_lang,
             )
             system = base_system
             if facts:
@@ -825,6 +827,7 @@ class Daemon:
                 image_b64=screenshot,
                 history=history,
                 max_tokens=ask_max_tokens,
+                lang=_lang,
             )
             log.info("wakeword answer: %s", answer)
             _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
