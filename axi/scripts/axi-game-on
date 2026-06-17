@@ -124,11 +124,13 @@ else
     systemctl --user try-restart llama-server.service 2>/dev/null || true
 fi
 
-# axi-voice is the daemon (voice + meetings) — it is a Whisper CLIENT, holds NO
-# VRAM, and must stay online so meetings/commands keep working in game mode.
-# `start` is idempotent; this also self-heals if a legacy game-on stopped it.
-echo "[axi-game-on] ensuring axi-voice daemon is online (CPU, no VRAM)…"
-systemctl --user start axi-voice.service 2>/dev/null || true
+# axi-voice: enable the always-listening wake-word co-pilot by writing a drop-in
+# that sets AXI_WAKEWORD_ENABLED=1, then restart the daemon so it picks it up.
+write_dropin axi-voice "[Service]
+Environment=AXI_WAKEWORD_ENABLED=1"
+
+echo "[axi-game-on] enabling wake-word listener (AXI_WAKEWORD_ENABLED=1) and restarting axi-voice…"
+systemctl --user restart axi-voice.service 2>/dev/null || true
 
 sleep 1
 if command -v nvidia-smi >/dev/null 2>&1; then
