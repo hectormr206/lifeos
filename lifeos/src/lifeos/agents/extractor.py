@@ -280,8 +280,8 @@ def extract(
     timeout_s: float = 20.0,
     retry_timeout_s: float = 30.0,
     retries: int = 1,
-    temperature: float = 0.1,
-    seed: int | None = None,
+    temperature: float = 0.0,
+    seed: int | None = 0,
 ) -> ExtractionResult | None:
     """Run the entity extractor over `text`. Returns None on:
       - empty input
@@ -317,8 +317,10 @@ def extract(
     if _is_ack_filler(text):
         return None
 
+    system_prompt = _SYSTEM_PROMPT
+
     r = runtime.call_nano(
-        system=_SYSTEM_PROMPT,
+        system=system_prompt,
         user=text,
         temperature=temperature,
         max_tokens=800,
@@ -333,7 +335,7 @@ def extract(
             r.error, r.latency_ms, attempt, retries, retry_timeout_s,
         )
         r = runtime.call_nano(
-            system=_SYSTEM_PROMPT,
+            system=system_prompt,
             user=text,
             temperature=temperature,
             max_tokens=800,

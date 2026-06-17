@@ -40,7 +40,7 @@ def _extract_as_dict(text: str) -> dict:
     Uses temperature=0.0 and seed=0 for deterministic, reproducible eval runs.
     timeout_s=30 and retry_timeout_s=60 give the CPU nano server enough
     headroom for the full 12K-char system prompt.
-    Production default (temperature=0.1, seed=None) is not changed.
+    Production default is now temperature=0.0, seed=0 (matches eval — ADR-1).
 
     Returns a dict with all ExtractionResult fields; domain=None when the
     extractor returns None (no extraction).
