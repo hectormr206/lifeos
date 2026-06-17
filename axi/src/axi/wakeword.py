@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -207,7 +208,8 @@ class WakeWordListener:
         self._running = False
 
         # Worker thread for segment processing (avoids blocking the audio callback).
-        self._segment_queue: list[np.ndarray] = []
+        # deque gives O(1) popleft() vs O(n) list.pop(0).
+        self._segment_queue: deque[np.ndarray] = deque()
         self._queue_lock = threading.Lock()
         self._queue_event = threading.Event()
         self._worker: threading.Thread | None = None
@@ -341,16 +343,36 @@ class WakeWordListener:
     # ------------------------------------------------------------------
 
     def _worker_loop(self) -> None:
-        """Drain the segment queue and process each segment."""
-        while self._running or self._segment_queue:
+        """Drain the segment queue and process each segment.
+
+        Single-worker-thread invariant: this loop is the ONLY consumer of
+        _segment_queue.  The on_wake callback's guard (`state in ("idle",)`)
+        is safe to use without additional locking BECAUSE segments are
+        processed serially here — there is never more than one concurrent
+        _process_segment call.  Do not add a second worker thread without
+        revisiting the daemon._on_wake state check.
+
+        Drain guarantee: the outer loop re-checks queue emptiness under
+        _queue_lock before deciding to block on _queue_event.  This closes
+        the TOCTOU window where a segment enqueued between the inner drain
+        finishing and the outer condition being re-evaluated could be missed
+        if _running has already been set to False by stop().
+        """
+        while True:
             self._queue_event.wait(timeout=0.5)
             self._queue_event.clear()
+            # Drain all currently queued segments.
             while True:
                 with self._queue_lock:
                     if not self._segment_queue:
                         break
-                    segment = self._segment_queue.pop(0)
+                    segment = self._segment_queue.popleft()
                 self._process_segment(segment)
+            # Re-check under the lock: if _running is False AND the queue is
+            # still empty, it is safe to exit — no segment can be dropped.
+            with self._queue_lock:
+                if not self._running and not self._segment_queue:
+                    break
 
     def _process_segment(self, audio: np.ndarray) -> None:
         """Transcribe a voiced segment and check for wake word.
