@@ -2608,6 +2608,7 @@ async def api_chat_ask(request: Request):
                     system=brain_system,
                     history=history,
                     image_b64=None,
+                    lang=_web_lang,
                 )
                 # Deterministically append source citations so they never depend
                 # on model behavior.
@@ -3224,7 +3225,7 @@ async def api_chat_ask(request: Request):
                 except (TypeError, ValueError):
                     pass
             if image_b64 or not web_research.is_enabled():
-                answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64)
+                answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64, lang=_chat_lang)
             else:
                 tool_system = (
                     brain_system
@@ -3240,6 +3241,7 @@ async def api_chat_ask(request: Request):
                     tools=[_WEB_SEARCH_TOOL],
                     tool_handlers={"web_search": _web_search_tool_handler},
                     tool_choice="auto",
+                    lang=_chat_lang,
                 )
             # NOTE: No persistence guardrail is applied here. In conversation
             # mode the brain answers freely and may legitimately use words like

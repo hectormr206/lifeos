@@ -92,6 +92,9 @@ _TEMPLATES: dict[tuple[str, str], str] = {
     ("transcribing", "en"): "Transcribing…",
     ("nothing_to_transcribe", "es"): "Nada que transcribir",
     ("nothing_to_transcribe", "en"): "Nothing to transcribe",
+    # Used by _stop_and_transcribe (dictation silence, distinct from ask-mode silence)
+    ("silence_dictation", "es"): "No oí nada (silencio)",
+    ("silence_dictation", "en"): "No audio detected",
 }
 
 

@@ -409,6 +409,7 @@ class Daemon:
                 image_b64=screenshot,
                 history=history,
                 max_tokens=ask_max_tokens,
+                lang=_lang,
             )
             log.info("answer: %s (vision=%s, history=%d, facts=%d)", answer, bool(screenshot), len(history) // 2, len(facts))
             _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
@@ -494,7 +495,7 @@ class Daemon:
             if rms < threshold:
                 self._set_state("idle")
                 log.info("silence gate triggered: rms=%.5f < %.5f", rms, threshold)
-                notify("Axi", _loc_msg("no_audio", _ui_lang2), icon="dialog-warning", timeout_ms=2000)
+                notify("Axi", _loc_msg("silence_dictation", _ui_lang2), icon="dialog-warning", timeout_ms=2000)
                 return "silence"
 
             notify("Axi", _loc_msg("transcribing", _ui_lang2), icon="view-refresh", transient=True, timeout_ms=2000)

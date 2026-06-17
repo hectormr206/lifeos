@@ -331,3 +331,72 @@ def test_system_prompt_module_constant_unchanged():
     """The module-level SYSTEM_PROMPT constant must still start with the canonical opening."""
     import axi.brain as brain
     assert brain.SYSTEM_PROMPT.startswith("Tu nombre es Axi")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 7. brain — _build_messages uses lang param, not string-prefix heuristic
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_build_messages_lang_en_injects_english_temporal():
+    """_build_messages with lang='en' must inject English temporal context."""
+    import axi.brain as brain
+    msgs = brain._build_messages("test", system=brain.SYSTEM_PROMPT, lang="en")
+    sys_content = msgs[0]["content"]
+    assert "TEMPORAL CONTEXT" in sys_content
+    assert "CONTEXTO TEMPORAL" not in sys_content
+
+
+def test_build_messages_lang_es_injects_spanish_temporal():
+    """_build_messages with lang='es' must inject Spanish temporal context."""
+    import axi.brain as brain
+    msgs = brain._build_messages("test", system=brain.SYSTEM_PROMPT, lang="es")
+    sys_content = msgs[0]["content"]
+    assert "CONTEXTO TEMPORAL" in sys_content
+    assert "TEMPORAL CONTEXT" not in sys_content
+
+
+def test_build_messages_no_lang_defaults_to_spanish_temporal():
+    """_build_messages with no lang must inject Spanish temporal context (backward compat)."""
+    import axi.brain as brain
+    msgs = brain._build_messages("test", system=brain.SYSTEM_PROMPT)
+    sys_content = msgs[0]["content"]
+    assert "CONTEXTO TEMPORAL" in sys_content
+
+
+def test_build_messages_en_prompt_with_es_lang_gets_spanish_temporal():
+    """Temporal context is driven by lang, not by the system prompt content.
+
+    Even if you pass SYSTEM_PROMPT_EN with lang='es', you get Spanish temporal
+    context. This is the regression guard against the old string-prefix heuristic.
+    """
+    import axi.brain as brain
+    # Passing the EN prompt but with an ES lang tag
+    msgs = brain._build_messages("test", system=brain.SYSTEM_PROMPT_EN, lang="es")
+    sys_content = msgs[0]["content"]
+    assert "CONTEXTO TEMPORAL" in sys_content
+    assert "TEMPORAL CONTEXT" not in sys_content
+
+
+def test_system_prompt_en_no_busca():
+    """SYSTEM_PROMPT_EN must not contain the Spanish command '/busca'."""
+    import axi.brain as brain
+    assert "/busca" not in brain.SYSTEM_PROMPT_EN
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 8. localize — silence_dictation key (regression: keeps '(silencio)' suffix)
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_localize_silence_dictation_es_has_silencio_suffix():
+    """'silence_dictation' ES must include '(silencio)' — original daemon.py string."""
+    from lifeos.localize import msg
+    result = msg("silence_dictation", "es")
+    assert "silencio" in result.lower()
+
+
+def test_localize_silence_dictation_en_is_english():
+    """'silence_dictation' EN must be English."""
+    from lifeos.localize import msg
+    result = msg("silence_dictation", "en")
+    assert result
+    assert "silencio" not in result.lower()
