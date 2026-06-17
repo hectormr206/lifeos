@@ -5,11 +5,12 @@ MoE with `--cpu-moe` offload (the current 35B-A3B pattern). Entries are
 GGUF-only; mmproj companions are listed alongside the main weights when the
 model supports vision.
 
-Refreshed 2026-06-10 (rev 4): Consolidated to 2 models.
+Refreshed 2026-06-17 (rev 5): Added qwen35-2b as game co-pilot brain.
 - qwen36-35b-a3b: production default (quality, local)
-- gemma4-e2b-it: universal small/fast/vision tier
+- gemma4-e2b-it: universal small/fast/vision tier (kept on disk as fallback)
+- qwen35-2b: game co-pilot brain (10 s/frame, ~2.2 GB RAM, CPU-only, vision)
 
-Cut:
+Rev 4 notes (2026-06-10): Consolidated to 2 models. Cut:
 - gemma4-e4b-it: strictly dominated by gemma4-e2b-it (e2b quality 0.698 > e4b
   0.665, faster, smaller). No tier where e4b is a better pick.
 - gemma4-26b-a4b-it: measured CPU RSS = 18.5 GB (gguf 16 GB). With
@@ -236,6 +237,54 @@ CATALOG: tuple[ModelEntry, ...] = (
         extra_args=_strip_reasoning_format(_GPU_DEFAULT_ARGS) + ("--reasoning", "off", "-a", "gemma-4-E2B-it"),
         vram_estimate_gb=2.8,
         notes="mmproj DEBE ser BF16 — los quants del projector están rotos en upstream.",
+    ),
+
+    # ------------------------------------------------------------------ #
+    # Game co-pilot brain — CPU-only, vision, fast latency.              #
+    # ------------------------------------------------------------------ #
+    ModelEntry(
+        id="qwen35-2b",
+        name="Qwen3.5 2B (game co-pilot)",
+        family="Qwen",
+        params="2B",
+        features=("vision", "tools"),
+        description=(
+            "Qwen3.5-2B Q4_K_M with mmproj-F16 for vision. Bench: 10 s/frame "
+            "on real game content (RE Requiem), ~2.2 GB RAM at ngl=0. "
+            "Designated game co-pilot brain; replaces gemma4-e2b-it in game mode "
+            "(3x faster, no --jinja quirks, no thinking-token budget drain). "
+            "Files already on disk at ~/LifeOS/models/qwen35-2b/."
+        ),
+        files=(
+            ModelFile(
+                repo_id="local",  # already present; no download required
+                filename="Qwen3.5-2B-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+            ModelFile(
+                repo_id="local",
+                filename="mmproj-F16.gguf",
+                kind="mmproj",
+            ),
+        ),
+        ctx=8192,
+        ngl=0,  # CPU-only; game mode frees all VRAM for the game
+        extra_args=(
+            "-t", "8",
+            "--temp", "0.7",
+            "--top-p", "0.95",
+            "--top-k", "20",
+            "-np", "1",
+            "-a", "Qwen3.5-2B",
+        ),
+        vram_estimate_gb=0.0,  # ngl=0 — no VRAM used
+        notes=(
+            "Local files at ~/LifeOS/models/qwen35-2b/ — no HF download required. "
+            "Benchmark: 10 s on 1024x576 game frame (RE Requiem), equal grounding "
+            "quality to gemma4-e2b-it which takes 17-35 s. No --jinja in extra_args "
+            "(axi-llama-launch injects it globally; Qwen3.5 chat template loads fine "
+            "without extra flags). No --reasoning off needed (not a Gemma model)."
+        ),
     ),
 
 )
