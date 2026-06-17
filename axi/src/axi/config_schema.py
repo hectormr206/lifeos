@@ -325,6 +325,13 @@ FIELDS: tuple[ConfigField, ...] = (
         "Minimum LLM confidence to fire a nudge.",
         minimum=0.0, maximum=1.0,
     ),
+    # ─────── gaming co-pilot (Slice 1) ───────
+    ConfigField(
+        "game_copilot_enabled", "boolean", True,
+        "When game-mode is active, inject a game-aware system prompt and brevity "
+        "cap (max_tokens=256) into the voice ask flow. Set to false to disable the "
+        "gaming co-pilot and keep the standard assistant prompt in game-mode.",
+    ),
 )
 
 
