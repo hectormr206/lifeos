@@ -46,6 +46,15 @@ _GAME_COPILOT_SYSTEM_PROMPT = (
     "No uses saludos ni cierres."
 )
 
+# Game-aware system prompt — English product voice (for EN locale users).
+_GAME_COPILOT_SYSTEM_PROMPT_EN = (
+    "You are the game co-pilot. "
+    "Look at the game screen and answer briefly and directly, no Markdown, "
+    "in one or two sentences. "
+    "If the question is about what is visible on screen, describe only what is relevant. "
+    "No greetings or sign-offs."
+)
+
 # Brevity cap for the game co-pilot — gemma4-e2b-it runs on CPU in game-mode,
 # so a short answer keeps round-trip latency under ~15 s.
 _GAME_COPILOT_MAX_TOKENS = 256
@@ -61,11 +70,16 @@ def _select_ask_params(
     Pure function — no I/O, no side effects.  Testable in isolation.
 
     When game-mode is active AND the co-pilot config flag is on, returns the
-    game-aware prompt and a brevity cap.  Otherwise returns the language-aware
-    system prompt and standard max_tokens.
+    game-aware prompt (EN or ES based on lang) and a brevity cap.  Otherwise
+    returns the language-aware system prompt and standard max_tokens.
     """
     if game_active and copilot_enabled:
-        return _GAME_COPILOT_SYSTEM_PROMPT, _GAME_COPILOT_MAX_TOKENS
+        prompt = (
+            _GAME_COPILOT_SYSTEM_PROMPT_EN
+            if (lang or "").startswith("en")
+            else _GAME_COPILOT_SYSTEM_PROMPT
+        )
+        return prompt, _GAME_COPILOT_MAX_TOKENS
     return _get_system_prompt(lang), 2048
 
 
