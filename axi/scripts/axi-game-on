@@ -130,6 +130,10 @@ write_dropin axi-voice "[Service]
 Environment=AXI_WAKEWORD_ENABLED=1"
 
 echo "[axi-game-on] enabling wake-word listener (AXI_WAKEWORD_ENABLED=1) and restarting axi-voice…"
+# daemon-reload AFTER writing the wake-word drop-in: the earlier reload (above) ran
+# before this drop-in existed, so without this systemd restarts axi-voice with a stale
+# empty environment and the listener never starts.
+systemctl --user daemon-reload
 systemctl --user restart axi-voice.service 2>/dev/null || true
 
 sleep 1
