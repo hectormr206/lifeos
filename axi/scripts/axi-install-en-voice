@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Install the English Piper TTS voice (en_US-lessac-medium).
+#
+# Voice: en_US-lessac-medium (~66 MB, Apache 2.0)
+# Source: https://huggingface.co/rhasspy/piper-voices
+# Target: ~/LifeOS/models/piper-voices/en_US-lessac/
+#
+# Usage:
+#   ./axi/scripts/axi-install-en-voice
+#
+# Run this once after cloning or to restore a deleted voice file.
+# A daemon restart is required after installation for the change to take effect.
+
+set -euo pipefail
+
+VOICE_DIR="${HOME}/LifeOS/models/piper-voices/en_US-lessac"
+BASE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
+ONNX_FILE="en_US-lessac-medium.onnx"
+JSON_FILE="en_US-lessac-medium.onnx.json"
+
+echo "Installing en_US-lessac-medium Piper voice..."
+mkdir -p "${VOICE_DIR}"
+
+for FILE in "${ONNX_FILE}" "${JSON_FILE}"; do
+    TARGET="${VOICE_DIR}/${FILE}"
+    if [[ -f "${TARGET}" ]] && [[ -s "${TARGET}" ]]; then
+        echo "  Already present: ${TARGET}"
+        continue
+    fi
+    echo "  Downloading ${FILE}..."
+    curl -L --progress-bar -o "${TARGET}" "${BASE_URL}/${FILE}"
+    if [[ ! -s "${TARGET}" ]]; then
+        echo "  ERROR: download failed or file is empty: ${TARGET}" >&2
+        exit 1
+    fi
+    echo "  OK: ${TARGET} ($(du -h "${TARGET}" | cut -f1))"
+done
+
+echo ""
+echo "Voice installed at: ${VOICE_DIR}"
+echo "Restart the axi-voice daemon to use it:"
+echo "  systemctl --user restart axi-voice"

@@ -25,7 +25,37 @@ import soundfile as sf
 log = logging.getLogger("axi.speak")
 
 PIPER_BIN = "piper-tts"
+# Legacy module-level constant kept for back-compat with any code that imports it
+# directly. The canonical selector is now _piper_model_path().
 PIPER_MODEL = Path.home() / "LifeOS/models/piper-voices/es_MX-claude/es_MX-claude-high.onnx"
+
+_PIPER_VOICES: dict[str, Path] = {
+    "es": Path.home() / "LifeOS/models/piper-voices/es_MX-claude/es_MX-claude-high.onnx",
+    "en": Path.home() / "LifeOS/models/piper-voices/en_US-lessac/en_US-lessac-medium.onnx",
+}
+
+
+def _piper_model_path(lang: str | None = None) -> Path:
+    """Return the Piper voice model path for the given language tag.
+
+    'en' (or 'en-*') -> en_US-lessac-medium
+    'es', 'es-MX', None, or anything else -> es_MX-claude-high (default)
+
+    When the resolved voice file does not exist, logs a warning and falls
+    back to the Spanish voice so a missing EN download does not hard-crash.
+    """
+    family = (lang or "es").split("-")[0].lower()
+    path = _PIPER_VOICES.get(family, _PIPER_VOICES["es"])
+    if not path.exists() and family != "es":
+        log.warning(
+            "Piper voice for lang='%s' not found at %s — falling back to Spanish voice. "
+            "Run axi/scripts/axi-install-en-voice to install it.",
+            lang, path,
+        )
+        path = _PIPER_VOICES["es"]
+    return path
+
+
 # Silence prefix to wake the audio sink before speech starts. Bluetooth codecs
 # (FreeClip etc.) take ~1-1.5 s to spin up after idle, but laptop speakers via
 # the PipeWire alsa sink also clip the first ~600 ms when the sink was suspended.
@@ -35,15 +65,18 @@ WAKE_SILENCE_S = 2.5
 
 
 def _piper_synthesize(text: str, out_wav: Path) -> bool:
+    from axi import config as _cfg  # noqa: PLC0415 — lazy to avoid import cycle
+    _lang = str(_cfg.get("language", "es-MX"))
+    model = _piper_model_path(_lang)
     if not shutil.which(PIPER_BIN):
         log.warning("%s not in PATH", PIPER_BIN)
         return False
-    if not PIPER_MODEL.exists():
-        log.warning("Piper model not found at %s", PIPER_MODEL)
+    if not model.exists():
+        log.warning("Piper model not found at %s", model)
         return False
     try:
         proc = subprocess.run(
-            [PIPER_BIN, "--model", str(PIPER_MODEL), "--output_file", str(out_wav)],
+            [PIPER_BIN, "--model", str(model), "--output_file", str(out_wav)],
             input=text.encode("utf-8"),
             check=False,
             timeout=60,
