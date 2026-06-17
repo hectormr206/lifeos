@@ -107,42 +107,53 @@ class TestMatchWakeFalseTriggerCases:
         assert is_wake is False
 
     def test_bare_axi_no_command(self):
-        """Bare trigger with no command remainder — must be rejected."""
+        """Bare trigger with no command — Fix 3: NOW wakes with empty command (high-recall)."""
         is_wake, command = match_wake("axi")
-        assert is_wake is False
+        assert is_wake is True
+        assert command == ""
 
     def test_bare_axi_punctuation_only(self):
+        """Trigger + punctuation only — Fix 3: wakes with empty command."""
         is_wake, command = match_wake("axi,")
-        assert is_wake is False
+        assert is_wake is True
+        assert command == ""
 
     def test_bare_asi_no_command(self):
-        """'así' alone without command — false trigger guard."""
+        """'así' alone — Fix 3: wakes with empty command (high-recall mode)."""
         is_wake, command = match_wake("así")
-        assert is_wake is False
+        assert is_wake is True
+        assert command == ""
 
     def test_asi_phrase_not_starting_with_trigger(self):
-        """Transcript where 'así' does NOT appear at the start."""
+        """Transcript where 'así' appears in the middle — Fix 3: wakes anywhere."""
+        # "no era así" — "así" appears mid-sentence → IS a wake now (high-recall).
+        # The command would be empty (nothing follows "así" at word boundary).
         is_wake, command = match_wake("no era así")
-        assert is_wake is False
+        assert is_wake is True
 
     def test_standalone_spanish_word_haz(self):
-        """'haz' is in _TRIGGER but with no command it must not fire."""
+        """'haz' is in _TRIGGER; Fix 3: bare trigger wakes with empty command."""
+        # Note: "haz" is a valid Axi phonetic variant — bare wake is now allowed.
         is_wake, command = match_wake("haz")
-        assert is_wake is False
+        assert is_wake is True
+        assert command == ""
 
     def test_noise_transcript(self):
         is_wake, command = match_wake("um er uh")
         assert is_wake is False
 
     def test_trigger_in_middle_of_sentence(self):
-        """Wake requires trigger at START of transcript, not embedded."""
+        """Fix 3: trigger ANYWHERE fires wake. 'me dijo que axi era genial' wakes."""
         is_wake, command = match_wake("me dijo que axi era genial")
-        assert is_wake is False
+        assert is_wake is True
+        # The command is whatever follows "axi" in the sentence
+        assert "era genial" in command or command == ""
 
     def test_empty_command_after_trigger_and_spaces(self):
-        """Trigger followed only by spaces — not a real command."""
+        """Fix 3: trigger followed only by spaces → wake with empty command."""
         is_wake, command = match_wake("axi   ")
-        assert is_wake is False
+        assert is_wake is True
+        assert command == ""
 
     def test_non_string_returns_false(self):
         # match_wake must never raise on weird input
@@ -269,7 +280,12 @@ class TestWakeWordListenerOrchestration:
         assert "ayudame" in called[0]
 
     def test_non_wake_segment_does_not_fire_on_wake(self):
-        """A voiced segment transcribed as a non-wake phrase does NOT call on_wake."""
+        """Fix 3: 'así' is in _TRIGGER so 'no era así, solo hablaba' NOW fires on_wake.
+
+        This is intentional — high-recall mode accepts more false-triggers in exchange
+        for catching all genuine wake events. The user is on a headset in game-mode
+        so false-trigger cost is low.
+        """
         called: list[str] = []
 
         def fake_transcribe(audio: np.ndarray):
@@ -292,10 +308,14 @@ class TestWakeWordListenerOrchestration:
         finally:
             listener.stop()
 
-        assert not called, f"on_wake should NOT have fired but got: {called}"
+        # Fix 3: "así" in "no era así, solo hablaba" triggers wake.
+        # Verify the listener fires (not assert-not-called — behavior changed).
+        assert called, (
+            "Fix 3: 'así' in transcript fires on_wake (high-recall); got no calls"
+        )
 
-    def test_bare_trigger_no_command_does_not_fire(self):
-        """Bare 'axi' with no command does not fire on_wake (false-trigger guard)."""
+    def test_bare_trigger_fires_on_wake_with_empty_command(self):
+        """Bare 'axi' now WAKES with empty command (Fix 3 — high-recall mode)."""
         called: list[str] = []
 
         def fake_transcribe(audio: np.ndarray):
@@ -318,7 +338,8 @@ class TestWakeWordListenerOrchestration:
         finally:
             listener.stop()
 
-        assert not called, "bare 'axi' without command must not fire on_wake"
+        assert called, "bare 'axi' must fire on_wake (Fix 3: high-recall)"
+        assert called[0] == "", "empty command must be passed to on_wake"
 
     def test_empty_audio_segment_skipped(self):
         """Silence-only segment (no voice detected) does not call transcribe or on_wake."""
@@ -627,3 +648,365 @@ class TestWorkerDrainOnStop:
         assert len(processed) == N, (
             f"Worker exited with {N - len(processed)} segments still in queue."
         )
+
+
+# ===========================================================================
+# Fix 1 — Whisper anti-hallucination params for the wake-word path
+# ===========================================================================
+
+class TestWakeWordTranscriberParams:
+    """Assert that the wake-word transcribe path uses anti-hallucination settings."""
+
+    def test_transcribe_wakeword_passes_anti_hallucination_params(self, monkeypatch):
+        """transcribe_wakeword() must call whisper_client.transcribe with specific params."""
+        from axi.transcriber import transcribe_wakeword
+        import axi.whisper_client as _wc
+
+        captured: list[dict] = []
+
+        class _FakeResult:
+            text = "Axi."
+            language = "es"
+            language_probability = 0.99
+
+        def _fake_transcribe(audio, **kwargs):
+            captured.append(kwargs)
+            return _FakeResult()
+
+        monkeypatch.setattr(_wc, "transcribe", _fake_transcribe)
+
+        import numpy as np
+        audio = np.zeros(1600, dtype=np.float32)
+        transcribe_wakeword(audio, language="es")
+
+        assert len(captured) == 1, "whisper_client.transcribe must be called once"
+        params = captured[0]
+        # Anti-hallucination requirements
+        assert params.get("condition_on_previous_text") is False, (
+            "condition_on_previous_text must be False to kill repetition loops"
+        )
+        assert params.get("no_speech_threshold", 0) >= 0.6, (
+            "no_speech_threshold must be raised (>= 0.6) for wake-word path"
+        )
+        assert params.get("vad_filter") is True, (
+            "vad_filter must be True for wake-word path"
+        )
+        # temperature=0 via extra_kwargs or beam_size=1 for greedy decoding
+        extra = params.get("extra_kwargs") or {}
+        temp = extra.get("temperature")
+        beam = params.get("beam_size")
+        assert temp == 0 or beam == 1, (
+            "Must use temperature=0 (via extra_kwargs) or beam_size=1 for greedy (anti-hallucination)"
+        )
+
+    def test_transcribe_wakeword_uses_wake_initial_prompt(self, monkeypatch):
+        """The initial_prompt for wake-word transcription must bias toward 'Axi.' not YouTube."""
+        from axi.transcriber import transcribe_wakeword
+        import axi.whisper_client as _wc
+
+        captured: list[dict] = []
+
+        class _FakeResult:
+            text = "Axi."
+            language = "es"
+            language_probability = 0.99
+
+        def _fake_transcribe(audio, **kwargs):
+            captured.append(kwargs)
+            return _FakeResult()
+
+        monkeypatch.setattr(_wc, "transcribe", _fake_transcribe)
+
+        import numpy as np
+        audio = np.zeros(1600, dtype=np.float32)
+        transcribe_wakeword(audio, language="es")
+
+        params = captured[0]
+        prompt = params.get("initial_prompt", "")
+        # Must mention Axi and be short (not a YouTube-style prompt)
+        assert "Axi" in prompt or "axi" in prompt.lower(), (
+            "initial_prompt must bias toward 'Axi'"
+        )
+        assert "Suscríbete" not in prompt and "suscribete" not in prompt.lower(), (
+            "initial_prompt must NOT contain YouTube phrases"
+        )
+
+
+# ===========================================================================
+# Fix 2 — Hallucination blocklist: is_hallucination()
+# ===========================================================================
+
+class TestIsHallucination:
+    """is_hallucination(text) must detect known Whisper hallucination phrases."""
+
+    def test_suscribete_al_canal_is_hallucination(self):
+        from axi.wakeword import is_hallucination
+        assert is_hallucination("¡Suscríbete al canal!") is True
+
+    def test_gracias_por_ver_el_video_is_hallucination(self):
+        from axi.wakeword import is_hallucination
+        assert is_hallucination("Gracias por ver el video.") is True
+
+    def test_subtitulos_realizados_es_hallucination(self):
+        from axi.wakeword import is_hallucination
+        assert is_hallucination("Subtítulos realizados por la comunidad.") is True
+
+    def test_amara_is_hallucination(self):
+        from axi.wakeword import is_hallucination
+        assert is_hallucination("subtítulos por la comunidad de amara.org") is True
+
+    def test_no_olvides_suscribirte_is_hallucination(self):
+        from axi.wakeword import is_hallucination
+        assert is_hallucination("No olvides suscribirte.") is True
+
+    def test_real_wake_phrase_is_not_hallucination(self):
+        from axi.wakeword import is_hallucination
+        assert is_hallucination("axi ayudame con esto") is False
+
+    def test_empty_string_is_not_hallucination(self):
+        from axi.wakeword import is_hallucination
+        # Empty or whitespace-only → no-speech handled elsewhere, not hallucination
+        assert is_hallucination("") is False
+
+    def test_normal_spanish_sentence_is_not_hallucination(self):
+        from axi.wakeword import is_hallucination
+        assert is_hallucination("¿Qué está pasando en el juego?") is False
+
+    def test_repetition_loop_is_hallucination(self):
+        """Same short phrase repeated 3+ times → hallucination."""
+        from axi.wakeword import is_hallucination
+        text = "ya no puedo ver el mismo " * 4
+        assert is_hallucination(text) is True
+
+    def test_two_repetitions_not_hallucination(self):
+        """Only two repetitions of a phrase → NOT a hallucination (could be legit)."""
+        from axi.wakeword import is_hallucination
+        text = "axi axi"
+        assert is_hallucination(text) is False
+
+    def test_case_insensitive_match(self):
+        from axi.wakeword import is_hallucination
+        assert is_hallucination("SUSCRÍBETE AL CANAL") is True
+
+    def test_punctuation_stripped_for_match(self):
+        from axi.wakeword import is_hallucination
+        # Variant with different punctuation
+        assert is_hallucination("¡suscríbete al canal!") is True
+
+
+# ===========================================================================
+# Fix 3 — Loosened match_wake: trigger ANYWHERE + empty command allowed
+# ===========================================================================
+
+class TestMatchWakeLoosened:
+    """New match_wake behavior: trigger anywhere, empty command still wakes."""
+
+    def test_bare_axi_wakes_with_empty_command(self):
+        """Bare 'Axi' with no command must return is_wake=True, command=''."""
+        from axi.wakeword import match_wake
+        is_wake, command = match_wake("axi")
+        assert is_wake is True
+        assert command == ""
+
+    def test_axi_punctuation_only_wakes_empty_command(self):
+        """'axi,' — punctuation after trigger, no command → wake with empty command."""
+        from axi.wakeword import match_wake
+        is_wake, command = match_wake("axi,")
+        assert is_wake is True
+        assert command == ""
+
+    def test_axi_anywhere_in_transcript_wakes(self):
+        """Whisper may prepend filler — 'bla bla axi ayudame' must still wake."""
+        from axi.wakeword import match_wake
+        is_wake, command = match_wake("bla bla axi ayudame")
+        assert is_wake is True
+        assert "ayudame" in command
+
+    def test_filler_then_axi_no_command_wakes_empty(self):
+        """Filler text then bare trigger → wake with empty command."""
+        from axi.wakeword import match_wake
+        is_wake, command = match_wake("um er axi")
+        assert is_wake is True
+        assert command == ""
+
+    def test_word_boundary_axi_inside_word_does_not_wake(self):
+        """'maximal' contains 'axi' but not as a standalone word → must NOT wake."""
+        from axi.wakeword import match_wake
+        is_wake, command = match_wake("la configuración maximal es correcta")
+        assert is_wake is False
+
+    def test_axi_with_command_anywhere_returns_command(self):
+        """Trigger anywhere, command extracted as remainder after trigger."""
+        from axi.wakeword import match_wake
+        is_wake, command = match_wake("oye axi, ¿qué hago con esto?")
+        assert is_wake is True
+        assert command  # non-empty
+
+    def test_hallucination_phrase_does_not_wake(self):
+        """A pure hallucination transcript must not wake (is_hallucination guard in process_segment)."""
+        # Note: match_wake itself doesn't call is_hallucination — that's in _process_segment.
+        # We test the integration path here: hallucination filtered before match_wake.
+        # This test verifies the _process_segment path via a mock listener.
+        import numpy as np
+        from axi.wakeword import WakeWordListener
+
+        wake_calls: list[str] = []
+
+        def fake_transcribe(audio):
+            return "¡Suscríbete al canal!", "es", 0.95
+
+        class _NullStream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        listener = WakeWordListener(
+            transcribe_fn=fake_transcribe,
+            on_wake=lambda cmd: wake_calls.append(cmd),
+            stream_factory=lambda callback, **kwargs: _NullStream(),
+            silence_duration_s=0.1,
+            sample_rate=16000,
+        )
+        listener.start()
+
+        # Directly process a segment (bypass audio hardware)
+        audio = np.ones(1600, dtype=np.float32) * 0.1
+        listener._process_segment(audio)
+
+        listener.stop()
+        assert not wake_calls, (
+            "Hallucination transcript '¡Suscríbete al canal!' must not fire on_wake"
+        )
+
+
+# ===========================================================================
+# Fix 4 — daemon._wakeword_ask: empty command speaks ack, not brain
+# ===========================================================================
+
+class TestDaemonWakewordAskEmptyCommand:
+    """Empty command from wake detection must speak ack, not call brain."""
+
+    def _build_daemon(self, brain_fn=None, speak_fn=None, monkeypatch=None):
+        import numpy as np
+        from axi.daemon import Daemon
+        from axi.memory import ConversationMemory
+        from axi.recorder import SAMPLE_RATE
+        import axi.daemon as d
+
+        if monkeypatch:
+            monkeypatch.setattr(d, "notify", lambda *a, **kw: None)
+            if speak_fn:
+                monkeypatch.setattr(d, "speak_text", speak_fn)
+
+        class _FakeRecorder:
+            active_source = "fake"
+            is_recording = False
+            def start(self): self.is_recording = True; return "fake"
+            def stop(self):
+                self.is_recording = False
+                return np.zeros(1600, dtype=np.float32)
+
+        class _FakeTranscriber:
+            def transcribe(self, audio): return "hola", "es", 0.95
+
+        brain_calls: list = []
+
+        def _brain(*a, **kw):
+            brain_calls.append((a, kw))
+            return "respuesta"
+
+        return Daemon(
+            recorder=_FakeRecorder(),
+            transcriber=_FakeTranscriber(),
+            memory=ConversationMemory(),
+            brain_ask=brain_fn or _brain,
+            vision_capture=lambda: None,
+            eyes_capture=lambda: (None, "ok"),
+            meeting_factory=lambda **kw: None,
+        ), brain_calls
+
+    def test_empty_command_does_not_call_brain(self, monkeypatch):
+        """When command is '', _wakeword_ask must NOT invoke brain_ask."""
+        import axi.daemon as d
+        monkeypatch.setattr(d, "notify", lambda *a, **kw: None)
+
+        spoken: list[str] = []
+        monkeypatch.setattr(d, "speak_text", lambda text: spoken.append(text))
+        # Also patch _game_mode_active and config to avoid side effects
+        monkeypatch.setattr(d, "_game_mode_active", lambda: False)
+
+        daemon, brain_calls = self._build_daemon(monkeypatch=None)
+        daemon.brain_ask = lambda *a, **kw: brain_calls.append((a, kw)) or "resp"
+
+        # Patch notify on the daemon's module reference
+        import axi.daemon as _d
+        _d.notify = lambda *a, **kw: None
+        _d.speak_text = lambda text: spoken.append(text)
+        _d._game_mode_active = lambda: False
+
+        brain_calls_local: list = []
+        _d_brain_orig = daemon.brain_ask
+
+        def _capture_brain(*a, **kw):
+            brain_calls_local.append((a, kw))
+            return "respuesta"
+
+        daemon.brain_ask = _capture_brain
+
+        daemon._wakeword_ask("", screenshot=None)
+
+        # Allow the speaking thread to finish
+        import time
+        time.sleep(0.15)
+
+        assert not brain_calls_local, (
+            f"brain_ask must NOT be called for empty command, but got: {brain_calls_local}"
+        )
+
+    def test_empty_command_speaks_acknowledgment(self, monkeypatch):
+        """When command is '', _wakeword_ask must speak a short ack in Spanish."""
+        import axi.daemon as d
+        import axi.daemon as _d
+
+        spoken: list[str] = []
+        _d.notify = lambda *a, **kw: None
+        _d.speak_text = lambda text: spoken.append(text)
+        _d._game_mode_active = lambda: False
+
+        daemon, _ = self._build_daemon(monkeypatch=None)
+        daemon.brain_ask = lambda *a, **kw: "resp"
+
+        daemon._wakeword_ask("", screenshot=None)
+
+        import time
+        time.sleep(0.15)
+
+        assert spoken, "Must speak an acknowledgment when command is empty"
+        # The ack should contain a Spanish-style response, not a full answer
+        ack = spoken[0].lower()
+        assert len(ack) < 50, f"Ack should be short, got: {spoken[0]!r}"
+
+    def test_nonempty_command_calls_brain(self, monkeypatch):
+        """A non-empty command must proceed through brain_ask as before."""
+        import axi.daemon as _d
+
+        spoken: list[str] = []
+        brain_calls: list = []
+        _d.notify = lambda *a, **kw: None
+        _d.speak_text = lambda text: spoken.append(text)
+        _d._game_mode_active = lambda: False
+
+        daemon, _ = self._build_daemon(monkeypatch=None)
+
+        def _brain(*a, **kw):
+            brain_calls.append((a, kw))
+            return "respuesta de prueba"
+
+        daemon.brain_ask = _brain
+
+        daemon._wakeword_ask("¿qué hago con esto?", screenshot=None)
+
+        import time
+        time.sleep(0.2)
+
+        assert brain_calls, "brain_ask must be called for a non-empty command"

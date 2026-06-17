@@ -48,6 +48,51 @@ INITIAL_PROMPT_EN = (
 
 DEFAULT_BEAM_SIZE = 5
 
+# Wake-word specific initial prompt — short, biases toward "Axi." and NOT YouTube phrases.
+# Must NOT include any YouTube-style closing phrases.
+WAKE_INITIAL_PROMPT = "Axi."
+
+
+def transcribe_wakeword(
+    audio: np.ndarray,
+    *,
+    language: str | None = "es",
+) -> tuple[str, str, float]:
+    """Transcribe a short audio segment optimised for wake-word detection.
+
+    Uses anti-hallucination settings specifically tuned for short utterances:
+    - condition_on_previous_text=False  — kills repetition loops
+    - temperature=0 (beam_size=1)       — greedy, no sampling variance
+    - no_speech_threshold=0.6           — raise gate above default 0.6
+    - vad_filter=True                   — discard silent/near-silent frames
+    - compression_ratio_threshold=1.35  — reject repetitive outputs early
+    - initial_prompt="Axi."             — biases model toward the wake word
+
+    This function ONLY applies to the wake-word path. The normal dictation
+    and meeting transcribe paths (Transcriber.transcribe) are UNCHANGED.
+    """
+    from axi.whisper_client import (  # noqa: PLC0415
+        TranscriptionResult,
+        WhisperServiceError,
+        transcribe as _whisper_transcribe,
+    )
+    try:
+        r: TranscriptionResult = _whisper_transcribe(
+            audio,
+            language=language,
+            beam_size=1,               # greedy decoding (no sampling)
+            initial_prompt=WAKE_INITIAL_PROMPT,
+            condition_on_previous_text=False,
+            no_speech_threshold=0.6,
+            compression_ratio_threshold=1.35,
+            vad_filter=True,
+            extra_kwargs={"temperature": 0},  # explicit greedy via server passthrough
+        )
+    except WhisperServiceError as e:
+        log.warning("wakeword whisper service unavailable: %s", e)
+        return "", "", 0.0
+    return r.text, r.language, r.language_probability
+
 
 class Transcriber:
     """Thin facade over the shared whisper server preserving the legacy

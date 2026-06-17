@@ -30,11 +30,16 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
+import unicodedata
+
 import numpy as np
 
 log = logging.getLogger("axi.wakeword")
 
 SAMPLE_RATE = 16_000
+
+# Minimum repetitions of a short phrase before treating it as a hallucination loop.
+_REPETITION_HALLUCINATION_THRESHOLD = 3
 
 # VAD frame size must be one of 10, 20, or 30 ms per the webrtcvad spec.
 _VAD_FRAME_MS = 20
@@ -53,6 +58,83 @@ _MIN_VOICED_FRAMES = 5  # 100 ms of actual speech
 # Reuse the _TRIGGER regex from intents.py — single source of truth for Axi variants.
 # Imported lazily to avoid circular dependency at module load time.
 _TRIGGER_RE: re.Pattern[str] | None = None
+
+# ---------------------------------------------------------------------------
+# Hallucination detection
+# ---------------------------------------------------------------------------
+
+def _normalize_for_hallucination(text: str) -> str:
+    """Lowercase, strip accent marks and punctuation for blocklist comparison."""
+    # Decompose Unicode (e.g. é → e + combining accent), then drop non-ASCII combining chars.
+    nfd = unicodedata.normalize("NFD", text.lower())
+    stripped = "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+    # Remove punctuation characters.
+    cleaned = re.sub(r"[^\w\s]", "", stripped, flags=re.UNICODE)
+    return cleaned.strip()
+
+
+# Known Whisper hallucination phrases (normalized, no accents/punctuation).
+# These appear when Whisper receives near-silence or very short audio and generates
+# YouTube-style filler text instead of the actual utterance.
+_HALLUCINATION_BLOCKLIST: frozenset[str] = frozenset({
+    "suscribete al canal",
+    "gracias por ver el video",
+    "subtitulos realizados por la comunidad",
+    "subtitulos por la comunidad de amaraorg",
+    "no olvides suscribirte",
+    "dale like y suscribete",
+    "gracias por ver",
+    "no te olvides de suscribirte",
+    "subtitulado por la comunidad de amaraorg",
+    "amara dot org",
+})
+
+
+def is_hallucination(transcript: str) -> bool:
+    """Return True if the transcript is a known Whisper hallucination.
+
+    Checks two conditions:
+    1. The normalized transcript matches (or starts with) a known blocklist phrase.
+    2. The transcript is a repetition loop: the same short phrase repeated
+       _REPETITION_HALLUCINATION_THRESHOLD or more times.
+
+    Pure function — no I/O, no side effects. Unit-testable without hardware.
+    """
+    if not transcript or not isinstance(transcript, str):
+        return False
+
+    normalized = _normalize_for_hallucination(transcript)
+    if not normalized:
+        return False
+
+    # Blocklist check — exact or prefix match.
+    for phrase in _HALLUCINATION_BLOCKLIST:
+        if normalized == phrase or normalized.startswith(phrase):
+            return True
+
+    # Repetition loop detection: split into words, find if any short sub-phrase
+    # repeats _REPETITION_HALLUCINATION_THRESHOLD or more times consecutively.
+    words = normalized.split()
+    n = len(words)
+    if n < 2:
+        return False
+
+    # Try sub-phrase lengths from 1 to half the total words.
+    for phrase_len in range(1, max(2, n // 2) + 1):
+        phrase_words = words[:phrase_len]
+        count = 1
+        i = phrase_len
+        while i + phrase_len <= n:
+            if words[i : i + phrase_len] == phrase_words:
+                count += 1
+                i += phrase_len
+            else:
+                break
+        if count >= _REPETITION_HALLUCINATION_THRESHOLD:
+            return True
+
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Rate-limit helpers for callback logging
@@ -85,37 +167,44 @@ class _RateLimiter:
 
 
 def _get_trigger_re() -> re.Pattern[str]:
-    """Return the compiled _TRIGGER regex, importing from intents on first call."""
+    """Return the compiled _TRIGGER regex, importing from intents on first call.
+
+    Loosened for high recall (Fix 3):
+    - Trigger may appear ANYWHERE in the transcript (not only at the start).
+    - Word boundary enforced so "axi" inside "maximal" does not match.
+    - The command (text after the trigger + separators) may be empty — bare
+      "Axi" is a valid wake with an empty command.
+    """
     global _TRIGGER_RE
     if _TRIGGER_RE is None:
         from axi.intents import _TRIGGER  # noqa: PLC0415
-        # Match trigger at the START of the (normalized) transcript.
-        # The trigger must be followed by a word boundary (not just another letter)
-        # to avoid "ax" consuming "axi" and treating "i" as the command.
-        # Then: optional punctuation/spaces, then a non-empty command remainder.
-        # Separator chars we skip between trigger and command (comma, colon, etc.).
-        # The command itself must contain at least one word character (letter/digit)
-        # so bare punctuation after the trigger doesn't count as a command.
+        # Pattern: optional leading text, then trigger with word boundaries,
+        # then optional separators, then an optional command remainder.
+        # (?:^|(?<=\s)|(?<=\W)) ensures the trigger is a standalone word:
+        # it must be preceded by start-of-string, whitespace, or a non-word char.
         _TRIGGER_RE = re.compile(
-            rf"^\s*{_TRIGGER}\b\s*[,:.!\-\s]*(?P<command>[^\s,:.!\-].*?)$",
+            rf"(?:^|(?<=\s)|(?<=\W)){_TRIGGER}\b\s*[,:.!\-\s]*(?P<command>.*?)$",
             re.IGNORECASE | re.DOTALL,
         )
     return _TRIGGER_RE
 
 
 def match_wake(transcript: Any) -> tuple[bool, str]:
-    """Determine whether a transcript contains a wake word followed by a command.
+    """Determine whether a transcript contains a wake word (anywhere) for Axi.
 
     Pure function — no I/O, no side effects. Unit-testable without hardware.
 
-    Rules:
+    Rules (Fix 3 — high-recall mode):
     1. transcript must be a non-empty string.
-    2. One of the _TRIGGER variants must appear at the START of the transcript.
-    3. After stripping the trigger and any punctuation/spaces, a non-empty
-       command remainder must exist. A bare trigger with no command is NOT a wake.
+    2. One of the _TRIGGER variants must appear ANYWHERE in the transcript,
+       at a word boundary (so "axi" inside "maximal" does not match).
+    3. The command is whatever follows the trigger after stripping separators.
+       An empty command is ALLOWED — "Axi" alone returns (True, "").
+    4. The daemon handles an empty command by speaking an acknowledgment
+       instead of routing to the brain.
 
     Returns:
-        (True, command_str)  — wake detected; command_str is stripped and ready to route.
+        (True, command_str)  — wake detected; command_str may be empty.
         (False, "")          — not a wake; caller should ignore this segment.
     """
     if not transcript or not isinstance(transcript, str):
@@ -126,15 +215,12 @@ def match_wake(transcript: Any) -> tuple[bool, str]:
         return False, ""
 
     pattern = _get_trigger_re()
-    m = pattern.match(text)
+    m = pattern.search(text)
     if m is None:
         return False, ""
 
     command = m.group("command").strip()
-    if not command:
-        # Trigger present but no command after it — false-trigger guard.
-        return False, ""
-
+    # command may legitimately be empty (bare "Axi") — that is a valid wake.
     return True, command
 
 
@@ -554,6 +640,13 @@ class WakeWordListener:
             return
 
         log.info("wakeword: transcript=%r", text)
+
+        # Discard known Whisper hallucination phrases before attempting a wake match.
+        # These appear when the model receives near-silence and generates YouTube filler.
+        if is_hallucination(text):
+            log.info("wakeword: transcript is a known hallucination — discarding: %r", text)
+            return
+
         is_wake, command = match_wake(text)
 
         if not is_wake:
