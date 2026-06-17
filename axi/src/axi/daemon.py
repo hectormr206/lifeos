@@ -20,10 +20,11 @@ from pathlib import Path
 from typing import Callable
 
 from axi import config
-from axi.brain import ask as brain_ask
+from axi.brain import ask as brain_ask, SYSTEM_PROMPT
 from axi.clean import clean as clean_text
 from axi.extractor import extract_and_store
 from axi.eyes import capture_b64 as webcam_capture_b64
+from axi.heartbeat import game_mode_active as _game_mode_active
 from axi.meeting import MeetingSession, process_meeting, recover_interrupted_meetings
 from axi.memory import ConversationMemory
 from axi.output import notify, save_last, save_last_answer, to_clipboard, type_to_focused
@@ -31,6 +32,39 @@ from axi.speak import speak as speak_text
 from axi.vision import capture_active_window_b64
 from axi.recorder import SAMPLE_RATE, Recorder
 from axi.transcriber import Transcriber
+
+
+# ───────── gaming co-pilot helpers ─────────
+
+# Game-aware system prompt — Spanish product voice (Axi speaks es_MX via Piper).
+_GAME_COPILOT_SYSTEM_PROMPT = (
+    "Eres el co-piloto de juegos de Héctor. "
+    "Mirá la pantalla del juego y respondé breve y directo, sin Markdown, "
+    "en una o dos frases. "
+    "Si la pregunta es sobre lo que se ve en pantalla, describí solo lo relevante. "
+    "No uses saludos ni cierres."
+)
+
+# Brevity cap for the game co-pilot — gemma4-e2b-it runs on CPU in game-mode,
+# so a short answer keeps round-trip latency under ~15 s.
+_GAME_COPILOT_MAX_TOKENS = 256
+
+
+def _select_ask_params(
+    game_active: bool,
+    copilot_enabled: bool,
+) -> tuple[str, int]:
+    """Return (system_prompt, max_tokens) for the current ask invocation.
+
+    Pure function — no I/O, no side effects.  Testable in isolation.
+
+    When game-mode is active AND the co-pilot config flag is on, returns the
+    game-aware prompt and a brevity cap.  Otherwise returns the default
+    SYSTEM_PROMPT and standard max_tokens unchanged.
+    """
+    if game_active and copilot_enabled:
+        return _GAME_COPILOT_SYSTEM_PROMPT, _GAME_COPILOT_MAX_TOKENS
+    return SYSTEM_PROMPT, 2048
 
 
 # ───────── default DI helpers ─────────
@@ -335,12 +369,20 @@ class Daemon:
                 transient=True,
                 timeout_ms=3000,
             )
+            # Select system prompt and token budget based on game-mode state.
+            # In game-mode with co-pilot enabled → game-aware prompt + brevity cap.
+            # In normal mode → standard SYSTEM_PROMPT + default max_tokens. (Slice 1)
+            _copilot_on = bool(config.get("game_copilot_enabled", True))
+            base_system, ask_max_tokens = _select_ask_params(
+                game_active=_game_mode_active(),
+                copilot_enabled=_copilot_on,
+            )
             # Inject relevant long-term facts into the system layer so the answer
             # is grounded in what Axi actually knows about Héctor.
-            from axi.brain import SYSTEM_PROMPT
-            system = SYSTEM_PROMPT
+            # In game-mode, facts are appended to the game-aware prompt too.
+            system = base_system
             if facts:
-                system = SYSTEM_PROMPT + "\n\nLo que sabes de Héctor (memoria largo plazo):\n- " + "\n- ".join(facts)
+                system = base_system + "\n\nLo que sabes de Héctor (memoria largo plazo):\n- " + "\n- ".join(facts)
             # P1.5 — opportunistic OCR. When the screen capture carries text
             # the brain can't easily "read" from the image (small fonts, dense
             # UI), prepend the OCR transcription so the answer is grounded in
@@ -356,7 +398,13 @@ class Daemon:
                     ocr_text = None
                 if ocr_text and len(ocr_text) > 20:
                     ocr_question = f"Texto en pantalla:\n{ocr_text}\n\n{question}"
-            answer = self.brain_ask(ocr_question, system=system, image_b64=screenshot, history=history)
+            answer = self.brain_ask(
+                ocr_question,
+                system=system,
+                image_b64=screenshot,
+                history=history,
+                max_tokens=ask_max_tokens,
+            )
             log.info("answer: %s (vision=%s, history=%d, facts=%d)", answer, bool(screenshot), len(history) // 2, len(facts))
             _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
 
