@@ -208,3 +208,42 @@ class TestEdgeCases:
 
     def test_pm_time_kept(self):
         assert _strip_phantom_dates(["10 pm"]) == ["10 pm"]
+
+
+# ---------------------------------------------------------------------------
+# False-drop regression tests (2026-06-17 review)
+# ---------------------------------------------------------------------------
+
+class TestFalseDropRegressions:
+    """Confirmed false-drop holes found in post-ship review.
+
+    These are REAL date expressions that were wrongly dropped before the fix:
+      - "esta noche" / bare "noche": time-of-day anchor not in token set
+      - "semana pasada" (no leading article): " semana" token requires a space
+        prefix that is absent when "semana" starts the string.
+    """
+
+    def test_keeps_esta_noche(self):
+        # "esta noche" is a real time-of-day anchor; must NOT be dropped.
+        assert _strip_phantom_dates(["esta noche"]) == ["esta noche"]
+
+    def test_keeps_bare_noche(self):
+        # Bare "noche" alone is a time-of-day word; must be kept.
+        assert _strip_phantom_dates(["noche"]) == ["noche"]
+
+    def test_keeps_hoy_en_la_noche(self):
+        assert _strip_phantom_dates(["hoy en la noche"]) == ["hoy en la noche"]
+
+    def test_keeps_manana_por_la_noche(self):
+        assert _strip_phantom_dates(["mañana por la noche"]) == ["mañana por la noche"]
+
+    def test_keeps_semana_pasada_bare(self):
+        # "semana pasada" without "la" leading article — starts with "semana".
+        assert _strip_phantom_dates(["semana pasada"]) == ["semana pasada"]
+
+    def test_keeps_semana_que_viene(self):
+        assert _strip_phantom_dates(["semana que viene"]) == ["semana que viene"]
+
+    def test_keeps_la_semana_still_works(self):
+        # Existing behaviour must not regress: "la semana" still matched.
+        assert _strip_phantom_dates(["la semana"]) == ["la semana"]
