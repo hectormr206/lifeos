@@ -332,6 +332,15 @@ FIELDS: tuple[ConfigField, ...] = (
         "cap (max_tokens=256) into the voice ask flow. Set to false to disable the "
         "gaming co-pilot and keep the standard assistant prompt in game-mode.",
     ),
+    # ─────── gaming co-pilot web-search (Slice 2) ───────
+    ConfigField(
+        "copilot_web_search_enabled", "boolean", True,
+        "When game-mode is active and the question matches a search-intent pattern, "
+        "run the deterministic web-search pipeline (entity extraction → SearXNG → "
+        "synthesis) instead of the vision-only path. Requires web_research to be "
+        "configured (searxng_url reachable). Set to false to keep the vision-only "
+        "game co-pilot path without web search.",
+    ),
 )
 
 
