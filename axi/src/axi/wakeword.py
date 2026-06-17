@@ -22,8 +22,10 @@ Public API:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from typing import Any
@@ -51,6 +53,35 @@ _MIN_VOICED_FRAMES = 5  # 100 ms of actual speech
 # Reuse the _TRIGGER regex from intents.py — single source of truth for Axi variants.
 # Imported lazily to avoid circular dependency at module load time.
 _TRIGGER_RE: re.Pattern[str] | None = None
+
+# ---------------------------------------------------------------------------
+# Rate-limit helpers for callback logging
+# ---------------------------------------------------------------------------
+
+# Minimum seconds between repeated log messages from the callback thread.
+_CALLBACK_LOG_INTERVAL_S = 2.0
+
+
+class _RateLimiter:
+    """Lightweight token-bucket style rate limiter for use inside audio callbacks.
+
+    Thread-safe via a lock because the callback thread and the worker thread
+    may both call it (e.g. for VAD-error logging).
+    """
+
+    def __init__(self, interval_s: float) -> None:
+        self._interval = interval_s
+        self._last: float = 0.0
+        self._lock = threading.Lock()
+
+    def allow(self) -> bool:
+        """Return True and update timestamp if the interval has elapsed."""
+        now = time.monotonic()
+        with self._lock:
+            if now - self._last >= self._interval:
+                self._last = now
+                return True
+        return False
 
 
 def _get_trigger_re() -> re.Pattern[str]:
@@ -108,12 +139,95 @@ def match_wake(transcript: Any) -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------
+# Device selection helper
+# ---------------------------------------------------------------------------
+
+def resolve_input_device() -> str | None:
+    """Choose the best available PulseAudio microphone source for the wakeword listener.
+
+    Reuses axi.mic.pick_best() — the same logic used by the push-to-talk Recorder —
+    so both the PTT recorder and the always-listening wakeword listener use the
+    SAME physical microphone.
+
+    Additionally honours the AXI_WAKEWORD_INPUT_DEVICE environment variable as
+    an explicit override (useful for debugging or unusual setups).  The env var
+    should contain a PulseAudio source name (e.g. "alsa_input.usb-...").
+
+    Returns the PulseAudio source name to pass to pactl, or None if detection
+    fails or is not available.  The caller logs the result.
+    """
+    # Explicit override wins.
+    env_device = os.environ.get("AXI_WAKEWORD_INPUT_DEVICE", "").strip()
+    if env_device:
+        log.info("wakeword input device override via AXI_WAKEWORD_INPUT_DEVICE: %r", env_device)
+        return env_device
+
+    try:
+        from axi.mic import pick_best  # noqa: PLC0415
+        best = pick_best()
+        if best is not None:
+            return best.name
+    except Exception as e:  # noqa: BLE001
+        log.warning("wakeword: mic.pick_best() failed: %s — will use system default", e)
+
+    return None
+
+
+def _apply_pulse_default_source(source_name: str) -> None:
+    """Set the PulseAudio default source so that the subsequent InputStream gets the right mic.
+
+    This mirrors what Recorder.start() does, ensuring both PTT and wake-word
+    listener always use the same physical microphone.
+    """
+    import subprocess  # noqa: PLC0415
+    try:
+        subprocess.run(
+            ["pactl", "set-default-source", source_name],
+            check=True,
+            timeout=2,
+            capture_output=True,
+        )
+        log.info("wakeword: set PulseAudio default source to %r", source_name)
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log.warning("wakeword: could not set default source %r: %s", source_name, e)
+
+
+# ---------------------------------------------------------------------------
 # Stream factory default — wraps sounddevice.InputStream
 # ---------------------------------------------------------------------------
 
 def _default_stream_factory(callback: Callable, *, sample_rate: int = SAMPLE_RATE, **kwargs) -> Any:
-    """Create and return a started sounddevice InputStream."""
+    """Create and return a started sounddevice InputStream.
+
+    Before opening the stream, resolves the best input device using the same
+    pick_best() logic as the push-to-talk Recorder, and forces it as the
+    PulseAudio default source via pactl.  This ensures the wake-word listener
+    captures from the same physical microphone as the rest of Axi.
+    """
     import sounddevice as sd  # noqa: PLC0415
+
+    # --- Device selection (OBSERVABILITY + FIX) ---
+    source_name = resolve_input_device()
+    if source_name:
+        _apply_pulse_default_source(source_name)
+    else:
+        log.info("wakeword: no explicit device selected — sounddevice will use system default")
+
+    # Log the device sounddevice will actually open (after we set PulseAudio default).
+    try:
+        default_dev = sd.query_devices(kind="input")
+        dev_name = default_dev.get("name", "unknown") if isinstance(default_dev, dict) else str(default_dev)
+        dev_index = sd.default.device[0] if hasattr(sd.default, "device") else "?"
+        log.info(
+            "wakeword: opening InputStream — device_index=%s name=%r samplerate=%d blocksize=%d",
+            dev_index,
+            dev_name,
+            sample_rate,
+            _VAD_FRAME_SAMPLES,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("wakeword: could not query default input device: %s", e)
+
     stream = sd.InputStream(
         samplerate=sample_rate,
         channels=1,
@@ -214,6 +328,11 @@ class WakeWordListener:
         self._queue_event = threading.Event()
         self._worker: threading.Thread | None = None
 
+        # Rate limiters for callback-thread logging (one per concern).
+        self._rl_activity = _RateLimiter(_CALLBACK_LOG_INTERVAL_S)   # callback heartbeat
+        self._rl_vad_error = _RateLimiter(_CALLBACK_LOG_INTERVAL_S)  # VAD exception
+        self._rl_overflow = _RateLimiter(_CALLBACK_LOG_INTERVAL_S)   # portaudio overflow
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -266,8 +385,10 @@ class WakeWordListener:
         Classifies each frame via VAD and accumulates voiced frames.
         When silence threshold reached or buffer too large, enqueues segment.
         """
+        # PortAudio overflow/underrun — promote to WARNING so dropped audio is visible.
         if status:
-            log.debug("portaudio status: %s", status)
+            if self._rl_overflow.allow():
+                log.warning("wakeword portaudio status: %s", status)
 
         frame = indata.copy().flatten()
 
@@ -277,12 +398,40 @@ class WakeWordListener:
         elif len(frame) > _VAD_FRAME_SAMPLES:
             frame = frame[:_VAD_FRAME_SAMPLES]
 
+        # Rate-limited heartbeat: proves the callback is firing AND shows audio levels.
+        if self._rl_activity.allow():
+            rms = float(np.sqrt(np.mean(frame ** 2)))
+            peak = float(np.abs(frame).max())
+            # Run a quick VAD check for the heartbeat log (before the guarded block).
+            # We run it here outside the main try/except so the heartbeat itself
+            # does not mask a VAD error that the next block will catch.
+            log.info(
+                "wakeword callback active — rms=%.5f peak=%.5f voiced_frames=%d silent_frames=%d",
+                rms,
+                peak,
+                self._voiced_frame_count,
+                self._silent_frame_count,
+            )
+
         # Run VAD — convert to int16 bytes as required by webrtcvad.
         try:
             is_speech = self._vad.is_speech(_to_pcm16_bytes(frame), self._sample_rate)
-        except Exception:  # noqa: BLE001
-            # Malformed frame — skip silently.
+        except Exception as exc:  # noqa: BLE001
+            # Log the exception (rate-limited) so we can see what webrtcvad is
+            # rejecting instead of swallowing the error silently.
+            if self._rl_vad_error.allow():
+                log.error(
+                    "wakeword VAD exception (frame_len=%d sample_rate=%d): %s",
+                    len(frame),
+                    self._sample_rate,
+                    exc,
+                    exc_info=True,
+                )
             return
+
+        # Heartbeat also logs is_speech so we can confirm VAD is classifying correctly.
+        if self._rl_activity.allow():
+            log.info("wakeword VAD result: is_speech=%s", is_speech)
 
         with self._lock:
             if is_speech:
@@ -319,9 +468,17 @@ class WakeWordListener:
         if not self._voiced_frames:
             return
         segment = np.concatenate(self._voiced_frames).flatten()
+        duration_s = len(self._voiced_frames) * _VAD_FRAME_MS / 1000.0
+        frame_count = len(self._voiced_frames)
         self._voiced_frames = []
         self._voiced_frame_count = 0
         self._silent_frame_count = 0
+
+        log.info(
+            "wakeword: flushing speech segment — frames=%d duration=%.2fs",
+            frame_count,
+            duration_s,
+        )
 
         with self._queue_lock:
             self._segment_queue.append(segment)
@@ -393,14 +550,17 @@ class WakeWordListener:
             return
 
         if not text:
+            log.debug("wakeword: transcribe returned empty text — skipping")
             return
 
-        log.debug("wakeword segment transcript: %r", text)
+        log.info("wakeword: transcript=%r", text)
         is_wake, command = match_wake(text)
+
         if not is_wake:
+            log.info("wakeword: no wake match for transcript %r", text)
             return
 
-        log.info("wake detected: command=%r", command)
+        log.info("wakeword: WAKE DETECTED — command=%r", command)
         try:
             self._on_wake(command)
         except Exception as e:  # noqa: BLE001

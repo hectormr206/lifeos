@@ -356,6 +356,89 @@ def _bind(capture: FakeStreamingCapture, callback: Callable) -> FakeStreamingCap
 
 
 # ===========================================================================
+# _RateLimiter — pure unit tests (no threading, no hardware)
+# ===========================================================================
+
+class TestRateLimiter:
+    """Tests for the callback-thread rate limiter helper."""
+
+    def test_first_call_always_allowed(self):
+        from axi.wakeword import _RateLimiter
+        rl = _RateLimiter(interval_s=10.0)
+        assert rl.allow() is True
+
+    def test_second_call_within_interval_blocked(self):
+        from axi.wakeword import _RateLimiter
+        rl = _RateLimiter(interval_s=10.0)
+        rl.allow()  # first call — sets timestamp
+        assert rl.allow() is False  # too soon
+
+    def test_call_after_interval_elapsed_allowed(self):
+        import time as _time
+        from axi.wakeword import _RateLimiter
+        rl = _RateLimiter(interval_s=0.01)
+        rl.allow()  # first call
+        _time.sleep(0.02)  # wait longer than interval
+        assert rl.allow() is True
+
+    def test_zero_interval_always_allows(self):
+        from axi.wakeword import _RateLimiter
+        rl = _RateLimiter(interval_s=0.0)
+        assert rl.allow() is True
+        assert rl.allow() is True
+
+
+# ===========================================================================
+# resolve_input_device — unit tests (mocked pactl / mic)
+# ===========================================================================
+
+class TestResolveInputDevice:
+    """Tests for the device-selection helper."""
+
+    def test_env_override_wins(self, monkeypatch):
+        """AXI_WAKEWORD_INPUT_DEVICE env var must be returned as-is."""
+        monkeypatch.setenv("AXI_WAKEWORD_INPUT_DEVICE", "alsa_input.usb-test")
+        from axi.wakeword import resolve_input_device
+        result = resolve_input_device()
+        assert result == "alsa_input.usb-test"
+
+    def test_empty_env_falls_through_to_pick_best(self, monkeypatch):
+        """When env var is empty, pick_best() is called."""
+        monkeypatch.delenv("AXI_WAKEWORD_INPUT_DEVICE", raising=False)
+
+        from axi.wakeword import resolve_input_device
+        import axi.wakeword as ww
+
+        class _FakeMic:
+            name = "alsa_input.usb-hyperx"
+            description = "HyperX SoloCast"
+            score = 100
+
+        monkeypatch.setattr(
+            "axi.mic.pick_best",
+            lambda: _FakeMic(),
+        )
+        result = resolve_input_device()
+        assert result == "alsa_input.usb-hyperx"
+
+    def test_pick_best_returns_none_gives_none(self, monkeypatch):
+        """When pick_best() returns None, resolve_input_device returns None."""
+        monkeypatch.delenv("AXI_WAKEWORD_INPUT_DEVICE", raising=False)
+        monkeypatch.setattr("axi.mic.pick_best", lambda: None)
+        from axi.wakeword import resolve_input_device
+        result = resolve_input_device()
+        assert result is None
+
+    def test_pick_best_exception_returns_none(self, monkeypatch):
+        """If pick_best() raises, resolve_input_device returns None without propagating."""
+        monkeypatch.delenv("AXI_WAKEWORD_INPUT_DEVICE", raising=False)
+        monkeypatch.setattr("axi.mic.pick_best", lambda: (_ for _ in ()).throw(RuntimeError("no pactl")))
+        from axi.wakeword import resolve_input_device
+        result = resolve_input_device()
+        assert result is None
+
+
+# ===========================================================================
 # Daemon integration — start_wakeword_listener / stop_wakeword_listener
 # ===========================================================================
 
