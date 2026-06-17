@@ -934,6 +934,9 @@ def _handle_cmd(daemon: Daemon, cmd: str) -> tuple[str, bool]:
         return f"cleared:{dropped}", False
     if cmd == "memory":
         return f"turns:{daemon.memory.turn_count()}", False
+    if cmd == "wakeword_status":
+        listener = getattr(daemon, "_wakeword_listener", None)
+        return "active" if listener is not None else "inactive", False
     if cmd.startswith("transcribe_path:"):
         path = cmd[len("transcribe_path:"):].strip()
         return daemon.transcribe_path(path), False
