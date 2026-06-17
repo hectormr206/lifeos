@@ -2,8 +2,8 @@
 # Game Mode — free ALL GPU VRAM for demanding games.
 #
 # DEFAULT (relocate / co-pilot mode):
-#   Swaps the active brain to gemma4-e2b-it on CPU (~4.6 GB RAM, ~28 tok/s).
-#   The game owns all 12 GB VRAM; a fast, light Gemma co-pilot stays available
+#   Swaps the active brain to qwen35-2b on CPU (~2.2 GB RAM, 10 s/frame).
+#   The game owns all 12 GB VRAM; a fast, light Qwen co-pilot stays available
 #   in RAM. The previous brain id is saved to $STATE_DIR/game-pre-model so
 #   axi-game-off can restore it exactly.
 #
@@ -19,12 +19,12 @@
 # truth; the drop-ins do the actual relocation.
 #
 # Usage:
-#   axi-game-on             # load gemma4-e2b co-pilot on CPU; VRAM free
+#   axi-game-on             # load qwen35-2b co-pilot on CPU; VRAM free
 #   axi-game-on --offline   # max-FPS: stop co-pilot entirely (0 CPU for LLM)
 #
 # VRAM holders on the RTX 5070 Ti (12 GB) and where they go in game mode:
 #   axi-whisper  (Whisper large-v3-turbo): ~2.3 GB VRAM  -> RAM (int8, CPU)
-#   llama-server (co-pilot gemma4-e2b):    ~0 VRAM        -> RAM (--cpu, ngl=0)
+#   llama-server (co-pilot qwen35-2b):     ~0 VRAM        -> RAM (--cpu, ngl=0)
 #   axi-translate (Opus/NLLB):             already CPU by default
 #   Result: ~0 MiB VRAM used by axi (effectively all 12 GB free for the game).
 
@@ -58,12 +58,12 @@ else
     echo "[axi-game-on] saved previous brain: '${PREV_MODEL:-<none>}' -> $PRE_MODEL_FILE"
 fi
 
-# In relocate mode: swap to the game co-pilot brain (gemma4-e2b-it).
+# In relocate mode: swap to the game co-pilot brain (qwen35-2b).
 # The CPU drop-in below ensures it loads with ngl=0 / CUDA hidden.
 if [ "$OFFLINE" -eq 0 ]; then
-    echo "[axi-game-on] swapping brain to gemma4-e2b-it (game co-pilot)…"
-    if ! "$AXI_PYTHON" -m axi.models_manager set-active gemma4-e2b-it; then
-        echo "[axi-game-on] ERROR: set-active gemma4-e2b-it failed — aborting game-on." >&2
+    echo "[axi-game-on] swapping brain to qwen35-2b (game co-pilot, ~2.2 GB RAM)…"
+    if ! "$AXI_PYTHON" -m axi.models_manager set-active qwen35-2b; then
+        echo "[axi-game-on] ERROR: set-active qwen35-2b failed — aborting game-on." >&2
         # Restore the backup file since we are not entering game mode.
         rm -f "$PRE_MODEL_FILE"
         exit 1
@@ -120,7 +120,7 @@ if [ "$OFFLINE" -eq 1 ]; then
 else
     # Restart with the co-pilot brain (gemma4-e2b-it) on CPU.
     # try-restart: only if already running (don't force it on for the first time).
-    echo "[axi-game-on] loading gemma4-e2b co-pilot on CPU (if llama-server was active)…"
+    echo "[axi-game-on] loading qwen35-2b co-pilot on CPU (if llama-server was active)…"
     systemctl --user try-restart llama-server.service 2>/dev/null || true
 fi
 
@@ -146,7 +146,7 @@ fi
 if [ "$OFFLINE" -eq 1 ]; then
     echo "[axi-game-on] MODO JUEGO (offline) activo — co-pilot disabled, VRAM libre."
 else
-    echo "[axi-game-on] MODO JUEGO (co-pilot) activo — gemma4-e2b en CPU, VRAM libre."
+    echo "[axi-game-on] MODO JUEGO (co-pilot) activo — qwen35-2b en CPU (~2.2 GB RAM), VRAM libre."
 fi
 echo "  Persiste tras reiniciar/apagar: nada se carga en VRAM hasta 'axi-game-off'."
 echo "  Para volver a GPU:  axi-game-off"

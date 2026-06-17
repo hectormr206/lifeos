@@ -28,13 +28,15 @@ def isolated_state(tmp_path, monkeypatch):
 def test_catalog_has_expected_entries():
     entries = models_catalog.catalog()
     ids = {e.id for e in entries}
-    # 2 total: qwen3.6 (prod/quality) + gemma4-e2b-it (universal small/fast/vision).
+    # 3 total: qwen3.6 (prod/quality) + gemma4-e2b-it (universal small/fast/vision)
+    # + qwen35-2b (game co-pilot brain, added 2026-06-17).
     # Cut (2026-06-10): gemma4-e4b-it (dominated by e2b), gemma4-26b-a4b-it (18.5 GB RSS
     # fails 22/24 GB tiers with reserve, owns no common tier).
-    assert len(entries) == 2
-    # Both kept models must be present.
+    assert len(entries) == 3
+    # All three kept models must be present.
     assert "qwen36-35b-a3b" in ids
     assert "gemma4-e2b-it" in ids
+    assert "qwen35-2b" in ids  # game co-pilot brain (bench winner: 10 s/frame)
     # Cut models must be absent.
     assert "gemma4-e4b-it" not in ids
     assert "gemma4-26b-a4b-it" not in ids
@@ -42,9 +44,8 @@ def test_catalog_has_expected_entries():
     assert "qwen35-9b" not in ids
     assert "granite-4.0-h-1b" not in ids
     assert "lfm2-1.2b-extract" not in ids
-    # Tiny Qwen3.5 dense models also absent.
+    # Other Qwen3.5 dense sizes must remain absent (only 2B is the co-pilot).
     assert "qwen35-0_8b" not in ids
-    assert "qwen35-2b" not in ids
     assert "qwen35-4b" not in ids
     # Qwen3-VL family must be gone.
     assert "qwen3-vl-30b-a3b" not in ids
@@ -305,6 +306,122 @@ def test_cli_set_active_uninstalled_exits_nonzero(isolated_state, capsys):
     assert exc.value.code == 1
     captured = capsys.readouterr()
     assert "not installed" in captured.err
+
+
+# ────────────────── qwen35-2b game co-pilot catalog entry ─────────────────────
+
+
+def test_qwen35_2b_entry_exists_in_catalog():
+    """qwen35-2b must be registered in the catalog (game co-pilot brain)."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None, "qwen35-2b not found in catalog"
+
+
+def test_qwen35_2b_has_vision_feature():
+    """qwen35-2b must advertise 'vision' so the UI/selector knows it supports images."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    assert "vision" in entry.features, f"Expected 'vision' in features, got {entry.features}"
+
+
+def test_qwen35_2b_has_tools_feature():
+    """qwen35-2b must advertise 'tools' for function-calling co-pilot scenarios."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    assert "tools" in entry.features, f"Expected 'tools' in features, got {entry.features}"
+
+
+def test_qwen35_2b_has_gguf_file():
+    """qwen35-2b must declare the Q4_K_M gguf weights file."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    gguf = entry.gguf_file
+    assert gguf.local_name == "Qwen3.5-2B-Q4_K_M.gguf", (
+        f"Expected 'Qwen3.5-2B-Q4_K_M.gguf', got '{gguf.local_name}'"
+    )
+
+
+def test_qwen35_2b_has_mmproj_file():
+    """qwen35-2b must declare an mmproj file for vision support."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    mmproj = entry.mmproj_file
+    assert mmproj is not None, "mmproj file missing from qwen35-2b entry"
+    assert mmproj.local_name == "mmproj-F16.gguf", (
+        f"Expected 'mmproj-F16.gguf', got '{mmproj.local_name}'"
+    )
+
+
+def test_qwen35_2b_ngl_is_zero():
+    """qwen35-2b is CPU-only (game co-pilot); ngl must be 0."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    assert entry.ngl == 0, f"Expected ngl=0 (CPU-only), got {entry.ngl}"
+
+
+def test_qwen35_2b_vram_estimate_reflects_cpu_model():
+    """qwen35-2b runs on CPU; vram_estimate_gb must be <= 2.5 GB."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    assert entry.vram_estimate_gb <= 2.5, (
+        f"Expected vram <= 2.5, got {entry.vram_estimate_gb}"
+    )
+
+
+def test_qwen35_2b_extra_args_no_jinja():
+    """qwen35-2b extra_args must NOT contain --jinja (axi-llama-launch adds it
+    globally; adding it again would conflict with Qwen's chat template)."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    assert "--jinja" not in entry.extra_args, (
+        "--jinja must not appear in qwen35-2b extra_args (it's injected by axi-llama-launch)"
+    )
+
+
+def test_qwen35_2b_extra_args_no_reasoning_off():
+    """qwen35-2b must NOT have '--reasoning off' (that's Gemma-specific)."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    args = list(entry.extra_args)
+    if "--reasoning" in args:
+        idx = args.index("--reasoning")
+        assert args[idx + 1] != "off", (
+            "'--reasoning off' is Gemma-specific; Qwen3.5-2B does not need it"
+        )
+
+
+def test_qwen35_2b_is_installed_when_files_present(isolated_state):
+    """is_installed returns True when both gguf and mmproj exist on disk."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    for f in entry.files:
+        path = models_manager.expected_path(entry, f)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"dummy")
+    assert models_manager.is_installed(entry)
+
+
+def test_qwen35_2b_write_active_includes_mmproj(isolated_state):
+    """write_active for qwen35-2b must include the mmproj path in the JSON."""
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    # write_active does not check is_installed; call it directly.
+    models_manager.write_active(entry)
+    data = models_manager.active_model_path().read_text()
+    parsed = __import__("json").loads(data)
+    assert "mmproj" in parsed, "active_model.json must include 'mmproj' for vision"
+    assert "mmproj-F16.gguf" in parsed["mmproj"]
+
+
+def test_qwen35_2b_model_dir_uses_entry_id(isolated_state):
+    """qwen35-2b is NOT a legacy entry; its dir must use the catalog id."""
+    _, models_root = isolated_state
+    entry = models_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    d = models_manager.model_dir(entry)
+    assert d == models_root / "qwen35-2b", (
+        f"Expected models/<id>/qwen35-2b, got {d}"
+    )
 
 
 class _patch_argv:
