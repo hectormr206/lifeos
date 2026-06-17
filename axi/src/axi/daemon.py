@@ -32,7 +32,7 @@ from axi.output import notify, save_last, save_last_answer, to_clipboard, type_t
 from axi.speak import speak as speak_text
 from axi.vision import capture_active_window_b64, get_active_window_title
 from axi.recorder import SAMPLE_RATE, Recorder
-from axi.transcriber import Transcriber
+from axi.transcriber import Transcriber, transcribe_wakeword as _transcribe_wakeword
 import axi.copilot_search as _copilot_search
 
 
@@ -822,8 +822,20 @@ class Daemon:
             # Route through the existing ask pipeline.
             self._wakeword_ask(command, screenshot)
 
+        # Use the wake-word-specific transcribe path (anti-hallucination settings).
+        # This is SEPARATE from _safe_transcribe (which uses normal dictation params).
+        # _safe_transcribe / Transcriber.transcribe are left UNCHANGED.
+        _cfg_lang = str(config.get("language", "es-MX"))
+        _ww_lang = "en" if _cfg_lang.split("-")[0].lower() == "en" else "es"
+        _transcribe_lock = self._transcribe_lock  # reuse the shared lock
+
+        def _wakeword_transcribe_fn(audio):
+            """Wake-word transcribe: anti-hallucination params, shared lock."""
+            with _transcribe_lock:
+                return _transcribe_wakeword(audio, language=_ww_lang)
+
         listener = WakeWordListener(
-            transcribe_fn=self._safe_transcribe,
+            transcribe_fn=_wakeword_transcribe_fn,
             on_wake=_on_wake,
         )
         self._wakeword_listener = listener
@@ -835,7 +847,27 @@ class Daemon:
 
         Mirrors _stop_and_ask internals but uses the already-transcribed command
         string instead of recording + transcribing again.
+
+        Empty command (bare "Axi" wake): speak a short acknowledgment in the
+        user's configured language so the user knows Axi heard them, then return
+        without routing to the brain. The user may then speak the actual question.
         """
+        # Empty command path: the user just said "Axi" with no follow-up.
+        # Speak an acknowledgment and return — do NOT call brain with empty question.
+        if not command or not command.strip():
+            log.info("wakeword: empty command — speaking acknowledgment")
+            _ui_lang = str(config.get("language", "es-MX"))
+            _lang_family = _ui_lang.split("-")[0].lower()
+            ack = "Yes? Go ahead." if _lang_family == "en" else "¿Sí? Decime."
+            self._set_state("speaking")
+            def _say_ack():
+                try:
+                    speak_text(ack)
+                finally:
+                    self._set_state("idle")
+            threading.Thread(target=_say_ack, daemon=True).start()
+            return
+
         try:
             self._set_state("thinking")
             question = command
