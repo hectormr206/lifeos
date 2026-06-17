@@ -30,9 +30,10 @@ from axi.meeting import MeetingSession, process_meeting, recover_interrupted_mee
 from axi.memory import ConversationMemory
 from axi.output import notify, save_last, save_last_answer, to_clipboard, type_to_focused
 from axi.speak import speak as speak_text
-from axi.vision import capture_active_window_b64
+from axi.vision import capture_active_window_b64, get_active_window_title
 from axi.recorder import SAMPLE_RATE, Recorder
 from axi.transcriber import Transcriber
+import axi.copilot_search as _copilot_search
 
 
 # ───────── gaming co-pilot helpers ─────────
@@ -417,14 +418,48 @@ class Daemon:
                     ocr_text = None
                 if ocr_text and len(ocr_text) > 20:
                     ocr_question = f"Texto en pantalla:\n{ocr_text}\n\n{question}"
-            answer = self.brain_ask(
-                ocr_question,
-                system=system,
-                image_b64=screenshot,
-                history=history,
-                max_tokens=ask_max_tokens,
-                lang=_lang,
+
+            # Slice 2: deterministic web-search pipeline for game co-pilot.
+            # Branches when: game-mode active + copilot enabled + web-search enabled
+            # + web_research is configured + question matches a search-intent pattern.
+            # The vision-only path (and all non-game paths) are 100% unchanged.
+            _copilot_search_on = bool(config.get("copilot_web_search_enabled", True))
+            _game_active_now = _game_mode_active()
+            _web_search_branch = (
+                _game_active_now
+                and _copilot_on
+                and _copilot_search_on
+                and _copilot_search.needs_search(question)
             )
+            if _web_search_branch:
+                try:
+                    import lifeos.web as _web_research  # noqa: PLC0415
+                    _search_fn = _web_research.get_search_fn() if _web_research.is_enabled() else None
+                except Exception:  # noqa: BLE001
+                    _search_fn = None
+            else:
+                _search_fn = None
+
+            if _web_search_branch and _search_fn is not None:
+                log.info("copilot web-search path: question=%r", question)
+                answer = _copilot_search.run(
+                    question,
+                    screenshot,
+                    lang=_lang,
+                    brain_ask=self.brain_ask,
+                    search_fn=_search_fn,
+                    window_title_fn=get_active_window_title,
+                    speak_interim=speak_text,
+                )
+            else:
+                answer = self.brain_ask(
+                    ocr_question,
+                    system=system,
+                    image_b64=screenshot,
+                    history=history,
+                    max_tokens=ask_max_tokens,
+                    lang=_lang,
+                )
             log.info("answer: %s (vision=%s, history=%d, facts=%d)", answer, bool(screenshot), len(history) // 2, len(facts))
             _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
 
@@ -835,14 +870,46 @@ class Daemon:
                 transient=True,
                 timeout_ms=3000,
             )
-            answer = self.brain_ask(
-                ocr_question,
-                system=system,
-                image_b64=screenshot,
-                history=history,
-                max_tokens=ask_max_tokens,
-                lang=_lang,
+
+            # Slice 2: deterministic web-search pipeline for wake-word game co-pilot.
+            # Mirrors the same branch in _stop_and_ask. Vision-only path is unchanged.
+            _copilot_search_on = bool(config.get("copilot_web_search_enabled", True))
+            _game_active_now = _game_mode_active()
+            _web_search_branch = (
+                _game_active_now
+                and _copilot_on
+                and _copilot_search_on
+                and _copilot_search.needs_search(question)
             )
+            if _web_search_branch:
+                try:
+                    import lifeos.web as _web_research  # noqa: PLC0415
+                    _search_fn = _web_research.get_search_fn() if _web_research.is_enabled() else None
+                except Exception:  # noqa: BLE001
+                    _search_fn = None
+            else:
+                _search_fn = None
+
+            if _web_search_branch and _search_fn is not None:
+                log.info("wakeword copilot web-search path: question=%r", question)
+                answer = _copilot_search.run(
+                    question,
+                    screenshot,
+                    lang=_lang,
+                    brain_ask=self.brain_ask,
+                    search_fn=_search_fn,
+                    window_title_fn=get_active_window_title,
+                    speak_interim=speak_text,
+                )
+            else:
+                answer = self.brain_ask(
+                    ocr_question,
+                    system=system,
+                    image_b64=screenshot,
+                    history=history,
+                    max_tokens=ask_max_tokens,
+                    lang=_lang,
+                )
             log.info("wakeword answer: %s", answer)
             _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
 

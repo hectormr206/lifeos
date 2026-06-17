@@ -104,6 +104,34 @@ def _ocr_image(png_bytes: bytes) -> str | None:
         return None
 
 
+def get_active_window_title() -> str | None:
+    """Return the active window caption via qdbus6 on KDE/Wayland.
+
+    Queries ``qdbus6 org.kde.KWin /KWin queryWindowInfo`` and parses the
+    ``caption:`` line.  Returns None on any failure (qdbus6 absent, timeout,
+    parse error, empty caption) so callers can fall back gracefully.
+
+    The result is used only for building a text search query — the screenshot
+    is never passed here.
+    """
+    if shutil.which("qdbus6") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["qdbus6", "org.kde.KWin", "/KWin", "queryWindowInfo"],
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("caption:"):
+                caption = line.split(":", 1)[1].strip()
+                return caption or None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def ocr_from_b64(image_b64: str) -> str | None:
     """Decode a base64 PNG and run OCR on it (P1.5).
 
