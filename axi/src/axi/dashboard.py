@@ -883,6 +883,7 @@ def snapshot():
         "unread_critical_events": events.unread_critical_count(),
         "whisper_restart_pending": _whisper_restart_pending(),
         "dashboard_restart_pending": _dashboard_restart_pending(),
+        "wakeword_listening": _daemon_cmd("wakeword_status") == "active",
     }
 
 

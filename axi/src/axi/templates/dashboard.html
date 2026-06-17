@@ -43,6 +43,14 @@
           #axi-avatar #organ-mind.mind-on .mind-spark { animation: mindSpark 2s ease-in-out infinite; }
           @keyframes mindPulse { 0%,100%{opacity:.22} 50%{opacity:.5} }
           @keyframes mindSpark { 0%,100%{opacity:.35;transform:translateY(0) scale(.85)} 50%{opacity:1;transform:translateY(-1px) scale(1.1)} }
+          /* Sonar ring — active listening (wake-word listener running) */
+          @keyframes sonarPulse { 0%{r:17;opacity:.8;stroke-width:1.2} 100%{r:26;opacity:0;stroke-width:0.3} }
+          #axi-avatar #sonar-ring { display:none; }
+          #axi-avatar #sonar-ring.sonar-active { display:block; animation: sonarPulse 2s ease-out infinite; }
+          /* Amber body glow — game mode active */
+          @keyframes amberGlow { 0%,100%{opacity:.55;filter:blur(2px)} 50%{opacity:.9;filter:blur(3.5px)} }
+          #axi-avatar #game-glow { display:none; }
+          #axi-avatar #game-glow.game-active { display:block; animation: amberGlow 1.6s ease-in-out infinite; }
           @media (prefers-reduced-motion: reduce){ #axi-avatar * { animation:none !important; } }
         </style>
 
@@ -81,6 +89,15 @@
         <!-- Pies -->
         <ellipse cx="25.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
         <ellipse cx="38.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+
+        <!-- Amber body glow — game mode active. Rendered BELOW the body so it
+             acts as a back-light aura. No permanent fill change — it's additive. -->
+        <ellipse id="game-glow"
+                 cx="32" cy="57" rx="15" ry="14.5"
+                 fill="#ffaa33" fill-opacity="0" stroke="#ffaa33" stroke-width="2.5"
+                 :class="($store.snap.models && $store.snap.models.mode === 'Modo juego') ? 'game-active' : ''">
+          <title>Modo juego</title>
+        </ellipse>
 
         <!-- Cuerpo -->
         <ellipse cx="32" cy="57" rx="12.5" ry="12" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
@@ -140,6 +157,16 @@
           <circle cx="34.8" cy="55" r="1.45" fill="#FF4D88"/>
           <path d="M30.85 55.6 Q33.5 60.5 36.15 55.6" fill="#FF4D88"/>
         </g>
+
+        <!-- Teal sonar ring — wake-word listener active.
+             Expands outward from the gills/ears region (cx≈32 cy≈37) and fades.
+             Purely visual, read-only, no click action. -->
+        <circle id="sonar-ring"
+                cx="32" cy="37" r="17"
+                fill="none" stroke="#00D4AA" stroke-width="1.2"
+                :class="$store.snap.wakeword_listening ? 'sonar-active' : ''">
+          <title>Escucha activa</title>
+        </circle>
 
         <!-- 🧠 Mente autónoma — aura teal + chispitas de pensamiento sobre la
              cabeza. Brilla y pulsa si está ACTIVADA, tenue si OFF. Clic = toggle. -->
