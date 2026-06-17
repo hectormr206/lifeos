@@ -6,7 +6,7 @@ consumers share a single instance via Unix socket, freeing VRAM for
 `llama-server` and the translator's Piper/Opus.
 
 Decoder behaviour is preserved verbatim from the prior in-process loader:
-language pinned to Spanish, no VAD (recorder bounds at toggle time),
+language is config-driven ('language' key; defaults to 'es'), no VAD (recorder bounds at toggle time),
 beam_size 5, high `no_speech_threshold` and low `compression_ratio_threshold`
 to suppress hallucinations, no carry-over of previous text.
 """
@@ -37,6 +37,15 @@ DEFAULT_INITIAL_PROMPT = (
     "código, framework, PR, branch, commit, debug, log, repo, endpoint, Axi."
 )
 
+INITIAL_PROMPT_EN = (
+    "English transcription of technical dictation and natural conversation. "
+    "The assistant is called Axi — spelled with an X (not 'Axe', not 'Aksi', not 'Axis'). "
+    "The user often starts with 'Axi, ...'. "
+    "Includes technical English vocabulary: Python, daemon, terminal, clipboard, "
+    "Whisper, GPU, systemd, KDE, PipeWire, Piper, prompt, framework, PR, branch, "
+    "commit, debug, log, repo, endpoint, llama, LifeOS, Axi."
+)
+
 DEFAULT_BEAM_SIZE = 5
 
 
@@ -54,8 +63,25 @@ class Transcriber:
         from axi.config import get  # noqa: PLC0415 — lazy import
         if model_name is None:
             model_name = str(get("whisper_model_name", DEFAULT_MODEL_NAME))
+
+        # Derive STT language from the user's configured language setting.
+        # 'en' (or 'en-*') → pin Whisper to English; everything else → Spanish.
+        # This replaces the hardcoded "es" that was previously in transcribe().
+        _lang_cfg = str(get("language", "es-MX"))
+        _lang_family = _lang_cfg.split("-")[0].lower()
+        self.stt_language: str = "en" if _lang_family == "en" else "es"
+
         if initial_prompt is None:
-            initial_prompt = str(get("whisper_initial_prompt", DEFAULT_INITIAL_PROMPT))
+            # Use the EN or ES initial prompt based on language unless the user
+            # has overridden whisper_initial_prompt directly in config.
+            _cfg_prompt = get("whisper_initial_prompt", None)
+            if _cfg_prompt is not None:
+                initial_prompt = str(_cfg_prompt)
+            elif self.stt_language == "en":
+                initial_prompt = INITIAL_PROMPT_EN
+            else:
+                initial_prompt = DEFAULT_INITIAL_PROMPT
+
         self.model_name = model_name
         self.initial_prompt = initial_prompt
         self.beam_size = int(get("whisper_beam_size", DEFAULT_BEAM_SIZE))
@@ -64,7 +90,7 @@ class Transcriber:
         try:
             r: TranscriptionResult = _whisper_transcribe(
                 audio,
-                language="es",  # see module docstring — auto-detect fails on short noisy chunks
+                language=self.stt_language,  # set in __init__ from config; was hardcoded "es"
                 beam_size=self.beam_size,
                 initial_prompt=self.initial_prompt,
                 condition_on_previous_text=False,
