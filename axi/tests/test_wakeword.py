@@ -431,3 +431,116 @@ class TestDaemonWakewordLifecycle:
         daemon.start_wakeword_listener()  # second call — must be a no-op
 
         assert len(instances) == 1, "start_wakeword_listener must be idempotent"
+
+
+# ===========================================================================
+# Concurrency hardening — stop() drain safety (TOCTOU fix)
+# ===========================================================================
+
+class TestWorkerDrainOnStop:
+    """Verify that segments enqueued before stop() returns are not silently dropped.
+
+    Design invariant: any segment appended to _segment_queue before stop() sets
+    _running = False must be processed.  The worker loop must drain the queue
+    AFTER _running goes False, not exit immediately when it sees _running=False.
+
+    We drive the drain path directly (no hardware, no VAD) by manually appending
+    to _segment_queue and then calling stop() before the worker has a chance to
+    drain.  All enqueued segments must still be processed.
+    """
+
+    def _build_stopped_listener(
+        self, transcribe_fn, on_wake_fn
+    ) -> WakeWordListener:
+        """Build and start a listener with no-op stream (no audio hardware)."""
+        class _NullStream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        listener = WakeWordListener(
+            transcribe_fn=transcribe_fn,
+            on_wake=on_wake_fn,
+            stream_factory=lambda callback, **kwargs: _NullStream(),
+            vad_aggressiveness=1,
+            silence_duration_s=0.1,
+            max_segment_s=8.0,
+            sample_rate=16000,
+        )
+        listener.start()
+        return listener
+
+    def test_segment_enqueued_before_stop_is_processed(self):
+        """All segments enqueued before stop() returns must be processed.
+
+        Invariant: stop() calls worker.join(), so by the time stop() returns
+        the worker has exited.  For no segment to be dropped, the worker's
+        drain loop must check the queue UNDER _queue_lock as the exit
+        condition, not as an unguarded read.
+
+        Note on RED: CPython's GIL makes the unguarded `or self._segment_queue`
+        read safe in practice for list truthiness checks, so a deterministic
+        unit-test cannot reliably make the buggy code drop a segment.
+        This test instead pins down the behavioral invariant that the
+        structural fix (lock-guarded drain condition) must satisfy: after
+        stop() returns, zero segments remain unprocessed.
+        """
+        processed: list = []
+
+        def fake_transcribe(audio: np.ndarray):
+            processed.append(1)
+            return "axi, drain test", "es", 0.95
+
+        wake_calls: list[str] = []
+
+        def fake_on_wake(command: str):
+            wake_calls.append(command)
+
+        listener = self._build_stopped_listener(fake_transcribe, fake_on_wake)
+
+        dummy = np.ones(160, dtype=np.float32)
+        N = 5
+        with listener._queue_lock:
+            for _ in range(N):
+                listener._segment_queue.append(dummy.copy())
+        listener._queue_event.set()
+
+        listener.stop()  # joins worker — must not return until queue is empty
+
+        assert len(processed) == N, (
+            f"Expected {N} segments processed after stop(), got {len(processed)}. "
+            "Worker exited before draining the queue."
+        )
+        assert len(wake_calls) == N, (
+            f"Expected {N} on_wake calls, got {len(wake_calls)}."
+        )
+
+    def test_multiple_segments_all_processed_before_exit(self):
+        """All N segments enqueued before stop() must be fully processed."""
+        processed: list = []
+
+        def fake_transcribe(audio: np.ndarray):
+            processed.append(1)
+            return "", "es", 0.0  # non-wake — just counting transcribe calls
+
+        listener = self._build_stopped_listener(
+            transcribe_fn=fake_transcribe,
+            on_wake_fn=lambda cmd: None,
+        )
+
+        # Same race simulation: enqueue, flip _running=False, then wake worker.
+        listener._queue_event.clear()
+        dummy = np.ones(160, dtype=np.float32)
+        N = 5
+        with listener._queue_lock:
+            for _ in range(N):
+                listener._segment_queue.append(dummy.copy())
+
+        listener._running = False
+        listener._queue_event.set()
+        if listener._worker is not None:
+            listener._worker.join(timeout=2.0)
+
+        assert len(processed) == N, (
+            f"Worker exited with {N - len(processed)} segments still in queue."
+        )
