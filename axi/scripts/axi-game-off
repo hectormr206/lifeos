@@ -20,6 +20,7 @@ echo "[axi-game-off] removing CPU drop-ins…"
 rm -f "$UNIT_DIR/axi-whisper.service.d/game-cpu.conf"
 rm -f "$UNIT_DIR/llama-server.service.d/game-cpu.conf"
 rm -f "$UNIT_DIR/axi-translate.service.d/game-cpu.conf"
+rm -f "$UNIT_DIR/axi-voice.service.d/game-cpu.conf"
 # Legacy drop-in names from earlier versions of these scripts.
 rm -f "$UNIT_DIR/llama-server.service.d/cpu-exec.conf"
 rm -f "$UNIT_DIR/llama-server.service.d/cpu-override.conf"
@@ -72,10 +73,11 @@ done
 echo "[axi-game-off] restarting axi-whisper (Whisper → GPU)…"
 systemctl --user restart axi-whisper.service || true
 
-# Ensure the voice/meetings daemon is online (it holds no VRAM; a legacy
-# game-on may have left it stopped). `start` is idempotent.
-echo "[axi-game-off] ensuring axi-voice daemon is online…"
-systemctl --user start axi-voice.service 2>/dev/null || true
+# Restart axi-voice so it picks up the removal of AXI_WAKEWORD_ENABLED=1
+# (written as a drop-in by axi-game-on). After restart, the daemon returns to
+# hotkey-only mode; the always-listening wake-word listener is stopped.
+echo "[axi-game-off] restarting axi-voice (disabling wake-word listener)…"
+systemctl --user restart axi-voice.service 2>/dev/null || true
 
 # Restore interpreter mode only if it was running.
 systemctl --user try-restart axi-translate.service 2>/dev/null || true

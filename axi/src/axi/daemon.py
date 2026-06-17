@@ -734,6 +734,139 @@ class Daemon:
         s = self.meeting.status_summary()
         return f"recording:{s['meeting_id']}:{s['duration_s']}s:mic={s['mic_chunks']}:sys={s['system_chunks']}:screens={s['screens']}"
 
+    # ────────────────── wake-word listener ──────────────────
+
+    def start_wakeword_listener(self) -> None:
+        """Start the always-listening wake-word listener if not already running.
+
+        Idempotent — safe to call multiple times; a second call is a no-op.
+        The listener runs on a background thread; audio is captured via
+        sounddevice, VAD-gated, and fed to Whisper only when speech is detected.
+        On wake detection, captures the active window screenshot and routes the
+        command through the existing _stop_and_ask internals.
+        """
+        if getattr(self, "_wakeword_listener", None) is not None:
+            log.info("wake-word listener already running — ignoring start request")
+            return
+
+        from axi.wakeword import WakeWordListener  # noqa: PLC0415
+
+        def _on_wake(command: str) -> None:
+            """Called from the WakeWordListener worker thread on wake detection."""
+            # Guard: do not overlap with an in-progress hotkey ask.
+            if self.state not in ("idle",):
+                log.info("wakeword: skipping wake while daemon state=%r", self.state)
+                return
+            log.info("wakeword: wake detected, command=%r", command)
+            notify("Axi", "🎮 Axi escuchó…", transient=True, timeout_ms=1200)
+            # Capture screenshot NOW (at wake confirmation time) then run ask.
+            screenshot = self.vision_capture()
+            self._pending_screenshot = screenshot
+            # Route through the existing ask pipeline.
+            self._wakeword_ask(command, screenshot)
+
+        listener = WakeWordListener(
+            transcribe_fn=self._safe_transcribe,
+            on_wake=_on_wake,
+        )
+        self._wakeword_listener = listener
+        listener.start()
+        log.info("wake-word listener started")
+
+    def _wakeword_ask(self, command: str, screenshot: str | None) -> None:
+        """Route a wake-word command through the ask pipeline.
+
+        Mirrors _stop_and_ask internals but uses the already-transcribed command
+        string instead of recording + transcribing again.
+        """
+        try:
+            self._set_state("thinking")
+            question = command
+            history = self.memory.messages()
+            facts = self.memory.relevant_facts(question, limit=5)
+            _copilot_on = bool(config.get("game_copilot_enabled", True))
+            base_system, ask_max_tokens = _select_ask_params(
+                game_active=_game_mode_active(),
+                copilot_enabled=_copilot_on,
+            )
+            system = base_system
+            if facts:
+                system = base_system + "\n\nLo que sabes de Héctor (memoria largo plazo):\n- " + "\n- ".join(facts)
+
+            ocr_question = question
+            if screenshot and config.get("ocr_enabled", True):
+                try:
+                    from axi.vision import ocr_from_b64  # noqa: PLC0415
+                    ocr_text = ocr_from_b64(screenshot)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("wakeword ocr_from_b64 failed: %s", e)
+                    ocr_text = None
+                if ocr_text and len(ocr_text) > 20:
+                    ocr_question = f"Texto en pantalla:\n{ocr_text}\n\n{question}"
+
+            notify(
+                "Axi",
+                f"🧠🎮 Pensando… wake: {question[:40]}",
+                icon="view-refresh",
+                transient=True,
+                timeout_ms=3000,
+            )
+            answer = self.brain_ask(
+                ocr_question,
+                system=system,
+                image_b64=screenshot,
+                history=history,
+                max_tokens=ask_max_tokens,
+            )
+            log.info("wakeword answer: %s", answer)
+            _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
+
+            if config.get("fact_extraction_enabled", True):
+                def _extract():
+                    try:
+                        from axi.extractor import extract_and_store  # noqa: PLC0415
+                        n = extract_and_store(question, answer, conv_node_id)
+                        if n:
+                            log.info("wakeword extracted %d fact(s)", n)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("wakeword fact extraction failed: %s", e)
+                threading.Thread(target=_extract, daemon=True).start()
+
+            save_last_answer(question, answer)
+            to_clipboard(answer)
+
+            preview = answer if len(answer) <= 400 else answer[:397] + "…"
+            notify(
+                title=f"Axi 🎮 → {question[:60]}",
+                body=preview,
+                icon="dialog-information",
+                timeout_ms=15000,
+            )
+
+            self._set_state("speaking")
+            def _say():
+                try:
+                    speak_text(answer)
+                finally:
+                    self._set_state("idle")
+            threading.Thread(target=_say, daemon=True).start()
+        except Exception as e:  # noqa: BLE001
+            log.exception("_wakeword_ask failed: %s", e)
+            notify("Axi", f"Error en co-piloto: {e}", icon="dialog-error", timeout_ms=4000)
+            self._set_state("idle")
+
+    def stop_wakeword_listener(self) -> None:
+        """Stop the wake-word listener if running. Idempotent."""
+        listener = getattr(self, "_wakeword_listener", None)
+        if listener is None:
+            return
+        try:
+            listener.stop()
+        except Exception as e:  # noqa: BLE001
+            log.warning("error stopping wake-word listener: %s", e)
+        self._wakeword_listener = None
+        log.info("wake-word listener stopped")
+
 
 def _start_recovery_thread(daemon: "Daemon") -> None:
     """Spawn a non-blocking background daemon thread that runs startup recovery.
@@ -804,6 +937,17 @@ def serve() -> int:
 
     _start_recovery_thread(daemon)
 
+    # Start the always-listening wake-word listener when requested via env var.
+    # Set AXI_WAKEWORD_ENABLED=1 in the axi-voice.service drop-in (written by
+    # axi-game-on) to activate it during game sessions. Unset = hotkey-only mode
+    # (existing behaviour is 100% unchanged).
+    if os.environ.get("AXI_WAKEWORD_ENABLED", "").strip() == "1":
+        log.info("AXI_WAKEWORD_ENABLED=1 — starting wake-word listener")
+        try:
+            daemon.start_wakeword_listener()
+        except Exception as _ww_err:  # noqa: BLE001
+            log.warning("wake-word listener failed to start: %s", _ww_err)
+
     stop_signal = {"raised": False}
 
     def _shutdown(*_):
@@ -839,6 +983,7 @@ def serve() -> int:
                 if should_quit:
                     stop_signal["raised"] = True
     finally:
+        daemon.stop_wakeword_listener()
         try:
             sock.close()
         finally:
