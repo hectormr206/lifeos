@@ -133,7 +133,7 @@ Internet capability:
 - If the user asks whether you can access the internet, say Axi can search from the
   chat, and that current information requires activating a search.
 - If asked for news or current data but you received no web results, do not invent data:
-  ask the user to activate a search or use /busca.
+  ask the user to activate a search from the dashboard chat (/search or the search tab).
 
 CRITICAL — DO NOT INVENT ACTIONS YOU CANNOT DO:
 - You do NOT have direct access to LifeOS databases (health, finance, exercise, etc.).
@@ -253,8 +253,14 @@ def _build_messages(
     system: str,
     image_b64: str | None = None,
     history: list[dict] | None = None,
+    lang: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Build OpenAI-compatible chat messages with Axi's live context."""
+    """Build OpenAI-compatible chat messages with Axi's live context.
+
+    `lang` is the user's configured language tag (e.g. 'en', 'es-MX').
+    When 'en*', English temporal context is injected; otherwise Spanish.
+    Callers that do not pass `lang` get Spanish (backward-compatible default).
+    """
     if image_b64:
         user_content: str | list[dict[str, Any]] = [
             {"type": "text", "text": prompt},
@@ -263,10 +269,11 @@ def _build_messages(
     else:
         user_content = prompt
 
-    # Select temporal context language based on whether the EN system prompt is active.
-    # Detect by checking the first token of the system string rather than importing
-    # SYSTEM_PROMPT_EN here (avoids a module-level circular reference at call time).
-    _tc = temporal_context_en() if system.startswith("Your name is Axi") else temporal_context()
+    # Select temporal context by explicit language tag, not by inspecting the
+    # system prompt string (that was fragile — one edit away from silently
+    # producing wrong-language timestamps).
+    _is_en = bool(lang and lang.split("-")[0].lower() == "en")
+    _tc = temporal_context_en() if _is_en else temporal_context()
     full_system = f"{system}\n\n{_tc}"
     messages: list[dict[str, Any]] = [{"role": "system", "content": full_system}]
     if history:
@@ -311,6 +318,7 @@ def _ask_impl(
     think: bool = False,
     image_b64: str | None = None,
     history: list[dict] | None = None,
+    lang: str | None = None,
     _retry_budget: int | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
     """Inner implementation: returns (text, raw_response_dict).
@@ -323,7 +331,7 @@ def _ask_impl(
     model spent the whole budget thinking and never reached the answer. We
     retry ONCE with a much larger budget so callers don't get empty strings.
     """
-    messages = _build_messages(prompt, system=system, image_b64=image_b64, history=history)
+    messages = _build_messages(prompt, system=system, image_b64=image_b64, history=history, lang=lang)
     effective_max_tokens = _retry_budget if _retry_budget is not None else max_tokens
     try:
         data = _post_chat_completion(
@@ -345,7 +353,7 @@ def _ask_impl(
                 return _ask_impl(
                     prompt, system=system, max_tokens=max_tokens, timeout=timeout,
                     think=think, image_b64=image_b64, history=history,
-                    _retry_budget=retry_budget,
+                    lang=lang, _retry_budget=retry_budget,
                 )
         return content, data
     except urllib.error.URLError as e:
@@ -398,6 +406,7 @@ def _ask_with_tools_impl(
     history: list[dict] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
     max_tool_rounds: int = 2,
+    lang: str | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
     """Run a small OpenAI tool-calling loop against local llama-server."""
     tool_system = (
@@ -408,7 +417,7 @@ def _ask_with_tools_impl(
         + "- No digas que necesitas /busca si ya recibiste resultados de una herramienta web_search.\n"
         + "- Si los resultados son insuficientes, dilo con precisión y cita lo que sí hay."
     )
-    messages = _build_messages(prompt, system=tool_system, image_b64=None, history=history)
+    messages = _build_messages(prompt, system=tool_system, image_b64=None, history=history, lang=lang)
     last_data: dict[str, Any] | None = None
     try:
         for _round in range(max_tool_rounds + 1):
@@ -455,6 +464,7 @@ def ask_with_tools(
     history: list[dict] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
     max_tool_rounds: int = 2,
+    lang: str | None = None,
 ) -> str:
     """Ask the local brain with whitelisted OpenAI-compatible tools.
 
@@ -477,6 +487,7 @@ def ask_with_tools(
             history=history,
             tool_choice=tool_choice,
             max_tool_rounds=max_tool_rounds,
+            lang=lang,
         )
         return text
     except BaseException as e:  # noqa: BLE001
@@ -503,14 +514,19 @@ def ask(
     think: bool = False,
     image_b64: str | None = None,
     history: list[dict] | None = None,
+    lang: str | None = None,
 ) -> str:
     """Public chat completion call.
 
-    Public signature is unchanged. Wraps `_ask_impl` to record a brain metric
-    (latency, model, token usage, ok flag) on a background thread. The metric
-    write NEVER fails the brain call: if it raises, it's swallowed inside the
-    worker; if the inner call raises, the metric is still recorded with ok=0
-    before the exception is re-raised.
+    `lang` is the user's configured language tag (e.g. 'en', 'es-MX'). When
+    provided, it controls which temporal context is injected into the system
+    prompt. Callers that omit it get Spanish temporal context (backward compat).
+
+    Wraps `_ask_impl` to record a brain metric (latency, model, token usage,
+    ok flag) on a background thread. The metric write NEVER fails the brain
+    call: if it raises, it's swallowed inside the worker; if the inner call
+    raises, the metric is still recorded with ok=0 before the exception is
+    re-raised.
     """
     start = time.monotonic()
     err_obj: BaseException | None = None
@@ -524,6 +540,7 @@ def ask(
             think=think,
             image_b64=image_b64,
             history=history,
+            lang=lang,
         )
         return text
     except BaseException as e:  # noqa: BLE001
