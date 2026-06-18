@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# axi-vt-launch — ExecStart entry point for llama-vt.service.
+#
+# Reads the active VT model from $XDG_STATE_HOME/axi/active_vt_model.json
+# (creates it with VibeThinker-3B defaults if missing — so a fresh install
+# works without manual config), then execs /usr/bin/llama-server on port 8082.
+#
+# VT is GPU-resident (ngl=999). Unlike axi-nano-launch, this script does NOT
+# set CUDA_VISIBLE_DEVICES — the unit file intentionally omits it so the GPU
+# is fully visible to the process.
+#
+# Mandatory flags per VRAM measurement #565 (RTX 5070 Ti 12 GB):
+#   -c 61440  -np 1  --cache-type-k q8_0  --cache-type-v q8_0  -fa on
+# Without -np 1 llama-server defaults to n_parallel=4 → 4x KV cache → OOM.
+#
+# AXI_DRY_RUN=1 prints the would-be command and exits without exec'ing
+# (used by tests and smoke checks).
+
+set -u
+exec python3 - <<'PY'
+import json, os, sys
+from pathlib import Path
+
+state_root = os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))
+state = os.path.join(state_root, "axi", "active_vt_model.json")
+
+# Default = VibeThinker-3B at 60K context, full GPU, port 8082.
+#
+# SYNC NOTE: This dict is intentionally duplicated from models_catalog entry
+# "vibethinker-3b" (axi/src/axi/models_catalog.py). The launcher cannot import
+# Python packages at exec time, so duplication is unavoidable.
+# models_catalog.py is AUTHORITATIVE — any change to the default config MUST
+# be mirrored here. In particular ctx=61440 per VRAM measurement #565.
+HOME = str(Path.home())
+DEFAULT = {
+    "id": "vibethinker-3b",
+    "gguf": HOME + "/LifeOS/models/vibethinker-3b/VibeThinker-3B-Q4_K_M.gguf",
+    # mmproj intentionally absent: VibeThinker-3B has no vision capability.
+    "ctx": 61440,   # 60K — per VRAM measurement #565; SYNC with catalog entry
+    "ngl": 999,
+    "port": 8082,
+    # extra_args: model-specific tuning only; --jinja, -c, -ngl, --host,
+    # --port are assembled below from the config fields so they are never
+    # duplicated between the fixed block and extra_args.
+    # -np 1 is MANDATORY: llama-server defaults to n_parallel=4 → 4x KV cache.
+    "extra_args": [
+        "--reasoning-format", "auto",
+        "--cache-type-k", "q8_0",
+        "--cache-type-v", "q8_0",
+        "-fa", "on",
+        "-b", "2048",
+        "-ub", "512",
+        "-t", "8",
+        "-tb", "8",
+        "--temp", "1.0",
+        "--top-p", "0.95",
+        "--top-k", "-1",
+        "-np", "1",
+        "-a", "VibeThinker-3B",
+    ],
+}
+
+if not os.path.exists(state):
+    os.makedirs(os.path.dirname(state), exist_ok=True)
+    with open(state, "w") as f:
+        json.dump(DEFAULT, f, indent=2)
+
+# W1: wrap read in try/except — corrupt JSON falls back to DEFAULT instead
+# of crashing the service into a systemd restart-loop.
+try:
+    with open(state) as f:
+        cfg = json.load(f)
+except (json.JSONDecodeError, OSError) as exc:
+    print(f"WARNING: could not read {state}: {exc}; using DEFAULT config", file=sys.stderr)
+    cfg = DEFAULT
+
+# W2: missing "gguf" key would crash at cfg["gguf"] below — fall back to DEFAULT.
+if "gguf" not in cfg:
+    print(f"WARNING: active_vt_model.json has no 'gguf' key; using DEFAULT config", file=sys.stderr)
+    cfg = DEFAULT
+
+ngl = int(cfg.get("ngl", 999))
+port = str(cfg.get("port", 8082))
+ctx = int(cfg.get("ctx", 61440))
+
+args = ["/usr/bin/llama-server", "-m", cfg["gguf"]]
+if cfg.get("mmproj"):
+    args += ["--mmproj", cfg["mmproj"]]
+args += [
+    "-ngl", str(ngl),
+    "--jinja",
+    "-c", str(ctx),
+    "--host", "127.0.0.1",
+    "--port", port,
+]
+# C1(a): dedupe flags already injected above so a hand-crafted extra_args
+# cannot produce duplicates (e.g. --jinja appearing twice or -ngl/-c/--port
+# duplicated when they appear in extra_args alongside the fixed block).
+#
+# _FIXED_FLAGS: single-token flags (no value) that are deduped by simple membership.
+# _FIXED_VALUE_FLAGS: value-taking flags (flag + value token) — deduped pair-aware:
+#   both the flag token AND the immediately following value token are skipped.
+_FIXED_FLAGS = {"--jinja"}
+_FIXED_VALUE_FLAGS = {"-ngl", "-c", "--host", "--port"}
+
+extra = cfg.get("extra_args", [])
+i = 0
+while i < len(extra):
+    tok = extra[i]
+    if tok in _FIXED_FLAGS:
+        i += 1
+        continue
+    if tok in _FIXED_VALUE_FLAGS:
+        i += 2  # skip flag + value
+        continue
+    args.append(tok)
+    i += 1
+
+# AXI_DRY_RUN=1 prints the would-be command and exits (tests + smoke).
+if os.environ.get("AXI_DRY_RUN") == "1":
+    print(" ".join(args))
+    sys.exit(0)
+
+os.execvp(args[0], args)
+PY

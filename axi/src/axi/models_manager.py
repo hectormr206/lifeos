@@ -34,6 +34,8 @@ from axi.model_params_schema import (
 log = logging.getLogger("axi.models")
 
 LLAMA_HEALTH_URL = "http://127.0.0.1:8080/health"
+# VibeThinker-3B reasoning sibling (port 8082, managed by llama-vt.service).
+LLAMA_VT_HEALTH_URL = "http://127.0.0.1:8082/health"
 LEGACY_QWEN_ID = "qwen36-35b-a3b"
 LEGACY_QWEN_DIR_NAME = "Qwen3.6-35B-A3B"
 
@@ -83,6 +85,74 @@ def _state_dir() -> Path:
 
 def active_model_path() -> Path:
     return _state_dir() / "active_model.json"
+
+
+def active_vt_model_path() -> Path:
+    """Path to the active VT (VibeThinker-3B) state file.
+
+    Mirrors active_model_path() but for the reasoning sibling (port 8082).
+    Written by write_active_vt(); read by axi-vt-launch on start.
+    """
+    return _state_dir() / "active_vt_model.json"
+
+
+def read_active_vt() -> dict | None:
+    """Read active_vt_model.json; returns None if missing or corrupt."""
+    p = active_vt_model_path()
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def get_active_vt_id() -> str | None:
+    """Return the id field from active_vt_model.json, or None."""
+    data = read_active_vt()
+    return data.get("id") if data else None
+
+
+def write_active_vt(entry: ModelEntry) -> Path:
+    """Write active_vt_model.json atomically (tmp + rename).
+
+    Mirrors write_active() but targets the VT state file (port 8082).
+    Does NOT restart llama-vt.service — the caller owns the restart.
+    """
+    paths = expected_paths(entry)
+    out: dict = {
+        "id": entry.id,
+        "gguf": str(paths["gguf"]),
+        "ctx": entry.ctx,
+        "ngl": entry.ngl,
+        "port": 8082,
+        "extra_args": list(entry.extra_args),
+    }
+    # mmproj is optional; VibeThinker-3B has none.
+    if "mmproj" in paths:
+        out["mmproj"] = str(paths["mmproj"])
+    p = active_vt_model_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(out, indent=2))
+    tmp.replace(p)
+    return p
+
+
+def is_triad_active() -> bool:
+    """Return True when the primary brain (port 8080) is qwen35-4b.
+
+    The primary (active_model.json) is the single source of truth for which
+    brain-set is resident. VT presence is a consequence of 4B being primary,
+    not an independent fact — so we only check the primary id.
+
+    Design decision (from sdd/brain-triad/design §1.4):
+      EXACT logic = get_active_id() == "qwen35-4b".
+      We do NOT also require active_vt_model.json to exist (that file is
+      auto-created by axi-vt-launch on first VT start; requiring it would
+      make this predicate flaky during transitions).
+    """
+    return get_active_id() == "qwen35-4b"
 
 
 def read_active() -> dict | None:
@@ -534,7 +604,10 @@ def catalog_status() -> list[CatalogStatus]:
 __all__ = [
     "CATALOG",
     "CatalogStatus",
+    "LLAMA_HEALTH_URL",
+    "LLAMA_VT_HEALTH_URL",
     "active_model_path",
+    "active_vt_model_path",
     "build_extra_args",
     "by_id",
     "catalog",
@@ -543,17 +616,21 @@ __all__ = [
     "effective_params",
     "expected_paths",
     "get_active_id",
+    "get_active_vt_id",
     "is_installed",
+    "is_triad_active",
     "load_overrides",
     "merge_extra_args",
     "model_dir",
     "models_dir",
     "overrides_path",
     "read_active",
+    "read_active_vt",
     "save_overrides",
     "set_active",
     "wait_for_llama_health",
     "write_active",
+    "write_active_vt",
 ]
 
 

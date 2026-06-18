@@ -1,0 +1,27 @@
+[Unit]
+Description=llama.cpp server — VibeThinker-3B reasoning (model from active_vt_model.json via axi-vt-launch)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# GPU-RESIDENT: VibeThinker-3B runs fully on GPU (ngl=999).
+# Unlike llama-nano.service, we do NOT set CUDA_VISIBLE_DEVICES="" here —
+# that would hide the GPU and defeat the purpose of a 60K-context reasoning
+# brain. The GPU is shared with llama-server.service (port 8080); the total
+# measured VRAM is ~8.68 GB for both brains at 60K ctx each.
+#
+# LIFECYCLE is managed by the application layer (dashboard activate +
+# game scripts), NOT by systemd BindsTo/PartOf coupling to llama-server.
+# This mirrors the llama-nano.service independent-sibling design.
+#
+# axi-vt-launch reads $XDG_STATE_HOME/axi/active_vt_model.json (created on
+# first launch with VibeThinker-3B defaults) and execs llama-server on
+# port 8082 with the assembled args.
+ExecStart=%h/LifeOS/lifeos/axi/scripts/axi-vt-launch
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

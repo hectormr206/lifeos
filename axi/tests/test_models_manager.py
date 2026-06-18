@@ -28,15 +28,17 @@ def isolated_state(tmp_path, monkeypatch):
 def test_catalog_has_expected_entries():
     entries = models_catalog.catalog()
     ids = {e.id for e in entries}
-    # 3 total: qwen3.6 (prod/quality) + gemma4-e2b-it (universal small/fast/vision)
-    # + qwen35-2b (game co-pilot brain, added 2026-06-17).
-    # Cut (2026-06-10): gemma4-e4b-it (dominated by e2b), gemma4-26b-a4b-it (18.5 GB RSS
-    # fails 22/24 GB tiers with reserve, owns no common tier).
-    assert len(entries) == 3
-    # All three kept models must be present.
+    # 5 total: qwen3.6 (prod/quality) + gemma4-e2b-it (universal small/fast/vision)
+    # + qwen35-2b (game co-pilot brain, added 2026-06-17)
+    # + qwen35-4b (primary triad brain, added 2026-06-18)
+    # + vibethinker-3b (reasoning sibling, added 2026-06-18).
+    assert len(entries) == 5
+    # All five models must be present.
     assert "qwen36-35b-a3b" in ids
     assert "gemma4-e2b-it" in ids
     assert "qwen35-2b" in ids  # game co-pilot brain (bench winner: 10 s/frame)
+    assert "qwen35-4b" in ids  # primary triad brain (60K ctx, GPU, vision+tools)
+    assert "vibethinker-3b" in ids  # reasoning sibling (60K ctx, GPU, no tools/vision)
     # Cut models must be absent.
     assert "gemma4-e4b-it" not in ids
     assert "gemma4-26b-a4b-it" not in ids
@@ -44,9 +46,8 @@ def test_catalog_has_expected_entries():
     assert "qwen35-9b" not in ids
     assert "granite-4.0-h-1b" not in ids
     assert "lfm2-1.2b-extract" not in ids
-    # Other Qwen3.5 dense sizes must remain absent (only 2B is the co-pilot).
+    # Other Qwen3.5 dense sizes must remain absent (only 2B co-pilot and 4B triad).
     assert "qwen35-0_8b" not in ids
-    assert "qwen35-4b" not in ids
     # Qwen3-VL family must be gone.
     assert "qwen3-vl-30b-a3b" not in ids
     assert "qwen3-vl-8b" not in ids
@@ -422,6 +423,211 @@ def test_qwen35_2b_model_dir_uses_entry_id(isolated_state):
     assert d == models_root / "qwen35-2b", (
         f"Expected models/<id>/qwen35-2b, got {d}"
     )
+
+
+# ────────────────── TRIAD: catalog entries (SLICE 1 TDD) ──────────────────────
+
+
+def test_catalog_has_triad_entries():
+    """Catalog must contain all five entries: original 3 + qwen35-4b + vibethinker-3b."""
+    entries = models_catalog.catalog()
+    ids = {e.id for e in entries}
+    assert "qwen35-4b" in ids, "qwen35-4b (primary triad brain) must be in catalog"
+    assert "vibethinker-3b" in ids, "vibethinker-3b (reasoning sibling) must be in catalog"
+    assert "qwen36-35b-a3b" in ids, "qwen36-35b-a3b must remain in catalog"
+
+
+def test_vibethinker_3b_has_no_tools_and_no_mmproj():
+    """vibethinker-3b must have tools=False (empty features) and no mmproj file."""
+    entry = models_catalog.by_id("vibethinker-3b")
+    assert entry is not None, "vibethinker-3b not in catalog"
+    assert "tools" not in entry.features, (
+        f"vibethinker-3b must NOT have 'tools'; features={entry.features}"
+    )
+    assert "vision" not in entry.features, (
+        f"vibethinker-3b must NOT have 'vision'; features={entry.features}"
+    )
+    assert entry.mmproj_file is None, "vibethinker-3b must have NO mmproj file"
+
+
+def test_qwen35_4b_has_vision_and_tools():
+    """qwen35-4b must advertise vision and tools features."""
+    entry = models_catalog.by_id("qwen35-4b")
+    assert entry is not None, "qwen35-4b not in catalog"
+    assert "vision" in entry.features, f"Expected 'vision' in features; got {entry.features}"
+    assert "tools" in entry.features, f"Expected 'tools' in features; got {entry.features}"
+
+
+def test_qwen35_4b_has_mmproj():
+    """qwen35-4b must declare an mmproj file (F16) for vision."""
+    entry = models_catalog.by_id("qwen35-4b")
+    assert entry is not None
+    mmproj = entry.mmproj_file
+    assert mmproj is not None, "qwen35-4b must have mmproj file"
+    assert "mmproj-F16.gguf" in mmproj.local_name
+
+
+def test_qwen35_4b_ctx_is_61440():
+    """qwen35-4b ctx must be 61440 per VRAM measurement #565."""
+    entry = models_catalog.by_id("qwen35-4b")
+    assert entry is not None
+    assert entry.ctx == 61440, f"Expected ctx=61440 (60K), got {entry.ctx}"
+
+
+def test_vibethinker_3b_ctx_is_61440():
+    """vibethinker-3b ctx must be 61440 per VRAM measurement #565."""
+    entry = models_catalog.by_id("vibethinker-3b")
+    assert entry is not None
+    assert entry.ctx == 61440, f"Expected ctx=61440 (60K), got {entry.ctx}"
+
+
+def test_qwen35_4b_ngl_is_999():
+    """qwen35-4b runs on GPU; ngl must be 999."""
+    entry = models_catalog.by_id("qwen35-4b")
+    assert entry is not None
+    assert entry.ngl == 999, f"Expected ngl=999, got {entry.ngl}"
+
+
+def test_vibethinker_3b_ngl_is_999():
+    """vibethinker-3b runs on GPU; ngl must be 999."""
+    entry = models_catalog.by_id("vibethinker-3b")
+    assert entry is not None
+    assert entry.ngl == 999, f"Expected ngl=999, got {entry.ngl}"
+
+
+def test_qwen35_4b_gguf_path():
+    """qwen35-4b gguf must reference Qwen3.5-4B-Q4_K_M.gguf."""
+    entry = models_catalog.by_id("qwen35-4b")
+    assert entry is not None
+    assert "Qwen3.5-4B-Q4_K_M.gguf" in entry.gguf_file.local_name
+
+
+def test_vibethinker_3b_gguf_path():
+    """vibethinker-3b gguf must reference VibeThinker-3B-Q4_K_M.gguf."""
+    entry = models_catalog.by_id("vibethinker-3b")
+    assert entry is not None
+    assert "VibeThinker-3B-Q4_K_M.gguf" in entry.gguf_file.local_name
+
+
+def test_triad_entries_have_np1_in_extra_args():
+    """-np 1 is mandatory per VRAM measurement; both triad entries must have it."""
+    for model_id in ("qwen35-4b", "vibethinker-3b"):
+        entry = models_catalog.by_id(model_id)
+        assert entry is not None
+        args = list(entry.extra_args)
+        assert "-np" in args, f"{model_id}: '-np' missing from extra_args"
+        idx = args.index("-np")
+        assert args[idx + 1] == "1", f"{model_id}: expected '-np 1', got '-np {args[idx+1]}'"
+
+
+def test_triad_entries_have_q8_kv_cache_and_fa():
+    """q8_0 KV cache + -fa on are mandatory for the 60K/60K VRAM budget."""
+    for model_id in ("qwen35-4b", "vibethinker-3b"):
+        entry = models_catalog.by_id(model_id)
+        assert entry is not None
+        args = list(entry.extra_args)
+        assert "--cache-type-k" in args, f"{model_id}: --cache-type-k missing"
+        assert "--cache-type-v" in args, f"{model_id}: --cache-type-v missing"
+        k_idx = args.index("--cache-type-k")
+        v_idx = args.index("--cache-type-v")
+        assert args[k_idx + 1] == "q8_0", f"{model_id}: expected --cache-type-k q8_0"
+        assert args[v_idx + 1] == "q8_0", f"{model_id}: expected --cache-type-v q8_0"
+        assert "-fa" in args, f"{model_id}: -fa missing"
+        fa_idx = args.index("-fa")
+        assert args[fa_idx + 1] == "on", f"{model_id}: expected -fa on"
+
+
+# ────────────────── TRIAD: models_manager VT helpers (SLICE 1 TDD) ────────────
+
+
+def test_active_vt_model_path_is_in_state_dir(isolated_state):
+    """active_vt_model_path() must point to <state_dir>/axi/active_vt_model.json."""
+    models_manager.active_vt_model_path()  # just verify it doesn't raise
+    p = models_manager.active_vt_model_path()
+    assert p.name == "active_vt_model.json"
+    assert "axi" in str(p)
+
+
+def test_read_active_vt_returns_none_when_missing(isolated_state):
+    """read_active_vt() must return None when the file does not exist."""
+    result = models_manager.read_active_vt()
+    assert result is None
+
+
+def test_write_active_vt_and_read_round_trip(isolated_state):
+    """write_active_vt + get_active_vt_id must round-trip correctly."""
+    entry = models_catalog.by_id("vibethinker-3b")
+    assert entry is not None
+    models_manager.write_active_vt(entry)
+    vt_id = models_manager.get_active_vt_id()
+    assert vt_id == "vibethinker-3b"
+
+
+def test_write_active_vt_writes_to_separate_file(isolated_state):
+    """write_active_vt must write to active_vt_model.json, NOT active_model.json."""
+    vt_entry = models_catalog.by_id("vibethinker-3b")
+    primary_entry = models_catalog.by_id("qwen35-4b")
+    assert vt_entry is not None and primary_entry is not None
+    models_manager.write_active(primary_entry)
+    models_manager.write_active_vt(vt_entry)
+    # The two files must be separate and independent.
+    primary_id = models_manager.get_active_id()
+    vt_id = models_manager.get_active_vt_id()
+    assert primary_id == "qwen35-4b"
+    assert vt_id == "vibethinker-3b"
+
+
+def test_state_files_are_independent(isolated_state):
+    """active_model.json and active_vt_model.json are completely independent files."""
+    primary_entry = models_catalog.by_id("qwen35-4b")
+    vt_entry = models_catalog.by_id("vibethinker-3b")
+    assert primary_entry is not None and vt_entry is not None
+    models_manager.write_active(primary_entry)
+    models_manager.write_active_vt(vt_entry)
+    # Read back: primary state file has qwen35-4b.
+    assert models_manager.read_active() is not None
+    assert models_manager.read_active()["id"] == "qwen35-4b"
+    # VT state file has vibethinker-3b.
+    assert models_manager.read_active_vt() is not None
+    assert models_manager.read_active_vt()["id"] == "vibethinker-3b"
+    # The two path objects must differ.
+    assert models_manager.active_model_path() != models_manager.active_vt_model_path()
+
+
+def test_is_triad_active_true_when_primary_is_4b(isolated_state):
+    """is_triad_active() must return True when active_model.json has qwen35-4b."""
+    entry = models_catalog.by_id("qwen35-4b")
+    assert entry is not None
+    models_manager.write_active(entry)
+    assert models_manager.is_triad_active() is True
+
+
+def test_is_triad_active_false_when_primary_is_35b(isolated_state):
+    """is_triad_active() must return False when primary is qwen36-35b-a3b."""
+    entry = models_catalog.by_id("qwen36-35b-a3b")
+    assert entry is not None
+    models_manager.write_active(entry)
+    assert models_manager.is_triad_active() is False
+
+
+def test_is_triad_active_false_when_primary_is_other(isolated_state):
+    """is_triad_active() must return False for any non-4B primary."""
+    entry = models_catalog.by_id("gemma4-e2b-it")
+    assert entry is not None
+    models_manager.write_active(entry)
+    assert models_manager.is_triad_active() is False
+
+
+def test_is_triad_active_false_when_no_active_model(isolated_state):
+    """is_triad_active() must return False when no active_model.json exists."""
+    assert models_manager.is_triad_active() is False
+
+
+def test_llama_vt_health_url_constant():
+    """LLAMA_VT_HEALTH_URL must point to 127.0.0.1:8082/health."""
+    assert hasattr(models_manager, "LLAMA_VT_HEALTH_URL")
+    assert "8082" in models_manager.LLAMA_VT_HEALTH_URL
+    assert "/health" in models_manager.LLAMA_VT_HEALTH_URL
 
 
 class _patch_argv:
