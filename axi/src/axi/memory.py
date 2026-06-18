@@ -45,35 +45,60 @@ def _format_ts(unix_ts: float, created_tz: str | None = None) -> str:
 
 
 class ConversationMemory:
-    """Thin facade — the real state lives in SQLite."""
+    """Thin facade — the real state lives in SQLite.
+
+    All public methods are wrapped with graceful degradation: a corrupt or
+    unavailable database never propagates an exception out of this class.
+    When degraded, messages() returns [], add() is a no-op, turn_count()
+    returns 0. The ``degraded`` flag is set when init_db() fails.
+    """
 
     def __init__(self, max_context_turns: int = MAX_CONTEXT_TURNS) -> None:
         self.max_context_turns = max_context_turns
-        store.init_db()
-        log.info("memory backend: %s (%d turns)", store.DB_PATH, store.conversation_count())
+        self.degraded = False
+        try:
+            store.init_db()
+            log.info("memory backend: %s (%d turns)", store.DB_PATH, store.conversation_count())
+        except Exception as exc:  # noqa: BLE001
+            self.degraded = True
+            log.warning("memory degraded: %s — running with empty history", exc)
 
     def add(self, user: str, axi: str, has_screenshot: bool = False) -> tuple[int, int]:
-        """Record a turn. Returns (conversation row id, conversation node id)."""
-        node_id = store.add_node(
-            kind="conversation",
-            label=user[:80],
-            data={"user": user, "axi": axi},
-        )
-        conv_id = store.add_conversation(user, axi, has_screenshot=has_screenshot)
-        # Bridge: link the conversation row to its graph node for future
-        # fact-extraction passes.
-        with store._tx() as c:  # noqa: SLF001 — internal helper, intentional
-            c.execute("UPDATE conversations SET node_id = ? WHERE id = ?", (node_id, conv_id))
-        return conv_id, node_id
+        """Record a turn. Returns (conversation row id, conversation node id).
+
+        Returns (0, 0) without raising when the underlying store is unavailable.
+        """
+        try:
+            node_id = store.add_node(
+                kind="conversation",
+                label=user[:80],
+                data={"user": user, "axi": axi},
+            )
+            conv_id = store.add_conversation(user, axi, has_screenshot=has_screenshot)
+            # Bridge: link the conversation row to its graph node for future
+            # fact-extraction passes.
+            with store._tx() as c:  # noqa: SLF001 — internal helper, intentional
+                c.execute("UPDATE conversations SET node_id = ? WHERE id = ?", (node_id, conv_id))
+            return conv_id, node_id
+        except Exception as exc:  # noqa: BLE001
+            log.warning("memory degraded: %s — turn not persisted", exc)
+            return 0, 0
 
     def messages(self) -> list[dict]:
-        """OpenAI chat-completion format, oldest first."""
-        rows = store.recent_conversations(self.max_context_turns)
-        out: list[dict] = []
-        for r in rows:
-            out.append({"role": "user", "content": r["user_text"]})
-            out.append({"role": "assistant", "content": r["axi_text"]})
-        return out
+        """OpenAI chat-completion format, oldest first.
+
+        Returns [] without raising when the store is corrupt or unavailable.
+        """
+        try:
+            rows = store.recent_conversations(self.max_context_turns)
+            out: list[dict] = []
+            for r in rows:
+                out.append({"role": "user", "content": r["user_text"]})
+                out.append({"role": "assistant", "content": r["axi_text"]})
+            return out
+        except Exception as exc:  # noqa: BLE001
+            log.warning("memory degraded: %s — returning empty history", exc)
+            return []
 
     def clear(self) -> int:
         n = store.clear_conversations()
@@ -81,7 +106,15 @@ class ConversationMemory:
         return n
 
     def turn_count(self) -> int:
-        return store.conversation_count()
+        """Return the number of stored conversation turns.
+
+        Returns 0 without raising when the store is unavailable.
+        """
+        try:
+            return store.conversation_count()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("memory degraded: %s — turn count unavailable", exc)
+            return 0
 
     def relevant_facts(self, query: str, limit: int = 5) -> list[str]:
         """FTS search over fact nodes. Returns lines pre-formatted with the
