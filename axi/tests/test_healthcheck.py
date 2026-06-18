@@ -18,6 +18,8 @@ from axi.healthcheck import (
     CheckResult,
     CheckStatus,
     _slug,
+    _model_file_ok,
+    _MIN_MODEL_BYTES,
     check_services,
     check_memory_db,
     check_llama_server,
@@ -504,7 +506,7 @@ def test_nano_server_non_200_returns_fail():
 
 def test_nano_gguf_present_passes(tmp_path):
     gguf = tmp_path / "Qwen3.5-0.8B-Q4_K_M.gguf"
-    gguf.touch()
+    gguf.write_bytes(b"x" * _MIN_MODEL_BYTES)
     active_nano = tmp_path / "active_nano_model.json"
     active_nano.write_text(json.dumps({"id": "qwen35-0_8b", "gguf": str(gguf)}))
     result = check_nano_gguf(active_nano_path=active_nano, default_gguf=gguf)
@@ -526,7 +528,7 @@ def test_nano_gguf_missing_fails(tmp_path):
 def test_nano_gguf_falls_back_to_default_when_no_active_json(tmp_path):
     """When active_nano_model.json is absent, falls back to default_gguf path."""
     default = tmp_path / "default.gguf"
-    default.touch()
+    default.write_bytes(b"x" * _MIN_MODEL_BYTES)
     result = check_nano_gguf(
         active_nano_path=tmp_path / "absent.json",
         default_gguf=default,
@@ -541,7 +543,7 @@ def test_nano_gguf_falls_back_to_default_when_no_active_json(tmp_path):
 
 def test_active_brain_gguf_present_passes(tmp_path):
     gguf = tmp_path / "model.gguf"
-    gguf.touch()
+    gguf.write_bytes(b"x" * _MIN_MODEL_BYTES)
 
     def active_fn(path):
         return {"id": "qwen36-35b-a3b", "gguf": str(gguf)}
@@ -731,8 +733,8 @@ def test_whisper_ping_socket_present_ping_raises_warns(tmp_path):
 def test_piper_tts_all_present_passes(tmp_path):
     es_voice = tmp_path / "es_MX-claude-high.onnx"
     en_voice = tmp_path / "en_US-lessac-medium.onnx"
-    es_voice.touch()
-    en_voice.touch()
+    es_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
+    en_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
     result = check_piper_tts(
         which_fn=lambda cmd: "/usr/bin/piper-tts",
         es_voice_path=es_voice,
@@ -765,7 +767,7 @@ def test_piper_tts_es_voice_missing_fails(tmp_path):
 
 def test_piper_tts_en_voice_missing_warns(tmp_path):
     es_voice = tmp_path / "es.onnx"
-    es_voice.touch()
+    es_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
     result = check_piper_tts(
         which_fn=lambda cmd: "/usr/bin/piper-tts",
         es_voice_path=es_voice,
@@ -1022,9 +1024,9 @@ def test_critical_files_all_present_passes(tmp_path):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"timezone": "UTC"}))
     es_voice = tmp_path / "es.onnx"
-    es_voice.touch()
+    es_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
     en_voice = tmp_path / "en.onnx"
-    en_voice.touch()
+    en_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
     vapid = tmp_path / "vapid.json"
     vapid.write_text(json.dumps({"public": "x", "private": "y"}))
     nano = tmp_path / "active_nano_model.json"
@@ -1048,7 +1050,7 @@ def test_critical_files_missing_key_fails(tmp_path):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({}))
     es_voice = tmp_path / "es.onnx"
-    es_voice.touch()
+    es_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
 
     result = check_critical_files(
         key_path=tmp_path / "missing.key",
@@ -1071,7 +1073,7 @@ def test_critical_files_invalid_active_model_fails(tmp_path):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({}))
     es_voice = tmp_path / "es.onnx"
-    es_voice.touch()
+    es_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
 
     result = check_critical_files(
         key_path=key,
@@ -1094,7 +1096,7 @@ def test_critical_files_missing_en_voice_warns(tmp_path):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({}))
     es_voice = tmp_path / "es.onnx"
-    es_voice.touch()
+    es_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
 
     result = check_critical_files(
         key_path=key,
@@ -1211,3 +1213,216 @@ def test_aggregate_counts_are_correct():
     assert summary.warned == 1
     assert summary.failed == 2
     assert summary.exit_code == 1
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _model_file_ok helper — size validation
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_model_file_ok_missing_returns_false_missing(tmp_path):
+    """A file that does not exist → ok=False, reason contains 'missing'."""
+    ok, reason = _model_file_ok(tmp_path / "nonexistent.gguf", _MIN_MODEL_BYTES)
+    assert ok is False
+    assert "missing" in reason
+
+
+def test_model_file_ok_truncated_returns_false_too_small(tmp_path):
+    """A file that exists but is below min_bytes → ok=False, reason contains size info."""
+    small = tmp_path / "truncated.onnx"
+    small.write_bytes(b"x" * 62_000)  # 62 KB — simulates the bad EN voice download
+    ok, reason = _model_file_ok(small, _MIN_MODEL_BYTES)
+    assert ok is False
+    assert "too small" in reason
+    assert "62000" in reason  # actual size in reason
+    assert str(_MIN_MODEL_BYTES) in reason  # expected floor in reason
+
+
+def test_model_file_ok_adequate_size_returns_true(tmp_path):
+    """A file at exactly min_bytes → ok=True."""
+    adequate = tmp_path / "model.gguf"
+    adequate.write_bytes(b"x" * _MIN_MODEL_BYTES)
+    ok, reason = _model_file_ok(adequate, _MIN_MODEL_BYTES)
+    assert ok is True
+    assert reason == ""
+
+
+def test_model_file_ok_large_file_returns_true(tmp_path):
+    """A file much larger than min_bytes → ok=True (realistic model)."""
+    large = tmp_path / "large.gguf"
+    large.write_bytes(b"x" * (_MIN_MODEL_BYTES * 10))
+    ok, reason = _model_file_ok(large, _MIN_MODEL_BYTES)
+    assert ok is True
+
+
+def test_model_file_ok_zero_bytes_returns_false(tmp_path):
+    """An empty file (0 bytes, e.g. touch) → ok=False."""
+    empty = tmp_path / "empty.onnx"
+    empty.touch()
+    ok, reason = _model_file_ok(empty, _MIN_MODEL_BYTES)
+    assert ok is False
+    assert "too small" in reason
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# check_nano_gguf — size-hardened
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_nano_gguf_truncated_fails(tmp_path):
+    """A GGUF file that exists but is < _MIN_MODEL_BYTES → FAIL (truncated)."""
+    gguf = tmp_path / "qwen.gguf"
+    gguf.write_bytes(b"x" * 100)  # tiny — truncated download
+    active_nano = tmp_path / "active_nano_model.json"
+    active_nano.write_text(json.dumps({"id": "qwen35-0_8b", "gguf": str(gguf)}))
+    result = check_nano_gguf(active_nano_path=active_nano, default_gguf=gguf)
+    assert result.status == CheckStatus.FAIL
+    assert "too small" in result.detail or "truncated" in result.detail
+
+
+def test_nano_gguf_adequate_size_passes(tmp_path):
+    """A GGUF file >= _MIN_MODEL_BYTES → PASS."""
+    gguf = tmp_path / "qwen.gguf"
+    gguf.write_bytes(b"x" * _MIN_MODEL_BYTES)
+    active_nano = tmp_path / "active_nano_model.json"
+    active_nano.write_text(json.dumps({"id": "qwen35-0_8b", "gguf": str(gguf)}))
+    result = check_nano_gguf(active_nano_path=active_nano, default_gguf=gguf)
+    assert result.status == CheckStatus.PASS
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# check_active_brain_gguf — size-hardened
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_active_brain_gguf_truncated_fails(tmp_path):
+    """Brain GGUF exists but is < _MIN_MODEL_BYTES → FAIL."""
+    gguf = tmp_path / "brain.gguf"
+    gguf.write_bytes(b"x" * 500)
+
+    def active_fn(path):
+        return {"id": "qwen36-35b-a3b", "gguf": str(gguf)}
+
+    result = check_active_brain_gguf(active_model_fn=active_fn)
+    assert result.status == CheckStatus.FAIL
+    assert "too small" in result.detail or "truncated" in result.detail
+
+
+def test_active_brain_gguf_adequate_size_passes(tmp_path):
+    """Brain GGUF >= _MIN_MODEL_BYTES → PASS."""
+    gguf = tmp_path / "brain.gguf"
+    gguf.write_bytes(b"x" * _MIN_MODEL_BYTES)
+
+    def active_fn(path):
+        return {"id": "qwen36-35b-a3b", "gguf": str(gguf)}
+
+    result = check_active_brain_gguf(active_model_fn=active_fn)
+    assert result.status == CheckStatus.PASS
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# check_piper_tts — size-hardened
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_piper_tts_es_voice_truncated_fails(tmp_path):
+    """ES voice exists but is < _MIN_MODEL_BYTES (e.g. 62 KB) → FAIL."""
+    es_voice = tmp_path / "es_MX-claude-high.onnx"
+    en_voice = tmp_path / "en_US-lessac-medium.onnx"
+    es_voice.write_bytes(b"x" * 62_000)  # the exact truncation scenario
+    en_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
+    result = check_piper_tts(
+        which_fn=lambda cmd: "/usr/bin/piper-tts",
+        es_voice_path=es_voice,
+        en_voice_path=en_voice,
+    )
+    assert result.status == CheckStatus.FAIL
+    assert "ES voice" in result.detail
+    assert "too small" in result.detail or "truncated" in result.detail
+
+
+def test_piper_tts_en_voice_truncated_warns(tmp_path):
+    """EN voice exists but is < _MIN_MODEL_BYTES → WARN (same severity as missing)."""
+    es_voice = tmp_path / "es_MX-claude-high.onnx"
+    en_voice = tmp_path / "en_US-lessac-medium.onnx"
+    es_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
+    en_voice.write_bytes(b"x" * 62_000)  # truncated EN voice
+    result = check_piper_tts(
+        which_fn=lambda cmd: "/usr/bin/piper-tts",
+        es_voice_path=es_voice,
+        en_voice_path=en_voice,
+    )
+    assert result.status == CheckStatus.WARN
+    assert "EN voice" in result.detail
+    assert "too small" in result.detail or "truncated" in result.detail
+
+
+def test_piper_tts_both_voices_adequate_passes(tmp_path):
+    """Both voice files >= _MIN_MODEL_BYTES → PASS (existing test updated for size gate)."""
+    es_voice = tmp_path / "es_MX-claude-high.onnx"
+    en_voice = tmp_path / "en_US-lessac-medium.onnx"
+    es_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
+    en_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
+    result = check_piper_tts(
+        which_fn=lambda cmd: "/usr/bin/piper-tts",
+        es_voice_path=es_voice,
+        en_voice_path=en_voice,
+    )
+    assert result.status == CheckStatus.PASS
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# check_critical_files — size-hardened piper voice checks
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_critical_files_es_voice_truncated_fails(tmp_path):
+    """critical-files: ES voice exists but truncated → FAIL."""
+    key = tmp_path / "memory.key"
+    key.write_text("a" * 64)
+    model = tmp_path / "active_model.json"
+    model.write_text(json.dumps({"id": "qwen36-35b-a3b", "gguf": "/some/path"}))
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"timezone": "UTC"}))
+    es_voice = tmp_path / "es.onnx"
+    es_voice.write_bytes(b"x" * 62_000)  # truncated
+    en_voice = tmp_path / "en.onnx"
+    en_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
+
+    result = check_critical_files(
+        key_path=key,
+        active_model_path=model,
+        config_path=config,
+        es_voice_path=es_voice,
+        en_voice_path=en_voice,
+        vapid_path=tmp_path / "vapid.json",
+        active_nano_path=tmp_path / "nano.json",
+    )
+    assert result.status == CheckStatus.FAIL
+    assert "ES voice" in result.detail
+
+
+def test_critical_files_en_voice_truncated_warns(tmp_path):
+    """critical-files: EN voice exists but truncated → WARN."""
+    key = tmp_path / "memory.key"
+    key.write_text("a" * 64)
+    model = tmp_path / "active_model.json"
+    model.write_text(json.dumps({"id": "qwen36-35b-a3b", "gguf": "/some/path"}))
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"timezone": "UTC"}))
+    es_voice = tmp_path / "es.onnx"
+    es_voice.write_bytes(b"x" * _MIN_MODEL_BYTES)
+    en_voice = tmp_path / "en.onnx"
+    en_voice.write_bytes(b"x" * 62_000)  # truncated
+
+    result = check_critical_files(
+        key_path=key,
+        active_model_path=model,
+        config_path=config,
+        es_voice_path=es_voice,
+        en_voice_path=en_voice,
+        vapid_path=tmp_path / "vapid.json",
+        active_nano_path=tmp_path / "nano.json",
+    )
+    assert result.status == CheckStatus.WARN
+    assert "EN voice" in result.detail
