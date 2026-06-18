@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from axi import config
+from axi import config, store
 from axi.brain import ask as brain_ask, SYSTEM_PROMPT, get_system_prompt as _get_system_prompt
 from lifeos.localize import msg as _loc_msg
 from axi.clean import clean as clean_text
@@ -1054,67 +1054,76 @@ def serve() -> int:
     if SOCK_PATH.exists():
         SOCK_PATH.unlink()
 
-    daemon = Daemon()
-
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.bind(str(SOCK_PATH))
-    sock.listen(4)
-    os.chmod(SOCK_PATH, 0o600)
-    log.info("listening on %s", SOCK_PATH)
-
-    _start_recovery_thread(daemon)
-
-    # Start the always-listening wake-word listener when requested via env var.
-    # Set AXI_WAKEWORD_ENABLED=1 in the axi-voice.service drop-in (written by
-    # axi-game-on) to activate it during game sessions. Unset = hotkey-only mode
-    # (existing behaviour is 100% unchanged).
-    if os.environ.get("AXI_WAKEWORD_ENABLED", "").strip() == "1":
-        log.info("AXI_WAKEWORD_ENABLED=1 — starting wake-word listener")
-        try:
-            daemon.start_wakeword_listener()
-        except Exception as _ww_err:  # noqa: BLE001
-            log.warning("wake-word listener failed to start: %s", _ww_err)
-
-    stop_signal = {"raised": False}
-
-    def _shutdown(*_):
-        stop_signal["raised"] = True
-        try:
-            sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-
-    signal.signal(signal.SIGTERM, _shutdown)
-    signal.signal(signal.SIGINT, _shutdown)
-
     try:
-        while not stop_signal["raised"]:
+        daemon = Daemon()
+
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(str(SOCK_PATH))
+        sock.listen(4)
+        os.chmod(SOCK_PATH, 0o600)
+        log.info("listening on %s", SOCK_PATH)
+
+        _start_recovery_thread(daemon)
+
+        # Start the always-listening wake-word listener when requested via env var.
+        # Set AXI_WAKEWORD_ENABLED=1 in the axi-voice.service drop-in (written by
+        # axi-game-on) to activate it during game sessions. Unset = hotkey-only mode
+        # (existing behaviour is 100% unchanged).
+        if os.environ.get("AXI_WAKEWORD_ENABLED", "").strip() == "1":
+            log.info("AXI_WAKEWORD_ENABLED=1 — starting wake-word listener")
             try:
-                conn, _ = sock.accept()
+                daemon.start_wakeword_listener()
+            except Exception as _ww_err:  # noqa: BLE001
+                log.warning("wake-word listener failed to start: %s", _ww_err)
+
+        stop_signal = {"raised": False}
+
+        def _shutdown(*_):
+            stop_signal["raised"] = True
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
             except OSError:
-                break
-            with conn:
-                try:
-                    # 4096 bytes is enough for every legacy command (toggle,
-                    # ask, status…) plus the new `transcribe_path:<path>` form
-                    # which can push the line up to ~150-200 bytes when the
-                    # temp file lives under a deep XDG_STATE_HOME.
-                    data = conn.recv(4096).decode("utf-8", errors="replace")
-                except OSError:
-                    continue
-                response, should_quit = _handle_cmd(daemon, data)
-                try:
-                    conn.sendall((response + "\n").encode("utf-8"))
-                except OSError:
-                    pass
-                if should_quit:
-                    stop_signal["raised"] = True
-    finally:
-        daemon.stop_wakeword_listener()
+                pass
+
+        signal.signal(signal.SIGTERM, _shutdown)
+        signal.signal(signal.SIGINT, _shutdown)
+
         try:
-            sock.close()
+            while not stop_signal["raised"]:
+                try:
+                    conn, _ = sock.accept()
+                except OSError:
+                    break
+                with conn:
+                    try:
+                        # 4096 bytes is enough for every legacy command (toggle,
+                        # ask, status…) plus the new `transcribe_path:<path>` form
+                        # which can push the line up to ~150-200 bytes when the
+                        # temp file lives under a deep XDG_STATE_HOME.
+                        data = conn.recv(4096).decode("utf-8", errors="replace")
+                    except OSError:
+                        continue
+                    response, should_quit = _handle_cmd(daemon, data)
+                    try:
+                        conn.sendall((response + "\n").encode("utf-8"))
+                    except OSError:
+                        pass
+                    if should_quit:
+                        stop_signal["raised"] = True
         finally:
-            SOCK_PATH.unlink(missing_ok=True)
+            daemon.stop_wakeword_listener()
+            try:
+                sock.close()
+            finally:
+                SOCK_PATH.unlink(missing_ok=True)
+    finally:
+        # Flush the WAL into the main DB file and close the connection so a
+        # clean shutdown ALWAYS checkpoints — whether the daemon ran normally,
+        # crashed during startup, or was killed via SIGTERM mid-write.
+        # This is the primary defense against "disk image is malformed"
+        # corruption caused by uncheckpointed partial WAL pages.
+        store.checkpoint()
+        store.close()
     log.info("bye")
     return 0
 
