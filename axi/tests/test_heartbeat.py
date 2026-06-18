@@ -70,6 +70,18 @@ def test_startup_grace_lt_watchdog():
     assert heartbeat.STARTUP_GRACE_SEC < 90
 
 
+def test_game_brains_includes_llama_vt():
+    """GAME_BRAINS must include 'llama-vt.service' so heartbeat never revives VT during game mode.
+
+    Spec: Scenario 'Heartbeat does not revive VT during game mode' +
+          Scenario 'Heartbeat revives VT outside game mode'.
+    TDD 3.1 RED — will fail until GAME_BRAINS is extended (3.2 GREEN).
+    """
+    from axi import heartbeat
+
+    assert "llama-vt.service" in heartbeat.GAME_BRAINS
+
+
 # ===========================================================================
 # Phase 2 — Core logic: detection, game-mode, rate-cap
 # ===========================================================================
@@ -655,6 +667,81 @@ def test_game_mode_lock_midcycle_blocks_brain_revival(monkeypatch, tmp_path):
 # ===========================================================================
 # Phase 5 — Unit file parse test
 # ===========================================================================
+
+# ===========================================================================
+# Phase 6 — FIX 2: llama-vt revival guard (triad-active only)
+# ===========================================================================
+
+def test_vt_revival_skipped_when_triad_inactive(monkeypatch):
+    """llama-vt.service in failed state + 35B active (triad inactive) → NOT revived.
+
+    FIX 2 RED: will fail until run_cycle guards llama-vt revival with is_triad_active().
+    """
+    from axi import heartbeat, models_manager
+
+    # Game mode OFF → brains are watched
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    # Triad inactive: primary is NOT qwen35-4b
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: False)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            svc = argv[3]
+            return _sp_result("failed\n" if svc == "llama-vt.service" else "inactive\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+
+    def recording_run(argv, **kw):
+        recorded.append(argv)
+        return fake_run(argv, **kw)
+
+    monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    revive_calls = [a for a in recorded if "reset-failed" in a or
+                    (len(a) > 2 and a[2] == "start")]
+    revived = {a[-1] for a in revive_calls}
+    assert "llama-vt.service" not in revived, (
+        "llama-vt.service was revived despite triad being inactive (35B active)"
+    )
+
+
+def test_vt_revival_happens_when_triad_active(monkeypatch):
+    """llama-vt.service in failed state + triad active (primary==4B) → revived.
+
+    FIX 2 GREEN guard: revival proceeds when is_triad_active() is True.
+    """
+    from axi import heartbeat, models_manager
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            svc = argv[3]
+            return _sp_result("failed\n" if svc == "llama-vt.service" else "inactive\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+
+    def recording_run(argv, **kw):
+        recorded.append(argv)
+        return fake_run(argv, **kw)
+
+    monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    revive_calls = [a for a in recorded if "reset-failed" in a]
+    revived = {a[-1] for a in revive_calls}
+    assert "llama-vt.service" in revived, (
+        "llama-vt.service should be revived when triad is active (primary==4B)"
+    )
+
 
 def test_unit_file_has_required_properties():
     """axi-heartbeat.service must contain all four self-protection properties."""

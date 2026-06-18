@@ -15,6 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AXI_PYTHON="$SCRIPT_DIR/../.venv/bin/python"
 rm -f "$MARKER"
 
+# Initialize PREV_MODEL so it is always defined (even if PRE_MODEL_FILE is absent).
+PREV_MODEL=""
+
 echo "[axi-game-off] removing CPU drop-ins…"
 # Current drop-ins written by axi-game-on.
 rm -f "$UNIT_DIR/axi-whisper.service.d/game-cpu.conf"
@@ -69,6 +72,34 @@ for i in $(seq 1 30); do
     fi
     sleep 1
 done
+
+# Restore the VibeThinker-3B reasoning sibling ONLY when the restored primary
+# is qwen35-4b (the triad brain). For any other primary (35B, 2B, etc.) leaving
+# llama-vt stopped is correct: the 35B fills VRAM and VT must NOT start
+# (VRAM conflict / mutual-exclusion guard).
+#
+# MEETING-SAFE DEFENSIVE GUARD: llama-vt.service may not yet be installed into
+# ~/.config/systemd/user/ (the unit file exists in axi/systemd/ but may not be
+# symlinked). All operations are skipped silently if the unit is not found.
+if systemctl --user list-unit-files llama-vt.service 2>/dev/null | grep -q "llama-vt.service"; then
+    echo "[axi-game-off] unmasking llama-vt.service…"
+    systemctl --user unmask llama-vt.service 2>/dev/null || true
+    if [ "${PREV_MODEL:-}" = "qwen35-4b" ]; then
+        echo "[axi-game-off] restoring VibeThinker-3B sibling (primary is qwen35-4b)…"
+        systemctl --user start llama-vt.service 2>/dev/null || true
+        echo "[axi-game-off] waiting for llama-vt /health (8082)…"
+        for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8082/health >/dev/null 2>&1; then
+                echo "[axi-game-off] llama-vt ready"; break
+            fi
+            sleep 1
+        done
+    else
+        echo "[axi-game-off] primary is '${PREV_MODEL:-<none>}' (not qwen35-4b) — leaving llama-vt stopped (VRAM guard)."
+    fi
+else
+    echo "[axi-game-off] llama-vt.service not installed — skipping VT restore (safe, no-op)."
+fi
 
 echo "[axi-game-off] restarting axi-whisper (Whisper → GPU)…"
 systemctl --user restart axi-whisper.service || true
