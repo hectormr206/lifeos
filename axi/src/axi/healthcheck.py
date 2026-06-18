@@ -1156,6 +1156,90 @@ def check_wakeword_deps(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# CHECK 20b: Wake-word engine configuration
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Minimum valid size for a wake-word ONNX model file (1 MB).
+# Real ONNX models produced by openWakeWord training are several MB.
+_MIN_WAKEWORD_MODEL_BYTES: int = 1_000_000
+
+
+def _default_config_reader(path: Path) -> dict:
+    """Read config.json and return it as a dict. Returns {} on error."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def check_wakeword_engine(
+    *,
+    config_path: Path = CONFIG_PATH,
+    config_reader_fn: Optional[Callable] = None,
+    import_fn: Optional[Callable] = None,
+) -> CheckResult:
+    """Report which wake-word engine is configured and validate its requirements.
+
+    For engine=openwakeword:
+      - WARN if openwakeword is not importable (package missing).
+      - WARN if the configured model file is missing or too small (< 1 MB).
+      - PASS if both openwakeword is importable AND the model file is valid.
+
+    For engine=vad_whisper (or any other value):
+      - PASS always (no OWW model required).
+
+    This check makes it immediately visible whether the trained Axi model is
+    actually wired — something the previous healthcheck missed entirely.
+    """
+    reader = config_reader_fn or (lambda p: _default_config_reader(p))
+    cfg = reader(config_path)
+
+    engine = str(cfg.get("wakeword_engine", "openwakeword"))
+    model_path_str = str(cfg.get("wakeword_model_path", ""))
+
+    if engine != "openwakeword":
+        return CheckResult(
+            "wakeword-engine",
+            CheckStatus.PASS,
+            f"engine=vad_whisper (legacy VAD+Whisper path)",
+        )
+
+    # engine == openwakeword: check importability and model file.
+    issues: list[str] = []
+
+    # Check openwakeword importability.
+    try:
+        if import_fn:
+            import_fn("openwakeword")
+        else:
+            import openwakeword  # noqa: F401, PLC0415
+    except ImportError as exc:
+        issues.append(f"openwakeword not importable: {exc}")
+
+    # Check model file existence and size.
+    if not model_path_str:
+        issues.append("wakeword_model_path not configured")
+    else:
+        model_path = Path(model_path_str)
+        ok, reason = _model_file_ok(model_path, _MIN_WAKEWORD_MODEL_BYTES)
+        if not ok:
+            issues.append(f"OWW model {reason}")
+
+    if issues:
+        return CheckResult(
+            "wakeword-engine",
+            CheckStatus.WARN,
+            f"engine=openwakeword — {'; '.join(issues)}",
+        )
+
+    return CheckResult(
+        "wakeword-engine",
+        CheckStatus.PASS,
+        f"engine=openwakeword model={Path(model_path_str).name}",
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # CHECK 21: Co-pilot intent gate smoke test
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1425,6 +1509,7 @@ def run_all() -> int:
     # ── SUBSYSTEMS ───────────────────────────────────────────────────────────
     results.append(check_meeting_store())
     results.append(check_wakeword_deps())
+    results.append(check_wakeword_engine())
     results.append(check_copilot())
 
     # ── CONFIG/STATE FILES ───────────────────────────────────────────────────

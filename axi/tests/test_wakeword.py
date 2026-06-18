@@ -503,7 +503,8 @@ class TestDaemonWakewordLifecycle:
 
         daemon = self._build_daemon()
 
-        # Patch WakeWordListener with a no-op stand-in so no audio hardware needed
+        # Patch both listener classes with a no-op stand-in so no audio hardware
+        # or ONNX model is needed (engine selection now reads config and may pick OWW).
         from axi import wakeword as ww
 
         class _FakeListener:
@@ -511,6 +512,7 @@ class TestDaemonWakewordLifecycle:
             def stop(self): pass
 
         monkeypatch.setattr(ww, "WakeWordListener", lambda **kw: _FakeListener())
+        monkeypatch.setattr(ww, "OWWWakeWordListener", lambda **kw: _FakeListener())
 
         daemon.start_wakeword_listener()
         daemon.stop_wakeword_listener()
@@ -529,7 +531,9 @@ class TestDaemonWakewordLifecycle:
             def start(self): instances.append(self)
             def stop(self): pass
 
+        # Patch both engines — whichever is selected by config, it must be idempotent.
         monkeypatch.setattr(ww, "WakeWordListener", lambda **kw: _FakeListener())
+        monkeypatch.setattr(ww, "OWWWakeWordListener", lambda **kw: _FakeListener())
 
         daemon.start_wakeword_listener()
         daemon.start_wakeword_listener()  # second call — must be a no-op

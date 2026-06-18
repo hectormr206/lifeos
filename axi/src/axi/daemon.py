@@ -806,10 +806,10 @@ class Daemon:
             log.info("wake-word listener already running — ignoring start request")
             return
 
-        from axi.wakeword import WakeWordListener  # noqa: PLC0415
+        from axi.wakeword import WakeWordListener, OWWWakeWordListener  # noqa: PLC0415
 
         def _on_wake(command: str) -> None:
-            """Called from the WakeWordListener worker thread on wake detection."""
+            """Called from the wake-word listener worker thread on wake detection."""
             # Guard: do not overlap with an in-progress hotkey ask.
             if self.state not in ("idle",):
                 log.info("wakeword: skipping wake while daemon state=%r", self.state)
@@ -834,10 +834,38 @@ class Daemon:
             with _transcribe_lock:
                 return _transcribe_wakeword(audio, language=_ww_lang)
 
-        listener = WakeWordListener(
-            transcribe_fn=_wakeword_transcribe_fn,
-            on_wake=_on_wake,
-        )
+        # Select the wake-word engine based on config.
+        engine = str(config.get("wakeword_engine", "openwakeword"))
+        model_path = str(config.get("wakeword_model_path", "alexa"))
+        threshold = float(config.get("wakeword_threshold", 0.5))
+
+        listener = None
+        if engine == "openwakeword":
+            try:
+                listener = OWWWakeWordListener(
+                    transcribe_fn=_wakeword_transcribe_fn,
+                    on_wake=_on_wake,
+                    oww_model_path=model_path,
+                    oww_threshold=threshold,
+                )
+                log.info(
+                    "oww wake-word listener started (model=%s threshold=%.2f)",
+                    model_path, threshold,
+                )
+            except Exception as oww_exc:  # noqa: BLE001
+                log.warning(
+                    "openWakeWord engine failed (%s) — falling back to vad_whisper",
+                    oww_exc,
+                )
+                listener = None
+
+        if listener is None:
+            # Either vad_whisper was requested, or OWW failed and we need the fallback.
+            listener = WakeWordListener(
+                transcribe_fn=_wakeword_transcribe_fn,
+                on_wake=_on_wake,
+            )
+
         self._wakeword_listener = listener
         listener.start()
         log.info("wake-word listener started")
