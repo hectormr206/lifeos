@@ -5,6 +5,12 @@ MoE with `--cpu-moe` offload (the current 35B-A3B pattern). Entries are
 GGUF-only; mmproj companions are listed alongside the main weights when the
 model supports vision.
 
+Refreshed 2026-06-18 (rev 6): Added qwen35-4b + vibethinker-3b (TRIAD).
+- qwen35-4b: primary triad brain (60K ctx, GPU, vision+tools, port 8080)
+- vibethinker-3b: reasoning sibling (60K ctx, GPU, no tools/vision, port 8082)
+Both measured at 8.68 GB together + Whisper ~2.3 GB = ~10.98 GB / 12 GB
+(~1.25 GB headroom). Flags: -np 1 --cache-type-k q8_0 --cache-type-v q8_0 -fa on.
+
 Refreshed 2026-06-17 (rev 5): Added qwen35-2b as game co-pilot brain.
 - qwen36-35b-a3b: production default (quality, local)
 - gemma4-e2b-it: universal small/fast/vision tier (kept on disk as fallback)
@@ -139,6 +145,31 @@ _QWEN36_ARGS: tuple[str, ...] = (
 )
 
 
+def _with_vt_sampling(args: tuple[str, ...]) -> tuple[str, ...]:
+    """Replace --temp and --top-k in `args` with VibeThinker-3B production values.
+
+    VibeThinker degrades at low temp (benchmark #559); its production sampling
+    is temp=1.0, top_k=-1 (disabled). The shared _GPU_DEFAULT_ARGS uses 0.7/20
+    (optimised for 4B), so VT's entry substitutes these two params in-place to
+    keep all other flags (batch sizes, -np 1, KV compression, etc.) unchanged.
+    SYNC NOTE: Must match axi-vt-launch DEFAULT dict and brain.py _base_payload.
+    """
+    result: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--temp" and i + 1 < len(args):
+            result += ["--temp", "1.0"]
+            i += 2
+        elif tok == "--top-k" and i + 1 < len(args):
+            result += ["--top-k", "-1"]
+            i += 2
+        else:
+            result.append(tok)
+            i += 1
+    return tuple(result)
+
+
 def _strip_reasoning_format(args: tuple[str, ...]) -> tuple[str, ...]:
     """Remove --reasoning-format <value> from args (used for Gemma entries that
     append --reasoning off, so only one reasoning flag is passed to llama-server)."""
@@ -237,6 +268,96 @@ CATALOG: tuple[ModelEntry, ...] = (
         extra_args=_strip_reasoning_format(_GPU_DEFAULT_ARGS) + ("--reasoning", "off", "-a", "gemma-4-E2B-it"),
         vram_estimate_gb=2.8,
         notes="mmproj DEBE ser BF16 — los quants del projector están rotos en upstream.",
+    ),
+
+    # ------------------------------------------------------------------ #
+    # Triad primary brain — GPU-resident, vision+tools, port 8080.       #
+    # Measured VRAM: 5.37 GB alone @60K; 8.68 GB together with VT-3B.   #
+    # ------------------------------------------------------------------ #
+    ModelEntry(
+        id="qwen35-4b",
+        name="Qwen3.5 4B (triad primary)",
+        family="Qwen",
+        params="4B",
+        features=("vision", "tools"),
+        description=(
+            "Primary triad brain. Qwen3.5-4B Q4_K_M + mmproj-F16 for vision. "
+            "Resident on GPU (ngl=999) at port 8080, ctx=61440 (60K). "
+            "Measured VRAM: 5.37 GB alone, 8.68 GB paired with VibeThinker-3B. "
+            "Replaces qwen36-35b-a3b as the daily-driver brain. "
+            "Files on disk at ~/LifeOS/models/qwen35-4b/."
+        ),
+        files=(
+            ModelFile(
+                repo_id="local",  # already on disk; no download required
+                filename="Qwen3.5-4B-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+            ModelFile(
+                repo_id="local",
+                filename="mmproj-F16.gguf",
+                kind="mmproj",
+            ),
+        ),
+        # ctx=61440 per VRAM measurement #565 — both triad brains at 60K fit
+        # in 12 GB with ~1.25 GB headroom. SYNC NOTE: this value is duplicated
+        # in axi-vt-launch DEFAULT dict; keep them in sync.
+        ctx=61440,
+        ngl=999,
+        extra_args=_GPU_DEFAULT_ARGS + ("-a", "Qwen3.5-4B"),
+        vram_estimate_gb=5.4,  # measured: 5.37 GB @60K, q8_0 KV, -np 1
+        notes=(
+            "Local files at ~/LifeOS/models/qwen35-4b/ — no HF download required. "
+            "Mandatory flags per VRAM measurement #565: -np 1 --cache-type-k q8_0 "
+            "--cache-type-v q8_0 -fa on (already in _GPU_DEFAULT_ARGS). "
+            "Uses --reasoning-format auto (Qwen puts reasoning in reasoning_content). "
+            "NO --cpu-moe (dense model), NO --reasoning off (Gemma-specific)."
+        ),
+    ),
+
+    # ------------------------------------------------------------------ #
+    # Triad reasoning sibling — GPU-resident, NO tools, NO vision.       #
+    # Runs on port 8082 via llama-vt.service / axi-vt-launch.            #
+    # Measured VRAM: +3.31 GB when paired with 4B (total 8.68 GB).      #
+    # ------------------------------------------------------------------ #
+    ModelEntry(
+        id="vibethinker-3b",
+        name="VibeThinker 3B (reasoning sibling)",
+        family="VibeThinker",
+        params="3B",
+        # Empty features tuple = machine-readable signal that this entry is
+        # router-ineligible for tools/vision. _route() in brain.py enforces
+        # the hard pre-check (tools or image_b64 -> 4B always).
+        features=(),
+        description=(
+            "Reasoning/code sibling in the triad. VibeThinker-3B Q4_K_M. "
+            "GPU-resident (ngl=999) at port 8082, ctx=61440 (60K). "
+            "NO mmproj (no vision), NO tools support. "
+            "Routes math/code/reasoning prompts from brain.py; think-tags "
+            "stripped by brain.py before returning to caller. "
+            "Files on disk at ~/LifeOS/models/vibethinker-3b/."
+        ),
+        files=(
+            ModelFile(
+                repo_id="local",  # already on disk; no download required
+                filename="VibeThinker-3B-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+            # NO mmproj: VibeThinker-3B has no vision capability.
+        ),
+        # ctx=61440 per VRAM measurement #565. SYNC NOTE: this value is
+        # duplicated in axi-vt-launch DEFAULT dict; keep them in sync.
+        ctx=61440,
+        ngl=999,
+        extra_args=_with_vt_sampling(_GPU_DEFAULT_ARGS) + ("-a", "VibeThinker-3B"),
+        vram_estimate_gb=3.3,  # measured: +3.31 GB when paired with 4B @60K
+        notes=(
+            "Local files at ~/LifeOS/models/vibethinker-3b/ — no HF download required. "
+            "Mandatory flags per VRAM measurement #565: -np 1 --cache-type-k q8_0 "
+            "--cache-type-v q8_0 -fa on (already in _GPU_DEFAULT_ARGS). "
+            "VT leaks <think> into content — brain.py strips it. "
+            "Managed by llama-vt.service / axi-vt-launch on port 8082."
+        ),
     ),
 
     # ------------------------------------------------------------------ #
