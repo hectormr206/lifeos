@@ -17,6 +17,8 @@ import time
 from collections import defaultdict, deque
 from pathlib import Path
 
+from axi import models_manager
+
 # ---------------------------------------------------------------------------
 # Invariant assertion: STARTUP_GRACE_SEC < WatchdogSec (90)
 # ---------------------------------------------------------------------------
@@ -38,6 +40,7 @@ HEARTBEAT_SERVICES: list[str] = [
 GAME_BRAINS: list[str] = [
     "llama-server.service",
     "llama-nano.service",
+    "llama-vt.service",
 ]
 
 POLL_INTERVAL_SEC: int = 30       # seconds between poll cycles
@@ -220,6 +223,11 @@ def run_cycle(now: float | None = None):
             _alerted.discard(svc)
         elif svc in GAME_BRAINS and game_mode_active():
             # Game mode started mid-cycle — skip revival to protect the GPU.
+            pass
+        elif svc == "llama-vt.service" and not models_manager.is_triad_active():
+            # VT sibling only runs when the primary brain is qwen35-4b (triad active).
+            # If the 35B (or any other non-4B) is the active primary, reviving VT would
+            # load 3.3 GB on top of the already-resident large model → OOM risk.
             pass
         elif under_cap(svc, now):
             revive(svc)
