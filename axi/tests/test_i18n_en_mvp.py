@@ -498,7 +498,7 @@ def test_ask_with_tools_impl_tool_system_spanish_when_no_lang():
 
     captured = {}
 
-    def fake_post(payload, *, timeout):
+    def fake_post(payload, *, timeout, endpoint=brain.ENDPOINT):
         captured["messages"] = payload.get("messages", [])
         # Return a minimal valid response that ends the loop immediately.
         return {
@@ -529,7 +529,7 @@ def test_ask_with_tools_impl_tool_system_spanish_when_lang_es():
 
     captured = {}
 
-    def fake_post(payload, *, timeout):
+    def fake_post(payload, *, timeout, endpoint=brain.ENDPOINT):
         captured["messages"] = payload.get("messages", [])
         return {
             "choices": [{
@@ -559,7 +559,7 @@ def test_ask_with_tools_impl_tool_system_english_when_lang_en():
 
     captured = {}
 
-    def fake_post(payload, *, timeout):
+    def fake_post(payload, *, timeout, endpoint=brain.ENDPOINT):
         captured["messages"] = payload.get("messages", [])
         return {
             "choices": [{
@@ -589,7 +589,7 @@ def test_ask_with_tools_impl_en_tool_system_content():
 
     captured = {}
 
-    def fake_post(payload, *, timeout):
+    def fake_post(payload, *, timeout, endpoint=brain.ENDPOINT):
         captured["messages"] = payload.get("messages", [])
         return {
             "choices": [{

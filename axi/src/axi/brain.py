@@ -2,12 +2,19 @@
 
 Uses stdlib `urllib` so it has zero extra deps. The server lives on
 localhost:8080 (set by the systemd service), is reachable only from
-this machine, and runs the Qwen3.6-35B-A3B MoE model with vision.
+this machine, and runs the Qwen3.5-4B model with vision as primary brain.
+
+TRIAD routing (Slice 2):
+  - Port 8080: Qwen3.5-4B — general/vision/tools brain (primary).
+  - Port 8082: VibeThinker-3B — reasoning/math/code brain (secondary).
+  - _route() selects the engine; ask() dispatches accordingly.
+  - ask_with_tools() ALWAYS uses 8080 (VT-3B has no tools support).
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import urllib.error
@@ -21,6 +28,144 @@ from axi import config
 LLAMA_HOST = "127.0.0.1"
 LLAMA_PORT = 8080
 ENDPOINT = f"http://{LLAMA_HOST}:{LLAMA_PORT}"
+
+# VibeThinker-3B reasoning brain — independent GPU instance on port 8082.
+VT_HOST = "127.0.0.1"
+VT_PORT = 8082
+VT_ENDPOINT = f"http://{VT_HOST}:{VT_PORT}"
+
+# Compiled intent pattern for routing prompts to VibeThinker-3B.
+# Vocabulary covers ES+EN math, reasoning, and programming triggers.
+# DESIGN: hardcoded compiled regex (not config.json) — routing changes are
+# code-reviewed; config indirection adds load-time cost for zero current benefit.
+#
+# TRADEOFF (FIX 5, June 2026): Axi is a Spanish-first daily driver.
+# False positives (common noun/verb → wrongly routed to VT-3B) hurt UX more
+# than false negatives (real code/math → answered by 4B, which is adequate).
+# Strategy: remove broad single-word triggers that double as common nouns/verbs;
+# prefer multi-word / context patterns that signal genuine code or math intent.
+#
+# Removed as false-positive sources:
+#   programa\w*, integr\w*, compil\w*, función|funcion, excepci\w*, demostraci\w*, factor
+# Replaced with: explicit action verbs (escribe, genera, depura, refactoriza, resuelve,
+# calcula) paired with code/math objects, or unambiguous technical tokens.
+_VT_PATTERN = re.compile(
+    r"(?:"
+    # ES math — action verbs for math intent (calcula, resuelve, demuestra, deriva, etc.)
+    r"\bcalcul\w+\b|"
+    r"\bresuelv\w+\b|"
+    r"\bresolv\w+\b|"
+    r"\bdemuestr\w+\b|"
+    r"\bderiv\w+\b|"
+    r"\bfactoriz\w+\b|"
+    r"\boptimiz\w+\b|"
+    # ES math nouns — unambiguous (ecuación, álgebra, geometría, etc.)
+    r"\bécuaci\w+\b|\bécuación\b|\becuaci\w+\b|"
+    r"\bmatem\w+\b|"
+    r"\bálgebra\b|\balgebra\b|"
+    r"\bgeometr\w+\b|"
+    r"\bprobabilidad\b|"
+    r"\bteoréma\b|\bteoema\b|\bteorema\b|"
+    r"\balgoritm\w+\b|"
+    r"\bcomplejidad\b|"
+    r"\brazonamiento\b|"
+    r"\bdeduc\w+\b|"
+    # ES programming — unambiguous tokens or explicit action+object combos
+    # "código" / "código fuente" — unambiguous
+    r"\bcódig\w+\b|\bcodig\w+\b|"
+    # depur\w* (depura, depurar) — always debug intent
+    r"\bdepur\w+\b|"
+    # refactoriz\w* — always refactor intent
+    r"\brefactoriz\w+\b|"
+    # stacktrace — always technical
+    r"\bstacktrace\b|"
+    # "escribe/genera/implementa ... (código|función|script|programa|clase|método)"
+    r"(?:escribe|genera|implementa|crea)\s+\w+(?:\s+\w+)?\s+(?:código|función|funcion|script|programa|clase|método)|"
+    # "función matemática" — context disambiguates función
+    r"\bfunción\s+matem\w+\b|\bfuncion\s+matem\w+\b|"
+    # "excepción de" code patterns: "maneja la excepción", "lanza una excepción", "try/except"
+    r"(?:maneja|lanza|captura|tira)\s+(?:la\s+)?excepci\w+|"
+    r"\btry\s*/\s*except\b|"
+    # "integra la función/ecuación" — calc context, not "integra sistemas"
+    r"\bintegr\w+\s+(?:la\s+)?(?:función|funcion|ecuaci\w+|integral\b)|"
+    # "compila el código/proyecto/binario" — compiler context, not "compila el informe"
+    r"\bcompil\w+\s+(?:el\s+|la\s+)?(?:código|codig\w+|proyecto|binario|fuente)|"
+    # "programa en X" / "el programa falla" / "escribe un programa"
+    r"(?:programa\s+en\s+\w+|escribe\s+\w+\s+programa)|"
+    # EN math / reasoning — high-precision tokens
+    r"\bcalculate\b|\bsolve\b|\bprove\b|\bproof\b|"
+    r"\bderivative\b|\bintegral\b|\bequation\b|"
+    r"\b(?:linear\s+)?algebra\b|\bgeometry\b|"
+    r"\bprobability\b|\btheorem\b|"
+    r"\boptimi[sz]e\b|\balgorithm\b|\bcomplexity\b|"
+    r"\breasoning\b|\bdeduce\b|"
+    # EN programming — unambiguous tokens
+    r"\bcoding\b|\bdebug\b|\brefactor\b|"
+    r"\bstack\s?trace\b|"
+    # EN: "write/create/implement a function/class/script/algorithm"
+    r"(?:write|create|implement)\s+\w+(?:\s+\w+)?\s+(?:function|class|script|algorithm)|"
+    r"\bcompile\b\s+(?:the\s+)?(?:code|project|binary)|"
+    r"\bexception\s+(?:handling|in\s+\w+)|"
+    r"\bmath(?:ematics)?\b|"
+    # "bug en mi programa" / "error en el código" — debug context
+    r"\bbug\b|\berror\s+en\s+(?:el\s+|mi\s+)?(?:código|codig\w+|programa|script)|"
+    r"(?:tengo|hay)\s+\w+\s+(?:bug|error)\s+en\s+(?:el\s+|mi\s+)?(?:código|codig\w+|programa)"
+    r")",
+    re.IGNORECASE,
+)
+
+def _strip_think(text: str) -> str:
+    """Remove <think> blocks from VT-3B output and return clean text.
+
+    Handles three problematic cases:
+    (a) Well-formed: <think>...</think> — removed by lazy DOTALL sub.
+    (b) Unclosed (mid-think truncation at max_tokens): <think>... to EOF
+        — removed by a second greedy DOTALL sub that catches any remaining
+        <think> prefix. This prevents raw <think> tags leaking to TTS/caller.
+    (c) Orphaned </think> after nested-tag processing — removed explicitly.
+
+    The function does NOT raise; it always returns a stripped string.
+    """
+    # Step 1: remove well-formed blocks (lazy, DOTALL)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # Step 2: remove any unclosed <think> from its position to end-of-string
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
+    # Step 3: remove any orphaned closing tags
+    text = text.replace("</think>", "")
+    return text.strip()
+
+
+def _route(prompt: str | None, image_b64: str | None, tools: list | None) -> str:
+    """Pure routing function — no I/O. Returns 'vt3b' or '4b'.
+
+    Decision order (HARD rules first):
+    1. image_b64 non-empty OR tools non-empty → '4b' (VT-3B has no mmproj, no tools).
+    2. Prompt matches _VT_PATTERN (math/code/reasoning keywords) → 'vt3b'.
+    3. Default → '4b'.
+
+    Precision tradeoff (FIX 5, June 2026):
+    _VT_PATTERN is tuned for precision over recall for Spanish input. Axi is a
+    Spanish-first daily driver — false positives (common noun misrouted to VT-3B)
+    cause latency and degraded chat UX, while false negatives (real code/math
+    answered by 4B) are non-breaking (4B handles code adequately).
+    Broad single-word triggers that double as common nouns/verbs have been replaced
+    with multi-word / context patterns that signal genuine code or math intent.
+    """
+    if image_b64 or tools:
+        return "4b"
+    if _VT_PATTERN.search(prompt or ""):
+        return "vt3b"
+    return "4b"
+
+
+def is_vt_alive(timeout: float = 1.0) -> bool:
+    """Quick health check on llama-vt (VibeThinker-3B). True if responding on /health."""
+    try:
+        with urllib.request.urlopen(f"{VT_ENDPOINT}/health", timeout=timeout) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
 
 _DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 _MONTHS_ES = [
@@ -282,10 +427,15 @@ def _build_messages(
     return messages
 
 
-def _post_chat_completion(payload_obj: dict[str, Any], timeout: float) -> dict[str, Any]:
+def _post_chat_completion(
+    payload_obj: dict[str, Any],
+    timeout: float,
+    endpoint: str = ENDPOINT,
+) -> dict[str, Any]:
+    """POST to /v1/chat/completions on the given endpoint (default: 4B at 8080)."""
     payload = json.dumps(payload_obj).encode("utf-8")
     req = urllib.request.Request(
-        f"{ENDPOINT}/v1/chat/completions",
+        f"{endpoint}/v1/chat/completions",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -294,15 +444,33 @@ def _post_chat_completion(payload_obj: dict[str, Any], timeout: float) -> dict[s
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _base_payload(messages: list[dict[str, Any]], max_tokens: int, think: bool) -> dict[str, Any]:
+def _base_payload(
+    messages: list[dict[str, Any]],
+    max_tokens: int,
+    think: bool,
+    engine: str = "4b",
+) -> dict[str, Any]:
+    """Build the request payload with engine-appropriate sampling parameters.
+
+    4B (Qwen3.5-4B) params: temp=0.7, top_p=0.8, top_k=20, enable_thinking=false.
+    vt3b (VibeThinker-3B) params: temp=1.0, top_p=0.95, top_k=-1 (disabled).
+    Source: benchmark #559 — low temperature degrades VibeThinker badly.
+    top_k=-1 means disabled in llama.cpp.
+    """
+    if engine == "vt3b":
+        temperature = 1.0
+        top_p = 0.95
+        top_k = -1  # disabled — VT-3B quality degrades with top_k limiting
+    else:
+        # 4B default — temp 0.7 confirmed by benchmark #555
+        temperature = 0.7
+        top_p = 0.8
+        top_k = 20
     return {
         "messages": messages,
-        # 0.3 chosen after A/B: equivalent chat quality vs 0.6, 100% vs 50%
-        # on strict logic puzzles. Lower it per-call if a caller wants more
-        # creative variance.
-        "temperature": 0.3,
-        "top_p": 0.95,
-        "top_k": 20,
+        "temperature": temperature,
+        "top_p": top_p,
+        "top_k": top_k,
         "max_tokens": max_tokens,
         "stream": False,
         # Qwen3-specific: passed through llama-server's --jinja templating.
@@ -326,35 +494,70 @@ def _ask_impl(
     The metric wrapper uses the raw dict to extract `usage` tokens and model.
     Callers of public `ask()` only see the text.
 
+    Triad routing (Slice 2):
+    - _route() selects engine ('4b' or 'vt3b') based on prompt/image/tools.
+    - If vt3b is selected but is_vt_alive() is False, transparently falls back
+      to 4b (no exception, no blank response).
+    - VT-3B uses different sampling params (temp=1.0, top_k=-1) per benchmark.
+    - VT-3B responses have <think>...</think> stripped from content.
+    - If VT-3B content is empty but reasoning_content is populated, reasoning_content
+      is used as fallback (mirrors the 35B empty-content bug fix).
+
     Reasoning-model safety net: if the response comes back with empty `content`
     while `reasoning_content` is populated and `finish_reason == "length"`, the
     model spent the whole budget thinking and never reached the answer. We
     retry ONCE with a much larger budget so callers don't get empty strings.
     """
+    # Determine routing engine and endpoint
+    engine = _route(prompt, image_b64, None)
+    if engine == "vt3b":
+        if not is_vt_alive():
+            log.warning("brain: VibeThinker-3B (8082) is down — falling back to 4B (8080)")
+            engine = "4b"
+    endpoint = VT_ENDPOINT if engine == "vt3b" else ENDPOINT
+
     messages = _build_messages(prompt, system=system, image_b64=image_b64, history=history, lang=lang)
     effective_max_tokens = _retry_budget if _retry_budget is not None else max_tokens
     try:
         data = _post_chat_completion(
-            _base_payload(messages, max_tokens=effective_max_tokens, think=think),
+            _base_payload(messages, max_tokens=effective_max_tokens, think=think, engine=engine),
             timeout=timeout,
+            endpoint=endpoint,
         )
         choice = data["choices"][0]
         message = choice["message"]
         content = (message.get("content") or "").strip()
-        if not content and _retry_budget is None:
+
+        # VT-3B: strip <think>...</think> reasoning blocks from content.
+        # Applied BEFORE empty-content check so that a response with only
+        # a think block + empty answer is treated as empty (not a false hit).
+        # Uses _strip_think which also handles unclosed tags and orphaned </think>.
+        if engine == "vt3b":
+            content = _strip_think(content)
+
+        if not content:
             reasoning = (message.get("reasoning_content") or "").strip()
-            finish = choice.get("finish_reason")
-            if reasoning and finish == "length":
-                retry_budget = max(effective_max_tokens * 4, 2048)
-                log.warning(
-                    "brain: reasoning consumed full budget (max_tokens=%d, finish=length); retrying with %d",
-                    effective_max_tokens, retry_budget,
-                )
-                return _ask_impl(
-                    prompt, system=system, max_tokens=max_tokens, timeout=timeout,
-                    think=think, image_b64=image_b64, history=history,
-                    lang=lang, _retry_budget=retry_budget,
-                )
+            # VT-3B with --reasoning-format auto can put the answer in
+            # reasoning_content leaving content empty (mirrors 35B prod bug).
+            # For VT-3B: always fall back to reasoning_content when content empty.
+            if engine == "vt3b" and reasoning:
+                content = _strip_think(reasoning)
+            if engine == "vt3b" and not content:
+                log.warning("brain: VT-3B returned empty content and empty reasoning_content — blank response")
+            elif _retry_budget is None:
+                # Standard 4B retry path: budget-exhausted reasoning model
+                finish = choice.get("finish_reason")
+                if reasoning and finish == "length":
+                    retry_budget = max(effective_max_tokens * 4, 2048)
+                    log.warning(
+                        "brain: reasoning consumed full budget (max_tokens=%d, finish=length); retrying with %d",
+                        effective_max_tokens, retry_budget,
+                    )
+                    return _ask_impl(
+                        prompt, system=system, max_tokens=max_tokens, timeout=timeout,
+                        think=think, image_b64=image_b64, history=history,
+                        lang=lang, _retry_budget=retry_budget,
+                    )
         return content, data
     except urllib.error.URLError as e:
         log.error("brain unreachable: %s", e)
@@ -431,10 +634,13 @@ def _ask_with_tools_impl(
     last_data: dict[str, Any] | None = None
     try:
         for _round in range(max_tool_rounds + 1):
-            payload = _base_payload(messages, max_tokens=max_tokens, think=think)
+            # ask_with_tools ALWAYS uses 4B (8080). VT-3B has no tools support
+            # (no --jinja tool schema, no mmproj) — routing is intentionally
+            # bypassed here. No think-strip applied (4B uses enable_thinking:false).
+            payload = _base_payload(messages, max_tokens=max_tokens, think=think, engine="4b")
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
-            data = _post_chat_completion(payload, timeout=timeout)
+            data = _post_chat_completion(payload, timeout=timeout, endpoint=ENDPOINT)
             last_data = data
             choice = data["choices"][0]
             message = choice["message"]

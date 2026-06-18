@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import io
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import axi.brain as brain  # type: ignore[import-not-found]
 
@@ -183,3 +183,455 @@ def test_ask_with_tools_unknown_tool_returns_safe_tool_error():
     tool_msg = captured["bodies"][1]["messages"][-1]
     assert tool_msg["role"] == "tool"
     assert "unknown tool 'shell'" in tool_msg["content"]
+
+
+# ---------------------------------------------------------------------------
+# SLICE 2 — Routing + API (RED tests — written before implementation)
+# ---------------------------------------------------------------------------
+
+# ---- 2.1  _route() decision table ----------------------------------------
+
+def test_route_image_always_4b():
+    """Non-empty image_b64 MUST return '4b' regardless of prompt."""
+    assert brain._route("calcula la integral", "base64data==", None) == "4b"
+
+
+def test_route_tools_always_4b():
+    """Non-empty tools list MUST return '4b' regardless of prompt."""
+    assert brain._route("escribe un algoritmo", None, [{"type": "function"}]) == "4b"
+
+
+def test_route_image_and_tools_4b():
+    """Both image AND tools → '4b'."""
+    assert brain._route("describe y resuelve", "abc", [{}]) == "4b"
+
+
+def test_route_math_es_calcula():
+    assert brain._route("calcula la derivada de x^2", None, None) == "vt3b"
+
+
+def test_route_math_es_resuelve():
+    assert brain._route("resuelve la integral de sin(x)", None, None) == "vt3b"
+
+
+def test_route_math_es_demuestra():
+    assert brain._route("demuestra el teorema de Pitágoras", None, None) == "vt3b"
+
+
+def test_route_code_es_funcion():
+    assert brain._route("escribe una función en Python", None, None) == "vt3b"
+
+
+def test_route_code_es_algoritmo():
+    assert brain._route("implementa un algoritmo de ordenamiento", None, None) == "vt3b"
+
+
+def test_route_code_es_debug():
+    assert brain._route("tengo un bug en mi programa", None, None) == "vt3b"
+
+
+def test_route_code_es_refactoriza():
+    assert brain._route("refactoriza este código", None, None) == "vt3b"
+
+
+def test_route_math_en_solve():
+    assert brain._route("solve the integral of x^2", None, None) == "vt3b"
+
+
+def test_route_math_en_calculate():
+    assert brain._route("calculate the derivative", None, None) == "vt3b"
+
+
+def test_route_code_en_function():
+    assert brain._route("write a function to sort a list", None, None) == "vt3b"
+
+
+def test_route_code_en_algorithm():
+    assert brain._route("implement a binary search algorithm", None, None) == "vt3b"
+
+
+def test_route_code_en_debug():
+    assert brain._route("debug this stacktrace for me", None, None) == "vt3b"
+
+
+def test_route_general_hola():
+    """General conversational → '4b'."""
+    assert brain._route("hola cómo estás", None, None) == "4b"
+
+
+def test_route_general_que_hora():
+    assert brain._route("qué hora es", None, None) == "4b"
+
+
+def test_route_ambiguous_raiz_cuadrada():
+    """Spec: ambiguous '¿cuánto es la raíz cuadrada de 144?' → '4b' (acceptable fallback)."""
+    assert brain._route("¿cuánto es la raíz cuadrada de 144?", None, None) == "4b"
+
+
+def test_route_empty_prompt_4b():
+    assert brain._route("", None, None) == "4b"
+
+
+def test_route_none_prompt_4b():
+    assert brain._route(None, None, None) == "4b"  # type: ignore[arg-type]
+
+
+# ---- 2.2  VT_ENDPOINT constant -------------------------------------------
+
+def test_vt_endpoint_constant_exists():
+    assert hasattr(brain, "VT_ENDPOINT")
+    assert "8082" in brain.VT_ENDPOINT
+    assert brain.VT_ENDPOINT.startswith("http://")
+
+
+def test_endpoint_constant_still_8080():
+    assert "8080" in brain.ENDPOINT
+
+
+# ---- 2.3  <think> strip ---------------------------------------------------
+
+def _make_vt_response(content: str, reasoning_content: str | None = None) -> bytes:
+    """Build a raw response dict as the server would return it."""
+    body = {
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {
+                "role": "assistant",
+                "content": content,
+                "reasoning_content": reasoning_content,
+            },
+        }]
+    }
+    return json.dumps(body).encode()
+
+
+class _FakeRespBytes:
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+        self.status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def read(self):
+        return self._data
+
+
+def _urlopen_returning(data: bytes):
+    def fake(req, timeout=0):  # noqa: ARG001
+        return _FakeRespBytes(data)
+    return fake
+
+
+def test_think_tags_stripped_from_vt3b_response():
+    """VT-3B response with <think>...</think> tags: only the answer is returned."""
+    raw = "<think>step by step reasoning here</think>actual answer"
+    with (
+        patch.object(brain.urllib.request, "urlopen",
+                     _urlopen_returning(_make_vt_response(raw))),
+        patch.object(brain, "_route", return_value="vt3b"),
+        patch.object(brain, "is_vt_alive", return_value=True),
+    ):
+        result = brain.ask("calcula algo")
+    assert result == "actual answer"
+
+
+def test_think_tags_stripped_multiline():
+    """Multi-line <think> block stripped (re.DOTALL)."""
+    raw = "<think>\nline1\nline2\n</think>final answer"
+    with (
+        patch.object(brain.urllib.request, "urlopen",
+                     _urlopen_returning(_make_vt_response(raw))),
+        patch.object(brain, "_route", return_value="vt3b"),
+        patch.object(brain, "is_vt_alive", return_value=True),
+    ):
+        result = brain.ask("resuelve algo")
+    assert result == "final answer"
+
+
+def test_no_think_tags_content_unchanged_vt3b():
+    """VT-3B response without <think> tags: content returned unchanged."""
+    raw = "this is a direct answer"
+    with (
+        patch.object(brain.urllib.request, "urlopen",
+                     _urlopen_returning(_make_vt_response(raw))),
+        patch.object(brain, "_route", return_value="vt3b"),
+        patch.object(brain, "is_vt_alive", return_value=True),
+    ):
+        result = brain.ask("resuelve algo")
+    assert result == "this is a direct answer"
+
+
+def test_think_tags_NOT_stripped_from_4b_response():
+    """4B with a literal <think> string is NOT stripped (4B uses enable_thinking:false)."""
+    raw = "Here is a <think>literal</think> word in the answer"
+    with (
+        patch.object(brain.urllib.request, "urlopen",
+                     _urlopen_returning(_make_vt_response(raw))),
+        patch.object(brain, "_route", return_value="4b"),
+    ):
+        result = brain.ask("hola")
+    assert "<think>" in result
+
+
+def test_vt3b_reasoning_content_fallback():
+    """When VT-3B returns empty content but populated reasoning_content, use reasoning_content."""
+    with (
+        patch.object(brain.urllib.request, "urlopen",
+                     _urlopen_returning(_make_vt_response("", "the answer is in here"))),
+        patch.object(brain, "_route", return_value="vt3b"),
+        patch.object(brain, "is_vt_alive", return_value=True),
+    ):
+        result = brain.ask("resuelve")
+    assert "the answer is in here" in result
+
+
+def test_vt3b_reasoning_content_with_think_tags_stripped():
+    """reasoning_content fallback content is also think-stripped."""
+    rc = "<think>internal</think>clean answer"
+    with (
+        patch.object(brain.urllib.request, "urlopen",
+                     _urlopen_returning(_make_vt_response("", rc))),
+        patch.object(brain, "_route", return_value="vt3b"),
+        patch.object(brain, "is_vt_alive", return_value=True),
+    ):
+        result = brain.ask("resuelve")
+    assert result == "clean answer"
+    assert "<think>" not in result
+
+
+# ---- 2.4  VT sampling params in payload ----------------------------------
+
+def test_vt3b_payload_uses_vt_sampling_params():
+    """When routing to vt3b, payload MUST use temp=1.0, top_k=-1."""
+    captured: dict = {}
+
+    def fake_urlopen(req, timeout=0):  # noqa: ARG001
+        captured["body"] = json.loads(req.data.decode())
+        captured["url"] = req.full_url
+        return _FakeRespBytes(_make_vt_response("answer"))
+
+    with (
+        patch.object(brain.urllib.request, "urlopen", fake_urlopen),
+        patch.object(brain, "_route", return_value="vt3b"),
+        patch.object(brain, "is_vt_alive", return_value=True),
+    ):
+        brain.ask("calcula")
+
+    assert captured["body"]["temperature"] == 1.0
+    assert captured["body"]["top_k"] == -1
+    assert captured["url"].startswith(brain.VT_ENDPOINT)
+
+
+def test_4b_payload_keeps_original_sampling_params():
+    """When routing to 4b, temp=0.7 / top_p=0.8 / top_k=20 (NOT VT params)."""
+    captured: dict = {}
+
+    def fake_urlopen(req, timeout=0):  # noqa: ARG001
+        captured["body"] = json.loads(req.data.decode())
+        captured["url"] = req.full_url
+        return _FakeRespBytes(_make_vt_response("answer"))
+
+    with (
+        patch.object(brain.urllib.request, "urlopen", fake_urlopen),
+        patch.object(brain, "_route", return_value="4b"),
+    ):
+        brain.ask("hola")
+
+    assert captured["body"]["temperature"] == 0.7
+    assert captured["body"]["top_p"] == 0.8
+    assert captured["body"]["top_k"] == 20
+    assert captured["url"].startswith(brain.ENDPOINT)
+
+
+# ---- 2.5  ask_with_tools always 8080 -------------------------------------
+
+def test_ask_with_tools_always_posts_to_8080():
+    """ask_with_tools MUST always POST to 8080, never to VT_ENDPOINT."""
+    captured_url = {}
+
+    def fake_urlopen(req, timeout=0):  # noqa: ARG001
+        captured_url["url"] = req.full_url
+        body = json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "done"}}]
+        }).encode()
+        return _FakeRespBytes(body)
+
+    with patch.object(brain.urllib.request, "urlopen", fake_urlopen):
+        brain.ask_with_tools(
+            "escribe una función",
+            tools=[{"type": "function", "function": {"name": "t", "parameters": {}}}],
+            tool_handlers={"t": lambda a: "ok"},
+        )
+
+    assert "8080" in captured_url["url"]
+    assert "8082" not in captured_url["url"]
+
+
+# ---- 2.6  VT-down fallback -----------------------------------------------
+
+def test_vt_down_falls_back_to_4b():
+    """When _route returns vt3b but is_vt_alive() is False → transparently uses 4B (8080)."""
+    captured_url = {}
+
+    def fake_urlopen(req, timeout=0):  # noqa: ARG001
+        captured_url["url"] = req.full_url
+        return _FakeRespBytes(_make_vt_response("fallback answer"))
+
+    with (
+        patch.object(brain.urllib.request, "urlopen", fake_urlopen),
+        patch.object(brain, "_route", return_value="vt3b"),
+        patch.object(brain, "is_vt_alive", return_value=False),
+    ):
+        result = brain.ask("calcula")
+
+    assert result == "fallback answer"
+    assert "8080" in captured_url["url"]
+    assert "8082" not in captured_url["url"]
+
+
+def test_vt_down_fallback_no_exception():
+    """Fallback must be transparent — no exception propagated to caller."""
+    with (
+        patch.object(brain.urllib.request, "urlopen",
+                     _urlopen_returning(_make_vt_response("ok"))),
+        patch.object(brain, "_route", return_value="vt3b"),
+        patch.object(brain, "is_vt_alive", return_value=False),
+    ):
+        try:
+            brain.ask("resuelve")
+        except Exception as e:  # noqa: BLE001
+            raise AssertionError(f"ask() raised when VT is down: {e}") from e
+
+
+# ---- 2.7  is_vt_alive() ---------------------------------------------------
+
+def test_is_vt_alive_returns_bool():
+    assert isinstance(brain.is_vt_alive(), bool)
+
+
+# ---------------------------------------------------------------------------
+# FIX 1 — _strip_think helper: unclosed tags, nested tags, both-empty warning
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# FIX 5 — _route() Spanish false positives (Judge B confirmed)
+# ---------------------------------------------------------------------------
+
+# These 7 high-frequency conversational ES phrases MUST route to '4b' (not vt3b).
+# They currently misroute to VT-3B due to overly broad single-word triggers.
+def test_route_funcion_conversational_routes_4b():
+    """'¿cuál es tu función aquí?' is a conversational question, not code intent → 4b."""
+    assert brain._route("¿cuál es tu función aquí?", None, None) == "4b"
+
+
+def test_route_programa_conversational_routes_4b():
+    """'programa de ejercicios' is a daily-driver request, not code → 4b."""
+    assert brain._route("programa de ejercicios", None, None) == "4b"
+
+
+def test_route_factor_conversational_routes_4b():
+    """'factor de riesgo' is a common noun phrase, not code/math intent → 4b."""
+    assert brain._route("factor de riesgo", None, None) == "4b"
+
+
+def test_route_excepcion_conversational_routes_4b():
+    """'excepción cultural' is a common noun, not a programming exception → 4b."""
+    assert brain._route("excepción cultural", None, None) == "4b"
+
+
+def test_route_demostraciones_conversational_routes_4b():
+    """'las demostraciones del producto' is product/sales context, not math proof → 4b."""
+    assert brain._route("las demostraciones del producto", None, None) == "4b"
+
+
+def test_route_integra_conversational_routes_4b():
+    """'integra nuestros sistemas' is a business request, not a calculus integral → 4b."""
+    assert brain._route("integra nuestros sistemas", None, None) == "4b"
+
+
+def test_route_compila_conversational_routes_4b():
+    """'compila el informe' means 'compile the report' (compile as assemble) → 4b."""
+    assert brain._route("compila el informe", None, None) == "4b"
+
+
+# These genuine code/math intent cases MUST still route to 'vt3b'.
+def test_route_escribe_funcion_python_routes_vt3b():
+    """'escribe una función en Python' is explicit code intent → vt3b."""
+    assert brain._route("escribe una función en Python", None, None) == "vt3b"
+
+
+def test_route_resuelve_integral_routes_vt3b():
+    """'resuelve la integral de x^2' is explicit math intent → vt3b."""
+    assert brain._route("resuelve la integral de x^2", None, None) == "vt3b"
+
+
+def test_route_depura_stacktrace_routes_vt3b():
+    """'depura este stacktrace' is explicit debug request → vt3b."""
+    assert brain._route("depura este stacktrace", None, None) == "vt3b"
+
+
+def test_route_refactoriza_funcion_routes_vt3b():
+    """'refactoriza esta función' is code refactor intent → vt3b."""
+    assert brain._route("refactoriza esta función", None, None) == "vt3b"
+
+
+def test_strip_think_well_formed():
+    """Well-formed <think>...</think> block is stripped, leaving only the answer."""
+    assert brain._strip_think("<think>reasoning</think>answer") == "answer"
+
+
+def test_strip_think_unclosed_tag():
+    """Unclosed <think> (max_tokens mid-think) must be stripped to end-of-string.
+    No raw <think> should leak to the caller."""
+    result = brain._strip_think("<think>partial reasoning without closing tag")
+    assert "<think>" not in result
+    assert result == ""
+
+
+def test_strip_think_orphaned_closing_tag():
+    """Orphaned </think> after well-formed strip must be removed."""
+    # This can happen with naively nested tags:
+    # <think><think>inner</think>outer</think>answer
+    # After first pass removes inner block: <think>outer</think>answer
+    # After second pass: answer — but direct orphan test:
+    result = brain._strip_think("answer</think>extra")
+    assert "</think>" not in result
+    assert "answer" in result
+
+
+def test_strip_think_nested_tags():
+    """Nested <think> leaves no stray </think> literal."""
+    raw = "<think><think>inner</think>outer</think>answer"
+    result = brain._strip_think(raw)
+    assert "<think>" not in result
+    assert "</think>" not in result
+    assert "answer" in result
+
+
+def test_strip_think_no_tags_unchanged():
+    """Text without any <think> tags is returned unchanged."""
+    assert brain._strip_think("direct answer") == "direct answer"
+
+
+def test_strip_think_strips_whitespace():
+    """Result is stripped of leading/trailing whitespace."""
+    assert brain._strip_think("  <think>r</think>  answer  ") == "answer"
+
+
+def test_both_empty_logs_warning(caplog):
+    """When both content and reasoning_content are empty after strip, a warning is logged."""
+    import logging
+    with (
+        patch.object(brain.urllib.request, "urlopen",
+                     _urlopen_returning(_make_vt_response("", ""))),
+        patch.object(brain, "_route", return_value="vt3b"),
+        patch.object(brain, "is_vt_alive", return_value=True),
+        caplog.at_level(logging.WARNING, logger="axi.brain"),
+    ):
+        result = brain.ask("resuelve")
+    assert result == ""
+    assert any("empty" in r.message.lower() for r in caplog.records)
