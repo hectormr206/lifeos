@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# axi-healthcheck — one-command post-development system validation.
+# Run at the END of every development session to catch integration issues
+# that unit tests miss (services down, DB corruption, wrong model, etc.)
+#
+# Usage: axi-healthcheck
+set -euo pipefail
+exec "$(dirname "$(dirname "$(readlink -f "$0")")")/.venv/bin/python" -m axi.healthcheck "$@"

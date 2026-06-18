@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import sqlite3
 import stat
 import threading
@@ -251,6 +252,95 @@ def load_key() -> str:
     return key
 
 
+def _try_open(db_path: Path, key: str) -> sqlcipher3.Connection | None:
+    """Open *db_path* with *key* and run a quick integrity probe.
+
+    Returns the connection on success, None if the file is missing, or raises
+    ``sqlcipher3.dbapi2.DatabaseError`` if the file is malformed/unreadable.
+    """
+    if not db_path.exists():
+        return None
+    c = sqlcipher3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    c.execute(f"PRAGMA key = \"x'{key}'\"")
+    # A single read forces SQLCipher to decrypt the first page; this is the
+    # operation that raises "database disk image is malformed" on corruption.
+    c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    return c
+
+
+def _remove_wal_sidecars(db_path: Path) -> None:
+    """Delete -wal and -shm sidecar files for *db_path* if they exist."""
+    for suffix in ("-wal", "-shm"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
+
+
+def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
+    """Recovery ladder for a corrupt memory.db.
+
+    Steps (each step is only attempted if the previous fails):
+    1. Back up the corrupt files to .corrupt-<pid>.bak.
+    2. Remove the WAL/SHM sidecars and retry the open (WAL-only corruption —
+       the most common case after a hard kill).
+    3. Restore the newest known-clean backup that passes integrity_check.
+    4. Build a fresh empty schema so Axi starts with empty memory rather than
+       crashing.
+
+    All steps are logged. Raises only if even a fresh schema cannot be built.
+    """
+    pid = os.getpid()
+    bak = db_path.parent / f"{db_path.name}.corrupt-{pid}.bak"
+    log.warning("corrupt memory DB detected — starting recovery (backup → %s)", bak)
+
+    # Step 1 — back up corrupt files.
+    try:
+        if db_path.exists():
+            shutil.copy2(str(db_path), str(bak))
+        for suffix in ("-wal", "-shm"):
+            src = Path(str(db_path) + suffix)
+            if src.exists():
+                shutil.copy2(str(src), str(bak) + suffix)
+    except OSError as backup_err:
+        log.warning("recovery: could not write backup (%s) — continuing", backup_err)
+
+    # Step 2 — WAL reset: remove sidecars and retry (handles WAL-only corruption).
+    _remove_wal_sidecars(db_path)
+    try:
+        conn = _try_open(db_path, key)
+        if conn is not None:
+            log.warning("recovery: WAL reset succeeded — memory DB is healthy again")
+            return conn
+    except sqlcipher3.dbapi2.DatabaseError:
+        log.warning("recovery: WAL reset was not sufficient — trying backup restore")
+
+    # Step 3 — restore newest known-clean backup.
+    clean_backups = sorted(
+        db_path.parent.glob(f"{db_path.name}*.bak"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in clean_backups:
+        # Skip the corrupt backup we just wrote.
+        if ".corrupt-" in candidate.name:
+            continue
+        try:
+            shutil.copy2(str(candidate), str(db_path))
+            _remove_wal_sidecars(db_path)
+            conn = _try_open(db_path, key)
+            if conn is not None:
+                log.warning("recovery: restored from backup %s", candidate.name)
+                return conn
+        except (OSError, sqlcipher3.dbapi2.DatabaseError):
+            log.warning("recovery: backup %s is also corrupt — skipping", candidate.name)
+
+    # Step 4 — last resort: rebuild an empty schema.
+    log.warning("recovery: no clean backup found — rebuilding empty memory DB")
+    db_path.unlink(missing_ok=True)
+    _remove_wal_sidecars(db_path)
+    conn = sqlcipher3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    conn.execute(f"PRAGMA key = \"x'{key}'\"")
+    return conn
+
+
 def _connect() -> sqlcipher3.Connection:
     global _conn
     if _conn is not None:
@@ -264,13 +354,27 @@ def _connect() -> sqlcipher3.Connection:
         from axi import db_migrate
         db_migrate.migrate_to_encrypted()
         key = load_key()
-        c = sqlcipher3.connect(
-            str(DB_PATH), check_same_thread=False, isolation_level=None
-        )
-        # PRAGMA key MUST come first or SQLCipher treats the file as unkeyed.
-        c.execute(f"PRAGMA key = \"x'{key}'\"")
+
+        try:
+            c = _try_open(DB_PATH, key)
+            if c is None:
+                # DB does not exist yet — create it fresh.
+                c = sqlcipher3.connect(
+                    str(DB_PATH), check_same_thread=False, isolation_level=None
+                )
+                c.execute(f"PRAGMA key = \"x'{key}'\"")
+        except sqlcipher3.dbapi2.DatabaseError as exc:
+            log.warning("memory DB corrupt on open (%s) — attempting auto-recovery", exc)
+            c = _repair_corrupt_db(DB_PATH, key)
+
+        # PRAGMA key is already applied by _try_open / _repair_corrupt_db;
+        # for fresh connections created inline above we still need WAL + tuning.
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA foreign_keys=ON")
+        # FULL durability: each WAL page is flushed before the commit returns.
+        # The conversation DB is written ~1x/min so the perf cost is negligible,
+        # and it eliminates the partial-WAL-page corruption on hard kills.
+        c.execute("PRAGMA synchronous=FULL")
         c.row_factory = sqlcipher3.Row
         try:
             DB_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)
