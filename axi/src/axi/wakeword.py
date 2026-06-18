@@ -689,18 +689,50 @@ _OWW_CHUNK_SAMPLES = 1280       # samples per openwakeword predict() call
 _OWW_FRAME_SAMPLES = _VAD_FRAME_SAMPLES  # 320 — same as VAD frame size
 
 
-def _load_oww_model(model_path: str) -> Any:
-    """Load an openWakeWord model by pretrained name or .onnx file path.
+def _resolve_oww_model_paths(name_or_path: str) -> list[str]:
+    """Resolve a pretrained model name or .onnx path to a list of absolute paths.
 
-    Accepts either:
-      - A pretrained model name (e.g. 'alexa', 'hey_jarvis') — downloaded
-        automatically on first call.
+    Accepts:
+      - A pretrained model name fragment (e.g. 'alexa', 'hey_jarvis') —
+        matched against the bundled pretrained models in the openwakeword package.
       - An absolute path to a custom .onnx file (e.g. the trained Axi model).
 
-    Returns an object with a .predict(chunk: np.ndarray) -> dict method.
+    Returns a list of resolved paths to pass to Model(wakeword_model_paths=...).
+    """
+    import os as _os  # noqa: PLC0415
+    import openwakeword as _oww  # noqa: PLC0415
+
+    # Custom .onnx path: use as-is.
+    if name_or_path.endswith(".onnx") or _os.path.isabs(name_or_path):
+        return [name_or_path]
+
+    # Pretrained name: match against bundled models (e.g. 'alexa' → 'alexa_v0.1.onnx').
+    try:
+        pretrained = _oww.get_pretrained_model_paths()
+        matches = [p for p in pretrained if name_or_path in _os.path.basename(p)]
+        if matches:
+            return matches
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Fallback: pass the name directly and let openWakeWord handle it.
+    return [name_or_path]
+
+
+def _load_oww_model(model_path: str) -> Any:
+    """Load an openWakeWord Model for the given pretrained name or .onnx path.
+
+    Accepts either:
+      - A pretrained model name (e.g. 'alexa', 'hey_jarvis') — matched against
+        bundled models in the openwakeword package directory.
+      - An absolute path to a custom .onnx file (e.g. the trained Axi model).
+
+    Returns an object with a .predict(chunk: np.ndarray) -> dict[str, float] method.
     """
     from openwakeword.model import Model  # noqa: PLC0415
-    return Model(wakeword_models=[model_path])
+    resolved_paths = _resolve_oww_model_paths(model_path)
+    log.info("oww: loading model from paths=%s", resolved_paths)
+    return Model(wakeword_model_paths=resolved_paths)
 
 
 class OWWWakeWordListener:
