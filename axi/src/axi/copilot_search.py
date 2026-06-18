@@ -222,7 +222,7 @@ def _build_synthesis_prompt(question: str, results: list) -> str:
     return (
         f"Contexto de búsqueda:\n{context}\n\n"
         f"Pregunta del jugador: {question}\n\n"
-        f"Respondé brevemente basándote en el contexto anterior."
+        f"Responde brevemente basándote en el contexto anterior."
     )
 
 
@@ -234,7 +234,7 @@ def _build_synthesis_system(lang: str) -> str:
             "context and the game screenshot. No Markdown. One or two sentences."
         )
     return (
-        "Eres el co-piloto de juegos. Respondé breve y directo usando el contexto de "
+        "Eres el co-piloto de juegos. Responde de forma breve y directa usando el contexto de "
         "búsqueda y lo que ves en pantalla. Sin Markdown. Una o dos frases."
     )
 

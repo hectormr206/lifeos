@@ -41,9 +41,9 @@ import axi.copilot_search as _copilot_search
 # Game-aware system prompt — Spanish product voice (Axi speaks es_MX via Piper).
 _GAME_COPILOT_SYSTEM_PROMPT = (
     "Eres el co-piloto de juegos de Héctor. "
-    "Mirá la pantalla del juego y respondé breve y directo, sin Markdown, "
+    "Mira la pantalla del juego y responde de forma breve y directa, sin Markdown, "
     "en una o dos frases. "
-    "Si la pregunta es sobre lo que se ve en pantalla, describí solo lo relevante. "
+    "Si la pregunta es sobre lo que se ve en pantalla, describe solo lo relevante. "
     "No uses saludos ni cierres."
 )
 
@@ -858,7 +858,7 @@ class Daemon:
             log.info("wakeword: empty command — speaking acknowledgment")
             _ui_lang = str(config.get("language", "es-MX"))
             _lang_family = _ui_lang.split("-")[0].lower()
-            ack = "Yes? Go ahead." if _lang_family == "en" else "¿Sí? Decime."
+            ack = "Yes? Go ahead." if _lang_family == "en" else "¿Sí? Dime."
             self._set_state("speaking")
             def _say_ack():
                 try:
