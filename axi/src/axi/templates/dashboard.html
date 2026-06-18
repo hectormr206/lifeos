@@ -357,6 +357,67 @@
       </div>
     </section>
 
+    <!-- ─── Cerebros activos — panel de cerebros del TRIAD ─── -->
+    <!-- Reads snap.triad (bool) and snap.services to show which brains are
+         running now. NORMAL triad = 4B + VibeThinker-3B + Whisper.
+         GAME mode = 2B-CPU + Whisper-CPU. 35B mode = 35B + Whisper.
+         llama-vt is NOT user-toggleable — no toggle button rendered here. -->
+    <section class="panel p-4">
+      <div class="flex items-baseline justify-between mb-3">
+        <div class="font-semibold">Cerebros activos</div>
+        <div class="muted text-xs" x-text="($store.snap.models && $store.snap.models.mode) || '—'"></div>
+      </div>
+      <div class="flex flex-wrap gap-3">
+
+        <!-- TRIAD mode: 4B primary + VibeThinker-3B + Whisper -->
+        <template x-if="$store.snap.triad">
+          <div class="flex flex-wrap gap-3">
+            <div class="panel2 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+              <span :style="$store.snap.services['llama-server']==='active' ? 'color:var(--green)' : 'color:var(--red)'" class="text-xs">&#9679;</span>
+              <span>Qwen3.5-4B <span class="muted text-xs">(general/visión)</span></span>
+            </div>
+            <div class="panel2 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+              <span :style="$store.snap.services['llama-vt']==='active' ? 'color:var(--green)' : 'color:var(--red)'" class="text-xs">&#9679;</span>
+              <span>VibeThinker-3B <span class="muted text-xs">(razonamiento)</span></span>
+            </div>
+            <div class="panel2 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+              <span :style="$store.snap.services['axi-whisper']==='active' ? 'color:var(--green)' : 'color:var(--red)'" class="text-xs">&#9679;</span>
+              <span>Whisper <span class="muted text-xs">(audio)</span></span>
+            </div>
+          </div>
+        </template>
+
+        <!-- GAME mode: 2B-CPU + Whisper-CPU -->
+        <template x-if="!$store.snap.triad && $store.snap.models && $store.snap.models.mode === 'Modo juego'">
+          <div class="flex flex-wrap gap-3">
+            <div class="panel2 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+              <span style="color:var(--amber)" class="text-xs">&#9679;</span>
+              <span>Qwen3.5-2B <span class="muted text-xs">(CPU, co-piloto)</span></span>
+            </div>
+            <div class="panel2 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+              <span style="color:var(--amber)" class="text-xs">&#9679;</span>
+              <span>Whisper <span class="muted text-xs">(CPU)</span></span>
+            </div>
+          </div>
+        </template>
+
+        <!-- NORMAL / 35B mode (not triad, not game) -->
+        <template x-if="!$store.snap.triad && (!$store.snap.models || $store.snap.models.mode !== 'Modo juego')">
+          <div class="flex flex-wrap gap-3">
+            <div class="panel2 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+              <span :style="$store.snap.services['llama-server']==='active' ? 'color:var(--green)' : 'color:var(--red)'" class="text-xs">&#9679;</span>
+              <span>Qwen3.6-35B <span class="muted text-xs">(visión)</span></span>
+            </div>
+            <div class="panel2 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+              <span :style="$store.snap.services['axi-whisper']==='active' ? 'color:var(--green)' : 'color:var(--red)'" class="text-xs">&#9679;</span>
+              <span>Whisper <span class="muted text-xs">(audio)</span></span>
+            </div>
+          </div>
+        </template>
+
+      </div>
+    </section>
+
     <!-- ─── memory: facts + conversations ─── -->
     <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 

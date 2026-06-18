@@ -32,6 +32,8 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
+import urllib.error
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -597,8 +599,22 @@ def _ram_snapshot() -> dict[str, Any]:
 
 def _friendly_from_cmdline(cmdline: str) -> str | None:
     """Map a process cmdline to a friendly axi-related model label.
-    Returns None for processes we don't care about."""
+    Returns None for processes we don't care about.
+
+    For llama-server processes, disambiguates by --port to distinguish the
+    VibeThinker-3B sibling (port 8082) from the primary brain (port 8080).
+    Design risk R5: both are llama-server binaries; only the port differs.
+    """
     if "llama-server" in cmdline:
+        # Extract --port value from cmdline tokens for disambiguation.
+        tokens = cmdline.split()
+        for i, tok in enumerate(tokens):
+            if tok == "--port" and i + 1 < len(tokens):
+                port_val = tokens[i + 1]
+                if port_val == "8082":
+                    return "VibeThinker-3B"
+                # 8090 is the nano CPU sibling; leave for nano label path below.
+                break
         return "Qwen 35B"
     if "axi.translate" in cmdline:
         return "Translate"
@@ -846,6 +862,9 @@ def snapshot():
         "axi-voice": _service_state("axi-voice.service"),
         "axi-tray": _service_state("axi-tray.service"),
         "llama-server": _service_state("llama-server.service"),
+        # llama-vt: VibeThinker-3B reasoning sibling (port 8082, GPU-resident).
+        # Managed only via activate/game scripts — NOT user-toggleable.
+        "llama-vt": _service_state("llama-vt.service"),
         "ydotoold": _service_state("ydotoold.service"),
         "axi-dashboard": _service_state("axi-dashboard.service"),
         # avatar organ services (axi-living-avatar)
@@ -857,6 +876,8 @@ def snapshot():
         "state": state,
         "meeting": _parse_meeting_status(meeting_status),
         "services": services,
+        # triad=True when primary==qwen35-4b (VT sibling is paired with 4B only).
+        "triad": models_manager.is_triad_active(),
         "llama_alive": _llama_alive(),
         "vram": _vram_snapshot(),
         "ram": _ram_snapshot(),
@@ -947,6 +968,8 @@ def cmd(name: str):
 # VITAL organs — axi-heartbeat (self-healing heart), llama-server (brain /
 # reasoning) and the store (memory) — those must not be toggled off from a
 # casual click.
+# llama-vt and llama-server are vital brain organs — managed only via
+# activate/game scripts, not user-toggleable.
 _TOGGLEABLE_SERVICES = {"axi-whisper", "ydotoold"}
 
 
@@ -1772,13 +1795,79 @@ def api_model_activate(model_id: str):
         raise HTTPException(status_code=404, detail="unknown model id")
     if not models_manager.is_installed(entry):
         raise HTTPException(status_code=409, detail="model not installed")
+
+    # Pair-activation: manage VibeThinker-3B sibling BEFORE primary restart
+    # when activating a non-4B model (uniform rule: VT runs IFF primary==4B).
+    # For 35B (and any other non-4B): STOP llama-vt FIRST to free VRAM before
+    # the large model loads (design ordering, R5: VRAM budget).
+    vt_state: str | None = None
+    if model_id != "qwen35-4b":
+        result = subprocess.run(
+            ["systemctl", "--user", "stop", "llama-vt.service"],
+            check=False, timeout=30,
+        )
+        if result.returncode == 0:
+            vt_state = "stopped"
+        else:
+            # Stop returned non-zero. Probe VT /health to determine whether it
+            # actually went down. Connection-refused counts as "down"; any 200
+            # response means VT is still holding VRAM — abort to avoid OOM.
+            vt_actually_down = False
+            try:
+                with urllib.request.urlopen(
+                    "http://127.0.0.1:8082/health", timeout=3
+                ) as resp:
+                    # VT responded → still up
+                    _ = resp.status
+                    vt_actually_down = False
+            except (urllib.error.URLError, OSError, TimeoutError):
+                # Connection refused or timeout → VT is actually down
+                vt_actually_down = True
+            if not vt_actually_down:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"llama-vt stop failed (returncode={result.returncode}) "
+                           f"and VT health probe still responds — aborting to prevent OOM; "
+                           f"vt_state=still-up",
+                )
+            vt_state = "stop-failed-but-down"
+
     try:
         ok = models_manager.set_active(entry)
     except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=503, detail=f"systemctl restart failed: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"systemctl restart failed: {e}; vt_state={vt_state}",
+        )
     if not ok:
-        raise HTTPException(status_code=503, detail="llama-server did not become healthy")
-    return {"ok": True, "active": entry.id}
+        raise HTTPException(
+            status_code=503,
+            detail=f"llama-server did not become healthy; vt_state={vt_state}",
+        )
+
+    # For qwen35-4b: co-start the VibeThinker-3B reasoning sibling AFTER
+    # the primary is healthy. Writes active_vt_model.json then restarts llama-vt.
+    if model_id == "qwen35-4b":
+        vt_entry = models_manager.by_id("vibethinker-3b")
+        if vt_entry is not None:
+            try:
+                models_manager.write_active_vt(vt_entry)
+                subprocess.run(
+                    ["systemctl", "--user", "restart", "llama-vt.service"],
+                    check=False, timeout=30,
+                )
+                models_manager.wait_for_llama_health(
+                    url="http://127.0.0.1:8082/health", timeout=60.0,
+                )
+                vt_state = "started"
+            except Exception as exc:  # noqa: BLE001
+                log.warning("llama-vt pair-start failed (non-fatal): %s", exc)
+                vt_state = "start-failed"
+
+    response: dict[str, Any] = {"ok": True, "active": entry.id}
+    if vt_state is not None:
+        response["vt"] = vt_state
+    return response
 
 
 # ────────────────────────── per-model params editor ────────────────
