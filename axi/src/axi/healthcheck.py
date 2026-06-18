@@ -138,6 +138,31 @@ _GAME_DROPIN_WAKEWORD = _SYSTEMD_USER_DIR / "axi-voice.service.d" / "game-mode.c
 _GAME_COPILOT_MODEL_ID = "qwen35-2b"
 
 
+# Minimum on-disk size for a valid model file (1 MB).  Any file smaller than
+# this is either missing data, a truncated download, or an HTML error page saved
+# by curl.  Real Piper .onnx voices are tens of MB; real GGUFs are hundreds of
+# MB — so 1 MB is a safe floor that catches corruption without false-failing any
+# legitimate model.
+_MIN_MODEL_BYTES: int = 1_000_000
+
+
+def _model_file_ok(path: Path, min_bytes: int) -> tuple[bool, str]:
+    """Return (ok, reason) for a model file path.
+
+    ok=False when:
+      - the file does not exist  → reason contains "missing"
+      - the file is smaller than min_bytes → reason contains "too small (N bytes, expected ≥ M)"
+
+    ok=True when the file exists and its size >= min_bytes; reason is "".
+    """
+    if not path.exists():
+        return False, f"missing: {path}"
+    size = path.stat().st_size
+    if size < min_bytes:
+        return False, f"too small ({size} bytes, expected ≥ {min_bytes}): {path.name}"
+    return True, ""
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Default side-effecting callables (production implementations)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -669,7 +694,8 @@ def check_nano_gguf(
 
         gguf_path = Path(cfg["gguf"]) if cfg and cfg.get("gguf") else default_gguf
 
-        if gguf_path.exists():
+        ok, reason = _model_file_ok(gguf_path, _MIN_MODEL_BYTES)
+        if ok:
             return CheckResult(
                 "nano-gguf",
                 CheckStatus.PASS,
@@ -678,7 +704,7 @@ def check_nano_gguf(
         return CheckResult(
             "nano-gguf",
             CheckStatus.FAIL,
-            f"missing: {gguf_path}",
+            reason,
         )
     except Exception as exc:  # noqa: BLE001
         return CheckResult("nano-gguf", CheckStatus.FAIL, str(exc))
@@ -712,9 +738,10 @@ def check_active_brain_gguf(
         )
 
     p = Path(gguf)
-    if p.exists():
+    ok, reason = _model_file_ok(p, _MIN_MODEL_BYTES)
+    if ok:
         return CheckResult("brain-gguf", CheckStatus.PASS, f"exists: {p.name}")
-    return CheckResult("brain-gguf", CheckStatus.FAIL, f"missing: {p}")
+    return CheckResult("brain-gguf", CheckStatus.FAIL, reason)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -922,24 +949,26 @@ def check_piper_tts(
             "piper-tts binary not found in PATH",
         )
 
-    if not es_voice_path.exists():
+    es_ok, es_reason = _model_file_ok(es_voice_path, _MIN_MODEL_BYTES)
+    if not es_ok:
         return CheckResult(
             "piper-tts",
             CheckStatus.FAIL,
-            f"ES voice model missing: {es_voice_path}",
+            f"ES voice {es_reason}",
         )
 
-    if not en_voice_path.exists():
+    en_ok, en_reason = _model_file_ok(en_voice_path, _MIN_MODEL_BYTES)
+    if not en_ok:
         return CheckResult(
             "piper-tts",
             CheckStatus.WARN,
-            f"EN voice model missing (EN replies may fail): {en_voice_path}",
+            f"EN voice {en_reason} (EN replies may fail)",
         )
 
     return CheckResult(
         "piper-tts",
         CheckStatus.PASS,
-        f"binary ok, ES + EN voices present",
+        "binary ok, ES + EN voices present",
     )
 
 
@@ -1204,13 +1233,15 @@ def check_critical_files(
     except (OSError, json.JSONDecodeError) as exc:
         fails.append(f"config.json invalid: {exc}")
 
-    # Piper ES voice — critical
-    if not es_voice_path.exists():
-        fails.append(f"Piper ES voice missing: {es_voice_path.name}")
+    # Piper ES voice — critical (missing or truncated = FAIL)
+    es_ok, es_reason = _model_file_ok(es_voice_path, _MIN_MODEL_BYTES)
+    if not es_ok:
+        fails.append(f"Piper ES voice {es_reason}")
 
-    # Piper EN voice — warn
-    if not en_voice_path.exists():
-        warns.append(f"Piper EN voice missing: {en_voice_path.name}")
+    # Piper EN voice — warn (missing or truncated = WARN)
+    en_ok, en_reason = _model_file_ok(en_voice_path, _MIN_MODEL_BYTES)
+    if not en_ok:
+        warns.append(f"Piper EN voice {en_reason}")
 
     # VAPID — warn
     if not vapid_path.exists():
