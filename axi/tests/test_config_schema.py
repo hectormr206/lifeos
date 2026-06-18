@@ -127,6 +127,68 @@ def test_lenient_load_accepts_unknown_key_and_warns():
     assert any("unknown key" in e["message"] for e in recent)
 
 
+# ===========================================================================
+# openWakeWord config fields (TDD RED → GREEN)
+# ===========================================================================
+
+class TestOpenWakeWordConfigFields:
+    """New config fields for openWakeWord integration must exist with correct defaults."""
+
+    def test_wakeword_threshold_has_correct_default(self):
+        defaults = config_schema.defaults()
+        assert defaults["wakeword_threshold"] == 0.5
+
+    def test_wakeword_threshold_is_number_type(self):
+        js = config_schema.to_json_schema()
+        assert js["properties"]["wakeword_threshold"]["type"] == "number"
+
+    def test_wakeword_threshold_bounds(self):
+        from axi.config_schema import ConfigError
+        # Above 1.0 must be rejected
+        with pytest.raises(ConfigError):
+            config_schema.load_validated({"wakeword_threshold": 1.1})
+
+    def test_wakeword_threshold_valid_values_accepted(self):
+        out = config_schema.load_validated({"wakeword_threshold": 0.7})
+        assert out["wakeword_threshold"] == pytest.approx(0.7)
+
+    def test_wakeword_model_path_has_correct_default(self):
+        defaults = config_schema.defaults()
+        assert defaults["wakeword_model_path"] == "alexa"
+
+    def test_wakeword_model_path_is_string_type(self):
+        js = config_schema.to_json_schema()
+        assert js["properties"]["wakeword_model_path"]["type"] == "string"
+
+    def test_wakeword_model_path_accepts_custom_onnx_path(self):
+        out = config_schema.load_validated(
+            {"wakeword_model_path": "/home/user/models/axi.onnx"}
+        )
+        assert out["wakeword_model_path"] == "/home/user/models/axi.onnx"
+
+    def test_wakeword_engine_has_correct_default(self):
+        defaults = config_schema.defaults()
+        assert defaults["wakeword_engine"] == "openwakeword"
+
+    def test_wakeword_engine_accepts_openwakeword(self):
+        out = config_schema.load_validated({"wakeword_engine": "openwakeword"})
+        assert out["wakeword_engine"] == "openwakeword"
+
+    def test_wakeword_engine_accepts_vad_whisper_legacy(self):
+        out = config_schema.load_validated({"wakeword_engine": "vad_whisper"})
+        assert out["wakeword_engine"] == "vad_whisper"
+
+    def test_wakeword_engine_rejects_unknown_value(self):
+        with pytest.raises(config_schema.ConfigError):
+            config_schema.load_validated({"wakeword_engine": "unknown_engine"})
+
+    def test_all_three_fields_present_in_schema(self):
+        names = set(config_schema.field_names())
+        assert "wakeword_threshold" in names
+        assert "wakeword_model_path" in names
+        assert "wakeword_engine" in names
+
+
 def test_lenient_load_falls_back_on_bad_value():
     events._reset_for_tests()
     out = config_schema.lenient_load({"tray_poll_ms": -1})

@@ -341,6 +341,29 @@ FIELDS: tuple[ConfigField, ...] = (
         "configured (searxng_url reachable). Set to false to keep the vision-only "
         "game co-pilot path without web search.",
     ),
+    # ─────── wake-word engine ───────
+    ConfigField(
+        "wakeword_engine", "string", "openwakeword",
+        "Wake-word detection engine: 'openwakeword' (instant acoustic detection via "
+        "openWakeWord ONNX model — default) or 'vad_whisper' (legacy fallback: "
+        "VAD gating + Whisper transcription for every segment).",
+        choices=("openwakeword", "vad_whisper"),
+    ),
+    ConfigField(
+        "wakeword_model_path", "string", "alexa",
+        "openWakeWord model to load. Accepts either a pretrained model name (e.g. "
+        "'alexa', 'hey_jarvis') or an absolute path to a custom .onnx file (e.g. "
+        "'/home/user/models/axi.onnx'). The loader handles both forms so the "
+        "custom Axi model can be activated with no code change.",
+    ),
+    ConfigField(
+        "wakeword_threshold", "number", 0.5,
+        "Confidence score threshold [0.0–1.0] above which an openWakeWord prediction "
+        "triggers wake detection. Higher values reduce false positives; lower values "
+        "increase recall. Only used when wakeword_engine='openwakeword'.",
+        minimum=0.0,
+        maximum=1.0,
+    ),
 )
 
 

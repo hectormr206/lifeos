@@ -1,9 +1,21 @@
-"""Always-listening wake-word listener for the gaming co-pilot (Slice 1, Approach B).
+"""Always-listening wake-word listener for the gaming co-pilot.
 
-Architecture:
-    Continuous sounddevice InputStream → WebRTCVAD gate → on speech segment end,
-    call the injected transcribe_fn → run match_wake() → if wake detected,
-    call the injected on_wake(command) callback.
+Two detection engines are available and selected via config (wakeword_engine):
+
+  openwakeword (default):
+    Approach A — State machine.  Continuous sounddevice InputStream fires
+    20 ms (320-sample) frames.  Every 4 frames (80 ms / 1280 samples) are
+    fed to openwakeword Model.predict().  When the score for the active
+    model exceeds wakeword_threshold the listener transitions to
+    COMMAND_CAPTURE.  The existing VAD+Whisper path then captures and
+    transcribes the command utterance, calling on_wake(command).  Instant
+    acoustic detection; Whisper only runs for the actual command, not the
+    wake keyword itself.
+
+  vad_whisper (legacy fallback):
+    Approach B — Original design.  VAD gate accumulates every voiced
+    segment and Whisper transcribes each one to look for the wake word.
+    Higher latency but works without openwakeword installed.
 
 Design principles:
 - Dependency-injected for testability: stream_factory, transcribe_fn, on_wake.
@@ -11,13 +23,18 @@ Design principles:
 - Thread-safe: buffer protected by a Lock; callbacks from the sounddevice thread
   never touch mutable state without acquiring the lock.
 - Never modifies the existing Recorder class.
+- oww_predict_fn is injectable so tests never load real ONNX models.
 
 Public API:
     match_wake(transcript) -> (is_wake: bool, command: str)
-    WakeWordListener(...)
+    WakeWordListener(...)           # legacy vad_whisper engine
         .start()  — opens stream, begins listening
         .stop()   — closes stream gracefully
         ._flush_segment()  — force-process buffered audio (used in tests)
+    OWWWakeWordListener(...)        # openwakeword engine (default)
+        .start() / .stop()
+        ._oww_ingest_frame(frame)  — inject a 320-sample frame (tests)
+        ._oww_state                — 'idle' | 'command_capture'
 """
 from __future__ import annotations
 
@@ -658,3 +675,357 @@ class WakeWordListener:
             self._on_wake(command)
         except Exception as e:  # noqa: BLE001
             log.warning("on_wake callback raised: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# OWWWakeWordListener — openWakeWord state-machine engine (Approach A)
+# ---------------------------------------------------------------------------
+
+# openWakeWord processes 80 ms chunks of int16 audio at 16 kHz.
+# 80 ms × 16000 Hz = 1280 samples per chunk.
+# The sounddevice callback delivers 320-sample (20 ms) frames, so we
+# accumulate 4 frames before calling predict().
+_OWW_CHUNK_SAMPLES = 1280       # samples per openwakeword predict() call
+_OWW_FRAME_SAMPLES = _VAD_FRAME_SAMPLES  # 320 — same as VAD frame size
+
+
+def _load_oww_model(model_path: str) -> Any:
+    """Load an openWakeWord model by pretrained name or .onnx file path.
+
+    Accepts either:
+      - A pretrained model name (e.g. 'alexa', 'hey_jarvis') — downloaded
+        automatically on first call.
+      - An absolute path to a custom .onnx file (e.g. the trained Axi model).
+
+    Returns an object with a .predict(chunk: np.ndarray) -> dict method.
+    """
+    from openwakeword.model import Model  # noqa: PLC0415
+    return Model(wakeword_models=[model_path])
+
+
+class OWWWakeWordListener:
+    """Wake-word listener using openWakeWord for instant acoustic detection.
+
+    State machine:
+      IDLE:
+        - Accumulate 320-sample (20 ms) frames into 1280-sample (80 ms) chunks.
+        - Call oww_model.predict(chunk) after every 4 frames.
+        - If the active model's score >= oww_threshold → COMMAND_CAPTURE.
+
+      COMMAND_CAPTURE:
+        - Reuse the existing VAD accumulation to capture the command audio
+          after the wake event (until silence or max segment length).
+        - Enqueue segment → transcribe_fn → is_hallucination filter →
+          match_wake() → on_wake(command).
+        - Return to IDLE.
+
+    Parameters
+    ----------
+    transcribe_fn:
+        Callable(audio: np.ndarray) -> (text, lang, prob).
+    on_wake:
+        Callable(command: str) -> None.  Fired on worker thread.
+    stream_factory:
+        Callable(callback, *, sample_rate, ...) -> stream with start/stop/close.
+    oww_predict_fn:
+        Injectable predict function for tests. Signature:
+          (chunk: np.ndarray) -> dict[str, float]
+        If None, a real openWakeWord Model is loaded from oww_model_path.
+    oww_model_path:
+        Pretrained model name or path to .onnx file (used when oww_predict_fn
+        is None).  Default 'alexa'.
+    oww_threshold:
+        Confidence score [0.0–1.0] above which wake is declared. Default 0.5.
+    silence_duration_s:
+        Seconds of consecutive silence marking the end of a command segment.
+    max_segment_s:
+        Hard cap on command segment length.
+    sample_rate:
+        Audio sample rate in Hz (must be 16000).
+    vad_aggressiveness:
+        VAD aggressiveness for COMMAND_CAPTURE accumulation (0–3).
+    """
+
+    def __init__(
+        self,
+        *,
+        transcribe_fn: Callable,
+        on_wake: Callable,
+        stream_factory: Callable | None = None,
+        oww_predict_fn: Callable | None = None,
+        oww_model_path: str = "alexa",
+        oww_threshold: float = 0.5,
+        silence_duration_s: float = _DEFAULT_SILENCE_DURATION_S,
+        max_segment_s: float = _DEFAULT_MAX_SEGMENT_S,
+        sample_rate: int = SAMPLE_RATE,
+        vad_aggressiveness: int = 2,
+    ) -> None:
+        self._transcribe_fn = transcribe_fn
+        self._on_wake = on_wake
+        self._stream_factory = stream_factory or _default_stream_factory
+        self._oww_threshold = oww_threshold
+        self._oww_model_path = oww_model_path
+        self._silence_duration_s = silence_duration_s
+        self._max_segment_s = max_segment_s
+        self._sample_rate = sample_rate
+        self._vad_aggressiveness = vad_aggressiveness
+
+        # Lazy-loaded OWW model (real ONNX).  If oww_predict_fn is supplied,
+        # _oww_model is never loaded — test isolation without real ONNX.
+        self._oww_model: Any = None
+        self._oww_predict_fn: Callable | None = oww_predict_fn
+
+        # State machine.
+        self._oww_state: str = "idle"          # 'idle' | 'command_capture'
+        self._oww_frame_buf: list[np.ndarray] = []  # accumulate 320-sample frames
+
+        # COMMAND_CAPTURE VAD accumulation (mirrors WakeWordListener).
+        self._lock = threading.Lock()
+        self._voiced_frames: list[np.ndarray] = []
+        self._silent_frame_count: int = 0
+        self._voiced_frame_count: int = 0
+        self._silence_frames_threshold = int(
+            silence_duration_s / (_VAD_FRAME_MS / 1000)
+        )
+        self._max_frames = int(max_segment_s * sample_rate / _VAD_FRAME_SAMPLES)
+
+        # Worker queue (same pattern as WakeWordListener).
+        self._segment_queue: deque[np.ndarray] = deque()
+        self._queue_lock = threading.Lock()
+        self._queue_event = threading.Event()
+        self._worker: threading.Thread | None = None
+        self._vad: Any = None
+        self._stream: Any = None
+        self._running = False
+
+        # Rate limiters.
+        self._rl_activity = _RateLimiter(_CALLBACK_LOG_INTERVAL_S)
+        self._rl_vad_error = _RateLimiter(_CALLBACK_LOG_INTERVAL_S)
+        self._rl_overflow = _RateLimiter(_CALLBACK_LOG_INTERVAL_S)
+
+    # ------------------------------------------------------------------
+    # Internal OWW predict dispatch
+    # ------------------------------------------------------------------
+
+    def _predict(self, chunk: np.ndarray) -> dict:
+        """Call predict on the OWW model or injected predict function."""
+        if self._oww_predict_fn is not None:
+            return self._oww_predict_fn(chunk)
+        if self._oww_model is None:
+            self._oww_model = _load_oww_model(self._oww_model_path)
+        # openWakeWord expects int16 audio.
+        chunk_int16 = (np.clip(chunk, -1.0, 1.0) * 32767).astype(np.int16)
+        return self._oww_model.predict(chunk_int16)
+
+    def _max_score(self, scores: dict) -> float:
+        """Return the highest score across all active model outputs."""
+        if not scores:
+            return 0.0
+        return max(scores.values())
+
+    # ------------------------------------------------------------------
+    # Frame ingestion — called directly in tests; by audio callback in production
+    # ------------------------------------------------------------------
+
+    def _oww_ingest_frame(self, frame: np.ndarray) -> None:
+        """Process a single 320-sample frame through the state machine.
+
+        IDLE: accumulate frames into 1280-sample chunks and call predict.
+        COMMAND_CAPTURE: run VAD accumulation to build the command segment.
+
+        Thread-safe: called from the audio callback (sounddevice thread) and
+        from tests (main thread).  The lock guards COMMAND_CAPTURE mutable state.
+        """
+        # Ensure the frame is exactly 320 samples (pad/trim like WakeWordListener).
+        if len(frame) < _OWW_FRAME_SAMPLES:
+            frame = np.pad(frame, (0, _OWW_FRAME_SAMPLES - len(frame)))
+        elif len(frame) > _OWW_FRAME_SAMPLES:
+            frame = frame[:_OWW_FRAME_SAMPLES]
+
+        if self._oww_state == "idle":
+            self._oww_frame_buf.append(frame.copy())
+            if len(self._oww_frame_buf) >= _OWW_CHUNK_SAMPLES // _OWW_FRAME_SAMPLES:
+                chunk = np.concatenate(self._oww_frame_buf).flatten()
+                self._oww_frame_buf = []
+                scores = self._predict(chunk)
+                score = self._max_score(scores)
+                log.debug("oww predict scores=%s max=%.4f threshold=%.2f", scores, score, self._oww_threshold)
+                if score >= self._oww_threshold:
+                    log.info(
+                        "oww: WAKE DETECTED (score=%.4f >= threshold=%.2f) — entering COMMAND_CAPTURE",
+                        score, self._oww_threshold,
+                    )
+                    self._oww_state = "command_capture"
+                    # Reset VAD accumulation buffers for the command.
+                    with self._lock:
+                        self._voiced_frames = []
+                        self._voiced_frame_count = 0
+                        self._silent_frame_count = 0
+
+        elif self._oww_state == "command_capture":
+            # VAD-gate the command audio (same logic as WakeWordListener._audio_callback).
+            if self._vad is None:
+                return  # VAD not yet initialized (before start())
+            try:
+                is_speech = self._vad.is_speech(_to_pcm16_bytes(frame), self._sample_rate)
+            except Exception as exc:  # noqa: BLE001
+                if self._rl_vad_error.allow():
+                    log.error("oww command_capture VAD error: %s", exc)
+                return
+
+            with self._lock:
+                if is_speech:
+                    self._voiced_frames.append(frame)
+                    self._voiced_frame_count += 1
+                    self._silent_frame_count = 0
+                else:
+                    self._silent_frame_count += 1
+                    if self._voiced_frame_count > 0:
+                        self._voiced_frames.append(frame)
+
+                should_flush = False
+                if (
+                    self._voiced_frame_count >= _MIN_VOICED_FRAMES
+                    and self._silent_frame_count >= self._silence_frames_threshold
+                ):
+                    should_flush = True
+                elif len(self._voiced_frames) >= self._max_frames:
+                    should_flush = True
+
+                if should_flush:
+                    self._enqueue_command_segment()
+                    self._oww_state = "idle"
+
+    def _enqueue_command_segment(self) -> None:
+        """Extract buffered command audio and enqueue for transcription.
+
+        Called with self._lock held.
+        """
+        if not self._voiced_frames:
+            # No voiced audio captured — return to IDLE without calling on_wake.
+            return
+        segment = np.concatenate(self._voiced_frames).flatten()
+        duration_s = len(self._voiced_frames) * _VAD_FRAME_MS / 1000.0
+        log.info(
+            "oww: enqueuing command segment — frames=%d duration=%.2fs",
+            len(self._voiced_frames), duration_s,
+        )
+        self._voiced_frames = []
+        self._voiced_frame_count = 0
+        self._silent_frame_count = 0
+        with self._queue_lock:
+            self._segment_queue.append(segment)
+        self._queue_event.set()
+
+    # ------------------------------------------------------------------
+    # Audio callback — runs on sounddevice callback thread
+    # ------------------------------------------------------------------
+
+    def _audio_callback(self, indata: np.ndarray, frames: int, time_info: Any, status: Any) -> None:
+        """Sounddevice callback: route each 320-sample frame to _oww_ingest_frame."""
+        if status:
+            if self._rl_overflow.allow():
+                log.warning("oww portaudio status: %s", status)
+
+        frame = indata.copy().flatten()
+        if self._rl_activity.allow():
+            rms = float(np.sqrt(np.mean(frame ** 2)))
+            log.info(
+                "oww callback active — state=%s rms=%.5f",
+                self._oww_state, rms,
+            )
+        self._oww_ingest_frame(frame)
+
+    # ------------------------------------------------------------------
+    # Worker thread — transcribes command segments and fires on_wake
+    # ------------------------------------------------------------------
+
+    def _worker_loop(self) -> None:
+        """Drain segment queue and process each command segment."""
+        while True:
+            self._queue_event.wait(timeout=0.5)
+            self._queue_event.clear()
+            while True:
+                with self._queue_lock:
+                    if not self._segment_queue:
+                        break
+                    segment = self._segment_queue.popleft()
+                self._process_command_segment(segment)
+            with self._queue_lock:
+                if not self._running and not self._segment_queue:
+                    break
+
+    def _process_command_segment(self, audio: np.ndarray) -> None:
+        """Transcribe a command segment and fire on_wake if wake is detected."""
+        if audio.size == 0:
+            return
+        try:
+            result = self._transcribe_fn(audio)
+            text = result[0] if isinstance(result, tuple) else str(result or "")
+        except Exception as e:  # noqa: BLE001
+            log.warning("oww command transcribe failed: %s", e)
+            return
+
+        if not text:
+            log.debug("oww: transcribe returned empty — returning to idle")
+            return
+
+        log.info("oww: command transcript=%r", text)
+
+        if is_hallucination(text):
+            log.info("oww: hallucination detected — discarding: %r", text)
+            return
+
+        is_wake, command = match_wake(text)
+        if not is_wake:
+            log.info("oww: no wake match in command transcript %r — returning to idle", text)
+            return
+
+        log.info("oww: COMMAND CONFIRMED — command=%r", command)
+        try:
+            self._on_wake(command)
+        except Exception as e:  # noqa: BLE001
+            log.warning("oww on_wake callback raised: %s", e)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Open the microphone stream and start listening."""
+        if self._running:
+            return
+        self._vad = _make_vad(self._vad_aggressiveness)
+        self._oww_state = "idle"
+        self._oww_frame_buf = []
+        self._running = True
+
+        self._worker = threading.Thread(
+            target=self._worker_loop, name="axi-oww-worker", daemon=True
+        )
+        self._worker.start()
+
+        self._stream = self._stream_factory(
+            self._audio_callback, sample_rate=self._sample_rate
+        )
+        self._stream.start()
+        log.info(
+            "oww wake-word listener started (model=%r threshold=%.2f)",
+            self._oww_model_path, self._oww_threshold,
+        )
+
+    def stop(self) -> None:
+        """Stop listening and clean up resources."""
+        self._running = False
+        self._queue_event.set()
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception as e:  # noqa: BLE001
+                log.warning("oww: error closing stream: %s", e)
+            self._stream = None
+        if self._worker is not None:
+            self._worker.join(timeout=5.0)
+            self._worker = None
+        log.info("oww wake-word listener stopped")

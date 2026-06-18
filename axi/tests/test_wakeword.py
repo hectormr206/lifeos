@@ -1010,3 +1010,269 @@ class TestDaemonWakewordAskEmptyCommand:
         time.sleep(0.2)
 
         assert brain_calls, "brain_ask must be called for a non-empty command"
+
+
+# ===========================================================================
+# openWakeWord state machine — TDD RED → GREEN
+# ===========================================================================
+
+class TestOWWStateMachineIDLE:
+    """IDLE state: accumulate 320-sample frames into 1280-sample chunks and call predict."""
+
+    def test_chunk_accumulation_four_frames_triggers_predict(self):
+        """4 × 320-sample frames must be batched into one 1280-sample predict call."""
+        from axi.wakeword import OWWWakeWordListener
+
+        predict_calls: list[np.ndarray] = []
+
+        def fake_predict(chunk: np.ndarray) -> dict:
+            predict_calls.append(chunk.copy())
+            return {"alexa": 0.0}  # below threshold — stay IDLE
+
+        class _NullStream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        listener = OWWWakeWordListener(
+            transcribe_fn=lambda audio: ("", "es", 0.0),
+            on_wake=lambda cmd: None,
+            stream_factory=lambda callback, **kw: _NullStream(),
+            oww_predict_fn=fake_predict,
+            oww_threshold=0.5,
+        )
+        listener.start()
+
+        # Inject 4 frames of 320 samples each
+        frame = np.zeros(320, dtype=np.float32)
+        for _ in range(4):
+            listener._oww_ingest_frame(frame)
+
+        listener.stop()
+
+        assert len(predict_calls) == 1, (
+            f"Expected exactly 1 predict call per 1280-sample chunk, got {len(predict_calls)}"
+        )
+        assert predict_calls[0].shape == (1280,), (
+            f"predict must receive a 1280-sample chunk, got shape {predict_calls[0].shape}"
+        )
+
+    def test_low_score_stays_idle(self):
+        """A predict score below threshold must NOT transition to COMMAND_CAPTURE."""
+        from axi.wakeword import OWWWakeWordListener
+
+        wake_calls: list[str] = []
+
+        def fake_predict(chunk: np.ndarray) -> dict:
+            return {"alexa": 0.1}  # well below default threshold 0.5
+
+        class _NullStream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        listener = OWWWakeWordListener(
+            transcribe_fn=lambda audio: ("axi test", "es", 0.9),
+            on_wake=lambda cmd: wake_calls.append(cmd),
+            stream_factory=lambda callback, **kw: _NullStream(),
+            oww_predict_fn=fake_predict,
+            oww_threshold=0.5,
+        )
+        listener.start()
+
+        # Feed 8 frames → 2 chunks, both with low score
+        frame = np.zeros(320, dtype=np.float32)
+        for _ in range(8):
+            listener._oww_ingest_frame(frame)
+
+        listener.stop()
+
+        assert not wake_calls, (
+            "Low OWW score must not trigger on_wake. Got calls: %s" % wake_calls
+        )
+        assert listener._oww_state == "idle", (
+            f"State must remain 'idle' after low-score chunks, got {listener._oww_state!r}"
+        )
+
+    def test_high_score_transitions_to_command_capture(self):
+        """A predict score >= threshold must transition state to COMMAND_CAPTURE."""
+        from axi.wakeword import OWWWakeWordListener
+
+        class _NullStream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        listener = OWWWakeWordListener(
+            transcribe_fn=lambda audio: ("", "es", 0.0),
+            on_wake=lambda cmd: None,
+            stream_factory=lambda callback, **kw: _NullStream(),
+            oww_predict_fn=lambda chunk: {"alexa": 0.9},  # above threshold
+            oww_threshold=0.5,
+        )
+        listener.start()
+
+        # One full chunk (4 × 320) with high score triggers transition
+        frame = np.zeros(320, dtype=np.float32)
+        for _ in range(4):
+            listener._oww_ingest_frame(frame)
+
+        # State should now be command_capture
+        state = listener._oww_state
+        listener.stop()
+
+        assert state == "command_capture", (
+            f"Expected 'command_capture' after high OWW score, got {state!r}"
+        )
+
+
+class TestOWWStateMachineCOMMAND_CAPTURE:
+    """COMMAND_CAPTURE state: run existing VAD capture then transcribe → on_wake."""
+
+    def test_command_capture_calls_on_wake_with_command(self):
+        """After OWW detects wake, COMMAND_CAPTURE must transcribe audio and call on_wake.
+
+        VAD classifies constant-amplitude frames (even zeros) as speech.
+        We use low-amplitude random noise for silence frames — VAD correctly
+        rejects random noise below the speech-frequency threshold.
+        """
+        from axi.wakeword import OWWWakeWordListener
+
+        wake_calls: list[str] = []
+        rng = np.random.default_rng(7)
+
+        def fake_transcribe(audio: np.ndarray):
+            return "axi ayudame", "es", 0.95
+
+        class _NullStream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        # Use threshold=0.5, predict always returns 0.9 → immediate capture transition
+        listener = OWWWakeWordListener(
+            transcribe_fn=fake_transcribe,
+            on_wake=lambda cmd: wake_calls.append(cmd),
+            stream_factory=lambda callback, **kw: _NullStream(),
+            oww_predict_fn=lambda chunk: {"alexa": 0.9},
+            oww_threshold=0.5,
+            silence_duration_s=0.04,  # 2 frames at 20ms — very short for test speed
+        )
+        listener.start()
+
+        # Trigger transition to COMMAND_CAPTURE via one full OWW chunk
+        idle_frame = np.zeros(320, dtype=np.float32)
+        for _ in range(4):
+            listener._oww_ingest_frame(idle_frame)
+
+        assert listener._oww_state == "command_capture", "Pre-condition: must enter command_capture"
+
+        # Feed voiced audio (sine wave — VAD classifies as speech, meets _MIN_VOICED_FRAMES=5)
+        t = np.arange(320, dtype=np.float32) / 16000
+        voiced = (0.3 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+        for _ in range(10):
+            listener._oww_ingest_frame(voiced)
+
+        # Feed silence (low-amplitude random noise — VAD classifies as non-speech)
+        for _ in range(10):
+            noise_silence = (rng.standard_normal(320) * 0.0005).astype(np.float32)
+            listener._oww_ingest_frame(noise_silence)
+
+        # Give worker thread time to process
+        time.sleep(0.3)
+        listener.stop()
+
+        assert wake_calls, "on_wake must be called after OWW triggers COMMAND_CAPTURE"
+        assert "ayudame" in wake_calls[0], (
+            f"Expected command 'ayudame' in on_wake, got: {wake_calls[0]!r}"
+        )
+
+    def test_command_capture_returns_to_idle_after_on_wake(self):
+        """After processing the command, state must return to IDLE.
+
+        VAD classifies constant-amplitude frames (even zeros) as speech.
+        We use low-amplitude random noise for silence frames — VAD correctly
+        rejects random noise below the speech-frequency threshold.
+        """
+        from axi.wakeword import OWWWakeWordListener
+
+        rng = np.random.default_rng(42)
+
+        class _NullStream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        listener = OWWWakeWordListener(
+            transcribe_fn=lambda audio: ("axi test", "es", 0.9),
+            on_wake=lambda cmd: None,
+            stream_factory=lambda callback, **kw: _NullStream(),
+            oww_predict_fn=lambda chunk: {"alexa": 0.9},
+            oww_threshold=0.5,
+            silence_duration_s=0.04,  # 2 frames at 20ms each
+        )
+        listener.start()
+
+        # Force into command_capture via 4 OWW frames
+        idle_frame = np.zeros(320, dtype=np.float32)
+        for _ in range(4):
+            listener._oww_ingest_frame(idle_frame)
+
+        assert listener._oww_state == "command_capture", "Pre-condition: must be in command_capture"
+
+        # Feed voiced audio (sine wave — VAD classifies as speech)
+        t = np.arange(320, dtype=np.float32) / 16000
+        voiced = (0.3 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+        for _ in range(6):
+            listener._oww_ingest_frame(voiced)
+
+        # Feed silence (low-amplitude random noise — VAD classifies as non-speech)
+        for _ in range(10):
+            noise_silence = (rng.standard_normal(320) * 0.0005).astype(np.float32)
+            listener._oww_ingest_frame(noise_silence)
+
+        time.sleep(0.3)
+        final_state = listener._oww_state
+        listener.stop()
+
+        assert final_state == "idle", (
+            f"State must return to 'idle' after processing command, got {final_state!r}"
+        )
+
+
+class TestOWWLegacyFallback:
+    """wakeword_engine='vad_whisper' must use the original WakeWordListener path."""
+
+    def test_create_listener_with_legacy_engine(self):
+        """WakeWordListener class must still be importable and instantiable."""
+        from axi.wakeword import WakeWordListener
+
+        class _NullStream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        listener = WakeWordListener(
+            transcribe_fn=lambda audio: ("", "es", 0.0),
+            on_wake=lambda cmd: None,
+            stream_factory=lambda callback, **kw: _NullStream(),
+        )
+        assert listener is not None
+
+    def test_legacy_listener_does_not_have_oww_state(self):
+        """Original WakeWordListener must NOT have _oww_state (clean separation)."""
+        from axi.wakeword import WakeWordListener
+
+        class _NullStream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        listener = WakeWordListener(
+            transcribe_fn=lambda audio: ("", "es", 0.0),
+            on_wake=lambda cmd: None,
+            stream_factory=lambda callback, **kw: _NullStream(),
+        )
+        assert not hasattr(listener, "_oww_state"), (
+            "WakeWordListener (legacy) must not have _oww_state attribute"
+        )

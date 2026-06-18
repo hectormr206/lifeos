@@ -60,6 +60,13 @@ dependencies = [
     # still depends on `webrtcvad`, and `-wheels` overrides the import.
     "webrtcvad-wheels>=2.0.14",
     "freezegun>=1.5.5",
+    # NOTE: openwakeword>=0.6.0 is a required runtime dep for the default
+    # wakeword_engine='openwakeword' but CANNOT be declared here because its
+    # tflite-runtime subdep has no cp312 wheel and blocks uv's resolver.
+    # Install manually into the venv:
+    #   uv pip install openwakeword --no-deps
+    # onnxruntime (already present via faster-whisper) is used automatically.
+    # See: axi/src/axi/wakeword.py OWWWakeWordListener for the integration.
 ]
 
 [build-system]
