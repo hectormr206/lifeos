@@ -69,7 +69,7 @@ WHISPER_SOCK_PATH: Path = _RUNTIME_DIR / "whisper.sock"
 ACTIVE_MODEL_PATH: Path = _STATE_DIR / "active_model.json"
 GAME_MODE_LOCK_PATH: Path = _STATE_DIR / "game-mode.lock"
 
-DASHBOARD_URL = "http://127.0.0.1:8081/"
+DASHBOARD_URL = "https://127.0.0.1:8081/"
 LLAMA_URL = "http://127.0.0.1:8080/v1/models"
 SEARXNG_URL = "http://127.0.0.1:8888/"
 
@@ -109,8 +109,15 @@ def _default_systemctl(svc: str, timeout: int = 5) -> str:
 
 
 def _default_http_get(url: str, timeout: float = HTTP_TIMEOUT):
-    """Open url and return an object with .status and .read()."""
-    return urllib.request.urlopen(url, timeout=timeout)
+    """Open url and return an object with .status and .read().
+
+    Uses an unverified SSL context so the dashboard's local self-signed
+    HTTPS cert (https on 8081) does not fail the check — it's a localhost
+    service, not a public endpoint. The context is ignored for http URLs.
+    """
+    import ssl
+    ctx = ssl._create_unverified_context()
+    return urllib.request.urlopen(url, timeout=timeout, context=ctx)
 
 
 def _default_open_db(db_path: Path, key_path: Path):
@@ -123,7 +130,11 @@ def _default_open_db(db_path: Path, key_path: Path):
 
     key = key_path.read_text().strip() if key_path.exists() else ""
     conn = sqlcipher3.connect(str(db_path), check_same_thread=False, isolation_level=None)
-    conn.execute(f"PRAGMA key='{key}'")
+    # The DB is encrypted with a raw 64-char hex key (store.py uses x'...' form).
+    # Passing it as a passphrase (PRAGMA key='...') makes SQLCipher derive a
+    # DIFFERENT key via KDF → HMAC mismatch → "file is not a database". Use the
+    # raw-hex form to match how store.py opens it.
+    conn.execute(f"PRAGMA key=\"x'{key}'\"")
     conn.row_factory = sqlcipher3.Row
 
     integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
