@@ -17,6 +17,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
+import socket
+import stat
 import subprocess
 import sys
 import urllib.error
@@ -66,11 +70,42 @@ _RUNTIME_DIR = Path(
 DB_PATH: Path = _STATE_DIR / "memory.db"
 KEY_PATH: Path = _STATE_DIR / "memory.key"
 WHISPER_SOCK_PATH: Path = _RUNTIME_DIR / "whisper.sock"
+VOICE_SOCK_PATH: Path = _RUNTIME_DIR / "voice.sock"
 ACTIVE_MODEL_PATH: Path = _STATE_DIR / "active_model.json"
+ACTIVE_NANO_MODEL_PATH: Path = _STATE_DIR / "active_nano_model.json"
 GAME_MODE_LOCK_PATH: Path = _STATE_DIR / "game-mode.lock"
+GAME_PRE_MODEL_PATH: Path = _STATE_DIR / "game-pre-model"
+
+# Config / credential paths
+CONFIG_PATH: Path = Path.home() / ".config" / "axi" / "config.json"
+VAPID_PATH: Path = Path(
+    os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+).parent / "lifeos" / "vapid.json"
+
+# Piper TTS voice paths
+PIPER_ES_VOICE: Path = (
+    Path.home() / "LifeOS/models/piper-voices/es_MX-claude/es_MX-claude-high.onnx"
+)
+PIPER_EN_VOICE: Path = (
+    Path.home() / "LifeOS/models/piper-voices/en_US-lessac/en_US-lessac-medium.onnx"
+)
+
+# Nano model default GGUF path (used when active_nano_model.json is absent)
+NANO_DEFAULT_GGUF: Path = (
+    Path.home() / "LifeOS/models/qwen35-0_8b/Qwen3.5-0.8B-Q4_K_M.gguf"
+)
+
+# Webcam device
+WEBCAM_DEV: Path = Path("/dev/video0")
+
+# Meetings data directory
+MEETINGS_DIR: Path = Path.home() / "LifeOS/data/meetings"
 
 DASHBOARD_URL = "https://127.0.0.1:8081/"
+DASHBOARD_SNAPSHOT_URL = "https://127.0.0.1:8081/api/snapshot"
 LLAMA_URL = "http://127.0.0.1:8080/v1/models"
+LLAMA_CHAT_URL = "http://127.0.0.1:8080/v1/chat/completions"
+NANO_HEALTH_URL = "http://127.0.0.1:8090/health"
 SEARXNG_URL = "http://127.0.0.1:8888/"
 
 # Services that must be active (FAIL if not)
@@ -80,15 +115,27 @@ REQUIRED_SERVICES: list[str] = [
     "axi-whisper",
     "axi-heartbeat",
     "llama-server",
+    "llama-nano",
 ]
 
 # Services that should be active (WARN if not)
 OPTIONAL_SERVICES: list[str] = [
     "axi-tray",
     "axi-translate",
+    "ydotoold",
 ]
 
 HTTP_TIMEOUT = 3.0
+
+# Game-mode CPU drop-in paths
+_SYSTEMD_USER_DIR = Path.home() / ".config/systemd/user"
+_GAME_DROPIN_WHISPER = _SYSTEMD_USER_DIR / "axi-whisper.service.d" / "game-mode.conf"
+_GAME_DROPIN_LLAMA = _SYSTEMD_USER_DIR / "llama-server.service.d" / "game-mode.conf"
+_GAME_DROPIN_TRANSLATE = _SYSTEMD_USER_DIR / "axi-translate.service.d" / "game-mode.conf"
+_GAME_DROPIN_WAKEWORD = _SYSTEMD_USER_DIR / "axi-voice.service.d" / "game-mode.conf"
+
+# qwen35-2b game co-pilot id
+_GAME_COPILOT_MODEL_ID = "qwen35-2b"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -118,6 +165,20 @@ def _default_http_get(url: str, timeout: float = HTTP_TIMEOUT):
     import ssl
     ctx = ssl._create_unverified_context()
     return urllib.request.urlopen(url, timeout=timeout, context=ctx)
+
+
+def _default_http_post(url: str, payload: dict, timeout: float = HTTP_TIMEOUT):
+    """POST JSON payload and return an object with .status and .read()."""
+    import ssl
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    ctx = ssl._create_unverified_context()
+    return urllib.request.urlopen(req, timeout=timeout, context=ctx)
 
 
 def _default_open_db(db_path: Path, key_path: Path):
@@ -150,12 +211,83 @@ def _default_open_db(db_path: Path, key_path: Path):
     return types.SimpleNamespace(integrity=integrity, conversation_count=conv_count)
 
 
+def _default_open_db_meeting(db_path: Path, key_path: Path):
+    """Open memory.db with SQLCipher and query meeting tables.
+
+    Returns a namespace with:
+      .has_meetings_table (bool)
+      .has_segments_table (bool)
+      .stuck_count (int) — meetings stuck in recording/processing status
+    Raises on connection failure.
+    """
+    import sqlcipher3
+
+    key = key_path.read_text().strip() if key_path.exists() else ""
+    conn = sqlcipher3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    conn.execute(f"PRAGMA key=\"x'{key}'\"")
+    conn.row_factory = sqlcipher3.Row
+
+    # Check table existence via sqlite_master
+    tables = {
+        r["name"]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    has_meetings = "meetings" in tables
+    has_segments = "meeting_segments" in tables
+
+    stuck_count = 0
+    if has_meetings:
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM meetings WHERE status IN ('recording', 'processing')"
+            ).fetchone()
+            stuck_count = int(row["n"]) if row else 0
+        except Exception:  # noqa: BLE001
+            pass
+
+    conn.close()
+
+    import types
+    return types.SimpleNamespace(
+        has_meetings_table=has_meetings,
+        has_segments_table=has_segments,
+        stuck_count=stuck_count,
+    )
+
+
 def _default_active_model(path: Path) -> Optional[dict]:
     """Read active_model.json. Returns dict or None if not found."""
     try:
         return json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _default_which(cmd: str) -> Optional[str]:
+    """Wraps shutil.which — injectable for tests."""
+    return shutil.which(cmd)
+
+
+def _default_disk_usage(path: Path):
+    """Return shutil.disk_usage result for the given path.
+    Raises FileNotFoundError if path does not exist."""
+    return shutil.disk_usage(path)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _slug(s: str) -> str:
+    """Normalize a model ID for fuzzy comparison.
+
+    Lowercases and strips all non-alphanumeric characters so
+    'Qwen3.6-35B-A3B' and 'qwen36-35b-a3b' compare equal.
+    """
+    return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -253,7 +385,7 @@ def check_llama_server(
     url: str = LLAMA_URL,
     active_model_path: Path = ACTIVE_MODEL_PATH,
 ) -> CheckResult:
-    """GET /v1/models — PASS if 200. WARN if served model != active_model.json."""
+    """GET /v1/models — PASS if 200. WARN if served model != active_model.json (slug-normalized)."""
     try:
         resp = http_get_fn(url)
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
@@ -275,15 +407,16 @@ def check_llama_server(
     except Exception:  # noqa: BLE001
         pass
 
-    # Compare with active_model.json
+    # Compare with active_model.json using slug-normalization to avoid spurious
+    # mismatches like 'Qwen3.6-35B-A3B' vs 'qwen36-35b-a3b'.
     active = active_model_fn(active_model_path)
     active_id = active.get("id") if isinstance(active, dict) else None
 
-    if active_id and served_id and active_id != served_id:
+    if active_id and served_id and _slug(active_id) != _slug(served_id):
         return CheckResult(
             "llama-server",
             CheckStatus.WARN,
-            f"model mismatch — serving '{served_id}' but active_model.json=''{active_id}''",
+            f"model mismatch — serving '{served_id}' but active_model.json='{active_id}'",
         )
 
     detail = f"serving '{served_id}'" if served_id else "200 OK"
@@ -370,7 +503,7 @@ def check_dashboard_http(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CHECK 7: Game-mode state (informational only — WARN max)
+# CHECK 7: Game-mode state (coherence check — extended)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -391,6 +524,775 @@ def check_game_mode_state(
 
     detail = f"game-mode OFF — model: {model_id or 'unknown'}"
     return CheckResult("game-mode", CheckStatus.PASS, detail)
+
+
+def check_game_mode_coherence(
+    *,
+    lock_path: Path = GAME_MODE_LOCK_PATH,
+    pre_model_path: Path = GAME_PRE_MODEL_PATH,
+    active_model_fn: Callable = _default_active_model,
+    active_model_path: Path = ACTIVE_MODEL_PATH,
+    systemctl_fn: Callable[[str, int], str] = _default_systemctl,
+    dropin_whisper: Path = _GAME_DROPIN_WHISPER,
+    dropin_llama: Path = _GAME_DROPIN_LLAMA,
+    dropin_translate: Path = _GAME_DROPIN_TRANSLATE,
+    dropin_wakeword: Path = _GAME_DROPIN_WAKEWORD,
+) -> CheckResult:
+    """Validate game-mode internal coherence.
+
+    If game-mode.lock is absent: PASS (not in game mode).
+    If present: check that the lock content is 'relocate' or 'offline',
+    and that the expected invariants hold for each sub-mode.
+    WARN on any inconsistency.
+    """
+    if not lock_path.exists():
+        return CheckResult("game-mode-coherence", CheckStatus.PASS, "not in game mode")
+
+    # Read lock content
+    try:
+        mode = lock_path.read_text().strip()
+    except OSError as exc:
+        return CheckResult(
+            "game-mode-coherence",
+            CheckStatus.WARN,
+            f"lock exists but unreadable: {exc}",
+        )
+
+    if mode not in ("relocate", "offline"):
+        return CheckResult(
+            "game-mode-coherence",
+            CheckStatus.WARN,
+            f"unexpected lock content: {mode!r} (expected 'relocate' or 'offline')",
+        )
+
+    issues: list[str] = []
+
+    if mode == "relocate":
+        # Active model should be qwen35-2b
+        active = active_model_fn(active_model_path)
+        active_id = active.get("id") if isinstance(active, dict) else None
+        if active_id != _GAME_COPILOT_MODEL_ID:
+            issues.append(
+                f"active model is '{active_id}', expected '{_GAME_COPILOT_MODEL_ID}'"
+            )
+
+        # CPU drop-ins should be present
+        for drop_path, label in [
+            (dropin_whisper, "axi-whisper drop-in"),
+            (dropin_llama, "llama-server drop-in"),
+            (dropin_translate, "axi-translate drop-in"),
+            (dropin_wakeword, "axi-voice/wakeword drop-in"),
+        ]:
+            if not drop_path.exists():
+                issues.append(f"{label} missing ({drop_path})")
+
+        # Wakeword drop-in should contain AXI_WAKEWORD_ENABLED=1
+        if dropin_wakeword.exists():
+            try:
+                content = dropin_wakeword.read_text()
+                if "AXI_WAKEWORD_ENABLED=1" not in content:
+                    issues.append("wakeword drop-in missing AXI_WAKEWORD_ENABLED=1")
+            except OSError:
+                pass
+
+    elif mode == "offline":
+        # llama-server should NOT be active in offline mode
+        try:
+            state = systemctl_fn("llama-server")
+            if state == "active":
+                issues.append("llama-server is active in offline mode (expected stopped)")
+        except Exception as exc:  # noqa: BLE001
+            issues.append(f"could not check llama-server state: {exc}")
+
+        # game-pre-model backup should exist (saved during game-on)
+        if not pre_model_path.exists():
+            issues.append(f"game-pre-model backup missing ({pre_model_path})")
+
+    if issues:
+        return CheckResult(
+            "game-mode-coherence",
+            CheckStatus.WARN,
+            f"mode={mode}, issues: {'; '.join(issues)}",
+        )
+
+    return CheckResult(
+        "game-mode-coherence",
+        CheckStatus.PASS,
+        f"mode={mode}, coherent",
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 8: Nano server health
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_nano_server(
+    *,
+    http_get_fn: Callable = _default_http_get,
+    url: str = NANO_HEALTH_URL,
+) -> CheckResult:
+    """GET http://127.0.0.1:8090/health — PASS if 200, FAIL otherwise."""
+    try:
+        resp = http_get_fn(url)
+        if resp.status == 200:
+            return CheckResult("nano-server", CheckStatus.PASS, "healthy")
+        return CheckResult(
+            "nano-server", CheckStatus.FAIL, f"HTTP {resp.status}"
+        )
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        return CheckResult("nano-server", CheckStatus.FAIL, str(exc))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 9: Nano GGUF file on disk
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_nano_gguf(
+    *,
+    active_nano_path: Path = ACTIVE_NANO_MODEL_PATH,
+    default_gguf: Path = NANO_DEFAULT_GGUF,
+) -> CheckResult:
+    """Verify the nano model GGUF file exists on disk.
+
+    Reads active_nano_model.json for the gguf path; falls back to the
+    default Qwen3.5-0.8B path if the file is absent.
+    """
+    try:
+        cfg: Optional[dict] = None
+        if active_nano_path.exists():
+            try:
+                cfg = json.loads(active_nano_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        gguf_path = Path(cfg["gguf"]) if cfg and cfg.get("gguf") else default_gguf
+
+        if gguf_path.exists():
+            return CheckResult(
+                "nano-gguf",
+                CheckStatus.PASS,
+                f"exists: {gguf_path.name}",
+            )
+        return CheckResult(
+            "nano-gguf",
+            CheckStatus.FAIL,
+            f"missing: {gguf_path}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("nano-gguf", CheckStatus.FAIL, str(exc))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 10: Active brain GGUF file on disk
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_active_brain_gguf(
+    *,
+    active_model_fn: Callable = _default_active_model,
+    active_model_path: Path = ACTIVE_MODEL_PATH,
+) -> CheckResult:
+    """FAIL if active_model.json is missing or the gguf path does not exist."""
+    active = active_model_fn(active_model_path)
+    if not isinstance(active, dict):
+        return CheckResult(
+            "brain-gguf",
+            CheckStatus.FAIL,
+            "active_model.json missing or invalid",
+        )
+
+    gguf = active.get("gguf")
+    if not gguf:
+        return CheckResult(
+            "brain-gguf",
+            CheckStatus.FAIL,
+            "active_model.json has no 'gguf' key",
+        )
+
+    p = Path(gguf)
+    if p.exists():
+        return CheckResult("brain-gguf", CheckStatus.PASS, f"exists: {p.name}")
+    return CheckResult("brain-gguf", CheckStatus.FAIL, f"missing: {p}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 11: Active brain mmproj file (vision)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_active_brain_mmproj(
+    *,
+    active_model_fn: Callable = _default_active_model,
+    active_model_path: Path = ACTIVE_MODEL_PATH,
+) -> CheckResult:
+    """WARN if the active model declares an mmproj but the file is missing."""
+    active = active_model_fn(active_model_path)
+    if not isinstance(active, dict):
+        return CheckResult(
+            "brain-mmproj",
+            CheckStatus.WARN,
+            "active_model.json missing — cannot check mmproj",
+        )
+
+    mmproj = active.get("mmproj")
+    if not mmproj:
+        return CheckResult(
+            "brain-mmproj",
+            CheckStatus.PASS,
+            "no mmproj declared (text-only model)",
+        )
+
+    p = Path(mmproj)
+    if p.exists():
+        return CheckResult("brain-mmproj", CheckStatus.PASS, f"exists: {p.name}")
+    return CheckResult(
+        "brain-mmproj",
+        CheckStatus.WARN,
+        f"missing — vision degraded: {p}",
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 12: Brain ping (fast inference smoke test)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_brain_ping(
+    *,
+    http_post_fn: Callable = _default_http_post,
+    url: str = LLAMA_CHAT_URL,
+) -> CheckResult:
+    """POST a 1-token chat completion to verify the brain can infer.
+
+    Uses max_tokens=1 so the request is near-instant even on a loaded model.
+    PASS if HTTP 200 and the response contains a non-empty choices list.
+    WARN if 200 but unexpected body; FAIL on connection error.
+    """
+    payload = {
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+    }
+    try:
+        resp = http_post_fn(url, payload)
+        if resp.status != 200:
+            return CheckResult(
+                "brain-ping", CheckStatus.FAIL, f"HTTP {resp.status}"
+            )
+        body = json.loads(resp.read())
+        choices = body.get("choices", [])
+        if choices:
+            return CheckResult("brain-ping", CheckStatus.PASS, "1-token response OK")
+        return CheckResult(
+            "brain-ping",
+            CheckStatus.WARN,
+            "200 OK but no choices in response body",
+        )
+    except urllib.error.HTTPError as exc:
+        return CheckResult(
+            "brain-ping", CheckStatus.FAIL, f"HTTP {exc.code}: {exc.reason}"
+        )
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        return CheckResult("brain-ping", CheckStatus.FAIL, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("brain-ping", CheckStatus.WARN, f"unexpected: {exc}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 13: Screen capture (spectacle binary)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_screen_capture(
+    *,
+    which_fn: Callable = _default_which,
+) -> CheckResult:
+    """Check that spectacle is available for screen capture.
+
+    FAIL if spectacle is not in PATH.
+    PASS if found (binary-only check — no actual capture to avoid side effects).
+    """
+    try:
+        path = which_fn("spectacle")
+        if path:
+            return CheckResult("screen-capture", CheckStatus.PASS, f"spectacle: {path}")
+        return CheckResult(
+            "screen-capture",
+            CheckStatus.FAIL,
+            "spectacle not found in PATH",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("screen-capture", CheckStatus.FAIL, str(exc))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 14: OCR (tesseract)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_ocr(
+    *,
+    which_fn: Callable = _default_which,
+) -> CheckResult:
+    """WARN if tesseract is not in PATH (OCR is opportunistic)."""
+    try:
+        path = which_fn("tesseract")
+        if path:
+            return CheckResult("ocr", CheckStatus.PASS, f"tesseract: {path}")
+        return CheckResult(
+            "ocr",
+            CheckStatus.WARN,
+            "tesseract not found — OCR unavailable",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("ocr", CheckStatus.WARN, str(exc))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 15: Whisper ping (safe round-trip via whisper_client.ping)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_whisper_ping(
+    *,
+    sock_path: Path = WHISPER_SOCK_PATH,
+    ping_fn: Optional[Callable] = None,
+) -> CheckResult:
+    """Verify whisper server is live via a socket ping.
+
+    Uses whisper_client.ping() if available (sends a silent frame).
+    Falls back to a plain socket-exists check if the ping helper is absent
+    or unavailable.
+    """
+    # Fast path: socket absent → skip attempting ping
+    if not sock_path.exists():
+        return CheckResult(
+            "whisper-ping",
+            CheckStatus.FAIL,
+            f"socket not found: {sock_path}",
+        )
+
+    # Try the injected or default ping function
+    try:
+        if ping_fn is None:
+            from axi.whisper_client import ping as _ping  # noqa: PLC0415
+            result = _ping(timeout_s=5.0)
+        else:
+            result = ping_fn()
+
+        if result:
+            return CheckResult("whisper-ping", CheckStatus.PASS, "server responded to ping")
+        return CheckResult(
+            "whisper-ping",
+            CheckStatus.FAIL,
+            "ping returned False — server unresponsive",
+        )
+    except Exception as exc:  # noqa: BLE001
+        # If the ping itself crashes (import error, network error), degrade to
+        # the socket-exists check which already passed above.
+        return CheckResult(
+            "whisper-ping",
+            CheckStatus.WARN,
+            f"ping failed ({exc}) — socket present but live check skipped",
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 16: Piper TTS binaries and voice models
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_piper_tts(
+    *,
+    which_fn: Callable = _default_which,
+    es_voice_path: Path = PIPER_ES_VOICE,
+    en_voice_path: Path = PIPER_EN_VOICE,
+) -> CheckResult:
+    """Verify piper-tts binary and voice model files.
+
+    FAIL if piper-tts binary missing OR ES voice model missing.
+    WARN if EN voice model missing (optional but used for English replies).
+    """
+    binary = which_fn("piper-tts")
+    if not binary:
+        return CheckResult(
+            "piper-tts",
+            CheckStatus.FAIL,
+            "piper-tts binary not found in PATH",
+        )
+
+    if not es_voice_path.exists():
+        return CheckResult(
+            "piper-tts",
+            CheckStatus.FAIL,
+            f"ES voice model missing: {es_voice_path}",
+        )
+
+    if not en_voice_path.exists():
+        return CheckResult(
+            "piper-tts",
+            CheckStatus.WARN,
+            f"EN voice model missing (EN replies may fail): {en_voice_path}",
+        )
+
+    return CheckResult(
+        "piper-tts",
+        CheckStatus.PASS,
+        f"binary ok, ES + EN voices present",
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 17: Webcam device
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_webcam(
+    *,
+    device_path: Path = WEBCAM_DEV,
+    which_fn: Callable = _default_which,
+) -> CheckResult:
+    """WARN if /dev/video0 is absent or ffmpeg is missing (no hardware = WARN only)."""
+    device_ok = device_path.exists()
+    ffmpeg_ok = bool(which_fn("ffmpeg"))
+
+    if device_ok and ffmpeg_ok:
+        return CheckResult("webcam", CheckStatus.PASS, f"{device_path} + ffmpeg")
+    issues = []
+    if not device_ok:
+        issues.append(f"{device_path} not found")
+    if not ffmpeg_ok:
+        issues.append("ffmpeg not in PATH")
+    return CheckResult(
+        "webcam",
+        CheckStatus.WARN,
+        "; ".join(issues),
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 18: Voice socket
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_voice_socket(
+    *,
+    sock_path: Path = VOICE_SOCK_PATH,
+) -> CheckResult:
+    """FAIL if voice.sock is absent or is not a Unix socket."""
+    if not sock_path.exists():
+        return CheckResult(
+            "voice-socket",
+            CheckStatus.FAIL,
+            f"not found: {sock_path}",
+        )
+    try:
+        mode = sock_path.stat().st_mode
+        if stat.S_ISSOCK(mode):
+            return CheckResult("voice-socket", CheckStatus.PASS, str(sock_path))
+        return CheckResult(
+            "voice-socket",
+            CheckStatus.FAIL,
+            f"path exists but is not a socket: {sock_path}",
+        )
+    except OSError as exc:
+        return CheckResult("voice-socket", CheckStatus.FAIL, str(exc))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 19: Meeting store
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_meeting_store(
+    *,
+    db_path: Path = DB_PATH,
+    key_path: Path = KEY_PATH,
+    open_fn: Callable = _default_open_db_meeting,
+    which_fn: Callable = _default_which,
+    meetings_dir: Path = MEETINGS_DIR,
+    disk_usage_fn: Callable = _default_disk_usage,
+) -> CheckResult:
+    """Validate the meeting subsystem.
+
+    Checks:
+    - meetings + meeting_segments tables exist in the DB
+    - No meetings stuck in recording/processing status
+    - ffmpeg is available (required for recording)
+    - meetings dir has >= 2 GB free
+    """
+    issues: list[str] = []
+
+    # Check tables
+    try:
+        info = open_fn(db_path, key_path)
+        if not info.has_meetings_table:
+            issues.append("meetings table missing")
+        if not info.has_segments_table:
+            issues.append("meeting_segments table missing")
+        if info.stuck_count > 0:
+            issues.append(
+                f"{info.stuck_count} meeting(s) stuck in recording/processing"
+            )
+    except Exception as exc:  # noqa: BLE001
+        issues.append(f"DB open failed: {exc}")
+
+    # ffmpeg is required for meeting recording
+    if not which_fn("ffmpeg"):
+        return CheckResult(
+            "meeting-store",
+            CheckStatus.FAIL,
+            "ffmpeg missing — meeting recording broken",
+        )
+
+    # Disk space check (WARN if < 2 GB free)
+    try:
+        usage = disk_usage_fn(meetings_dir if meetings_dir.exists() else Path.home())
+        free_gb = usage.free / (1024 ** 3)
+        if free_gb < 2.0:
+            issues.append(f"low disk space: {free_gb:.1f} GB free (<2 GB)")
+    except Exception as exc:  # noqa: BLE001
+        issues.append(f"disk check failed: {exc}")
+
+    if issues:
+        # Distinguish FAIL (table missing / ffmpeg) from WARN (stuck, disk)
+        has_critical = any(
+            "table missing" in i or "DB open failed" in i for i in issues
+        )
+        return CheckResult(
+            "meeting-store",
+            CheckStatus.FAIL if has_critical else CheckStatus.WARN,
+            "; ".join(issues),
+        )
+
+    return CheckResult("meeting-store", CheckStatus.PASS, "tables ok, ffmpeg present")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 20: Wake-word dependencies
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_wakeword_deps(
+    *,
+    import_fn: Optional[Callable] = None,
+    pick_best_fn: Optional[Callable] = None,
+) -> CheckResult:
+    """Check webrtcvad, sounddevice, and mic availability.
+
+    WARN if any dependency is missing (wake-word is a soft feature).
+    PASS if all three are available.
+    """
+    issues: list[str] = []
+
+    # Test webrtcvad importability
+    try:
+        if import_fn:
+            import_fn("webrtcvad")
+        else:
+            import webrtcvad  # noqa: F401, PLC0415
+    except ImportError:
+        issues.append("webrtcvad not importable")
+
+    # Test sounddevice importability
+    try:
+        if import_fn:
+            import_fn("sounddevice")
+        else:
+            import sounddevice  # noqa: F401, PLC0415
+    except ImportError:
+        issues.append("sounddevice not importable")
+
+    # Test mic availability
+    try:
+        if pick_best_fn:
+            device = pick_best_fn()
+        else:
+            from axi.mic import pick_best  # noqa: PLC0415
+            device = pick_best()
+        if device is None:
+            issues.append("no microphone found (mic.pick_best() returned None)")
+    except Exception as exc:  # noqa: BLE001
+        issues.append(f"mic check failed: {exc}")
+
+    if issues:
+        return CheckResult(
+            "wakeword-deps",
+            CheckStatus.WARN,
+            "; ".join(issues),
+        )
+
+    return CheckResult("wakeword-deps", CheckStatus.PASS, "webrtcvad + sounddevice + mic OK")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 21: Co-pilot intent gate smoke test
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_copilot(
+    *,
+    needs_search_fn: Optional[Callable] = None,
+) -> CheckResult:
+    """Pure-function smoke test for copilot_search.needs_search.
+
+    Verifies that the intent gate correctly classifies a prototypical search
+    phrase. No network or model calls involved.
+    """
+    try:
+        if needs_search_fn is None:
+            from axi.copilot_search import needs_search  # noqa: PLC0415
+            needs_search_fn = needs_search
+
+        result = needs_search_fn("qué hago")
+        if result is True:
+            return CheckResult(
+                "copilot-intent",
+                CheckStatus.PASS,
+                "needs_search('qué hago') → True",
+            )
+        return CheckResult(
+            "copilot-intent",
+            CheckStatus.FAIL,
+            f"needs_search('qué hago') returned {result!r}, expected True",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("copilot-intent", CheckStatus.FAIL, str(exc))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 22: Critical config / state files
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_critical_files(
+    *,
+    key_path: Path = KEY_PATH,
+    active_model_path: Path = ACTIVE_MODEL_PATH,
+    config_path: Path = CONFIG_PATH,
+    es_voice_path: Path = PIPER_ES_VOICE,
+    en_voice_path: Path = PIPER_EN_VOICE,
+    vapid_path: Path = VAPID_PATH,
+    active_nano_path: Path = ACTIVE_NANO_MODEL_PATH,
+) -> CheckResult:
+    """Verify presence and basic validity of critical config/state files.
+
+    FAIL: memory.key missing/empty, active_model.json invalid JSON or no 'id',
+          config.json invalid JSON, Piper ES voice missing.
+    WARN: Piper EN voice missing, VAPID vapid.json missing,
+          active_nano_model.json present but invalid JSON.
+    """
+    fails: list[str] = []
+    warns: list[str] = []
+
+    # memory.key — critical
+    if not key_path.exists() or key_path.stat().st_size == 0:
+        fails.append("memory.key missing or empty")
+
+    # active_model.json — must be valid JSON with an 'id'
+    try:
+        data = json.loads(active_model_path.read_text())
+        if not data.get("id"):
+            fails.append("active_model.json has no 'id'")
+    except (OSError, json.JSONDecodeError) as exc:
+        fails.append(f"active_model.json invalid: {exc}")
+
+    # config.json — must be valid JSON
+    try:
+        json.loads(config_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        fails.append(f"config.json invalid: {exc}")
+
+    # Piper ES voice — critical
+    if not es_voice_path.exists():
+        fails.append(f"Piper ES voice missing: {es_voice_path.name}")
+
+    # Piper EN voice — warn
+    if not en_voice_path.exists():
+        warns.append(f"Piper EN voice missing: {en_voice_path.name}")
+
+    # VAPID — warn
+    if not vapid_path.exists():
+        warns.append(f"VAPID keypair missing: {vapid_path}")
+
+    # active_nano_model.json — warn if present but invalid
+    if active_nano_path.exists():
+        try:
+            json.loads(active_nano_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            warns.append(f"active_nano_model.json invalid: {exc}")
+
+    if fails:
+        return CheckResult(
+            "critical-files",
+            CheckStatus.FAIL,
+            "; ".join(fails + [f"[warn] {w}" for w in warns]) if warns else "; ".join(fails),
+        )
+    if warns:
+        return CheckResult(
+            "critical-files",
+            CheckStatus.WARN,
+            "; ".join(warns),
+        )
+    return CheckResult("critical-files", CheckStatus.PASS, "all critical files present")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CHECK 23: Dashboard snapshot API
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def check_dashboard_snapshot(
+    *,
+    http_get_fn: Callable = _default_http_get,
+    url: str = DASHBOARD_SNAPSHOT_URL,
+) -> CheckResult:
+    """GET /api/snapshot — PASS if 200 and JSON contains a 'state'-like key."""
+    try:
+        resp = http_get_fn(url)
+    except urllib.error.HTTPError as exc:
+        return CheckResult(
+            "dashboard-snapshot",
+            CheckStatus.FAIL,
+            f"HTTP {exc.code}: {exc.reason}",
+        )
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        return CheckResult(
+            "dashboard-snapshot",
+            CheckStatus.FAIL,
+            f"unreachable: {exc}",
+        )
+
+    if resp.status != 200:
+        return CheckResult(
+            "dashboard-snapshot",
+            CheckStatus.FAIL,
+            f"HTTP {resp.status}",
+        )
+
+    try:
+        body = json.loads(resp.read())
+    except (json.JSONDecodeError, OSError) as exc:
+        return CheckResult(
+            "dashboard-snapshot",
+            CheckStatus.WARN,
+            f"200 OK but invalid JSON: {exc}",
+        )
+
+    # Any key in the JSON response counts as a valid snapshot
+    if body:
+        keys = list(body.keys())[:3]
+        return CheckResult(
+            "dashboard-snapshot",
+            CheckStatus.PASS,
+            f"snapshot OK (keys: {keys})",
+        )
+    return CheckResult(
+        "dashboard-snapshot",
+        CheckStatus.WARN,
+        "200 OK but empty JSON body",
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -423,10 +1325,10 @@ _ICON = {
 
 
 def _render(results: list[CheckResult]) -> None:
-    print("axi-healthcheck — system validation\n")
+    print("axi-healthcheck — comprehensive system validation\n")
     for r in results:
         icon = _ICON.get(r.status, "?")
-        print(f"  {icon}  [{r.status:4s}]  {r.name:<22s}  {r.detail}")
+        print(f"  {icon}  [{r.status:4s}]  {r.name:<28s}  {r.detail}")
 
 
 def _render_summary(summary: AggregateSummary) -> None:
@@ -453,26 +1355,53 @@ def run_all() -> int:
     """Run every check and print the full report. Returns the exit code."""
     results: list[CheckResult] = []
 
-    # 1. Services (returns a list)
+    # ── SERVICES ─────────────────────────────────────────────────────────────
     results.extend(check_services())
 
-    # 2. Memory DB — the recurring failure; always prominent
+    # ── MEMORY DB ────────────────────────────────────────────────────────────
     results.append(check_memory_db())
 
-    # 3. llama-server
+    # ── LLAMA-SERVER (brain) ─────────────────────────────────────────────────
     results.append(check_llama_server())
 
-    # 4. Whisper socket
-    results.append(check_whisper_socket())
+    # ── BRAIN MODEL FILES ────────────────────────────────────────────────────
+    results.append(check_active_brain_gguf())
+    results.append(check_active_brain_mmproj())
 
-    # 5. SearXNG
+    # ── BRAIN INFERENCE PING ─────────────────────────────────────────────────
+    results.append(check_brain_ping())
+
+    # ── NANO MODEL ───────────────────────────────────────────────────────────
+    results.append(check_nano_server())
+    results.append(check_nano_gguf())
+
+    # ── SENSES ───────────────────────────────────────────────────────────────
+    results.append(check_whisper_socket())
+    results.append(check_whisper_ping())
+    results.append(check_screen_capture())
+    results.append(check_ocr())
+    results.append(check_piper_tts())
+    results.append(check_webcam())
+    results.append(check_voice_socket())
+
+    # ── SEARCH / WEB ─────────────────────────────────────────────────────────
     results.append(check_searxng())
 
-    # 6. Dashboard HTTP
-    results.append(check_dashboard_http())
-
-    # 7. Game-mode (informational)
+    # ── MODES ────────────────────────────────────────────────────────────────
     results.append(check_game_mode_state())
+    results.append(check_game_mode_coherence())
+
+    # ── SUBSYSTEMS ───────────────────────────────────────────────────────────
+    results.append(check_meeting_store())
+    results.append(check_wakeword_deps())
+    results.append(check_copilot())
+
+    # ── CONFIG/STATE FILES ───────────────────────────────────────────────────
+    results.append(check_critical_files())
+
+    # ── DASHBOARD ────────────────────────────────────────────────────────────
+    results.append(check_dashboard_http())
+    results.append(check_dashboard_snapshot())
 
     _render(results)
     summary = aggregate(results)
