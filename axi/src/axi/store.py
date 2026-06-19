@@ -397,6 +397,8 @@ def init_db() -> None:
             create_vec_nodes_table(c)
         except Exception as _vec_exc:  # noqa: BLE001
             log.warning("init_db: could not create vec_nodes table: %s", _vec_exc)
+        # Slice 2: domain_node_map bridge table.
+        _create_domain_node_map(c)
 
 
 def checkpoint() -> None:
@@ -1009,6 +1011,282 @@ def semantic_search_nodes(
     # Re-order by the KNN rank.
     id_to_row = {int(r[0]): dict(r) for r in rows}
     return [id_to_row[nid] for nid in node_ids if nid in id_to_row]
+
+
+# ─────────────────── domain_node_map bridge table (Slice 2) ─────────────────
+
+
+def _create_domain_node_map(conn) -> None:
+    """Create the domain_node_map bridge table if it does not exist.
+
+    domain_node_map links a lifeos domain entry (identified by domain name +
+    ULID entry_id) to a System-A fact node in memory.db. The primary key
+    (domain, entry_id) ensures uniqueness — no two entries from the same domain
+    can map to different nodes, and the same entry can only be bridged once.
+
+    Called from init_db() so every fresh DB has the table from the start.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS domain_node_map (
+            domain      TEXT NOT NULL,
+            entry_id    TEXT NOT NULL,
+            node_id     INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+            created_at  REAL NOT NULL,
+            PRIMARY KEY (domain, entry_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dnm_node_id ON domain_node_map(node_id)"
+    )
+
+
+def upsert_domain_node_map(domain: str, entry_id: str, node_id: int) -> int:
+    """Insert or ignore a (domain, entry_id) → node_id mapping.
+
+    Idempotent: if a row already exists for (domain, entry_id), it is left
+    unchanged and the existing node_id is returned.
+
+    Returns the node_id (existing or newly inserted).
+    """
+    with _tx() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO domain_node_map(domain, entry_id, node_id, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (domain, entry_id, node_id, time.time()),
+        )
+    # Always return the canonical node_id (existing wins on conflict).
+    c = _connect()
+    row = c.execute(
+        "SELECT node_id FROM domain_node_map WHERE domain = ? AND entry_id = ?",
+        (domain, entry_id),
+    ).fetchone()
+    return int(row[0])
+
+
+def get_node_for_domain_entry(domain: str, entry_id: str) -> int | None:
+    """Return the node_id for a (domain, entry_id) pair, or None if not mapped."""
+    c = _connect()
+    row = c.execute(
+        "SELECT node_id FROM domain_node_map WHERE domain = ? AND entry_id = ?",
+        (domain, entry_id),
+    ).fetchone()
+    return int(row[0]) if row else None
+
+
+# ─────────────────── fact-node creation (Slice 2) ────────────────────────────
+
+
+def create_fact_node_for_interaction(interaction: Any) -> int:
+    """Create a System-A fact node for a lifeos relationships interaction.
+
+    Uses raw_utterance as the node label (truncated to 120 chars).  Falls back
+    to interaction.title if raw_utterance is None or empty.  Tags the node with
+    domain='relationships', registers the (domain, entry_id) → node_id mapping in
+    domain_node_map, and enqueues embedding via trigger_embed_for_node.
+
+    Idempotent: if a mapping already exists for this interaction.id, the existing
+    node_id is returned without creating a new node.
+
+    Args:
+        interaction: any object with .id, .raw_utterance, .title, .body, .person_id
+
+    Returns:
+        The node_id of the fact node (new or existing).
+    """
+    existing = get_node_for_domain_entry("relationships", interaction.id)
+    if existing is not None:
+        return existing
+
+    # Build label: prefer raw_utterance (truncated to 120 chars), then title.
+    raw = getattr(interaction, "raw_utterance", None)
+    label: str
+    if raw:
+        label = raw[:120]
+    else:
+        label = (getattr(interaction, "title", None) or "")[:120]
+
+    data: dict[str, Any] = {
+        "person_id": getattr(interaction, "person_id", None),
+        "interaction_id": interaction.id,
+    }
+    if getattr(interaction, "body", None):
+        data["body"] = interaction.body
+
+    node_id = add_node("fact", label, data=data, domain="relationships")
+    upsert_domain_node_map("relationships", interaction.id, node_id)
+    trigger_embed_for_node(node_id)
+    return node_id
+
+
+# ─────────────────── similar-to auto-edges (Slice 2) ─────────────────────────
+
+
+def knn_nodes_with_distance(conn, *, vector: list[float], k: int = 10) -> list[tuple[int, float]]:
+    """Return the k nearest node ids with their cosine DISTANCE from vec_nodes.
+
+    vec0 returns cosine DISTANCE (1 - cosine_similarity). Returns list of
+    (node_id, distance) tuples ordered by ascending distance (closest first).
+
+    Returns an empty list if vec_nodes is empty or sqlite-vec is not loaded.
+    """
+    import struct
+
+    _load_sqlite_vec(conn)
+    vec = vector[:512]
+    blob = struct.pack(f"{len(vec)}f", *vec)
+    try:
+        rows = conn.execute(
+            "SELECT node_id, distance FROM vec_nodes WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+            (blob, k),
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    return [(int(r[0]), float(r[1])) for r in rows]
+
+
+def check_and_create_similar_to_edges(
+    node_id: int,
+    conn,
+    *,
+    threshold: float = 0.85,
+) -> int:
+    """Create 'similar-to' edges from *node_id* to its KNN neighbors above threshold.
+
+    After a node is embedded, run KNN on vec_nodes and insert edges(kind='similar-to')
+    for every neighbor whose cosine similarity is >= threshold.
+
+    Rules:
+    - No self-links.
+    - Idempotent via INSERT OR IGNORE.
+    - Uses knn_nodes_with_distance so the threshold can be applied precisely.
+
+    Returns the number of new edges created.
+    """
+    # Get this node's embedding vector from nodes table.
+    row = conn.execute(
+        "SELECT embedding, embedding_dim FROM nodes WHERE id = ? AND embedding IS NOT NULL",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return 0
+
+    import struct
+
+    blob = row[0]
+    dim = int(row[1]) if row[1] else 512
+    vector = list(struct.unpack(f"{dim}f", blob[:dim * 4]))
+
+    neighbors = knn_nodes_with_distance(conn, vector=vector, k=20)
+
+    created = 0
+    for neighbor_id, distance in neighbors:
+        if neighbor_id == node_id:
+            continue  # no self-link
+        cosine_similarity = 1.0 - distance
+        if cosine_similarity < threshold:
+            continue
+        try:
+            with _tx() as c:
+                exists = c.execute(
+                    "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='similar-to' LIMIT 1",
+                    (node_id, neighbor_id),
+                ).fetchone()
+                if exists is None:
+                    c.execute(
+                        "INSERT INTO edges(from_id, to_id, kind, data, created_at) "
+                        "VALUES (?, ?, 'similar-to', '{}', ?)",
+                        (node_id, neighbor_id, time.time()),
+                    )
+                    created += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "check_and_create_similar_to_edges: failed for (%d, %d): %s",
+                node_id, neighbor_id, exc,
+            )
+
+    return created
+
+
+# ─────────────────── bounded backfill (Slice 2) ──────────────────────────────
+
+
+def _fetch_recent_interactions(*, days: int = 90) -> list[Any]:
+    """Fetch recent interactions from the relationships domain.
+
+    Pulled via lifeos.relationships.interactions.list_recent. Returns an empty
+    list if the relationships DB is unavailable or not yet migrated.
+    """
+    try:
+        from lifeos.relationships import interactions as _rel_interactions
+        return _rel_interactions.list_recent(days=days, limit=10_000)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("_fetch_recent_interactions: failed to load relationships: %s", exc)
+        return []
+
+
+def backfill_domain_fact_nodes(
+    *,
+    days: int = 90,
+    batch_size: int = 50,
+    sleep_s: float = 0.1,
+) -> int:
+    """Bounded backfill: create fact-nodes for recent domain interactions.
+
+    Processes interactions from the relationships domain within the last *days*
+    days, creating fact-nodes + domain_node_map entries. Already-mapped entries
+    are skipped (resumable). Rate-limited by *batch_size* and *sleep_s*.
+
+    Returns the number of interactions newly bridged.
+    """
+    import time as _time
+
+    interactions = _fetch_recent_interactions(days=days)
+    processed = 0
+
+    for i, interaction in enumerate(interactions):
+        # Skip already-mapped entries (idempotent / resumable).
+        if get_node_for_domain_entry("relationships", interaction.id) is not None:
+            continue
+
+        try:
+            create_fact_node_for_interaction(interaction)
+            processed += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("backfill_domain_fact_nodes: failed for %s: %s", interaction.id, exc)
+            continue
+
+        # Rate limiting: pause after each batch.
+        if sleep_s > 0 and processed % batch_size == 0:
+            _time.sleep(sleep_s)
+
+    return processed
+
+
+def backfill_similar_to_edges(*, threshold: float = 0.85) -> int:
+    """Create similar-to edges for all nodes that already have embeddings.
+
+    Iterates every node with a non-NULL embedding (that is also present in
+    vec_nodes), calling check_and_create_similar_to_edges for each. Idempotent
+    via INSERT OR IGNORE in the underlying helper.
+
+    Returns the total number of new edges created across all nodes.
+    """
+    c = _connect()
+    rows = c.execute(
+        "SELECT node_id FROM vec_nodes"
+    ).fetchall()
+
+    total = 0
+    for row in rows:
+        nid = int(row[0])
+        try:
+            total += check_and_create_similar_to_edges(nid, c, threshold=threshold)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("backfill_similar_to_edges: failed for node %d: %s", nid, exc)
+
+    return total
 
 
 def close() -> None:
