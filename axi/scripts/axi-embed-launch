@@ -66,11 +66,15 @@ ctx = int(cfg.get("ctx", 512))
 # NOTE: NO --jinja (embedding models do not use chat templates).
 # NOTE: --embedding --pooling last are ALWAYS present for embed service.
 # C1(a): dedupe flags that are always injected so extra_args cannot cause duplicates.
-_FIXED_FLAGS = {"--embedding", "--pooling", "last", "-c", "-ngl", "--host", "--port"}
+_FIXED_FLAGS = {"--embedding", "--pooling", "last", "-c", "-ngl", "--host", "--port", "--device", "none"}
 
 args = ["/usr/bin/llama-server", "-m", cfg["gguf"]]
 args += [
     "-ngl", str(ngl),
+    # --device none: ngl=0 alone still lets CUDA allocate compute buffers and OOM
+    # against the GPU (confirmed in the Slice-0 eval). --device none forces pure
+    # CPU regardless of CUDA_VISIBLE_DEVICES, so a manual launcher run is also safe.
+    "--device", "none",
     "--embedding",
     "--pooling", "last",
     "-c", str(ctx),
