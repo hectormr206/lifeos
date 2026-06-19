@@ -35,6 +35,7 @@ HEARTBEAT_SERVICES: list[str] = [
     "ydotoold.service",
     "axi-tray.service",
     "axi-dashboard.service",
+    "llama-embed.service",
 ]
 
 GAME_BRAINS: list[str] = [
@@ -69,6 +70,9 @@ _alerted: set[str] = set()
 # _alerted so the ensure-up warning isn't cleared by the "not failed" branch
 # before the cap check can fire.
 _vt_ensure_up_alerted: bool = False
+
+# Same dedup guard for llama-embed ensure-up cap-warning. Reset when embed becomes active.
+_embed_ensure_up_alerted: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +252,30 @@ def run_cycle(now: float | None = None):
         if not is_failed(svc):
             # Service recovered — reset alert guard so a future episode fires again.
             _alerted.discard(svc)
+            # ── llama-embed ensure-up: CPU service, always-on, no guards ────
+            if svc == "llama-embed.service":
+                global _embed_ensure_up_alerted
+                if not is_active(svc):
+                    if under_cap(svc, now):
+                        start_service(svc)
+                        record_revival(svc, now)
+                        _embed_ensure_up_alerted = False
+                    elif not _embed_ensure_up_alerted:
+                        _embed_ensure_up_alerted = True
+                        n = len(_revivals[svc])
+                        subprocess.run(
+                            [
+                                "notify-send",
+                                "--urgency=normal",
+                                "Axi heartbeat — llama-embed rate cap exhausted",
+                                f"llama-embed down but rate-cap exhausted"
+                                f" ({n}/{RATE_CAP} per hour); not starting",
+                            ],
+                            timeout=SYSTEMCTL_TIMEOUT,
+                        )
+                else:
+                    # embed is active — reset the cap-warning guard
+                    _embed_ensure_up_alerted = False
             # ── llama-vt ensure-up: start if stopped (inactive) ──────────────
             if svc == "llama-vt.service" and not game_mode_active() and models_manager.is_triad_active():
                 global _vt_ensure_up_alerted
