@@ -2111,6 +2111,16 @@ def _resolve_role_alias(text: str):
     return None
 
 
+# Regex to detect "a las HH[:MM]" clock-time markers in sleep messages.
+# Used to detect when a user gave two clock times — in that case we NEVER
+# trust the nano's sleep_hours arithmetic (0.8B models are unreliable at
+# time-delta math). The deterministic ingestion parser handles the math.
+_CLOCK_TIME_RE = re.compile(
+    r"\ba\s+las?\s+\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?",
+    re.IGNORECASE,
+)
+
+
 def _try_nano_extract(
     text: str,
     location_tag: str | None,
@@ -2373,13 +2383,37 @@ def _try_nano_extract(
                     entry_title = f"presión {result.systolic}/{result.diastolic}"
                 entry_data = bp_data
             elif result.sleep_hours is not None and 0.5 <= result.sleep_hours <= 16:
-                entry_kind = "vital"
-                entry_data = {
-                    "type": "sleep_hours",
-                    "value": result.sleep_hours,
-                    "unit": "h",
-                }
-                entry_title = f"dormí {result.sleep_hours}h"
+                # Defense-in-depth: when the user gave two clock times (e.g.
+                # "me dormí a las 11:50 pm … desperté a las 5:50 am"), do NOT
+                # trust the nano's arithmetic — a 0.8B model is unreliable at
+                # time-delta math and may disobey the null rule in its prompt.
+                # Route through the deterministic Python parser instead; if it
+                # produces a result, use that value. Only fall back to the
+                # nano's sleep_hours when it is the sole source (explicit hours
+                # like "dormí 8 horas" where there are no two clock markers).
+                _sleep_hours_final = result.sleep_hours
+                if len(_CLOCK_TIME_RE.findall(body_text)) >= 2:
+                    try:
+                        from lifeos.health import ingestion as _hi  # noqa: PLC0415
+                        _det = _hi.parse_health(body_text, now=now_utc)
+                        if _det is not None and _det.data.get("type") == "sleep_hours":
+                            _sleep_hours_final = _det.data["value"]
+                        else:
+                            # Deterministic parser couldn't derive a value from the
+                            # two-clock-time input → do not log a wrong nano value.
+                            _sleep_hours_final = None
+                    except Exception:  # noqa: BLE001
+                        log.warning("sleep defense-in-depth parse_health call failed", exc_info=True)
+                if _sleep_hours_final is None or not (0.5 <= _sleep_hours_final <= 16):
+                    entry_kind = "note"
+                else:
+                    entry_kind = "vital"
+                    entry_data = {
+                        "type": "sleep_hours",
+                        "value": _sleep_hours_final,
+                        "unit": "h",
+                    }
+                    entry_title = f"dormí {_sleep_hours_final}h"
             elif result.weight_kg is not None and 20 <= result.weight_kg <= 300:
                 entry_kind = "vital"
                 entry_data = {
