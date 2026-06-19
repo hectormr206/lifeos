@@ -524,7 +524,13 @@ install_services() {
   done
 
   local to_enable=("${SERVICES_BASE[@]}")
+  # llama-embed: CPU-only embedding service — always safe to enable regardless of GPU/VRAM.
+  to_enable+=(llama-embed.service)
   [ -f "$MODELS_DIR/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf" ] && to_enable+=(llama-server.service)
+  # llama-vt: GPU sibling of llama-server; enable only when the primary 4B triad model is
+  # present. The unit has an ExecCondition guard (axi-vt-guard) that skips start at boot
+  # when a non-4B primary is active, so enabling it is safe even if the 35B is loaded.
+  [ -f "$MODELS_DIR/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf" ] && to_enable+=(llama-vt.service)
   # Check if the active nano model gguf is present; fall back to the default.
   local nano_gguf
   nano_gguf="$("$VENV/bin/python" - <<'PY' 2>/dev/null

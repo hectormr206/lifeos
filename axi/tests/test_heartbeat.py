@@ -33,10 +33,12 @@ def clear_revivals():
     heartbeat._revivals.clear()
     heartbeat._alerted.clear()
     heartbeat._vt_ensure_up_alerted = False
+    heartbeat._embed_ensure_up_alerted = False
     yield
     heartbeat._revivals.clear()
     heartbeat._alerted.clear()
     heartbeat._vt_ensure_up_alerted = False
+    heartbeat._embed_ensure_up_alerted = False
 
 
 # ===========================================================================
@@ -44,7 +46,7 @@ def clear_revivals():
 # ===========================================================================
 
 def test_watchlist_membership():
-    """HEARTBEAT_SERVICES contains exactly the 5 core services."""
+    """HEARTBEAT_SERVICES contains exactly the 6 always-on services (including llama-embed)."""
     from axi import heartbeat
 
     expected = {
@@ -53,9 +55,17 @@ def test_watchlist_membership():
         "ydotoold.service",
         "axi-tray.service",
         "axi-dashboard.service",
+        "llama-embed.service",
     }
     assert set(heartbeat.HEARTBEAT_SERVICES) == expected
     assert "axi-translate.service" not in heartbeat.HEARTBEAT_SERVICES
+
+
+def test_embed_not_in_game_brains():
+    """llama-embed.service must NOT be in GAME_BRAINS — it's CPU-only and stays up in game mode."""
+    from axi import heartbeat
+
+    assert "llama-embed.service" not in heartbeat.GAME_BRAINS
 
 
 def test_watchlist_independence_from_doctor():
@@ -357,8 +367,10 @@ def test_run_cycle_cap_exceeded_alerts_no_revive(monkeypatch):
 def test_run_cycle_inactive_not_revived(monkeypatch):
     """is_failed returning False → no reset-failed; start only via ensure-up path.
 
-    With triad inactive, ensure-up for llama-vt is suppressed, so no start
-    command should be issued for any service in a fully-inactive cycle.
+    With triad inactive, llama-vt ensure-up is suppressed.
+    llama-embed ensure-up (no guards) WILL call start when inactive — it is the
+    only service allowed to be started by the ensure-up path in this scenario.
+    No reset-failed is ever called for non-failed services.
     """
     from axi import heartbeat, models_manager
 
@@ -367,6 +379,8 @@ def test_run_cycle_inactive_not_revived(monkeypatch):
     def fake_run(argv, **kw):
         recorded.append(argv)
         if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
             return _sp_result("inactive\n", 1)
         return _sp_result("", 0)
 
@@ -378,10 +392,19 @@ def test_run_cycle_inactive_not_revived(monkeypatch):
 
     list(heartbeat.run_cycle(now=0.0))  # consume generator
 
+    # reset-failed is never called (no service is in failed state)
     for call in recorded:
         assert "reset-failed" not in call
-        if len(call) > 2:
-            assert call[2] != "start"
+
+    # start may be called for llama-embed (ensure-up, CPU, no guards) but not for VT
+    start_calls = [a for a in recorded if len(a) > 2 and a[2] == "start"]
+    started_svcs = {a[3] for a in start_calls if len(a) > 3}
+    assert "llama-vt.service" not in started_svcs, (
+        "llama-vt should NOT be started when triad is inactive"
+    )
+    # All other non-embed services must not be started either
+    unexpected = started_svcs - {"llama-embed.service"}
+    assert not unexpected, f"Unexpected start calls for: {unexpected}"
 
 
 def test_run_cycle_yields_per_service(monkeypatch):
@@ -1109,3 +1132,122 @@ def test_vt_ensure_up_under_cap_starts_service(monkeypatch):
     # No warning should fire
     notify_calls = [a for a in recorded if "notify-send" in a]
     assert not notify_calls, f"No warning expected when under cap, got: {notify_calls}"
+
+
+# ===========================================================================
+# Phase 9 — llama-embed ensure-up: CPU service, always-on
+# ===========================================================================
+
+def test_embed_ensure_up_inactive_under_cap(monkeypatch):
+    """llama-embed inactive + under cap → start called (no guards, any mode)."""
+    from axi import heartbeat
+
+    svc = "llama-embed.service"
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            s = argv[3]
+            return _sp_result("inactive\n" if s == svc else "active\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run",
+                        lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == svc]
+    assert start_calls, "Expected systemctl start llama-embed.service but it was not called"
+
+
+def test_embed_ensure_up_inactive_over_cap_warns_no_start(monkeypatch):
+    """llama-embed inactive + cap exhausted → warning logged, start NOT called."""
+    from axi import heartbeat
+
+    svc = "llama-embed.service"
+    for _ in range(heartbeat.RATE_CAP):
+        heartbeat.record_revival(svc, now=0.0)
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            s = argv[3]
+            return _sp_result("inactive\n" if s == svc else "active\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run",
+                        lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    notify_calls = [a for a in recorded if "notify-send" in a]
+    assert notify_calls, "Expected notify-send warning when embed cap exhausted"
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == svc]
+    assert not start_calls, f"start must NOT be called when cap exhausted, got: {start_calls}"
+
+
+def test_embed_ensure_up_active_no_action(monkeypatch):
+    """llama-embed already active → no start action taken."""
+    from axi import heartbeat
+
+    svc = "llama-embed.service"
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return _sp_result("active\n", 0)  # embed is already active
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run",
+                        lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == svc]
+    assert not start_calls, f"llama-embed should NOT be started when already active, got: {start_calls}"
+
+
+def test_embed_ensure_up_game_mode_on_still_starts(monkeypatch, tmp_path):
+    """game mode ON + llama-embed inactive → start IS called (CPU service, no game-mode guard)."""
+    from axi import heartbeat
+
+    lock = tmp_path / "game-mode.lock"
+    lock.touch()
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: lock)
+
+    svc = "llama-embed.service"
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            s = argv[3]
+            return _sp_result("inactive\n" if s == svc else "active\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run",
+                        lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    # llama-embed is in HEARTBEAT_SERVICES, so it IS watched during game mode
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == svc]
+    assert start_calls, (
+        "llama-embed.service should be started even in game mode (it's CPU-only)"
+    )
