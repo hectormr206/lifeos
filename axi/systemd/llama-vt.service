@@ -18,6 +18,18 @@ Type=simple
 # axi-vt-launch reads $XDG_STATE_HOME/axi/active_vt_model.json (created on
 # first launch with VibeThinker-3B defaults) and execs llama-server on
 # port 8082 with the assembled args.
+#
+# ENABLE vs LINK: this unit is `enabled` (not just `linked`) so that
+# WantedBy=default.target creates a real symlink and systemd keeps it
+# anchored during sibling-restart transactions (the original "drop gremlin").
+#
+# BOOT-TIME OOM GUARD: enabling means llama-vt auto-starts at boot.
+# If the active primary brain at boot is the 35B (qwen36-35b-a3b), then
+# llama-server (22 GB) + llama-vt (3.3 GB) both load → 25+ GB on a 12 GB
+# GPU → OOM. ExecCondition runs axi-vt-guard which exits 0 only when the
+# active primary is qwen35-4b (the triad configuration). A non-zero exit
+# from ExecCondition causes systemd to skip the unit cleanly (not a failure).
+ExecCondition=%h/LifeOS/lifeos/axi/scripts/axi-vt-guard
 ExecStart=%h/LifeOS/lifeos/axi/scripts/axi-vt-launch
 Restart=on-failure
 RestartSec=5
