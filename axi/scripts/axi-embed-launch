@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# axi-embed-launch — ExecStart entry point for llama-embed.service.
+#
+# Reads the active embed model from $XDG_STATE_HOME/axi/active_embed_model.json
+# (creates it with the Qwen3-Embedding-4B defaults if missing).
+#
+# Key differences from axi-nano-launch:
+#   - Port 8091 (not 8090)
+#   - Adds --embedding --pooling last
+#   - Drops --jinja (embedding models don't use chat templates)
+#   - ngl is always 0 (CPU-only; CUDA_VISIBLE_DEVICES="" set by systemd unit)
+#
+# AXI_DRY_RUN=1 prints the would-be command and exits without exec'ing
+# (used by tests and smoke checks).
+
+set -u
+exec python3 - <<'PY'
+import json, os, sys
+from pathlib import Path
+
+state_root = os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))
+state = os.path.join(state_root, "axi", "active_embed_model.json")
+
+# Default = Qwen3-Embedding-4B (PROVISIONAL — Slice-0 eval will confirm or swap).
+# Model path is configurable: swap by writing a new active_embed_model.json.
+#
+# SYNC NOTE: This dict is intentionally duplicated from embed_manager._make_default()
+# (axi/src/axi/embed_manager.py). The launcher cannot import Python packages, so
+# duplication is unavoidable. embed_manager is AUTHORITATIVE — any change to the
+# default config MUST be mirrored here.
+HOME = str(Path.home())
+DEFAULT = {
+    "id": "qwen3-embedding-4b",
+    "gguf": HOME + "/LifeOS/models/qwen3-embedding-4b/Qwen3-Embedding-4B-Q4_K_M.gguf",
+    "ctx": 512,
+    "ngl": 0,
+    "port": 8091,
+    "extra_args": [
+        "-t", "4",
+        "--no-mmap",
+    ],
+}
+
+if not os.path.exists(state):
+    os.makedirs(os.path.dirname(state), exist_ok=True)
+    with open(state, "w") as f:
+        json.dump(DEFAULT, f, indent=2)
+
+# W1: wrap read in try/except — corrupt JSON falls back to DEFAULT.
+try:
+    with open(state) as f:
+        cfg = json.load(f)
+except (json.JSONDecodeError, OSError) as exc:
+    print(f"WARNING: could not read {state}: {exc}; using DEFAULT config", file=sys.stderr)
+    cfg = DEFAULT
+
+# W2: missing "gguf" key → fall back to DEFAULT.
+if "gguf" not in cfg:
+    print(f"WARNING: active_embed_model.json has no 'gguf' key; using DEFAULT config", file=sys.stderr)
+    cfg = DEFAULT
+
+ngl = int(cfg.get("ngl", 0))
+port = str(cfg.get("port", 8091))
+ctx = int(cfg.get("ctx", 512))
+
+# NOTE: NO --jinja (embedding models do not use chat templates).
+# NOTE: --embedding --pooling last are ALWAYS present for embed service.
+# C1(a): dedupe flags that are always injected so extra_args cannot cause duplicates.
+_FIXED_FLAGS = {"--embedding", "--pooling", "last", "-c", "-ngl", "--host", "--port"}
+
+args = ["/usr/bin/llama-server", "-m", cfg["gguf"]]
+args += [
+    "-ngl", str(ngl),
+    "--embedding",
+    "--pooling", "last",
+    "-c", str(ctx),
+    "--host", "127.0.0.1",
+    "--port", port,
+]
+# Append extra_args, skipping flags already in the fixed block.
+extra = cfg.get("extra_args", [])
+skip_next = False
+for i, a in enumerate(extra):
+    if skip_next:
+        skip_next = False
+        continue
+    if a in {"--embedding", "--pooling", "--jinja"}:
+        # skip --pooling's value token too
+        if a == "--pooling":
+            skip_next = True
+        continue
+    args.append(a)
+
+# AXI_DRY_RUN=1 prints the would-be command and exits (tests + smoke).
+if os.environ.get("AXI_DRY_RUN") == "1":
+    print(" ".join(args))
+    sys.exit(0)
+
+os.execvp(args[0], args)
+PY

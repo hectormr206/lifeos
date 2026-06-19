@@ -41,6 +41,11 @@ dependencies = [
     # Ships its own SQLCipher build, so no system sqlcipher package is needed.
     # Also a transitive of lifeos, but axi imports it directly now.
     "sqlcipher3-wheels>=0.5",
+    # sqlite-vec: vector similarity extension for SQLCipher (semantic memory, Slice 1).
+    # PoC 0.1 confirmed it loads into a sqlcipher3 connection via enable_load_extension.
+    # Installed ad-hoc during PoC; now formalized as a declared dependency so uv sync
+    # keeps it available. Used by store.create_vec_nodes_table + knn_nodes.
+    "sqlite-vec>=0.1.6",
     # MCP server (axi.mcp_server) — exposes LifeOS capabilities to local
     # agents over stdio. Official Python SDK; FastMCP lives under mcp.server.
     "mcp>=1.2",

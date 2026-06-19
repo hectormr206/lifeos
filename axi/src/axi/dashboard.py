@@ -1324,23 +1324,92 @@ def list_facts(limit: int = 200, domain: str | None = None):
 
 
 @app.get("/api/search")
-def search(q: str, limit: int = 30):
-    if not q.strip():
-        return []
-    try:
-        rows = store.search_nodes_fts(q.strip(), limit=limit)
-    except Exception:
-        return []
-    return [
-        {
-            "id": r["id"],
-            "kind": r["kind"],
-            "label": r["label"],
-            "domain": r["domain"],
-            "created": _fmt_ts(r["created_at"]),
-        }
-        for r in rows
-    ]
+def search(q: str = "", limit: int = 30, semantic: int = 0, anchor: int | None = None):
+    """Search nodes via FTS (default) or semantic/cosine ranking (?semantic=1).
+
+    Semantic mode (semantic=1):
+      - Embeds *q* with mode='query' via the embed service.
+      - Returns nodes ranked by cosine similarity (vec_nodes KNN).
+      - Degrades to [] if the embed service is down (never crashes).
+      - anchor=<node_id> embeds the stored node vector instead of a text query.
+
+    FTS mode (default, semantic=0):
+      - Unchanged from the original implementation — FTS5 keyword search.
+    """
+    if semantic:
+        # Semantic path (Slice 1 addition).
+        try:
+            if anchor is not None:
+                # Anchor search: find nodes similar to an existing node.
+                conn = store._connect()
+                row = conn.execute(
+                    "SELECT embedding FROM nodes WHERE id = ? AND embedding IS NOT NULL",
+                    (anchor,),
+                ).fetchone()
+                if row is None:
+                    return []
+                import struct as _struct
+                blob = row[0]
+                n = len(blob) // 4
+                vector = list(_struct.unpack(f"{n}f", blob))
+                node_ids = store.knn_nodes(conn, vector=vector, k=limit)
+                # Exclude the anchor node itself from results.
+                node_ids = [nid for nid in node_ids if nid != anchor]
+                if not node_ids:
+                    return []
+                placeholders = ",".join("?" * len(node_ids))
+                rows = conn.execute(
+                    f"SELECT id, kind, label, domain, created_at FROM nodes WHERE id IN ({placeholders})",
+                    node_ids,
+                ).fetchall()
+                id_to_row = {int(r[0]): r for r in rows}
+                ordered = [id_to_row[nid] for nid in node_ids if nid in id_to_row]
+                return [
+                    {
+                        "id": r[0],
+                        "kind": r[1],
+                        "label": r[2],
+                        "domain": r[3],
+                        "created": _fmt_ts(r[4]),
+                    }
+                    for r in ordered
+                ]
+            else:
+                # Text query → embed → KNN.
+                if not q.strip():
+                    return []
+                sem_rows = store.semantic_search_nodes(q.strip(), k=limit)
+                return [
+                    {
+                        "id": r["id"],
+                        "kind": r["kind"],
+                        "label": r["label"],
+                        "domain": r.get("domain"),
+                        "created": _fmt_ts(r["created_at"]),
+                    }
+                    for r in sem_rows
+                ]
+        except Exception:  # noqa: BLE001
+            # Graceful fallback: semantic failure returns empty list, never 500.
+            return []
+    else:
+        # FTS path — unchanged.
+        if not q.strip():
+            return []
+        try:
+            rows = store.search_nodes_fts(q.strip(), limit=limit)
+        except Exception:
+            return []
+        return [
+            {
+                "id": r["id"],
+                "kind": r["kind"],
+                "label": r["label"],
+                "domain": r["domain"],
+                "created": _fmt_ts(r["created_at"]),
+            }
+            for r in rows
+        ]
 
 
 # ────────── config ──────────
