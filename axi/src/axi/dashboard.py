@@ -1868,6 +1868,144 @@ def graph_data(limit: int = 200):
     return {"nodes": nodes, "edges": edges}
 
 
+# ────────── /api/graph/full — unified System A + System B graph ──────────
+
+
+def _attach_lifeos_edges(conn) -> list[dict[str, Any]]:
+    """Attach lifeos.db and return System-B edges whose endpoints are bridged.
+
+    Uses SQLCipher ATTACH DATABASE with the x'<hex>' key syntax (validated by
+    Slice-0 PoC 0.2).  Reads lifeos.edges, then maps both endpoints through
+    domain_node_map to System-A node_ids.  Edges whose endpoints don't resolve
+    to a bridge mapping are SKIPPED (clean option: no virtual nodes).
+
+    Raises any exception so the caller can catch it and set partial=True.
+
+    Returns a list of edge dicts: {source, target, kind, system='B'}.
+    """
+    from lifeos.store import load_key as _lf_load_key, db_path as _lf_db_path
+
+    lf_path = str(_lf_db_path())
+    lf_key = _lf_load_key()
+
+    # ATTACH lifeos.db to the existing memory.db connection.
+    conn.execute(f"ATTACH DATABASE '{lf_path}' AS lf KEY \"x'{lf_key}'\"")
+    try:
+        # Fetch all edges from lifeos.db.
+        # lifeos edges schema: (id, src_id, src_domain, dst_id, dst_domain, rel, weight, metadata, ...)
+        edge_rows = conn.execute(
+            "SELECT src_id, src_domain, dst_id, dst_domain, rel FROM lf.edges"
+        ).fetchall()
+
+        # Build bridge lookup: entry_id → node_id from domain_node_map.
+        # The bridge key is just entry_id (ULID); domain is informational here.
+        bridge_rows = conn.execute(
+            "SELECT entry_id, node_id FROM domain_node_map"
+        ).fetchall()
+        bridge: dict[str, int] = {str(br["entry_id"]): int(br["node_id"]) for br in bridge_rows}
+
+        b_edges: list[dict[str, Any]] = []
+        for er in edge_rows:
+            from_node_id = bridge.get(str(er["src_id"]))
+            to_node_id = bridge.get(str(er["dst_id"]))
+
+            if from_node_id is not None and to_node_id is not None:
+                b_edges.append({
+                    "source": from_node_id,
+                    "target": to_node_id,
+                    "kind": str(er["rel"]),
+                    "system": "B",
+                })
+
+        return b_edges
+    finally:
+        try:
+            conn.execute("DETACH DATABASE lf")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+@app.get("/api/graph/full")
+def graph_full(limit: int = 500) -> dict[str, Any]:
+    """Return a merged graph: System A nodes+edges + System B cross-domain edges.
+
+    Response shape:
+        {
+          nodes: [{id, label, kind, domain, has_embedding}],
+          edges: [{source, target, kind, system}],
+          partial: bool  -- True when System B was unavailable
+        }
+
+    System A edges include 'similar-to' semantic edges.
+    System B edges are cross-domain edges from lifeos.db whose endpoints
+    resolve through domain_node_map; unresolved endpoints are skipped.
+    When lifeos.db is unavailable/locked, returns System A only with partial=True.
+    """
+    c = store._connect()  # noqa: SLF001
+
+    # ── System A: nodes ──────────────────────────────────────────────────────
+    node_rows = c.execute(
+        "SELECT id, kind, label, domain, embedding FROM nodes "
+        "ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+    nodes = [
+        {
+            "id": r["id"],
+            "label": r["label"][:80] if r["label"] else "",
+            "kind": r["kind"],
+            "domain": r["domain"] or "",
+            "has_embedding": r["embedding"] is not None,
+        }
+        for r in node_rows
+    ]
+
+    node_id_set = {r["id"] for r in node_rows}
+
+    # ── System A: edges (including similar-to) ────────────────────────────────
+    edge_rows = c.execute(
+        "SELECT from_id, to_id, kind FROM edges"
+    ).fetchall()
+
+    a_edges = [
+        {
+            "source": r["from_id"],
+            "target": r["to_id"],
+            "kind": r["kind"],
+            "system": "A",
+        }
+        for r in edge_rows
+        if r["from_id"] in node_id_set and r["to_id"] in node_id_set
+    ]
+
+    # ── System B: cross-domain edges via ATTACH ──────────────────────────────
+    # partial=True only when lifeos.db EXISTS but is unavailable/locked.
+    # If the file simply doesn't exist (new install), partial stays False.
+    partial = False
+    b_edges: list[dict[str, Any]] = []
+    try:
+        from lifeos.store import db_path as _lf_db_path_check
+        _lf_db_exists = _lf_db_path_check().exists()
+    except Exception:  # noqa: BLE001
+        _lf_db_exists = False
+
+    if _lf_db_exists:
+        try:
+            b_edges = _attach_lifeos_edges(c)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("/api/graph/full: System B unavailable, returning partial result: %s", exc)
+            partial = True
+
+    all_edges = a_edges + b_edges
+
+    return {
+        "nodes": nodes,
+        "edges": all_edges,
+        "partial": partial,
+    }
+
+
 # ────────────────────────── model selector ────────────────────────────
 #
 # Endpoints under /api/models drive the catalog page (templates/models.html).
