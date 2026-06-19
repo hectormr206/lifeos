@@ -16,6 +16,8 @@ from typing import Callable
 
 import sqlcipher3
 
+from lifeos._common.migrations import make_raw_capture_migration
+
 log = logging.getLogger("lifeos.relationships.store")
 
 _lock = threading.Lock()
@@ -140,10 +142,15 @@ def _migration_003_interactions(conn: sqlcipher3.Connection) -> None:
     )
 
 
+# FOOTGUN: 003 is already taken by _migration_003_interactions.
+# Raw-capture for the interactions table is version 004.
+_migration_004_raw_capture = make_raw_capture_migration("interactions")
+
 MIGRATIONS: list[Migration] = [
     _migration_001_schema_version,
     _migration_002_people,
     _migration_003_interactions,
+    _migration_004_raw_capture,
 ]
 
 

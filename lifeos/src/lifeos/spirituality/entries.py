@@ -45,6 +45,8 @@ class Entry:
     reminder_id: str | None = None
     created_at: datetime | None = None
     deleted_at: datetime | None = None
+    raw_utterance: str | None = None
+    source_conv_id: int | None = None
 
 
 def _to_iso_utc(dt: datetime) -> str:
@@ -60,6 +62,7 @@ def _parse_iso(s: str) -> datetime:
 def _row_to_entry(row) -> Entry:
     data = json.loads(row["data"]) if row["data"] else {}
     tags = [t for t in (row["tags"] or "").split(",") if t]
+    keys = row.keys() if hasattr(row, "keys") else []
     return Entry(
         id=row["id"],
         ts=_parse_iso(row["ts"]),
@@ -74,6 +77,8 @@ def _row_to_entry(row) -> Entry:
         reminder_id=row["reminder_id"],
         created_at=_parse_iso(row["created_at"]) if row["created_at"] else None,
         deleted_at=_parse_iso(row["deleted_at"]) if row["deleted_at"] else None,
+        raw_utterance=row["raw_utterance"] if "raw_utterance" in keys else None,
+        source_conv_id=row["source_conv_id"] if "source_conv_id" in keys else None,
     )
 
 
@@ -84,7 +89,9 @@ def create(*, kind: Kind, title: str, when: datetime,
            tags: list[str] | None = None,
            source: Source = "manual",
            confidence: float = 1.0,
-           reminder_id: str | None = None) -> Entry:
+           reminder_id: str | None = None,
+           raw_utterance: str | None = None,
+           source_conv_id: int | None = None) -> Entry:
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
     if when.tzinfo is None:
@@ -96,13 +103,14 @@ def create(*, kind: Kind, title: str, when: datetime,
     with store.connect() as conn:
         conn.execute(
             "INSERT INTO spirituality_entries(id, ts, kind, title, body, mood, "
-            "data, tags, source, confidence, reminder_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "data, tags, source, confidence, reminder_id, raw_utterance, source_conv_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 eid, _to_iso_utc(when), kind, title, body, mood,
                 json.dumps(data) if data else None,
                 ",".join(tags) if tags else None,
                 source, float(confidence), reminder_id,
+                raw_utterance, source_conv_id,
             ),
         )
     fetched = get(eid)
