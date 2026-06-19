@@ -58,6 +58,8 @@ class Entry:
     reminder_id: str | None = None
     created_at: datetime | None = None
     deleted_at: datetime | None = None
+    raw_utterance: str | None = None
+    source_conv_id: int | None = None
 
 
 def _to_iso_utc(dt: datetime) -> str:
@@ -72,6 +74,7 @@ def _parse_iso(s: str) -> datetime:
 
 def _row_to_entry(row) -> Entry:
     tags = [t for t in (row["tags"] or "").split(",") if t]
+    keys = row.keys() if hasattr(row, "keys") else []
     return Entry(
         id=row["id"],
         ts=_parse_iso(row["ts"]),
@@ -90,6 +93,8 @@ def _row_to_entry(row) -> Entry:
         reminder_id=row["reminder_id"],
         created_at=_parse_iso(row["created_at"]) if row["created_at"] else None,
         deleted_at=_parse_iso(row["deleted_at"]) if row["deleted_at"] else None,
+        raw_utterance=row["raw_utterance"] if "raw_utterance" in keys else None,
+        source_conv_id=row["source_conv_id"] if "source_conv_id" in keys else None,
     )
 
 
@@ -102,7 +107,9 @@ def create(*, kind: Kind, title: str, amount: float, when: datetime,
            source: Source = "manual",
            confidence: float = 1.0,
            reflect_at: datetime | None = None,
-           reminder_id: str | None = None) -> Entry:
+           reminder_id: str | None = None,
+           raw_utterance: str | None = None,
+           source_conv_id: int | None = None) -> Entry:
     """Insert a new finance entry.
 
     For `kind='big_purchase'` and `reflect_at` omitted, automatically sets
@@ -125,8 +132,9 @@ def create(*, kind: Kind, title: str, amount: float, when: datetime,
         conn.execute(
             "INSERT INTO finance_entries"
             "(id, ts, kind, amount, currency, category, merchant, title, body, "
-            " tags, source, confidence, reflect_at, reminder_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " tags, source, confidence, reflect_at, reminder_id, "
+            " raw_utterance, source_conv_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 eid, _to_iso_utc(when), kind, float(amount), currency,
                 category, merchant, title, body,
@@ -134,6 +142,7 @@ def create(*, kind: Kind, title: str, amount: float, when: datetime,
                 source, float(confidence),
                 _to_iso_utc(reflect_at) if reflect_at else None,
                 reminder_id,
+                raw_utterance, source_conv_id,
             ),
         )
     fetched = get(eid)

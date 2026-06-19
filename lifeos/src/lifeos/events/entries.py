@@ -100,7 +100,9 @@ def create(*, kind: Kind, title: str, when: datetime,
            tags: list[str] | None = None,
            source: Source = "manual",
            confidence: float = 1.0,
-           reminder_id: str | None = None) -> Event:
+           reminder_id: str | None = None,
+           raw_utterance: str | None = None,
+           source_conv_id: int | None = None) -> Event:
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
     if when.tzinfo is None:
@@ -110,14 +112,15 @@ def create(*, kind: Kind, title: str, when: datetime,
     with store.connect() as conn:
         conn.execute(
             "INSERT INTO events(id, ts, kind, title, body, location, people, "
-            "data, tags, source, confidence, reminder_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "data, tags, source, confidence, reminder_id, raw_utterance, source_conv_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 eid, _to_iso_utc(when), kind, title, body, location,
                 ",".join(people) if people else None,
                 json.dumps(data) if data else None,
                 ",".join(tags) if tags else None,
                 source, float(confidence), reminder_id,
+                raw_utterance, source_conv_id,
             ),
         )
     fetched = get(eid)

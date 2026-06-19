@@ -229,6 +229,24 @@ _SLEEP_DE_X_A_Y_RE = re.compile(
 )
 
 
+# Module-level compiled regexes for _parse_duration_es (FIX 8: avoids
+# re-compilation on every call; FIX 7: sleep-vocab guard).
+# Note: \b does not work correctly around non-ASCII chars (ñ, í, é) in Python
+# regex when using the default ASCII flag. We use a plain substring search via
+# re.search (which does not require word-boundary anchors to be reliable here)
+# since the vocabulary is domain-specific and won't produce false positives in
+# exercise contexts.
+_DURATION_SLEEP_VOCAB_RE = re.compile(
+    r"(?:dorm[íi]|durm[íi]|acost[eé]|despert[oé]|sue[ñn]|noche)",
+    re.IGNORECASE,
+)
+_DURATION_MINUTES_RE = re.compile(r"\b(\d{1,3})\s+min(?:utos?)?\b", re.IGNORECASE)
+_DURATION_COMPOUND_RE = re.compile(
+    r"\b(\d{1,2})\s+hora(?:s)?\s+(\d{1,3})\s+min(?:utos?)?\b",
+    re.IGNORECASE,
+)
+
+
 def _parse_minutes_word(tok: str | None) -> int:
     """Convert 'media' → 30, 'cuarto' → 15, '20' → 20. Returns 0 on None."""
     if not tok:
@@ -417,6 +435,117 @@ def _resolve_hour_24(h: int, period: str, ampm: str, wake: bool = False) -> int:
         return h if h <= 12 else h
     # Sleep-onset heuristic: h ≤ 6 → AM (madrugada), else PM (evening).
     return h if h <= 6 else (h + 12 if h < 12 else h)
+
+
+def _parse_duration_es(text: str) -> int | None:
+    """Parse a Spanish exercise-duration phrase and return total minutes.
+
+    Reuses _parse_hour_token and _parse_minutes_word — no new number parser.
+
+    Handles:
+      "media hora"              → 30
+      "cuarto de hora"          → 15
+      "45 minutos"              → 45
+      "30 minutos"              → 30
+      "una hora"                → 60
+      "2 horas"                 → 120
+      "hora y media"            → 90
+      "una hora y media"        → 90
+      "1 hora y cuarto"         → 75
+      "una hora y cuarto"       → 75
+      "una hora y 20"           → 80
+      "2 horas 30 minutos"      → 150  (compound: hours + bare minutes)
+      "1 hora 15 minutos"       → 75   (compound)
+
+    Returns None when:
+      - no duration phrase is found
+      - the value is outside the plausible range (1..1440 minutes)
+      - the text contains sleep-onset vocabulary (FIX 7: guard against
+        misclassified sleep phrases producing bogus exercise durations)
+    """
+    if not text or not isinstance(text, str):
+        return None
+
+    t = text.lower().strip()
+
+    # ── FIX 7: sleep-vocab guard ─────────────────────────────────────────
+    # If the text contains sleep-onset vocabulary, this is not an exercise
+    # duration phrase even if it contains hour/minute numbers.
+    if _DURATION_SLEEP_VOCAB_RE.search(t):
+        return None
+
+    # ── "media hora" (alone or with other text) ─────────────────────────
+    if re.search(r"\bmedia\s+hora\b", t):
+        return 30
+
+    # ── "cuarto de hora" ─────────────────────────────────────────────────
+    if re.search(r"\bcuarto\s+de\s+hora\b", t):
+        return 15
+
+    # ── FIX 4: compound "N horas M minutos" ──────────────────────────────
+    # Must be checked BEFORE the standalone "N minutos" branch so the
+    # trailing minutes don't return early and drop the hours component.
+    mc = _DURATION_COMPOUND_RE.search(t)
+    if mc:
+        h_val = int(mc.group(1))
+        m_val = int(mc.group(2))
+        total = h_val * 60 + m_val
+        return total if 1 <= total <= 1440 else None
+
+    # ── "N hora(s) [y <min_word>]" ───────────────────────────────────────
+    # Matches: "una hora", "2 horas", "hora y media", "1 hora y cuarto"
+    _HOUR_ALT = "|".join(_SP_HOUR_WORDS.keys())
+    hour_re = re.compile(
+        rf"\b({_HOUR_ALT}|\d{{1,2}})\s+hora(?:s)?"
+        r"(?:\s+y\s+(media|cuarto|\d{1,2}))?\b",
+        re.IGNORECASE,
+    )
+    m = hour_re.search(t)
+    if m:
+        hour_tok = m.group(1)
+        hour_val = _parse_hour_token(hour_tok)
+        if hour_val is not None:
+            min_word = m.group(2)  # may be None
+            total = hour_val * 60 + _parse_minutes_word(min_word)
+            return total if 1 <= total <= 1440 else None
+
+    # Also handle bare "hora y media" / "hora y cuarto" without a number prefix
+    m2 = re.search(r"\bhora(?:s)?\s+y\s+(media|cuarto|\d{1,2})\b", t)
+    if m2:
+        min_word = m2.group(1)
+        total = 60 + _parse_minutes_word(min_word)
+        return total if 1 <= total <= 1440 else None
+
+    # ── "N minutos" / "N mins" ───────────────────────────────────────────
+    mm = _DURATION_MINUTES_RE.search(t)
+    if mm:
+        minutes = int(mm.group(1))
+        if 1 <= minutes <= 1440:
+            return minutes
+
+    return None
+
+
+def _validate_amount(raw_text: str | None, nano_amount: float | None) -> float | None:
+    """Conservative validate-and-skip guard for finance amounts.
+
+    Returns nano_amount when it falls within plausible bounds (>0 and <= 1e9).
+    Returns None when the amount is implausible or unparseable.
+
+    This is a VALIDATION layer, not a re-parser. When None is returned the
+    caller should not silently trust the nano value — but should also not
+    aggressively re-parse to avoid false overrides (design ADR-conservative).
+    """
+    if nano_amount is None:
+        return None
+    try:
+        v = float(nano_amount)
+    except (TypeError, ValueError):
+        return None
+    # Conservative bounds: positive and below one billion
+    if v <= 0 or v >= 1_000_000_000:
+        return None
+    return v
 
 
 def _try_natural_sleep(

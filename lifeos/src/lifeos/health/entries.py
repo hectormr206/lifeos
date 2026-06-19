@@ -45,6 +45,8 @@ class Entry:
     confidence: float = 1.0
     created_at: datetime | None = None
     deleted_at: datetime | None = None
+    raw_utterance: str | None = None
+    source_conv_id: int | None = None
 
 
 def _to_iso_utc(dt: datetime) -> str:
@@ -60,6 +62,7 @@ def _parse_iso(s: str) -> datetime:
 def _row_to_entry(row) -> Entry:
     data = json.loads(row["data"]) if row["data"] else {}
     tags = [t for t in (row["tags"] or "").split(",") if t]
+    keys = row.keys() if hasattr(row, "keys") else []
     return Entry(
         id=row["id"],
         ts=_parse_iso(row["ts"]),
@@ -72,6 +75,8 @@ def _row_to_entry(row) -> Entry:
         confidence=float(row["confidence"]),
         created_at=_parse_iso(row["created_at"]) if row["created_at"] else None,
         deleted_at=_parse_iso(row["deleted_at"]) if row["deleted_at"] else None,
+        raw_utterance=row["raw_utterance"] if "raw_utterance" in keys else None,
+        source_conv_id=row["source_conv_id"] if "source_conv_id" in keys else None,
     )
 
 
@@ -80,7 +85,9 @@ def create(*, kind: Kind, title: str, when: datetime,
            data: dict | None = None,
            tags: list[str] | None = None,
            source: Source = "manual",
-           confidence: float = 1.0) -> Entry:
+           confidence: float = 1.0,
+           raw_utterance: str | None = None,
+           source_conv_id: int | None = None) -> Entry:
     """Insert a new health entry."""
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
@@ -90,12 +97,14 @@ def create(*, kind: Kind, title: str, when: datetime,
     with store.connect() as conn:
         conn.execute(
             "INSERT INTO health_entries(id, ts, kind, title, body, data, tags, "
-            "source, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "source, confidence, raw_utterance, source_conv_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 eid, _to_iso_utc(when), kind, title, body,
                 json.dumps(data) if data else None,
                 ",".join(tags) if tags else None,
                 source, float(confidence),
+                raw_utterance, source_conv_id,
             ),
         )
     fetched = get(eid)

@@ -34,6 +34,8 @@ from typing import Callable
 
 import sqlcipher3
 
+from lifeos._common.migrations import make_raw_capture_migration
+
 log = logging.getLogger("lifeos.health.store")
 
 _lock = threading.Lock()
@@ -142,9 +144,12 @@ def _migration_002_health_entries(conn: sqlcipher3.Connection) -> None:
     )
 
 
+_migration_003_raw_capture = make_raw_capture_migration("health_entries")
+
 MIGRATIONS: list[Migration] = [
     _migration_001_schema_version,
     _migration_002_health_entries,
+    _migration_003_raw_capture,
 ]
 
 
