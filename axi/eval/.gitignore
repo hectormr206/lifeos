@@ -1,0 +1,5 @@
+# Personal data + heavy logs from the embedder eval — never commit
+*.jsonl
+*.log
+eval_results.json
+__pycache__/
