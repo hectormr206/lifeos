@@ -141,6 +141,25 @@ def is_failed(svc: str) -> bool:
     return result.stdout.strip() == "failed"
 
 
+def is_active(svc: str) -> bool:
+    """Return True iff `systemctl --user is-active <svc>` reports 'active'."""
+    result = subprocess.run(
+        ["systemctl", "--user", "is-active", svc],
+        capture_output=True,
+        text=True,
+        timeout=SYSTEMCTL_TIMEOUT,
+    )
+    return result.stdout.strip() == "active"
+
+
+def start_service(svc: str) -> None:
+    """Start a stopped (but not failed) service."""
+    subprocess.run(
+        ["systemctl", "--user", "start", svc],
+        timeout=SYSTEMCTL_TIMEOUT,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Rate cap
 # ---------------------------------------------------------------------------
@@ -215,12 +234,23 @@ def run_cycle(now: float | None = None):
     to stop beating, which causes systemd to kill and restart the process
     via WatchdogSec.
     """
+    from axi import store as _store
+
     now = time.time() if now is None else now
     game = game_mode_active()
     for svc in watched_services(game):
         if not is_failed(svc):
             # Service recovered — reset alert guard so a future episode fires again.
             _alerted.discard(svc)
+            # ── llama-vt ensure-up: start if stopped (inactive) ──────────────
+            if svc == "llama-vt.service" and not game_mode_active() and models_manager.is_triad_active():
+                try:
+                    in_meeting = _store.meeting_in_progress()
+                except Exception:
+                    in_meeting = True  # fail-safe: uncertain state → do not start
+                if not in_meeting and not is_active(svc) and under_cap(svc, now):
+                    start_service(svc)
+                    record_revival(svc, now)
         elif svc in GAME_BRAINS and game_mode_active():
             # Game mode started mid-cycle — skip revival to protect the GPU.
             pass
