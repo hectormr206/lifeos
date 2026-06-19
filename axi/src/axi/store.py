@@ -742,6 +742,22 @@ def search_meeting_segments(query: str, limit: int = 20) -> list[dict[str, Any]]
     return out
 
 
+def meeting_in_progress() -> bool:
+    """Return True if any meeting has status 'recording' or 'processing'.
+
+    Fail-safe: returns True on any DB error so the caller (heartbeat) does
+    NOT start llama-vt during uncertain state, avoiding potential VRAM OOM.
+    """
+    try:
+        c = _connect()
+        row = c.execute(
+            "SELECT 1 FROM meetings WHERE status IN ('recording','processing') LIMIT 1"
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return True  # fail-safe
+
+
 def close() -> None:
     global _conn
     with _conn_lock:

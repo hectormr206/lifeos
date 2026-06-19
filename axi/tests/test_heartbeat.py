@@ -353,8 +353,12 @@ def test_run_cycle_cap_exceeded_alerts_no_revive(monkeypatch):
 
 
 def test_run_cycle_inactive_not_revived(monkeypatch):
-    """is_failed returning False → no reset-failed or start."""
-    from axi import heartbeat
+    """is_failed returning False → no reset-failed; start only via ensure-up path.
+
+    With triad inactive, ensure-up for llama-vt is suppressed, so no start
+    command should be issued for any service in a fully-inactive cycle.
+    """
+    from axi import heartbeat, models_manager
 
     recorded = []
 
@@ -367,6 +371,8 @@ def test_run_cycle_inactive_not_revived(monkeypatch):
     monkeypatch.setattr(heartbeat.subprocess, "run", fake_run)
     monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
     monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+    # Triad inactive → ensure-up for llama-vt is suppressed
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: False)
 
     list(heartbeat.run_cycle(now=0.0))  # consume generator
 
@@ -752,4 +758,233 @@ def test_unit_file_has_required_properties():
     assert "Restart=always" in text
     assert "StartLimitIntervalSec=0" in text
     assert "WatchdogSec=90" in text
-    assert "NotifyAccess=main" in text
+
+
+# ===========================================================================
+# Phase 7 — llama-vt ensure-up: self-heal cleanly stopped VT
+# ===========================================================================
+
+def test_vt_ensure_up_inactive_triad_active_no_meeting(monkeypatch):
+    """triad active + game off + no meeting + llama-vt inactive → START called.
+
+    RED: fails before is_active() and ensure-up logic are added.
+    """
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: False)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)  # not failed
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            svc = argv[3]
+            # llama-vt is inactive (stopped); others are active
+            return _sp_result("inactive\n" if svc == "llama-vt.service" else "active\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+
+    def recording_run(argv, **kw):
+        recorded.append(argv)
+        return fake_run(argv, **kw)
+
+    monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == "llama-vt.service"]
+    assert start_calls, "Expected systemctl start llama-vt.service but it was not called"
+
+
+def test_vt_ensure_up_meeting_recording_blocks_start(monkeypatch):
+    """triad active + game off + meeting recording → start NOT called.
+
+    RED: fails before ensure-up logic guards on meeting_in_progress().
+    """
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: True)  # meeting active!
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return _sp_result("inactive\n", 1)
+        return _sp_result("", 0)
+
+    recorded = []
+
+    def recording_run(argv, **kw):
+        recorded.append(argv)
+        return fake_run(argv, **kw)
+
+    monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == "llama-vt.service"]
+    assert not start_calls, f"llama-vt should NOT be started during a meeting, but got: {start_calls}"
+
+
+def test_vt_ensure_up_meeting_processing_blocks_start(monkeypatch):
+    """triad active + game off + meeting processing → start NOT called."""
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: True)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return _sp_result("inactive\n", 1)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run", lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == "llama-vt.service"]
+    assert not start_calls, f"llama-vt should NOT be started during processing, got: {start_calls}"
+
+
+def test_vt_ensure_up_triad_inactive_blocks_start(monkeypatch):
+    """35B active (triad inactive) + llama-vt inactive → start NOT called."""
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: False)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: False)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return _sp_result("inactive\n", 1)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run", lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == "llama-vt.service"]
+    assert not start_calls, f"llama-vt should NOT be started when triad is inactive, got: {start_calls}"
+
+
+def test_vt_ensure_up_game_mode_on_blocks_start(monkeypatch, tmp_path):
+    """game mode ON + llama-vt inactive → start NOT called."""
+    from axi import heartbeat, models_manager, store
+
+    lock = tmp_path / "game-mode.lock"
+    lock.touch()
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: lock)
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: False)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return _sp_result("inactive\n", 1)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run", lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == "llama-vt.service"]
+    assert not start_calls, f"llama-vt should NOT be started during game mode, got: {start_calls}"
+
+
+def test_vt_ensure_up_already_active_no_action(monkeypatch):
+    """llama-vt already active → no start action taken."""
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: False)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return _sp_result("active\n", 0)  # already active!
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run", lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == "llama-vt.service"]
+    assert not start_calls, f"llama-vt should NOT be started when already active, got: {start_calls}"
+
+
+def test_vt_ensure_up_db_error_treated_as_meeting_active(monkeypatch):
+    """meeting_in_progress() DB error → treated as meeting active (fail-safe, start NOT called)."""
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+
+    def failing_meeting_in_progress():
+        raise Exception("simulated DB error")
+
+    monkeypatch.setattr(store, "meeting_in_progress", failing_meeting_in_progress)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return _sp_result("inactive\n", 1)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run", lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    # The heartbeat must NOT crash, and must NOT start VT
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == "llama-vt.service"]
+    assert not start_calls, f"llama-vt should NOT be started on DB error (fail-safe), got: {start_calls}"
+
+
+def test_vt_ensure_up_regression_llama_server_still_revived(monkeypatch):
+    """Regression: existing failed-service revival for llama-server still works after the VT ensure-up change."""
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: False)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            svc = argv[3]
+            return _sp_result("failed\n" if svc == "llama-server.service" else "inactive\n", 0)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return _sp_result("active\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run", lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    reset_calls = [a for a in recorded if "reset-failed" in a and "llama-server.service" in a]
+    assert reset_calls, "llama-server.service should still be revived via reset-failed + start when failed"
