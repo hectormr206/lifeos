@@ -1,0 +1,22 @@
+[Unit]
+Description=llama.cpp server — text embeddings (model from active_embed_model.json via axi-embed-launch)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Listens only on localhost. CPU-ONLY. CUDA_VISIBLE_DEVICES="" hides the GPU
+# completely from the process so llama-server never touches VRAM regardless of
+# flags. The main brain (port 8080) and nano (port 8090) keep their GPU access.
+# This embed service is fully independent.
+Environment="CUDA_VISIBLE_DEVICES="
+ExecStart=%h/LifeOS/lifeos/axi/scripts/axi-embed-launch
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+# 8 GB RAM cap — Qwen3-Embedding-4B Q4_K_M fits with KV cache to spare.
+# Swap to a smaller model (Harrier-OSS-0.6B) to reduce to ~2G if RAM is tight.
+MemoryMax=8G
+
+[Install]
+WantedBy=default.target

@@ -389,6 +389,14 @@ def init_db() -> None:
         c = _connect()
         c.executescript(_SCHEMA)
         c.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', '1')")
+        # Slice 1: embedding columns + vec_nodes virtual table.
+        # migrate_nodes_embedding() and create_vec_nodes_table() are defined later
+        # in this module; calling them here ensures they run on every fresh init_db().
+        migrate_nodes_embedding()
+        try:
+            create_vec_nodes_table(c)
+        except Exception as _vec_exc:  # noqa: BLE001
+            log.warning("init_db: could not create vec_nodes table: %s", _vec_exc)
 
 
 def checkpoint() -> None:
@@ -756,6 +764,251 @@ def meeting_in_progress() -> bool:
         return row is not None
     except Exception:
         return True  # fail-safe
+
+
+# ─────────────────── embedding schema migration (Slice 1) ───────────────────
+
+
+def migrate_nodes_embedding() -> None:
+    """Idempotent migration: add embedding columns to the nodes table.
+
+    Adds:
+        embedding       BLOB     — float32 vector bytes (struct.pack)
+        embedding_model TEXT     — model id that produced the embedding
+        embedding_dim   INTEGER  — number of float32 values in embedding
+
+    Existing rows keep NULL for all three columns (backward-compatible).
+    Safe to call multiple times (guarded by PRAGMA table_info).
+    """
+    c = _connect()
+    existing = {r[1] for r in c.execute("PRAGMA table_info(nodes)").fetchall()}
+    new_cols: list[tuple[str, str]] = [
+        ("embedding", "BLOB"),
+        ("embedding_model", "TEXT"),
+        ("embedding_dim", "INTEGER"),
+    ]
+    for col, col_type in new_cols:
+        if col not in existing:
+            c.execute(f"ALTER TABLE nodes ADD COLUMN {col} {col_type}")
+
+
+# ─────────────────── sqlite-vec virtual table (Slice 1, FORK-VEC path A) ────
+
+
+def _load_sqlite_vec(conn) -> None:
+    """Load the sqlite-vec extension into *conn*. Called once per connection open."""
+    import sqlite_vec
+
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+
+
+def create_vec_nodes_table(conn) -> None:
+    """Create the vec_nodes virtual table (float[512]) if it does not exist.
+
+    Uses sqlite-vec (vec0 virtual table engine). The dimensionality 512 matches
+    the Matryoshka-512 slice defined in ADR D3. embedding_dim is stored per-node
+    so a model swap is detectable (task 4.19).
+
+    Idempotent: safe to call multiple times.
+    """
+    _load_sqlite_vec(conn)
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_nodes USING vec0("
+        "  node_id INTEGER PRIMARY KEY,"
+        "  embedding float[512]"
+        ")"
+    )
+
+
+def upsert_vec_node(conn, *, node_id: int, vector: list[float]) -> None:
+    """Insert or replace a node's embedding in vec_nodes.
+
+    Truncates vector to 512 dims (Matryoshka slice) before storing.
+    Caller must commit.
+    """
+    import struct
+
+    vec = vector[:512]
+    blob = struct.pack(f"{len(vec)}f", *vec)
+    conn.execute(
+        "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+        (node_id, blob),
+    )
+
+
+def knn_nodes(conn, *, vector: list[float], k: int = 10) -> list[int]:
+    """Return the k nearest node ids from vec_nodes ordered by cosine distance.
+
+    Returns an empty list if vec_nodes is empty or sqlite-vec is not loaded.
+    """
+    import struct
+
+    _load_sqlite_vec(conn)
+    vec = vector[:512]
+    blob = struct.pack(f"{len(vec)}f", *vec)
+    try:
+        rows = conn.execute(
+            "SELECT node_id FROM vec_nodes WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+            (blob, k),
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    return [int(r[0]) for r in rows]
+
+
+# ─────────────────── embed worker (Slice 1) ──────────────────────────────────
+
+# Re-export embed_text from embed_client so store.py callers use a single import,
+# and tests can patch "axi.store.embed_text" cleanly.
+def embed_text(text: str, *, mode: str = "passage") -> list[float]:
+    """Thin wrapper around embed_client.embed — patchable in tests."""
+    from axi.embed_client import embed
+
+    return embed(text, mode=mode)  # type: ignore[arg-type]
+
+
+def embed_pending_nodes(*, limit: int = 100) -> int:
+    """Select nodes WHERE embedding IS NULL, embed each, and persist results.
+
+    Mirrors reindex_meeting_segments (store.py:669):
+      - Bounded by *limit* (default 100) for rate limiting.
+      - Orders by created_at DESC (most recent first, per ADR D4).
+      - Single embed failure is logged and skipped; does not abort the batch.
+      - Returns the number of nodes successfully embedded.
+
+    Never blocks fact creation — callers should invoke via trigger_embed_for_node
+    (fire-and-forget thread) rather than calling this synchronously.
+    """
+    import struct
+    import time as _time
+
+    from axi.embed_client import EmbedServiceError
+
+    c = _connect()
+    rows = c.execute(
+        "SELECT id, label, data FROM nodes WHERE embedding IS NULL "
+        "ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    embedded_count = 0
+    model_id = "qwen3-embedding-4b"  # read from active_embed_model.json if present
+    try:
+        from axi.embed_manager import read_active_embed
+        cfg = read_active_embed()
+        if cfg and "id" in cfg:
+            model_id = cfg["id"]
+    except Exception:  # noqa: BLE001
+        pass
+
+    for row in rows:
+        node_id = int(row[0])
+        label = row[1] or ""
+        data = row[2] or ""
+        # Combine label + data text for embedding (passage mode).
+        text_to_embed = label if not data or data == "{}" else f"{label} {data}"
+
+        try:
+            vector = embed_text(text_to_embed, mode="passage")
+        except EmbedServiceError as exc:
+            log.debug("embed_pending_nodes: skip node %d — embed failed: %s", node_id, exc)
+            continue
+        except Exception as exc:  # noqa: BLE001
+            log.warning("embed_pending_nodes: unexpected error for node %d: %s", node_id, exc)
+            continue
+
+        dim = len(vector)
+        blob = struct.pack(f"{dim}f", *vector)
+
+        try:
+            with _tx() as txc:
+                txc.execute(
+                    "UPDATE nodes SET embedding = ?, embedding_model = ?, embedding_dim = ? "
+                    "WHERE id = ?",
+                    (blob, model_id, dim, node_id),
+                )
+            # Sync to vec_nodes virtual table (outside _tx: vec0 uses its own txn).
+            upsert_vec_node(c, node_id=node_id, vector=vector)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("embed_pending_nodes: failed to persist embedding for node %d: %s", node_id, exc)
+            continue
+
+        embedded_count += 1
+
+    return embedded_count
+
+
+def trigger_embed_for_node(node_id: int) -> None:
+    """Fire-and-forget daemon thread that embeds a single newly inserted node.
+
+    Returns immediately. The embed happens asynchronously so fact creation
+    is never blocked (Spec: No Blocking of Fact Creation).
+    """
+
+    def _worker(nid: int) -> None:
+        try:
+            embed_pending_nodes(limit=1)
+        except Exception:  # noqa: BLE001
+            pass
+
+    t = threading.Thread(target=_worker, args=(node_id,), daemon=True)
+    t.start()
+
+
+# ─────────────────── semantic search (Slice 1) ───────────────────────────────
+
+
+def semantic_search_nodes(
+    query: str,
+    *,
+    k: int = 20,
+    conn=None,
+) -> list[dict[str, Any]]:
+    """Embed *query* and return nodes ranked by cosine similarity via vec_nodes KNN.
+
+    Returns an empty list if:
+      - The embed service is down (EmbedServiceError).
+      - vec_nodes is empty or not loaded.
+
+    Never raises — callers receive an empty list on any failure.
+    """
+    from axi.embed_client import EmbedServiceError
+
+    try:
+        vector = embed_text(query, mode="query")
+    except EmbedServiceError:
+        log.debug("semantic_search_nodes: embed service down for query %r", query)
+        return []
+    except Exception as exc:  # noqa: BLE001
+        log.warning("semantic_search_nodes: unexpected embed error: %s", exc)
+        return []
+
+    c = conn or _connect()
+
+    try:
+        node_ids = knn_nodes(c, vector=vector, k=k)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("semantic_search_nodes: knn failed: %s", exc)
+        return []
+
+    if not node_ids:
+        return []
+
+    # Fetch node metadata in one query, preserving KNN order.
+    placeholders = ",".join("?" * len(node_ids))
+    rows = c.execute(
+        f"SELECT id, kind, label, domain, created_at FROM nodes WHERE id IN ({placeholders})",
+        node_ids,
+    ).fetchall()
+
+    # Re-order by the KNN rank.
+    id_to_row = {int(r[0]): dict(r) for r in rows}
+    return [id_to_row[nid] for nid in node_ids if nid in id_to_row]
 
 
 def close() -> None:

@@ -271,6 +271,13 @@ FIELDS: tuple[ConfigField, ...] = (
         "nano_endpoint", "string", "http://127.0.0.1:8090",
         "URL del nano llama-server (extractor de entidades, puerto 8090).",
     ),
+    # ─────── embedding service endpoint ───────
+    ConfigField(
+        "embed_endpoint", "string", "http://127.0.0.1:8091",
+        "URL of the llama-embed server (text embedding service, port 8091). "
+        "Serves /v1/embeddings for semantic memory (Slice 1). "
+        "Default model: Qwen3-Embedding-4B (configurable via active_embed_model.json).",
+    ),
     # ─────── dashboard bind ───────
     ConfigField(
         "dashboard_host", "string", "127.0.0.1",
