@@ -1828,6 +1828,12 @@ def graph_page(request: Request):
     return templates.TemplateResponse(request, "graph.html", {})
 
 
+@app.get("/brain3d", response_class=HTMLResponse)
+def brain3d_page(request: Request):
+    """3D interactive visualization of the semantic memory graph."""
+    return templates.TemplateResponse(request, "brain3d.html", {})
+
+
 @app.get("/api/graph")
 def graph_data(limit: int = 200):
     """Return graph nodes + edges in Cytoscape.js format."""

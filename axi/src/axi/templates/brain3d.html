@@ -1,0 +1,234 @@
+{% extends "_base.html" %}
+{% block title %}Cerebro 3D · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="brain3dPage()" x-init="load()">
+
+  <!-- ─── header ─── -->
+  <div class="flex justify-between items-baseline flex-wrap gap-2">
+    <h1 class="text-2xl font-semibold">Cerebro 3D</h1>
+    <div class="flex items-center gap-3 text-sm">
+      <span class="muted" x-text="nodeCount + ' nodos · ' + edgeCount + ' relaciones'"></span>
+      <!-- Partial indicator: cross-domain edges temporarily unavailable -->
+      <template x-if="partial">
+        <span class="text-xs px-2 py-0.5 rounded-full" style="background:var(--panel2);color:var(--amber)">
+          ⚠ Solo red local (conexiones entre dominios no disponibles)
+        </span>
+      </template>
+    </div>
+  </div>
+
+  <!-- ─── loading state ─── -->
+  <template x-if="loading">
+    <div class="panel p-12 text-center">
+      <div class="muted">Cargando grafo 3D…</div>
+      <div class="muted text-xs mt-2">Preparando neuronas y conexiones</div>
+    </div>
+  </template>
+
+  <!-- ─── empty state ─── -->
+  <template x-if="!loading && nodeCount === 0">
+    <div class="panel p-12 text-center">
+      <div class="muted text-lg">No hay nodos para visualizar</div>
+      <div class="text-sm muted mt-2">
+        Habla con Axi para que empiece a construir su red de memoria.
+        Los hechos extraídos de las conversaciones aparecerán aquí como neuronas conectadas.
+      </div>
+    </div>
+  </template>
+
+  <!-- ─── main layout: 3D canvas + sidebar ─── -->
+  <template x-if="!loading && nodeCount > 0">
+    <div class="flex gap-4" style="height: 75vh; min-height: 400px;">
+
+      <!-- 3D graph canvas -->
+      <div class="flex-1 panel" style="position:relative; overflow:hidden; border-radius:0.75rem;">
+        <div id="brain3d-graph" style="width:100%; height:100%;"></div>
+
+        <!-- Legend overlay -->
+        <div class="absolute top-3 left-3 panel2 p-2 text-xs space-y-1" style="max-width:160px; border-radius:0.5rem;">
+          <div class="muted font-semibold mb-1">Dominio</div>
+          <template x-for="[domain, color] in Object.entries(DOMAIN_COLOR)" :key="domain">
+            <div class="flex items-center gap-2">
+              <span style="width:10px;height:10px;border-radius:50%;flex-shrink:0;"
+                    :style="'background:' + color"></span>
+              <span x-text="domain"></span>
+            </div>
+          </template>
+        </div>
+
+        <!-- Instructions hint -->
+        <div class="absolute bottom-3 left-3 muted text-xs panel2 p-1.5" style="border-radius:0.5rem; opacity:0.8;">
+          Orbitar: arrastrar · Zoom: scroll · Click: seleccionar nodo
+        </div>
+      </div>
+
+      <!-- ─── node sidebar ─── -->
+      <div id="node-sidebar" class="panel p-4 text-sm flex-shrink-0"
+           style="width: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;">
+
+        <template x-if="!selectedNode">
+          <div class="muted text-center py-8">
+            <div style="font-size:2rem">🧠</div>
+            <div class="mt-2">Haz click en un nodo para ver sus detalles</div>
+          </div>
+        </template>
+
+        <template x-if="selectedNode">
+          <div>
+            <!-- Node header -->
+            <div class="font-semibold text-base mb-1" x-text="selectedNode.label"></div>
+            <div class="muted text-xs space-y-0.5">
+              <div>
+                <span class="font-medium">Tipo:</span>
+                <span x-text="selectedNode.kind"></span>
+              </div>
+              <div x-show="selectedNode.domain">
+                <span class="font-medium">Dominio:</span>
+                <span x-text="selectedNode.domain"></span>
+              </div>
+              <div>
+                <span class="font-medium">Embedding:</span>
+                <span x-text="selectedNode.has_embedding ? '✓ Sí' : '—'"></span>
+              </div>
+            </div>
+
+            <!-- Connected edges -->
+            <template x-if="neighborEdges.length > 0">
+              <div class="mt-4">
+                <div class="font-semibold text-xs muted mb-2">Conexiones (<span x-text="neighborEdges.length"></span>)</div>
+                <div class="space-y-1.5 max-h-64 overflow-y-auto">
+                  <template x-for="edge in neighborEdges" :key="edge._key">
+                    <div class="panel2 p-2 text-xs rounded">
+                      <div class="font-medium" x-text="edge.kind"></div>
+                      <div class="muted mt-0.5" x-text="edge.direction + ' ' + edge.neighborLabel"></div>
+                      <div x-show="edge.system" class="muted text-xs" x-text="'sistema ' + edge.system"></div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="neighborEdges.length === 0">
+              <div class="muted text-xs mt-3">Sin conexiones visibles</div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+</div>
+
+<!-- Vendored 3d-force-graph (no CDN) — bundles Three.js internally -->
+<script src="/static/vendor/3d-force-graph.min.js"></script>
+
+<script>
+// Domain-to-color map — consistent palette across all renders.
+const DOMAIN_COLOR = {
+  relationships: '#FF6B9D',  // pink
+  health:        '#22cc55',  // green
+  finance:       '#ffaa33',  // amber
+  conversation:  '#33aaff',  // blue
+  fact:          '#00D4AA',  // teal
+  event:         '#ee55ff',  // purple
+  meeting:       '#ff8844',  // orange
+  exercise:      '#44ddff',  // cyan
+  learning:      '#bbff44',  // lime
+  spirituality:  '#ff44aa',  // rose
+  default:       '#888888',  // grey
+};
+
+function brain3dPage() {
+  return {
+    loading: true,
+    nodeCount: 0,
+    edgeCount: 0,
+    partial: false,
+    selectedNode: null,
+    neighborEdges: [],
+    _graphData: null,
+    _graph: null,
+    DOMAIN_COLOR,  // expose for Alpine x-for
+
+    async load() {
+      this.loading = true;
+      this.selectedNode = null;
+      try {
+        const resp = await fetch('/api/graph/full');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        this._graphData = data;
+        this.nodeCount = data.nodes.length;
+        this.edgeCount = data.edges.length;
+        this.partial = !!data.partial;
+        this.loading = false;
+        if (data.nodes.length > 0) {
+          this.$nextTick(() => this._render(data));
+        }
+      } catch (e) {
+        console.error('[brain3d] fetch failed:', e);
+        this.loading = false;
+      }
+    },
+
+    _render(data) {
+      const container = document.getElementById('brain3d-graph');
+      if (!container || typeof ForceGraph3D === 'undefined') return;
+
+      // Convert /api/graph/full format to 3d-force-graph format.
+      const nodeById = {};
+      const gfNodes = data.nodes.map(n => {
+        const color = DOMAIN_COLOR[n.domain] || DOMAIN_COLOR['default'];
+        const gn = { id: n.id, label: n.label, kind: n.kind, domain: n.domain, has_embedding: n.has_embedding, color };
+        nodeById[n.id] = gn;
+        return gn;
+      });
+      const gfLinks = data.edges.map(e => ({
+        source: e.source,
+        target: e.target,
+        kind: e.kind,
+        system: e.system,
+        // Visual distinction: dashed-style color for similar-to vs explicit edges.
+        color: e.kind === 'similar-to' ? '#3a5a6a' : '#5a7a4a',
+      }));
+
+      const self = this;
+
+      this._graph = ForceGraph3D()(container)
+        .backgroundColor('#0b0e13')
+        .nodeLabel(n => `<div style="background:#1a1f2b;color:#e6edf3;padding:4px 8px;border-radius:4px;font-size:12px;max-width:200px">${n.label}</div>`)
+        .nodeColor(n => n.color)
+        .nodeOpacity(0.9)
+        .nodeVal(n => n.has_embedding ? 4 : 2)
+        .linkColor(l => l.color)
+        .linkOpacity(0.5)
+        .linkWidth(l => l.system === 'B' ? 2 : 1)
+        .graphData({ nodes: gfNodes, links: gfLinks })
+        .onNodeClick(node => {
+          self._selectNode(node, data.edges, nodeById);
+        });
+    },
+
+    _selectNode(node, edges, nodeById) {
+      this.selectedNode = node;
+      // Build neighbor edge list.
+      const nid = node.id;
+      this.neighborEdges = edges
+        .filter(e => e.source === nid || e.target === nid)
+        .map((e, i) => {
+          const isOutbound = e.source === nid;
+          const neighborId = isOutbound ? e.target : e.source;
+          const neighbor = nodeById[neighborId];
+          return {
+            _key: i,
+            kind: e.kind,
+            system: e.system,
+            direction: isOutbound ? '→' : '←',
+            neighborLabel: neighbor ? neighbor.label : String(neighborId),
+          };
+        });
+    },
+  };
+}
+</script>
+{% endblock %}
