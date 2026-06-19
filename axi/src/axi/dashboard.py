@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+from collections import OrderedDict
 import socket
 import subprocess
 import sys
@@ -126,6 +127,153 @@ _DASHBOARD_RESTART_KEYS = ("dashboard_host", "dashboard_port")
 PROJECT_ROOT = Path(__file__).resolve().parent
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 STATIC_DIR = PROJECT_ROOT / "static"
+
+# ── L3 Correction UX ─────────────────────────────────────────────────────────
+# Per-session in-process memory of the last turn's persisted entries.
+# Key: session_id (str), Value: list of (domain, entry_id) tuples.
+# Lost on daemon restart — acceptable; undo is a within-conversation affordance.
+_LAST_ENTRIES: OrderedDict[str, list[tuple[str, str]]] = OrderedDict()
+_LAST_ENTRIES_MAX_SESSIONS = 100
+
+# Confidence threshold for nudge: STRICT less-than. Exactly 0.85 does NOT nudge.
+_NUDGE_CONFIDENCE_THRESHOLD = 0.85
+
+# Neutral-Spanish nudge text appended to low-confidence answers.
+_NUDGE_TEXT = " ¿Es correcto? Si no, decime 'corregir' o 'deshacer'."
+
+# Regex for detecting undo commands.
+# ONLY matches deliberate undo intents — bare command or with explicit object.
+# Must NOT fire on sentences with unrelated objects (e.g. "corregir la ruta").
+_UNDO_COMMAND_RE = re.compile(
+    r"^\s*(?:"
+    r"deshacer"
+    r"|deshazlo"
+    r"|deshacer\s+eso"
+    r"|deshacer\s+lo\s+[uú]ltimo"
+    r"|corregir\s+eso"
+    r"|corregir\s+lo\s+[uú]ltimo"
+    r"|borrar\s+eso"
+    r")\s*[.!?]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _record_last_entries(session_id: str, entries: list[tuple[str, str]]) -> None:
+    """Write entries to _LAST_ENTRIES[session_id] with the 100-slot cap (FIX 8)."""
+    _LAST_ENTRIES[session_id] = entries
+    _LAST_ENTRIES.move_to_end(session_id)
+    while len(_LAST_ENTRIES) > _LAST_ENTRIES_MAX_SESSIONS:
+        _LAST_ENTRIES.popitem(last=False)
+
+
+def _maybe_nudge(answer: str, confidence: float) -> str:
+    """Append a correction nudge to `answer` when confidence < 0.85 (strict).
+
+    Confidence of exactly 0.85 does NOT nudge (boundary rule).
+    Nano entries are ~0.65 so they always nudge; fast-path regex entries are
+    typically 0.85-1.0 so they do not.
+    """
+    if confidence < _NUDGE_CONFIDENCE_THRESHOLD:
+        return answer + _NUDGE_TEXT
+    return answer
+
+
+def _is_undo_command(text: str) -> bool:
+    """Return True when `text` matches a 'deshacer'/'corregir' undo command."""
+    return bool(_UNDO_COMMAND_RE.match(text))
+
+
+def _handle_deshacer(session_id: str) -> str:
+    """Soft-delete all entries from the last turn for this session.
+
+    Dispatches each (domain, entry_id) pair to the appropriate domain's
+    soft delete() method. Returns a neutral-Spanish confirmation string.
+    Clears _LAST_ENTRIES[session_id] after deletion.
+
+    When no prior entries exist, returns a graceful 'nothing to undo' message.
+    """
+    # Import domain delete functions lazily to match project pattern.
+    # All 6 domain stores expose a soft delete() that sets deleted_at.
+    _DOMAIN_DELETERS: dict[str, "Any"] = {
+        "health": None,
+        "finance": None,
+        "exercise": None,
+        "learning": None,
+        "spirituality": None,
+        "relationships": None,
+        "relationships_person": None,  # FIX 2: newly-created person cleanup
+        "events": None,               # FIX 3: events undo support
+    }
+    try:
+        from lifeos.health import entries as _he_del  # noqa: PLC0415
+        _DOMAIN_DELETERS["health"] = _he_del.delete
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from lifeos.finance import entries as _fe_del  # noqa: PLC0415
+        _DOMAIN_DELETERS["finance"] = _fe_del.delete
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from lifeos.exercise import sessions as _es_del  # noqa: PLC0415
+        _DOMAIN_DELETERS["exercise"] = _es_del.delete
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from lifeos.learning import entries as _le_del  # noqa: PLC0415
+        _DOMAIN_DELETERS["learning"] = _le_del.delete
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from lifeos.spirituality import entries as _se_del  # noqa: PLC0415
+        _DOMAIN_DELETERS["spirituality"] = _se_del.delete
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from lifeos.relationships import interactions as _ri_del  # noqa: PLC0415
+        _DOMAIN_DELETERS["relationships"] = _ri_del.delete
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from lifeos.relationships import people as _rp_del  # noqa: PLC0415
+        _DOMAIN_DELETERS["relationships_person"] = _rp_del.delete
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from lifeos.events import entries as _ev_del  # noqa: PLC0415
+        _DOMAIN_DELETERS["events"] = _ev_del.delete
+    except Exception:  # noqa: BLE001
+        pass
+
+    entries = _LAST_ENTRIES.get(session_id, [])
+    if not entries:
+        return "No hay nada reciente que deshacer."
+
+    undone: list[str] = []
+    for domain, entry_id in entries:
+        deleter = _DOMAIN_DELETERS.get(domain)
+        if deleter is not None:
+            try:
+                deleted = deleter(entry_id)
+                # Only count as undone when the soft-delete actually changed a row.
+                # Deleters return bool; True = row was soft-deleted.
+                if deleted is not False:
+                    undone.append(f"{domain}/{entry_id}")
+            except Exception:  # noqa: BLE001
+                log.warning("deshacer: delete failed for %s/%s", domain, entry_id)
+        else:
+            log.warning("deshacer: no deleter for domain=%s", domain)
+
+    # Clear the session's last entries so repeated 'deshacer' is a no-op.
+    _LAST_ENTRIES[session_id] = []
+
+    n = len(undone)
+    if n == 0:
+        return "No pude deshacer nada (error interno)."
+    if n == 1:
+        return f"Deshecho: {n} registro eliminado. Listo."
+    return f"Deshecho: {n} registros eliminados. Listo."
+
 
 def _apply_nano_endpoint(endpoint: str) -> None:
     """Propagate the configured nano llama-server URL to the environment and,
@@ -2126,6 +2274,7 @@ def _try_nano_extract(
     location_tag: str | None,
     entry_when: "datetime | None" = None,
     original_text: str | None = None,
+    session_id: str | None = None,
 ) -> dict | None:
     """Last resort before the main brain: ask the nano entity extractor
     what this message is about. If it returns a structured result with a
@@ -2143,6 +2292,19 @@ def _try_nano_extract(
     """
     # Use original_text for body/memory persistence; text for extraction only.
     body_text = original_text if original_text is not None else text
+
+    def _build_result(domain: str, answer: str, entry_ids: list[str], confidence: float) -> dict:
+        """Build the nano_out dict with nudge applied and _LAST_ENTRIES updated.
+
+        Store-then-correct ordering: entries are ALWAYS persisted before this
+        helper is called. Nudge is evaluated AFTER persistence — never blocks it.
+        """
+        nudged_answer = _maybe_nudge(answer, confidence)
+        if session_id is not None:
+            # Replace (not append) last-turn memory for this session.
+            _record_last_entries(session_id, [(domain, eid) for eid in entry_ids])
+        return {"domain": domain, "answer": nudged_answer, "entry_ids": entry_ids}
+
     try:
         from lifeos.agents import extractor as nano_extractor
     except Exception as e:  # noqa: BLE001
@@ -2169,6 +2331,7 @@ def _try_nano_extract(
         if domain == "finance":
             from lifeos.finance import entries as _fe
             from lifeos.finance.ingestion import FinanceIntent  # for tags shape
+            from lifeos.health import ingestion as _hi  # noqa: PLC0415
             merchant = result.merchant
             currency = result.currency or "MXN"
             # If we have ≥2 itemized products, store ONE entry per item so
@@ -2182,45 +2345,64 @@ def _try_nano_extract(
                 for it in result.items:
                     if it.get("amount") is None:
                         continue
+                    # L2 amount guard: validate each item amount before persist.
+                    _item_amount = _hi._validate_amount(body_text, it.get("amount"))
+                    if _item_amount is None:
+                        continue
                     cat = it.get("category")
                     tags = list(extra_tags)
                     if merchant:
                         tags.append(f"merchant:{merchant}")
                     fe = _fe.create(
                         kind=base_kind, title=str(it["name"]),
-                        amount=float(it["amount"]),
+                        amount=_item_amount,
                         when=now_utc, currency=currency,
                         category=cat, merchant=merchant, body=body_text,
                         tags=tags or None, source="chat",
                         confidence=result.confidence,
+                        raw_utterance=body_text, source_conv_id=None,
                     )
                     entry_ids.append(fe.id)
+                # FIX 5: if ALL items failed validation, do not return a misleading success.
+                if not entry_ids:
+                    return None
                 title_human = f"{len(entry_ids)} ítems en {merchant or 'compra'}"
             elif result.amount is not None:
+                # L2 amount guard: validate total amount before persist.
+                _validated_amount = _hi._validate_amount(body_text, result.amount)
+                if _validated_amount is None:
+                    # Implausible/garbled amount — do not silently trust nano.
+                    return None
                 # Single entry with total amount.
                 fe = _fe.create(
                     kind=base_kind, title=(result.title or "gasto"),
-                    amount=float(result.amount),
+                    amount=_validated_amount,
                     when=now_utc, currency=currency,
                     merchant=merchant, body=body_text,
                     tags=extra_tags or None, source="chat",
                     confidence=result.confidence,
+                    raw_utterance=body_text, source_conv_id=None,
                 )
                 entry_ids.append(fe.id)
-                title_human = f"{result.amount:g} {currency} en {merchant or (result.title or 'gasto')}"
+                title_human = f"{_validated_amount:g} {currency} en {merchant or (result.title or 'gasto')}"
             else:
                 # Finance domain but no amount detected — bail.
                 return None
-            return {
-                "domain": "finance",
-                "answer": f'Anotado en finanzas (nano): {title_human}. {len(entry_ids)} entry(s).',
-                "entry_ids": entry_ids,
-            }
+            return _build_result(
+                "finance",
+                f'Anotado en finanzas (nano): {title_human}. {len(entry_ids)} entry(s).',
+                entry_ids,
+                result.confidence,
+            )
 
         # ─── exercise ───────────────────────────────────────────────
         if domain == "exercise":
             from lifeos.exercise import sessions as _es
-            if not result.duration_minutes:
+            from lifeos.health import ingestion as _hi  # noqa: PLC0415
+            # L2 deterministic override: _parse_duration_es wins when non-None.
+            _det_dur = _hi._parse_duration_es(body_text)
+            _dur = _det_dur if _det_dur is not None else result.duration_minutes
+            if not _dur:
                 return None  # we need a duration to log a session
             kind_map = {"walk": "walk", "run": "run", "cardio": "cardio",
                         "strength": "strength", "yoga": "yoga",
@@ -2228,16 +2410,18 @@ def _try_nano_extract(
             sess = _es.create(
                 kind=kind_map.get(result.kind, "other"),
                 title=(result.title or "sesión de ejercicio"),
-                duration_minutes=int(result.duration_minutes),
+                duration_minutes=int(_dur),
                 when=now_utc, body=body_text,
                 tags=extra_tags or None, source="chat",
                 confidence=result.confidence,
+                raw_utterance=body_text, source_conv_id=None,
             )
-            return {
-                "domain": "exercise",
-                "answer": f'Anotada sesión (nano): {result.title or "ejercicio"} — {int(result.duration_minutes)} min.',
-                "entry_ids": [sess.id],
-            }
+            return _build_result(
+                "exercise",
+                f'Anotada sesión (nano): {result.title or "ejercicio"} — {int(_dur)} min.',
+                [sess.id],
+                result.confidence,
+            )
 
         # ─── learning ───────────────────────────────────────────────
         if domain == "learning":
@@ -2253,12 +2437,14 @@ def _try_nano_extract(
                 title=(result.title or body_text[:80]),
                 when=now_utc, body=body_text, author=author,
                 source="chat", confidence=result.confidence,
+                raw_utterance=body_text, source_conv_id=None,
             )
-            return {
-                "domain": "learning",
-                "answer": f'Anotado en aprendizaje (nano): "{result.title or body_text[:60]}".',
-                "entry_ids": [le.id],
-            }
+            return _build_result(
+                "learning",
+                f'Anotado en aprendizaje (nano): "{result.title or body_text[:60]}".',
+                [le.id],
+                result.confidence,
+            )
 
         # ─── events ─────────────────────────────────────────────────
         if domain == "events":
@@ -2291,12 +2477,14 @@ def _try_nano_extract(
                 body=body_text,
                 tags=extra_tags or None,
                 source="chat", confidence=result.confidence,
+                raw_utterance=body_text, source_conv_id=None,
             )
-            return {
-                "domain": "events",
-                "answer": f'Anotado evento (nano): "{result.title or body_text[:60]}".',
-                "entry_ids": [ev.id],
-            }
+            return _build_result(
+                "events",
+                f'Anotado evento (nano): "{result.title or body_text[:60]}".',
+                [ev.id],
+                result.confidence,
+            )
 
         # ─── relationships ──────────────────────────────────────────
         if domain == "relationships":
@@ -2315,10 +2503,15 @@ def _try_nano_extract(
             #   Path 1: explicit proper name remains → use it.
             #   Path 2: nothing left → fall to role-alias resolver.
             real_names = _strip_role_pseudo_names(result.people)
+            person_was_new = False
             if real_names:
                 name = real_names[0]
                 existing = rel_people.find_by_name(name)
-                person = existing or rel_people.create(name=name)
+                if existing is None:
+                    person = rel_people.create(name=name)
+                    person_was_new = True
+                else:
+                    person = existing
             else:
                 person = _resolve_role_alias(text)
             if person is None:
@@ -2331,12 +2524,21 @@ def _try_nano_extract(
                 title=(result.title or f"interacción con {person.name}"),
                 when=now_utc, body=body_text,
                 source="chat", confidence=result.confidence,
+                raw_utterance=body_text, source_conv_id=None,
             )
-            return {
-                "domain": "relationships",
-                "answer": f'Anotada interacción (nano): {kind} con {person.name}.',
-                "entry_ids": [inter.id, person.id],
-            }
+            # FIX 2: record interaction under "relationships" and, ONLY IF the person
+            # was newly created, record person.id under "relationships_person" so
+            # _handle_deshacer can clean it up without mis-dispatching to interactions.
+            result_out = _build_result(
+                "relationships",
+                f'Anotada interacción (nano): {kind} con {person.name}.',
+                [inter.id],
+                result.confidence,
+            )
+            if person_was_new and session_id is not None:
+                # Append person cleanup entry AFTER _build_result has set _LAST_ENTRIES.
+                _LAST_ENTRIES[session_id].append(("relationships_person", person.id))
+            return result_out
 
         # ─── health (conversacional, regex prioritizes structured) ──
         if domain == "health":
@@ -2392,9 +2594,24 @@ def _try_nano_extract(
                 # nano's sleep_hours when it is the sole source (explicit hours
                 # like "dormí 8 horas" where there are no two clock markers).
                 _sleep_hours_final = result.sleep_hours
-                if len(_CLOCK_TIME_RE.findall(body_text)) >= 2:
+                # L2 gate widening (ADR-4): fire on digit-form clocks (>= 2
+                # matches of _CLOCK_TIME_RE) OR on word-form sleep phrases
+                # (_SLEEP_FROM_TO_RE / _SLEEP_DE_X_A_Y_RE). The regexes and
+                # _parse_hour_token already handle word-form hours; only the
+                # gate condition needed widening.
+                from lifeos.health import ingestion as _hi  # noqa: PLC0415
+                _two_clocks = len(_CLOCK_TIME_RE.findall(body_text)) >= 2
+                # Word-form gate: only fire when the match has an explicit end
+                # hour token (i.e., the user stated BOTH sleep and wake times).
+                # When end_h is absent, the deterministic parser would use
+                # wall time (unreliable), so we prefer the nano's value.
+                _wf_m = _hi._SLEEP_FROM_TO_RE.search(body_text)
+                _word_form = (
+                    (_wf_m is not None and _wf_m.group("end_h") is not None)
+                    or _hi._SLEEP_DE_X_A_Y_RE.search(body_text) is not None
+                )
+                if _two_clocks or _word_form:
                     try:
-                        from lifeos.health import ingestion as _hi  # noqa: PLC0415
                         _det = _hi.parse_health(body_text, now=now_utc)
                         if _det is not None and _det.data.get("type") == "sleep_hours":
                             _sleep_hours_final = _det.data["value"]
@@ -2442,16 +2659,18 @@ def _try_nano_extract(
                 data=entry_data,
                 tags=extra_tags or None,
                 source="chat", confidence=result.confidence,
+                raw_utterance=body_text, source_conv_id=None,
             )
             if entry_kind == "vital":
                 answer_text = f"Anotado en salud como vital: {entry_title}."
             else:
                 answer_text = f'Anotado en salud (nano): "{entry_title}".'
-            return {
-                "domain": "health",
-                "answer": answer_text,
-                "entry_ids": [entry.id],
-            }
+            return _build_result(
+                "health",
+                answer_text,
+                [entry.id],
+                result.confidence,
+            )
 
         # ─── spirituality (low frequency; minimal wire) ─────────────
         if domain == "spirituality":
@@ -2471,12 +2690,14 @@ def _try_nano_extract(
                 title=(result.title or body_text[:80]),
                 when=now_utc, body=body_text,
                 source="chat", confidence=result.confidence,
+                raw_utterance=body_text, source_conv_id=None,
             )
-            return {
-                "domain": "spirituality",
-                "answer": f'Anotado en espiritualidad (nano): "{result.title or body_text[:60]}".',
-                "entry_ids": [entry.id],
-            }
+            return _build_result(
+                "spirituality",
+                f'Anotado en espiritualidad (nano): "{result.title or body_text[:60]}".',
+                [entry.id],
+                result.confidence,
+            )
 
         return None
 
@@ -2508,6 +2729,13 @@ async def api_chat_ask(request: Request):
     # bool("true") == True footgun (any non-empty string is truthy in Python).
     _lm = body.get("logging_mode", False)
     logging_mode: bool = _lm if isinstance(_lm, bool) else False
+    # session_id: per-client session identifier used for _LAST_ENTRIES tracking.
+    # Falls back to "default" when the client doesn't send one (single-user device).
+    _raw_session_id = body.get("session_id")
+    chat_session_id: str = (
+        str(_raw_session_id).strip() if _raw_session_id and isinstance(_raw_session_id, str)
+        else "default"
+    )
     # PWA optional fields — captured by the chat UI when the user toggles
     # the corresponding affordances. None when absent. We log them and pass
     # to the relevant domain create() as ad-hoc tag/data fields.
@@ -2592,6 +2820,22 @@ async def api_chat_ask(request: Request):
             )
         except Exception:  # noqa: BLE001
             log.warning("fastpath metric record failed", exc_info=True)
+
+    # ─── L3 Correction UX: deshacer / corregir command ─────────────────────
+    # Detect "deshacer", "corregir", or "borrar eso" before ALL other paths.
+    # These are undo commands that soft-delete the last persisted entries for
+    # this session. No persistence, no nano, no brain — just undo and confirm.
+    if _is_undo_command(text) and not image_b64:
+        latency_ms = round((time.monotonic() - start) * 1000)
+        undo_answer = _handle_deshacer(chat_session_id)
+        try:
+            mem.add(text, undo_answer, has_screenshot=False)
+        except Exception:  # noqa: BLE001
+            pass
+        stage_holder[0] = "deshacer"
+        _record_metric()
+        return {"answer": undo_answer, "latency_ms": latency_ms,
+                "spoke": False, "audio_b64": None}
 
     # ─── Web research fast-path (/busca, /investiga, current news) ──────────
     # Must run BEFORE any domain parsers — explicit command tokens and narrow
@@ -2822,6 +3066,7 @@ async def api_chat_ask(request: Request):
                     location=ei.location, body=text,
                     data=ei.data or None,
                     source="chat", confidence=ei.confidence,
+                    raw_utterance=text, source_conv_id=None,
                 )
                 streak = ex_sessions.current_streak()
                 lang = str(config.get("language", "es-MX"))
@@ -2852,6 +3097,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                # FIX 1: record for undo
+                _record_last_entries(chat_session_id, [("exercise", sess.id)])
                 stage_holder[0] = "exercise"
                 _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
@@ -2873,6 +3120,7 @@ async def api_chat_ask(request: Request):
                     when=entry_when,
                     body=si.body or text, data=si.data or None,
                     source="chat", confidence=si.confidence,
+                    raw_utterance=text, source_conv_id=None,
                 )
                 lang = str(config.get("language", "es-MX"))
                 fam = lifeos_localize.lang_family(lang)
@@ -2898,6 +3146,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                # FIX 1: record for undo
+                _record_last_entries(chat_session_id, [("spirituality", se.id)])
                 stage_holder[0] = "spirituality"
                 _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
@@ -2920,6 +3170,7 @@ async def api_chat_ask(request: Request):
                     body=li.body or None, author=li.author or None,
                     data=li.data or None,
                     source="chat", confidence=li.confidence,
+                    raw_utterance=text, source_conv_id=None,
                 )
                 lang = str(config.get("language", "es-MX"))
                 fam = lifeos_localize.lang_family(lang)
@@ -2951,6 +3202,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                # FIX 1: record for undo
+                _record_last_entries(chat_session_id, [("learning", le.id)])
                 stage_holder[0] = "learning"
                 _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
@@ -2991,6 +3244,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                # FIX 1: record for undo
+                _record_last_entries(chat_session_id, [("events", ev.id)])
                 stage_holder[0] = "events"
                 _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
@@ -3013,6 +3268,7 @@ async def api_chat_ask(request: Request):
                     kind=hi.kind, title=hi.title, when=entry_when,
                     body=text, data=hi.data or None, tags=hi.tags or None,
                     source="chat", confidence=hi.confidence,
+                    raw_utterance=text, source_conv_id=None,
                 )
                 lang = str(config.get("language", "es-MX"))
                 kind_label_es = {
@@ -3051,6 +3307,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                # FIX 1: record for undo
+                _record_last_entries(chat_session_id, [("health", entry.id)])
                 stage_holder[0] = "health"
                 _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
@@ -3068,13 +3326,17 @@ async def api_chat_ask(request: Request):
             ri_rel = None
         if ri_rel is not None:
             try:
-                person = rel_people.get_or_create(name=ri_rel.person_name)
+                # FIX 1+2: detect whether person is new so we can record for undo properly.
+                _existing_person = rel_people.find_by_name(ri_rel.person_name)
+                person = _existing_person or rel_people.create(name=ri_rel.person_name)
+                _fp_person_was_new = _existing_person is None
                 interaction = rel_interactions.create(
                     person_id=person.id, kind=ri_rel.kind,
                     title=ri_rel.title, body=text,
                     when=entry_when,
                     tags=ri_rel.tags or None,
                     source="chat", confidence=ri_rel.confidence,
+                    raw_utterance=text, source_conv_id=None,
                 )
                 # Auto-create a mentions-person edge from interaction → person.
                 # This is the first auto-edge of the system; future cross-domain
@@ -3144,6 +3406,11 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                # FIX 1+2: record for undo; only include person if newly created.
+                _fp_entries: list[tuple[str, str]] = [("relationships", interaction.id)]
+                if _fp_person_was_new:
+                    _fp_entries.append(("relationships_person", person.id))
+                _record_last_entries(chat_session_id, _fp_entries)
                 stage_holder[0] = "relationships"
                 _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
@@ -3171,6 +3438,7 @@ async def api_chat_ask(request: Request):
                     merchant=fi.merchant, body=text,
                     tags=merged_tags or None,
                     source="chat", confidence=fi.confidence,
+                    raw_utterance=text, source_conv_id=None,
                 )
                 # Big purchases auto-schedule a +7d reflection.
                 if fe.kind == "big_purchase":
@@ -3208,6 +3476,8 @@ async def api_chat_ask(request: Request):
                     mem.add(text, answer, has_screenshot=False)
                 except Exception as e:  # noqa: BLE001
                     log.warning("chat memory.add failed: %s", e)
+                # FIX 1: record for undo
+                _record_last_entries(chat_session_id, [("finance", fe.id)])
                 stage_holder[0] = "finance"
                 _record_metric()
                 return {"answer": answer, "latency_ms": latency_ms,
@@ -3282,6 +3552,7 @@ async def api_chat_ask(request: Request):
                     parse_text, location_tag,
                     entry_when=entry_when,
                     original_text=text,
+                    session_id=chat_session_id,
                 )
             except Exception as e:  # noqa: BLE001
                 log.exception("nano-extract wrapper failed: %s", e)
