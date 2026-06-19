@@ -563,3 +563,89 @@ def test_body_composition_plausibility_rejects_extreme() -> None:
         assert "weight_kg" not in h.data
     else:
         assert h.data.get("type") == "muscle_pct"
+
+
+# ── Golden tests: sleep-duration miscalculation bug (obs #575, 2026-06-18) ───
+# Original bug: "Me dormí a las 11:50 pm y me desperté hoy a las 5:50 am"
+# → Axi logged "dormí 8.0h". Correct is 6.0h (23:50→05:50 with midnight wrap).
+# Root cause: nano disobeyed its null rule and computed wrong math; the
+# deterministic regex now matches all these shapes and computes in Python.
+
+
+def test_sleep_original_bug_11_50pm_to_5_50am() -> None:
+    """THE original bug: 23:50→05:50 with midnight wrap = 6.0h, not 8.0h."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("Me dormí a las 11:50 pm y me desperté hoy a las 5:50 am")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 6.0
+    assert h.data["start_hour_24"] == 23
+    assert h.data["start_minute"] == 50
+    assert h.data["end_hour_24"] == 5
+    assert h.data["end_minute"] == 50
+
+
+def test_sleep_23_to_7_midnight_wrap() -> None:
+    """'me dormí a las 23 y desperté a las 7' — 24h notation, 8.0h."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("me dormí a las 23 y desperté a las 7")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 8.0
+    assert h.data["start_hour_24"] == 23
+    assert h.data["end_hour_24"] == 7
+
+
+def test_sleep_22_30_to_6_15_with_minutes() -> None:
+    """'me acosté a las 22:30 y me levanté a las 6:15' = 7h45m = 7.75h."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("me acosté a las 22:30 y me levanté a las 6:15")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 7.75
+    assert h.data["start_hour_24"] == 22
+    assert h.data["start_minute"] == 30
+    assert h.data["end_hour_24"] == 6
+    assert h.data["end_minute"] == 15
+
+
+def test_sleep_1am_to_9am_inline_ampm() -> None:
+    """'dormí de 1am a 9am' — inline am/pm (no space), 8.0h."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("dormí de 1am a 9am")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 8.0
+
+
+def test_sleep_explicit_hours_8_unchanged() -> None:
+    """'dormí 8 horas' → 8.0h — explicit hours path must be unaffected."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("dormí 8 horas")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 8.0
+
+
+def test_sleep_explicit_hours_plausibility_rejects_too_short() -> None:
+    """'dormí 0.2 horas' — below 0.5h plausibility floor, must return None."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("dormí 0.2 horas")
+    assert h is None or h.data.get("type") != "sleep_hours"
+
+
+def test_sleep_same_day_no_wrap() -> None:
+    """'dormí de las 8 a las 10' — same morning, no midnight wrap, 2.0h."""
+    from lifeos.health.ingestion import parse_health
+
+    h = parse_health("dormí de las 8 de la mañana a las 10 de la mañana")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 2.0

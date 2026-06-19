@@ -462,7 +462,7 @@ def _try_natural_sleep(
             delta = (eh24 * 60 + end_min) - (sh24 * 60 + start_min)
             if delta < 0:
                 delta += 24 * 60
-            hours = round(delta / 60, 1)
+            hours = round(delta / 60, 2)
             if 0.5 <= hours <= 16:
                 return HealthIntent(
                     kind="vital",
@@ -519,7 +519,7 @@ def _try_natural_sleep(
     delta = end_min_total - start_min_total
     if delta < 0:
         delta += 24 * 60
-    hours = round(delta / 60, 1)
+    hours = round(delta / 60, 2)
     if hours < 0.5 or hours > 16:  # sanity bounds; outside this is suspicious
         return None
     return HealthIntent(
@@ -616,6 +616,11 @@ def _try_vital(text: str) -> HealthIntent | None:
         # " y media" tail so check if it's present in the matched text.
         if "y media" in m.group(0).lower():
             v += 0.5
+        # Plausibility: explicit sleep hours must be in a physiological range.
+        # Values below 0.5h or above 16h are almost certainly mis-parses or
+        # typos — mirrors the sanity gate in _try_natural_sleep.
+        if v < 0.5 or v > 16:
+            return None
         return HealthIntent(
             kind="vital",
             title=f"dormí {v}h",
