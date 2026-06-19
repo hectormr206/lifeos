@@ -32,9 +32,11 @@ def clear_revivals():
     from axi import heartbeat
     heartbeat._revivals.clear()
     heartbeat._alerted.clear()
+    heartbeat._vt_ensure_up_alerted = False
     yield
     heartbeat._revivals.clear()
     heartbeat._alerted.clear()
+    heartbeat._vt_ensure_up_alerted = False
 
 
 # ===========================================================================
@@ -988,3 +990,122 @@ def test_vt_ensure_up_regression_llama_server_still_revived(monkeypatch):
 
     reset_calls = [a for a in recorded if "reset-failed" in a and "llama-server.service" in a]
     assert reset_calls, "llama-server.service should still be revived via reset-failed + start when failed"
+
+
+# ===========================================================================
+# Phase 8 — FIX B: llama-vt ensure-up rate-cap observability
+# ===========================================================================
+
+def test_vt_ensure_up_cap_exhausted_logs_warning(monkeypatch):
+    """triad active + game off + no meeting + llama-vt inactive + cap exhausted → warning logged.
+
+    The capped give-up must be visible via notify-send (once per episode).
+    start_service must NOT be called.
+    """
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: False)
+
+    # Pre-fill rate cap for llama-vt
+    svc = "llama-vt.service"
+    for _ in range(heartbeat.RATE_CAP):
+        heartbeat.record_revival(svc, now=0.0)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)  # not failed (stopped cleanly)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            s = argv[3]
+            return _sp_result("inactive\n" if s == svc else "active\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+
+    def recording_run(argv, **kw):
+        recorded.append(argv)
+        return fake_run(argv, **kw)
+
+    monkeypatch.setattr(heartbeat.subprocess, "run", recording_run)
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    # notify-send must have been called for the cap-exhausted warning
+    notify_calls = [a for a in recorded if "notify-send" in a]
+    assert notify_calls, "Expected notify-send for capped ensure-up give-up, but none fired"
+
+    # start must NOT have been called for llama-vt
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == svc]
+    assert not start_calls, f"start_service must not be called when cap exhausted, got: {start_calls}"
+
+
+def test_vt_ensure_up_cap_exhausted_warning_deduped(monkeypatch):
+    """Cap-exhausted warning fires ONCE per episode, not every cycle."""
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: False)
+
+    svc = "llama-vt.service"
+    for _ in range(heartbeat.RATE_CAP):
+        heartbeat.record_revival(svc, now=0.0)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            s = argv[3]
+            return _sp_result("inactive\n" if s == svc else "active\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run",
+                        lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    # Run two cycles — warning should fire only once
+    list(heartbeat.run_cycle(now=0.0))
+    list(heartbeat.run_cycle(now=1.0))
+
+    notify_calls = [a for a in recorded if "notify-send" in a]
+    assert len(notify_calls) == 1, (
+        f"Expected warning exactly once, got {len(notify_calls)}"
+    )
+
+
+def test_vt_ensure_up_under_cap_starts_service(monkeypatch):
+    """Regression guard: when cap is NOT exhausted, start_service IS called (existing behavior)."""
+    from axi import heartbeat, models_manager, store
+
+    monkeypatch.setattr(heartbeat, "_game_lock_path", lambda: Path("/nonexistent/game-mode.lock"))
+    monkeypatch.setattr(models_manager, "is_triad_active", lambda: True)
+    monkeypatch.setattr(store, "meeting_in_progress", lambda: False)
+
+    svc = "llama-vt.service"
+    # Only 1 revival recorded — still under cap (cap = 3)
+    heartbeat.record_revival(svc, now=0.0)
+
+    def fake_run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "is-failed"]:
+            return _sp_result("inactive\n", 1)
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            s = argv[3]
+            return _sp_result("inactive\n" if s == svc else "active\n", 0)
+        return _sp_result("", 0)
+
+    recorded = []
+    monkeypatch.setattr(heartbeat.subprocess, "run",
+                        lambda a, **kw: recorded.append(a) or fake_run(a, **kw))
+    monkeypatch.setattr(heartbeat, "_sd_notify", lambda s: None)
+
+    list(heartbeat.run_cycle(now=0.0))
+
+    start_calls = [a for a in recorded if len(a) > 3 and a[2] == "start" and a[3] == svc]
+    assert start_calls, f"start_service should be called when under cap, but was not"
+
+    # No warning should fire
+    notify_calls = [a for a in recorded if "notify-send" in a]
+    assert not notify_calls, f"No warning expected when under cap, got: {notify_calls}"

@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Boot-time OOM guard for llama-vt.service.
+
+Exits 0 (allow start) iff the active primary brain is qwen35-4b.
+Exits 1 (clean skip — not a failure) in all other cases:
+  - active primary is NOT qwen35-4b (e.g. 35B → OOM risk)
+  - active_model.json is missing
+  - active_model.json is malformed/corrupt JSON
+  - any other I/O error
+
+Used as ExecCondition in llama-vt.service so llama-vt only auto-starts
+at boot when the triad is active. When the 35B (qwen36-35b-a3b) is the
+primary, loading llama-server (22 GB) + llama-vt (3.3 GB) simultaneously
+would exhaust the 12 GB GPU VRAM.
+
+Env override for testing:
+  AXI_ACTIVE_MODEL_PATH — absolute path to the active_model.json to read.
+  If set, this overrides the default XDG_STATE_HOME/axi/active_model.json.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+_TRIAD_PRIMARY_ID = "qwen35-4b"
+
+
+def _active_model_path() -> Path:
+    """Return the path to active_model.json, honoring env overrides."""
+    override = os.environ.get("AXI_ACTIVE_MODEL_PATH")
+    if override:
+        return Path(override)
+    state_home = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(state_home) / "axi" / "active_model.json"
+
+
+def _is_triad_primary() -> bool:
+    """Return True iff active_model.json records id == 'qwen35-4b'."""
+    path = _active_model_path()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        # Missing file → fail-safe: do not start VT
+        return False
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        # Corrupt JSON → fail-safe: do not start VT
+        return False
+
+    return data.get("id") == _TRIAD_PRIMARY_ID
+
+
+if __name__ == "__main__":
+    sys.exit(0 if _is_triad_primary() else 1)

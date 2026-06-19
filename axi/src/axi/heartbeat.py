@@ -64,6 +64,12 @@ _revivals: dict[str, deque] = defaultdict(deque)
 # cap-exceeded notification this episode. Reset when the service recovers.
 _alerted: set[str] = set()
 
+# Separate dedup guard for the ensure-up cap-warning path. Reset when llama-vt
+# becomes active (the is_active check clears it). Uses a different set from
+# _alerted so the ensure-up warning isn't cleared by the "not failed" branch
+# before the cap check can fire.
+_vt_ensure_up_alerted: bool = False
+
 
 # ---------------------------------------------------------------------------
 # sd_notify — vendored ~15-line socket helper (no python-systemd dep)
@@ -244,13 +250,36 @@ def run_cycle(now: float | None = None):
             _alerted.discard(svc)
             # ── llama-vt ensure-up: start if stopped (inactive) ──────────────
             if svc == "llama-vt.service" and not game_mode_active() and models_manager.is_triad_active():
+                global _vt_ensure_up_alerted
                 try:
                     in_meeting = _store.meeting_in_progress()
                 except Exception:
                     in_meeting = True  # fail-safe: uncertain state → do not start
-                if not in_meeting and not is_active(svc) and under_cap(svc, now):
-                    start_service(svc)
-                    record_revival(svc, now)
+                if not in_meeting and not is_active(svc):
+                    if under_cap(svc, now):
+                        start_service(svc)
+                        record_revival(svc, now)
+                    elif not _vt_ensure_up_alerted:
+                        # Rate cap exhausted — notify once per episode so a silent
+                        # give-up is visible. Uses a separate guard from _alerted
+                        # because the "not failed" branch discards _alerted before
+                        # the cap check runs. Reset when VT becomes active again.
+                        _vt_ensure_up_alerted = True
+                        n = len(_revivals[svc])
+                        subprocess.run(
+                            [
+                                "notify-send",
+                                "--urgency=normal",
+                                "Axi heartbeat — llama-vt rate cap exhausted",
+                                f"llama-vt down + triad active but rate-cap exhausted"
+                                f" ({n}/{RATE_CAP} per hour); not starting",
+                            ],
+                            timeout=SYSTEMCTL_TIMEOUT,
+                        )
+                else:
+                    # VT is active (or meeting is running) — reset the cap-warning guard
+                    # so the next capped episode fires again.
+                    _vt_ensure_up_alerted = False
         elif svc in GAME_BRAINS and game_mode_active():
             # Game mode started mid-cycle — skip revival to protect the GPU.
             pass
