@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import secrets
 import shutil
 import sqlite3
@@ -813,6 +814,10 @@ def create_vec_nodes_table(conn) -> None:
     the Matryoshka-512 slice defined in ADR D3. embedding_dim is stored per-node
     so a model swap is detectable (task 4.19).
 
+    Also creates an AFTER DELETE trigger on nodes that removes the corresponding
+    vec_nodes row. SQLite FK ON DELETE CASCADE does NOT propagate to vec0 virtual
+    tables, so the trigger is the only safe cleanup path.
+
     Idempotent: safe to call multiple times.
     """
     _load_sqlite_vec(conn)
@@ -822,13 +827,24 @@ def create_vec_nodes_table(conn) -> None:
         "  embedding float[512]"
         ")"
     )
+    # AFTER DELETE trigger: clean up vec_nodes when a node is deleted.
+    # FK ON DELETE CASCADE does not fire for vec0 virtual tables.
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_nodes_delete_vec
+        AFTER DELETE ON nodes
+        BEGIN
+            DELETE FROM vec_nodes WHERE node_id = OLD.id;
+        END
+        """
+    )
 
 
 def upsert_vec_node(conn, *, node_id: int, vector: list[float]) -> None:
     """Insert or replace a node's embedding in vec_nodes.
 
     Truncates vector to 512 dims (Matryoshka slice) before storing.
-    Caller must commit.
+    vec0 manages its own internal transaction; no external commit needed.
     """
     import struct
 
@@ -934,8 +950,31 @@ def embed_pending_nodes(*, limit: int = 100) -> int:
                     "WHERE id = ?",
                     (blob, model_id, dim, node_id),
                 )
-            # Sync to vec_nodes virtual table (outside _tx: vec0 uses its own txn).
-            upsert_vec_node(c, node_id=node_id, vector=vector)
+            # Sync to vec_nodes virtual table.
+            # If this fails, roll back nodes.embedding to NULL so the node stays
+            # re-queueable — prevents torn state where embedding IS SET but vec_nodes row
+            # is missing, which would exclude the node from future KNN forever.
+            try:
+                upsert_vec_node(c, node_id=node_id, vector=vector)
+            except Exception as vec_exc:  # noqa: BLE001
+                log.warning(
+                    "embed_pending_nodes: vec_nodes upsert failed for node %d — "
+                    "rolling back nodes.embedding to NULL: %s",
+                    node_id, vec_exc,
+                )
+                try:
+                    with _tx() as txc2:
+                        txc2.execute(
+                            "UPDATE nodes SET embedding = NULL, embedding_model = NULL, "
+                            "embedding_dim = NULL WHERE id = ?",
+                            (node_id,),
+                        )
+                except Exception as rb_exc:  # noqa: BLE001
+                    log.warning(
+                        "embed_pending_nodes: rollback of nodes.embedding failed for node %d: %s",
+                        node_id, rb_exc,
+                    )
+                continue
         except Exception as exc:  # noqa: BLE001
             log.warning("embed_pending_nodes: failed to persist embedding for node %d: %s", node_id, exc)
             continue
@@ -945,21 +984,101 @@ def embed_pending_nodes(*, limit: int = 100) -> int:
     return embedded_count
 
 
-def trigger_embed_for_node(node_id: int) -> None:
-    """Fire-and-forget daemon thread that embeds a single newly inserted node.
+# ─────────────────── shared embed background worker (FIX 5) ─────────────────
+# A bounded queue + single consumer thread replaces the per-node thread spawn.
+# trigger_embed_for_node enqueues a signal; the worker drains pending nodes in
+# batches.  Idempotent: duplicate signals are silently dropped (queue full).
 
-    Returns immediately. The embed happens asynchronously so fact creation
-    is never blocked (Spec: No Blocking of Fact Creation).
+_EMBED_QUEUE: queue.Queue[int] = queue.Queue(maxsize=500)
+_embed_worker_started = threading.Event()
+_embed_worker_lock = threading.Lock()
+
+
+def _embed_worker_loop() -> None:
+    """Single consumer thread: drain embed_pending_nodes whenever signalled.
+
+    Blocks on the queue (1 s timeout so the thread wakes periodically).
+    On EmbedServiceError: backs off 10 s; nodes remain embedding IS NULL and
+    will be retried on the next drain cycle (service-down safe, no lost nodes).
     """
+    _BACKOFF_S = 10.0
+    _DRAIN_LIMIT = 50  # nodes per drain cycle
 
-    def _worker(nid: int) -> None:
+    while True:
         try:
-            embed_pending_nodes(limit=1)
-        except Exception:  # noqa: BLE001
-            pass
+            _EMBED_QUEUE.get(timeout=1.0)
+            # Drain the queue so we don't process one-at-a-time when bursting.
+            while not _EMBED_QUEUE.empty():
+                try:
+                    _EMBED_QUEUE.get_nowait()
+                except queue.Empty:
+                    break
+        except queue.Empty:
+            continue
 
-    t = threading.Thread(target=_worker, args=(node_id,), daemon=True)
-    t.start()
+        try:
+            embed_pending_nodes(limit=_DRAIN_LIMIT)
+        except Exception:  # noqa: BLE001
+            log.debug("embed_worker: drain error — backing off %ss", _BACKOFF_S)
+            time.sleep(_BACKOFF_S)
+
+
+def _ensure_embed_worker() -> None:
+    """Start the shared embed consumer thread if it has not been started yet."""
+    if _embed_worker_started.is_set():
+        return
+    with _embed_worker_lock:
+        if _embed_worker_started.is_set():
+            return
+        t = threading.Thread(target=_embed_worker_loop, name="axi-embed-worker", daemon=True)
+        t.start()
+        _embed_worker_started.set()
+
+
+def trigger_embed_for_node(node_id: int) -> None:
+    """Signal the shared background embed worker that a new node is pending.
+
+    Returns immediately — never blocks fact creation.  The worker thread
+    drains embed_pending_nodes(limit=50) in batches.  If the embed service is
+    down, nodes stay embedding IS NULL and are retried on the next signal.
+    """
+    _ensure_embed_worker()
+    try:
+        _EMBED_QUEUE.put_nowait(node_id)
+    except queue.Full:
+        # Queue already full — a drain is already scheduled; nothing is lost
+        # because embed_pending_nodes selects ALL embedding IS NULL nodes.
+        pass
+
+
+def run_periodic_embed_drain(*, embed_limit: int = 50, similarity_threshold: float = 0.85) -> None:
+    """Drain pending embeddings, backfill similar-to edges, and run auto-linkers.
+
+    Intended to be called periodically (e.g. every 5 minutes) from the dashboard
+    lifespan background task.  All operations are idempotent and bounded.
+
+    row_factory is set to sqlcipher3.Row before run_auto_linkers so the linker
+    dict-access (row["col"]) works correctly regardless of caller state.
+    """
+    try:
+        embed_pending_nodes(limit=embed_limit)
+    except Exception:  # noqa: BLE001
+        log.warning("run_periodic_embed_drain: embed_pending_nodes failed", exc_info=True)
+
+    try:
+        backfill_similar_to_edges(threshold=similarity_threshold)
+    except Exception:  # noqa: BLE001
+        log.warning("run_periodic_embed_drain: backfill_similar_to_edges failed", exc_info=True)
+
+    try:
+        from axi.linkers import run_auto_linkers
+        c = _connect()
+        # Ensure row_factory is set so linkers can use row["col"] access.
+        import sqlcipher3 as _sc3
+        c.row_factory = _sc3.Row
+        run_auto_linkers(c)
+    except Exception:  # noqa: BLE001
+        log.warning("run_periodic_embed_drain: run_auto_linkers failed", exc_info=True)
 
 
 # ─────────────────── semantic search (Slice 1) ───────────────────────────────

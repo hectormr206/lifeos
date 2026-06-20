@@ -1,7 +1,11 @@
 """Tests for the SQLite-backed knowledge store."""
 from __future__ import annotations
 
+import struct
 import time
+from unittest.mock import patch
+
+import pytest
 
 from axi import store
 
@@ -61,3 +65,147 @@ def test_created_tz_is_recorded():
     row = store.get_node(nid)
     # Whatever the config says, the column should not be NULL.
     assert row["created_tz"] is not None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 3: vec_nodes ↔ nodes atomicity — failure in upsert_vec_node must
+#         roll back (or clear) nodes.embedding so the node stays re-queueable.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_embed_pending_nodes_rolls_back_embedding_on_vec_upsert_failure():
+    """FIX 3 RED: if upsert_vec_node raises, nodes.embedding must end up NULL.
+
+    Without this fix a crash between the nodes UPDATE and the vec_nodes INSERT
+    leaves nodes.embedding set but no vec_nodes row — the node is silently lost
+    from all future KNN queries because embed_pending_nodes skips embedded nodes.
+    """
+    nid = store.add_node("fact", "atomic test node", domain="setup")
+
+    # Patch upsert_vec_node to raise after the nodes UPDATE has been committed.
+    with patch.object(store, "upsert_vec_node", side_effect=RuntimeError("simulated vec failure")):
+        with patch.object(store, "embed_text", return_value=[0.1] * 512):
+            embedded = store.embed_pending_nodes(limit=1)
+
+    # The embed should have been skipped (count = 0) OR the node embedding must be NULL.
+    row = store.get_node(nid)
+    assert row is not None
+
+    # Core invariant: node must be re-queueable (embedding IS NULL) after a vec failure.
+    assert row["embedding"] is None, (
+        "After upsert_vec_node failure, nodes.embedding must be NULL so the node "
+        "re-queues on the next embed_pending_nodes call. Got non-NULL embedding — "
+        "torn state detected (FIX 3 not applied)."
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 4: vec_nodes orphan cleanup on node DELETE
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_delete_node_removes_vec_nodes_row():
+    """FIX 4 RED: deleting a node must also remove its vec_nodes row.
+
+    vec0 virtual tables do not honor SQLite FK ON DELETE CASCADE, so dangling
+    rowids pollute KNN results unless explicitly cleaned up.
+    """
+    c = store._connect()
+
+    # Insert node + embedding.
+    nid = store.add_node("fact", "vec orphan test", domain="setup")
+    vector = [0.0] * 512
+    vector[0] = 1.0  # unit vector
+    store.upsert_vec_node(c, node_id=nid, vector=vector)
+
+    # Confirm vec_nodes row exists before deletion.
+    before = c.execute(
+        "SELECT 1 FROM vec_nodes WHERE node_id = ?", (nid,)
+    ).fetchone()
+    assert before is not None, "vec_nodes row should exist before DELETE"
+
+    # Delete the node.
+    with store._tx() as txc:
+        txc.execute("DELETE FROM nodes WHERE id = ?", (nid,))
+
+    # vec_nodes row must be gone too.
+    after = c.execute(
+        "SELECT 1 FROM vec_nodes WHERE node_id = ?", (nid,)
+    ).fetchone()
+    assert after is None, (
+        "vec_nodes row still exists after node DELETE — orphan detected (FIX 4 not applied)"
+    )
+
+
+def test_knn_does_not_return_deleted_node():
+    """FIX 4: KNN must not return a node that has been deleted."""
+    c = store._connect()
+
+    nid = store.add_node("fact", "knn orphan check", domain="setup")
+    vector = [0.0] * 512
+    vector[1] = 1.0  # unit vector
+    store.upsert_vec_node(c, node_id=nid, vector=vector)
+
+    # Delete the node.
+    with store._tx() as txc:
+        txc.execute("DELETE FROM nodes WHERE id = ?", (nid,))
+
+    # KNN with the same vector must not include the deleted node.
+    results = store.knn_nodes(c, vector=vector, k=10)
+    assert nid not in results, (
+        f"Deleted node {nid} still appears in KNN results — orphan vec_nodes row (FIX 4)"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 5: embed worker service-down → nodes remain re-queueable
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_embed_pending_nodes_service_down_leaves_embedding_null():
+    """FIX 5 RED: when the embed service is down, nodes stay embedding IS NULL.
+
+    Nodes must NOT be marked as embedded when the embed call fails — they must
+    remain re-queueable so the next drain picks them up.
+    """
+    from axi.embed_client import EmbedServiceError
+
+    nid = store.add_node("fact", "service down test", domain="setup")
+
+    with patch.object(store, "embed_text", side_effect=EmbedServiceError("service down")):
+        count = store.embed_pending_nodes(limit=1)
+
+    assert count == 0, "embed_pending_nodes must return 0 when service is down"
+
+    row = store.get_node(nid)
+    assert row["embedding"] is None, (
+        "Node embedding must remain NULL when embed service is down — "
+        "it must stay re-queueable for the next drain"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 5: shared background embed worker
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_trigger_embed_for_node_does_not_spawn_unbounded_threads():
+    """FIX 5: trigger_embed_for_node must use a shared worker, not a new thread per call."""
+    import threading
+
+    before = threading.active_count()
+
+    # Call trigger multiple times — a shared worker starts only once.
+    nid = store.add_node("fact", "worker thread test", domain="setup")
+    for _ in range(10):
+        store.trigger_embed_for_node(nid)
+
+    after = threading.active_count()
+    # Should start at most 1 new thread (the shared worker), not 10.
+    new_threads = after - before
+    assert new_threads <= 1, (
+        f"trigger_embed_for_node started {new_threads} new threads for 10 calls — "
+        "must use a shared worker queue, not thread-per-node (FIX 5 not applied)"
+    )
+
+
+def test_run_periodic_embed_drain_exists():
+    """FIX 5: run_periodic_embed_drain must be importable from axi.store."""
+    from axi.store import run_periodic_embed_drain
+    assert callable(run_periodic_embed_drain)

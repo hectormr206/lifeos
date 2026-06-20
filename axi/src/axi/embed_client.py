@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import urllib.error
 import urllib.request
 from typing import Literal
@@ -94,6 +95,13 @@ def embed(
     # Matryoshka truncation: keep only the first *dim* components.
     if len(vector) > dim:
         vector = vector[:dim]
+
+    # Re-normalize to unit length after truncation.
+    # A prefix-slice of a unit vector has norm < 1; sqlite-vec cosine assumes
+    # unit-normalized inputs, so distances would be wrong without this step.
+    norm = math.sqrt(sum(v * v for v in vector))
+    if norm > 0:
+        vector = [v / norm for v in vector]
 
     return [float(v) for v in vector]
 

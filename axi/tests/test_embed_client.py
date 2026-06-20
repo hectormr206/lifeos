@@ -101,3 +101,63 @@ def test_embed_posts_to_correct_endpoint():
     request_obj = mock_urlopen.call_args[0][0]
     assert "/v1/embeddings" in request_obj.full_url
     assert "8091" in request_obj.full_url
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 1: Matryoshka truncation must re-normalize to unit length
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_embed_truncation_renormalizes_to_unit_vector():
+    """FIX 1 RED: after Matryoshka truncation the returned vector must have L2 norm ≈ 1.0.
+
+    A non-unit raw vector [3, 4, 0, 0, ...] truncated to 512 dims has norm 5.0
+    without renormalization and norm 1.0 after renormalization.  Before this fix
+    the raw slice was returned as-is, breaking cosine distance in sqlite-vec.
+    """
+    import math
+    from axi.embed_client import embed
+
+    # Build a raw 1024-dim vector whose first 2 components are [3, 4] → norm 5.
+    # After truncation to 512 dims it will still be [3, 4, 0, ...] → norm 5 without fix.
+    raw = [0.0] * 1024
+    raw[0] = 3.0
+    raw[1] = 4.0
+    fake_response = _make_fake_response(raw)
+
+    with patch("urllib.request.urlopen", return_value=fake_response):
+        result = embed("test", mode="passage", dim=512)
+
+    assert len(result) == 512
+    norm = math.sqrt(sum(v * v for v in result))
+    assert abs(norm - 1.0) < 1e-5, f"Expected unit norm after truncation, got {norm}"
+
+
+def test_embed_already_unit_vector_stays_unit():
+    """FIX 1: a vector that is already unit-norm (after truncation) stays unit-norm."""
+    import math
+    from axi.embed_client import embed
+
+    # Build a 512-dim unit vector: [1/sqrt(512), ...] * 512
+    val = 1.0 / math.sqrt(512)
+    raw = [val] * 512
+    fake_response = _make_fake_response(raw)
+
+    with patch("urllib.request.urlopen", return_value=fake_response):
+        result = embed("test", mode="passage", dim=512)
+
+    norm = math.sqrt(sum(v * v for v in result))
+    assert abs(norm - 1.0) < 1e-5, f"Expected unit norm, got {norm}"
+
+
+def test_embed_zero_vector_does_not_divide_by_zero():
+    """FIX 1: a zero vector (norm 0) must not raise ZeroDivisionError; return as-is."""
+    from axi.embed_client import embed
+
+    raw = [0.0] * 512
+    fake_response = _make_fake_response(raw)
+
+    with patch("urllib.request.urlopen", return_value=fake_response):
+        result = embed("test", mode="passage", dim=512)
+
+    assert len(result) == 512
+    assert all(v == 0.0 for v in result)

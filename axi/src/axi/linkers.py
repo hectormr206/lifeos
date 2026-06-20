@@ -33,6 +33,11 @@ _HAPPENED_AT_WINDOW_S: float = 3600.0
 # Look-back window for same-day and happened-at linkers (seconds).
 _DEFAULT_WINDOW_DAYS: int = 90
 
+# Per-day fan-out cap for the same-day linker.
+# Without this, a day with N=100 fact-nodes produces N*(N-1)/2 = 4950 edges (O(N²)).
+# Cap at 50 pairs per day: each node links to at most its K=10 nearest-by-time neighbors.
+MAX_SAME_DAY_PAIRS_PER_DAY: int = 50
+
 
 def _edge_exists(conn, from_id: int, to_id: int, kind: str) -> bool:
     """Return True if an edge of *kind* from *from_id* to *to_id* already exists."""
@@ -44,14 +49,18 @@ def _edge_exists(conn, from_id: int, to_id: int, kind: str) -> bool:
 
 
 def _safe_insert_edge(conn, from_id: int, to_id: int, kind: str) -> bool:
-    """Insert edge if not already present. Returns True if a new edge was created."""
+    """Insert edge if not already present. Returns True if a new edge was created.
+
+    The connection is expected to be in autocommit mode (isolation_level=None).
+    Do NOT call conn.commit() here — it is a no-op in autocommit and breaks
+    when the connection is nested inside an explicit _tx() BEGIN/COMMIT block.
+    """
     if _edge_exists(conn, from_id, to_id, kind):
         return False
     conn.execute(
         "INSERT INTO edges(from_id, to_id, kind, data, created_at) VALUES (?, ?, ?, ?, ?)",
         (from_id, to_id, kind, "{}", time.time()),
     )
-    conn.commit()
     return True
 
 
@@ -227,13 +236,23 @@ def run_same_day_linker(
     for day_key, node_ids in by_day.items():
         if len(node_ids) < 2:
             continue
-        # Create edges for every ordered pair (a, b) with a < b (avoids duplicates).
-        for i in range(len(node_ids)):
-            for j in range(i + 1, len(node_ids)):
-                a, b = node_ids[i], node_ids[j]
+        # Cap fan-out per day: link each node to its K nearest-by-created_at neighbors
+        # (node_ids are sorted by created_at ASC already).  This bounds the per-day
+        # edge count to MAX_SAME_DAY_PAIRS_PER_DAY instead of O(N²).
+        day_pairs_created = 0
+        # K nearest neighbors per node (window of K consecutive nodes in time order).
+        _K_NEAREST = 5
+        for i, a in enumerate(node_ids):
+            if day_pairs_created >= MAX_SAME_DAY_PAIRS_PER_DAY:
+                break
+            # Only link to the next K nodes in time order (avoids O(N²)).
+            for b in node_ids[i + 1: i + 1 + _K_NEAREST]:
+                if day_pairs_created >= MAX_SAME_DAY_PAIRS_PER_DAY:
+                    break
                 try:
                     if _safe_insert_edge(conn, a, b, "same-day"):
                         created += 1
+                        day_pairs_created += 1
                 except Exception:  # noqa: BLE001
                     log.warning(
                         "same-day: failed edge (%d → %d)", a, b, exc_info=True

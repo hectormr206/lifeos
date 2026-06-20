@@ -340,3 +340,72 @@ def test_run_auto_linkers_runs_all_three():
     assert "happened_at" in result
     assert "involves_person" in result
     assert "same_day" in result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 6: same-day linker O(N²) cap
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_same_day_linker_bounded_fan_out():
+    """FIX 6 RED: same-day linker must cap per-day edge fan-out to avoid O(N²).
+
+    With N=30 nodes on the same day, an uncapped linker produces N*(N-1)/2 = 435 edges.
+    After the cap (MAX_SAME_DAY_PAIRS_PER_DAY), the count must be <= the cap value.
+    """
+    import axi.store as store
+    from axi.linkers import run_same_day_linker, MAX_SAME_DAY_PAIRS_PER_DAY
+
+    conn = store._connect()
+
+    now = time.time()
+    # All 30 nodes on the same UTC day.
+    today_start = datetime.fromtimestamp(now, tz=timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).timestamp()
+
+    N = 30
+    for i in range(N):
+        _insert_node(conn, kind="fact", label=f"Fan-out node {i}", domain="finance", ts=today_start + i * 60)
+
+    created = run_same_day_linker(conn)
+
+    max_expected = N * (N - 1) // 2  # 435 without cap
+    assert created <= MAX_SAME_DAY_PAIRS_PER_DAY, (
+        f"same-day linker created {created} edges for {N} nodes on the same day, "
+        f"exceeding MAX_SAME_DAY_PAIRS_PER_DAY={MAX_SAME_DAY_PAIRS_PER_DAY}. "
+        "FIX 6 not applied — O(N²) fan-out uncapped."
+    )
+
+
+def test_same_day_linker_cap_exported():
+    """FIX 6: MAX_SAME_DAY_PAIRS_PER_DAY must be importable from axi.linkers."""
+    from axi.linkers import MAX_SAME_DAY_PAIRS_PER_DAY
+    assert isinstance(MAX_SAME_DAY_PAIRS_PER_DAY, int)
+    assert MAX_SAME_DAY_PAIRS_PER_DAY > 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 7a: conn.commit() in autocommit (linkers.py _safe_insert_edge)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_safe_insert_edge_no_explicit_commit():
+    """FIX 7a: _safe_insert_edge must NOT call conn.commit() in autocommit mode.
+
+    isolation_level=None (autocommit) — conn.commit() is a no-op but breaks if
+    the connection is ever nested inside _tx() (which begins an explicit txn).
+    We verify that no commit() call is executed by checking there is no
+    standalone 'conn.commit()' statement in the function body (outside comments/docstring).
+    """
+    import re
+    import inspect
+    from axi.linkers import _safe_insert_edge
+    src = inspect.getsource(_safe_insert_edge)
+    # Strip docstring from the search so docstring mentions don't trip the check.
+    # Find the first line after the closing triple-quote of the docstring.
+    body_start = src.find('"""', src.find('"""') + 3)
+    body = src[body_start + 3:] if body_start != -1 else src
+    # Look for an actual conn.commit() call (not in a comment or docstring).
+    assert not re.search(r'^\s*conn\.commit\(\)', body, re.MULTILINE), (
+        "_safe_insert_edge still calls conn.commit() — must be removed for "
+        "correctness in autocommit mode and nested _tx() safety (FIX 7a)"
+    )
