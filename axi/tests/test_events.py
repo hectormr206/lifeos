@@ -33,8 +33,8 @@ def test_log_event_writes_to_ring_and_db():
     assert rows[0]["data"] == {"k": "v"}
     assert rows[0]["unread"] is True
 
-    # SQLite persistence
-    c = store._connect()
+    # SQLite persistence — events live in the separate events.db, not memory.db.
+    c = store._connect_events()
     db_rows = c.execute("SELECT source, level, message FROM events").fetchall()
     assert len(db_rows) == 1
     assert db_rows[0]["message"] == "hello world"
@@ -98,7 +98,7 @@ def test_trim_events_keeps_only_recent():
     for i in range(10):
         store.insert_event(float(i), "x", "info", f"msg {i}", None)
     store.trim_events(keep=3)
-    c = store._connect()
+    c = store._connect_events()
     n = c.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
     assert n == 3
     # Most recent (highest ts) survive.
