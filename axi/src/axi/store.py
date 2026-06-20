@@ -40,6 +40,35 @@ STATE_DIR = Path(
 ) / "axi"
 DB_PATH = STATE_DIR / "memory.db"
 
+
+def _events_db_path() -> Path:
+    """Path to the separate events (telemetry) DB.
+
+    Events are high-frequency, disposable telemetry written by THREE processes
+    (daemon, dashboard, heartbeat). Keeping them in their own SQLCipher file —
+    derived from DB_PATH's directory so it follows test monkeypatching — means
+    only the daemon ever writes memory.db, eliminating the cross-process WAL
+    write contention behind the 2026-06-20 corruption.
+    """
+    return DB_PATH.parent / "events.db"
+
+
+_EVENTS_SCHEMA = r"""
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+
+CREATE TABLE IF NOT EXISTS events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts        REAL NOT NULL,
+  source    TEXT NOT NULL,
+  level     TEXT NOT NULL,
+  message   TEXT NOT NULL,
+  data_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts    ON events(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_events_level ON events(level);
+"""
+
 _SCHEMA = r"""
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -235,6 +264,10 @@ _tl = threading.local()
 # It is NO LONGER used to gate individual SQL statements.
 _conn_lock = threading.Lock()
 _init_lock = threading.Lock()
+# Dedicated lock for the one-time events.db migration. MUST be distinct from
+# _conn_lock: the migration calls _connect() (which itself takes _conn_lock),
+# and threading.Lock is not reentrant, so sharing the lock would deadlock.
+_events_migrate_lock = threading.Lock()
 
 
 def key_path() -> Path:
@@ -282,6 +315,35 @@ def _remove_wal_sidecars(db_path: Path) -> None:
     """Delete -wal and -shm sidecar files for *db_path* if they exist."""
     for suffix in ("-wal", "-shm"):
         Path(str(db_path) + suffix).unlink(missing_ok=True)
+
+
+def _backup_passes_integrity(path: Path, key: str) -> bool:
+    """Return True only if *path* opens and passes a full ``integrity_check``.
+
+    Used by the recovery ladder to decide whether a backup candidate is safe to
+    restore. We run the FULL ``PRAGMA integrity_check`` (not the light first-page
+    probe in :func:`_try_open`) because corruption frequently lives deeper in the
+    b-tree than page 1, and — conversely — a file flagged corrupt by one process
+    is often perfectly healthy on disk (the damage was WAL-only or cross-process).
+    Filename is irrelevant: a ``.corrupt-<pid>.bak`` snapshot is validated by its
+    actual contents, never skipped by its name.
+    """
+    if not path.exists():
+        return False
+    conn = None
+    try:
+        conn = sqlcipher3.connect(str(path), isolation_level=None)
+        conn.execute(f"PRAGMA key = \"x'{key}'\"")
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        return bool(result) and str(result[0]).lower() == "ok"
+    except (sqlcipher3.dbapi2.DatabaseError, OSError):
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 — closing a probe connection must never raise
+                pass
 
 
 def _emit_recovery_event(level: str, message: str, data: dict | None = None) -> None:
@@ -371,33 +433,46 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
             {"error": str(wal_err)},
         )
 
-    # Step 3 — restore newest known-clean backup.
-    clean_backups = sorted(
+    # Step 3 — restore newest backup that passes a FULL integrity check.
+    #
+    # Validate by CONTENT, never by filename. The step-1 snapshot we just wrote
+    # is named ``.corrupt-<pid>.bak`` yet — because corruption is usually
+    # WAL-only or cross-process — it is frequently a perfectly healthy copy of
+    # the main file. The old code skipped every ``.corrupt-*`` candidate by name
+    # and fell through to the empty-schema rebuild, destroying memory that was
+    # never actually lost (the 2026-06-20 data-loss incident). Including these
+    # snapshots, gated by ``integrity_check``, is what makes recovery safe.
+    candidates = sorted(
         db_path.parent.glob(f"{db_path.name}*.bak"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    for candidate in clean_backups:
-        # Skip the corrupt backup we just wrote.
-        if ".corrupt-" in candidate.name:
+    for candidate in candidates:
+        if not _backup_passes_integrity(candidate, key):
+            log.warning("recovery: backup %s failed integrity_check — skipping", candidate.name)
+            _emit_recovery_event(
+                "warning",
+                f"recovery step 3: backup {candidate.name} failed integrity_check — skipping",
+                {"backup_file": candidate.name},
+            )
             continue
         try:
             shutil.copy2(str(candidate), str(db_path))
             _remove_wal_sidecars(db_path)
             conn = _try_open(db_path, key)
             if conn is not None:
-                log.warning("recovery: restored from backup %s", candidate.name)
+                log.warning("recovery: restored from healthy backup %s", candidate.name)
                 _emit_recovery_event(
                     "warning",
-                    f"recovery step 3: restored from backup {candidate.name}",
+                    f"recovery step 3: restored from healthy backup {candidate.name}",
                     {"backup_file": candidate.name, "strategy": "restore_backup"},
                 )
                 return conn
         except (OSError, sqlcipher3.dbapi2.DatabaseError) as cand_err:
-            log.warning("recovery: backup %s is also corrupt — skipping", candidate.name)
+            log.warning("recovery: restore of %s failed (%s) — skipping", candidate.name, cand_err)
             _emit_recovery_event(
                 "warning",
-                f"recovery step 3: backup {candidate.name} is also corrupt — skipping",
+                f"recovery step 3: restore of {candidate.name} failed ({cand_err}) — skipping",
                 {"backup_file": candidate.name, "error": str(cand_err)},
             )
 
@@ -502,6 +577,95 @@ def _connect() -> sqlcipher3.Connection:
     return c
 
 
+def _connect_events() -> sqlcipher3.Connection:
+    """Return the calling thread's connection to the separate events.db.
+
+    Mirrors :func:`_connect` (thread-local, SQLCipher, WAL, busy_timeout) but
+    targets :func:`_events_db_path`. Events are disposable telemetry: on
+    corruption we simply rebuild an empty schema rather than running the
+    data-precious recovery ladder used for memory.db.
+    """
+    conn = getattr(_tl, "events_conn", None)
+    if conn is not None:
+        return conn
+
+    key = load_key()
+    path = _events_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        c = _try_open(path, key)
+        if c is None:
+            c = sqlcipher3.connect(str(path), isolation_level=None)
+            c.execute(f"PRAGMA key = \"x'{key}'\"")
+    except sqlcipher3.dbapi2.DatabaseError as exc:
+        # Telemetry is disposable — reset rather than recover.
+        log.warning("events.db corrupt on open (%s) — rebuilding empty", exc)
+        path.unlink(missing_ok=True)
+        _remove_wal_sidecars(path)
+        c = sqlcipher3.connect(str(path), isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA synchronous=NORMAL")
+    c.execute("PRAGMA busy_timeout=5000")
+    c.row_factory = sqlcipher3.Row
+    c.executescript(_EVENTS_SCHEMA)
+
+    _tl.events_conn = c
+    _migrate_events_from_memory_db(c)
+    return c
+
+
+def _migrate_events_from_memory_db(events_conn: sqlcipher3.Connection) -> None:
+    """One-time copy of legacy events from memory.db into events.db.
+
+    Idempotent by data state: runs only while events.db is empty. After copying,
+    legacy rows are deleted from memory.db so it is no longer an events writer
+    and cannot re-seed a duplicate migration. Failures are swallowed — telemetry
+    history is never worth aborting startup for.
+    """
+    with _events_migrate_lock:
+        try:
+            already = events_conn.execute("SELECT count(*) FROM events").fetchone()[0]
+            if already:
+                return
+            if not DB_PATH.exists():
+                return
+            src = _connect()
+            has_tbl = src.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
+            ).fetchone()
+            if not has_tbl:
+                return
+            rows = src.execute(
+                "SELECT ts, source, level, message, data_json FROM events"
+            ).fetchall()
+            if not rows:
+                return
+            events_conn.executemany(
+                "INSERT INTO events(ts, source, level, message, data_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(r["ts"], r["source"], r["level"], r["message"], r["data_json"]) for r in rows],
+            )
+            src.execute("DELETE FROM events")
+            log.info("migrated %d legacy events memory.db → events.db", len(rows))
+        except Exception as exc:  # noqa: BLE001 — telemetry migration must never abort startup
+            log.warning("events migration skipped: %s", exc)
+
+
+@contextmanager
+def _tx_events() -> Iterator[sqlcipher3.Connection]:
+    """Begin/commit a transaction on the calling thread's events.db connection."""
+    c = _connect_events()
+    c.execute("BEGIN")
+    try:
+        yield c
+        c.execute("COMMIT")
+    except Exception:
+        c.execute("ROLLBACK")
+        raise
+
+
 def init_db() -> None:
     with _init_lock:
         c = _connect()
@@ -517,6 +681,10 @@ def init_db() -> None:
             log.warning("init_db: could not create vec_nodes table: %s", _vec_exc)
         # Slice 2: domain_node_map bridge table.
         _create_domain_node_map(c)
+        # Events live in their own DB (telemetry isolated from user memory).
+        # Open it here so the schema exists and any legacy events are migrated
+        # at startup rather than lazily on the first write.
+        _connect_events()
 
 
 def checkpoint() -> None:
@@ -702,7 +870,7 @@ def insert_event(
     data_json: str | None,
 ) -> None:
     """Persist a single event row. Used by `axi.events` background worker."""
-    with _tx() as c:
+    with _tx_events() as c:
         c.execute(
             "INSERT INTO events(ts, source, level, message, data_json) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -712,7 +880,7 @@ def insert_event(
 
 def trim_events(keep: int = 5000) -> None:
     """Keep only the most recent `keep` event rows (delete older)."""
-    with _tx() as c:
+    with _tx_events() as c:
         c.execute(
             "DELETE FROM events WHERE id NOT IN ("
             "  SELECT id FROM events ORDER BY ts DESC LIMIT ?"
@@ -771,7 +939,7 @@ def query_events(
         f"LIMIT ? OFFSET ?"
     )
 
-    c = _connect()
+    c = _connect_events()
     rows = c.execute(sql, params).fetchall()
 
     result: list[dict[str, Any]] = []
@@ -1669,11 +1837,12 @@ def backfill_similar_to_edges(*, threshold: float = 0.85) -> int:
 
 
 def close() -> None:
-    """Close the calling thread's SQLite connection (if open) and clear it."""
-    conn = getattr(_tl, "conn", None)
-    if conn is not None:
-        try:
-            conn.close()
-        except Exception:  # noqa: BLE001
-            pass
-        _tl.conn = None
+    """Close the calling thread's SQLite connections (memory.db + events.db)."""
+    for attr in ("conn", "events_conn"):
+        conn = getattr(_tl, attr, None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+            setattr(_tl, attr, None)

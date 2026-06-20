@@ -294,6 +294,88 @@ class TestStartupRecovery:
         conn.execute("CREATE TABLE IF NOT EXISTS sentinel (id INTEGER PRIMARY KEY)")
         conn.execute("INSERT INTO sentinel VALUES (1)")
 
+    def test_recovery_restores_data_from_healthy_corrupt_named_backup(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression (2026-06-20 data-loss incident): recovery MUST restore a
+        healthy backup even when it is named ``.corrupt-<pid>.bak``.
+
+        Corruption is most often WAL-only or cross-process, so the snapshot the
+        recovery ladder takes in step 1 (named ``memory.db.corrupt-<pid>.bak``)
+        is frequently a perfectly healthy copy of the main file. The old code
+        skipped every ``.corrupt-*`` candidate by filename and fell through to
+        the empty-schema rebuild — destroying all memory that was never actually
+        lost. The fix validates each candidate with a real integrity check and
+        restores the newest healthy one regardless of its name.
+        """
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        # A healthy backup of the data, carrying the very name the old code skipped.
+        healthy_bak = tmp_path / "memory.db.corrupt-99999.bak"
+        c = sqlcipher3.connect(str(healthy_bak), check_same_thread=False, isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        c.execute("CREATE TABLE nodes (id INTEGER PRIMARY KEY, label TEXT)")
+        c.execute("INSERT INTO nodes (label) VALUES ('keep-me-1'), ('keep-me-2')")
+        c.close()
+
+        # Main file + WAL are unrecoverable garbage so steps 2 cannot reopen them.
+        db.write_bytes(b"\xff" * 4096)
+        Path(str(db) + "-wal").write_bytes(b"\xff" * 512)
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+
+        conn = store._repair_corrupt_db(db, key)
+        assert conn is not None
+        # The data MUST survive — recovery restored the healthy named-corrupt backup
+        # instead of rebuilding an empty schema.
+        rows = conn.execute("SELECT label FROM nodes ORDER BY id").fetchall()
+        assert [r[0] for r in rows] == ["keep-me-1", "keep-me-2"], (
+            "recovery destroyed recoverable data instead of restoring the "
+            "healthy .corrupt-*.bak snapshot"
+        )
+
+    def test_events_persist_to_separate_db_not_memory_db(self):
+        """Events (telemetry) must live in their own events.db, never in memory.db.
+
+        Three processes (daemon, dashboard, heartbeat) all open memory.db; the
+        observability work made heartbeat a high-frequency events writer. Mixing
+        disposable telemetry writes from 3 processes into the same SQLCipher file
+        that holds irreplaceable user memory is what drove the cross-process WAL
+        contention behind the 2026-06-20 corruption. Events get their own DB so
+        only the daemon ever writes memory.db.
+        """
+        key = store.load_key()
+        store.init_db()
+        store.insert_event(123.0, "sep.test", "info", "hello-events-db", None)
+
+        # Queryable through the normal API.
+        evs = store.query_events(source="sep.test")
+        assert any(e["message"] == "hello-events-db" for e in evs)
+
+        # The row lives in events.db ...
+        ec = sqlcipher3.connect(str(store._events_db_path()), isolation_level=None)
+        ec.execute(f"PRAGMA key = \"x'{key}'\"")
+        in_events = ec.execute(
+            "SELECT count(*) FROM events WHERE source='sep.test'"
+        ).fetchone()[0]
+        ec.close()
+        assert in_events == 1, "event did not land in events.db"
+
+        # ... and NOT in memory.db.
+        mc = sqlcipher3.connect(str(store.DB_PATH), isolation_level=None)
+        mc.execute(f"PRAGMA key = \"x'{key}'\"")
+        has_tbl = mc.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
+        ).fetchone()
+        leaked = (
+            mc.execute("SELECT count(*) FROM events WHERE source='sep.test'").fetchone()[0]
+            if has_tbl else 0
+        )
+        mc.close()
+        assert leaked == 0, "event leaked into memory.db — telemetry must not touch user memory"
+
     def test_recovery_logged_on_corrupt_file(self, tmp_path, monkeypatch, caplog):
         """Recovery steps must produce WARNING log records."""
         import logging
