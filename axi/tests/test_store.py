@@ -209,3 +209,119 @@ def test_run_periodic_embed_drain_exists():
     """FIX 5: run_periodic_embed_drain must be importable from axi.store."""
     from axi.store import run_periodic_embed_drain
     assert callable(run_periodic_embed_drain)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 6: thread-local connections — the bug that caused real B-tree corruption
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_concurrent_writes_no_corruption():
+    """FIX 6 RED: concurrent writes from multiple threads must not corrupt the DB.
+
+    This is the test that would have caught the real corruption incident:
+    the FIX-5 embed worker thread + periodic drain + FastAPI request threads
+    all shared a single SQLite connection (check_same_thread=False, no global
+    lock around every statement).  Two threads executing on the SAME connection
+    concurrently caused B-tree corruption ('rowid out of order' → 'database
+    disk image is malformed').
+
+    Fix: thread-local connections — each thread gets its own sqlcipher3
+    connection.  This test verifies the fix by running concurrent writes and
+    asserting PRAGMA integrity_check returns 'ok' after the load.
+    """
+    import threading
+
+    errors: list[Exception] = []
+    node_ids: list[int] = []
+    lock = threading.Lock()
+
+    def writer(label: str) -> None:
+        # Each thread calls store functions that obtain a thread-local connection.
+        # If two threads shared the same connection object this would corrupt.
+        try:
+            for i in range(10):
+                nid = store.add_node("fact", f"{label}-{i}", domain="concurrency-test")
+                with lock:
+                    node_ids.append(nid)
+                # Also do a read on the same connection to interleave read+write.
+                store.get_node(nid)
+        except Exception as exc:  # noqa: BLE001
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(f"thread-{t}",)) for t in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, f"Concurrent write errors: {errors}"
+
+    # After the concurrent load, integrity_check must pass on the main thread's
+    # connection — this is the definitive proof that no corruption occurred.
+    c = store._connect()
+    result = c.execute("PRAGMA integrity_check").fetchone()[0]
+    assert result == "ok", f"DB integrity_check failed after concurrent writes: {result}"
+
+    # All 40 written nodes must be queryable.
+    assert len(node_ids) == 40
+    for nid in node_ids:
+        assert store.get_node(nid) is not None, f"Node {nid} missing after concurrent write"
+
+
+def test_each_thread_gets_own_connection():
+    """FIX 6: _connect() must return a DIFFERENT connection object per thread.
+
+    The root cause of the corruption was that _connect() returned the same
+    module-level singleton to all threads.  This test asserts the thread-local
+    model: two threads must get different connection objects.
+    """
+    import threading
+
+    connections: list[object] = []
+    lock = threading.Lock()
+
+    def capture_conn() -> None:
+        c = store._connect()
+        with lock:
+            connections.append(id(c))
+
+    main_conn_id = id(store._connect())
+    t = threading.Thread(target=capture_conn)
+    t.start()
+    t.join(timeout=5)
+
+    assert len(connections) == 1
+    assert connections[0] != main_conn_id, (
+        "Both main thread and child thread got the same connection object — "
+        "thread-local isolation is NOT in effect (FIX 6 not applied)"
+    )
+
+
+def test_new_thread_can_query_vec_nodes():
+    """FIX 6: a fresh thread's _connect() must be able to query vec_nodes.
+
+    Without loading sqlite-vec on every new connection, any thread other than
+    the one that called init_db() would see 'no such module: vec0' and crash
+    when trying to use the vec_nodes virtual table.
+    """
+    import threading
+
+    errors: list[Exception] = []
+
+    def query_vec_nodes() -> None:
+        try:
+            c = store._connect()
+            # This SELECT hits the vec0 virtual table engine.
+            # It raises 'no such module: vec0' if the extension is not loaded.
+            c.execute("SELECT count(*) FROM vec_nodes").fetchone()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t = threading.Thread(target=query_vec_nodes)
+    t.start()
+    t.join(timeout=5)
+
+    assert not errors, (
+        f"New thread could not query vec_nodes (sqlite-vec not loaded per thread): {errors}"
+    )

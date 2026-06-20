@@ -27,7 +27,7 @@ def test_migration_adds_embedding_columns(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     store.init_db()
 
     from axi.store import migrate_nodes_embedding
@@ -47,7 +47,7 @@ def test_migration_existing_rows_have_null_embedding(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     store.init_db()
 
     # Insert a node BEFORE migration (simulates an existing DB).
@@ -78,7 +78,7 @@ def test_migration_is_idempotent(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     store.init_db()
 
     from axi.store import migrate_nodes_embedding
@@ -93,7 +93,7 @@ def test_migration_called_by_init_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     # init_db is called by the fresh_db fixture; call it explicitly here too.
     store.init_db()
 

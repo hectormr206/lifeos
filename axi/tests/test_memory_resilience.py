@@ -209,7 +209,7 @@ class TestSynchronousFull:
         """After _connect(), the connection must report synchronous=2 (FULL)."""
         monkeypatch.setattr(store, "DB_PATH", tmp_path / "test_sync.db")
         monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-        monkeypatch.setattr(store, "_conn", None)
+        store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
 
         conn = store._connect()
         row = conn.execute("PRAGMA synchronous").fetchone()
@@ -328,7 +328,7 @@ class TestStartupRecovery:
 
         monkeypatch.setattr(store, "DB_PATH", db)
         monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-        monkeypatch.setattr(store, "_conn", None)
+        store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
         monkeypatch.setattr(store, "load_key", lambda: key)
 
         repair_calls = []
