@@ -1,7 +1,9 @@
 [Unit]
 Description=llama.cpp server — VibeThinker-3B reasoning (model from active_vt_model.json via axi-vt-launch)
 After=graphical-session.target
-PartOf=graphical-session.target
+# Intentionally NOT PartOf=graphical-session.target: that coupling made the GPU
+# brains cascade-stop during systemd transactions (the "gremlin"). Enabled
+# (WantedBy=default.target) + After= gives boot ordering without the cascade.
 
 [Service]
 Type=simple
