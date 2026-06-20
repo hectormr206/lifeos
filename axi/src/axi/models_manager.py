@@ -514,8 +514,11 @@ def download(entry: ModelEntry, *, progress_cb: ProgressCb | None = None) -> Non
 
 def _systemctl_restart_llama() -> None:
     """Restart llama-server.service via the user systemd manager."""
-    subprocess.run(
-        ["systemctl", "--user", "restart", "llama-server.service"],
+    from axi import obs
+    obs.managed_systemctl(
+        "restart", "llama-server.service",
+        caller="models_manager.set_active",
+        reason="brain swap",
         check=True,
         timeout=30,
     )

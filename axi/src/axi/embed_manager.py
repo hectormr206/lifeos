@@ -89,8 +89,11 @@ def get_active_embed_id() -> str | None:
 
 def restart_embed_service() -> None:
     """Restart llama-embed.service via systemctl --user."""
-    subprocess.run(
-        ["systemctl", "--user", "restart", "llama-embed.service"],
+    from axi import obs
+    obs.managed_systemctl(
+        "restart", "llama-embed.service",
+        caller="embed_manager",
+        reason="embed model swap",
         check=True,
         timeout=30,
     )

@@ -179,8 +179,11 @@ def build_nano_launch_args(cfg: dict) -> list[str]:
 
 
 def _systemctl_restart_nano() -> None:
-    subprocess.run(
-        ["systemctl", "--user", "restart", "llama-nano.service"],
+    from axi import obs
+    obs.managed_systemctl(
+        "restart", "llama-nano.service",
+        caller="nano_manager",
+        reason="nano swap",
         check=True,
         timeout=30,
     )
