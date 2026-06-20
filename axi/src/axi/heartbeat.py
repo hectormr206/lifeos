@@ -9,6 +9,7 @@ Usage (direct / systemd):
 """
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import subprocess
@@ -18,6 +19,8 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 from axi import models_manager
+
+log = logging.getLogger("axi.heartbeat")
 
 # ---------------------------------------------------------------------------
 # Invariant assertion: STARTUP_GRACE_SEC < WatchdogSec (90)
@@ -232,6 +235,15 @@ def alert_cap_exceeded(svc: str) -> None:
 # The spine — run_cycle(now)
 # ---------------------------------------------------------------------------
 
+def _obs_lifecycle(level: str, source: str, message: str, **data) -> None:
+    """Emit obs.lifecycle without raising — logging must never abort service management."""
+    try:
+        from axi import obs
+        obs.lifecycle(log, level, source, message, **data)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_cycle(now: float | None = None):
     """Execute one poll cycle as a generator.
 
@@ -257,12 +269,20 @@ def run_cycle(now: float | None = None):
                 global _embed_ensure_up_alerted
                 if not is_active(svc):
                     if under_cap(svc, now):
+                        _obs_lifecycle(
+                            "info", "heartbeat", "ensure_up",
+                            service=svc, action="start",
+                        )
                         start_service(svc)
                         record_revival(svc, now)
                         _embed_ensure_up_alerted = False
                     elif not _embed_ensure_up_alerted:
                         _embed_ensure_up_alerted = True
                         n = len(_revivals[svc])
+                        _obs_lifecycle(
+                            "warning", "heartbeat", "cap_exhausted",
+                            service=svc, reason="cap_exhausted",
+                        )
                         subprocess.run(
                             [
                                 "notify-send",
@@ -276,6 +296,7 @@ def run_cycle(now: float | None = None):
                 else:
                     # embed is active — reset the cap-warning guard
                     _embed_ensure_up_alerted = False
+                    log.debug("heartbeat non-action pass service=%s status=active", svc)
             # ── llama-vt ensure-up: start if stopped (inactive) ──────────────
             if svc == "llama-vt.service" and not game_mode_active() and models_manager.is_triad_active():
                 global _vt_ensure_up_alerted
@@ -285,6 +306,10 @@ def run_cycle(now: float | None = None):
                     in_meeting = True  # fail-safe: uncertain state → do not start
                 if not in_meeting and not is_active(svc):
                     if under_cap(svc, now):
+                        _obs_lifecycle(
+                            "info", "heartbeat", "ensure_up",
+                            service=svc, action="start",
+                        )
                         start_service(svc)
                         record_revival(svc, now)
                     elif not _vt_ensure_up_alerted:
@@ -294,6 +319,10 @@ def run_cycle(now: float | None = None):
                         # the cap check runs. Reset when VT becomes active again.
                         _vt_ensure_up_alerted = True
                         n = len(_revivals[svc])
+                        _obs_lifecycle(
+                            "warning", "heartbeat", "cap_exhausted",
+                            service=svc, reason="cap_exhausted",
+                        )
                         subprocess.run(
                             [
                                 "notify-send",
@@ -308,18 +337,37 @@ def run_cycle(now: float | None = None):
                     # VT is active (or meeting is running) — reset the cap-warning guard
                     # so the next capped episode fires again.
                     _vt_ensure_up_alerted = False
+                    if not in_meeting:
+                        log.debug("heartbeat non-action pass service=%s status=active", svc)
+            elif svc not in ("llama-embed.service",):
+                # For regular HEARTBEAT_SERVICES that are healthy — debug only
+                log.debug("heartbeat non-action pass service=%s status=ok", svc)
         elif svc in GAME_BRAINS and game_mode_active():
             # Game mode started mid-cycle — skip revival to protect the GPU.
-            pass
+            _obs_lifecycle(
+                "info", "heartbeat", "game_mode_skip",
+                service=svc, reason="game_mode",
+            )
         elif svc == "llama-vt.service" and not models_manager.is_triad_active():
             # VT sibling only runs when the primary brain is qwen35-4b (triad active).
             # If the 35B (or any other non-4B) is the active primary, reviving VT would
             # load 3.3 GB on top of the already-resident large model → OOM risk.
-            pass
+            _obs_lifecycle(
+                "info", "heartbeat", "triad_inactive_skip",
+                service=svc, reason="triad_inactive",
+            )
         elif under_cap(svc, now):
+            _obs_lifecycle(
+                "warning", "heartbeat", "revive",
+                service=svc, reason="failed",
+            )
             revive(svc)
             record_revival(svc, now)
         else:
+            _obs_lifecycle(
+                "warning", "heartbeat", "cap_exhausted",
+                service=svc, reason="cap_exhausted",
+            )
             alert_cap_exceeded(svc)
         yield  # beat opportunity: one per service, only if we reach here
 
@@ -329,6 +377,8 @@ def run_cycle(now: float | None = None):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    from axi.logging_setup import setup_logging
+    setup_logging(level=logging.INFO)
     notify_ready()                        # tell systemd init is done
     time.sleep(STARTUP_GRACE_SEC)         # let services settle after boot
     while True:

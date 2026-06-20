@@ -843,10 +843,8 @@ def _remember_en(text_en: str) -> None:
 
 def run_interpreter() -> int:
     """Block the main thread on the interpreter loop. Returns 0 on clean stop."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    from axi.logging_setup import setup_logging
+    setup_logging(level=logging.INFO)
     log.info("starting interpreter EN→ES…")
 
     # Pre-load the translator so the first chunk doesn't pay the cold cost.

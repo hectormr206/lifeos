@@ -5736,10 +5736,8 @@ async def api_spirit_schedule_weekly_retro(request: Request):
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    from axi.logging_setup import setup_logging
+    setup_logging(level=logging.INFO)
     store.init_db()
     _maybe_migrate_meeting_fts()
     # Read bind config at startup (not import-time) so changes via /config
