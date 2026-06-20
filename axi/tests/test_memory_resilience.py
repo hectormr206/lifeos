@@ -336,6 +336,46 @@ class TestStartupRecovery:
             "healthy .corrupt-*.bak snapshot"
         )
 
+    def test_events_persist_to_separate_db_not_memory_db(self):
+        """Events (telemetry) must live in their own events.db, never in memory.db.
+
+        Three processes (daemon, dashboard, heartbeat) all open memory.db; the
+        observability work made heartbeat a high-frequency events writer. Mixing
+        disposable telemetry writes from 3 processes into the same SQLCipher file
+        that holds irreplaceable user memory is what drove the cross-process WAL
+        contention behind the 2026-06-20 corruption. Events get their own DB so
+        only the daemon ever writes memory.db.
+        """
+        key = store.load_key()
+        store.init_db()
+        store.insert_event(123.0, "sep.test", "info", "hello-events-db", None)
+
+        # Queryable through the normal API.
+        evs = store.query_events(source="sep.test")
+        assert any(e["message"] == "hello-events-db" for e in evs)
+
+        # The row lives in events.db ...
+        ec = sqlcipher3.connect(str(store._events_db_path()), isolation_level=None)
+        ec.execute(f"PRAGMA key = \"x'{key}'\"")
+        in_events = ec.execute(
+            "SELECT count(*) FROM events WHERE source='sep.test'"
+        ).fetchone()[0]
+        ec.close()
+        assert in_events == 1, "event did not land in events.db"
+
+        # ... and NOT in memory.db.
+        mc = sqlcipher3.connect(str(store.DB_PATH), isolation_level=None)
+        mc.execute(f"PRAGMA key = \"x'{key}'\"")
+        has_tbl = mc.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
+        ).fetchone()
+        leaked = (
+            mc.execute("SELECT count(*) FROM events WHERE source='sep.test'").fetchone()[0]
+            if has_tbl else 0
+        )
+        mc.close()
+        assert leaked == 0, "event leaked into memory.db — telemetry must not touch user memory"
+
     def test_recovery_logged_on_corrupt_file(self, tmp_path, monkeypatch, caplog):
         """Recovery steps must produce WARNING log records."""
         import logging

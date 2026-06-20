@@ -40,6 +40,35 @@ STATE_DIR = Path(
 ) / "axi"
 DB_PATH = STATE_DIR / "memory.db"
 
+
+def _events_db_path() -> Path:
+    """Path to the separate events (telemetry) DB.
+
+    Events are high-frequency, disposable telemetry written by THREE processes
+    (daemon, dashboard, heartbeat). Keeping them in their own SQLCipher file —
+    derived from DB_PATH's directory so it follows test monkeypatching — means
+    only the daemon ever writes memory.db, eliminating the cross-process WAL
+    write contention behind the 2026-06-20 corruption.
+    """
+    return DB_PATH.parent / "events.db"
+
+
+_EVENTS_SCHEMA = r"""
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+
+CREATE TABLE IF NOT EXISTS events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts        REAL NOT NULL,
+  source    TEXT NOT NULL,
+  level     TEXT NOT NULL,
+  message   TEXT NOT NULL,
+  data_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts    ON events(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_events_level ON events(level);
+"""
+
 _SCHEMA = r"""
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -235,6 +264,10 @@ _tl = threading.local()
 # It is NO LONGER used to gate individual SQL statements.
 _conn_lock = threading.Lock()
 _init_lock = threading.Lock()
+# Dedicated lock for the one-time events.db migration. MUST be distinct from
+# _conn_lock: the migration calls _connect() (which itself takes _conn_lock),
+# and threading.Lock is not reentrant, so sharing the lock would deadlock.
+_events_migrate_lock = threading.Lock()
 
 
 def key_path() -> Path:
@@ -544,6 +577,95 @@ def _connect() -> sqlcipher3.Connection:
     return c
 
 
+def _connect_events() -> sqlcipher3.Connection:
+    """Return the calling thread's connection to the separate events.db.
+
+    Mirrors :func:`_connect` (thread-local, SQLCipher, WAL, busy_timeout) but
+    targets :func:`_events_db_path`. Events are disposable telemetry: on
+    corruption we simply rebuild an empty schema rather than running the
+    data-precious recovery ladder used for memory.db.
+    """
+    conn = getattr(_tl, "events_conn", None)
+    if conn is not None:
+        return conn
+
+    key = load_key()
+    path = _events_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        c = _try_open(path, key)
+        if c is None:
+            c = sqlcipher3.connect(str(path), isolation_level=None)
+            c.execute(f"PRAGMA key = \"x'{key}'\"")
+    except sqlcipher3.dbapi2.DatabaseError as exc:
+        # Telemetry is disposable — reset rather than recover.
+        log.warning("events.db corrupt on open (%s) — rebuilding empty", exc)
+        path.unlink(missing_ok=True)
+        _remove_wal_sidecars(path)
+        c = sqlcipher3.connect(str(path), isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA synchronous=NORMAL")
+    c.execute("PRAGMA busy_timeout=5000")
+    c.row_factory = sqlcipher3.Row
+    c.executescript(_EVENTS_SCHEMA)
+
+    _tl.events_conn = c
+    _migrate_events_from_memory_db(c)
+    return c
+
+
+def _migrate_events_from_memory_db(events_conn: sqlcipher3.Connection) -> None:
+    """One-time copy of legacy events from memory.db into events.db.
+
+    Idempotent by data state: runs only while events.db is empty. After copying,
+    legacy rows are deleted from memory.db so it is no longer an events writer
+    and cannot re-seed a duplicate migration. Failures are swallowed — telemetry
+    history is never worth aborting startup for.
+    """
+    with _events_migrate_lock:
+        try:
+            already = events_conn.execute("SELECT count(*) FROM events").fetchone()[0]
+            if already:
+                return
+            if not DB_PATH.exists():
+                return
+            src = _connect()
+            has_tbl = src.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
+            ).fetchone()
+            if not has_tbl:
+                return
+            rows = src.execute(
+                "SELECT ts, source, level, message, data_json FROM events"
+            ).fetchall()
+            if not rows:
+                return
+            events_conn.executemany(
+                "INSERT INTO events(ts, source, level, message, data_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(r["ts"], r["source"], r["level"], r["message"], r["data_json"]) for r in rows],
+            )
+            src.execute("DELETE FROM events")
+            log.info("migrated %d legacy events memory.db → events.db", len(rows))
+        except Exception as exc:  # noqa: BLE001 — telemetry migration must never abort startup
+            log.warning("events migration skipped: %s", exc)
+
+
+@contextmanager
+def _tx_events() -> Iterator[sqlcipher3.Connection]:
+    """Begin/commit a transaction on the calling thread's events.db connection."""
+    c = _connect_events()
+    c.execute("BEGIN")
+    try:
+        yield c
+        c.execute("COMMIT")
+    except Exception:
+        c.execute("ROLLBACK")
+        raise
+
+
 def init_db() -> None:
     with _init_lock:
         c = _connect()
@@ -559,6 +681,10 @@ def init_db() -> None:
             log.warning("init_db: could not create vec_nodes table: %s", _vec_exc)
         # Slice 2: domain_node_map bridge table.
         _create_domain_node_map(c)
+        # Events live in their own DB (telemetry isolated from user memory).
+        # Open it here so the schema exists and any legacy events are migrated
+        # at startup rather than lazily on the first write.
+        _connect_events()
 
 
 def checkpoint() -> None:
@@ -744,7 +870,7 @@ def insert_event(
     data_json: str | None,
 ) -> None:
     """Persist a single event row. Used by `axi.events` background worker."""
-    with _tx() as c:
+    with _tx_events() as c:
         c.execute(
             "INSERT INTO events(ts, source, level, message, data_json) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -754,7 +880,7 @@ def insert_event(
 
 def trim_events(keep: int = 5000) -> None:
     """Keep only the most recent `keep` event rows (delete older)."""
-    with _tx() as c:
+    with _tx_events() as c:
         c.execute(
             "DELETE FROM events WHERE id NOT IN ("
             "  SELECT id FROM events ORDER BY ts DESC LIMIT ?"
@@ -813,7 +939,7 @@ def query_events(
         f"LIMIT ? OFFSET ?"
     )
 
-    c = _connect()
+    c = _connect_events()
     rows = c.execute(sql, params).fetchall()
 
     result: list[dict[str, Any]] = []
@@ -1711,11 +1837,12 @@ def backfill_similar_to_edges(*, threshold: float = 0.85) -> int:
 
 
 def close() -> None:
-    """Close the calling thread's SQLite connection (if open) and clear it."""
-    conn = getattr(_tl, "conn", None)
-    if conn is not None:
-        try:
-            conn.close()
-        except Exception:  # noqa: BLE001
-            pass
-        _tl.conn = None
+    """Close the calling thread's SQLite connections (memory.db + events.db)."""
+    for attr in ("conn", "events_conn"):
+        conn = getattr(_tl, attr, None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+            setattr(_tl, attr, None)
