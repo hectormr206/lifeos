@@ -244,6 +244,18 @@ def _obs_lifecycle(level: str, source: str, message: str, **data) -> None:
         pass
 
 
+def _safe_debug(msg: str, *args) -> None:
+    """Emit log.debug without propagating handler exceptions.
+
+    Heartbeat is safety-critical: a RotatingFileHandler failure (e.g. full
+    disk) must NEVER escape run_cycle and stop the watchdog beats.
+    """
+    try:
+        log.debug(msg, *args)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_cycle(now: float | None = None):
     """Execute one poll cycle as a generator.
 
@@ -296,7 +308,7 @@ def run_cycle(now: float | None = None):
                 else:
                     # embed is active — reset the cap-warning guard
                     _embed_ensure_up_alerted = False
-                    log.debug("heartbeat non-action pass service=%s status=active", svc)
+                    _safe_debug("heartbeat non-action pass service=%s status=active", svc)
             # ── llama-vt ensure-up: start if stopped (inactive) ──────────────
             if svc == "llama-vt.service" and not game_mode_active() and models_manager.is_triad_active():
                 global _vt_ensure_up_alerted
@@ -338,10 +350,10 @@ def run_cycle(now: float | None = None):
                     # so the next capped episode fires again.
                     _vt_ensure_up_alerted = False
                     if not in_meeting:
-                        log.debug("heartbeat non-action pass service=%s status=active", svc)
+                        _safe_debug("heartbeat non-action pass service=%s status=active", svc)
             elif svc not in ("llama-embed.service",):
                 # For regular HEARTBEAT_SERVICES that are healthy — debug only
-                log.debug("heartbeat non-action pass service=%s status=ok", svc)
+                _safe_debug("heartbeat non-action pass service=%s status=ok", svc)
         elif svc in GAME_BRAINS and game_mode_active():
             # Game mode started mid-cycle — skip revival to protect the GPU.
             _obs_lifecycle(

@@ -18,8 +18,23 @@ from typing import Optional
 # Tag attribute name used to identify handlers owned by setup_logging.
 _MANAGED_TAG = "_axi_managed"
 
-# Base logfmt-style format string.
-_BASE_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+# Base logfmt-style format string — includes req_id for Slice-4 correlation.
+_BASE_FORMAT = "%(asctime)s %(levelname)s %(name)s req_id=%(req_id)s %(message)s"
+
+
+def _logfmt_escape(value: str) -> str:
+    """Return a logfmt-safe representation of *value*.
+
+    Values that contain spaces, newlines, '=', or '"' are wrapped in double
+    quotes, with internal '"' escaped as '\\"' and newlines collapsed to ' '.
+    Simple values without those characters are returned unchanged.
+    """
+    # Collapse newlines/CR to a single space before quoting decision.
+    clean = value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    if any(ch in clean for ch in (' ', '=', '"')):
+        escaped = clean.replace('"', '\\"')
+        return f'"{escaped}"'
+    return clean
 
 
 class LogfmtFormatter(logging.Formatter):
@@ -29,17 +44,27 @@ class LogfmtFormatter(logging.Formatter):
         log.info("msg", extra={"extra_fields": {"service": "svc", "reason": "failed"}})
 
     The output becomes:
-        2026-01-01 00:00:00,000 INFO axi.heartbeat msg service=svc reason=failed
+        2026-01-01 00:00:00,000 INFO axi.heartbeat req_id=- msg service=svc reason=failed
+
+    Values containing spaces, newlines, or '=' are automatically quoted so the
+    output is safe for logfmt parsers.  A default req_id="-" is injected onto
+    records that lack the attribute (e.g., records from third-party loggers that
+    bypass the ReqIdFilter) so the format string never raises KeyError.
     """
 
     def __init__(self) -> None:
         super().__init__(fmt=_BASE_FORMAT)
 
     def format(self, record: logging.LogRecord) -> str:
+        # Ensure req_id is always present so %(req_id)s never raises KeyError.
+        if not hasattr(record, "req_id"):
+            record.req_id = "-"
         base = super().format(record)
         extra_fields: dict = getattr(record, "extra_fields", {}) or {}
         if extra_fields:
-            kv_pairs = " ".join(f"{k}={v}" for k, v in extra_fields.items())
+            kv_pairs = " ".join(
+                f"{k}={_logfmt_escape(str(v))}" for k, v in extra_fields.items()
+            )
             return f"{base} {kv_pairs}"
         return base
 
