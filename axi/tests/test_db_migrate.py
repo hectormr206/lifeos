@@ -87,7 +87,7 @@ def test_fresh_db_is_encrypted_on_disk(tmp_path, monkeypatch):
     store.close()
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "memory.db")
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     store.init_db()
     store.add_node("fact", "secret note", domain="setup")
     store.close()
@@ -105,7 +105,7 @@ def test_migrate_plaintext_preserves_data(tmp_path, monkeypatch):
     db = tmp_path / "memory.db"
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(store, "DB_PATH", db)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     _make_plain_db(
         db,
         nodes=[("fact", "Héctor usa CachyOS")],
@@ -138,7 +138,7 @@ def test_migrate_preserves_fts_search(tmp_path, monkeypatch):
     db = tmp_path / "memory.db"
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(store, "DB_PATH", db)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     _make_plain_db(db, nodes=[("fact", "Axi corre en CachyOS")])
 
     db_migrate.migrate_to_encrypted()
@@ -156,7 +156,7 @@ def test_migrate_is_idempotent_on_encrypted_db(tmp_path, monkeypatch):
     db = tmp_path / "memory.db"
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(store, "DB_PATH", db)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     store.init_db()  # creates an encrypted DB
     store.close()
 
@@ -171,7 +171,7 @@ def test_migrate_noop_when_db_absent(tmp_path, monkeypatch):
     db = tmp_path / "memory.db"
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(store, "DB_PATH", db)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     assert not db.exists()
 
     result = db_migrate.migrate_to_encrypted()
@@ -186,7 +186,7 @@ def test_migrate_dry_run_does_not_swap(tmp_path, monkeypatch):
     db = tmp_path / "memory.db"
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(store, "DB_PATH", db)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     _make_plain_db(db, nodes=[("fact", "still plain")])
 
     result = db_migrate.migrate_to_encrypted(dry_run=True)
@@ -204,7 +204,7 @@ def test_connect_auto_migrates_plaintext(tmp_path, monkeypatch):
     db = tmp_path / "memory.db"
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(store, "DB_PATH", db)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     _make_plain_db(db, conversations=[("antes", "de cifrar")])
 
     # First normal API call should just work and see the old data...

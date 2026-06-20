@@ -223,7 +223,14 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
 
-_conn: sqlite3.Connection | None = None
+# Thread-local connection storage: each thread (FastAPI workers, embed worker,
+# drain thread, etc.) gets its OWN SQLCipher connection so no two threads ever
+# share a connection object.  Concurrent writes are serialized by SQLite's WAL
+# file lock + busy_timeout, not by an in-process shared-connection lock.
+_tl = threading.local()
+
+# _conn_lock is kept for the one-time global setup (migration, schema init).
+# It is NO LONGER used to gate individual SQL statements.
 _conn_lock = threading.Lock()
 _init_lock = threading.Lock()
 
@@ -261,7 +268,7 @@ def _try_open(db_path: Path, key: str) -> sqlcipher3.Connection | None:
     """
     if not db_path.exists():
         return None
-    c = sqlcipher3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    c = sqlcipher3.connect(str(db_path), isolation_level=None)
     c.execute(f"PRAGMA key = \"x'{key}'\"")
     # A single read forces SQLCipher to decrypt the first page; this is the
     # operation that raises "database disk image is malformed" on corruption.
@@ -337,52 +344,80 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
     log.warning("recovery: no clean backup found — rebuilding empty memory DB")
     db_path.unlink(missing_ok=True)
     _remove_wal_sidecars(db_path)
-    conn = sqlcipher3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    conn = sqlcipher3.connect(str(db_path), isolation_level=None)
     conn.execute(f"PRAGMA key = \"x'{key}'\"")
     return conn
 
 
+def _open_new_connection(key: str) -> sqlcipher3.Connection:
+    """Open (or create) the DB file and return a fully-configured connection.
+
+    Called once per thread on first use.  Every connection gets:
+      - SQLCipher key
+      - WAL + FULL synchronous (durability)
+      - busy_timeout = 5000 ms (cross-connection WAL write contention retries)
+      - sqlite-vec extension loaded (required for any thread touching vec_nodes)
+      - row_factory = sqlcipher3.Row
+    """
+    try:
+        c = _try_open(DB_PATH, key)
+        if c is None:
+            # DB does not exist yet — create it fresh.
+            c = sqlcipher3.connect(str(DB_PATH), isolation_level=None)
+            c.execute(f"PRAGMA key = \"x'{key}'\"")
+    except sqlcipher3.dbapi2.DatabaseError as exc:
+        log.warning("memory DB corrupt on open (%s) — attempting auto-recovery", exc)
+        c = _repair_corrupt_db(DB_PATH, key)
+
+    # WAL + durability (idempotent — safe to set on every new connection).
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA foreign_keys=ON")
+    c.execute("PRAGMA synchronous=FULL")
+    # Retry up to 5 s when another thread (or process) holds the WAL write lock.
+    c.execute("PRAGMA busy_timeout=5000")
+    c.row_factory = sqlcipher3.Row
+
+    # Load sqlite-vec on every connection so any thread can use vec_nodes.
+    try:
+        _load_sqlite_vec(c)
+    except Exception as _vec_load_exc:  # noqa: BLE001
+        log.warning("_open_new_connection: could not load sqlite-vec: %s", _vec_load_exc)
+
+    return c
+
+
 def _connect() -> sqlcipher3.Connection:
-    global _conn
-    if _conn is not None:
-        return _conn
+    """Return the SQLCipher connection for the calling thread.
+
+    Each thread owns exactly one connection (created on first use via
+    threading.local).  No two threads ever share a connection object, so
+    concurrent use of the same connection is impossible by construction.
+
+    Cross-thread write serialization is handled by SQLite's WAL file lock
+    and the busy_timeout=5000 set on every connection.
+    """
+    conn = getattr(_tl, "conn", None)
+    if conn is not None:
+        return conn
+
     with _conn_lock:
-        if _conn is not None:
-            return _conn
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
         # One-time, transparent upgrade: an older plaintext memory.db is
         # encrypted in place (backup + atomic swap) before we open it.
+        # Guard with _conn_lock so only one thread runs the migration.
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
         from axi import db_migrate
         db_migrate.migrate_to_encrypted()
-        key = load_key()
 
-        try:
-            c = _try_open(DB_PATH, key)
-            if c is None:
-                # DB does not exist yet — create it fresh.
-                c = sqlcipher3.connect(
-                    str(DB_PATH), check_same_thread=False, isolation_level=None
-                )
-                c.execute(f"PRAGMA key = \"x'{key}'\"")
-        except sqlcipher3.dbapi2.DatabaseError as exc:
-            log.warning("memory DB corrupt on open (%s) — attempting auto-recovery", exc)
-            c = _repair_corrupt_db(DB_PATH, key)
+    key = load_key()
+    c = _open_new_connection(key)
 
-        # PRAGMA key is already applied by _try_open / _repair_corrupt_db;
-        # for fresh connections created inline above we still need WAL + tuning.
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA foreign_keys=ON")
-        # FULL durability: each WAL page is flushed before the commit returns.
-        # The conversation DB is written ~1x/min so the perf cost is negligible,
-        # and it eliminates the partial-WAL-page corruption on hard kills.
-        c.execute("PRAGMA synchronous=FULL")
-        c.row_factory = sqlcipher3.Row
-        try:
-            DB_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
-            pass
-        _conn = c
-        return _conn
+    try:
+        DB_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+
+    _tl.conn = c
+    return c
 
 
 def init_db() -> None:
@@ -412,15 +447,19 @@ def checkpoint() -> None:
 
 @contextmanager
 def _tx() -> Iterator[sqlite3.Connection]:
+    """Begin/commit a transaction on the calling thread's own connection.
+
+    No shared lock needed — each thread has its own connection object.
+    SQLite WAL + busy_timeout handle cross-thread write serialization.
+    """
     c = _connect()
-    with _conn_lock:
-        c.execute("BEGIN")
-        try:
-            yield c
-            c.execute("COMMIT")
-        except Exception:
-            c.execute("ROLLBACK")
-            raise
+    c.execute("BEGIN")
+    try:
+        yield c
+        c.execute("COMMIT")
+    except Exception:
+        c.execute("ROLLBACK")
+        raise
 
 
 # ─────────────────────────── graph operations ───────────────────────────
@@ -1409,8 +1448,11 @@ def backfill_similar_to_edges(*, threshold: float = 0.85) -> int:
 
 
 def close() -> None:
-    global _conn
-    with _conn_lock:
-        if _conn is not None:
-            _conn.close()
-            _conn = None
+    """Close the calling thread's SQLite connection (if open) and clear it."""
+    conn = getattr(_tl, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        _tl.conn = None

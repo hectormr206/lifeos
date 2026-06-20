@@ -24,7 +24,7 @@ def test_create_vec_nodes_table(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     store.init_db()
 
     from axi.store import create_vec_nodes_table
@@ -45,7 +45,7 @@ def test_vec_nodes_insert_and_knn(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     store.init_db()
 
     from axi.store import create_vec_nodes_table, knn_nodes, upsert_vec_node
@@ -89,7 +89,7 @@ def test_vec_nodes_created_on_init_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-    monkeypatch.setattr(store, "_conn", None)
+    store.close()  # clear thread-local so _connect() re-opens against new DB_PATH
     store.init_db()
 
     conn = store._connect()

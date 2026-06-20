@@ -97,8 +97,11 @@ def fresh_db(tmp_path, monkeypatch):
     from axi import store
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
-    # Force a new connection bound to the temp DB.
-    monkeypatch.setattr(store, "_conn", None)
+    # Force the calling thread to open a fresh connection bound to the temp DB.
+    # With thread-local connections there is no module-level _conn; closing the
+    # current thread's connection (if any) is sufficient — _connect() will
+    # re-open against the new DB_PATH on the next call.
+    store.close()
     # Redirect all lifeos domain stores to the per-test tmp dir.  Must be set
     # before init_db() so any domain store initialised during the test uses the
     # temp path from the very first call.
