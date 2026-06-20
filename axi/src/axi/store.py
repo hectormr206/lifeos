@@ -1175,13 +1175,31 @@ def run_periodic_embed_drain(*, embed_limit: int = 50, similarity_threshold: flo
     """
     try:
         embed_pending_nodes(limit=embed_limit)
-    except Exception:  # noqa: BLE001
+    except Exception as _e:  # noqa: BLE001
         log.warning("run_periodic_embed_drain: embed_pending_nodes failed", exc_info=True)
+        try:
+            from axi import events as _events
+            _events.log_warning(
+                "embed.drain",
+                f"embed_pending_nodes failed: {_e}",
+                {"step": "embed_pending_nodes", "error": str(_e)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     try:
         backfill_similar_to_edges(threshold=similarity_threshold)
-    except Exception:  # noqa: BLE001
+    except Exception as _e:  # noqa: BLE001
         log.warning("run_periodic_embed_drain: backfill_similar_to_edges failed", exc_info=True)
+        try:
+            from axi import events as _events
+            _events.log_warning(
+                "embed.drain",
+                f"backfill_similar_to_edges failed: {_e}",
+                {"step": "backfill_similar_to_edges", "error": str(_e)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     try:
         from axi.linkers import run_auto_linkers
@@ -1190,8 +1208,17 @@ def run_periodic_embed_drain(*, embed_limit: int = 50, similarity_threshold: flo
         import sqlcipher3 as _sc3
         c.row_factory = _sc3.Row
         run_auto_linkers(c)
-    except Exception:  # noqa: BLE001
+    except Exception as _e:  # noqa: BLE001
         log.warning("run_periodic_embed_drain: run_auto_linkers failed", exc_info=True)
+        try:
+            from axi import events as _events
+            _events.log_warning(
+                "embed.drain",
+                f"run_auto_linkers failed: {_e}",
+                {"step": "run_auto_linkers", "error": str(_e)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ─────────────────── semantic search (Slice 1) ───────────────────────────────

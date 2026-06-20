@@ -10,6 +10,17 @@ Public API (Slice 1):
     managed_systemctl(action, service, *, caller, reason, check=False, timeout=30)
         Emits an event BEFORE running systemctl; returns the CompletedProcess.
 
+Public API (Slice 4):
+    get_request_id() -> str
+        Returns the current request_id from the ContextVar (default "-").
+
+    set_request_id(rid) -> None
+        Sets the request_id ContextVar for the current async task / thread.
+
+    install_request_id_middleware(app) -> None
+        Registers an HTTP middleware on a FastAPI app that sets/resets the
+        request_id ContextVar for every incoming request.
+
 Internal helpers used in tests for patching:
     _get_events_log_fn(level) -> Callable
         Returns the events.log_<level> function for the given level string.
@@ -18,7 +29,26 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import uuid
+from contextvars import ContextVar
 from typing import Any, Callable
+
+# ---------------------------------------------------------------------------
+# Slice 4 — request_id correlation via ContextVar
+# ---------------------------------------------------------------------------
+
+# Default is "-" so log lines outside an HTTP request always have a stable value.
+_request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
+
+
+def get_request_id() -> str:
+    """Return the current request_id (default '-' when not in an HTTP request)."""
+    return _request_id_var.get()
+
+
+def set_request_id(rid: str) -> None:
+    """Set the request_id ContextVar for the current execution context."""
+    _request_id_var.set(rid)
 
 log = logging.getLogger("axi.obs")
 
@@ -128,3 +158,36 @@ def managed_systemctl(
         capture_output=True,
         text=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Slice 4 — FastAPI middleware helper
+# ---------------------------------------------------------------------------
+
+
+def install_request_id_middleware(app: Any) -> None:
+    """Register an HTTP middleware on *app* that sets/resets request_id.
+
+    Generates a short UUID4-based id for each incoming request, stores it in
+    the ContextVar via set_request_id(), and resets to "-" after the response
+    so no request_id leaks between requests in the same async task.
+
+    Usage (dashboard.py):
+        from axi import obs
+        obs.install_request_id_middleware(app)
+    """
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+
+    class _ReqIdMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            # Prefer an incoming X-Request-Id header; generate one if absent.
+            rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+            set_request_id(rid)
+            try:
+                response = await call_next(request)
+                return response
+            finally:
+                set_request_id("-")
+
+    app.add_middleware(_ReqIdMiddleware)

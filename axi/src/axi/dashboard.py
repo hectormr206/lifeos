@@ -555,6 +555,15 @@ templates.env.globals["dashboard_poll_ms"] = lambda: int(
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# ────────────────────── request_id correlation middleware ──────────────
+#
+# Installs an HTTP middleware that generates (or propagates) a short
+# request_id for every incoming request. The id is stored in the
+# obs.request_id ContextVar so every log line emitted during a request
+# automatically carries req_id=<value> via ReqIdFilter.
+
+obs.install_request_id_middleware(app)
+
 
 # ────────────────────── Global 500 exception handler ──────────────────
 #
@@ -2585,6 +2594,14 @@ def _try_nano_extract(
         from lifeos.agents import extractor as nano_extractor
     except Exception as e:  # noqa: BLE001
         log.warning("nano extractor import failed: %s", e)
+        try:
+            events.log_warning(
+                "extractor",
+                f"nano extractor import failed: {e}",
+                {"error": str(e)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return None
 
     try:
@@ -2594,6 +2611,14 @@ def _try_nano_extract(
         result = nano_extractor.extract(text)
     except Exception as e:  # noqa: BLE001
         log.warning("nano extractor crashed: %s", e)
+        try:
+            events.log_warning(
+                "extractor",
+                f"nano extractor crashed: {e}",
+                {"error": str(e)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return None
     if result is None or not result.domain:
         return None

@@ -44,6 +44,23 @@ class LogfmtFormatter(logging.Formatter):
         return base
 
 
+class ReqIdFilter(logging.Filter):
+    """Inject the current request_id into every LogRecord as record.req_id.
+
+    The value is read from obs.get_request_id() which defaults to "-" outside
+    an HTTP request. Adding this filter to managed handlers ensures every log
+    line carries a stable req_id field for correlation.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        try:
+            from axi.obs import get_request_id  # lazy to avoid circular import
+            record.req_id = get_request_id()
+        except Exception:  # noqa: BLE001
+            record.req_id = "-"
+        return True
+
+
 def _is_managed(handler: logging.Handler) -> bool:
     return bool(getattr(handler, _MANAGED_TAG, False))
 
@@ -77,11 +94,13 @@ def setup_logging(
                 pass
 
     formatter = LogfmtFormatter()
+    req_id_filter = ReqIdFilter()
 
     # Always attach a stderr StreamHandler.
     stream_handler = logging.StreamHandler(sys.stderr)
     stream_handler.setFormatter(formatter)
     stream_handler.setLevel(level)
+    stream_handler.addFilter(req_id_filter)
     setattr(stream_handler, _MANAGED_TAG, True)
     root.addHandler(stream_handler)
 
@@ -96,6 +115,7 @@ def setup_logging(
             )
             file_handler.setFormatter(formatter)
             file_handler.setLevel(level)
+            file_handler.addFilter(req_id_filter)
             setattr(file_handler, _MANAGED_TAG, True)
             root.addHandler(file_handler)
         except OSError as exc:

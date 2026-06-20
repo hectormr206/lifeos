@@ -509,12 +509,42 @@ def _ask_impl(
     retry ONCE with a much larger budget so callers don't get empty strings.
     """
     # Determine routing engine and endpoint
+    # Compute the trigger reason for the routing event before any fallback.
+    _route_trigger: str
+    if image_b64:
+        _route_trigger = "image"
+    elif _VT_PATTERN.search(prompt or ""):
+        _route_trigger = "vt_pattern"
+    else:
+        _route_trigger = "default"
+
     engine = _route(prompt, image_b64, None)
     if engine == "vt3b":
         if not is_vt_alive():
             log.warning("brain: VibeThinker-3B (8082) is down — falling back to 4B (8080)")
             engine = "4b"
+            # Emit fallback warning event (Slice 4 correlation)
+            try:
+                from axi import events as _events
+                _events.log_warning(
+                    "brain.fallback",
+                    "VibeThinker-3B down — routing to 4B",
+                    {"reason": "vt_down", "trigger": _route_trigger},
+                )
+            except Exception:  # noqa: BLE001
+                pass
     endpoint = VT_ENDPOINT if engine == "vt3b" else ENDPOINT
+
+    # Emit routing event so each request/thread is traceable (Slice 4)
+    try:
+        from axi import events as _events
+        _events.log_info(
+            "brain.route",
+            f"routing to engine={engine}",
+            {"engine": engine, "trigger": _route_trigger},
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
     messages = _build_messages(prompt, system=system, image_b64=image_b64, history=history, lang=lang)
     effective_max_tokens = _retry_budget if _retry_budget is not None else max_tokens
@@ -561,6 +591,16 @@ def _ask_impl(
         return content, data
     except urllib.error.URLError as e:
         log.error("brain unreachable: %s", e)
+        # Emit error event (Slice 4 correlation)
+        try:
+            from axi import events as _events
+            _events.log_error(
+                "brain.error",
+                f"brain unreachable: {e}",
+                {"engine": engine, "error": str(e)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return "[Axi brain no responde — ¿está corriendo llama-server?]", None
     except (json.JSONDecodeError, KeyError) as e:
         log.error("brain malformed response: %s", e)
