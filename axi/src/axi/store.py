@@ -33,6 +33,8 @@ log = logging.getLogger("axi.store")
 
 import sqlcipher3
 
+from axi import events as _events
+
 STATE_DIR = Path(
     os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
 ) / "axi"
@@ -282,6 +284,26 @@ def _remove_wal_sidecars(db_path: Path) -> None:
         Path(str(db_path) + suffix).unlink(missing_ok=True)
 
 
+def _emit_recovery_event(level: str, message: str, data: dict | None = None) -> None:
+    """Emit a recovery event via events module.
+
+    Double-wrapped: events.py already swallows its own errors, but this
+    extra try/except ensures that even a catastrophic failure in the events
+    system (e.g. import error, ring-lock corruption) NEVER aborts the DB
+    recovery ladder.
+    """
+    try:
+        fn = {
+            "critical": _events.log_critical,
+            "error": _events.log_error,
+            "warning": _events.log_warning,
+            "info": _events.log_info,
+        }.get(level, _events.log_warning)
+        fn("store.corruption", message, data)
+    except Exception:  # noqa: BLE001 — events must never abort recovery
+        pass
+
+
 def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
     """Recovery ladder for a corrupt memory.db.
 
@@ -293,11 +315,19 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
     4. Build a fresh empty schema so Axi starts with empty memory rather than
        crashing.
 
-    All steps are logged. Raises only if even a fresh schema cannot be built.
+    All steps are logged (stdlib + events ring). Raises only if even a fresh
+    schema cannot be built.
     """
     pid = os.getpid()
     bak = db_path.parent / f"{db_path.name}.corrupt-{pid}.bak"
     log.warning("corrupt memory DB detected — starting recovery (backup → %s)", bak)
+
+    # Detection event — emitted first, before any recovery attempt.
+    _emit_recovery_event(
+        "critical",
+        f"corrupt memory DB detected — starting recovery: {db_path.name}",
+        {"db_path": str(db_path), "backup_path": str(bak), "pid": pid},
+    )
 
     # Step 1 — back up corrupt files.
     try:
@@ -307,8 +337,19 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
             src = Path(str(db_path) + suffix)
             if src.exists():
                 shutil.copy2(str(src), str(bak) + suffix)
+        log.warning("recovery: backup written to %s", bak)
+        _emit_recovery_event(
+            "warning",
+            f"recovery step 1: corrupt DB backed up to {bak.name}",
+            {"backup_path": str(bak)},
+        )
     except OSError as backup_err:
         log.warning("recovery: could not write backup (%s) — continuing", backup_err)
+        _emit_recovery_event(
+            "warning",
+            f"recovery step 1: backup failed ({backup_err}) — continuing",
+            {"error": str(backup_err)},
+        )
 
     # Step 2 — WAL reset: remove sidecars and retry (handles WAL-only corruption).
     _remove_wal_sidecars(db_path)
@@ -316,9 +357,19 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
         conn = _try_open(db_path, key)
         if conn is not None:
             log.warning("recovery: WAL reset succeeded — memory DB is healthy again")
+            _emit_recovery_event(
+                "warning",
+                "recovery step 2: WAL reset succeeded — memory DB is healthy again",
+                {"strategy": "wal_reset"},
+            )
             return conn
-    except sqlcipher3.dbapi2.DatabaseError:
+    except sqlcipher3.dbapi2.DatabaseError as wal_err:
         log.warning("recovery: WAL reset was not sufficient — trying backup restore")
+        _emit_recovery_event(
+            "warning",
+            f"recovery step 2: WAL reset failed ({wal_err}) — trying backup restore",
+            {"error": str(wal_err)},
+        )
 
     # Step 3 — restore newest known-clean backup.
     clean_backups = sorted(
@@ -336,12 +387,27 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
             conn = _try_open(db_path, key)
             if conn is not None:
                 log.warning("recovery: restored from backup %s", candidate.name)
+                _emit_recovery_event(
+                    "warning",
+                    f"recovery step 3: restored from backup {candidate.name}",
+                    {"backup_file": candidate.name, "strategy": "restore_backup"},
+                )
                 return conn
-        except (OSError, sqlcipher3.dbapi2.DatabaseError):
+        except (OSError, sqlcipher3.dbapi2.DatabaseError) as cand_err:
             log.warning("recovery: backup %s is also corrupt — skipping", candidate.name)
+            _emit_recovery_event(
+                "warning",
+                f"recovery step 3: backup {candidate.name} is also corrupt — skipping",
+                {"backup_file": candidate.name, "error": str(cand_err)},
+            )
 
     # Step 4 — last resort: rebuild an empty schema.
     log.warning("recovery: no clean backup found — rebuilding empty memory DB")
+    _emit_recovery_event(
+        "critical",
+        "recovery step 4: no clean backup — rebuilding fresh empty schema (all memory lost)",
+        {"strategy": "fresh_schema"},
+    )
     db_path.unlink(missing_ok=True)
     _remove_wal_sidecars(db_path)
     conn = sqlcipher3.connect(str(db_path), isolation_level=None)
@@ -443,6 +509,14 @@ def checkpoint() -> None:
         _connect().execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except Exception as e:  # noqa: BLE001
         log.warning("wal_checkpoint failed: %s", e)
+        try:
+            _events.log_warning(
+                "store.checkpoint",
+                f"WAL checkpoint failed: {e}",
+                {"error": str(e)},
+            )
+        except Exception:  # noqa: BLE001 — events must never abort checkpoint
+            pass
 
 
 @contextmanager

@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import traceback as _traceback
 import threading
 from collections import OrderedDict
 import socket
@@ -553,6 +554,37 @@ templates.env.globals["dashboard_poll_ms"] = lambda: int(
 )
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# ────────────────────── Global 500 exception handler ──────────────────
+#
+# Catches any Exception that is NOT an HTTPException (those are handled
+# normally by FastAPI and must NOT be logged as api.500 errors).
+# Records an event in the events ring/SQLite so unhandled server errors
+# have a queryable audit trail, then RE-RAISES so uvicorn still returns
+# a proper 500 response and nothing is swallowed.
+
+
+@app.exception_handler(Exception)
+async def _global_500_handler(request: Request, exc: Exception):
+    # HTTPException is handled by FastAPI's own handler — pass it through.
+    if isinstance(exc, HTTPException):
+        raise exc
+
+    route = str(request.url.path)
+    exc_type = type(exc).__name__
+    tb = _traceback.format_exc()
+
+    try:
+        events.log_error(
+            "api.500",
+            f"unhandled exception on {route}: {exc_type}",
+            {"route": route, "exc": exc_type, "traceback": tb},
+        )
+    except Exception:  # noqa: BLE001 — events failure must never swallow the original exc
+        pass
+
+    raise exc
 
 
 # ────────────────────── Anti-hallucination guardrail ──────────────────
