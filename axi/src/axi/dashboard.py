@@ -48,7 +48,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
-from axi import config, events, store
+from axi import config, events, obs, store
 from axi import models_manager
 from axi import model_params_schema
 
@@ -2192,9 +2192,10 @@ def api_model_activate(model_id: str):
     # the large model loads (design ordering, R5: VRAM budget).
     vt_state: str | None = None
     if model_id != "qwen35-4b":
-        result = subprocess.run(
-            ["systemctl", "--user", "stop", "llama-vt.service"],
-            check=False, timeout=30,
+        result = obs.managed_systemctl(
+            "stop", "llama-vt.service",
+            caller="model-activate",
+            reason=f"activating {model_id} (non-4B)",
         )
         if result.returncode == 0:
             vt_state = "stopped"
@@ -2242,9 +2243,10 @@ def api_model_activate(model_id: str):
         if vt_entry is not None:
             try:
                 models_manager.write_active_vt(vt_entry)
-                subprocess.run(
-                    ["systemctl", "--user", "restart", "llama-vt.service"],
-                    check=False, timeout=30,
+                obs.managed_systemctl(
+                    "restart", "llama-vt.service",
+                    caller="model-activate",
+                    reason="4B pair co-start",
                 )
                 models_manager.wait_for_llama_health(
                     url="http://127.0.0.1:8082/health", timeout=60.0,

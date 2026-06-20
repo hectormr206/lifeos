@@ -415,7 +415,12 @@ class AxiTray(QtCore.QObject):
         box.exec()
 
     def _restart_daemon(self) -> None:
-        subprocess.Popen(["systemctl", "--user", "restart", "axi-voice.service"])
+        from axi import obs
+        obs.managed_systemctl(
+            "restart", "axi-voice.service",
+            caller="tray",
+            reason="tray restart",
+        )
 
     # ───────────────── state poll ─────────────────
 
