@@ -284,6 +284,35 @@ def _remove_wal_sidecars(db_path: Path) -> None:
         Path(str(db_path) + suffix).unlink(missing_ok=True)
 
 
+def _backup_passes_integrity(path: Path, key: str) -> bool:
+    """Return True only if *path* opens and passes a full ``integrity_check``.
+
+    Used by the recovery ladder to decide whether a backup candidate is safe to
+    restore. We run the FULL ``PRAGMA integrity_check`` (not the light first-page
+    probe in :func:`_try_open`) because corruption frequently lives deeper in the
+    b-tree than page 1, and — conversely — a file flagged corrupt by one process
+    is often perfectly healthy on disk (the damage was WAL-only or cross-process).
+    Filename is irrelevant: a ``.corrupt-<pid>.bak`` snapshot is validated by its
+    actual contents, never skipped by its name.
+    """
+    if not path.exists():
+        return False
+    conn = None
+    try:
+        conn = sqlcipher3.connect(str(path), isolation_level=None)
+        conn.execute(f"PRAGMA key = \"x'{key}'\"")
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        return bool(result) and str(result[0]).lower() == "ok"
+    except (sqlcipher3.dbapi2.DatabaseError, OSError):
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 — closing a probe connection must never raise
+                pass
+
+
 def _emit_recovery_event(level: str, message: str, data: dict | None = None) -> None:
     """Emit a recovery event via events module.
 
@@ -371,33 +400,46 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
             {"error": str(wal_err)},
         )
 
-    # Step 3 — restore newest known-clean backup.
-    clean_backups = sorted(
+    # Step 3 — restore newest backup that passes a FULL integrity check.
+    #
+    # Validate by CONTENT, never by filename. The step-1 snapshot we just wrote
+    # is named ``.corrupt-<pid>.bak`` yet — because corruption is usually
+    # WAL-only or cross-process — it is frequently a perfectly healthy copy of
+    # the main file. The old code skipped every ``.corrupt-*`` candidate by name
+    # and fell through to the empty-schema rebuild, destroying memory that was
+    # never actually lost (the 2026-06-20 data-loss incident). Including these
+    # snapshots, gated by ``integrity_check``, is what makes recovery safe.
+    candidates = sorted(
         db_path.parent.glob(f"{db_path.name}*.bak"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    for candidate in clean_backups:
-        # Skip the corrupt backup we just wrote.
-        if ".corrupt-" in candidate.name:
+    for candidate in candidates:
+        if not _backup_passes_integrity(candidate, key):
+            log.warning("recovery: backup %s failed integrity_check — skipping", candidate.name)
+            _emit_recovery_event(
+                "warning",
+                f"recovery step 3: backup {candidate.name} failed integrity_check — skipping",
+                {"backup_file": candidate.name},
+            )
             continue
         try:
             shutil.copy2(str(candidate), str(db_path))
             _remove_wal_sidecars(db_path)
             conn = _try_open(db_path, key)
             if conn is not None:
-                log.warning("recovery: restored from backup %s", candidate.name)
+                log.warning("recovery: restored from healthy backup %s", candidate.name)
                 _emit_recovery_event(
                     "warning",
-                    f"recovery step 3: restored from backup {candidate.name}",
+                    f"recovery step 3: restored from healthy backup {candidate.name}",
                     {"backup_file": candidate.name, "strategy": "restore_backup"},
                 )
                 return conn
         except (OSError, sqlcipher3.dbapi2.DatabaseError) as cand_err:
-            log.warning("recovery: backup %s is also corrupt — skipping", candidate.name)
+            log.warning("recovery: restore of %s failed (%s) — skipping", candidate.name, cand_err)
             _emit_recovery_event(
                 "warning",
-                f"recovery step 3: backup {candidate.name} is also corrupt — skipping",
+                f"recovery step 3: restore of {candidate.name} failed ({cand_err}) — skipping",
                 {"backup_file": candidate.name, "error": str(cand_err)},
             )
 
