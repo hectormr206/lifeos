@@ -188,7 +188,9 @@ function brain3dPage() {
       // Convert /api/graph/full format to 3d-force-graph format.
       const nodeById = {};
       const gfNodes = data.nodes.map(n => {
-        const color = DOMAIN_COLOR[n.domain] || DOMAIN_COLOR['default'];
+        // Color by domain when set; most nodes (conversations/facts) carry a
+        // kind but no domain, so fall back to kind, then to the grey default.
+        const color = DOMAIN_COLOR[n.domain] || DOMAIN_COLOR[n.kind] || DOMAIN_COLOR['default'];
         const gn = { id: n.id, label: n.label, kind: n.kind, domain: n.domain, has_embedding: n.has_embedding, color };
         nodeById[n.id] = gn;
         return gn;
