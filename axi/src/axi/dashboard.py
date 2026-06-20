@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import threading
 from collections import OrderedDict
 import socket
 import subprocess
@@ -507,7 +508,33 @@ async def lifespan(_app: FastAPI):
     except Exception:  # noqa: BLE001
         log.exception("web research failed to configure — feature disabled")
 
+    # ── Semantic memory periodic drain (FIX 5) ──────────────────────────────
+    # One background thread wakes every 5 minutes to drain pending embeddings,
+    # backfill similar-to edges, and run the cross-domain auto-linkers.
+    # Uses run_periodic_embed_drain() which is idempotent, bounded, and
+    # handles embed-service-down gracefully (nodes stay re-queueable).
+    _embed_drain_stop = threading.Event()
+
+    def _embed_drain_loop(stop_event: threading.Event) -> None:
+        _INTERVAL_S = 300  # 5 minutes
+        while not stop_event.wait(timeout=_INTERVAL_S):
+            try:
+                from axi.store import run_periodic_embed_drain
+                run_periodic_embed_drain()
+            except Exception:  # noqa: BLE001
+                log.warning("embed drain loop: unexpected error", exc_info=True)
+
+    _embed_drain_thread = threading.Thread(
+        target=_embed_drain_loop,
+        args=(_embed_drain_stop,),
+        name="axi-embed-drain",
+        daemon=True,
+    )
+    _embed_drain_thread.start()
+
     yield
+
+    _embed_drain_stop.set()
 
     try:
         get_scheduler().shutdown(wait=False)
@@ -1895,7 +1922,9 @@ def _attach_lifeos_edges(conn) -> list[dict[str, Any]]:
     lf_key = _lf_load_key()
 
     # ATTACH lifeos.db to the existing memory.db connection.
-    conn.execute(f"ATTACH DATABASE '{lf_path}' AS lf KEY \"x'{lf_key}'\"")
+    # lf_path is a bound parameter to avoid injection on paths with special characters.
+    # lf_key is a pure hex string from secrets.token_bytes — safe to inline as key literal.
+    conn.execute(f"ATTACH DATABASE ? AS lf KEY \"x'{lf_key}'\"", (lf_path,))
     try:
         # Fetch all edges from lifeos.db.
         # lifeos edges schema: (id, src_id, src_domain, dst_id, dst_domain, rel, weight, metadata, ...)

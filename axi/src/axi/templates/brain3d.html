@@ -123,6 +123,16 @@
 <script src="/static/vendor/3d-force-graph.min.js"></script>
 
 <script>
+// HTML-escape helper — prevents stored XSS when node labels are injected as HTML.
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Domain-to-color map — consistent palette across all renders.
 const DOMAIN_COLOR = {
   relationships: '#FF6B9D',  // pink
@@ -196,7 +206,7 @@ function brain3dPage() {
 
       this._graph = ForceGraph3D()(container)
         .backgroundColor('#0b0e13')
-        .nodeLabel(n => `<div style="background:#1a1f2b;color:#e6edf3;padding:4px 8px;border-radius:4px;font-size:12px;max-width:200px">${n.label}</div>`)
+        .nodeLabel(n => `<div style="background:#1a1f2b;color:#e6edf3;padding:4px 8px;border-radius:4px;font-size:12px;max-width:200px">${escHtml(n.label)}</div>`)
         .nodeColor(n => n.color)
         .nodeOpacity(0.9)
         .nodeVal(n => n.has_embedding ? 4 : 2)
