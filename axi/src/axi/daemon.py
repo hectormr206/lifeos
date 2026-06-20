@@ -1073,10 +1073,8 @@ def _handle_cmd(daemon: Daemon, cmd: str) -> tuple[str, bool]:
 
 
 def serve() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    from axi.logging_setup import setup_logging
+    setup_logging(level=logging.INFO)
 
     SOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     if SOCK_PATH.exists():

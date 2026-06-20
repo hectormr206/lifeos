@@ -247,10 +247,8 @@ def _handle(conn: socket.socket, model: WhisperModel, pipeline: BatchedInference
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    from axi.logging_setup import setup_logging
+    setup_logging(level=logging.INFO)
 
     model_name = os.environ.get("AXI_WHISPER_MODEL", DEFAULT_MODEL)
     device = os.environ.get("AXI_WHISPER_DEVICE", DEFAULT_DEVICE)
