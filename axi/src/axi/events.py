@@ -43,7 +43,9 @@ _TRIM_EVERY = 100
 _ring: deque[dict[str, Any]] = deque(maxlen=_RING_MAX)
 _ring_lock = threading.Lock()
 
-_write_queue: queue.Queue = queue.Queue()
+_WRITE_QUEUE_MAX = 2000  # bounded to prevent unbounded memory growth under stall
+_write_queue: queue.Queue = queue.Queue(maxsize=_WRITE_QUEUE_MAX)
+_queue_drop_count = 0       # monotone counter of dropped events (for diagnostics)
 _worker_thread: threading.Thread | None = None
 _worker_lock = threading.Lock()
 _insert_count = 0
@@ -169,7 +171,7 @@ def log_event(
         with _ring_lock:
             _ring.append(entry)
 
-        # Queue SQLite insert on the worker thread.
+        # Queue SQLite insert on the worker thread (non-blocking).
         import json as _json
         data_json = None
         if entry["data"] is not None:
@@ -177,13 +179,24 @@ def log_event(
                 data_json = _json.dumps(entry["data"], ensure_ascii=False)
             except (TypeError, ValueError):
                 data_json = None
-        _write_queue.put({
-            "ts": ts,
-            "source": entry["source"],
-            "level": level,
-            "message": entry["message"],
-            "data_json": data_json,
-        })
+        try:
+            _write_queue.put_nowait({
+                "ts": ts,
+                "source": entry["source"],
+                "level": level,
+                "message": entry["message"],
+                "data_json": data_json,
+            })
+        except queue.Full:
+            # Queue is full (writer stalled) — drop rather than block the caller.
+            global _queue_drop_count
+            _queue_drop_count += 1
+            # Emit a single rate-limited warning via stdlib logging (never back to events).
+            if _queue_drop_count == 1 or _queue_drop_count % 100 == 0:
+                log.warning(
+                    "events._write_queue full — dropping event (total dropped: %d)",
+                    _queue_drop_count,
+                )
         _ensure_worker()
         # P2.5 — fire libnotify for critical/error. Best-effort, rate-limited.
         try:

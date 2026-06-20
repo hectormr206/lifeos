@@ -403,16 +403,32 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
 
     # Step 4 — last resort: rebuild an empty schema.
     log.warning("recovery: no clean backup found — rebuilding empty memory DB")
-    _emit_recovery_event(
-        "critical",
-        "recovery step 4: no clean backup — rebuilding fresh empty schema (all memory lost)",
-        {"strategy": "fresh_schema"},
-    )
-    db_path.unlink(missing_ok=True)
-    _remove_wal_sidecars(db_path)
-    conn = sqlcipher3.connect(str(db_path), isolation_level=None)
-    conn.execute(f"PRAGMA key = \"x'{key}'\"")
-    return conn
+    # Emit the critical event BEFORE attempting the unlink+connect so it is
+    # always recorded even if the step itself fails (e.g. disk full / permissions).
+    try:
+        _emit_recovery_event(
+            "critical",
+            "recovery step 4: no clean backup — rebuilding fresh empty schema (all memory lost)",
+            {"strategy": "fresh_schema"},
+        )
+    except Exception:  # noqa: BLE001 — event emission must never abort recovery
+        pass
+    try:
+        db_path.unlink(missing_ok=True)
+        _remove_wal_sidecars(db_path)
+        conn = sqlcipher3.connect(str(db_path), isolation_level=None)
+        conn.execute(f"PRAGMA key = \"x'{key}'\"")
+        return conn
+    except (OSError, Exception) as exc:  # noqa: BLE001
+        try:
+            _emit_recovery_event(
+                "critical",
+                f"recovery step 4 failed: {exc}",
+                {"strategy": "fresh_schema", "error": str(exc)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(f"recovery step 4 failed: {exc}") from exc
 
 
 def _open_new_connection(key: str) -> sqlcipher3.Connection:
@@ -728,6 +744,10 @@ def query_events(
     Returns:
         List of dicts with keys: ts, source, level, message, data.
     """
+    # Clamp limit and offset defensively to safe ranges.
+    limit = max(1, min(limit, 5000))
+    offset = max(0, offset)
+
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -1172,6 +1192,8 @@ def embed_pending_nodes(*, limit: int = 100) -> int:
 _EMBED_QUEUE: queue.Queue[int] = queue.Queue(maxsize=500)
 _embed_worker_started = threading.Event()
 _embed_worker_lock = threading.Lock()
+_embed_worker_stop = threading.Event()   # sentinel: set → worker loop exits
+_embed_worker_thread: threading.Thread | None = None
 
 
 def _embed_worker_loop() -> None:
@@ -1180,13 +1202,16 @@ def _embed_worker_loop() -> None:
     Blocks on the queue (1 s timeout so the thread wakes periodically).
     On EmbedServiceError: backs off 10 s; nodes remain embedding IS NULL and
     will be retried on the next drain cycle (service-down safe, no lost nodes).
+    Exits cleanly when _embed_worker_stop is set (for test teardown / shutdown).
     """
     _BACKOFF_S = 10.0
     _DRAIN_LIMIT = 50  # nodes per drain cycle
 
-    while True:
+    while not _embed_worker_stop.is_set():
         try:
             _EMBED_QUEUE.get(timeout=1.0)
+            if _embed_worker_stop.is_set():
+                return
             # Drain the queue so we don't process one-at-a-time when bursting.
             while not _EMBED_QUEUE.empty():
                 try:
@@ -1195,6 +1220,9 @@ def _embed_worker_loop() -> None:
                     break
         except queue.Empty:
             continue
+
+        if _embed_worker_stop.is_set():
+            return
 
         try:
             embed_pending_nodes(limit=_DRAIN_LIMIT)
@@ -1205,14 +1233,39 @@ def _embed_worker_loop() -> None:
 
 def _ensure_embed_worker() -> None:
     """Start the shared embed consumer thread if it has not been started yet."""
+    global _embed_worker_thread
     if _embed_worker_started.is_set():
         return
     with _embed_worker_lock:
         if _embed_worker_started.is_set():
             return
+        _embed_worker_stop.clear()
         t = threading.Thread(target=_embed_worker_loop, name="axi-embed-worker", daemon=True)
         t.start()
+        _embed_worker_thread = t
         _embed_worker_started.set()
+
+
+def stop_embed_worker(timeout: float = 3.0) -> None:
+    """Signal the embed worker to stop and wait for it to exit.
+
+    Safe to call even if the worker was never started.  Used in test teardown
+    to prevent the daemon thread from touching sqlcipher during interpreter
+    shutdown (which causes SIGSEGV).
+    """
+    global _embed_worker_thread
+    _embed_worker_stop.set()
+    # Unblock a waiting get() by draining and sending a dummy signal.
+    try:
+        _EMBED_QUEUE.put_nowait(-1)
+    except queue.Full:
+        pass
+    if _embed_worker_thread is not None and _embed_worker_thread.is_alive():
+        _embed_worker_thread.join(timeout=timeout)
+    # Reset state so _ensure_embed_worker() can restart a fresh worker later.
+    _embed_worker_stop.clear()
+    _embed_worker_started.clear()
+    _embed_worker_thread = None
 
 
 def trigger_embed_for_node(node_id: int) -> None:

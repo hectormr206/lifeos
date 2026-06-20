@@ -151,13 +151,33 @@ def managed_systemctl(
         pass
 
     # Run systemctl --user.
-    return subprocess.run(
+    result = subprocess.run(
         ["systemctl", "--user", action, service],
         check=check,
         timeout=timeout,
         capture_output=True,
         text=True,
     )
+
+    # Emit a warning event when the command fails so failures are visible in
+    # the event log even when callers pass check=False.
+    if result is not None and result.returncode != 0:
+        try:
+            warning_fn = _get_events_log_fn("warning")
+            warning_fn(
+                caller,
+                f"{action} {service} failed rc={result.returncode}",
+                data={
+                    "service": service,
+                    "action": action,
+                    "returncode": result.returncode,
+                    "stderr": result.stderr[:500] if result.stderr else "",
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -183,11 +203,13 @@ def install_request_id_middleware(app: Any) -> None:
         async def dispatch(self, request: Request, call_next):
             # Prefer an incoming X-Request-Id header; generate one if absent.
             rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
-            set_request_id(rid)
+            # Use token-based reset so nested set/reset pairs are nesting-safe
+            # and the outer ContextVar value is always restored.
+            token = _request_id_var.set(rid)
             try:
                 response = await call_next(request)
                 return response
             finally:
-                set_request_id("-")
+                _request_id_var.reset(token)
 
     app.add_middleware(_ReqIdMiddleware)

@@ -263,8 +263,8 @@ def fresh_db(tmp_path, monkeypatch):
     # don't block unrelated tests.
     _apply_lifeos_migrations_to_tmp()
     yield
-    # Drain background writer threads (events + brain-metric) so they don't
-    # outlive the temp DB they were writing to.
+    # Drain background writer threads (events + brain-metric + embed-worker)
+    # so they don't outlive the temp DB they were writing to.
     import threading
     import time as _time
     from axi import events as _events
@@ -278,6 +278,9 @@ def fresh_db(tmp_path, monkeypatch):
     _events._write_queue.put(None)  # sentinel: terminates the worker loop
     if _events._worker_thread is not None:
         _events._worker_thread.join(timeout=1.0)
+    # Stop the embed worker so it does not touch sqlcipher during interpreter
+    # teardown (preventing SIGSEGV at test-suite shutdown).
+    store.stop_embed_worker()
     # Drain any in-flight axi-brain-metric daemon threads (spawned per call).
     deadline = _time.time() + 1.0
     while _time.time() < deadline:

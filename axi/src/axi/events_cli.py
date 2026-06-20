@@ -62,6 +62,11 @@ def parse_since(value: str) -> float:
             "Expected a number followed by h/m/d (e.g. '1h', '30m', '2d')."
         )
 
+    if amount < 0:
+        raise ValueError(
+            f"Invalid --since value {value!r}: amount must be non-negative."
+        )
+
     multipliers = {
         "h": 3600,
         "m": 60,
@@ -74,6 +79,18 @@ def parse_since(value: str) -> float:
         )
 
     return time.time() - amount * multipliers[suffix]
+
+
+def _logfmt_escape_cli(value: str) -> str:
+    """Quote logfmt values that contain spaces, newlines, '=', or '"'.
+
+    Newlines are collapsed to a single space so the output remains one line.
+    """
+    clean = value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    if any(ch in clean for ch in (' ', '=', '"')):
+        escaped = clean.replace('"', '\\"')
+        return f'"{escaped}"'
+    return clean
 
 
 def format_event_line(event: dict[str, Any]) -> str:
@@ -99,7 +116,9 @@ def format_event_line(event: dict[str, Any]) -> str:
 
     data = event.get("data")
     if isinstance(data, dict) and data:
-        kv_pairs = " ".join(f"{k}={v}" for k, v in sorted(data.items()))
+        kv_pairs = " ".join(
+            f"{k}={_logfmt_escape_cli(str(v))}" for k, v in sorted(data.items())
+        )
         parts.append(kv_pairs)
 
     return "  ".join(parts)
