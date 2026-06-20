@@ -705,6 +705,73 @@ def trim_events(keep: int = 5000) -> None:
         )
 
 
+def query_events(
+    source: str | None = None,
+    since_ts: float | None = None,
+    level: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Query the persistent events table with optional filters.
+
+    Returns a list of event dicts ordered newest-first.  Reads from the
+    SQLite table directly (not the in-memory ring buffer), so it can return
+    the full persisted history beyond the 200-event ring cap.
+
+    Args:
+        source:   Filter to events whose ``source`` matches exactly.
+        since_ts: Unix epoch float — include only events with ``ts > since_ts``.
+        level:    Filter to events whose ``level`` matches exactly.
+        limit:    Maximum number of rows to return (default 100).
+        offset:   Skip this many rows (for pagination, default 0).
+
+    Returns:
+        List of dicts with keys: ts, source, level, message, data.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if source is not None:
+        clauses.append("source = ?")
+        params.append(source)
+    if level is not None:
+        clauses.append("level = ?")
+        params.append(level)
+    if since_ts is not None:
+        clauses.append("ts > ?")
+        params.append(since_ts)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.extend([limit, offset])
+
+    sql = (
+        f"SELECT ts, source, level, message, data_json "  # noqa: S608
+        f"FROM events {where} "
+        f"ORDER BY ts DESC "
+        f"LIMIT ? OFFSET ?"
+    )
+
+    c = _connect()
+    rows = c.execute(sql, params).fetchall()
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        data: dict[str, Any] | None = None
+        if row["data_json"]:
+            try:
+                data = json.loads(row["data_json"])
+            except (TypeError, ValueError):
+                data = None
+        result.append({
+            "ts": row["ts"],
+            "source": row["source"],
+            "level": row["level"],
+            "message": row["message"],
+            "data": data,
+        })
+    return result
+
+
 # ─────────────────────── brain metrics (P0.2) ──────────────────────────
 
 def insert_brain_metric(

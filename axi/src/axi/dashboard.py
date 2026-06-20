@@ -1640,11 +1640,32 @@ def events_page(request: Request):
 
 
 @app.get("/api/events")
-def api_events(limit: int = 50, level: str | None = None):
+def api_events(
+    limit: int = 50,
+    level: str | None = None,
+    source: str | None = None,
+    since_ts: float | None = None,
+    offset: int = 0,
+):
     if level and level not in events.EVENT_LEVELS:
         raise HTTPException(400, f"unknown level: {level}")
     if limit < 1 or limit > 500:
         raise HTTPException(400, "limit must be 1..500")
+    # When any filter param is present, query the full SQLite history.
+    # No params → fall back to the fast ring buffer for backward compat.
+    if source is not None or since_ts is not None or level is not None or offset > 0:
+        from axi import store as _store
+        event_list = _store.query_events(
+            source=source,
+            since_ts=since_ts,
+            level=level,
+            limit=limit,
+            offset=offset,
+        )
+        return {
+            "events": event_list,
+            "unread_critical": events.unread_critical_count(),
+        }
     return {
         "events": events.recent_events(limit=limit, level=level),
         "unread_critical": events.unread_critical_count(),
