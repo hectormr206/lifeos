@@ -1811,19 +1811,28 @@ def backfill_domain_fact_nodes(
     return processed
 
 
-def backfill_similar_to_edges(*, threshold: float = 0.85) -> int:
+def backfill_similar_to_edges(*, threshold: float = 0.85, node_limit: int | None = None) -> int:
     """Create similar-to edges for all nodes that already have embeddings.
 
     Iterates every node with a non-NULL embedding (that is also present in
     vec_nodes), calling check_and_create_similar_to_edges for each. Idempotent
     via INSERT OR IGNORE in the underlying helper.
 
+    Args:
+        threshold: Minimum cosine similarity for edge creation.
+        node_limit: If set, process at most this many nodes (most-recent first).
+                    None (default) processes all nodes.
+
     Returns the total number of new edges created across all nodes.
     """
     c = _connect()
-    rows = c.execute(
-        "SELECT node_id FROM vec_nodes"
-    ).fetchall()
+    if node_limit is not None:
+        rows = c.execute(
+            "SELECT node_id FROM vec_nodes ORDER BY node_id DESC LIMIT ?",
+            (node_limit,),
+        ).fetchall()
+    else:
+        rows = c.execute("SELECT node_id FROM vec_nodes").fetchall()
 
     total = 0
     for row in rows:
