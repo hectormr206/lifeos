@@ -287,25 +287,37 @@ def test_events_renderer_uses_title_not_raw_utterance():
 
 
 def test_events_renderer_includes_kind_and_location():
-    """2.1.1 RED — events renderer appends kind + location when present."""
+    """2.1.1 RED — events renderer appends kind + location in natural-language format."""
     from axi.domain_bridge import _events_renderer
 
     entry = EventEntryStub(title="Aniversario", kind="anniversary", location="Casa")
     result = _events_renderer(entry)
+    # Natural-language format: "Aniversario (anniversary) en Casa"
+    assert result == "Aniversario (anniversary) en Casa"
     assert "Aniversario" in result
     assert "anniversary" in result
     assert "Casa" in result
 
 
 def test_events_renderer_works_with_no_location():
-    """2.1.1 — events renderer works fine when location is None."""
+    """2.1.1 — events renderer omits 'en {location}' when location is None."""
     from axi.domain_bridge import _events_renderer
 
     entry = EventEntryStub(title="Graduación", kind="milestone", location=None)
     result = _events_renderer(entry)
-    assert "Graduación" in result
-    assert isinstance(result, str)
-    assert len(result) > 0
+    # Format: "Graduación (milestone)" — no trailing "en"
+    assert result == "Graduación (milestone)"
+    assert "en" not in result
+
+
+def test_events_renderer_no_empty_parens_when_no_kind():
+    """FIX3 — when kind is None, no empty parens in the output."""
+    from axi.domain_bridge import _events_renderer
+
+    entry = EventEntryStub(title="Reunión familiar", kind=None, location=None)
+    result = _events_renderer(entry)
+    assert result == "Reunión familiar"
+    assert "(" not in result
 
 
 def test_events_renderer_never_none_raw_utterance():
@@ -316,6 +328,35 @@ def test_events_renderer_never_none_raw_utterance():
                             location=None, raw_utterance=None)
     result = _events_renderer(entry)
     assert "Fiesta de cumple" in result
+
+
+def test_events_renderer_hardened_fallback_no_title_with_kind():
+    """FIX3 — absent title + present kind → 'event: {kind}', never bare 'event'."""
+    from axi.domain_bridge import _events_renderer
+
+    entry = EventEntryStub(title="", kind="birthday", location=None)
+    result = _events_renderer(entry)
+    assert result == "event: birthday"
+    assert result != "event"
+
+
+def test_events_renderer_hardened_fallback_no_title_no_kind():
+    """FIX3 — absent title + absent kind → 'event: other', never bare 'event'."""
+    from axi.domain_bridge import _events_renderer
+
+    entry = EventEntryStub(title="", kind=None, location=None)
+    result = _events_renderer(entry)
+    assert result == "event: other"
+    assert result != "event"
+
+
+def test_events_renderer_whitespace_title_uses_hardened_fallback():
+    """FIX3 — whitespace-only title triggers hardened fallback, not bare 'event'."""
+    from axi.domain_bridge import _events_renderer
+
+    entry = EventEntryStub(title="   ", kind="meeting", location=None)
+    result = _events_renderer(entry)
+    assert result == "event: meeting"
 
 
 def test_events_renderer_truncates_to_120():
