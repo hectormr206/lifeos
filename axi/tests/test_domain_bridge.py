@@ -164,6 +164,45 @@ def test_health_renderer_truncates_to_120():
     assert len(result) <= 120
 
 
+# ─── FIX 5: whitespace-only label guards ────────────────────────────────────
+
+
+def test_health_renderer_whitespace_only_raw_utterance_falls_back():
+    """FIX 5 — whitespace-only raw_utterance must NOT produce a whitespace label."""
+    from axi.domain_bridge import _health_renderer
+
+    entry = HealthEntryStub(raw_utterance="   ", title="real title")
+    result = _health_renderer(entry)
+    assert result.strip() != "", "Renderer must not return whitespace-only label"
+    assert result == "real title", f"Expected fallback to title, got {result!r}"
+
+
+def test_health_renderer_whitespace_only_title_falls_back_to_structured():
+    """FIX 5 — whitespace-only title falls back to structured string."""
+    from axi.domain_bridge import _health_renderer
+
+    entry = HealthEntryStub(raw_utterance=None, title="  \t  ", kind="vital")
+    result = _health_renderer(entry)
+    assert result.strip() != "", "Renderer must not return whitespace-only label"
+    assert "vital" in result or "health" in result, f"Expected structured fallback, got {result!r}"
+
+
+def test_relationships_renderer_whitespace_only_falls_back():
+    """FIX 5 — whitespace-only raw_utterance in relationships renderer falls back."""
+    from axi.domain_bridge import _relationships_renderer
+
+    @dataclass
+    class RelEntry:
+        id: str = "r-001"
+        raw_utterance: str | None = "   "
+        title: str | None = "Met Alice"
+        kind: str = "note"
+
+    result = _relationships_renderer(RelEntry())
+    assert result.strip() != "", "Renderer must not return whitespace-only label"
+    assert result == "Met Alice", f"Expected fallback to title, got {result!r}"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 1.4 — domain_bridge.py: create_fact_node_for_entry + idempotency
 # ═══════════════════════════════════════════════════════════════════════════
@@ -340,18 +379,72 @@ def test_health_api_post_creates_domain_node_map_row(monkeypatch):
         )
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FIX 4 — Health chat-site integration: parse_health fast-path
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_chat_health_fast_path_creates_domain_node_map_row(monkeypatch):
+    """FIX 4 — POST /api/chat/ask with a parseable health phrase creates domain_node_map row.
+
+    Drives the health ingestion fast-path in api_chat_ask (dashboard.py:3594
+    bridge_entry call) through the real bridge.  Uses 'glucosa 110 mg/dL'
+    which parse_health detects as a vital without a GPU/brain.
+    """
+    import axi.store as store
+    from fastapi.testclient import TestClient
+
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as td:
+        db_path = os.path.join(td, "health.db")
+        key_path = os.path.join(td, "health.key")
+        monkeypatch.setenv("LIFEOS_HEALTH_DB_PATH", db_path)
+        monkeypatch.setenv("LIFEOS_HEALTH_KEY_PATH", key_path)
+        from lifeos.health import store as hs
+        hs.apply_migrations()
+
+        from axi import dashboard
+        monkeypatch.setattr(dashboard, "_daemon_cmd", lambda *_a, **_k: "idle")
+        monkeypatch.setattr(dashboard, "_llama_alive", lambda: False)
+        monkeypatch.setattr(dashboard, "_service_state", lambda *_a, **_k: "active")
+        monkeypatch.setattr(dashboard, "_vram_snapshot", lambda: {
+            "name": "test", "used_mb": 100, "total_mb": 1000, "util_pct": 10,
+        })
+        monkeypatch.setattr(dashboard, "_ram_snapshot", lambda: {
+            "used": 100, "total": 1000, "pct": 10.0,
+        })
+        monkeypatch.setattr(dashboard, "_cpu_pct", lambda: 1.5)
+
+        client = TestClient(dashboard.app)
+        resp = client.post(
+            "/api/chat/ask",
+            json={
+                "text": "glucosa 110 mg/dL",
+                "logging_mode": False,
+                "speak": False,
+            },
+        )
+        # The chat endpoint returns 200 with an answer dict on the fast-path.
+        assert resp.status_code == 200, (
+            f"Expected 200 from chat ask, got {resp.status_code}: {resp.text}"
+        )
+
+        conn = store._connect()
+        rows = conn.execute(
+            "SELECT * FROM domain_node_map WHERE domain='health'"
+        ).fetchall()
+        assert len(rows) >= 1, (
+            f"Expected at least 1 domain_node_map row for health after chat ask, got {len(rows)}\n"
+            f"Response: {resp.json()}"
+        )
+
+
 def test_same_day_linker_connects_health_and_meeting_nodes():
     """1.9.1 RED — health fact node and meeting fact node on same day get linked."""
     import axi.store as store
     from axi.linkers import run_same_day_linker
 
-    conn = store._connect()
-    conn.row_factory = store._connect().__class__.__mro__  # ensure Row factory
-
-    # Re-open with proper row factory.
     import sqlcipher3
-    store._connect().row_factory = sqlcipher3.Row
-
     c = store._connect()
     c.row_factory = sqlcipher3.Row
 
