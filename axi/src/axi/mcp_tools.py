@@ -105,12 +105,16 @@ def log_finance_entry(
     """Record a finance entry. kind is one of expense|income|savings|
     debt_payment|big_purchase|note. amount must be non-negative."""
     from lifeos.finance import entries as fin
-    return _jsonable(
-        fin.create(
-            kind=kind, title=title, amount=amount,
-            when=_parse_when(when_iso), currency=currency,
-        )
+    entry = fin.create(
+        kind=kind, title=title, amount=amount,
+        when=_parse_when(when_iso), currency=currency,
     )
+    try:
+        from axi import domain_bridge as _db
+        _db.bridge_entry("finance", entry)
+    except Exception:  # noqa: BLE001
+        pass
+    return _jsonable(entry)
 
 
 def log_health_entry(
