@@ -133,16 +133,21 @@ def _events_renderer(entry: Any) -> str:
     IMPORTANT: Event.raw_utterance is dropped on read (_row_to_event in entries.py
     does not map it), so this renderer NEVER reads raw_utterance — it always uses
     title as the primary source, then appends kind and location when present.
+
+    Format: "{title} ({kind}) en {location}" — kind/location omitted when absent.
+    Degenerate fallback (no title): "event: {kind}" to avoid bare "event" label.
     """
     title = getattr(entry, "title", None) or ""
     kind = getattr(entry, "kind", None)
     location = getattr(entry, "location", None)
-    parts = [title.strip()] if title.strip() else ["event"]
+    if not title.strip():
+        return f"event: {kind or 'other'}"[:120]
+    label = title.strip()
     if kind:
-        parts.append(kind)
+        label = f"{label} ({kind})"
     if location:
-        parts.append(location)
-    return " | ".join(parts)[:120]
+        label = f"{label} en {location}"
+    return label[:120]
 
 
 def _relationships_renderer(entry: Any) -> str:
