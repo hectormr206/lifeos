@@ -1770,7 +1770,8 @@ def backfill_domain_fact_nodes(
 
     for i, interaction in enumerate(interactions):
         # Skip already-mapped entries (idempotent / resumable).
-        if get_node_for_domain_entry("relationships", interaction.id) is not None:
+        # entry_id is stored as str(id) in domain_node_map — always stringify.
+        if get_node_for_domain_entry("relationships", str(interaction.id)) is not None:
             continue
 
         try:
