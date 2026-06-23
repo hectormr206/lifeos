@@ -2983,6 +2983,11 @@ def _try_nano_extract(
                 source="chat", confidence=result.confidence,
                 raw_utterance=body_text, source_conv_id=None,
             )
+            try:
+                from axi import domain_bridge as _db
+                _db.bridge_entry("health", entry)
+            except Exception:  # noqa: BLE001
+                pass
             if entry_kind == "vital":
                 answer_text = f"Anotado en salud como vital: {entry_title}."
             else:
@@ -3592,6 +3597,11 @@ async def api_chat_ask(request: Request):
                     source="chat", confidence=hi.confidence,
                     raw_utterance=text, source_conv_id=None,
                 )
+                try:
+                    from axi import domain_bridge as _db
+                    _db.bridge_entry("health", entry)
+                except Exception:  # noqa: BLE001
+                    pass
                 lang = str(config.get("language", "es-MX"))
                 kind_label_es = {
                     "symptom": "síntoma", "vital": "vital",
@@ -4548,6 +4558,11 @@ async def api_health_create(request: Request):
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+    try:
+        from axi import domain_bridge as _db
+        _db.bridge_entry("health", entry)
+    except Exception:  # noqa: BLE001
+        pass
     return _health_entry_to_dict(entry)
 
 
