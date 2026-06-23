@@ -256,6 +256,11 @@ def bridge_entry(domain: str, entry: Any) -> int | None:
 
 # ─── historical backfill ─────────────────────────────────────────────────────
 
+# Generous per-domain fetch cap for backfill runs.  The round-robin node_limit
+# in backfill_all_domains still bounds how many nodes are CREATED per run;
+# this constant only widens the fetch pool so older entries are candidates.
+_BACKFILL_FETCH_LIMIT = 10_000
+
 
 def _fetch_domain_entries(domain: str, *, days: int, limit: int | None = None) -> list[Any]:
     """Fetch recent entries for a given domain from its lifeos store.
@@ -395,7 +400,7 @@ def backfill_all_domains(
     # iteration is deterministic given the same DB state.
     pending: dict[str, list[Any]] = {}
     for domain in active_domains:
-        all_entries = _fetch_domain_entries(domain, days=days)
+        all_entries = _fetch_domain_entries(domain, days=days, limit=_BACKFILL_FETCH_LIMIT)
         # Filter to only un-bridged entries; idempotency is enforced here rather
         # than inside the inner loop so we avoid the TOCTOU double-read.
         domain_pending: list[Any] = []

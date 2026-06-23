@@ -468,3 +468,68 @@ def test_same_day_linker_connects_health_and_meeting_nodes():
         "Expected a same-day edge between health node and meeting node; "
         f"edges_created={edges_created}"
     )
+
+
+# ─── Slice 3: backfill fetch-limit regression guard ─────────────────────────
+
+
+def test_fetch_domain_entries_uses_generous_limit_for_relationships():
+    """3.backfill — _fetch_domain_entries must pass limit=_BACKFILL_FETCH_LIMIT
+    (10_000) to list_recent, not silently rely on the store default (300).
+
+    RED: fails when _fetch_domain_entries is called without an explicit limit.
+    GREEN: passes once backfill_all_domains passes limit=_BACKFILL_FETCH_LIMIT.
+    """
+    from unittest.mock import patch, call
+    from axi.domain_bridge import _fetch_domain_entries, _BACKFILL_FETCH_LIMIT
+
+    captured_calls: list = []
+
+    def _fake_list_recent(**kwargs):
+        captured_calls.append(kwargs)
+        return []
+
+    with patch("lifeos.relationships.interactions.list_recent", _fake_list_recent):
+        _fetch_domain_entries("relationships", days=90, limit=_BACKFILL_FETCH_LIMIT)
+
+    assert captured_calls, "_fetch_domain_entries did not call list_recent at all"
+    actual_limit = captured_calls[0].get("limit")
+    assert actual_limit == _BACKFILL_FETCH_LIMIT, (
+        f"list_recent was called with limit={actual_limit!r}, "
+        f"expected {_BACKFILL_FETCH_LIMIT} (_BACKFILL_FETCH_LIMIT). "
+        "backfill_all_domains must pass an explicit generous limit so historical "
+        "entries beyond the store default (300) are candidates for bridging."
+    )
+
+
+def test_backfill_all_domains_fetches_with_generous_limit():
+    """3.backfill — backfill_all_domains must pass _BACKFILL_FETCH_LIMIT to
+    _fetch_domain_entries so the fetch pool is not silently capped at 300.
+
+    RED: fails when backfill_all_domains calls _fetch_domain_entries without
+    an explicit limit argument.
+    GREEN: passes once the call includes limit=_BACKFILL_FETCH_LIMIT.
+    """
+    from unittest.mock import patch, MagicMock, call
+    from axi.domain_bridge import backfill_all_domains, _BACKFILL_FETCH_LIMIT
+
+    fetch_calls: list = []
+
+    def _fake_fetch(domain, *, days, limit=None):
+        fetch_calls.append({"domain": domain, "days": days, "limit": limit})
+        return []
+
+    with (
+        patch("axi.domain_bridge._fetch_domain_entries", side_effect=_fake_fetch),
+        patch("axi.store.get_node_for_domain_entry", return_value=None),
+    ):
+        backfill_all_domains(days=90, domains=["relationships"])
+
+    assert fetch_calls, "backfill_all_domains did not call _fetch_domain_entries"
+    actual_limit = fetch_calls[0].get("limit")
+    assert actual_limit == _BACKFILL_FETCH_LIMIT, (
+        f"_fetch_domain_entries was called with limit={actual_limit!r}, "
+        f"expected {_BACKFILL_FETCH_LIMIT} (_BACKFILL_FETCH_LIMIT). "
+        "Without an explicit generous limit the backfill silently truncates "
+        "to the store default (e.g. 300) and never reaches old entries."
+    )
