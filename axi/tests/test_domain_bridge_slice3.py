@@ -345,11 +345,11 @@ def test_backfill_all_domains_returns_dict_per_domain():
 
 
 def test_backfill_domain_fact_nodes_delegates_to_backfill_all_domains():
-    """3.2.1 RED — store.backfill_domain_fact_nodes delegates to backfill_all_domains.
+    """3.2.1 — store.backfill_domain_fact_nodes delegates to backfill_all_domains.
 
-    After the Slice 3 refactor, backfill_domain_fact_nodes should call
-    backfill_all_domains internally (or at minimum produce equivalent results
-    for the relationships domain).
+    After the Slice 3 refactor, backfill_domain_fact_nodes delegates to
+    backfill_all_domains(domains=["relationships"], ...) so the fetch path goes
+    through _fetch_domain_entries, not _fetch_recent_interactions.
     """
     import axi.store as store
 
@@ -364,7 +364,12 @@ def test_backfill_domain_fact_nodes_delegates_to_backfill_all_domains():
 
     interaction = FakeInteraction(id=99)
 
-    with patch("axi.store._fetch_recent_interactions", return_value=[interaction]), \
+    def _fake_fetch(domain: str, *, days: int, limit: int | None = None):
+        if domain == "relationships":
+            return [interaction]
+        return []
+
+    with patch("axi.domain_bridge._fetch_domain_entries", side_effect=_fake_fetch), \
          patch("axi.store.trigger_embed_for_node"):
         count = store.backfill_domain_fact_nodes(days=90)
 
