@@ -122,6 +122,10 @@ def log_health_entry(
     """Record a health entry. kind is one of symptom|medication|vital|
     condition|note."""
     from lifeos.health import entries as he
-    return _jsonable(
-        he.create(kind=kind, title=title, when=_parse_when(when_iso), body=body)
-    )
+    entry = he.create(kind=kind, title=title, when=_parse_when(when_iso), body=body)
+    try:
+        from axi import domain_bridge as _db
+        _db.bridge_entry("health", entry)
+    except Exception:  # noqa: BLE001
+        pass
+    return _jsonable(entry)
