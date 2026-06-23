@@ -16,6 +16,7 @@ across threads.
 from __future__ import annotations
 
 import logging
+import time as _time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -251,6 +252,151 @@ def bridge_entry(domain: str, entry: Any) -> int | None:
             domain, getattr(entry, "id", "<no id>"), exc,
         )
         return None
+
+
+# ─── historical backfill ─────────────────────────────────────────────────────
+
+
+def _fetch_domain_entries(domain: str, *, days: int, limit: int | None = None) -> list[Any]:
+    """Fetch recent entries for a given domain from its lifeos store.
+
+    This is the injectable seam used by backfill_all_domains.  Tests patch
+    this function to inject fake entries without touching the real lifeos stores.
+
+    Returns an empty list if the domain store is unavailable or not migrated.
+
+    Args:
+        domain:  Domain key (must match _DOMAIN_CONFIGS keys).
+        days:    Look-back window in days (passed as `days` or `days_back`).
+        limit:   Optional upper bound on entries fetched (defaults to store default).
+    """
+    try:
+        if domain == "health":
+            from lifeos.health import entries as _he
+            kwargs: dict[str, Any] = {"days": days}
+            if limit is not None:
+                kwargs["limit"] = limit
+            return _he.list_recent(**kwargs)
+
+        if domain == "finance":
+            from lifeos.finance import entries as _fe
+            kwargs = {"days": days}
+            if limit is not None:
+                kwargs["limit"] = limit
+            return _fe.list_recent(**kwargs)
+
+        if domain == "exercise":
+            from lifeos.exercise import sessions as _ex
+            kwargs = {"days": days}
+            if limit is not None:
+                kwargs["limit"] = limit
+            return _ex.list_recent(**kwargs)
+
+        if domain == "spirituality":
+            from lifeos.spirituality import entries as _se
+            kwargs = {"days": days}
+            if limit is not None:
+                kwargs["limit"] = limit
+            return _se.list_recent(**kwargs)
+
+        if domain == "learning":
+            from lifeos.learning import entries as _le
+            kwargs = {"days": days}
+            if limit is not None:
+                kwargs["limit"] = limit
+            return _le.list_recent(**kwargs)
+
+        if domain == "lifeos-events":
+            from lifeos.events import entries as _ev
+            # Events uses `days_back` instead of `days`.
+            kwargs = {"days_back": days}
+            if limit is not None:
+                kwargs["limit"] = limit
+            return _ev.list_recent(**kwargs)
+
+        if domain == "relationships":
+            from lifeos.relationships import interactions as _rel
+            kwargs = {"days": days}
+            if limit is not None:
+                kwargs["limit"] = limit
+            return _rel.list_recent(**kwargs)
+
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "_fetch_domain_entries: failed to fetch domain=%r: %s", domain, exc
+        )
+    return []
+
+
+def backfill_all_domains(
+    *,
+    days: int = 90,
+    batch_size: int = 50,
+    sleep_s: float = 0.1,
+    node_limit: int | None = None,
+) -> dict[str, int]:
+    """Bounded, rate-limited, idempotent historical backfill across all domains.
+
+    For every domain registered in _DOMAIN_CONFIGS, fetches existing entries
+    within the last *days* days and calls create_fact_node_for_entry for any
+    entry NOT already recorded in domain_node_map.
+
+    Args:
+        days:        Look-back window in days for each domain's fetch.
+        batch_size:  Rate-limiting granularity — sleep after this many newly
+                     bridged nodes (across ALL domains combined).
+        sleep_s:     Seconds to sleep between batches (respects embed queue cap).
+        node_limit:  If set, stop creating new nodes once this many NEW nodes
+                     have been created across all domains combined.
+
+    Returns:
+        Dict mapping domain → number of NEW nodes created in this run.
+        Already-bridged entries do not count.
+
+    Idempotency:
+        Running twice with the same parameters is a no-op for already-bridged
+        entries — create_fact_node_for_entry's guard skips them.
+
+    Thread safety:
+        All writes go through store._tx() (thread-local connections).  The
+        caller must not share the returned node ids across threads.
+    """
+    result: dict[str, int] = {domain: 0 for domain in _DOMAIN_CONFIGS}
+    total_created = 0
+
+    for domain in _DOMAIN_CONFIGS:
+        if node_limit is not None and total_created >= node_limit:
+            break
+
+        entries = _fetch_domain_entries(domain, days=days)
+
+        for entry in entries:
+            if node_limit is not None and total_created >= node_limit:
+                break
+
+            try:
+                from axi import store
+                # Idempotency check: skip entries already in domain_node_map.
+                existing = store.get_node_for_domain_entry(domain, str(entry.id))
+                if existing is not None:
+                    continue
+
+                create_fact_node_for_entry(domain, entry)
+                result[domain] += 1
+                total_created += 1
+
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "backfill_all_domains: failed for domain=%r entry=%r: %s",
+                    domain, getattr(entry, "id", "<no id>"), exc,
+                )
+                continue
+
+            # Rate-limiting: pause after each batch.
+            if sleep_s > 0 and total_created % batch_size == 0:
+                _time.sleep(sleep_s)
+
+    return result
 
 
 # ─── backward-compat shim ────────────────────────────────────────────────────
