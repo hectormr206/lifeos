@@ -1626,15 +1626,12 @@ def get_node_for_domain_entry(domain: str, entry_id: str) -> int | None:
 
 
 def create_fact_node_for_interaction(interaction: Any) -> int:
-    """Create a System-A fact node for a lifeos relationships interaction.
+    """Thin shim: create a fact node for a relationships interaction.
 
-    Uses raw_utterance as the node label (truncated to 120 chars).  Falls back
-    to interaction.title if raw_utterance is None or empty.  Tags the node with
-    domain='relationships', registers the (domain, entry_id) → node_id mapping in
-    domain_node_map, and enqueues embedding via trigger_embed_for_node.
-
-    Idempotent: if a mapping already exists for this interaction.id, the existing
-    node_id is returned without creating a new node.
+    Delegates entirely to domain_bridge.create_fact_node_for_entry so there is
+    a single code path for relationships nodes.  Entry ids are always
+    stringified (str(interaction.id)) ensuring the domain_node_map key is
+    consistent whether the id is an int or a string.
 
     Args:
         interaction: any object with .id, .raw_utterance, .title, .body, .person_id
@@ -1642,29 +1639,8 @@ def create_fact_node_for_interaction(interaction: Any) -> int:
     Returns:
         The node_id of the fact node (new or existing).
     """
-    existing = get_node_for_domain_entry("relationships", interaction.id)
-    if existing is not None:
-        return existing
-
-    # Build label: prefer raw_utterance (truncated to 120 chars), then title.
-    raw = getattr(interaction, "raw_utterance", None)
-    label: str
-    if raw:
-        label = raw[:120]
-    else:
-        label = (getattr(interaction, "title", None) or "")[:120]
-
-    data: dict[str, Any] = {
-        "person_id": getattr(interaction, "person_id", None),
-        "interaction_id": interaction.id,
-    }
-    if getattr(interaction, "body", None):
-        data["body"] = interaction.body
-
-    node_id = add_node("fact", label, data=data, domain="relationships")
-    upsert_domain_node_map("relationships", interaction.id, node_id)
-    trigger_embed_for_node(node_id)
-    return node_id
+    from axi.domain_bridge import create_fact_node_for_entry  # noqa: PLC0415
+    return create_fact_node_for_entry("relationships", interaction)
 
 
 # ─────────────────── similar-to auto-edges (Slice 2) ─────────────────────────
@@ -1811,19 +1787,28 @@ def backfill_domain_fact_nodes(
     return processed
 
 
-def backfill_similar_to_edges(*, threshold: float = 0.85) -> int:
+def backfill_similar_to_edges(*, threshold: float = 0.85, node_limit: int | None = None) -> int:
     """Create similar-to edges for all nodes that already have embeddings.
 
     Iterates every node with a non-NULL embedding (that is also present in
     vec_nodes), calling check_and_create_similar_to_edges for each. Idempotent
     via INSERT OR IGNORE in the underlying helper.
 
+    Args:
+        threshold: Minimum cosine similarity for edge creation.
+        node_limit: If set, process at most this many nodes (most-recent first).
+                    None (default) processes all nodes.
+
     Returns the total number of new edges created across all nodes.
     """
     c = _connect()
-    rows = c.execute(
-        "SELECT node_id FROM vec_nodes"
-    ).fetchall()
+    if node_limit is not None:
+        rows = c.execute(
+            "SELECT node_id FROM vec_nodes ORDER BY node_id DESC LIMIT ?",
+            (node_limit,),
+        ).fetchall()
+    else:
+        rows = c.execute("SELECT node_id FROM vec_nodes").fetchall()
 
     total = 0
     for row in rows:
