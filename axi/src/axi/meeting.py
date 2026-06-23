@@ -968,6 +968,29 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
         )
     log.info("meeting %d %s: %d segments, summary %d chars", meeting_id, final_status, len(segments), len(summary))
 
+    # Bridge the meeting into the semantic graph so linkers can include it.
+    # Only runs when summary is available and node_id not yet set (idempotent).
+    if summary:
+        try:
+            _conn = store._connect()  # noqa: SLF001
+            existing_node = _conn.execute(
+                "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
+            ).fetchone()
+            if existing_node is not None and existing_node[0] is None:
+                label = summary[:120]
+                nid = store.add_node(
+                    "fact", label, data={"meeting_id": meeting_id}, domain="meetings"
+                )
+                with store._tx() as txc:  # noqa: SLF001
+                    txc.execute(
+                        "UPDATE meetings SET node_id=? WHERE id=?",
+                        (nid, meeting_id),
+                    )
+                store.trigger_embed_for_node(nid)
+                log.info("meeting %d bridged to graph node %d", meeting_id, nid)
+        except Exception as _bridge_exc:  # noqa: BLE001
+            log.warning("meeting %d: failed to bridge to graph: %s", meeting_id, _bridge_exc)
+
     # P1.1 — rebuild FTS index for this meeting so /api/meetings/search can find it.
     try:
         n_fts = store.reindex_meeting_segments(meeting_id)
