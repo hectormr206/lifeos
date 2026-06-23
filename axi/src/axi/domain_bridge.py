@@ -60,6 +60,96 @@ def _health_renderer(entry: Any) -> str:
 # ─── domain registry ─────────────────────────────────────────────────────────
 
 
+def _finance_renderer(entry: Any) -> str:
+    """Render a finance entry to a short node label (≤120 chars).
+
+    Priority: raw_utterance → title → structured fallback (kind + amount + currency).
+    Whitespace-only strings are treated as absent.
+    """
+    raw = getattr(entry, "raw_utterance", None)
+    if raw and raw.strip():
+        return raw.strip()[:120]
+    title = getattr(entry, "title", None)
+    if title and title.strip():
+        return title.strip()[:120]
+    kind = getattr(entry, "kind", "expense")
+    amount = getattr(entry, "amount", 0)
+    currency = getattr(entry, "currency", "MXN")
+    return f"finance: {kind} {amount:g} {currency}"[:120]
+
+
+def _exercise_renderer(entry: Any) -> str:
+    """Render an exercise session to a short node label (≤120 chars).
+
+    Priority: raw_utterance → title → structured fallback (kind + duration).
+    Whitespace-only strings are treated as absent.
+    """
+    raw = getattr(entry, "raw_utterance", None)
+    if raw and raw.strip():
+        return raw.strip()[:120]
+    title = getattr(entry, "title", None)
+    if title and title.strip():
+        return title.strip()[:120]
+    kind = getattr(entry, "kind", "other")
+    duration = getattr(entry, "duration_minutes", 0)
+    return f"exercise: {kind} {duration} min"[:120]
+
+
+def _spirituality_renderer(entry: Any) -> str:
+    """Render a spirituality entry to a short node label (≤120 chars).
+
+    Priority: raw_utterance → title → structured fallback (kind).
+    Whitespace-only strings are treated as absent.
+    """
+    raw = getattr(entry, "raw_utterance", None)
+    if raw and raw.strip():
+        return raw.strip()[:120]
+    title = getattr(entry, "title", None)
+    if title and title.strip():
+        return title.strip()[:120]
+    kind = getattr(entry, "kind", "reflection")
+    return f"spirituality: {kind}"[:120]
+
+
+def _learning_renderer(entry: Any) -> str:
+    """Render a learning entry to a short node label (≤120 chars).
+
+    Priority: raw_utterance → title → structured fallback (kind).
+    Whitespace-only strings are treated as absent.
+    """
+    raw = getattr(entry, "raw_utterance", None)
+    if raw and raw.strip():
+        return raw.strip()[:120]
+    title = getattr(entry, "title", None)
+    if title and title.strip():
+        return title.strip()[:120]
+    kind = getattr(entry, "kind", "idea")
+    return f"learning: {kind}"[:120]
+
+
+def _events_renderer(entry: Any) -> str:
+    """Render a lifeos-events entry to a short node label (≤120 chars).
+
+    IMPORTANT: Event.raw_utterance is dropped on read (_row_to_event in entries.py
+    does not map it), so this renderer NEVER reads raw_utterance — it always uses
+    title as the primary source, then appends kind and location when present.
+
+    Format: "{title} ({kind}) en {location}" — kind/location omitted when absent.
+    Degenerate fallback (no title): "event: {kind}" to avoid bare "event" label.
+    """
+    title = getattr(entry, "title", None) or ""
+    kind = getattr(entry, "kind", None)
+    location = getattr(entry, "location", None)
+    if not title.strip():
+        return f"event: {kind or 'other'}"[:120]
+    label = title.strip()
+    if kind:
+        label = f"{label} ({kind})"
+    if location:
+        label = f"{label} en {location}"
+    return label[:120]
+
+
 def _relationships_renderer(entry: Any) -> str:
     """Render a relationships interaction to a short node label (≤120 chars).
 
@@ -88,6 +178,12 @@ def _relationships_extra_data(entry: Any) -> dict:
 
 _DOMAIN_CONFIGS: dict[str, DomainConfig] = {
     "health": DomainConfig(renderer=_health_renderer),
+    # Slice 2: fan-out to the 5 remaining structured domains.
+    "finance": DomainConfig(renderer=_finance_renderer),
+    "exercise": DomainConfig(renderer=_exercise_renderer),
+    "spirituality": DomainConfig(renderer=_spirituality_renderer),
+    "learning": DomainConfig(renderer=_learning_renderer),
+    "lifeos-events": DomainConfig(renderer=_events_renderer),
     # relationships is handled through this bridge as well (Slice 1 shim).
     "relationships": DomainConfig(
         renderer=_relationships_renderer,
