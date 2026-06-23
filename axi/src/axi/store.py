@@ -1626,15 +1626,12 @@ def get_node_for_domain_entry(domain: str, entry_id: str) -> int | None:
 
 
 def create_fact_node_for_interaction(interaction: Any) -> int:
-    """Create a System-A fact node for a lifeos relationships interaction.
+    """Thin shim: create a fact node for a relationships interaction.
 
-    Uses raw_utterance as the node label (truncated to 120 chars).  Falls back
-    to interaction.title if raw_utterance is None or empty.  Tags the node with
-    domain='relationships', registers the (domain, entry_id) → node_id mapping in
-    domain_node_map, and enqueues embedding via trigger_embed_for_node.
-
-    Idempotent: if a mapping already exists for this interaction.id, the existing
-    node_id is returned without creating a new node.
+    Delegates entirely to domain_bridge.create_fact_node_for_entry so there is
+    a single code path for relationships nodes.  Entry ids are always
+    stringified (str(interaction.id)) ensuring the domain_node_map key is
+    consistent whether the id is an int or a string.
 
     Args:
         interaction: any object with .id, .raw_utterance, .title, .body, .person_id
@@ -1642,29 +1639,8 @@ def create_fact_node_for_interaction(interaction: Any) -> int:
     Returns:
         The node_id of the fact node (new or existing).
     """
-    existing = get_node_for_domain_entry("relationships", interaction.id)
-    if existing is not None:
-        return existing
-
-    # Build label: prefer raw_utterance (truncated to 120 chars), then title.
-    raw = getattr(interaction, "raw_utterance", None)
-    label: str
-    if raw:
-        label = raw[:120]
-    else:
-        label = (getattr(interaction, "title", None) or "")[:120]
-
-    data: dict[str, Any] = {
-        "person_id": getattr(interaction, "person_id", None),
-        "interaction_id": interaction.id,
-    }
-    if getattr(interaction, "body", None):
-        data["body"] = interaction.body
-
-    node_id = add_node("fact", label, data=data, domain="relationships")
-    upsert_domain_node_map("relationships", interaction.id, node_id)
-    trigger_embed_for_node(node_id)
-    return node_id
+    from axi.domain_bridge import create_fact_node_for_entry  # noqa: PLC0415
+    return create_fact_node_for_entry("relationships", interaction)
 
 
 # ─────────────────── similar-to auto-edges (Slice 2) ─────────────────────────

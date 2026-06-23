@@ -45,13 +45,14 @@ def _health_renderer(entry: Any) -> str:
     """Render a health entry to a short node label (≤120 chars).
 
     Priority: raw_utterance → title → structured fallback.
+    Whitespace-only strings are treated as absent (stripped before testing).
     """
     raw = getattr(entry, "raw_utterance", None)
-    if raw:
-        return raw[:120]
+    if raw and raw.strip():
+        return raw.strip()[:120]
     title = getattr(entry, "title", None)
-    if title:
-        return title[:120]
+    if title and title.strip():
+        return title.strip()[:120]
     kind = getattr(entry, "kind", "entry")
     return f"health: {kind}"
 
@@ -59,14 +60,39 @@ def _health_renderer(entry: Any) -> str:
 # ─── domain registry ─────────────────────────────────────────────────────────
 
 
+def _relationships_renderer(entry: Any) -> str:
+    """Render a relationships interaction to a short node label (≤120 chars).
+
+    Priority: raw_utterance → title → structured fallback.
+    """
+    raw = getattr(entry, "raw_utterance", None)
+    if raw and raw.strip():
+        return raw.strip()[:120]
+    title = getattr(entry, "title", None)
+    if title and title.strip():
+        return title.strip()[:120]
+    return f"relationships: {getattr(entry, 'kind', 'interaction')}"
+
+
+def _relationships_extra_data(entry: Any) -> dict:
+    """Extra data fields for relationships nodes (person_id, interaction_id, body)."""
+    data: dict = {
+        "person_id": getattr(entry, "person_id", None),
+        "interaction_id": str(entry.id),
+    }
+    body = getattr(entry, "body", None)
+    if body:
+        data["body"] = body
+    return data
+
+
 _DOMAIN_CONFIGS: dict[str, DomainConfig] = {
     "health": DomainConfig(renderer=_health_renderer),
     # relationships is handled through this bridge as well (Slice 1 shim).
-    "relationships": DomainConfig(renderer=lambda e: (
-        (getattr(e, "raw_utterance", None) or "")[:120]
-        or (getattr(e, "title", None) or "")[:120]
-        or f"relationships: {getattr(e, 'kind', 'interaction')}"
-    )),
+    "relationships": DomainConfig(
+        renderer=_relationships_renderer,
+        extra_data_fn=_relationships_extra_data,
+    ),
 }
 
 
