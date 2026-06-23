@@ -1,15 +1,15 @@
-"""Tests for meeting bridge fix: meeting.py:964 sets meetings.node_id after summarization.
+"""Tests for meeting bridge: meeting.py bridge_meeting_node() sets meetings.node_id.
 
 Phases covered:
-  1.8.1 — After finalization, meetings.node_id is non-NULL.
-  1.8.2 — Calling the bridge twice (idempotent) does NOT create a second node.
+  1.8.1 — After bridge_meeting_node runs, meetings.node_id is non-NULL.
+  1.8.2 — Calling bridge_meeting_node twice (idempotent) does NOT create a second node.
   1.8.3 — Meeting node (kind='fact') is visible to run_same_day_linker.
+  1.8.4 — Double-call race: exactly ONE node + node_id set (no orphan node).
 """
 from __future__ import annotations
 
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -30,34 +30,35 @@ def _seed_meeting(conn, *, summary: str = "", status: str = "done") -> int:
 
 
 def test_meeting_node_id_set_after_finalize(tmp_path):
-    """1.8.1 RED — After the bridge logic runs, meetings.node_id is non-NULL."""
+    """1.8.1 — After bridge_meeting_node runs, meetings.node_id is non-NULL."""
     import axi.store as store
+    from axi.meeting import bridge_meeting_node
 
     conn = store._connect()
     meeting_id = _seed_meeting(conn)
 
-    # Check that node_id is currently NULL.
     row_before = conn.execute(
         "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
     ).fetchone()
-    assert row_before[0] is None, "Precondition: node_id must be NULL before finalization"
+    assert row_before[0] is None, "Precondition: node_id must be NULL before bridge call"
 
-    _bridge_meeting_node(meeting_id, summary="Team standup. Discussed sprint goals.")
+    bridge_meeting_node(meeting_id, "Team standup. Discussed sprint goals.")
 
     row_after = conn.execute(
         "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
     ).fetchone()
-    assert row_after[0] is not None, "node_id must be non-NULL after bridge call"
+    assert row_after[0] is not None, "node_id must be non-NULL after bridge_meeting_node"
 
 
 def test_meeting_node_has_kind_fact(tmp_path):
-    """1.8.1 RED — The created meeting node has kind='fact'."""
+    """1.8.1 — The created meeting node has kind='fact'."""
     import axi.store as store
+    from axi.meeting import bridge_meeting_node
 
     conn = store._connect()
     meeting_id = _seed_meeting(conn)
 
-    _bridge_meeting_node(meeting_id, summary="Sprint retrospective notes.")
+    bridge_meeting_node(meeting_id, "Sprint retrospective notes.")
 
     row = conn.execute(
         "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
@@ -74,19 +75,20 @@ def test_meeting_node_has_kind_fact(tmp_path):
 
 
 def test_meeting_bridge_idempotent():
-    """1.8.2 RED — Bridging the same meeting twice does NOT create a second node."""
+    """1.8.2 — Calling bridge_meeting_node twice does NOT create a second node."""
     import axi.store as store
+    from axi.meeting import bridge_meeting_node
 
     conn = store._connect()
     meeting_id = _seed_meeting(conn)
 
-    _bridge_meeting_node(meeting_id, summary="First call.")
+    bridge_meeting_node(meeting_id, "First call.")
     row1 = conn.execute(
         "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
     ).fetchone()
     nid1 = row1[0]
 
-    _bridge_meeting_node(meeting_id, summary="Second call — should be a no-op.")
+    bridge_meeting_node(meeting_id, "Second call — should be a no-op.")
     row2 = conn.execute(
         "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
     ).fetchone()
@@ -94,7 +96,6 @@ def test_meeting_bridge_idempotent():
 
     assert nid1 == nid2, "Second bridge call must not create a new node (idempotent)"
 
-    # Exactly one node with domain='meetings'.
     count = conn.execute(
         "SELECT COUNT(*) FROM nodes WHERE domain='meetings'"
     ).fetchone()[0]
@@ -105,27 +106,23 @@ def test_meeting_bridge_idempotent():
 
 
 def test_meeting_node_visible_to_same_day_linker():
-    """1.8.3 RED — Meeting node (kind='fact') is in the same-day linker's pool.
-
-    The same-day linker queries: SELECT id FROM nodes WHERE kind='fact' AND created_at > ?
-    So a meeting node with kind='fact' must appear there.
-    """
+    """1.8.3 — Meeting node (kind='fact') is in the same-day linker's pool."""
     import axi.store as store
     import sqlcipher3
+    from axi.meeting import bridge_meeting_node
 
     conn = store._connect()
     conn.row_factory = sqlcipher3.Row
 
     meeting_id = _seed_meeting(conn)
-    _bridge_meeting_node(meeting_id, summary="Daily standup meeting notes.")
+    bridge_meeting_node(meeting_id, "Daily standup meeting notes.")
 
     row = conn.execute(
         "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
     ).fetchone()
     nid = row["node_id"]
 
-    # Query exactly what the same-day linker uses.
-    cutoff = time.time() - 1  # 1 second ago — node was just created
+    cutoff = time.time() - 1
     result = conn.execute(
         "SELECT id FROM nodes WHERE kind='fact' AND created_at > ?",
         (cutoff,),
@@ -137,34 +134,38 @@ def test_meeting_node_visible_to_same_day_linker():
     )
 
 
-# ─── helper used by all tests ────────────────────────────────────────────────
+# ─── Phase 1.8.4 — double-call race (FIX 2) ────────────────────────────────
 
 
-def _bridge_meeting_node(meeting_id: int, *, summary: str) -> None:
-    """Call the meeting bridge logic: add_node('fact') + UPDATE meetings SET node_id.
+def test_meeting_bridge_double_call_no_orphan_node():
+    """1.8.4 — Two sequential bridge_meeting_node calls produce exactly ONE node.
 
-    This is extracted from meeting.py:964 so tests can drive it in isolation.
-    Once meeting.py is updated (Phase 1.8.4 GREEN), this helper can delegate to
-    that function directly.
+    Simulates the recovery-path race: process_meeting called twice for the same
+    meeting_id (once normally, once via recover_interrupted_meetings).  The
+    serialized transaction guard must prevent duplicate nodes.
     """
     import axi.store as store
+    from axi.meeting import bridge_meeting_node
 
     conn = store._connect()
+    meeting_id = _seed_meeting(conn)
 
-    # Check idempotency guard: only bridge if node_id is NULL.
+    # Both calls use the same meeting_id (recovery scenario).
+    bridge_meeting_node(meeting_id, "First summary.")
+    bridge_meeting_node(meeting_id, "Recovery call — should be a no-op.")
+
+    # node_id must be set exactly once.
     row = conn.execute(
         "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
     ).fetchone()
-    if row is None or row[0] is not None:
-        return  # Already bridged or meeting not found.
+    assert row[0] is not None, "node_id must be set after first call"
 
-    label = (summary or "meeting")[:120]
-    nid = store.add_node(
-        "fact", label, data={"meeting_id": meeting_id}, domain="meetings"
+    # Exactly one node for this meeting in `nodes`.
+    count = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE data LIKE ?",
+        (f'%"meeting_id": {meeting_id}%',),
+    ).fetchone()[0]
+    assert count == 1, (
+        f"Expected exactly 1 node for meeting {meeting_id}, found {count} "
+        "(duplicate/orphan node created by concurrent calls)"
     )
-    with store._tx() as txc:
-        txc.execute(
-            "UPDATE meetings SET node_id=? WHERE id=?",
-            (nid, meeting_id),
-        )
-    store.trigger_embed_for_node(nid)

@@ -818,6 +818,61 @@ def _hierarchical_summary(brain_ask: Callable[..., str], segments: list[tuple[st
     )
 
 
+def bridge_meeting_node(meeting_id: int, summary: str) -> None:
+    """Bridge a meeting into the semantic graph after summarization.
+
+    Creates a fact node (kind='fact', domain='meetings') and writes the resulting
+    node_id back to meetings.node_id.  Idempotent: if node_id is already set the
+    call is a no-op.
+
+    Race-safety: Uses ``UPDATE … WHERE node_id IS NULL`` as the atomic test-and-set.
+    If two concurrent calls both reach add_node, only the first UPDATE succeeds
+    (rowcount == 1); the second detects rowcount == 0 and deletes the orphan node
+    it created.  This serializes via SQLite's write lock — no SAVEPOINT nesting needed.
+
+    Args:
+        meeting_id: Primary key of the meetings row.
+        summary:    The meeting summary text (used to derive the node label).
+
+    Raises:
+        Exception: Any store error propagates to the caller (use a try/except at
+            the call site for best-effort semantics).
+    """
+    from axi import store as _store
+
+    # Fast-path: if already bridged, skip add_node entirely.
+    _conn = _store._connect()  # noqa: SLF001
+    row = _conn.execute(
+        "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
+    ).fetchone()
+    if row is None or row[0] is not None:
+        return  # Meeting not found or already has a node_id.
+
+    label = (summary or "meeting")[:120]
+    nid = _store.add_node(
+        "fact", label, data={"meeting_id": meeting_id}, domain="meetings"
+    )
+
+    # Atomic test-and-set: only UPDATE if node_id is still NULL.
+    # If a concurrent call already set node_id, rowcount == 0 → clean up orphan.
+    with _store._tx() as txc:  # noqa: SLF001
+        txc.execute(
+            "UPDATE meetings SET node_id=? WHERE id=? AND node_id IS NULL",
+            (nid, meeting_id),
+        )
+        updated = txc.execute("SELECT changes()").fetchone()[0]
+
+    if updated == 0:
+        # Another concurrent call won the race — remove the orphan node we created.
+        with _store._tx() as txc:  # noqa: SLF001
+            txc.execute("DELETE FROM nodes WHERE id=?", (nid,))
+        return
+
+    _store.trigger_embed_for_node(nid)
+    _log = logging.getLogger("axi.meeting.process")
+    _log.info("meeting %d bridged to graph node %d", meeting_id, nid)
+
+
 def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSession | None" = None) -> None:
     """Final pass after the meeting stops.
 
@@ -969,25 +1024,10 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
     log.info("meeting %d %s: %d segments, summary %d chars", meeting_id, final_status, len(segments), len(summary))
 
     # Bridge the meeting into the semantic graph so linkers can include it.
-    # Only runs when summary is available and node_id not yet set (idempotent).
+    # Only runs when summary is available; idempotency + race safety inside bridge_meeting_node.
     if summary:
         try:
-            _conn = store._connect()  # noqa: SLF001
-            existing_node = _conn.execute(
-                "SELECT node_id FROM meetings WHERE id=?", (meeting_id,)
-            ).fetchone()
-            if existing_node is not None and existing_node[0] is None:
-                label = summary[:120]
-                nid = store.add_node(
-                    "fact", label, data={"meeting_id": meeting_id}, domain="meetings"
-                )
-                with store._tx() as txc:  # noqa: SLF001
-                    txc.execute(
-                        "UPDATE meetings SET node_id=? WHERE id=?",
-                        (nid, meeting_id),
-                    )
-                store.trigger_embed_for_node(nid)
-                log.info("meeting %d bridged to graph node %d", meeting_id, nid)
+            bridge_meeting_node(meeting_id, summary)
         except Exception as _bridge_exc:  # noqa: BLE001
             log.warning("meeting %d: failed to bridge to graph: %s", meeting_id, _bridge_exc)
 
