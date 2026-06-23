@@ -49,7 +49,12 @@ class _FakeInteraction:
 
 
 def test_backfill_processes_recent_interactions(monkeypatch):
-    """Task 2.7 RED: backfill_domain_fact_nodes processes interactions within the window."""
+    """Task 2.7: backfill_domain_fact_nodes processes interactions within the window.
+
+    Now delegates to backfill_all_domains(domains=["relationships"]), so we
+    patch _fetch_domain_entries (the injectable seam) instead of the old
+    _fetch_recent_interactions which is no longer on the hot path.
+    """
     from axi.store import backfill_domain_fact_nodes, get_node_for_domain_entry
 
     fake_interactions = [
@@ -57,16 +62,24 @@ def test_backfill_processes_recent_interactions(monkeypatch):
         for i in range(1, 4)
     ]
 
-    with patch("axi.store.trigger_embed_for_node"):
-        with patch("axi.store._fetch_recent_interactions", return_value=fake_interactions) as mock_fetch:
-            count = backfill_domain_fact_nodes(days=90, batch_size=50, sleep_s=0)
+    def _fake_fetch(domain, *, days, limit=None):
+        if domain == "relationships":
+            assert days == 90
+            return fake_interactions
+        return []
+
+    with patch("axi.store.trigger_embed_for_node"), \
+         patch("axi.domain_bridge._fetch_domain_entries", side_effect=_fake_fetch):
+        count = backfill_domain_fact_nodes(days=90, batch_size=50, sleep_s=0)
 
     assert count == 3, f"expected 3 processed, got {count}"
-    mock_fetch.assert_called_once_with(days=90)
 
 
 def test_backfill_skips_already_mapped_interactions(monkeypatch):
-    """Task 2.7 RED: already-mapped interactions are skipped (resumable)."""
+    """Task 2.7: already-mapped interactions are skipped (resumable).
+
+    Delegates through backfill_all_domains → _fetch_domain_entries seam.
+    """
     import axi.store as store
     from axi.store import backfill_domain_fact_nodes, upsert_domain_node_map
 
@@ -84,43 +97,42 @@ def test_backfill_skips_already_mapped_interactions(monkeypatch):
     already_mapped = _FakeInteraction(_make_interaction_dict(iid="01HX-ALREADY"))
     new_one = _FakeInteraction(_make_interaction_dict(iid="01HX-NEW-ONE"))
 
-    call_count = {"n": 0}
+    def _fake_fetch(domain, *, days, limit=None):
+        if domain == "relationships":
+            return [already_mapped, new_one]
+        return []
 
-    original_create = None
+    with patch("axi.store.trigger_embed_for_node"), \
+         patch("axi.domain_bridge._fetch_domain_entries", side_effect=_fake_fetch):
+        count = backfill_domain_fact_nodes(days=90, batch_size=50, sleep_s=0)
 
-    def counting_create(interaction):
-        call_count["n"] += 1
-        return original_create(interaction)
-
-    with patch("axi.store.trigger_embed_for_node"):
-        with patch("axi.store._fetch_recent_interactions", return_value=[already_mapped, new_one]):
-            import axi.store as _store
-            original_create = _store.create_fact_node_for_interaction
-            with patch("axi.store.create_fact_node_for_interaction", side_effect=counting_create):
-                backfill_domain_fact_nodes(days=90, batch_size=50, sleep_s=0)
-
-    assert call_count["n"] == 1, (
-        f"expected create called once (skip already-mapped), got {call_count['n']}"
+    assert count == 1, (
+        f"expected 1 processed (skip already-mapped), got {count}"
     )
 
 
 def test_backfill_respects_days_window(monkeypatch):
-    """Task 2.7 RED: interactions older than the window are excluded."""
+    """Task 2.7: interactions older than the window are excluded.
+
+    Delegates through backfill_all_domains → _fetch_domain_entries seam.
+    Verifies days is forwarded correctly to the fetch call.
+    """
     from axi.store import backfill_domain_fact_nodes
 
-    # All interactions are 200 days old — outside a 90-day window.
-    old_interactions = [
-        _FakeInteraction(_make_interaction_dict(iid=f"01HXOLD{i:010d}", days_ago=200))
-        for i in range(3)
-    ]
+    days_seen: list[int] = []
 
-    with patch("axi.store.trigger_embed_for_node"):
-        with patch("axi.store._fetch_recent_interactions", return_value=[]) as mock_fetch:
-            count = backfill_domain_fact_nodes(days=90, batch_size=50, sleep_s=0)
+    def _fake_fetch(domain, *, days, limit=None):
+        if domain == "relationships":
+            days_seen.append(days)
+        return []  # Simulate all filtered out at DB level.
+
+    with patch("axi.store.trigger_embed_for_node"), \
+         patch("axi.domain_bridge._fetch_domain_entries", side_effect=_fake_fetch):
+        count = backfill_domain_fact_nodes(days=90, batch_size=50, sleep_s=0)
 
     assert count == 0
     # The fetch must be called with days=90 so the DB query itself filters.
-    mock_fetch.assert_called_once_with(days=90)
+    assert 90 in days_seen, f"days=90 not forwarded to fetch; saw: {days_seen}"
 
 
 def test_backfill_similar_to_edges_runs_for_embedded_nodes(monkeypatch):
