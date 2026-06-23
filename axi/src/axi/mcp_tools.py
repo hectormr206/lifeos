@@ -109,11 +109,8 @@ def log_finance_entry(
         kind=kind, title=title, amount=amount,
         when=_parse_when(when_iso), currency=currency,
     )
-    try:
-        from axi import domain_bridge as _db
-        _db.bridge_entry("finance", entry)
-    except Exception:  # noqa: BLE001
-        pass
+    from axi import domain_bridge as _db
+    _db.bridge_entry("finance", entry)
     return _jsonable(entry)
 
 
