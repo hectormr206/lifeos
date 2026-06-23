@@ -1755,37 +1755,23 @@ def backfill_domain_fact_nodes(
     batch_size: int = 50,
     sleep_s: float = 0.1,
 ) -> int:
-    """Bounded backfill: create fact-nodes for recent domain interactions.
+    """Bounded backfill: create fact-nodes for recent relationships interactions.
 
-    Processes interactions from the relationships domain within the last *days*
-    days, creating fact-nodes + domain_node_map entries. Already-mapped entries
-    are skipped (resumable). Rate-limited by *batch_size* and *sleep_s*.
+    Thin wrapper that delegates to domain_bridge.backfill_all_domains scoped
+    to the "relationships" domain. Rate-limiting and idempotency are handled
+    there. Already-mapped entries are skipped (resumable).
 
     Returns the number of interactions newly bridged.
     """
-    import time as _time
+    from axi.domain_bridge import backfill_all_domains
 
-    interactions = _fetch_recent_interactions(days=days)
-    processed = 0
-
-    for i, interaction in enumerate(interactions):
-        # Skip already-mapped entries (idempotent / resumable).
-        # entry_id is stored as str(id) in domain_node_map — always stringify.
-        if get_node_for_domain_entry("relationships", str(interaction.id)) is not None:
-            continue
-
-        try:
-            create_fact_node_for_interaction(interaction)
-            processed += 1
-        except Exception as exc:  # noqa: BLE001
-            log.warning("backfill_domain_fact_nodes: failed for %s: %s", interaction.id, exc)
-            continue
-
-        # Rate limiting: pause after each batch.
-        if sleep_s > 0 and processed % batch_size == 0:
-            _time.sleep(sleep_s)
-
-    return processed
+    result = backfill_all_domains(
+        days=days,
+        batch_size=batch_size,
+        sleep_s=sleep_s,
+        domains=["relationships"],
+    )
+    return result.get("relationships", 0)
 
 
 def backfill_similar_to_edges(*, threshold: float = 0.85, node_limit: int | None = None) -> int:
