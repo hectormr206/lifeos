@@ -2684,6 +2684,8 @@ def _try_nano_extract(
                         confidence=result.confidence,
                         raw_utterance=body_text, source_conv_id=None,
                     )
+                    from axi import domain_bridge as _db
+                    _db.bridge_entry("finance", fe)
                     entry_ids.append(fe.id)
                 # FIX 5: if ALL items failed validation, do not return a misleading success.
                 if not entry_ids:
@@ -2705,6 +2707,8 @@ def _try_nano_extract(
                     confidence=result.confidence,
                     raw_utterance=body_text, source_conv_id=None,
                 )
+                from axi import domain_bridge as _db
+                _db.bridge_entry("finance", fe)
                 entry_ids.append(fe.id)
                 title_human = f"{_validated_amount:g} {currency} en {merchant or (result.title or 'gasto')}"
             else:
@@ -2738,6 +2742,8 @@ def _try_nano_extract(
                 confidence=result.confidence,
                 raw_utterance=body_text, source_conv_id=None,
             )
+            from axi import domain_bridge as _db
+            _db.bridge_entry("exercise", sess)
             return _build_result(
                 "exercise",
                 f'Anotada sesión (nano): {result.title or "ejercicio"} — {int(_dur)} min.',
@@ -2761,6 +2767,8 @@ def _try_nano_extract(
                 source="chat", confidence=result.confidence,
                 raw_utterance=body_text, source_conv_id=None,
             )
+            from axi import domain_bridge as _db
+            _db.bridge_entry("learning", le)
             return _build_result(
                 "learning",
                 f'Anotado en aprendizaje (nano): "{result.title or body_text[:60]}".',
@@ -2801,6 +2809,8 @@ def _try_nano_extract(
                 source="chat", confidence=result.confidence,
                 raw_utterance=body_text, source_conv_id=None,
             )
+            from axi import domain_bridge as _db
+            _db.bridge_entry("lifeos-events", ev)
             return _build_result(
                 "events",
                 f'Anotado evento (nano): "{result.title or body_text[:60]}".',
@@ -3019,6 +3029,8 @@ def _try_nano_extract(
                 source="chat", confidence=result.confidence,
                 raw_utterance=body_text, source_conv_id=None,
             )
+            from axi import domain_bridge as _db
+            _db.bridge_entry("spirituality", entry)
             return _build_result(
                 "spirituality",
                 f'Anotado en espiritualidad (nano): "{result.title or body_text[:60]}".',
@@ -3395,6 +3407,8 @@ async def api_chat_ask(request: Request):
                     source="chat", confidence=ei.confidence,
                     raw_utterance=text, source_conv_id=None,
                 )
+                from axi import domain_bridge as _db
+                _db.bridge_entry("exercise", sess)
                 streak = ex_sessions.current_streak()
                 lang = str(config.get("language", "es-MX"))
                 fam = lifeos_localize.lang_family(lang)
@@ -3449,6 +3463,8 @@ async def api_chat_ask(request: Request):
                     source="chat", confidence=si.confidence,
                     raw_utterance=text, source_conv_id=None,
                 )
+                from axi import domain_bridge as _db
+                _db.bridge_entry("spirituality", se)
                 lang = str(config.get("language", "es-MX"))
                 fam = lifeos_localize.lang_family(lang)
                 kind_label_es = {
@@ -3499,6 +3515,8 @@ async def api_chat_ask(request: Request):
                     source="chat", confidence=li.confidence,
                     raw_utterance=text, source_conv_id=None,
                 )
+                from axi import domain_bridge as _db
+                _db.bridge_entry("learning", le)
                 lang = str(config.get("language", "es-MX"))
                 fam = lifeos_localize.lang_family(lang)
                 kind_label_es = {
@@ -3554,6 +3572,8 @@ async def api_chat_ask(request: Request):
                     tags=[location_tag] if location_tag else None,
                     source="chat", confidence=evi.confidence,
                 )
+                from axi import domain_bridge as _db
+                _db.bridge_entry("lifeos-events", ev)
                 try:
                     _link_event_to_people(ev)
                 except Exception:  # noqa: BLE001
@@ -3772,6 +3792,8 @@ async def api_chat_ask(request: Request):
                     source="chat", confidence=fi.confidence,
                     raw_utterance=text, source_conv_id=None,
                 )
+                from axi import domain_bridge as _db
+                _db.bridge_entry("finance", fe)
                 # Big purchases auto-schedule a +7d reflection.
                 if fe.kind == "big_purchase":
                     try:
@@ -4702,6 +4724,8 @@ async def api_finance_create(request: Request):
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+    from axi import domain_bridge as _db
+    _db.bridge_entry("finance", entry)
     # If it's a big_purchase, fire-and-forget the reflection scheduler.
     if entry.kind == "big_purchase":
         try:
@@ -4992,6 +5016,8 @@ async def api_ex_create(request: Request):
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+    from axi import domain_bridge as _db
+    _db.bridge_entry("exercise", s)
     return _session_to_dict(s)
 
 
@@ -5062,6 +5088,8 @@ async def api_spirit_create(request: Request):
         )
     except ValueError as ex:
         raise HTTPException(400, str(ex))
+    from axi import domain_bridge as _db
+    _db.bridge_entry("spirituality", e)
     return _spirit_entry_to_dict(e)
 
 
@@ -5138,6 +5166,8 @@ async def api_learn_create(request: Request):
         )
     except ValueError as ex:
         raise HTTPException(400, str(ex))
+    from axi import domain_bridge as _db
+    _db.bridge_entry("learning", e)
     return _learn_entry_to_dict(e)
 
 
@@ -5286,6 +5316,8 @@ async def api_calendar_create(request: Request):
         )
     except ValueError as ex:
         raise HTTPException(400, str(ex))
+    from axi import domain_bridge as _db
+    _db.bridge_entry("lifeos-events", e)
     # Auto-link to existing people in relationships domain.
     try:
         _link_event_to_people(e)
