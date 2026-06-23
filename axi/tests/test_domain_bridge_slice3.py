@@ -12,7 +12,7 @@ Phases covered:
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from unittest.mock import patch, MagicMock
 
@@ -415,3 +415,121 @@ def test_create_fact_node_for_interaction_from_store_creates_node():
         (str(interaction.id),),
     ).fetchone()
     assert row is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Review fixes: FIX 1 — fairness / round-robin starvation prevention
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_backfill_all_domains_no_domain_starvation():
+    """FIX 1 RED — later domains are not starved when an early domain is large.
+
+    Setup: health has N=10 entries, finance has M=5 entries, node_limit=6.
+    Under the old greedy loop: health consumes all 6 slots → finance gets 0.
+    Under the new fair (round-robin) loop: finance must receive at least 1 node
+    on the first call to backfill_all_domains.
+
+    This test MUST FAIL against the original order-greedy implementation.
+    """
+    from axi.domain_bridge import backfill_all_domains
+
+    health_entries = _make_fake_entries(10, "health")
+    finance_entries = [FakeEntry(id=100 + i, title=f"finance entry {i}") for i in range(5)]
+
+    def _fake_fetch(domain: str, *, days: int, limit: int | None = None) -> list[Any]:
+        if domain == "health":
+            return health_entries
+        if domain == "finance":
+            return finance_entries
+        return []
+
+    with patch("axi.domain_bridge._fetch_domain_entries", side_effect=_fake_fetch), \
+         patch("axi.store.trigger_embed_for_node"):
+        result = backfill_all_domains(node_limit=6)
+
+    total = sum(result.values())
+    assert total <= 6, f"Total ({total}) exceeded node_limit=6"
+
+    # Finance MUST NOT be starved: it must receive at least 1 node.
+    assert result.get("finance", 0) >= 1, (
+        f"finance got 0 nodes — domain starvation detected. "
+        f"health={result.get('health', 0)}, finance={result.get('finance', 0)}. "
+        f"backfill_all_domains must use round-robin or similar fair allocation."
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Review fixes: FIX 2 — real delegation test (spy on backfill_all_domains)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_backfill_domain_fact_nodes_actually_delegates_to_backfill_all_domains():
+    """FIX 2 RED — backfill_domain_fact_nodes MUST call backfill_all_domains.
+
+    Patches backfill_all_domains and asserts it is called with the relationships
+    domain in scope. This test FAILS if delegation is removed and a parallel
+    loop is used instead.
+    """
+    import axi.store as store
+
+    @dataclass
+    class FakeInteraction:
+        id: int = 55
+        raw_utterance: str | None = None
+        title: str | None = "Chat with Carol"
+        kind: str = "chat"
+        body: str | None = None
+        person_id: int | None = None
+
+    fake_result = {"relationships": 1}
+
+    with patch("axi.store._fetch_recent_interactions", return_value=[FakeInteraction()]), \
+         patch("axi.domain_bridge.backfill_all_domains", return_value=fake_result) as mock_backfill:
+        result = store.backfill_domain_fact_nodes(days=90)
+
+    # Must have delegated to backfill_all_domains.
+    mock_backfill.assert_called_once()
+    call_kwargs = mock_backfill.call_args
+
+    # The call must be scoped to "relationships" domain only.
+    domains_arg = (
+        call_kwargs.kwargs.get("domains")
+        if call_kwargs.kwargs
+        else None
+    )
+    assert domains_arg is not None and "relationships" in domains_arg, (
+        f"backfill_all_domains was called but not scoped to 'relationships'. "
+        f"Call args: {call_kwargs}. "
+        f"backfill_domain_fact_nodes must pass domains=['relationships'] (or equivalent)."
+    )
+
+    # Return value must reflect the relationships count.
+    assert result == 1, f"Expected return value 1, got {result}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Review fixes: FIX 3 — _fetch_domain_entries warns on unknown domain
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_fetch_domain_entries_warns_on_unknown_domain():
+    """FIX 3 RED — _fetch_domain_entries logs a warning for an unrecognised domain.
+
+    Before the fix: silently returns [].
+    After the fix: calls log.warning(...) with the unknown domain name,
+    then returns [].
+    """
+    from axi.domain_bridge import _fetch_domain_entries
+    import logging
+
+    with patch("axi.domain_bridge.log") as mock_log:
+        result = _fetch_domain_entries("nonexistent-domain-xyz", days=30)
+
+    assert result == [], f"Expected empty list, got {result!r}"
+    mock_log.warning.assert_called_once()
+    warning_call = mock_log.warning.call_args
+    # The warning message must contain the unknown domain name.
+    assert "nonexistent-domain-xyz" in str(warning_call), (
+        f"Warning must mention the unknown domain. Got: {warning_call}"
+    )
