@@ -2,6 +2,13 @@
 {% block title %}Cerebro 3D · Axi{% endblock %}
 
 {% block content %}
+<!-- When this page is loaded inside the dashboard's brain modal iframe, the
+     modal already provides its own header ("🧠 Cerebro 3D · Cerrar"), so the
+     global nav header from _base.html (LifeOS logo, clock, VRAM, menu) is
+     redundant and looks like a nested/duplicated header. Hide it when embedded.
+     Standalone navigation to /brain3d still shows the full nav. -->
+<style>html.embedded body > header { display: none !important; }</style>
+<script>if (window.self !== window.top) document.documentElement.classList.add('embedded');</script>
 <div class="space-y-4" x-data="brain3dPage()" x-init="load()">
 
   <!-- ─── header ─── -->
