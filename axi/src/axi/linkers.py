@@ -73,12 +73,19 @@ def run_happened_at_linker(
     window_days: int = _DEFAULT_WINDOW_DAYS,
     window_s: float = _HAPPENED_AT_WINDOW_S,
 ) -> int:
-    """Link fact-nodes to meeting nodes when fact.created_at ∈ [meeting.start_time ± window_s].
+    """Link fact-nodes to meeting nodes when fact event time ∈ [meeting.start_time ± window_s].
 
     Edge direction: meeting_node → fact_node (kind='happened-at').
 
+    The fact's event time is COALESCE(occurred_at, created_at): the real event
+    timestamp when available, falling back to the graph-insertion time when not.
+    This fixes the backfill bug where all backfilled nodes share the same
+    created_at and would incorrectly link to meetings inserted on the same day.
+
     Only meetings that have a node_id (linked to a System-A node) are considered.
-    Only fact-nodes in the recent *window_days* days are processed.
+    Fact-nodes are fetched without a window filter on event time because a
+    backfilled fact may have created_at=today but occurred_at=5 days ago (inside
+    an older meeting's window). The meeting window cutoff still bounds the search.
 
     Returns the number of new 'happened-at' edges created.
     """
@@ -95,11 +102,12 @@ def run_happened_at_linker(
     if not meetings:
         return 0
 
-    # Fetch recent fact-nodes.
+    # Fetch ALL fact-nodes (no cutoff on created_at/occurred_at) because
+    # a backfilled fact's occurred_at may fall inside an older meeting's window
+    # even if created_at is recent. The meeting window cutoff bounds the search.
     fact_nodes = conn.execute(
-        "SELECT id, created_at FROM nodes "
-        "WHERE kind='fact' AND created_at > ?",
-        (cutoff,),
+        "SELECT id, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
+        "WHERE kind='fact'",
     ).fetchall()
 
     if not fact_nodes:
@@ -114,7 +122,7 @@ def run_happened_at_linker(
 
         for fact in fact_nodes:
             fact_id = int(fact["id"])
-            fact_ts = float(fact["created_at"])
+            fact_ts = float(fact["event_ts"])
             if lo <= fact_ts <= hi:
                 try:
                     if _safe_insert_edge(conn, meeting_node_id, fact_id, "happened-at"):
@@ -205,30 +213,33 @@ def run_same_day_linker(
     with kind='same-day'.
 
     Only fact-nodes in the recent *window_days* window are processed.
-    Within that window, nodes are grouped by UTC date string (YYYY-MM-DD).
-    For each group, every ordered pair (lower_id, higher_id) gets one edge.
-    Self-links are excluded.  Idempotent via SELECT-before-INSERT.
+    Within that window, nodes are grouped by UTC date string (YYYY-MM-DD)
+    using COALESCE(occurred_at, created_at) as the event date.
 
-    Design note: We choose same-day over mood-correlates-with because
-    health.Entry has no explicit mood field (mood_pre/mood_post live on
-    Interaction in the relationships domain). The same-day linker is simpler,
-    fully defensible, and uses only System-A data — no cross-DB read required.
+    Using occurred_at (instead of created_at) fixes the backfill "todo ligado"
+    bug: entries backfilled on the same day share the same created_at but have
+    different real event dates stored in occurred_at.  Only nodes whose real
+    event date (or insertion date when occurred_at is NULL) falls within the
+    window are considered.
 
     Returns the number of new 'same-day' edges created.
     """
     cutoff = time.time() - window_days * 86400
 
+    # Use COALESCE(occurred_at, created_at) as the canonical event timestamp.
+    # The window cutoff is also applied to the same expression so nodes are
+    # included based on their real event date, not their insertion date.
     rows = conn.execute(
-        "SELECT id, created_at FROM nodes "
-        "WHERE kind='fact' AND created_at > ? "
-        "ORDER BY created_at ASC",
+        "SELECT id, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
+        "WHERE kind='fact' AND COALESCE(occurred_at, created_at) > ? "
+        "ORDER BY COALESCE(occurred_at, created_at) ASC",
         (cutoff,),
     ).fetchall()
 
-    # Group by UTC date string.
+    # Group by UTC date string derived from the real event timestamp.
     by_day: dict[str, list[int]] = {}
     for row in rows:
-        ts = float(row["created_at"])
+        ts = float(row["event_ts"])
         day_key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
         by_day.setdefault(day_key, []).append(int(row["id"]))
 

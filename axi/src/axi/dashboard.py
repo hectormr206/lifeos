@@ -2083,7 +2083,7 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
 
     # ── System A: nodes ──────────────────────────────────────────────────────
     node_rows = c.execute(
-        "SELECT id, kind, label, domain, embedding FROM nodes "
+        "SELECT id, kind, label, domain, embedding, occurred_at FROM nodes "
         "ORDER BY created_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
@@ -2095,6 +2095,7 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
             "kind": r["kind"],
             "domain": r["domain"] or "",
             "has_embedding": r["embedding"] is not None,
+            "occurred_at": r["occurred_at"],  # real event epoch (float) or null
         }
         for r in node_rows
     ]

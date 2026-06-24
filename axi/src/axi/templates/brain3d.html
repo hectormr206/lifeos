@@ -94,6 +94,10 @@
                 <span class="font-medium">Embedding:</span>
                 <span x-text="selectedNode.has_embedding ? '✓ ' + tUi('yes') : '—'"></span>
               </div>
+              <div x-show="selectedNode.occurred_at != null">
+                <span class="font-medium" x-text="tUi('date') + ':'"></span>
+                <span x-text="selectedNode.occurred_at ? new Date(selectedNode.occurred_at * 1000).toLocaleDateString() : '—'"></span>
+              </div>
             </div>
 
             <!-- Connected edges -->
@@ -196,6 +200,7 @@ const LABELS = {
       clickNode:    'Haz click en un nodo para ver sus detalles',
       typeLabel:    'Tipo',
       domainLabel:  'Dominio',
+      date:         'Fecha',
       yes:          'Sí',
       connections:  'Conexiones',
       system:       'sistema',
@@ -237,6 +242,7 @@ const LABELS = {
       clickNode:    'Click a node to see its details',
       typeLabel:    'Type',
       domainLabel:  'Domain',
+      date:         'Date',
       yes:          'Yes',
       connections:  'Connections',
       system:       'system',
@@ -317,7 +323,15 @@ function brain3dPage() {
         // Color by domain when set; most nodes (conversations/facts) carry a
         // kind but no domain, so fall back to kind, then to the grey default.
         const color = DOMAIN_COLOR[n.domain] || DOMAIN_COLOR[n.kind] || DOMAIN_COLOR['default'];
-        const gn = { id: n.id, label: n.label, kind: n.kind, domain: n.domain, has_embedding: n.has_embedding, color };
+        const gn = {
+          id: n.id,
+          label: n.label,
+          kind: n.kind,
+          domain: n.domain,
+          has_embedding: n.has_embedding,
+          occurred_at: n.occurred_at ?? null,  // real event epoch or null
+          color,
+        };
         nodeById[n.id] = gn;
         return gn;
       });
