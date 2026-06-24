@@ -533,3 +533,199 @@ def test_backfill_all_domains_fetches_with_generous_limit():
         "Without an explicit generous limit the backfill silently truncates "
         "to the store default (e.g. 300) and never reaches old entries."
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Review-fix tests — low-value filter edge cases
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# ─── FIX 1: falsy-zero in has_numeric ───────────────────────────────────────
+
+@dataclass
+class FinanceEntryStub:
+    """Minimal duck-typed finance entry."""
+    id: str = "fe-001"
+    raw_utterance: str | None = None
+    title: str | None = "muestra"
+    amount: float | None = None
+    data: dict | None = None
+
+
+@dataclass
+class ExerciseEntryStub:
+    """Minimal duck-typed exercise entry."""
+    id: str = "ex-001"
+    raw_utterance: str | None = None
+    title: str | None = "correr"
+    duration_minutes: int | None = None
+    data: dict | None = None
+
+
+class TestIsLowValueFalsyZero:
+    """FIX 1 — amount=0 or duration_minutes=0 must be treated as real content."""
+
+    def test_finance_amount_zero_is_kept(self):
+        """FINANCE entry with amount=0 (free transaction), short title, no raw → NOT low-value.
+
+        RED: fails when has_numeric uses bool(getattr(..., 'amount', None))
+        because bool(0) is False, so the entry is wrongly dropped.
+        GREEN: passes once the check uses `is not None`.
+        """
+        from axi.domain_bridge import _is_low_value
+
+        entry = FinanceEntryStub(amount=0, title="muestra", raw_utterance=None, data=None)
+        result = _is_low_value("muestra", entry)
+        assert result is False, (
+            "amount=0 must count as a present numeric field; entry must NOT be low-value"
+        )
+
+    def test_exercise_duration_minutes_zero_is_kept(self):
+        """EXERCISE entry with duration_minutes=0, short title, no raw → NOT low-value.
+
+        RED: fails when has_numeric uses bool(getattr(..., 'duration_minutes', None))
+        because bool(0) is False, so the entry is wrongly dropped.
+        GREEN: passes once the check uses `is not None`.
+        """
+        from axi.domain_bridge import _is_low_value
+
+        entry = ExerciseEntryStub(duration_minutes=0, title="correr", raw_utterance=None, data=None)
+        result = _is_low_value("correr", entry)
+        assert result is False, (
+            "duration_minutes=0 must count as a present numeric field; entry must NOT be low-value"
+        )
+
+    def test_finance_amount_zero_creates_node(self):
+        """create_fact_node_for_entry returns a node_id (not None) for amount=0 entry.
+
+        RED: drops the entry (returns None) when has_numeric uses truthiness check.
+        GREEN: creates the node once `is not None` check is in place.
+        """
+        from unittest.mock import patch, MagicMock
+        from axi import domain_bridge
+
+        entry = FinanceEntryStub(id="fe-zero-001", amount=0, title="muestra", raw_utterance=None, data=None)
+
+        with (
+            patch("axi.store.get_node_for_domain_entry", return_value=None),
+            patch("axi.store.add_node", return_value=42) as mock_add,
+            patch("axi.store.upsert_domain_node_map"),
+            patch("axi.store.trigger_embed_for_node"),
+        ):
+            node_id = domain_bridge.create_fact_node_for_entry("finance", entry)
+
+        assert node_id is not None, (
+            "create_fact_node_for_entry must create a node for a finance entry with amount=0"
+        )
+
+
+# ─── FIX 2: backfill counter only counts real creations ─────────────────────
+
+class TestBackfillCounterSkipsLowValue:
+    """FIX 2 — low-value skips (None return) must NOT increment backfill counters."""
+
+    def test_low_value_skip_does_not_consume_node_limit_budget(self):
+        """Backfill with 1 real entry + 1 low-value entry and node_limit=1 →
+        the real entry is created and counts as 1; the low-value does not burn the budget.
+
+        RED: fails when the counter increments unconditionally (create_fact_node_for_entry
+        returns None for the low-value entry, but result[domain] and total_created are
+        still incremented, exhausting the budget before the real entry is processed).
+        GREEN: passes once the counter only increments when the return value is not None.
+        """
+        from unittest.mock import patch, MagicMock
+        from types import SimpleNamespace
+        from axi.domain_bridge import backfill_all_domains
+
+        low_value_entry = SimpleNamespace(id="lv-001", title="muestra", raw_utterance=None, data=None, amount=None, duration_minutes=None, duration=None)
+        real_entry = SimpleNamespace(id="real-001", title="presión 120/80", raw_utterance="presión 120/80", data=None, amount=None, duration_minutes=None, duration=None)
+
+        def _fake_fetch(domain, *, days, limit=None):
+            return [low_value_entry, real_entry]
+
+        created_ids: list[str] = []
+
+        def _fake_create(domain, entry):
+            if entry.id == "lv-001":
+                return None  # low-value skip
+            created_ids.append(entry.id)
+            return 99
+
+        with (
+            patch("axi.domain_bridge._fetch_domain_entries", side_effect=_fake_fetch),
+            patch("axi.store.get_node_for_domain_entry", return_value=None),
+            patch("axi.domain_bridge.create_fact_node_for_entry", side_effect=_fake_create),
+            patch("axi.store.checkpoint"),
+        ):
+            result = backfill_all_domains(days=90, domains=["health"], node_limit=1)
+
+        assert result["health"] == 1, (
+            f"result['health'] should be 1 (only the real entry), got {result['health']}"
+        )
+        assert "real-001" in created_ids, "The real entry must have been processed"
+
+
+# ─── FIX 3: has_data should consider `body` ─────────────────────────────────
+
+@dataclass
+class RelationshipsEntryStub:
+    """Minimal duck-typed relationships interaction entry."""
+    id: str = "ri-001"
+    raw_utterance: str | None = None
+    title: str | None = "charla"
+    body: str | None = None
+    data: dict | None = None
+
+
+class TestIsLowValueBodyContent:
+    """FIX 3 — non-empty body must count as real content and prevent low-value drop."""
+
+    def test_short_title_no_raw_no_data_but_body_is_kept(self):
+        """Relationships entry with short title, no raw_utterance, no data, but
+        non-empty body → NOT low-value.
+
+        RED: fails when _is_low_value ignores entry.body.
+        GREEN: passes once body is included in the 'has content' check.
+        """
+        from axi.domain_bridge import _is_low_value
+
+        entry = RelationshipsEntryStub(
+            title="charla",
+            raw_utterance=None,
+            data=None,
+            body="Spoke about the project status and next steps.",
+        )
+        result = _is_low_value("charla", entry)
+        assert result is False, (
+            "Entry with non-empty body must NOT be low-value even with a short single-word title"
+        )
+
+    def test_empty_body_still_low_value(self):
+        """Entry with short title, no raw, no data, and empty body → still low-value."""
+        from axi.domain_bridge import _is_low_value
+
+        entry = RelationshipsEntryStub(
+            title="charla",
+            raw_utterance=None,
+            data=None,
+            body="",
+        )
+        result = _is_low_value("charla", entry)
+        assert result is True, (
+            "Entry with empty body and no other content must still be low-value"
+        )
+
+    def test_none_body_still_low_value(self):
+        """Entry with short title, no raw, no data, body=None → still low-value."""
+        from axi.domain_bridge import _is_low_value
+
+        entry = RelationshipsEntryStub(
+            title="charla",
+            raw_utterance=None,
+            data=None,
+            body=None,
+        )
+        result = _is_low_value("charla", entry)
+        assert result is True, (
+            "Entry with body=None and no other content must still be low-value"
+        )

@@ -193,10 +193,67 @@ _DOMAIN_CONFIGS: dict[str, DomainConfig] = {
 }
 
 
+# ─── low-value filter ────────────────────────────────────────────────────────
+
+
+def _is_low_value(label: str, entry: Any) -> bool:
+    """Return True when *label* is clearly contentless and must not become a graph node.
+
+    Conservative filter — only drop true garbage; keep anything with signal.
+
+    Rules (evaluated in order; first match wins):
+    1. Strip the label. If empty → True (low value).
+    2. If the stripped label contains ANY digit → False (keep).
+       Vitals/finance/sleep all carry numbers: "dormí 10.7h", "presión 120/86",
+       "gasté 450 en super".
+    3. If ALL three conditions hold → True (low value — bare keyword):
+       a. The stripped label is a SINGLE token (no whitespace).
+       b. The single token is short (≤ 14 chars).
+       c. The entry carries NO real content:
+          - ``raw_utterance`` is falsy/empty/whitespace-only, AND
+          - ``data`` is empty/missing, AND
+          - no meaningful numeric field (``amount``, ``duration_minutes``,
+            ``duration``) is set — finance/exercise entries with a real value
+            must always be kept even when they lack a raw_utterance.
+    4. Otherwise → False (keep).  Multi-word labels, long single tokens, or
+       entries with non-empty raw_utterance, data, or numeric fields are
+       preserved.
+    """
+    stripped = label.strip()
+    if not stripped:
+        return True
+
+    if any(ch.isdigit() for ch in stripped):
+        return False
+
+    # Single-token short bare-keyword check.
+    if len(stripped.split()) == 1 and len(stripped) <= 14:
+        raw = getattr(entry, "raw_utterance", None)
+        has_raw = bool(raw and raw.strip())
+        data = getattr(entry, "data", None)
+        has_data = bool(data)
+        body = getattr(entry, "body", None)
+        has_body = bool(body and body.strip())
+        # Also treat any entry with a meaningful numeric field (amount, duration,
+        # duration_minutes, etc.) as having real content — finance/exercise entries
+        # often carry no raw_utterance but do have structured numeric values.
+        # Use `is not None` (not truthiness) so zero values (e.g. amount=0 for a
+        # free transaction, duration_minutes=0) are treated as present numeric data.
+        has_numeric = (
+            getattr(entry, "amount", None) is not None
+            or getattr(entry, "duration_minutes", None) is not None
+            or getattr(entry, "duration", None) is not None
+        )
+        if not has_raw and not has_data and not has_body and not has_numeric:
+            return True
+
+    return False
+
+
 # ─── core: create_fact_node_for_entry ────────────────────────────────────────
 
 
-def create_fact_node_for_entry(domain: str, entry: Any) -> int:
+def create_fact_node_for_entry(domain: str, entry: Any) -> int | None:
     """Create a fact node for a domain entry and register it in domain_node_map.
 
     Steps:
@@ -223,6 +280,13 @@ def create_fact_node_for_entry(domain: str, entry: Any) -> int:
 
     cfg = _DOMAIN_CONFIGS[domain]
     label = cfg.renderer(entry)
+
+    if _is_low_value(label, entry):
+        log.debug(
+            "bridge: skipping low-value entry label=%r domain=%r",
+            label, domain,
+        )
+        return None
 
     extra: dict[str, Any] = {}
     if cfg.extra_data_fn is not None:
@@ -428,9 +492,10 @@ def backfill_all_domains(
             any_remaining = True
             entry = pending[domain].pop(0)
             try:
-                create_fact_node_for_entry(domain, entry)
-                result[domain] += 1
-                total_created += 1
+                node_id = create_fact_node_for_entry(domain, entry)
+                if node_id is not None:
+                    result[domain] += 1
+                    total_created += 1
             except Exception as exc:  # noqa: BLE001
                 log.warning(
                     "backfill_all_domains: failed for domain=%r entry=%r: %s",
