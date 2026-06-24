@@ -8,7 +8,6 @@ Layer 3: Startup auto-recovery ladder (store._connect corruption recovery)
 """
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
@@ -671,6 +670,136 @@ class TestStartupRecovery:
         assert leftover_tmp == [], (
             f"restore temp file(s) left behind: {leftover_tmp}"
         )
+
+    def test_try_open_raises_database_error_on_temp_leaves_db_path_untouched(
+        self, tmp_path, monkeypatch
+    ):
+        """FIX 3 — production-path: _try_open RAISES DatabaseError (not returns None)
+        on the temp-file open, exactly as in the 2026-06-24 btrfs incident.
+
+        Discriminates old vs new:
+        - OLD code (pre-atomic): shutil.copy2 went directly to db_path; a raise
+          from _try_open never occurred there; db_path was already clobbered.
+        - NEW code (atomic): copy goes to a temp; _try_open(tmp) raises
+          DatabaseError → caught by `except (OSError, DatabaseError)` → tmp.unlink()
+          in finally → os.replace never called → db_path untouched.
+
+        Asserts:
+        - _repair_corrupt_db raises RecoveryError (healthy_backup_seen=True,
+          no restore succeeded).
+        - db_path bytes are identical to original (no clobber).
+        - No .restore-tmp-* file is left behind.
+        """
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        original_bytes = b"\xff" * 4096
+        db.write_bytes(original_bytes)
+
+        # Healthy backup — passes integrity_check.
+        healthy_bak = tmp_path / "memory.db.incident-btrfs.bak"
+        c = sqlcipher3.connect(str(healthy_bak), check_same_thread=False, isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        c.execute("CREATE TABLE nodes (id INTEGER PRIMARY KEY, label TEXT)")
+        c.execute("INSERT INTO nodes (label) VALUES ('btrfs-incident-data')")
+        c.close()
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+
+        real_try_open = store._try_open
+
+        def _raising_try_open(path, k):
+            p = str(path)
+            # Simulate btrfs I/O decrypt error on the temp file open (or live path).
+            if p == str(db) or ".restore-tmp-" in p:
+                raise sqlcipher3.dbapi2.DatabaseError("file is not a database")
+            return real_try_open(path, k)
+
+        monkeypatch.setattr(store, "_try_open", _raising_try_open)
+
+        with pytest.raises(store.RecoveryError):
+            store._repair_corrupt_db(db, key)
+
+        # db_path must be untouched.
+        assert db.exists(), "db_path must not be unlinked"
+        assert db.read_bytes() == original_bytes, (
+            "db_path was clobbered — os.replace must not run when temp open raises"
+        )
+
+        # No temp file left behind.
+        leftover = list(tmp_path.glob("memory.db.restore-tmp-*"))
+        assert leftover == [], f"restore temp file(s) left behind: {leftover}"
+
+    def test_swap_ok_but_reopen_fails_leaves_db_path_with_verified_backup_bytes(
+        self, tmp_path, monkeypatch
+    ):
+        """FIX 4 — swap-ok-but-reopen-fails corner: after os.replace, db_path holds
+        verified-good backup bytes even though the subsequent _try_open(db_path) fails.
+
+        Discriminates the invariant:
+        - _try_open(tmp) (pre-replace) SUCCEEDS → tmp is verified good.
+        - os.replace(tmp, db_path) runs → db_path now contains backup bytes.
+        - _try_open(db_path) (post-replace) returns None or raises → loop continues.
+        - After all candidates exhausted, RecoveryError is raised.
+        - db_path holds the verified backup bytes, NOT the original corrupt bytes.
+
+        This documents and locks the intended behavior: a swap that occurred but
+        whose post-replace reopen failed leaves db_path strictly better than before
+        (verified backup vs corrupt original).
+        """
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        corrupt_bytes = b"\xff" * 4096
+        db.write_bytes(corrupt_bytes)
+
+        # Healthy backup with distinct content.
+        healthy_bak = tmp_path / "memory.db.swap-reopen.bak"
+        c = sqlcipher3.connect(str(healthy_bak), check_same_thread=False, isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        c.execute("CREATE TABLE t (v TEXT)")
+        c.execute("INSERT INTO t VALUES ('swap-corner-case')")
+        c.close()
+
+        # Capture backup bytes so we can assert db_path ends up holding them.
+        backup_bytes = Path(str(healthy_bak)).read_bytes()
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+
+        real_try_open = store._try_open
+        calls: list[str] = []
+
+        def _selective_try_open(path, k):
+            p = str(path)
+            calls.append(p)
+            # Temp open (pre-replace) succeeds — backup is verified good.
+            if ".restore-tmp-" in p:
+                return real_try_open(path, k)
+            # Live db_path open (step 2 WAL reset AND post-replace) returns None
+            # — simulates a transient lock or delayed fsync after swap.
+            if p == str(db):
+                return None
+            return real_try_open(path, k)
+
+        monkeypatch.setattr(store, "_try_open", _selective_try_open)
+
+        with pytest.raises(store.RecoveryError):
+            store._repair_corrupt_db(db, key)
+
+        # db_path must now hold the verified backup bytes, not the original corrupt bytes.
+        assert db.exists(), "db_path must exist after swap"
+        assert db.read_bytes() != corrupt_bytes, (
+            "db_path still holds corrupt bytes — os.replace did not run"
+        )
+        assert db.read_bytes() == backup_bytes, (
+            "db_path does not hold the verified backup bytes after swap-ok-reopen-fail"
+        )
+
+        # No temp file must linger.
+        leftover = list(tmp_path.glob("memory.db.restore-tmp-*"))
+        assert leftover == [], f"restore temp file(s) left behind: {leftover}"
 
     def test_connect_triggers_repair_when_open_raises(self, tmp_path, monkeypatch):
         """_connect() must call _repair_corrupt_db when _try_open raises DatabaseError."""
