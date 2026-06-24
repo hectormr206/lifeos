@@ -193,10 +193,63 @@ _DOMAIN_CONFIGS: dict[str, DomainConfig] = {
 }
 
 
+# ─── low-value filter ────────────────────────────────────────────────────────
+
+
+def _is_low_value(label: str, entry: Any) -> bool:
+    """Return True when *label* is clearly contentless and must not become a graph node.
+
+    Conservative filter — only drop true garbage; keep anything with signal.
+
+    Rules (evaluated in order; first match wins):
+    1. Strip the label. If empty → True (low value).
+    2. If the stripped label contains ANY digit → False (keep).
+       Vitals/finance/sleep all carry numbers: "dormí 10.7h", "presión 120/86",
+       "gasté 450 en super".
+    3. If ALL three conditions hold → True (low value — bare keyword):
+       a. The stripped label is a SINGLE token (no whitespace).
+       b. The single token is short (≤ 14 chars).
+       c. The entry carries NO real content:
+          - ``raw_utterance`` is falsy/empty/whitespace-only, AND
+          - ``data`` is empty/missing, AND
+          - no meaningful numeric field (``amount``, ``duration_minutes``,
+            ``duration``) is set — finance/exercise entries with a real value
+            must always be kept even when they lack a raw_utterance.
+    4. Otherwise → False (keep).  Multi-word labels, long single tokens, or
+       entries with non-empty raw_utterance, data, or numeric fields are
+       preserved.
+    """
+    stripped = label.strip()
+    if not stripped:
+        return True
+
+    if any(ch.isdigit() for ch in stripped):
+        return False
+
+    # Single-token short bare-keyword check.
+    if len(stripped.split()) == 1 and len(stripped) <= 14:
+        raw = getattr(entry, "raw_utterance", None)
+        has_raw = bool(raw and raw.strip())
+        data = getattr(entry, "data", None)
+        has_data = bool(data)
+        # Also treat any entry with a meaningful numeric field (amount, duration,
+        # duration_minutes, etc.) as having real content — finance/exercise entries
+        # often carry no raw_utterance but do have structured numeric values.
+        has_numeric = bool(
+            getattr(entry, "amount", None)
+            or getattr(entry, "duration_minutes", None)
+            or getattr(entry, "duration", None)
+        )
+        if not has_raw and not has_data and not has_numeric:
+            return True
+
+    return False
+
+
 # ─── core: create_fact_node_for_entry ────────────────────────────────────────
 
 
-def create_fact_node_for_entry(domain: str, entry: Any) -> int:
+def create_fact_node_for_entry(domain: str, entry: Any) -> int | None:
     """Create a fact node for a domain entry and register it in domain_node_map.
 
     Steps:
@@ -223,6 +276,13 @@ def create_fact_node_for_entry(domain: str, entry: Any) -> int:
 
     cfg = _DOMAIN_CONFIGS[domain]
     label = cfg.renderer(entry)
+
+    if _is_low_value(label, entry):
+        log.debug(
+            "bridge: skipping low-value entry label=%r domain=%r",
+            label, domain,
+        )
+        return None
 
     extra: dict[str, Any] = {}
     if cfg.extra_data_fn is not None:
