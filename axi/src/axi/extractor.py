@@ -24,7 +24,7 @@ import logging
 import re
 from typing import Any
 
-from axi import store
+from axi import config, store
 from axi.brain import ask as brain_ask
 
 log = logging.getLogger("axi.extractor")
@@ -86,7 +86,15 @@ def _parse_json_strict(text: str) -> dict[str, Any] | None:
 
 
 def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int | None) -> int:
-    """Run one extraction pass and persist any facts. Returns count of facts saved."""
+    """Run one extraction pass and persist any facts. Returns count of facts saved.
+
+    Gated by the ``graph_bridge_chat_facts`` config flag (default False). When
+    the flag is off the function returns 0 immediately without making the LLM
+    call — keeping the semantic graph free of arbitrary-domain chat facts.
+    """
+    if not config.get("graph_bridge_chat_facts", False):
+        return 0
+
     exchange = f"Héctor dijo: {user_text}\n\nAxi respondió: {axi_text}"
     raw = brain_ask(
         prompt=exchange,

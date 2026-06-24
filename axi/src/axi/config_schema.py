@@ -382,6 +382,11 @@ FIELDS: tuple[ConfigField, ...] = (
         "If true, meeting summaries are added as nodes in the semantic graph. "
         "Default off (meetings are noisy and pollute the life-facts graph).",
     ),
+    ConfigField(
+        "graph_bridge_chat_facts", "boolean", False,
+        "If true, facts extracted from chat conversations are added as nodes in the "
+        "semantic graph. Default off keeps the graph to structured life-domains only.",
+    ),
 )
 
 
