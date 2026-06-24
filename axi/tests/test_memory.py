@@ -6,11 +6,13 @@ import time
 from axi.memory import ConversationMemory
 
 
-def test_add_returns_conversation_and_node_ids():
+def test_add_returns_conversation_id_node_id_none_by_default():
+    """Default config (graph_bridge_conversations=False) → node_id is None."""
     m = ConversationMemory()
     conv_id, node_id = m.add("hola Axi", "hola Héctor")
     assert conv_id > 0
-    assert node_id > 0
+    # With graph_bridge_conversations=False (default), no graph node is created.
+    assert node_id is None
 
 
 def test_messages_returns_openai_format_oldest_first():

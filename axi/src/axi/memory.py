@@ -90,16 +90,18 @@ class ConversationMemory:
         Returns (0, 0) without raising when the underlying store is unavailable.
         """
         try:
-            node_id = store.add_node(
-                kind="conversation",
-                label=user[:80],
-                data={"user": user, "axi": axi},
-            )
             conv_id = store.add_conversation(user, axi, has_screenshot=has_screenshot)
-            # Bridge: link the conversation row to its graph node for future
-            # fact-extraction passes.
-            with store._tx() as c:  # noqa: SLF001 — internal helper, intentional
-                c.execute("UPDATE conversations SET node_id = ? WHERE id = ?", (node_id, conv_id))
+            node_id: int | None = None
+            if config.get("graph_bridge_conversations", False):
+                node_id = store.add_node(
+                    kind="conversation",
+                    label=user[:80],
+                    data={"user": user, "axi": axi},
+                )
+                # Bridge: link the conversation row to its graph node for future
+                # fact-extraction passes.
+                with store._tx() as c:  # noqa: SLF001 — internal helper, intentional
+                    c.execute("UPDATE conversations SET node_id = ? WHERE id = ?", (node_id, conv_id))
             return conv_id, node_id
         except RecoveryError as exc:
             log.critical(
