@@ -664,6 +664,158 @@ def test_backfill_node_occurred_at_skips_already_set():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# T5d — backfill_node_occurred_at: generous default window (FIX 1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_backfill_default_window_covers_entries_older_than_one_year():
+    """T5d RED: The DEFAULT call (no days= arg) must populate occurred_at for a
+    node whose real event date is 800 days ago.
+
+    Prior to the fix, days defaulted to 365.  An entry with event_ts = 800 days
+    ago is outside that window and would NOT be returned by _fetch_domain_entries,
+    leaving occurred_at NULL — the dense-mesh bug persists for >1-year-old entries.
+
+    After the fix (days=36500 ≈ 100 years), all existing entries are reachable.
+    The test uses a patched _fetch_domain_entries so the call is local and fast.
+    """
+    import axi.store as store
+    from axi.domain_bridge import backfill_node_occurred_at
+
+    conn = store._connect()
+
+    now = time.time()
+    cur = conn.execute(
+        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("fact", "ancient health event", "{}", "health", now, now),
+    )
+    conn.commit()
+    node_id = cur.lastrowid
+
+    entry_id = "he-ancient-800d"
+    conn.execute(
+        "INSERT INTO domain_node_map(domain, entry_id, node_id, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        ("health", entry_id, node_id, now),
+    )
+    conn.commit()
+
+    # Real event date is 800 days ago — well outside the old 365-day default.
+    ancient_dt = datetime.now(tz=timezone.utc) - timedelta(days=800)
+    ancient_epoch = ancient_dt.timestamp()
+
+    # Track the days= value that _fetch_domain_entries is actually called with.
+    received_days: list[int] = []
+
+    @dataclass
+    class _FakeEntry:
+        id: str = entry_id
+        kind: str = "vital"
+        raw_utterance: str = "ancient vital"
+        ts: object = ancient_dt
+        created_at: object = None
+
+    def _fake_fetch(domain, *, days, limit=None):  # noqa: ANN001
+        received_days.append(days)
+        return [_FakeEntry()]
+
+    with patch("axi.domain_bridge._fetch_domain_entries", side_effect=_fake_fetch):
+        count = backfill_node_occurred_at()  # no days= argument — uses the default
+
+    # The default window must be generous enough to cover 800-day-old entries.
+    assert received_days, "_fetch_domain_entries was never called"
+    assert received_days[0] >= 800, (
+        f"backfill_node_occurred_at default days={received_days[0]} is too small to "
+        f"cover an 800-day-old entry. Default should be >= 36500 (≈100 years)."
+    )
+
+    assert count >= 1, (
+        "backfill_node_occurred_at did not update the ancient node; "
+        "the default look-back window is too narrow."
+    )
+
+    row = store.get_node(node_id)
+    assert row is not None
+    assert row["occurred_at"] == pytest.approx(ancient_epoch, abs=1), (
+        f"occurred_at should be the ancient event epoch ({ancient_epoch}); "
+        f"got {row['occurred_at']}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# T5e — backfill_node_occurred_at: rowcount accuracy (FIX 2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_backfill_rowcount_reflects_actual_rows_updated():
+    """T5e RED: The return value of backfill_node_occurred_at must equal the number
+    of rows actually changed in the DB — NOT the number of iterations.
+
+    Scenario:
+      - Two nodes with NULL occurred_at and matching domain entries.
+      - First call → both updated → count == 2.
+      - Second call → both already set → count == 0 (idempotency + rowcount check).
+
+    If the code does `updated += 1` unconditionally (without checking rowcount),
+    the second call would still return 2 (the loop iterates but SQLite's
+    WHERE occurred_at IS NULL prevents any actual writes).
+    """
+    import axi.store as store
+    from axi.domain_bridge import backfill_node_occurred_at
+
+    conn = store._connect()
+    now = time.time()
+
+    node_ids = []
+    entry_ids = []
+    for i in range(2):
+        cur = conn.execute(
+            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("fact", f"rowcount test node {i}", "{}", "health", now, now),
+        )
+        conn.commit()
+        nid = cur.lastrowid
+        node_ids.append(nid)
+
+        eid = f"he-rowcount-{i:03d}"
+        entry_ids.append(eid)
+        conn.execute(
+            "INSERT INTO domain_node_map(domain, entry_id, node_id, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("health", eid, nid, now),
+        )
+        conn.commit()
+
+    real_dt = datetime(2025, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+    @dataclass
+    class _FakeEntry:
+        id: str = ""
+        kind: str = "vital"
+        raw_utterance: str = "rowcount test"
+        ts: object = real_dt
+        created_at: object = None
+
+    def _fake_fetch(domain, *, days, limit=None):  # noqa: ANN001
+        return [_FakeEntry(id=eid) for eid in entry_ids]
+
+    with patch("axi.domain_bridge._fetch_domain_entries", side_effect=_fake_fetch):
+        count_first = backfill_node_occurred_at()
+        count_second = backfill_node_occurred_at()
+
+    assert count_first == 2, (
+        f"First backfill run should update exactly 2 nodes; got {count_first}. "
+        "Make sure the count uses cur.rowcount, not unconditional += 1."
+    )
+    assert count_second == 0, (
+        f"Second backfill run should return 0 (all occurred_at already set); "
+        f"got {count_second}. This indicates the count does NOT reflect actual DB writes."
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # T6 — /api/graph/full includes occurred_at; brain3d.html references it
 # ═══════════════════════════════════════════════════════════════════════════
 
