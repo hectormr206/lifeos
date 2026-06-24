@@ -26,9 +26,24 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import ssl
 from typing import Any
 
-_DEFAULT_BASE_URL = "http://127.0.0.1:7799"
+_DEFAULT_BASE_URL = "https://127.0.0.1:8081"
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    """SSL context for talking to the local dashboard.
+
+    The dashboard serves HTTPS with a self-signed cert bound to loopback
+    (single-user, trusted-loopback posture). Verification is disabled because
+    there is no CA for a self-signed localhost cert; the connection never
+    leaves 127.0.0.1.
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 # ---------------------------------------------------------------------------
 # Public helpers (also tested directly)
@@ -147,8 +162,9 @@ def _fetch_events(
         params["since_ts"] = f"{since_ts:.6f}"
 
     url = f"{base_url}/api/events?" + urllib.parse.urlencode(params)
+    ctx = _build_ssl_context() if url.startswith("https") else None
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=10, context=ctx) as resp:  # noqa: S310
             body = resp.read().decode()
             payload = json.loads(body)
             return payload.get("events", [])
