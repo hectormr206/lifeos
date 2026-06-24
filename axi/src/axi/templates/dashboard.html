@@ -259,7 +259,10 @@
          x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
          @keydown.escape.window="$store.brain3d.open = false"
          style="display:none; position:fixed; inset:0; z-index:200; background:rgba(11,14,19,0.96); display:none; flex-direction:column;">
-      <div x-show="$store.brain3d.open" style="position:fixed; inset:0; z-index:200; background:rgba(11,14,19,0.96); display:flex; flex-direction:column;">
+      <!-- No x-show here: it is gated by the outer #brain3d-modal. Putting x-show
+           on this flex container made Alpine overwrite display:flex with block
+           when toggling, collapsing the iframe to its 150px intrinsic height. -->
+      <div style="position:fixed; inset:0; z-index:200; background:rgba(11,14,19,0.96); display:flex; flex-direction:column;">
         <!-- Modal header -->
         <div style="display:flex; align-items:center; justify-content:space-between; padding:0.75rem 1.25rem; border-bottom:1px solid var(--panel2); flex-shrink:0;">
           <div style="display:flex; align-items:center; gap:0.75rem;">
@@ -273,11 +276,16 @@
           </div>
           <button @click="$store.brain3d.open = false" class="btn" style="padding:3px 12px; font-size:0.8rem">✕ Cerrar</button>
         </div>
-        <!-- Modal body: lazy-load brain3d in iframe -->
-        <iframe x-show="$store.brain3d.open" :src="$store.brain3d.open ? '/brain3d' : ''"
-                style="flex:1; border:none; width:100%;"
-                title="Visualización 3D del grafo de memoria">
-        </iframe>
+        <!-- Modal body: lazy-load brain3d in iframe. The iframe is wrapped in a
+             flex:1 / min-height:0 box and set to height:100% so it actually
+             fills the modal — a bare flex:1 iframe collapses to its intrinsic
+             150px default, squashing the 3D graph into a thin strip. -->
+        <div style="flex:1; min-height:0;">
+          <iframe x-show="$store.brain3d.open" :src="$store.brain3d.open ? '/brain3d' : ''"
+                  style="width:100%; height:100%; border:none; display:block;"
+                  title="Visualización 3D del grafo de memoria">
+          </iframe>
+        </div>
       </div>
     </div>
 
