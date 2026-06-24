@@ -23,6 +23,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from axi import config, store
+from axi.output import notify
+from axi.store import RecoveryError
 
 log = logging.getLogger("axi.memory")
 
@@ -59,6 +61,25 @@ class ConversationMemory:
         try:
             store.init_db()
             log.info("memory backend: %s (%d turns)", store.DB_PATH, store.conversation_count())
+        except RecoveryError as exc:
+            log.critical(
+                "RECOVERY REQUIRED — recoverable data exists but restore failed; "
+                "refusing to run with empty memory. Manual recovery needed. "
+                "Files: ~/.local/state/axi/memory.db, "
+                ".corrupt-*.bak backups in that directory, ~/lifeos-backups. "
+                "Error: %s",
+                exc,
+            )
+            try:
+                notify(
+                    "Axi — Recovery Required",
+                    "Recoverable data exists but restore failed. "
+                    "Check ~/.local/state/axi/ and ~/lifeos-backups. Manual recovery needed.",
+                    icon="dialog-error",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            raise
         except Exception as exc:  # noqa: BLE001
             self.degraded = True
             log.warning("memory degraded: %s — running with empty history", exc)
@@ -80,6 +101,21 @@ class ConversationMemory:
             with store._tx() as c:  # noqa: SLF001 — internal helper, intentional
                 c.execute("UPDATE conversations SET node_id = ? WHERE id = ?", (node_id, conv_id))
             return conv_id, node_id
+        except RecoveryError as exc:
+            log.critical(
+                "RECOVERY REQUIRED — store raised RecoveryError at runtime; "
+                "turn not persisted. Manual recovery needed. Error: %s",
+                exc,
+            )
+            try:
+                notify(
+                    "Axi — Recovery Required",
+                    "Store error: recoverable data at risk. Check ~/.local/state/axi/.",
+                    icon="dialog-error",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return 0, 0
         except Exception as exc:  # noqa: BLE001
             log.warning("memory degraded: %s — turn not persisted", exc)
             return 0, 0
@@ -96,6 +132,21 @@ class ConversationMemory:
                 out.append({"role": "user", "content": r["user_text"]})
                 out.append({"role": "assistant", "content": r["axi_text"]})
             return out
+        except RecoveryError as exc:
+            log.critical(
+                "RECOVERY REQUIRED — store raised RecoveryError fetching history; "
+                "returning empty. Error: %s",
+                exc,
+            )
+            try:
+                notify(
+                    "Axi — Recovery Required",
+                    "Store error: recoverable data at risk. Check ~/.local/state/axi/.",
+                    icon="dialog-error",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return []
         except Exception as exc:  # noqa: BLE001
             log.warning("memory degraded: %s — returning empty history", exc)
             return []
@@ -112,6 +163,21 @@ class ConversationMemory:
         """
         try:
             return store.conversation_count()
+        except RecoveryError as exc:
+            log.critical(
+                "RECOVERY REQUIRED — store raised RecoveryError fetching turn count; "
+                "returning 0. Error: %s",
+                exc,
+            )
+            try:
+                notify(
+                    "Axi — Recovery Required",
+                    "Store error: recoverable data at risk. Check ~/.local/state/axi/.",
+                    icon="dialog-error",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return 0
         except Exception as exc:  # noqa: BLE001
             log.warning("memory degraded: %s — turn count unavailable", exc)
             return 0
