@@ -33,6 +33,16 @@ log = logging.getLogger("axi.store")
 
 import sqlcipher3
 
+
+class RecoveryError(RuntimeError):
+    """Raised when healthy backups exist but every restore attempt failed.
+
+    This signals that recoverable data is present but cannot be written to
+    disk (e.g. due to I/O errors). Axi refuses to wipe the database and
+    start with an empty schema when data is demonstrably recoverable — a
+    loud failure forces human intervention rather than silent data loss.
+    """
+
 from axi import events as _events
 
 STATE_DIR = Path(
@@ -447,6 +457,12 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
+    # Track whether any candidate passed the integrity check, regardless of
+    # whether its subsequent restore succeeded.  This distinguishes "no
+    # recoverable data anywhere" (healthy_backup_seen=False → step 4 safe to
+    # rebuild empty) from "data exists but disk refuses writes" (True → MUST
+    # raise rather than wipe).
+    healthy_backup_seen = False
     for candidate in candidates:
         if not _backup_passes_integrity(candidate, key):
             log.warning("recovery: backup %s failed integrity_check — skipping", candidate.name)
@@ -456,6 +472,8 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
                 {"backup_file": candidate.name},
             )
             continue
+        # At least one healthy (integrity-passing) backup exists.
+        healthy_backup_seen = True
         try:
             shutil.copy2(str(candidate), str(db_path))
             _remove_wal_sidecars(db_path)
@@ -476,7 +494,28 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
                 {"backup_file": candidate.name, "error": str(cand_err)},
             )
 
-    # Step 4 — last resort: rebuild an empty schema.
+    # Step 4 — last resort: rebuild an empty schema — BUT only when there is
+    # genuinely nothing to recover.  If at least one backup passed the integrity
+    # check (healthy_backup_seen=True) but every restore failed (e.g. a btrfs
+    # I/O error), wiping db_path would destroy recoverable data.  Raise instead
+    # so Axi fails loudly and a human can intervene.
+    if healthy_backup_seen:
+        msg = (
+            "recovery aborted: healthy backups exist but every restore attempt "
+            "failed — refusing to wipe memory.db to prevent data loss; "
+            "manual recovery required"
+        )
+        log.error("recovery: %s", msg)
+        try:
+            _emit_recovery_event(
+                "critical",
+                f"recovery step 4 ABORTED: {msg}",
+                {"strategy": "refuse_wipe", "db_path": str(db_path)},
+            )
+        except Exception:  # noqa: BLE001 — event emission must never mask the primary error
+            pass
+        raise RecoveryError(msg)
+
     log.warning("recovery: no clean backup found — rebuilding empty memory DB")
     # Emit the critical event BEFORE attempting the unlink+connect so it is
     # always recorded even if the step itself fails (e.g. disk full / permissions).

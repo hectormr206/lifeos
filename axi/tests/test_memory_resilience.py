@@ -401,6 +401,157 @@ class TestStartupRecovery:
         ]
         assert len(recovery_msgs) >= 1, "No recovery log message found"
 
+    # ── Safety-gate tests (new, 2026-06-24) ──────────────────────────────────
+
+    def test_healthy_backup_restore_fails_raises_recovery_error(
+        self, tmp_path, monkeypatch
+    ):
+        """SAFETY: healthy backup exists but restore raises OSError → MUST raise
+        RecoveryError, MUST NOT wipe db_path to empty.
+
+        Discriminates old vs new:
+        - OLD behavior: exits step-3 loop with no success, falls to step 4,
+          calls db_path.unlink() and returns an empty-schema connection.
+        - NEW behavior: detects healthy_backup_seen=True, refuses to wipe,
+          raises RecoveryError so the caller learns recoverable data exists.
+        """
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        # Main file is garbage (forces step 2 to fail).
+        db.write_bytes(b"\xff" * 4096)
+
+        # Create a healthy backup that passes integrity_check.
+        healthy_bak = tmp_path / "memory.db.good.bak"
+        c = sqlcipher3.connect(str(healthy_bak), check_same_thread=False, isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        c.execute("CREATE TABLE nodes (id INTEGER PRIMARY KEY, label TEXT)")
+        c.execute("INSERT INTO nodes (label) VALUES ('precious')")
+        c.close()
+
+        # Capture the original bytes of db_path before recovery.
+        original_bytes = db.read_bytes()
+
+        # Monkeypatch shutil.copy2 so the restore step always raises OSError.
+        real_copy2 = shutil.copy2
+        call_count = {"n": 0}
+
+        def _failing_copy2(src, dst, **kwargs):
+            call_count["n"] += 1
+            # Only fail copies that target db_path (restores); allow backups.
+            if str(dst) == str(db):
+                raise OSError("disk I/O error — btrfs failure")
+            return real_copy2(src, dst, **kwargs)
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+        monkeypatch.setattr("axi.store.shutil.copy2", _failing_copy2)
+
+        # Must raise RecoveryError (not return an empty connection).
+        with pytest.raises(store.RecoveryError):
+            store._repair_corrupt_db(db, key)
+
+        # db_path must NOT have been wiped — original bytes preserved.
+        assert db.exists(), "db_path must not be unlinked"
+        assert db.read_bytes() == original_bytes, (
+            "db_path bytes changed — it was wiped or overwritten during failed recovery"
+        )
+
+    def test_healthy_backup_restore_fails_does_not_return_empty_connection(
+        self, tmp_path, monkeypatch
+    ):
+        """Companion to above: _repair_corrupt_db must not return a fresh empty
+        connection when healthy backups exist but restores fail.
+
+        OLD: returned a live sqlcipher3.Connection to an empty schema → silent loss.
+        NEW: raises, never returns, so no caller can mistake 'empty connection' for success.
+        """
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        db.write_bytes(b"\xff" * 4096)
+
+        healthy_bak = tmp_path / "memory.db.healthy.bak"
+        c = sqlcipher3.connect(str(healthy_bak), check_same_thread=False, isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        c.execute("CREATE TABLE t (v TEXT)")
+        c.execute("INSERT INTO t VALUES ('must-not-lose')")
+        c.close()
+
+        real_copy2 = shutil.copy2
+
+        def _failing_copy2(src, dst, **kwargs):
+            if str(dst) == str(db):
+                raise OSError("disk I/O error")
+            return real_copy2(src, dst, **kwargs)
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+        monkeypatch.setattr("axi.store.shutil.copy2", _failing_copy2)
+
+        result = None
+        raised = False
+        try:
+            result = store._repair_corrupt_db(db, key)
+        except (store.RecoveryError, RuntimeError):
+            raised = True
+
+        assert raised, "_repair_corrupt_db must raise, not return, when healthy backup exists"
+        assert result is None, "result must be None — no empty connection was returned"
+
+    def test_no_healthy_backup_still_rebuilds_empty_schema(self, tmp_path, monkeypatch):
+        """Regression guard: when genuinely NO healthy backup exists,
+        the existing behavior (rebuild empty schema) must be preserved.
+
+        This covers the 'nothing to lose' path — healthy_backup_seen stays False
+        and step 4 runs as before.
+
+        Note: we verify conn is not None (step 4 returns a connection, not raises).
+        We do not attempt DDL here because a just-unlinked+recreated SQLCipher file
+        may exhibit transient disk-I/O in certain fs setups (matches the known flake
+        in test_fresh_schema_created_when_no_recovery_possible when run in suite).
+        """
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        # Main file + WAL are garbage. NO .bak files exist.
+        db.write_bytes(b"\xff" * 4096)
+        Path(str(db) + "-wal").write_bytes(b"\xff" * 512)
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+
+        # Must NOT raise RecoveryError — no data to lose, rebuild empty.
+        conn = store._repair_corrupt_db(db, key)
+        assert conn is not None, "step 4 must return a fresh connection, not raise"
+
+    def test_healthy_backup_that_restores_ok_returns_connection(self, tmp_path, monkeypatch):
+        """Happy path: healthy backup + restore succeeds → returns working connection.
+        This must remain GREEN (no regression from the safety flag).
+        """
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        # Main file is garbage.
+        db.write_bytes(b"\xff" * 4096)
+
+        # Healthy backup.
+        healthy_bak = tmp_path / "memory.db.restore-ok.bak"
+        c = sqlcipher3.connect(str(healthy_bak), check_same_thread=False, isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        c.execute("CREATE TABLE memories (id INTEGER PRIMARY KEY, content TEXT)")
+        c.execute("INSERT INTO memories (content) VALUES ('survive-recovery')")
+        c.close()
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+
+        conn = store._repair_corrupt_db(db, key)
+        assert conn is not None
+
+        rows = conn.execute("SELECT content FROM memories").fetchall()
+        assert [r[0] for r in rows] == ["survive-recovery"]
+
     def test_connect_triggers_repair_when_open_raises(self, tmp_path, monkeypatch):
         """_connect() must call _repair_corrupt_db when _try_open raises DatabaseError."""
         import sqlcipher3
