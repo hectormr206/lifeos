@@ -573,7 +573,7 @@ def backfill_all_domains(
 
 def backfill_node_occurred_at(
     *,
-    days: int = 365,
+    days: int = 36500,
     limit: int | None = None,
 ) -> int:
     """Idempotent helper: fill occurred_at on nodes that have NULL occurred_at.
@@ -588,7 +588,12 @@ def backfill_node_occurred_at(
     - Domains that fail to fetch are skipped with a warning (never raises).
 
     Args:
-        days:  Look-back window passed to _fetch_domain_entries (default 365).
+        days:  Look-back window passed to _fetch_domain_entries.
+               Default is 36500 (≈100 years) so ALL existing entries are
+               considered — a one-time migration must not silently skip nodes
+               whose real event date is older than the previous 365-day window.
+               Pass a smaller value only when testing or when a bounded run is
+               explicitly desired.
         limit: Optional cap on total nodes updated in a single run.
 
     Returns:
@@ -641,13 +646,14 @@ def backfill_node_occurred_at(
                 continue
 
             try:
-                conn.execute(
+                cur = conn.execute(
                     "UPDATE nodes SET occurred_at=? WHERE id=? AND occurred_at IS NULL",
                     (epoch, node_id),
                 )
                 # In autocommit mode (isolation_level=None) the UPDATE commits
-                # automatically. No explicit commit needed.
-                updated += 1
+                # automatically. Use rowcount so concurrent callers don't both
+                # increment when only one wins the SQLite write lock.
+                updated += cur.rowcount
             except Exception as exc:  # noqa: BLE001
                 log.warning(
                     "backfill_node_occurred_at: failed to update node_id=%r: %s", node_id, exc
