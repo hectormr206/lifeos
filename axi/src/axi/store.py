@@ -506,9 +506,35 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
             continue
         # At least one healthy (integrity-passing) backup exists.
         healthy_backup_seen = True
+        # Atomic restore: copy to a temp file, verify it opens, THEN swap in
+        # place with os.replace().  Invariant: db_path is never left holding
+        # unverified or partial bytes.  The only mutation is an atomic swap to
+        # a backup that already passed open-verification.  In the rare case
+        # where os.replace succeeds but the subsequent _try_open(db_path) fails,
+        # db_path holds verified-good backup bytes — strictly better than the
+        # original corrupt content.  Any earlier failure (copy error, temp-open
+        # failure) leaves db_path completely untouched.
+        tmp = db_path.parent / f"{db_path.name}.restore-tmp-{os.getpid()}-{threading.get_ident()}-{secrets.token_hex(4)}"
         try:
-            shutil.copy2(str(candidate), str(db_path))
+            shutil.copy2(str(candidate), str(tmp))
+            verify = _try_open(tmp, key)
+            if verify is None:
+                tmp.unlink(missing_ok=True)
+                log.warning(
+                    "recovery: temp restore of %s did not open — skipping",
+                    candidate.name,
+                )
+                _emit_recovery_event(
+                    "warning",
+                    f"recovery step 3: temp restore of {candidate.name} did not open — skipping",
+                    {"backup_file": candidate.name},
+                )
+                continue
+            verify.close()
+            # Temp file is verified good.  Clear stale WAL/SHM of the live file
+            # BEFORE the atomic swap so readers never see a mismatched WAL.
             _remove_wal_sidecars(db_path)
+            os.replace(str(tmp), str(db_path))
             conn = _try_open(db_path, key)
             if conn is not None:
                 log.warning("recovery: restored from healthy backup %s", candidate.name)
@@ -518,6 +544,17 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
                     {"backup_file": candidate.name, "strategy": "restore_backup"},
                 )
                 return conn
+            # os.replace succeeded but final open failed — unusual (possible
+            # concurrent writer); fall through to try next candidate.
+            log.warning(
+                "recovery: restore of %s: swap succeeded but final open failed — skipping",
+                candidate.name,
+            )
+            _emit_recovery_event(
+                "warning",
+                f"recovery step 3: restore of {candidate.name}: swap ok but open failed — skipping",
+                {"backup_file": candidate.name},
+            )
         except (OSError, sqlcipher3.dbapi2.DatabaseError) as cand_err:
             log.warning("recovery: restore of %s failed (%s) — skipping", candidate.name, cand_err)
             _emit_recovery_event(
@@ -525,6 +562,12 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
                 f"recovery step 3: restore of {candidate.name} failed ({cand_err}) — skipping",
                 {"backup_file": candidate.name, "error": str(cand_err)},
             )
+        finally:
+            # Never leave a temp file behind regardless of outcome.
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
 
     # Step 4 — last resort: rebuild an empty schema — BUT only when there is
     # genuinely nothing to recover.  If at least one backup passed the integrity
@@ -533,9 +576,9 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
     # so Axi fails loudly and a human can intervene.
     if healthy_backup_seen:
         msg = (
-            "recovery aborted: healthy backups exist but every restore attempt "
-            "failed — refusing to wipe memory.db to prevent data loss; "
-            "manual recovery required"
+            "recovery aborted: could not bring memory.db back to a healthy open "
+            "state from any backup — refusing to wipe memory.db to prevent data "
+            "loss; manual recovery required"
         )
         log.error("recovery: %s", msg)
         try:
