@@ -864,8 +864,10 @@ def bridge_meeting_node(meeting_id: int, summary: str) -> None:
 
     if updated == 0:
         # Another concurrent call won the race — remove the orphan node we created.
+        # Also clean the FTS shadow row so no stale entry is left in nodes_fts.
         with _store._tx() as txc:  # noqa: SLF001
             txc.execute("DELETE FROM nodes WHERE id=?", (nid,))
+            txc.execute("DELETE FROM nodes_fts WHERE rowid=?", (nid,))
         return
 
     _store.trigger_embed_for_node(nid)
