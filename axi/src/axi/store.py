@@ -51,6 +51,38 @@ STATE_DIR = Path(
 DB_PATH = STATE_DIR / "memory.db"
 
 
+def _ensure_nocow_dir(path: Path) -> None:
+    """Set the NoCoW (Copy-on-Write disabled) attribute on *path* if it exists.
+
+    On btrfs with CoW + compression, SQLite/SQLCipher's many small random
+    writes produce "disk I/O error" on read — the proven root fix is to set
+    the +C (NoCoW) attribute on the state DIRECTORY so every file created
+    inside (memory.db, events.db, future DBs) inherits NoCoW automatically.
+
+    This is best-effort and idempotent:
+    - Non-btrfs filesystems (ext4, xfs, tmpfs, APFS) and missing ``chattr``
+      binary are silently ignored — startup must never fail on CI or non-btrfs.
+    - A plain ``chattr +C`` re-apply on an already-NoCoW dir is a harmless no-op.
+    - Only attempted when *path* exists (must be called after mkdir).
+
+    NOTE: lifeos domain DBs in ~/.local/state/lifeos also need the same
+    treatment; that should be applied inside the lifeos package on its own
+    STATE_DIR, not here.
+    """
+    if not path.exists():
+        return
+    try:
+        import subprocess as _sp
+        _sp.run(
+            ["chattr", "+C", str(path)],
+            check=False,
+            capture_output=True,
+        )
+    except Exception:
+        # Non-btrfs, chattr missing, permission denied, unsupported fs — all OK.
+        log.debug("_ensure_nocow_dir: chattr +C skipped for %s (best-effort)", path)
+
+
 def _events_db_path() -> Path:
     """Path to the separate events (telemetry) DB.
 
@@ -601,6 +633,10 @@ def _connect() -> sqlcipher3.Connection:
         # encrypted in place (backup + atomic swap) before we open it.
         # Guard with _conn_lock so only one thread runs the migration.
         STATE_DIR.mkdir(parents=True, exist_ok=True)
+        # Set NoCoW on the state directory so memory.db and events.db inherit
+        # the +C attribute on btrfs.  Best-effort: swallows all failures on
+        # non-btrfs filesystems (ext4, xfs, tmpfs, CI).
+        _ensure_nocow_dir(STATE_DIR)
         from axi import db_migrate
         db_migrate.migrate_to_encrypted()
 
