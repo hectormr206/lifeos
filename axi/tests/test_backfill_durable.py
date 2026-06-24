@@ -177,7 +177,7 @@ def test_backfill_main_calls_backfill_then_checkpoint_then_close():
          patch("axi.backfill.store") as mock_store:
         mock_store.checkpoint.side_effect = fake_checkpoint
         mock_store.close.side_effect = fake_close
-        backfill_mod.main()
+        backfill_mod.main([])
 
     assert call_order == ["backfill", "checkpoint", "close"], (
         f"expected [backfill, checkpoint, close] in order, got {call_order}"
