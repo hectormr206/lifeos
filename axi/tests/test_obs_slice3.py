@@ -113,12 +113,24 @@ def test_repair_corrupt_db_emits_event_after_backup(tmp_path, monkeypatch):
     conn_stub = MagicMock()
     conn_stub.execute.return_value = MagicMock()
     conn_stub.execute.return_value.fetchone.return_value = (1,)
-    monkeypatch.setattr(store, "_try_open", lambda *a, **kw: conn_stub)
+
+    # The re-check (first call) must return None so the ladder proceeds to Step 1
+    # and actually emits the backup/detection event.  Subsequent calls (Step 2)
+    # return the healthy stub so recovery completes successfully.
+    real_try_open = store._try_open
+    call_count = {"n": 0}
+
+    def _recheck_fails_then_succeeds(path, k):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return None  # re-check fails → ladder must run
+        return conn_stub
+
+    monkeypatch.setattr(store, "_try_open", _recheck_fails_then_succeeds)
 
     store._repair_corrupt_db(db_path, key)
 
-    sources = [e[2] for e in emitted if len(e) > 2]
-    # Some event should reference backup / corruption
+    # Some event should reference backup / corruption (Step 1 must have fired)
     backup_events = [e for e in emitted if "backup" in str(e).lower() or "corrupt" in str(e).lower()]
     assert len(backup_events) >= 1
 

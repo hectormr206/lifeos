@@ -225,7 +225,14 @@ class TestStartupRecovery:
     """store._repair_corrupt_db() self-heals corrupt DB files."""
 
     def test_wal_sidecar_removal_recovers_after_corruption(self, tmp_path, monkeypatch):
-        """Common case: WAL reset (remove WAL/SHM) returns a working connection."""
+        """Common case: WAL reset (remove WAL/SHM) returns a working connection.
+
+        The re-check inside _repair_corrupt_db_locked calls _remove_wal_sidecars
+        then _try_open.  With a real corrupt WAL the re-check would naturally fail
+        and proceed to the ladder.  Here we patch _try_open so the FIRST call
+        (the re-check) returns None, ensuring Step 2 (WAL reset) is the actual
+        path that produces the successful connection — not the re-check skip.
+        """
         import sqlcipher3
 
         db = tmp_path / "test_recover.db"
@@ -244,7 +251,20 @@ class TestStartupRecovery:
         monkeypatch.setattr(store, "DB_PATH", db)
         monkeypatch.setattr(store, "STATE_DIR", tmp_path)
 
-        # _repair_corrupt_db calls step 2 (WAL reset) — must succeed.
+        # Re-check must fail (return None) so the ladder's Step 2 runs.
+        # Subsequent calls use the real function — Step 2 will open the clean DB.
+        real_try_open = store._try_open
+        call_count = {"n": 0}
+
+        def _recheck_fails(path, k):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return None  # re-check fails → proceed to Step 2
+            return real_try_open(path, k)
+
+        monkeypatch.setattr(store, "_try_open", _recheck_fails)
+
+        # Step 2 (WAL reset) must succeed and return a connection.
         conn = store._repair_corrupt_db(db, key)
         assert conn is not None
         # WAL/SHM must be gone after recovery.
@@ -294,6 +314,59 @@ class TestStartupRecovery:
 
         bak_files = list(tmp_path.glob("memory.db.corrupt-*.bak"))
         assert len(bak_files) >= 1, "Expected at least one .corrupt-*.bak file"
+
+    def test_forensic_wal_snapshot_preserved_before_recheck_removal(
+        self, tmp_path, monkeypatch
+    ):
+        """Forensic regression: WAL bytes must be preserved even when the re-check
+        removes sidecars before Step 1 runs.
+
+        _repair_corrupt_db_locked snapshots existing WAL/SHM to
+        ``<db>.corrupt-<pid>.bak-wal`` / ``-shm`` BEFORE calling
+        _remove_wal_sidecars, so the corrupt bytes survive for post-incident
+        inspection regardless of which recovery path is taken.
+        """
+        import sqlcipher3
+
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        # Build a valid DB.
+        c = sqlcipher3.connect(str(db), check_same_thread=False, isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        c.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)")
+        c.close()
+
+        # Write a recognisable WAL payload so we can confirm it was copied.
+        wal_sentinel = b"\xDE\xAD\xBE\xEF" * 64
+        Path(str(db) + "-wal").write_bytes(wal_sentinel)
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+
+        # Re-check fails so the ladder runs (same pattern as other tests).
+        real_try_open = store._try_open
+        call_count = {"n": 0}
+
+        def _recheck_fails(path, k):
+            call_count["n"] += 1
+            if call_count["n"] == 1 and str(path) == str(db):
+                return None
+            return real_try_open(path, k)
+
+        monkeypatch.setattr(store, "_try_open", _recheck_fails)
+
+        store._repair_corrupt_db(db, key)
+
+        # A forensic WAL artifact must exist after recovery.
+        wal_artifacts = list(tmp_path.glob("memory.db.corrupt-*.bak-wal"))
+        assert len(wal_artifacts) >= 1, (
+            "Expected a forensic .corrupt-<pid>.bak-wal file preserving the corrupt WAL"
+        )
+        # Confirm the sentinel bytes were captured (not an empty snapshot).
+        assert wal_artifacts[0].read_bytes() == wal_sentinel, (
+            "Forensic WAL snapshot must contain the original corrupt WAL bytes"
+        )
 
     def test_fresh_schema_created_when_no_recovery_possible(self, tmp_path, monkeypatch):
         """Last resort: if main file and WAL are both unrecoverable, fresh schema is built."""
@@ -1151,7 +1224,11 @@ class TestRecoveryFlockSerialization:
 
         monkeypatch.setattr(_fcntl, "flock", _failing_flock)
 
-        # Must NOT raise from the lock; must still recover (WAL reset → return conn).
+        # Must NOT raise from the lock; must still recover.
+        # With flock unavailable, _recovery_lock yields without a lock and
+        # _repair_corrupt_db_locked runs normally.  The re-check removes the
+        # garbage WAL and _try_open succeeds on the healthy main DB, so recovery
+        # returns via the re-check skip path (not Step 2).
         conn = store._repair_corrupt_db(db, key)
         assert conn is not None, (
             "_repair_corrupt_db must succeed even when flock raises — lock is best-effort"
