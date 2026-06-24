@@ -5,7 +5,7 @@ present in memory.db.  All linkers are IDEMPOTENT (SELECT-before-INSERT) and
 bounded to a recent window to avoid full-table scans.
 
 Linkers implemented:
-  - run_happened_at_linker   : meeting node → fact node when fact.created_at ∈ [meeting.start_time ± 1h]
+  - run_happened_at_linker   : meeting node → fact node when COALESCE(fact.occurred_at, fact.created_at) ∈ [meeting.start_time ± 1h]
   - run_involves_person_linker: fact node → person node when fact.data.person_id is bridged via domain_node_map
   - run_same_day_linker      : fact node ↔ fact node when both share the same UTC calendar day
 
@@ -102,12 +102,21 @@ def run_happened_at_linker(
     if not meetings:
         return 0
 
-    # Fetch ALL fact-nodes (no cutoff on created_at/occurred_at) because
-    # a backfilled fact's occurred_at may fall inside an older meeting's window
-    # even if created_at is recent. The meeting window cutoff bounds the search.
+    # Fetch fact-nodes whose event time falls within the relevant range.
+    # Use COALESCE(occurred_at, created_at) as the canonical event timestamp
+    # (same expression used in the inner match loop below).
+    #
+    # The lower bound is the oldest meeting start_time minus window_s, so no
+    # fact that could legitimately match ANY meeting in this run is excluded.
+    # This restores bounded complexity (O(meetings × window)) without
+    # re-introducing the backfill bug: the cutoff is on the EVENT time
+    # (occurred_at when set), not created_at.
+    oldest_meeting_start = min(float(m["start_time"]) for m in meetings)
+    fact_cutoff = oldest_meeting_start - window_s
     fact_nodes = conn.execute(
         "SELECT id, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
-        "WHERE kind='fact'",
+        "WHERE kind='fact' AND COALESCE(occurred_at, created_at) > ?",
+        (fact_cutoff,),
     ).fetchall()
 
     if not fact_nodes:
@@ -247,9 +256,9 @@ def run_same_day_linker(
     for day_key, node_ids in by_day.items():
         if len(node_ids) < 2:
             continue
-        # Cap fan-out per day: link each node to its K nearest-by-created_at neighbors
-        # (node_ids are sorted by created_at ASC already).  This bounds the per-day
-        # edge count to MAX_SAME_DAY_PAIRS_PER_DAY instead of O(N²).
+        # Cap fan-out per day: link each node to its K nearest-by-event_ts neighbors
+        # (node_ids are sorted by COALESCE(occurred_at, created_at) ASC already).
+        # This bounds the per-day edge count to MAX_SAME_DAY_PAIRS_PER_DAY instead of O(N²).
         day_pairs_created = 0
         # K nearest neighbors per node (window of K consecutive nodes in time order).
         _K_NEAREST = 5
