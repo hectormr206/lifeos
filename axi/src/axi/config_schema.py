@@ -371,6 +371,17 @@ FIELDS: tuple[ConfigField, ...] = (
         minimum=0.0,
         maximum=1.0,
     ),
+    # ─────── semantic graph bridging gates ───────
+    ConfigField(
+        "graph_bridge_conversations", "boolean", False,
+        "If true, each chat turn is also added as a node in the semantic graph. "
+        "Default off keeps the graph to structured life-facts only.",
+    ),
+    ConfigField(
+        "graph_bridge_meetings", "boolean", False,
+        "If true, meeting summaries are added as nodes in the semantic graph. "
+        "Default off (meetings are noisy and pollute the life-facts graph).",
+    ),
 )
 
 

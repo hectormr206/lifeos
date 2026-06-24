@@ -1026,8 +1026,9 @@ def process_meeting(meeting_id: int, transcriber, brain_ask, session: "MeetingSe
     log.info("meeting %d %s: %d segments, summary %d chars", meeting_id, final_status, len(segments), len(summary))
 
     # Bridge the meeting into the semantic graph so linkers can include it.
-    # Only runs when summary is available; idempotency + race safety inside bridge_meeting_node.
-    if summary:
+    # Gated by graph_bridge_meetings (default OFF) — keeps the graph to structured
+    # life-facts only; meetings are too noisy by default.
+    if summary and config.get("graph_bridge_meetings", False):
         try:
             bridge_meeting_node(meeting_id, summary)
         except Exception as _bridge_exc:  # noqa: BLE001
