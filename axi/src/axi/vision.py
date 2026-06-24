@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -38,7 +39,15 @@ def _spectacle_capture(active_only: bool) -> bytes | None:
     try:
         args = ["spectacle", "-b", "-n", "-o", str(out_path)]
         args.append("-a" if active_only else "-f")
-        proc = subprocess.run(args, capture_output=True, timeout=5, check=False)
+        # On a Wayland session DISPLAY is often still set, which tempts Qt into
+        # the xcb platform plugin — that needs libxcb-cursor0 and otherwise
+        # aborts with SIGABRT (no capture, coredump on every attempt). Pin Qt to
+        # the Wayland plugin so spectacle talks to KWin directly. Left untouched
+        # on pure-X sessions so we don't force an unavailable plugin there.
+        env = None
+        if os.environ.get("WAYLAND_DISPLAY"):
+            env = {**os.environ, "QT_QPA_PLATFORM": "wayland"}
+        proc = subprocess.run(args, capture_output=True, timeout=5, check=False, env=env)
         if proc.returncode != 0:
             err = proc.stderr.decode(errors="replace")[:200]
             log.warning("spectacle returned %d: %s", proc.returncode, err)
