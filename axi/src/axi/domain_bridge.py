@@ -442,6 +442,16 @@ def backfill_all_domains(
             if sleep_s > 0 and total_created % batch_size == 0:
                 _time.sleep(sleep_s)
 
+    # Durability: fold WAL frames into the main DB file before returning so
+    # standalone (non-daemon) callers don't silently lose writes on process
+    # exit.  A checkpoint while the daemon runs is a normal SQLite operation
+    # and does not break concurrent reads.  Failure is logged and swallowed
+    # so the caller always receives the result dict.
+    try:
+        store.checkpoint()
+    except Exception as _exc:  # noqa: BLE001
+        log.warning("backfill_all_domains: post-backfill checkpoint failed: %s", _exc)
+
     return result
 
 
