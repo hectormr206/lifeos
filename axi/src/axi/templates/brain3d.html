@@ -13,9 +13,9 @@
 
   <!-- ─── header ─── -->
   <div class="flex justify-between items-baseline flex-wrap gap-2">
-    <h1 class="text-2xl font-semibold">Cerebro 3D</h1>
+    <h1 class="text-2xl font-semibold" x-text="tUi('title')"></h1>
     <div class="flex items-center gap-3 text-sm">
-      <span class="muted" x-text="nodeCount + ' nodos · ' + edgeCount + ' relaciones'"></span>
+      <span class="muted" x-text="nodeCount + ' ' + tUi('nodes') + ' · ' + edgeCount + ' ' + tUi('relations')"></span>
       <!-- Partial indicator: cross-domain edges temporarily unavailable -->
       <template x-if="partial">
         <span class="text-xs px-2 py-0.5 rounded-full" style="background:var(--panel2);color:var(--amber)">
@@ -28,19 +28,16 @@
   <!-- ─── loading state ─── -->
   <template x-if="loading">
     <div class="panel p-12 text-center">
-      <div class="muted">Cargando grafo 3D…</div>
-      <div class="muted text-xs mt-2">Preparando neuronas y conexiones</div>
+      <div class="muted" x-text="tUi('loading')"></div>
+      <div class="muted text-xs mt-2" x-text="tUi('loadingSub')"></div>
     </div>
   </template>
 
   <!-- ─── empty state ─── -->
   <template x-if="!loading && nodeCount === 0">
     <div class="panel p-12 text-center">
-      <div class="muted text-lg">No hay nodos para visualizar</div>
-      <div class="text-sm muted mt-2">
-        Habla con Axi para que empiece a construir su red de memoria.
-        Los hechos extraídos de las conversaciones aparecerán aquí como neuronas conectadas.
-      </div>
+      <div class="muted text-lg" x-text="tUi('empty')"></div>
+      <div class="text-sm muted mt-2" x-text="tUi('emptyHint')"></div>
     </div>
   </template>
 
@@ -54,7 +51,7 @@
 
         <!-- Legend overlay -->
         <div class="absolute top-3 left-3 panel2 p-2 text-xs space-y-1" style="max-width:160px; border-radius:0.5rem;">
-          <div class="muted font-semibold mb-1">Dominio</div>
+          <div class="muted font-semibold mb-1" x-text="tUi('domainLegend')"></div>
           <template x-for="[domain, color] in Object.entries(DOMAIN_COLOR)" :key="domain">
             <div class="flex items-center gap-2">
               <span style="width:10px;height:10px;border-radius:50%;flex-shrink:0;"
@@ -65,9 +62,8 @@
         </div>
 
         <!-- Instructions hint -->
-        <div class="absolute bottom-3 left-3 muted text-xs panel2 p-1.5" style="border-radius:0.5rem; opacity:0.8;">
-          Orbitar: arrastrar · Zoom: scroll · Click: seleccionar nodo
-        </div>
+        <div class="absolute bottom-3 left-3 muted text-xs panel2 p-1.5" style="border-radius:0.5rem; opacity:0.8;"
+             x-text="tUi('controls')"></div>
       </div>
 
       <!-- ─── node sidebar ─── -->
@@ -77,7 +73,7 @@
         <template x-if="!selectedNode">
           <div class="muted text-center py-8">
             <div style="font-size:2rem">🧠</div>
-            <div class="mt-2">Haz click en un nodo para ver sus detalles</div>
+            <div class="mt-2" x-text="tUi('clickNode')"></div>
           </div>
         </template>
 
@@ -87,29 +83,29 @@
             <div class="font-semibold text-base mb-1" x-text="selectedNode.label"></div>
             <div class="muted text-xs space-y-0.5">
               <div>
-                <span class="font-medium">Tipo:</span>
+                <span class="font-medium" x-text="tUi('typeLabel') + ':'"></span>
                 <span x-text="tLabel(selectedNode.kind)"></span>
               </div>
               <div x-show="selectedNode.domain">
-                <span class="font-medium">Dominio:</span>
+                <span class="font-medium" x-text="tUi('domainLabel') + ':'"></span>
                 <span x-text="tLabel(selectedNode.domain)"></span>
               </div>
               <div>
                 <span class="font-medium">Embedding:</span>
-                <span x-text="selectedNode.has_embedding ? '✓ Sí' : '—'"></span>
+                <span x-text="selectedNode.has_embedding ? '✓ ' + tUi('yes') : '—'"></span>
               </div>
             </div>
 
             <!-- Connected edges -->
             <template x-if="neighborEdges.length > 0">
               <div class="mt-4">
-                <div class="font-semibold text-xs muted mb-2">Conexiones (<span x-text="neighborEdges.length"></span>)</div>
+                <div class="font-semibold text-xs muted mb-2"><span x-text="tUi('connections')"></span> (<span x-text="neighborEdges.length"></span>)</div>
                 <div class="space-y-1.5 max-h-64 overflow-y-auto">
                   <template x-for="edge in neighborEdges" :key="edge._key">
                     <div class="panel2 p-2 text-xs rounded">
                       <div class="font-medium" x-text="tEdge(edge.kind)"></div>
                       <div class="muted mt-0.5" x-text="edge.direction + ' ' + edge.neighborLabel"></div>
-                      <div x-show="edge.system" class="muted text-xs" x-text="'sistema ' + edge.system"></div>
+                      <div x-show="edge.system" class="muted text-xs" x-text="tUi('system') + ' ' + edge.system"></div>
                     </div>
                   </template>
                 </div>
@@ -186,6 +182,24 @@ const LABELS = {
     'involves-person':  'Involucra a',
     'mentioned_in':     'Mencionado en',
     'has_setup':        'Configuración',
+    // Static UI chrome strings
+    ui: {
+      title:        'Cerebro 3D',
+      nodes:        'nodos',
+      relations:    'relaciones',
+      loading:      'Cargando grafo 3D…',
+      loadingSub:   'Preparando neuronas y conexiones',
+      empty:        'No hay nodos para visualizar',
+      emptyHint:    'Habla con Axi para que empiece a construir su red de memoria.',
+      domainLegend: 'Dominio',
+      controls:     'Orbitar: arrastrar · Zoom: scroll · Click: seleccionar nodo',
+      clickNode:    'Haz click en un nodo para ver sus detalles',
+      typeLabel:    'Tipo',
+      domainLabel:  'Dominio',
+      yes:          'Sí',
+      connections:  'Conexiones',
+      system:       'sistema',
+    },
   },
   en: {
     // Domains + kinds
@@ -209,6 +223,24 @@ const LABELS = {
     'involves-person':  'Involves',
     'mentioned_in':     'Mentioned in',
     'has_setup':        'Setup',
+    // Static UI chrome strings
+    ui: {
+      title:        '3D Brain',
+      nodes:        'nodes',
+      relations:    'connections',
+      loading:      'Loading 3D graph…',
+      loadingSub:   'Preparing neurons and connections',
+      empty:        'No nodes to display',
+      emptyHint:    'Talk to Axi so it starts building your memory network.',
+      domainLegend: 'Domain',
+      controls:     'Orbit: drag · Zoom: scroll · Click: select node',
+      clickNode:    'Click a node to see its details',
+      typeLabel:    'Type',
+      domainLabel:  'Domain',
+      yes:          'Yes',
+      connections:  'Connections',
+      system:       'system',
+    },
   },
 };
 
@@ -230,6 +262,16 @@ function tEdge(key) {
   if (!key) return key;
   const map = LABELS[LANG] || LABELS['es'];
   return map[key] !== undefined ? map[key] : key;
+}
+
+/**
+ * Translate a static UI chrome string key to the current UI language.
+ * Falls back to the es value, then to the raw key (graceful degradation).
+ */
+function tUi(key) {
+  if (!key) return key;
+  const ui = (LABELS[LANG] || LABELS['es']).ui || LABELS['es'].ui || {};
+  return ui[key] !== undefined ? ui[key] : (LABELS['es'].ui || {})[key] || key;
 }
 
 function brain3dPage() {
@@ -292,6 +334,7 @@ function brain3dPage() {
 
       this._graph = ForceGraph3D()(container)
         .backgroundColor('#0b0e13')
+        .showNavInfo(false)
         .nodeLabel(n => `<div style="background:#1a1f2b;color:#e6edf3;padding:4px 8px;border-radius:4px;font-size:12px;max-width:200px">${escHtml(n.label)}</div>`)
         .nodeColor(n => n.color)
         .nodeOpacity(0.9)
