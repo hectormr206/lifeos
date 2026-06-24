@@ -507,10 +507,14 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
         # At least one healthy (integrity-passing) backup exists.
         healthy_backup_seen = True
         # Atomic restore: copy to a temp file, verify it opens, THEN swap in
-        # place with os.replace().  db_path is never mutated until a verified-
-        # good file is ready — if anything fails before the swap, db_path is
-        # left exactly as it was (invariant: no clobber on failed restore).
-        tmp = db_path.parent / f"{db_path.name}.restore-tmp-{os.getpid()}"
+        # place with os.replace().  Invariant: db_path is never left holding
+        # unverified or partial bytes.  The only mutation is an atomic swap to
+        # a backup that already passed open-verification.  In the rare case
+        # where os.replace succeeds but the subsequent _try_open(db_path) fails,
+        # db_path holds verified-good backup bytes — strictly better than the
+        # original corrupt content.  Any earlier failure (copy error, temp-open
+        # failure) leaves db_path completely untouched.
+        tmp = db_path.parent / f"{db_path.name}.restore-tmp-{os.getpid()}-{threading.get_ident()}-{secrets.token_hex(4)}"
         try:
             shutil.copy2(str(candidate), str(tmp))
             verify = _try_open(tmp, key)
@@ -572,9 +576,9 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
     # so Axi fails loudly and a human can intervene.
     if healthy_backup_seen:
         msg = (
-            "recovery aborted: healthy backups exist but every restore attempt "
-            "failed — refusing to wipe memory.db to prevent data loss; "
-            "manual recovery required"
+            "recovery aborted: could not bring memory.db back to a healthy open "
+            "state from any backup — refusing to wipe memory.db to prevent data "
+            "loss; manual recovery required"
         )
         log.error("recovery: %s", msg)
         try:
