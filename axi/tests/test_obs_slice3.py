@@ -45,6 +45,10 @@ def test_repair_corrupt_db_emits_log_critical_on_detection(tmp_path, monkeypatch
     """When _repair_corrupt_db is called the first event emitted is a
     log_critical with source='store.corruption' and a message describing the
     corrupt DB path.
+
+    The re-check (flock + re-check, 2026-06-24) must fail first so the ladder
+    proceeds to the detection event.  We return None on the re-check call and
+    conn_stub on the WAL-reset call.
     """
     from axi import events, store
 
@@ -58,11 +62,20 @@ def test_repair_corrupt_db_emits_log_critical_on_detection(tmp_path, monkeypatch
     monkeypatch.setattr(events, "log_error", lambda *a, **kw: None)
     monkeypatch.setattr(events, "log_info", lambda *a, **kw: None)
 
-    # Stub _try_open to simulate that WAL reset succeeds (so recovery finishes fast)
+    # Stub _try_open: re-check (first call) returns None so the ladder runs;
+    # WAL-reset call (second+) succeeds so recovery finishes fast.
     conn_stub = MagicMock()
     conn_stub.execute.return_value = MagicMock()
     conn_stub.execute.return_value.fetchone.return_value = (1,)
-    monkeypatch.setattr(store, "_try_open", lambda *a, **kw: conn_stub)
+    call_count = {"n": 0}
+
+    def _try_open_stub(*a, **kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return None  # re-check fails → ladder runs
+        return conn_stub  # WAL-reset step succeeds
+
+    monkeypatch.setattr(store, "_try_open", _try_open_stub)
 
     store._repair_corrupt_db(db_path, key)
 
@@ -100,12 +113,24 @@ def test_repair_corrupt_db_emits_event_after_backup(tmp_path, monkeypatch):
     conn_stub = MagicMock()
     conn_stub.execute.return_value = MagicMock()
     conn_stub.execute.return_value.fetchone.return_value = (1,)
-    monkeypatch.setattr(store, "_try_open", lambda *a, **kw: conn_stub)
+
+    # The re-check (first call) must return None so the ladder proceeds to Step 1
+    # and actually emits the backup/detection event.  Subsequent calls (Step 2)
+    # return the healthy stub so recovery completes successfully.
+    real_try_open = store._try_open
+    call_count = {"n": 0}
+
+    def _recheck_fails_then_succeeds(path, k):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return None  # re-check fails → ladder must run
+        return conn_stub
+
+    monkeypatch.setattr(store, "_try_open", _recheck_fails_then_succeeds)
 
     store._repair_corrupt_db(db_path, key)
 
-    sources = [e[2] for e in emitted if len(e) > 2]
-    # Some event should reference backup / corruption
+    # Some event should reference backup / corruption (Step 1 must have fired)
     backup_events = [e for e in emitted if "backup" in str(e).lower() or "corrupt" in str(e).lower()]
     assert len(backup_events) >= 1
 
@@ -118,6 +143,10 @@ def test_repair_corrupt_db_emits_event_after_backup(tmp_path, monkeypatch):
 def test_repair_corrupt_db_emits_event_on_wal_reset_success(tmp_path, monkeypatch):
     """When WAL reset (step 2) succeeds, an event is emitted confirming
     recovery via WAL reset.
+
+    The re-check (flock + re-check, 2026-06-24) must fail first so the ladder
+    proceeds to Step 1/2.  We return None on the re-check call and conn_stub on
+    the WAL-reset call.
     """
     import sqlcipher3
     from axi import events, store
@@ -131,11 +160,20 @@ def test_repair_corrupt_db_emits_event_on_wal_reset_success(tmp_path, monkeypatc
     monkeypatch.setattr(events, "log_error", lambda *a, **kw: emitted.append(("error",) + a))
     monkeypatch.setattr(events, "log_info", lambda *a, **kw: emitted.append(("info",) + a))
 
-    # _try_open succeeds on the WAL-reset attempt (step 2)
+    # _try_open: re-check (first call) returns None → ladder runs;
+    # WAL-reset call (second+) returns conn_stub → step 2 success event is emitted.
     conn_stub = MagicMock()
     conn_stub.execute.return_value = MagicMock()
     conn_stub.execute.return_value.fetchone.return_value = (1,)
-    monkeypatch.setattr(store, "_try_open", lambda *a, **kw: conn_stub)
+    call_count = {"n": 0}
+
+    def _try_open_stub(*a, **kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return None  # re-check fails → ladder runs
+        return conn_stub  # WAL-reset step succeeds
+
+    monkeypatch.setattr(store, "_try_open", _try_open_stub)
 
     store._repair_corrupt_db(db_path, key)
 

@@ -29,6 +29,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+try:
+    import fcntl as _fcntl
+    _FCNTL_AVAILABLE = True
+except ImportError:
+    _FCNTL_AVAILABLE = False
+
 log = logging.getLogger("axi.store")
 
 import sqlcipher3
@@ -408,6 +414,96 @@ def _emit_recovery_event(level: str, message: str, data: dict | None = None) -> 
         pass
 
 
+@contextmanager
+def _recovery_lock(db_path: Path):
+    """Acquire an EXCLUSIVE inter-process flock on a lock file beside *db_path*.
+
+    The lock file is ``Path(str(db_path) + ".recovery.lock")``.  It is created
+    if it does not yet exist.  The fd is kept open for the duration of the
+    context so the OS releases the lock automatically if the holding process
+    dies (flock is tied to the open-file-description).
+
+    Timeout / best-effort:
+    - Tries to acquire with ``LOCK_NB`` in a loop, sleeping 0.1 s per attempt,
+      for up to 60 s total.
+    - If ``fcntl`` is unavailable (non-Linux) or every attempt errors out, logs a
+      WARNING and yields without a lock so recovery still proceeds.  The lock
+      must NEVER deadlock or raise out of the context manager.
+
+    Usage::
+
+        # Called internally by _repair_corrupt_db, which wraps
+        # _repair_corrupt_db_locked inside this context manager.
+        with _recovery_lock(db_path):
+            return _repair_corrupt_db_locked(db_path, key)
+    """
+    lock_path = Path(str(db_path) + ".recovery.lock")
+    lock_fd = None
+
+    if not _FCNTL_AVAILABLE:
+        log.debug("_recovery_lock: fcntl unavailable — proceeding without inter-process lock")
+        yield
+        return
+
+    try:
+        lock_fd = lock_path.open("a+")
+        _LOCK_TIMEOUT_S = 60.0
+        _SLEEP_S = 0.1
+        _max_attempts = int(_LOCK_TIMEOUT_S / _SLEEP_S)
+        acquired = False
+        hard_error = False  # True when flock itself is unavailable (not just contended)
+        for _ in range(_max_attempts):
+            try:
+                _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                time.sleep(_SLEEP_S)
+            except OSError as exc:
+                # flock genuinely unavailable (e.g. ENOLCK, NFS, unsupported FS).
+                # Log once and proceed without the lock; do NOT emit the timeout
+                # message below — only one attempt was made, not a full timeout.
+                log.warning(
+                    "_recovery_lock: flock unavailable (%s) — proceeding without lock",
+                    exc,
+                )
+                hard_error = True
+                break
+
+        if not acquired and not hard_error:
+            log.warning(
+                "_recovery_lock: could not acquire lock on %s within %.0fs "
+                "— proceeding without inter-process lock",
+                lock_path.name,
+                _LOCK_TIMEOUT_S,
+            )
+    except Exception as exc:  # noqa: BLE001 — lock must never abort recovery
+        log.warning(
+            "_recovery_lock: failed to open/lock %s (%s) — proceeding without lock",
+            lock_path.name,
+            exc,
+        )
+        if lock_fd is not None:
+            try:
+                lock_fd.close()
+            except Exception:  # noqa: BLE001
+                pass
+        lock_fd = None
+
+    try:
+        yield
+    finally:
+        if lock_fd is not None:
+            try:
+                _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_UN)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                lock_fd.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
     """Recovery ladder for a corrupt memory.db.
 
@@ -422,6 +518,54 @@ def _repair_corrupt_db(db_path: Path, key: str) -> sqlcipher3.Connection:
     All steps are logged (stdlib + events ring). Raises only if even a fresh
     schema cannot be built.
     """
+    with _recovery_lock(db_path):
+        return _repair_corrupt_db_locked(db_path, key)
+
+
+def _repair_corrupt_db_locked(db_path: Path, key: str) -> sqlcipher3.Connection:
+    """Inner recovery body, called only while holding the inter-process flock.
+
+    Immediately re-checks whether the DB is already healthy before running
+    any destructive step.  If another process recovered memory.db while this
+    process waited for the lock, the re-check succeeds and we return early
+    without touching the filesystem.
+    """
+    # Re-check: another process may have already recovered the DB while we
+    # waited for the inter-process lock.  Remove WAL sidecars first (same as
+    # Step 2) so the open is not skewed by stale sidecars from the original
+    # failure.  If the DB opens cleanly at this point, it is healthy and we
+    # can skip all destructive steps.
+    #
+    # Forensic snapshot: before removing sidecars, best-effort copy any WAL/SHM
+    # that are present so corrupt bytes are preserved for post-incident inspection
+    # even if the re-check succeeds and we skip Step 1.  This must never abort
+    # recovery — wrap in try/except.
+    try:
+        _forensic_pid = os.getpid()
+        _forensic_bak = db_path.parent / f"{db_path.name}.corrupt-{_forensic_pid}.bak"
+        for _suffix in ("-wal", "-shm"):
+            _src = Path(str(db_path) + _suffix)
+            if _src.exists():
+                shutil.copy2(str(_src), str(_forensic_bak) + _suffix)
+    except Exception:  # noqa: BLE001 — forensic copy must never break recovery
+        pass
+
+    try:
+        _remove_wal_sidecars(db_path)
+        recheck_conn = _try_open(db_path, key)
+        if recheck_conn is not None:
+            log.warning(
+                "recovery: memory.db already healthy (recovered by another process) — skipping"
+            )
+            _emit_recovery_event(
+                "info",
+                "recovery: memory.db already healthy after inter-process lock — skipping destructive recovery",
+                {"strategy": "recheck_skip", "db_path": str(db_path)},
+            )
+            return recheck_conn
+    except Exception:  # noqa: BLE001 — re-check failure means we proceed normally
+        pass
+
     pid = os.getpid()
     bak = db_path.parent / f"{db_path.name}.corrupt-{pid}.bak"
     log.warning("corrupt memory DB detected — starting recovery (backup → %s)", bak)
