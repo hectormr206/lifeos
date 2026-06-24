@@ -1004,13 +1004,17 @@ def _recent_conversations(limit: int = 10) -> list[dict[str, Any]]:
 
 
 def _recent_facts(limit: int = 30) -> list[dict[str, Any]]:
-    c = store._connect()  # noqa: SLF001
-    rows = c.execute(
-        "SELECT id, label, data, domain, created_at, created_tz "
-        "FROM nodes WHERE kind = 'fact' "
-        "ORDER BY created_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
+    try:
+        c = store._connect()  # noqa: SLF001
+        rows = c.execute(
+            "SELECT id, label, data, domain, created_at, created_tz "
+            "FROM nodes WHERE kind = 'fact' "
+            "ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        log.warning("recent facts unavailable (memory.db degraded): %s", e)
+        return []
     out = []
     for r in rows:
         try:
@@ -1111,10 +1115,7 @@ def snapshot():
             "vision_enabled": bool(config.get("vision_enabled", True)),
             "tts_enabled": bool(config.get("tts_enabled", True)),
         },
-        "memory": {
-            "conversation_turns": _safe_conversation_count(),
-            "facts_count": _fact_count(),
-        },
+        "memory": _memory_snapshot(),
         "recent_conversations": _recent_conversations(10),
         "recent_facts": _recent_facts(20),
         "unread_critical_events": events.unread_critical_count(),
@@ -1154,9 +1155,44 @@ def _safe_conversation_count() -> int:
         return 0
 
 
-def _fact_count() -> int:
-    c = store._connect()  # noqa: SLF001
-    return c.execute("SELECT COUNT(*) AS n FROM nodes WHERE kind='fact'").fetchone()["n"]
+def _memory_snapshot() -> dict[str, Any]:
+    """Return memory stats with graceful degradation on DB failure.
+
+    Each DB read is attempted independently. If any fails, ``degraded`` is set
+    to True so the frontend can show a discreet recovery indicator without
+    blanking the UI. Safe defaults (0 / []) are used for failed reads.
+    """
+    degraded = False
+    reason_parts: list[str] = []
+
+    try:
+        conversation_turns: int = store.conversation_count()
+    except Exception as e:  # noqa: BLE001
+        log.warning("conversation count unavailable (memory.db degraded): %s", e)
+        conversation_turns = 0
+        degraded = True
+        reason_parts.append(f"conversation_count: {e}")
+
+    try:
+        c = store._connect()  # noqa: SLF001
+        facts_count: int = c.execute(
+            "SELECT COUNT(*) AS n FROM nodes WHERE kind='fact'"
+        ).fetchone()["n"]
+    except Exception as e:  # noqa: BLE001
+        log.warning("fact count unavailable (memory.db degraded): %s", e)
+        facts_count = 0
+        degraded = True
+        reason_parts.append(f"facts_count: {e}")
+
+    result: dict[str, Any] = {
+        "conversation_turns": conversation_turns,
+        "facts_count": facts_count,
+    }
+    if degraded:
+        result["degraded"] = True
+        if reason_parts:
+            result["degraded_reason"] = "; ".join(reason_parts)
+    return result
 
 
 @app.post("/api/cmd/{name}")
