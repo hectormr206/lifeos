@@ -12,6 +12,8 @@ from typing import Callable
 
 import sqlcipher3
 
+from lifeos._common.nocow import ensure_nocow_dir
+
 log = logging.getLogger("lifeos.posture.store")
 
 _lock = threading.Lock()
@@ -50,6 +52,7 @@ def _ensure_key() -> str:
 def connect() -> sqlcipher3.Connection:
     p = db_path()
     p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    ensure_nocow_dir(p.parent)
     key = _ensure_key()
     conn = sqlcipher3.connect(p, isolation_level=None, check_same_thread=False)
     conn.execute(f"PRAGMA key = \"x'{key}'\"")
