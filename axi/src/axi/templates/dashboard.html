@@ -465,7 +465,7 @@
       <div class="panel p-4">
         <div class="flex justify-between items-baseline mb-3">
           <div class="font-semibold">Hechos en memoria de largo plazo</div>
-          <div class="muted text-xs" x-text="$store.snap.memory.facts_count + ' total'"></div>
+          <div class="muted text-xs" x-text="(($store.snap.memory && $store.snap.memory.facts_count) || 0) + ' total'"></div>
         </div>
         <template x-if="$store.snap.recent_facts.length === 0">
           <div class="muted text-sm py-4">Aún no se han extraído hechos. Habla con Axi vía Meta+Shift+Espacio y se irán acumulando aquí.</div>
@@ -487,7 +487,7 @@
       <div class="panel p-4">
         <div class="flex justify-between items-baseline mb-3">
           <div class="font-semibold">Conversaciones recientes</div>
-          <div class="muted text-xs" x-text="$store.snap.memory.conversation_turns + ' turnos guardados'"></div>
+          <div class="muted text-xs" x-text="(($store.snap.memory && $store.snap.memory.conversation_turns) || 0) + ' turnos guardados'"></div>
         </div>
         <template x-if="$store.snap.recent_conversations.length === 0">
           <div class="muted text-sm py-4">No hay conversaciones todavía.</div>

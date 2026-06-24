@@ -130,25 +130,9 @@ class TestSnapshotDegradeOnDatabaseError:
 # ──────────────────────────────────────────────────────────────────
 
 class TestHelpersSafeDefaults:
-    """_fact_count() → 0 and _recent_facts() → [] on DB failure."""
-
-    def test_fact_count_returns_zero_on_recovery_error(self, monkeypatch):
-        """_fact_count must return 0 instead of propagating RecoveryError."""
-        from axi import dashboard, store
-
-        def _raise(): raise store.RecoveryError("db gone")
-        monkeypatch.setattr(store, "_connect", _raise)
-        result = dashboard._fact_count()
-        assert result == 0
-
-    def test_fact_count_returns_zero_on_database_error(self, monkeypatch):
-        """_fact_count must return 0 instead of propagating DatabaseError."""
-        from axi import dashboard, store
-
-        def _raise(): raise _sc3_dbapi.DatabaseError("disk I/O error")
-        monkeypatch.setattr(store, "_connect", _raise)
-        result = dashboard._fact_count()
-        assert result == 0
+    """_recent_facts() → [] on DB failure. (Fact-count degradation is covered at
+    the snapshot level — see TestSnapshotDegradeOn* — since the inline count in
+    _memory_snapshot replaced the old _fact_count helper.)"""
 
     def test_recent_facts_returns_empty_list_on_recovery_error(self, monkeypatch):
         """_recent_facts must return [] instead of propagating RecoveryError."""

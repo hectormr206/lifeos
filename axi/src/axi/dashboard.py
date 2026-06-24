@@ -1195,15 +1195,6 @@ def _memory_snapshot() -> dict[str, Any]:
     return result
 
 
-def _fact_count() -> int:
-    try:
-        c = store._connect()  # noqa: SLF001
-        return c.execute("SELECT COUNT(*) AS n FROM nodes WHERE kind='fact'").fetchone()["n"]
-    except Exception as e:  # noqa: BLE001
-        log.warning("fact count unavailable (memory.db degraded): %s", e)
-        return 0
-
-
 @app.post("/api/cmd/{name}")
 def cmd(name: str):
     log.info("/api/cmd/%s invoked", name)
