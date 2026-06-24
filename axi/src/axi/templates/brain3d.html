@@ -52,7 +52,7 @@
             <div class="flex items-center gap-2">
               <span style="width:10px;height:10px;border-radius:50%;flex-shrink:0;"
                     :style="'background:' + color"></span>
-              <span x-text="domain"></span>
+              <span x-text="tLabel(domain)"></span>
             </div>
           </template>
         </div>
@@ -81,11 +81,11 @@
             <div class="muted text-xs space-y-0.5">
               <div>
                 <span class="font-medium">Tipo:</span>
-                <span x-text="selectedNode.kind"></span>
+                <span x-text="tLabel(selectedNode.kind)"></span>
               </div>
               <div x-show="selectedNode.domain">
                 <span class="font-medium">Dominio:</span>
-                <span x-text="selectedNode.domain"></span>
+                <span x-text="tLabel(selectedNode.domain)"></span>
               </div>
               <div>
                 <span class="font-medium">Embedding:</span>
@@ -100,7 +100,7 @@
                 <div class="space-y-1.5 max-h-64 overflow-y-auto">
                   <template x-for="edge in neighborEdges" :key="edge._key">
                     <div class="panel2 p-2 text-xs rounded">
-                      <div class="font-medium" x-text="edge.kind"></div>
+                      <div class="font-medium" x-text="tEdge(edge.kind)"></div>
                       <div class="muted mt-0.5" x-text="edge.direction + ' ' + edge.neighborLabel"></div>
                       <div x-show="edge.system" class="muted text-xs" x-text="'sistema ' + edge.system"></div>
                     </div>
@@ -133,7 +133,12 @@ function escHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+// UI language injected by the server from the 'language' config key.
+// 'es-MX' → 'es', 'en-US' → 'en'. Defaults to 'es'.
+const LANG = '{{ lang | default("es") }}';
+
 // Domain-to-color map — consistent palette across all renders.
+// Keys are canonical English identifiers; displayed text uses tLabel/tEdge.
 const DOMAIN_COLOR = {
   relationships: '#FF6B9D',  // pink
   health:        '#22cc55',  // green
@@ -147,6 +152,78 @@ const DOMAIN_COLOR = {
   spirituality:  '#ff44aa',  // rose
   default:       '#888888',  // grey
 };
+
+// i18n label maps for domain/kind keys and edge kind keys.
+// Add a new locale by extending with a new top-level key.
+// Unknown keys fall back to the raw canonical key (graceful degradation).
+const LABELS = {
+  es: {
+    // Domains + kinds
+    relationships: 'Relaciones',
+    health:        'Salud',
+    finance:       'Finanzas',
+    conversation:  'Conversación',
+    fact:          'Hecho',
+    event:         'Evento',
+    'lifeos-events': 'Evento',
+    meeting:       'Reunión',
+    exercise:      'Ejercicio',
+    learning:      'Aprendizaje',
+    spirituality:  'Espiritualidad',
+    person:        'Persona',
+    default:       'General',
+    // Edge kinds
+    'similar-to':       'Similar a',
+    'same-day':         'Mismo día',
+    'happened-at':      'Ocurrió en',
+    'involves-person':  'Involucra a',
+    'mentioned_in':     'Mencionado en',
+    'has_setup':        'Configuración',
+  },
+  en: {
+    // Domains + kinds
+    relationships: 'Relationships',
+    health:        'Health',
+    finance:       'Finance',
+    conversation:  'Conversation',
+    fact:          'Fact',
+    event:         'Event',
+    'lifeos-events': 'Event',
+    meeting:       'Meeting',
+    exercise:      'Exercise',
+    learning:      'Learning',
+    spirituality:  'Spirituality',
+    person:        'Person',
+    default:       'General',
+    // Edge kinds
+    'similar-to':       'Similar to',
+    'same-day':         'Same day',
+    'happened-at':      'Happened at',
+    'involves-person':  'Involves',
+    'mentioned_in':     'Mentioned in',
+    'has_setup':        'Setup',
+  },
+};
+
+/**
+ * Translate a domain or node kind key to the current UI language.
+ * Falls back to the raw key when no translation exists (future-safe).
+ */
+function tLabel(key) {
+  if (!key) return key;
+  const map = LABELS[LANG] || LABELS['es'];
+  return map[key] !== undefined ? map[key] : key;
+}
+
+/**
+ * Translate an edge kind key to the current UI language.
+ * Falls back to the raw key when no translation exists.
+ */
+function tEdge(key) {
+  if (!key) return key;
+  const map = LABELS[LANG] || LABELS['es'];
+  return map[key] !== undefined ? map[key] : key;
+}
 
 function brain3dPage() {
   return {
