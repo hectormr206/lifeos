@@ -219,6 +219,23 @@ function brain3dPage() {
         .onNodeClick(node => {
           self._selectNode(node, data.edges, nodeById);
         });
+
+      // 3d-force-graph locks the canvas to the container size at creation. Inside
+      // the dashboard's modal iframe the container often isn't at its final size
+      // yet (and the window can be resized), so keep the canvas synced to the
+      // container — otherwise the graph stays frozen in a tiny strip.
+      const syncSize = () => {
+        if (!self._graph) return;
+        self._graph.width(container.clientWidth).height(container.clientHeight);
+      };
+      syncSize();
+      if (window.ResizeObserver) {
+        if (self._resizeObs) self._resizeObs.disconnect();
+        self._resizeObs = new ResizeObserver(syncSize);
+        self._resizeObs.observe(container);
+      } else {
+        window.addEventListener('resize', syncSize);
+      }
     },
 
     _selectNode(node, edges, nodeById) {
