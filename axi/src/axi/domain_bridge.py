@@ -232,15 +232,19 @@ def _is_low_value(label: str, entry: Any) -> bool:
         has_raw = bool(raw and raw.strip())
         data = getattr(entry, "data", None)
         has_data = bool(data)
+        body = getattr(entry, "body", None)
+        has_body = bool(body and body.strip())
         # Also treat any entry with a meaningful numeric field (amount, duration,
         # duration_minutes, etc.) as having real content — finance/exercise entries
         # often carry no raw_utterance but do have structured numeric values.
-        has_numeric = bool(
-            getattr(entry, "amount", None)
-            or getattr(entry, "duration_minutes", None)
-            or getattr(entry, "duration", None)
+        # Use `is not None` (not truthiness) so zero values (e.g. amount=0 for a
+        # free transaction, duration_minutes=0) are treated as present numeric data.
+        has_numeric = (
+            getattr(entry, "amount", None) is not None
+            or getattr(entry, "duration_minutes", None) is not None
+            or getattr(entry, "duration", None) is not None
         )
-        if not has_raw and not has_data and not has_numeric:
+        if not has_raw and not has_data and not has_body and not has_numeric:
             return True
 
     return False
@@ -488,9 +492,10 @@ def backfill_all_domains(
             any_remaining = True
             entry = pending[domain].pop(0)
             try:
-                create_fact_node_for_entry(domain, entry)
-                result[domain] += 1
-                total_created += 1
+                node_id = create_fact_node_for_entry(domain, entry)
+                if node_id is not None:
+                    result[domain] += 1
+                    total_created += 1
             except Exception as exc:  # noqa: BLE001
                 log.warning(
                     "backfill_all_domains: failed for domain=%r entry=%r: %s",
