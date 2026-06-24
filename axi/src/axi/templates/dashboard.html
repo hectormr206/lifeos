@@ -211,6 +211,10 @@
         <div class="font-semibold mb-1" style="color:var(--pink)">💾 Memoria</div>
         <div class="muted text-xs">Hechos recordados: <span x-text="($store.snap.memory && $store.snap.memory.facts_count) || 0"></span></div>
         <div class="muted text-xs">Conversaciones: <span x-text="($store.snap.memory && $store.snap.memory.conversation_turns) || 0"></span></div>
+        <div x-show="$store.snap.memory && $store.snap.memory.degraded"
+             style="margin-top:0.4rem;padding:0.25rem 0.5rem;border-radius:4px;background:rgba(255,200,0,0.12);border:1px solid rgba(255,200,0,0.35);color:#c8a000;font-size:0.7rem;line-height:1.3">
+          Memoria en recuperación — tus datos están a salvo en disco
+        </div>
       </div>
       <div id="popover-ears" x-show="open === 'ears'"
            class="panel2 p-3 text-sm absolute z-50" style="min-width:200px; display:none; top:1rem; right:1rem">
@@ -349,7 +353,7 @@
       <div class="panel p-4">
         <div class="text-sm muted mb-3">Services</div>
         <div class="space-y-2 text-sm">
-          <template x-for="[name, state] in Object.entries($store.snap.services)" :key="name">
+          <template x-for="[name, state] in Object.entries($store.snap.services || {})" :key="name">
             <div class="flex justify-between">
               <span x-text="name"></span>
               <span :style="state === 'active' ? 'color: var(--green)' : 'color: var(--red)'" x-text="state"></span>
