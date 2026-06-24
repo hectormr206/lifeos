@@ -588,3 +588,125 @@ class TestStartupRecovery:
         conn = store._connect()
         assert conn is not None
         assert len(repair_calls) == 1, "_repair_corrupt_db must be called when _try_open raises"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LAYER 4 — RecoveryError propagation (daemon loudness)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestRecoveryErrorLoudness:
+    """ConversationMemory must NOT swallow RecoveryError silently.
+
+    When init_db raises RecoveryError it means recoverable data exists but
+    restore failed — the daemon must fail loudly rather than run amnesiac.
+    """
+
+    def test_init_reraises_recovery_error_not_silent_degrade(self, monkeypatch):
+        """__init__ must propagate RecoveryError, NOT return degraded=True.
+
+        RED discriminator:
+        - OLD: except Exception catches RecoveryError → sets degraded=True, returns object.
+        - NEW: except RecoveryError clause re-raises → ConversationMemory() raises.
+        """
+        from axi.store import RecoveryError
+
+        def _raise_recovery():
+            raise RecoveryError("healthy backup exists but every restore failed")
+
+        monkeypatch.setattr("axi.memory.store.init_db", _raise_recovery)
+
+        with pytest.raises(RecoveryError):
+            ConversationMemory()
+
+    def test_init_fires_critical_log_on_recovery_error(self, monkeypatch, caplog):
+        """__init__ must emit a CRITICAL log (not WARNING) when RecoveryError is raised.
+
+        RED discriminator:
+        - OLD: logs at WARNING level via the broad except Exception clause.
+        - NEW: logs at CRITICAL level in the specific except RecoveryError clause
+               before re-raising.
+        """
+        import logging
+        from axi.store import RecoveryError
+
+        def _raise_recovery():
+            raise RecoveryError("healthy backup exists but every restore failed")
+
+        monkeypatch.setattr("axi.memory.store.init_db", _raise_recovery)
+
+        with caplog.at_level(logging.CRITICAL, logger="axi.memory"):
+            with pytest.raises(RecoveryError):
+                ConversationMemory()
+
+        critical_records = [r for r in caplog.records if r.levelno == logging.CRITICAL]
+        assert critical_records, "Expected at least one CRITICAL log record from axi.memory"
+
+    def test_init_fires_notification_on_recovery_error(self, monkeypatch):
+        """__init__ must call notify() (best-effort desktop alert) on RecoveryError.
+
+        RED discriminator:
+        - OLD: notify() is never called because the error is silently swallowed.
+        - NEW: notify() is called in the except RecoveryError clause before re-raising.
+        """
+        from axi.store import RecoveryError
+
+        notify_calls = []
+
+        def _raise_recovery():
+            raise RecoveryError("healthy backup exists but every restore failed")
+
+        monkeypatch.setattr("axi.memory.store.init_db", _raise_recovery)
+        monkeypatch.setattr("axi.memory.notify", lambda *a, **kw: notify_calls.append((a, kw)))
+
+        with pytest.raises(RecoveryError):
+            ConversationMemory()
+
+        assert notify_calls, "notify() must be called when RecoveryError is raised in __init__"
+
+    def test_generic_exception_still_degrades_gracefully(self, monkeypatch):
+        """Non-RecoveryError exceptions must still set degraded=True without raising.
+
+        Ensures the existing contract for transient/unknown DB errors is preserved.
+
+        RED discriminator: this test must pass both before and after the fix —
+        it guards against over-catching that breaks the graceful-degradation path.
+        """
+        import sqlcipher3
+
+        def _raise_db_error():
+            raise sqlcipher3.dbapi2.DatabaseError("database disk image is malformed")
+
+        monkeypatch.setattr("axi.memory.store.init_db", _raise_db_error)
+
+        mem = ConversationMemory()  # must NOT raise
+        assert mem.degraded is True
+
+    def test_add_logs_critical_and_notifies_on_recovery_error(self, monkeypatch, caplog):
+        """add() must log CRITICAL + call notify() when store raises RecoveryError.
+
+        Returns (0, 0) safe default — must NOT crash mid-conversation.
+
+        RED discriminator:
+        - OLD: except Exception logs WARNING only, no notification.
+        - NEW: except RecoveryError logs CRITICAL + calls notify() before returning (0, 0).
+        """
+        import logging
+        from axi.store import RecoveryError
+
+        notify_calls = []
+
+        raising_store = _RaisingStore(exc=RecoveryError("runtime recovery error"))
+        monkeypatch.setattr("axi.memory.store", raising_store)
+        monkeypatch.setattr("axi.memory.notify", lambda *a, **kw: notify_calls.append((a, kw)))
+
+        mem = ConversationMemory.__new__(ConversationMemory)
+        mem.max_context_turns = 20
+
+        with caplog.at_level(logging.CRITICAL, logger="axi.memory"):
+            result = mem.add("hola", "respuesta")
+
+        assert result == (0, 0), "add() must return (0, 0) safe default"
+        critical_records = [r for r in caplog.records if r.levelno == logging.CRITICAL]
+        assert critical_records, "add() must emit CRITICAL log on RecoveryError"
+        assert notify_calls, "add() must call notify() on RecoveryError"
