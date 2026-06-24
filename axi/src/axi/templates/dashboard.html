@@ -115,7 +115,7 @@
         <ellipse cx="32" cy="38" rx="15.5" ry="13.5" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
         <!-- 🧠 Cerebro = llama-server (el modelo que razona), dentro de la cabeza.
              Brillo teal + neuronas en la frente. Clic = modelo / VRAM / estado. -->
-        <g id="organ-brain" class="clk" @click="brain3dOpen = true">
+        <g id="organ-brain" class="clk" @click="$store.brain3d.open = true">
           <title>Cerebro (el modelo que razona)</title>
           <ellipse cx="32" cy="30.5" rx="7" ry="3.8" fill="#000000" fill-opacity="0"/>
           <!-- mini cerebro: óvalo + circunvoluciones -->
@@ -255,11 +255,11 @@
     <!-- ─── brain3d full-screen modal overlay ─── -->
     <!-- Triggered by clicking #organ-brain (brain3dOpen = true).
          Contains an iframe to /brain3d so it loads lazily and independently. -->
-    <div id="brain3d-modal" x-show="brain3dOpen" x-transition:enter="transition ease-out duration-200"
+    <div id="brain3d-modal" x-show="$store.brain3d.open" x-transition:enter="transition ease-out duration-200"
          x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
-         @keydown.escape.window="brain3dOpen = false"
+         @keydown.escape.window="$store.brain3d.open = false"
          style="display:none; position:fixed; inset:0; z-index:200; background:rgba(11,14,19,0.96); display:none; flex-direction:column;">
-      <div x-show="brain3dOpen" style="position:fixed; inset:0; z-index:200; background:rgba(11,14,19,0.96); display:flex; flex-direction:column;">
+      <div x-show="$store.brain3d.open" style="position:fixed; inset:0; z-index:200; background:rgba(11,14,19,0.96); display:flex; flex-direction:column;">
         <!-- Modal header -->
         <div style="display:flex; align-items:center; justify-content:space-between; padding:0.75rem 1.25rem; border-bottom:1px solid var(--panel2); flex-shrink:0;">
           <div style="display:flex; align-items:center; gap:0.75rem;">
@@ -271,10 +271,10 @@
               · Estado: <span x-text="$store.snap.services['llama-server'] || '—'"></span>
             </span>
           </div>
-          <button @click="brain3dOpen = false" class="btn" style="padding:3px 12px; font-size:0.8rem">✕ Cerrar</button>
+          <button @click="$store.brain3d.open = false" class="btn" style="padding:3px 12px; font-size:0.8rem">✕ Cerrar</button>
         </div>
         <!-- Modal body: lazy-load brain3d in iframe -->
-        <iframe x-show="brain3dOpen" :src="brain3dOpen ? '/brain3d' : ''"
+        <iframe x-show="$store.brain3d.open" :src="$store.brain3d.open ? '/brain3d' : ''"
                 style="flex:1; border:none; width:100%;"
                 title="Visualización 3D del grafo de memoria">
         </iframe>
@@ -589,6 +589,16 @@
 </template>
 
 <script>
+// brain3d modal open-state lives in a GLOBAL store because its trigger
+// (#organ-brain, in the avatarWidget() scope) and the modal overlay (in the
+// dashboardStore() scope) are in DIFFERENT Alpine component scopes. A plain
+// x-data property would only exist in one of them, so clicking the brain set a
+// variable the modal could never see ("brain3dOpen is not defined"). A store is
+// visible from every scope.
+document.addEventListener('alpine:init', () => {
+  Alpine.store('brain3d', { open: false });
+});
+
 function isBusy() {
   const s = Alpine.store('snap')?.state;
   return ['recording', 'thinking', 'speaking'].includes(s) || s.startsWith('transcribing');
@@ -763,7 +773,6 @@ function axiBuilder(){return{
 function avatarWidget() {
   return {
     open: null,
-    brain3dOpen: false,
     eyeImg: null,
     eyeLoading: false,
     eyeError: null,
