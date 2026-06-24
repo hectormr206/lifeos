@@ -1956,7 +1956,12 @@ def graph_page(request: Request):
 @app.get("/brain3d", response_class=HTMLResponse)
 def brain3d_page(request: Request):
     """3D interactive visualization of the semantic memory graph."""
-    return templates.TemplateResponse(request, "brain3d.html", {})
+    raw_lang = str(config.get("language", "es-MX"))
+    # Normalize locale tag to 2-letter code: es-MX → es, en-US → en, etc.
+    lang = raw_lang.split("-")[0].lower() if "-" in raw_lang else raw_lang[:2].lower()
+    if lang not in ("es", "en"):
+        lang = "es"
+    return templates.TemplateResponse(request, "brain3d.html", {"lang": lang})
 
 
 @app.get("/api/graph")
