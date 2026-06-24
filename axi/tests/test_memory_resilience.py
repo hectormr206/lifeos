@@ -251,7 +251,12 @@ class TestStartupRecovery:
         assert not Path(str(db) + "-wal").exists()
 
     def test_corrupt_backup_files_created_on_recovery(self, tmp_path, monkeypatch):
-        """On recovery, a .corrupt-*.bak backup of the original file is created."""
+        """On recovery, a .corrupt-*.bak backup of the original file is created.
+
+        The re-check (new behavior) is made to fail by writing garbage WAL so the
+        post-WAL-removal _try_open still raises DatabaseError, forcing Step 1 to run.
+        The backup must be written before any destructive step.
+        """
         import sqlcipher3
 
         db = tmp_path / "memory.db"
@@ -263,10 +268,28 @@ class TestStartupRecovery:
         c.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)")
         c.close()
 
+        # Write garbage WAL so _remove_wal_sidecars + re-check still fails,
+        # forcing the ladder to run and write the backup in Step 1.
+        Path(str(db) + "-wal").write_bytes(b"\xff" * 512)
+
         monkeypatch.setattr(store, "DB_PATH", db)
         monkeypatch.setattr(store, "STATE_DIR", tmp_path)
 
-        # Trigger recovery (WAL reset path is sufficient to test backup creation).
+        # Patch _try_open so the re-check (after WAL removal) still returns None,
+        # forcing Step 1 to run.  Subsequent calls (Step 2) use the real function.
+        real_try_open = store._try_open
+        call_count = {"n": 0}
+
+        def _recheck_fails(path, k):
+            call_count["n"] += 1
+            if call_count["n"] == 1 and str(path) == str(db):
+                # Re-check fails — ladder must run.
+                return None
+            return real_try_open(path, k)
+
+        monkeypatch.setattr(store, "_try_open", _recheck_fails)
+
+        # Trigger recovery (Step 1 backup + Step 2 WAL reset).
         store._repair_corrupt_db(db, key)
 
         bak_files = list(tmp_path.glob("memory.db.corrupt-*.bak"))
@@ -959,3 +982,207 @@ class TestRecoveryErrorLoudness:
         critical_records = [r for r in caplog.records if r.levelno == logging.CRITICAL]
         assert critical_records, "add() must emit CRITICAL log on RecoveryError"
         assert notify_calls, "add() must call notify() on RecoveryError"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LAYER 5 — Inter-process flock serialization (recovery-serialize-flock)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestRecoveryFlockSerialization:
+    """_repair_corrupt_db must serialize across processes via flock + re-check.
+
+    Prevents a cascade where multiple processes each detect a transient disk I/O
+    error and independently run their own destructive recovery — last-writer-wins
+    os.replace, repeated RecoveryErrors → API 500s.
+
+    Design:
+    - _recovery_lock(db_path): context-manager that acquires LOCK_EX flock on
+      Path(str(db_path) + ".recovery.lock"). Best-effort: never raises.
+    - _repair_corrupt_db: wraps its body in `with _recovery_lock(db_path):`; after
+      acquiring, immediately re-checks via _try_open. If the DB is already healthy
+      (another process recovered it), returns the connection without running Step 1.
+    """
+
+    def test_recheck_skips_recovery_when_db_already_healthy(self, tmp_path, monkeypatch):
+        """RED: if _try_open succeeds after the lock is acquired (another process
+        already recovered), _repair_corrupt_db MUST return that connection and
+        MUST NOT execute Step 1 (shutil.copy2 backup write).
+
+        Discriminates old vs new:
+        - OLD: no re-check → always runs Step 1 → shutil.copy2 is called.
+        - NEW: re-check succeeds → returns early → shutil.copy2 never called.
+        """
+        import shutil as _shutil
+
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        # Main file is garbage (so _open_new_connection would have raised).
+        db.write_bytes(b"\xff" * 4096)
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+
+        # Build a healthy connection that the re-check will return.
+        healthy_db = tmp_path / "healthy.db"
+        c = sqlcipher3.connect(str(healthy_db), check_same_thread=False, isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        c.execute("CREATE TABLE t (v TEXT)")
+        c.execute("INSERT INTO t VALUES ('already-recovered')")
+
+        # Track shutil.copy2 calls so we can assert Step 1 was NOT reached.
+        copy2_calls: list = []
+        real_copy2 = _shutil.copy2
+
+        def _tracking_copy2(src, dst, **kw):
+            copy2_calls.append((src, dst))
+            return real_copy2(src, dst, **kw)
+
+        monkeypatch.setattr(_shutil, "copy2", _tracking_copy2)
+
+        # After _recovery_lock is acquired, the re-check _try_open must succeed.
+        # Simulate: the real _try_open returns None on db (it's garbage), but we
+        # patch _try_open to return our healthy connection on the SECOND call
+        # (the re-check inside the lock) so the re-check path is exercised.
+        real_try_open = store._try_open
+        call_count = {"n": 0}
+
+        def _patched_try_open(path, k):
+            call_count["n"] += 1
+            # The re-check is the FIRST _try_open call inside _repair_corrupt_db_locked.
+            # Return the healthy connection on any call on db_path to simulate
+            # "another process already recovered while we waited for the lock."
+            if str(path) == str(db):
+                return c
+            return real_try_open(path, k)
+
+        monkeypatch.setattr(store, "_try_open", _patched_try_open)
+
+        # _repair_corrupt_db is called directly (as _open_new_connection does).
+        result = store._repair_corrupt_db(db, key)
+
+        # Must return the healthy connection from the re-check.
+        assert result is c, (
+            "_repair_corrupt_db must return the re-check connection when DB is already healthy"
+        )
+        # Step 1 (backup via shutil.copy2) must NOT have run.
+        assert copy2_calls == [], (
+            f"shutil.copy2 was called {len(copy2_calls)} time(s) — "
+            "Step 1 must be skipped when the re-check finds the DB already healthy"
+        )
+
+    def test_recovery_still_runs_when_recheck_fails(self, tmp_path, monkeypatch):
+        """Re-check returns None → existing ladder (Step 1-4) still executes.
+        Regression guard: the flock+re-check must not prevent real recovery.
+
+        Setup: main file is healthy (WAL-only corruption) — Step 2 (WAL reset) recovers it.
+        The re-check is patched to return None on the FIRST _try_open call on db
+        (simulating the pre-lock check that triggered _repair_corrupt_db), so the
+        ladder enters. Then the real _try_open is used for Step 2's WAL-reset check.
+        """
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        # Build a valid encrypted DB.
+        c_good = sqlcipher3.connect(str(db), check_same_thread=False, isolation_level=None)
+        c_good.execute(f"PRAGMA key = \"x'{key}'\"")
+        c_good.execute("CREATE TABLE nodes (id INTEGER PRIMARY KEY, label TEXT)")
+        c_good.execute("INSERT INTO nodes (label) VALUES ('flock-guard')")
+        c_good.close()
+
+        # Write garbage WAL so the step-2 WAL-reset is needed and succeeds.
+        Path(str(db) + "-wal").write_bytes(b"\xff" * 512)
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+
+        # First _try_open call returns None → triggers _repair_corrupt_db.
+        # Subsequent calls (inside the re-check and Step 2) use the real function.
+        real_try_open = store._try_open
+        call_count = {"n": 0}
+
+        def _first_call_fails(path, k):
+            call_count["n"] += 1
+            if call_count["n"] == 1 and str(path) == str(db):
+                # Re-check inside lock also returns None → ladder must run.
+                return None
+            return real_try_open(path, k)
+
+        monkeypatch.setattr(store, "_try_open", _first_call_fails)
+
+        conn = store._repair_corrupt_db(db, key)
+        assert conn is not None, "recovery ladder must still succeed when re-check fails"
+        rows = conn.execute("SELECT label FROM nodes ORDER BY id").fetchall()
+        assert [r[0] for r in rows] == ["flock-guard"], (
+            "recovery must restore data from healthy backup when re-check fails"
+        )
+
+    def test_lock_best_effort_does_not_deadlock_when_flock_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """If _recovery_lock cannot acquire the flock (e.g. fcntl unavailable,
+        timeout, or OSError), _repair_corrupt_db must still proceed and recover.
+        Never hangs or raises from the lock itself.
+
+        Simulate by patching fcntl.flock to always raise OSError.
+        """
+        import fcntl as _fcntl
+
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+
+        # DB is healthy on disk (WAL-only corruption simulation: main file is good,
+        # WAL is garbage). Step 2 (WAL reset) will succeed.
+        c_healthy = sqlcipher3.connect(str(db), check_same_thread=False, isolation_level=None)
+        c_healthy.execute(f"PRAGMA key = \"x'{key}'\"")
+        c_healthy.execute("CREATE TABLE t (v TEXT)")
+        c_healthy.close()
+
+        # Write garbage WAL so recovery is actually triggered.
+        Path(str(db) + "-wal").write_bytes(b"\xff" * 512)
+
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+
+        # Make flock always fail.
+        def _failing_flock(fd, op):
+            raise OSError("simulated flock failure")
+
+        monkeypatch.setattr(_fcntl, "flock", _failing_flock)
+
+        # Must NOT raise from the lock; must still recover (WAL reset → return conn).
+        conn = store._repair_corrupt_db(db, key)
+        assert conn is not None, (
+            "_repair_corrupt_db must succeed even when flock raises — lock is best-effort"
+        )
+
+    def test_recovery_lock_acquires_and_releases(self, tmp_path):
+        """_recovery_lock context manager acquires LOCK_EX flock on enter and
+        releases it on exit (lock file is visible during and released after).
+
+        After the with-block exits, a non-blocking flock on the same file must
+        succeed — proving the first lock was released.
+        """
+        import fcntl as _fcntl
+
+        db = tmp_path / "memory.db"
+        lock_path = Path(str(db) + ".recovery.lock")
+
+        # Enter the context: lock must be held.
+        with store._recovery_lock(db):
+            # Lock file must exist while the context is active.
+            assert lock_path.exists(), "lock file must be created by _recovery_lock"
+            # Attempting a non-blocking exclusive lock from the SAME process on the
+            # same fd would succeed (flock is per open-file-description, not per-fd),
+            # so we verify the lock file exists and is non-empty path as a proxy.
+            # (Testing that another process would block requires a subprocess.)
+
+        # After exit, a fresh non-blocking LOCK_EX must succeed (lock was released).
+        fd = lock_path.open("r")
+        try:
+            # LOCK_EX | LOCK_NB: if still locked this would raise BlockingIOError.
+            _fcntl.flock(fd.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            _fcntl.flock(fd.fileno(), _fcntl.LOCK_UN)
+        finally:
+            fd.close()
