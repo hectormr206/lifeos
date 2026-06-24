@@ -1743,7 +1743,7 @@ def get_node_for_domain_entry(domain: str, entry_id: str) -> int | None:
 # ─────────────────── fact-node creation (Slice 2) ────────────────────────────
 
 
-def create_fact_node_for_interaction(interaction: Any) -> int:
+def create_fact_node_for_interaction(interaction: Any) -> int | None:
     """Thin shim: create a fact node for a relationships interaction.
 
     Delegates entirely to domain_bridge.create_fact_node_for_entry so there is
