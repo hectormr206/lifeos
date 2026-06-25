@@ -5,9 +5,14 @@
 # (creates it with VibeThinker-3B defaults if missing — so a fresh install
 # works without manual config), then execs /usr/bin/llama-server on port 8082.
 #
-# VT is GPU-resident (ngl=999). Unlike axi-nano-launch, this script does NOT
-# set CUDA_VISIBLE_DEVICES — the unit file intentionally omits it so the GPU
-# is fully visible to the process.
+# VT is GPU-resident (ngl=999) by default. Unlike axi-nano-launch, this script
+# does NOT set CUDA_VISIBLE_DEVICES — the unit file intentionally omits it so
+# the GPU is fully visible to the process.
+#
+# axi-vt-launch --cpu  forces ngl=0 (game-mode CPU relocation — mirrors
+# axi-llama-launch --cpu). Game mode pairs this with a CUDA_VISIBLE_DEVICES=
+# drop-in so VibeThinker-3B stays available in RAM (slower) instead of being
+# stopped, keeping all of Axi usable while the game owns the VRAM.
 #
 # Mandatory flags per VRAM measurement #565 (RTX 5070 Ti 12 GB):
 #   -c 61440  -np 1  --cache-type-k q8_0  --cache-type-v q8_0  -fa on
@@ -17,6 +22,12 @@
 # (used by tests and smoke checks).
 
 set -u
+
+# --cpu forces ngl=0 (game-mode CPU relocation; mirrors axi-llama-launch).
+CPU_MODE=0
+[ "${1:-}" = "--cpu" ] && CPU_MODE=1
+export AXI_VT_CPU="$CPU_MODE"
+
 exec python3 - <<'PY'
 import json, os, sys
 from pathlib import Path
@@ -79,7 +90,10 @@ if "gguf" not in cfg:
     print(f"WARNING: active_vt_model.json has no 'gguf' key; using DEFAULT config", file=sys.stderr)
     cfg = DEFAULT
 
-ngl = int(cfg.get("ngl", 999))
+# AXI_VT_CPU=1 (set by `axi-vt-launch --cpu`) forces ngl=0 so VibeThinker-3B
+# runs on CPU/RAM during game mode instead of being stopped.
+cpu_mode = os.environ.get("AXI_VT_CPU") == "1"
+ngl = 0 if cpu_mode else int(cfg.get("ngl", 999))
 port = str(cfg.get("port", 8082))
 ctx = int(cfg.get("ctx", 61440))
 

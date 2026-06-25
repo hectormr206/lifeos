@@ -25,8 +25,10 @@
 # VRAM holders on the RTX 5070 Ti (12 GB) and where they go in game mode:
 #   axi-whisper  (Whisper large-v3-turbo): ~2.3 GB VRAM  -> RAM (int8, CPU)
 #   llama-server (co-pilot qwen35-2b):     ~0 VRAM        -> RAM (--cpu, ngl=0)
+#   llama-vt     (VibeThinker-3B):         ~3.3 GB VRAM  -> RAM (--cpu, ngl=0)
 #   axi-translate (Opus/NLLB):             already CPU by default
 #   Result: ~0 MiB VRAM used by axi (effectively all 12 GB free for the game).
+# All of Axi stays available in game mode (slower, on CPU/RAM) — nothing is lost.
 
 set -u
 
@@ -124,20 +126,27 @@ else
     systemctl --user try-restart llama-server.service 2>/dev/null || true
 fi
 
-# VibeThinker-3B (GPU-resident reasoning sibling) has no game-mode role.
-# Mask it (reboot-safe) and stop it immediately to free its VRAM.
-# game-off will unmask and restart it ONLY if the restored primary == qwen35-4b.
+# VibeThinker-3B (reasoning sibling): RELOCATE to CPU instead of stopping it,
+# so all of Axi stays available (slower) during game mode without losing VT's
+# reasoning. The drop-in hides the GPU (CUDA_VISIBLE_DEVICES=) and re-points
+# ExecStart at the --cpu launcher (ngl=0) → true 0 VRAM. game-off removes it.
 #
 # MEETING-SAFE DEFENSIVE GUARD: llama-vt.service may not yet be installed into
 # ~/.config/systemd/user/ (the unit file exists in axi/systemd/ but may not be
 # symlinked). All operations are skipped silently if the unit is not found.
 if systemctl --user list-unit-files llama-vt.service 2>/dev/null | grep -q "llama-vt.service"; then
-    echo "[axi-game-on] masking llama-vt.service (VibeThinker-3B — reboot-safe VRAM eviction)…"
-    systemctl --user mask llama-vt.service 2>/dev/null || true
-    echo "[axi-game-on] stopping llama-vt.service…"
-    systemctl --user stop llama-vt.service 2>/dev/null || true
+    # Unmask first in case an older game-on masked it (previous behavior).
+    systemctl --user unmask llama-vt.service 2>/dev/null || true
+    echo "[axi-game-on] relocating llama-vt (VibeThinker-3B) to CPU (ngl=0, ~0 VRAM, stays available)…"
+    write_dropin llama-vt "[Service]
+Environment=CUDA_VISIBLE_DEVICES=
+ExecStart=
+ExecStart=%h/LifeOS/lifeos/axi/scripts/axi-vt-launch --cpu"
+    systemctl --user daemon-reload
+    # try-restart: relocate to CPU only if VT was running; don't force it on.
+    systemctl --user try-restart llama-vt.service 2>/dev/null || true
 else
-    echo "[axi-game-on] llama-vt.service not installed — skipping VT eviction (safe, no-op)."
+    echo "[axi-game-on] llama-vt.service not installed — skipping VT relocation (safe, no-op)."
 fi
 
 # axi-voice: enable the always-listening wake-word co-pilot by writing a drop-in
