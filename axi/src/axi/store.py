@@ -1789,11 +1789,13 @@ def run_periodic_embed_drain(*, embed_limit: int = 50, similarity_threshold: flo
 
     try:
         from axi.linkers import run_auto_linkers
+        from axi import config as _cfg
         c = _connect()
         # Ensure row_factory is set so linkers can use row["col"] access.
         import sqlcipher3 as _sc3
         c.row_factory = _sc3.Row
-        run_auto_linkers(c)
+        _tz = str(_cfg.get("timezone", "UTC"))
+        run_auto_linkers(c, tz_name=_tz)
     except Exception as _e:  # noqa: BLE001
         log.warning("run_periodic_embed_drain: run_auto_linkers failed", exc_info=True)
         try:

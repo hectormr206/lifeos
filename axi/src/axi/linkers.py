@@ -7,14 +7,14 @@ bounded to a recent window to avoid full-table scans.
 Linkers implemented:
   - run_happened_at_linker   : meeting node → fact node when COALESCE(fact.occurred_at, fact.created_at) ∈ [meeting.start_time ± 1h]
   - run_involves_person_linker: fact node → person node when fact.data.person_id is bridged via domain_node_map
-  - run_same_day_linker      : fact node ↔ fact node when both share the same UTC calendar day
+  - run_same_day_linker      : fact node ↔ fact node when both share the same LOCAL calendar day (configured tz)
 
 Each function:
   - Accepts a live sqlcipher3 connection (same connection the caller uses).
   - Returns an int count of NEW edges created this run.
   - Logs warnings on per-row failures but never propagates exceptions.
 
-run_auto_linkers(conn, *, window_days=90):
+run_auto_linkers(conn, *, window_days=90, tz_name="UTC"):
   - Runs all three linkers over a recent bounded window.
   - Returns {happened_at: int, involves_person: int, same_day: int}.
 """
@@ -24,6 +24,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 log = logging.getLogger("axi.linkers")
 
@@ -214,16 +215,21 @@ def run_same_day_linker(
     conn,
     *,
     window_days: int = _DEFAULT_WINDOW_DAYS,
+    tz_name: str = "UTC",
 ) -> int:
-    """Link pairs of fact-nodes that share the same UTC calendar day.
+    """Link pairs of fact-nodes that share the same LOCAL calendar day.
 
-    This is a time-proximity linker: two facts on the same day are likely
-    contextually related even without semantic similarity.  Edges are created
-    with kind='same-day'.
+    Two facts on the same calendar day (in the user's configured timezone) are
+    likely contextually related even without semantic similarity.  Edges are
+    created with kind='same-day'.
 
     Only fact-nodes in the recent *window_days* window are processed.
-    Within that window, nodes are grouped by UTC date string (YYYY-MM-DD)
-    using COALESCE(occurred_at, created_at) as the event date.
+    Within that window, nodes are grouped by their LOCAL date string (YYYY-MM-DD)
+    using COALESCE(occurred_at, created_at) as the event timestamp and *tz_name*
+    as the calendar-day reference timezone.
+
+    The look-back window cutoff is epoch-based (tz-agnostic) — only the
+    day_key bucketing uses the local tz.
 
     Using occurred_at (instead of created_at) fixes the backfill "todo ligado"
     bug: entries backfilled on the same day share the same created_at but have
@@ -231,8 +237,27 @@ def run_same_day_linker(
     event date (or insertion date when occurred_at is NULL) falls within the
     window are considered.
 
-    Returns the number of new 'same-day' edges created.
+    Args:
+        conn: Live sqlcipher3 connection to memory.db.
+        window_days: How many days back to look for candidates (default 90).
+        tz_name: IANA timezone name used for calendar-day bucketing (e.g.
+            'America/Mexico_City').  Defaults to 'UTC'.  If the name is
+            invalid, logs a warning and falls back to UTC so the linker
+            never crashes due to a misconfigured timezone.
+
+    Returns:
+        Number of new 'same-day' edges created.
     """
+    # Resolve tz once before the grouping loop.
+    try:
+        local_tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, KeyError, Exception):
+        log.warning(
+            "same-day linker: unknown timezone %r — falling back to UTC",
+            tz_name,
+        )
+        local_tz = timezone.utc
+
     cutoff = time.time() - window_days * 86400
 
     # Use COALESCE(occurred_at, created_at) as the canonical event timestamp.
@@ -245,11 +270,11 @@ def run_same_day_linker(
         (cutoff,),
     ).fetchall()
 
-    # Group by UTC date string derived from the real event timestamp.
+    # Group by LOCAL date string derived from the real event timestamp.
     by_day: dict[str, list[int]] = {}
     for row in rows:
         ts = float(row["event_ts"])
-        day_key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+        day_key = datetime.fromtimestamp(ts, tz=local_tz).strftime("%Y-%m-%d")
         by_day.setdefault(day_key, []).append(int(row["id"]))
 
     created = 0
@@ -288,6 +313,7 @@ def run_auto_linkers(
     conn,
     *,
     window_days: int = _DEFAULT_WINDOW_DAYS,
+    tz_name: str = "UTC",
 ) -> dict[str, int]:
     """Run all three cross-domain auto-linkers over the recent *window_days* window.
 
@@ -297,6 +323,9 @@ def run_auto_linkers(
     Args:
         conn: Active sqlcipher3 connection to memory.db (System A).
         window_days: How many days back to look for candidates (default 90).
+        tz_name: IANA timezone name passed to the same-day linker for calendar-day
+            bucketing (default 'UTC').  Pass config.get('timezone', 'UTC') from
+            the caller site so 'same day' means the user's local calendar day.
 
     Returns:
         {"happened_at": int, "involves_person": int, "same_day": int}
@@ -318,7 +347,7 @@ def run_auto_linkers(
         log.warning("run_auto_linkers: involves_person failed", exc_info=True)
 
     try:
-        result["same_day"] = run_same_day_linker(conn, window_days=window_days)
+        result["same_day"] = run_same_day_linker(conn, window_days=window_days, tz_name=tz_name)
     except Exception:  # noqa: BLE001
         log.warning("run_auto_linkers: same_day failed", exc_info=True)
 
