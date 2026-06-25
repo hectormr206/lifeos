@@ -57,6 +57,30 @@ _PERSONAL_RECALL_PATTERN = re.compile(
     | \bmedicamento\b        # medication
     | \bpastilla\b           # pill / tablet
     | \bfrecuencia\s+card[ií]aca\b  # frecuencia cardíaca (heart rate)
+    # English health / finance vocabulary (mirrors the Spanish set). Bare
+    # ambiguous tokens (gas, sugar, ran, felt) are intentionally omitted; the
+    # 0.9 distance backstop bounds any false positive.
+    | \bblood\s+pressure\b   # blood pressure
+    | \bpressure\b           # pressure (bare; mirrors bare "presión")
+    | \bpulse\b              # pulse
+    | \bheart\s+rate\b       # heart rate
+    | \bslept\b              # slept
+    | \bsleep\b              # sleep
+    | \bsleeping\b           # sleeping
+    | \bweight\b             # weight
+    | \bweighed\b            # weighed
+    | \bglucose\b            # glucose
+    | \bblood\s+sugar\b      # blood sugar
+    | \bexpense\b            # expense
+    | \bspent\b              # spent
+    | \bgasoline\b           # gasoline
+    | \bfuel\b               # fuel
+    | \bexercise\b           # exercise
+    | \bworkout\b            # workout
+    | \bmood\b               # mood
+    | \bsymptoms?\b          # symptom / symptoms
+    | \bmedication\b         # medication
+    | \bpill\b               # pill
     """,
     re.IGNORECASE | re.VERBOSE,
 )
