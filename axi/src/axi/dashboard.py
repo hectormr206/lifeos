@@ -1961,7 +1961,8 @@ def brain3d_page(request: Request):
     lang = raw_lang.split("-")[0].lower() if "-" in raw_lang else raw_lang[:2].lower()
     if lang not in ("es", "en"):
         lang = "es"
-    return templates.TemplateResponse(request, "brain3d.html", {"lang": lang})
+    tz = str(config.get("timezone", "UTC"))
+    return templates.TemplateResponse(request, "brain3d.html", {"lang": lang, "tz": tz})
 
 
 @app.get("/api/graph")

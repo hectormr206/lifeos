@@ -96,7 +96,7 @@
               </div>
               <div x-show="selectedNode.occurred_at != null">
                 <span class="font-medium" x-text="tUi('date') + ':'"></span>
-                <span x-text="selectedNode.occurred_at ? new Date(selectedNode.occurred_at * 1000).toLocaleDateString() : '—'"></span>
+                <span x-text="selectedNode.occurred_at ? new Date(selectedNode.occurred_at * 1000).toLocaleDateString(LANG === 'en' ? 'en-US' : 'es-ES', { timeZone: TZ }) : '—'"></span>
               </div>
             </div>
 
@@ -143,6 +143,10 @@ function escHtml(str) {
 // UI language injected by the server from the 'language' config key.
 // 'es-MX' → 'es', 'en-US' → 'en'. Defaults to 'es'.
 const LANG = '{{ lang | default("es") }}';
+
+// IANA timezone injected by the server from config.timezone.
+// Used for toLocaleDateString() so displayed dates match the user's local calendar day.
+const TZ = '{{ tz | default("UTC") }}';
 
 // Domain-to-color map — consistent palette across all renders.
 // Keys are canonical English identifiers; displayed text uses tLabel/tEdge.
