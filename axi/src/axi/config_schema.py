@@ -18,6 +18,23 @@ from typing import Any
 log = logging.getLogger("axi.config_schema")
 
 
+def _detect_system_timezone() -> str:
+    """Return the IANA timezone name for the current machine.
+
+    Uses tzlocal.get_localzone_name() which reads /etc/localtime or the
+    TZ environment variable.  Falls back to 'UTC' if tzlocal is missing,
+    raises, or returns None.
+    """
+    try:
+        import tzlocal
+        name = tzlocal.get_localzone_name()
+        if name:
+            return str(name)
+    except Exception:
+        pass
+    return "UTC"
+
+
 class ConfigError(ValueError):
     """Raised when a config value fails validation.
 
@@ -98,7 +115,7 @@ _DEFAULT_WHISPER_PROMPT = (
 FIELDS: tuple[ConfigField, ...] = (
     # ─────── identity / locale ───────
     ConfigField(
-        "timezone", "string", "America/Mexico_City",
+        "timezone", "string", _detect_system_timezone(),
         "IANA timezone name used for dashboard timestamps.",
     ),
     ConfigField(
