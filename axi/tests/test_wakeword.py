@@ -1017,6 +1017,39 @@ class TestDaemonWakewordAskEmptyCommand:
 
 
 # ===========================================================================
+# Live-test harness — wake path must emit machine-parseable metric logs
+# ===========================================================================
+
+class TestWakewordMetricLogs(TestDaemonWakewordAskEmptyCommand):
+    """The wake/ask path must emit `wakeword-metric:` INFO lines for the
+    live-test harness (scripts/wakeword_report.py): ask_start, tts_start,
+    tts_done. These let Héctor get a decision table from journald afterward
+    without babysitting a terminal during play.
+    """
+
+    def test_wake_path_emits_metric_logs(self, monkeypatch, caplog):
+        import logging
+        import time as _t
+        import axi.daemon as _d
+
+        _d.notify = lambda *a, **kw: None
+        _d.speak_text = lambda text: None
+        _d._game_mode_active = lambda: False
+
+        daemon, _ = self._build_daemon(monkeypatch=None)
+        daemon.brain_ask = lambda *a, **kw: "respuesta de prueba"
+
+        with caplog.at_level(logging.INFO, logger="axi.daemon"):
+            daemon._wakeword_ask("ayudame con esto", screenshot=None)
+            _t.sleep(0.2)  # let the _say thread emit tts_done
+
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("wakeword-metric: ask_start t=" in m for m in msgs), msgs
+        assert any("wakeword-metric: tts_start t=" in m for m in msgs), msgs
+        assert any("wakeword-metric: tts_done t=" in m for m in msgs), msgs
+
+
+# ===========================================================================
 # openWakeWord state machine — TDD RED → GREEN
 # ===========================================================================
 
