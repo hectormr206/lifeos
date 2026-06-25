@@ -99,25 +99,35 @@ def test_chat_ask_records_brain_metric(client, monkeypatch):
     brain.ask_with_tools) since the routing now uses ask_with_tools for
     non-image turns. Either path must record the metric.
     """
+    import time
     from axi import brain, store
-    monkeypatch.setattr(brain, "_BG_WORKERS_DISABLED", False)  # test requires metric threads
+    monkeypatch.setattr(brain, "_BG_WORKERS_DISABLED", False)  # test requires the metric thread
     _stub_meta = {"model": "stub", "usage": {"total_tokens": 5, "prompt_tokens": 2, "completion_tokens": 3}}
     monkeypatch.setattr(brain, "_ask_impl", lambda prompt, **kw: ("ok", _stub_meta))
     monkeypatch.setattr(brain, "_ask_with_tools_impl", lambda prompt, **kw: ("ok", _stub_meta))
 
+    # Assert the metric is RECORDED (insert_brain_metric called with the stub
+    # model) rather than reading it back from the per-test encrypted DB. The
+    # metric write happens on an async daemon thread; reading it back couples
+    # this test to the encrypted-DB round-trip, which is order-dependent under
+    # the per-test DB fixture (hmac key races). The DB persistence round-trip is
+    # covered directly by tests/test_brain_metrics.py.
+    recorded_models: list[str | None] = []
+    monkeypatch.setattr(
+        store, "insert_brain_metric",
+        lambda **kw: recorded_models.append(kw.get("model")),
+    )
+
     r = client.post("/api/chat/ask", json={"text": "ping"})
     assert r.status_code == 200
 
-    # The metric write is async — wait briefly for the daemon thread.
-    import threading, time
+    # The metric write is async — wait briefly for the daemon thread to call it.
     deadline = time.time() + 2.0
     while time.time() < deadline:
-        if any(t.name == "axi-brain-metric" and t.is_alive() for t in threading.enumerate()):
-            time.sleep(0.02)
-            continue
-        break
-    metrics = store.recent_brain_metrics(limit=10)
-    assert any(m.get("model") == "stub" for m in metrics)
+        if "stub" in recorded_models:
+            break
+        time.sleep(0.02)
+    assert "stub" in recorded_models, f"brain metric not recorded; got {recorded_models}"
 
 
 def test_chat_history_empty(client):
