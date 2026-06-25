@@ -1,0 +1,35 @@
+# Coder sandbox image for the Axi autonomous developer (#6).
+#
+# Containment model: this image is the security boundary. The host filesystem
+# is NOT present inside the container unless explicitly volume-mounted, so the
+# cloud coding agent cannot read host secrets (~/.ssh, ~/.aws) or write outside
+# the mounted worktree. See src/axi/dev_agent.py for the `podman run` invocation.
+#
+# Contains only what the coder needs: python (for the SDK + runner), node (for
+# the `claude` CLI the SDK spawns), the claude-agent-sdk, and git. The runner
+# (_dev_agent_runner.py) is mounted read-only at runtime, not baked in, so it
+# can be iterated without rebuilding this image.
+#
+# Build:  podman build -t axi-coder:latest -f deploy/dev-agent/Containerfile .
+FROM docker.io/library/node:22-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 python3-pip git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python SDK (pinned to the version verified against the host).
+RUN pip3 install --no-cache-dir --break-system-packages "claude-agent-sdk==0.2.110"
+
+# The `claude` CLI that the SDK spawns.
+RUN npm install -g @anthropic-ai/claude-code \
+    && claude --version
+
+# Run as a non-root user (defense in depth; the container is the boundary).
+# The node:22 base already ships a `node` user at uid 1000, which rootless
+# podman maps to the host user so the mounted worktree stays writable.
+USER node
+WORKDIR /work
+
+# No ENTRYPOINT: dev_agent.py passes the explicit command
+#   python3 /runner.py /work/in.json /work/out.json
