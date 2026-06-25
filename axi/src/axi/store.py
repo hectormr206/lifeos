@@ -943,6 +943,8 @@ def init_db() -> None:
             log.warning("init_db: could not create vec_nodes table: %s", _vec_exc)
         # Slice 2: domain_node_map bridge table.
         _create_domain_node_map(c)
+        # Event-date column: stores the real event timestamp (vs. insertion time).
+        migrate_nodes_occurred_at()
         # Events live in their own DB (telemetry isolated from user memory).
         # Open it here so the schema exists and any legacy events are migrated
         # at startup rather than lazily on the first write.
@@ -995,16 +997,29 @@ def add_node(
     label: str,
     data: dict[str, Any] | None = None,
     domain: str | None = None,
+    occurred_at: float | None = None,
 ) -> int:
-    """Insert a node, mirror text into FTS, return its id."""
+    """Insert a node, mirror text into FTS, return its id.
+
+    Args:
+        kind:       Node kind ('fact', 'person', 'event', …).
+        label:      Short human-readable description.
+        data:       Optional JSON-serialisable dict of extra properties.
+        domain:     Domain key ('health', 'finance', …) or None.
+        occurred_at: Real event timestamp (Unix epoch UTC). NULL when the
+                     event date is unknown (conversation nodes, etc.). Stored
+                     separately from created_at (graph-insertion time) so
+                     linkers can group by the actual event day rather than the
+                     day data was backfilled into the graph.
+    """
     now = time.time()
     payload = json.dumps(data or {}, ensure_ascii=False)
     tz = _current_tz()
     with _tx() as c:
         cur = c.execute(
-            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, created_tz) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (kind, label, payload, domain, now, now, tz),
+            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, created_tz, occurred_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, label, payload, domain, now, now, tz, occurred_at),
         )
         node_id = cur.lastrowid
         c.execute(
@@ -1425,6 +1440,27 @@ def migrate_nodes_embedding() -> None:
             c.execute(f"ALTER TABLE nodes ADD COLUMN {col} {col_type}")
 
 
+def migrate_nodes_occurred_at() -> None:
+    """Idempotent migration: add occurred_at column to the nodes table.
+
+    occurred_at stores the real event moment (Unix epoch UTC) — the timestamp
+    of the domain entry this node represents. It is NULL for nodes created
+    without a source entry (e.g. conversation nodes, person nodes).
+
+    Linkers use COALESCE(occurred_at, created_at) so existing nodes without
+    an event date fall back to the insertion timestamp (backward-compatible).
+
+    Safe to call multiple times (guarded by PRAGMA table_info).
+    """
+    c = _connect()
+    existing = {r[1] for r in c.execute("PRAGMA table_info(nodes)").fetchall()}
+    if "occurred_at" not in existing:
+        c.execute("ALTER TABLE nodes ADD COLUMN occurred_at REAL")
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_occurred ON nodes(occurred_at)"
+        )
+
+
 # ─────────────────── sqlite-vec virtual table (Slice 1, FORK-VEC path A) ────
 
 
@@ -1753,11 +1789,13 @@ def run_periodic_embed_drain(*, embed_limit: int = 50, similarity_threshold: flo
 
     try:
         from axi.linkers import run_auto_linkers
+        from axi import config as _cfg
         c = _connect()
         # Ensure row_factory is set so linkers can use row["col"] access.
         import sqlcipher3 as _sc3
         c.row_factory = _sc3.Row
-        run_auto_linkers(c)
+        _tz = str(_cfg.get("timezone", "UTC"))
+        run_auto_linkers(c, tz_name=_tz)
     except Exception as _e:  # noqa: BLE001
         log.warning("run_periodic_embed_drain: run_auto_linkers failed", exc_info=True)
         try:
