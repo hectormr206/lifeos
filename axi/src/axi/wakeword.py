@@ -671,6 +671,8 @@ class WakeWordListener:
             return
 
         log.info("wakeword: WAKE DETECTED — command=%r", command)
+        # Machine-parseable anchor for the live-test harness (wake path only).
+        log.info("wakeword-metric: wake_detected t=%.3f command=%r", time.time(), command)
         try:
             self._on_wake(command)
         except Exception as e:  # noqa: BLE001

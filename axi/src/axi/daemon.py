@@ -898,6 +898,8 @@ class Daemon:
 
         try:
             self._set_state("thinking")
+            # Live-test harness anchor: brain ask is about to start (wake path only).
+            log.info("wakeword-metric: ask_start t=%.3f", time.time())
             question = command
             history = self.memory.messages()
             facts = self.memory.relevant_facts(question, limit=5)
@@ -996,10 +998,14 @@ class Daemon:
             )
 
             self._set_state("speaking")
+            # Live-test harness anchor: TTS playback starting (wake path only).
+            log.info("wakeword-metric: tts_start t=%.3f", time.time())
             def _say():
                 try:
                     speak_text(answer)
                 finally:
+                    # Live-test harness anchor: TTS finished (wake path only).
+                    log.info("wakeword-metric: tts_done t=%.3f", time.time())
                     self._set_state("idle")
             threading.Thread(target=_say, daemon=True).start()
         except Exception as e:  # noqa: BLE001
