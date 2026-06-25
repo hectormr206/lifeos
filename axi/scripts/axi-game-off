@@ -22,6 +22,7 @@ echo "[axi-game-off] removing CPU drop-ins…"
 # Current drop-ins written by axi-game-on.
 rm -f "$UNIT_DIR/axi-whisper.service.d/game-cpu.conf"
 rm -f "$UNIT_DIR/llama-server.service.d/game-cpu.conf"
+rm -f "$UNIT_DIR/llama-vt.service.d/game-cpu.conf"
 rm -f "$UNIT_DIR/axi-translate.service.d/game-cpu.conf"
 rm -f "$UNIT_DIR/axi-voice.service.d/game-cpu.conf"
 # Legacy drop-in names from earlier versions of these scripts.
@@ -32,6 +33,7 @@ rm -f "$UNIT_DIR/axi-voice.service.d/cpu-env.conf"
 # hold unrelated user drop-ins).
 rmdir "$UNIT_DIR/axi-whisper.service.d" 2>/dev/null || true
 rmdir "$UNIT_DIR/llama-server.service.d" 2>/dev/null || true
+rmdir "$UNIT_DIR/llama-vt.service.d" 2>/dev/null || true
 rmdir "$UNIT_DIR/axi-translate.service.d" 2>/dev/null || true
 rmdir "$UNIT_DIR/axi-voice.service.d" 2>/dev/null || true
 
@@ -82,11 +84,13 @@ done
 # ~/.config/systemd/user/ (the unit file exists in axi/systemd/ but may not be
 # symlinked). All operations are skipped silently if the unit is not found.
 if systemctl --user list-unit-files llama-vt.service 2>/dev/null | grep -q "llama-vt.service"; then
-    echo "[axi-game-off] unmasking llama-vt.service…"
+    # Unmask in case an older game-on masked it (previous VRAM-eviction behavior).
     systemctl --user unmask llama-vt.service 2>/dev/null || true
     if [ "${PREV_MODEL:-}" = "qwen35-4b" ]; then
-        echo "[axi-game-off] restoring VibeThinker-3B sibling (primary is qwen35-4b)…"
-        systemctl --user start llama-vt.service 2>/dev/null || true
+        echo "[axi-game-off] restoring VibeThinker-3B sibling to GPU (primary is qwen35-4b)…"
+        # restart (not start): VT may still be RUNNING on CPU from game-on's
+        # relocate; the game-cpu drop-in is now removed, so it re-execs on GPU.
+        systemctl --user restart llama-vt.service 2>/dev/null || true
         echo "[axi-game-off] waiting for llama-vt /health (8082)…"
         for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8082/health >/dev/null 2>&1; then
@@ -95,7 +99,10 @@ if systemctl --user list-unit-files llama-vt.service 2>/dev/null | grep -q "llam
             sleep 1
         done
     else
-        echo "[axi-game-off] primary is '${PREV_MODEL:-<none>}' (not qwen35-4b) — leaving llama-vt stopped (VRAM guard)."
+        # Primary is the big 35B (or other) — VT cannot share VRAM, so STOP it
+        # (it may be running on CPU from game-on's relocate). VRAM guard.
+        echo "[axi-game-off] primary is '${PREV_MODEL:-<none>}' (not qwen35-4b) — stopping llama-vt (VRAM guard)."
+        systemctl --user stop llama-vt.service 2>/dev/null || true
     fi
 else
     echo "[axi-game-off] llama-vt.service not installed — skipping VT restore (safe, no-op)."
