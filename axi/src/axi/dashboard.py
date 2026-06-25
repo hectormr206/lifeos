@@ -694,6 +694,54 @@ def _web_search_tool_handler(args: dict[str, Any]) -> dict[str, Any]:
     return {"ok": bool(packed), "query": query, "results": packed}
 
 
+_RECALL_MEMORY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "recall_memory",
+        "description": (
+            "Busca en la memoria personal del usuario (su gráfico de vida) para recuperar "
+            "hechos datados que él mismo registró: salud, sueño, presión arterial, glucosa, "
+            "peso, gastos, eventos, actividad física, u otros datos de vida. "
+            "Úsala cuando el usuario pregunta sobre SUS PROPIOS registros pasados y necesitás "
+            "hechos con fechas exactas para responder con precisión. "
+            "Reformulá la pregunta del usuario en términos de búsqueda concisos: por ejemplo, "
+            "si pregunta '¿qué presión tenía cuando dormí mal?' llamá a recall_memory con "
+            "query='presión dormí pocas horas'. "
+            "Devuelve hechos datados de la memoria personal del usuario."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Términos de búsqueda concisos para encontrar los recuerdos relevantes.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+
+def _recall_memory_tool_handler(args: dict[str, Any]) -> dict[str, Any]:
+    """Whitelisted local recall_memory tool for the big brain."""
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"ok": False, "error": "query is required", "facts": ""}
+    if not config.get("graph_recall", True):
+        return {"ok": False, "error": "graph recall disabled", "facts": ""}
+    try:
+        from axi import recall
+        lang = str(config.get("language", "es-MX"))
+        max_dist = float(config.get("graph_recall_tool_max_distance", 0.9))
+        block = recall.build_recall_block(query, lang=lang, max_distance=max_dist)
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "recall lookup failed", "facts": ""}
+    if not block:
+        return {"ok": False, "query": query, "facts": "", "note": "no relevant memories found"}
+    return {"ok": True, "query": query, "facts": block}
+
+
 # Map of keywords → suggested format. When the user's message contains
 # one of these keywords AND the brain hallucinated persistence, we
 # include a hint about what format actually works.
@@ -4016,22 +4064,36 @@ async def api_chat_ask(request: Request):
                     log.info("brain: injecting location context (lat=%.5f, lng=%.5f)", _lat, _lng)
                 except (TypeError, ValueError):
                     pass
-            if image_b64 or not web_research.is_enabled():
+            if image_b64:
                 answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64, lang=_chat_lang)
             else:
+                # Build tool list dynamically: recall_memory always present;
+                # web_search only when web research is enabled.
+                tools: list[dict[str, Any]] = [_RECALL_MEMORY_TOOL]
+                tool_handlers: dict[str, Any] = {"recall_memory": _recall_memory_tool_handler}
                 tool_system = (
                     brain_system
-                    + "\n\nUSO DE INTERNET EN MODO CHARLA:\n"
-                    + "- Tienes disponible la herramienta web_search para consultas actuales, verificables o donde necesites fuentes.\n"
-                    + "- Decide tú cuándo usarla. Úsala para noticias, precios, versiones, documentación reciente, eventos actuales o datos que puedan haber cambiado.\n"
-                    + "- No la uses para charla personal, razonamiento general o información estable que ya sabes."
+                    + "\n\nRECUERDOS PERSONALES:\n"
+                    + "- Tienes disponible la herramienta recall_memory para buscar datos datados que el usuario registró en su memoria personal (salud, sueño, presión, glucosa, etc.).\n"
+                    + "- Úsala cuando el usuario pregunte sobre sus propios registros pasados y necesites hechos con fechas exactas.\n"
+                    + "- No la uses para charla casual, saludos, ni temas que no involucren los registros personales del usuario."
                 )
+                if web_research.is_enabled():
+                    tools.append(_WEB_SEARCH_TOOL)
+                    tool_handlers["web_search"] = _web_search_tool_handler
+                    tool_system = (
+                        tool_system
+                        + "\n\nUSO DE INTERNET EN MODO CHARLA:\n"
+                        + "- Tienes disponible la herramienta web_search para consultas actuales, verificables o donde necesites fuentes.\n"
+                        + "- Decide tú cuándo usarla. Úsala para noticias, precios, versiones, documentación reciente, eventos actuales o datos que puedan haber cambiado.\n"
+                        + "- No la uses para charla personal, razonamiento general o información estable que ya sabes."
+                    )
                 answer = brain.ask_with_tools(
                     text,
                     system=tool_system,
                     history=history,
-                    tools=[_WEB_SEARCH_TOOL],
-                    tool_handlers={"web_search": _web_search_tool_handler},
+                    tools=tools,
+                    tool_handlers=tool_handlers,
                     tool_choice="auto",
                     lang=_chat_lang,
                 )

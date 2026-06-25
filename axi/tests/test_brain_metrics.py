@@ -85,6 +85,7 @@ def _flush_metric_threads(timeout: float = 2.0) -> None:
 
 def test_ask_records_metric_with_usage_tokens(monkeypatch):
     monkeypatch.setattr(config, "get", lambda k, default=None: True if k == "brain_metrics_enabled" else default)
+    monkeypatch.setattr(brain, "_BG_WORKERS_DISABLED", False)  # test requires metric threads
 
     def fake_impl(prompt, **kw):
         return "hola", {
@@ -112,6 +113,7 @@ def test_ask_records_metric_with_usage_tokens(monkeypatch):
 
 def test_ask_records_null_usage_when_absent(monkeypatch):
     monkeypatch.setattr(config, "get", lambda k, default=None: True if k == "brain_metrics_enabled" else default)
+    monkeypatch.setattr(brain, "_BG_WORKERS_DISABLED", False)  # test requires metric threads
 
     def fake_impl(prompt, **kw):
         return "ok", {"choices": [{"message": {"content": "ok"}}]}
@@ -132,6 +134,7 @@ def test_ask_records_null_usage_when_absent(monkeypatch):
 
 def test_ask_records_metric_on_error_and_reraises(monkeypatch):
     monkeypatch.setattr(config, "get", lambda k, default=None: True if k == "brain_metrics_enabled" else default)
+    monkeypatch.setattr(brain, "_BG_WORKERS_DISABLED", False)  # test requires metric threads
 
     def boom(prompt, **kw):
         raise RuntimeError("brain exploded")

@@ -134,6 +134,7 @@ def test_chat_ask_speak_synthesizes_wav_in_response(client, monkeypatch):
     """
     from axi import brain, speak as speak_mod
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "hola Héctor")
+    monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: "hola Héctor")
     synthesized: list[str] = []
 
     def fake_synth(text: str) -> bytes:

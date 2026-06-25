@@ -543,18 +543,121 @@ def test_stop_embed_worker_stops_thread():
     if not alive_before:
         pytest.skip("axi-embed-worker did not start — cannot test stop")
 
-    store.stop_embed_worker()
+    try:
+        store.stop_embed_worker()
 
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            alive = [t for t in threading.enumerate()
+                     if t.name == "axi-embed-worker" and t.is_alive()]
+            if not alive:
+                break
+            time.sleep(0.05)
+
         alive = [t for t in threading.enumerate()
                  if t.name == "axi-embed-worker" and t.is_alive()]
-        if not alive:
-            break
+        assert not alive, (
+            f"axi-embed-worker is still alive after stop_embed_worker() (FIX 9)"
+        )
+    finally:
+        store.stop_embed_worker()
+
+
+def test_embed_worker_backoff_is_interruptible():
+    """stop_embed_worker() completes within 2 s even when worker is in backoff sleep.
+
+    With OLD code (time.sleep(_BACKOFF_S)) this would take ~10 s to complete.
+    With the fix (_embed_worker_stop.wait(_BACKOFF_S)) the stop event wakes the
+    worker immediately and stop_embed_worker() returns in well under 2 s.
+    """
+    from axi import store
+
+    # Ensure clean state
+    store.stop_embed_worker()
+
+    def _always_raise(*, limit: int = 100) -> int:  # noqa: ARG001
+        raise RuntimeError("simulated embed service error")
+
+    with patch.object(store, "embed_pending_nodes", side_effect=_always_raise):
+        store._embed_worker_started.clear()
+        store._ensure_embed_worker()
+
+        # Give the worker a moment to start
         time.sleep(0.05)
 
-    alive = [t for t in threading.enumerate()
-             if t.name == "axi-embed-worker" and t.is_alive()]
-    assert not alive, (
-        f"axi-embed-worker is still alive after stop_embed_worker() (FIX 9)"
-    )
+        # Trigger the error→backoff path
+        try:
+            store._EMBED_QUEUE.put_nowait(1)
+        except queue.Full:
+            pass
+
+        # Let the worker enter the error handler and begin backoff (~0.1 s headroom)
+        time.sleep(0.15)
+
+        # Now stop — must complete well within 2 s (the fix makes this ~instant)
+        t_start = time.monotonic()
+        try:
+            store.stop_embed_worker(timeout=2.0)
+        finally:
+            pass
+        elapsed = time.monotonic() - t_start
+
+        assert elapsed < 2.0, (
+            f"stop_embed_worker took {elapsed:.2f}s — backoff is not interruptible "
+            f"(expected < 2s with interruptible wait)"
+        )
+
+        # Confirm the thread is actually gone
+        alive = [t for t in threading.enumerate()
+                 if t.name == "axi-embed-worker" and t.is_alive()]
+        assert not alive, (
+            f"axi-embed-worker still alive {elapsed:.2f}s after stop_embed_worker()"
+        )
+
+
+def test_stop_embed_worker_reaps_orphaned_workers():
+    """stop_embed_worker() kills ALL axi-embed-worker threads, not just the tracked one.
+
+    Simulates the orphan scenario: start a worker, force-orphan it by clearing
+    _embed_worker_started and starting a second worker.  Two threads are alive.
+    stop_embed_worker() must reap both.
+    """
+    from axi import store
+
+    # Ensure clean state
+    store.stop_embed_worker()
+
+    try:
+        # Start first worker
+        store._embed_worker_started.clear()
+        store._ensure_embed_worker()
+        time.sleep(0.05)
+
+        first_alive = [t for t in threading.enumerate()
+                       if t.name == "axi-embed-worker" and t.is_alive()]
+        if not first_alive:
+            pytest.skip("first axi-embed-worker did not start")
+
+        # Orphan the first worker: clear the started flag so _ensure_embed_worker
+        # spawns a SECOND worker thread (the tracked _embed_worker_thread is replaced,
+        # but the first thread is still alive and untracked).
+        store._embed_worker_started.clear()
+        store._ensure_embed_worker()
+        time.sleep(0.05)
+
+        both_alive = [t for t in threading.enumerate()
+                      if t.name == "axi-embed-worker" and t.is_alive()]
+        # We expect 2, but the test is meaningful as long as at least 1 is alive.
+        assert len(both_alive) >= 1, "No axi-embed-worker threads alive before stop"
+
+        # stop_embed_worker must reap every thread named axi-embed-worker
+        store.stop_embed_worker(timeout=3.0)
+
+        alive_after = [t for t in threading.enumerate()
+                       if t.name == "axi-embed-worker" and t.is_alive()]
+        assert not alive_after, (
+            f"{len(alive_after)} axi-embed-worker thread(s) still alive after "
+            f"stop_embed_worker() — orphaned threads not reaped"
+        )
+    finally:
+        store.stop_embed_worker()

@@ -22,6 +22,7 @@ def client(monkeypatch):
 def test_chat_ask_returns_answer(client, monkeypatch):
     from axi import brain
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "respuesta de prueba")
+    monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: "respuesta de prueba")
 
     r = client.post("/api/chat/ask", json={"text": "hola"})
     assert r.status_code == 200
@@ -47,6 +48,7 @@ def test_chat_ask_passes_history(client, monkeypatch):
         return "ok"
 
     monkeypatch.setattr(brain, "ask", fake_ask)
+    monkeypatch.setattr(brain, "ask_with_tools", fake_ask)
 
     r = client.post("/api/chat/ask", json={"text": "tercera"})
     assert r.status_code == 200
@@ -63,6 +65,7 @@ def test_chat_ask_passes_history(client, monkeypatch):
 def test_chat_ask_then_history_roundtrip(client, monkeypatch):
     from axi import brain
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "respuesta")
+    monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: "respuesta")
 
     r = client.post("/api/chat/ask", json={"text": "pregunta"})
     assert r.status_code == 200
@@ -90,13 +93,17 @@ def test_chat_ask_rejects_empty(client, monkeypatch):
 
 
 def test_chat_ask_records_brain_metric(client, monkeypatch):
-    """The brain.ask call from chat must also feed the brain-metrics table.
+    """The brain call from chat must also feed the brain-metrics table.
 
-    We don't mock _record_metric_async directly — we exercise the real
-    `brain.ask` wrapper with a stub `_ask_impl`, then check the store.
+    Stubs both _ask_impl (for brain.ask) and _ask_with_tools_impl (for
+    brain.ask_with_tools) since the routing now uses ask_with_tools for
+    non-image turns. Either path must record the metric.
     """
     from axi import brain, store
-    monkeypatch.setattr(brain, "_ask_impl", lambda prompt, **kw: ("ok", {"model": "stub", "usage": {"total_tokens": 5, "prompt_tokens": 2, "completion_tokens": 3}}))
+    monkeypatch.setattr(brain, "_BG_WORKERS_DISABLED", False)  # test requires metric threads
+    _stub_meta = {"model": "stub", "usage": {"total_tokens": 5, "prompt_tokens": 2, "completion_tokens": 3}}
+    monkeypatch.setattr(brain, "_ask_impl", lambda prompt, **kw: ("ok", _stub_meta))
+    monkeypatch.setattr(brain, "_ask_with_tools_impl", lambda prompt, **kw: ("ok", _stub_meta))
 
     r = client.post("/api/chat/ask", json={"text": "ping"})
     assert r.status_code == 200

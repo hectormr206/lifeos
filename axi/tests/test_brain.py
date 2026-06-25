@@ -96,12 +96,21 @@ def test_ask_disables_thinking_by_default():
 
 
 def test_ask_with_tools_dispatches_tool_and_sends_result():
-    captured = {"bodies": []}
+    # chat_bodies contains only chat-completion requests (not embed requests).
+    # ask_with_tools now fires a recall embed first (FIX 1), which goes through
+    # the same urlopen mock; we filter by URL so the counter stays correct.
+    chat_bodies = []
 
     def fake_urlopen(req, timeout=0):  # noqa: ARG001
         body = json.loads(req.data.decode())
-        captured["bodies"].append(body)
-        if len(captured["bodies"]) == 1:
+        url = getattr(req, "full_url", "") or ""
+        if "embeddings" in url or "input" in body:
+            # Embed pre-call: return a response that causes EmbedServiceError
+            # so build_recall_block returns "" gracefully.
+            return _FakeResp(json.dumps({"data": []}).encode())
+        # Real chat-completion call
+        chat_bodies.append(body)
+        if len(chat_bodies) == 1:
             response = {
                 "choices": [{
                     "finish_reason": "tool_calls",
@@ -135,10 +144,10 @@ def test_ask_with_tools_dispatches_tool_and_sends_result():
 
     assert out == "final answer"
     assert calls == [{"query": "latest news"}]
-    assert len(captured["bodies"]) == 2
-    assert captured["bodies"][0]["tools"] == tools
-    assert captured["bodies"][0]["tool_choice"] == "required"
-    second_messages = captured["bodies"][1]["messages"]
+    assert len(chat_bodies) == 2
+    assert chat_bodies[0]["tools"] == tools
+    assert chat_bodies[0]["tool_choice"] == "required"
+    second_messages = chat_bodies[1]["messages"]
     assert second_messages[-2]["role"] == "assistant"
     assert second_messages[-2]["tool_calls"][0]["id"] == "call_1"
     assert second_messages[-1]["role"] == "tool"
@@ -147,12 +156,16 @@ def test_ask_with_tools_dispatches_tool_and_sends_result():
 
 
 def test_ask_with_tools_unknown_tool_returns_safe_tool_error():
-    captured = {"bodies": []}
+    # Similar to above: filter embed pre-calls from chat-completion calls.
+    chat_bodies = []
 
     def fake_urlopen(req, timeout=0):  # noqa: ARG001
         body = json.loads(req.data.decode())
-        captured["bodies"].append(body)
-        if len(captured["bodies"]) == 1:
+        url = getattr(req, "full_url", "") or ""
+        if "embeddings" in url or "input" in body:
+            return _FakeResp(json.dumps({"data": []}).encode())
+        chat_bodies.append(body)
+        if len(chat_bodies) == 1:
             response = {
                 "choices": [{
                     "finish_reason": "tool_calls",
@@ -180,7 +193,7 @@ def test_ask_with_tools_unknown_tool_returns_safe_tool_error():
         )
 
     assert out == "safe final"
-    tool_msg = captured["bodies"][1]["messages"][-1]
+    tool_msg = chat_bodies[1]["messages"][-1]
     assert tool_msg["role"] == "tool"
     assert "unknown tool 'shell'" in tool_msg["content"]
 

@@ -39,6 +39,13 @@ log = logging.getLogger("axi.store")
 
 import sqlcipher3
 
+# Process-level gate: when set to "1", "true", or "yes" (case-insensitive),
+# all implicit background-worker auto-triggers are suppressed. Explicit
+# lifecycle functions (_ensure_embed_worker, stop_embed_worker, etc.) remain
+# callable so worker-lifecycle tests still work. Default is OFF (workers
+# auto-start normally in production).
+_BG_WORKERS_DISABLED = os.environ.get("AXI_DISABLE_BG_WORKERS", "").lower() in ("1", "true", "yes")
+
 
 class RecoveryError(RuntimeError):
     """Raised when healthy backups exist but every restore attempt failed.
@@ -1083,6 +1090,37 @@ def neighbors(node_id: int, edge_kind: str | None = None, depth: int = 1) -> lis
     return list(rows)
 
 
+def same_day_neighbors(node_id: int, conn=None) -> list[dict[str, Any]]:
+    """Return all nodes connected to node_id via a 'same-day' edge in EITHER direction.
+
+    Uses a UNION of two direction-specific queries so SQLite can use the
+    dedicated idx_edges_from and idx_edges_to indexes instead of a full
+    OR-scan.  Self (n.id = node_id) is excluded in both arms.
+
+    Returns a list of node dicts (id, kind, label, domain, created_at,
+    occurred_at).  Returns [] on any error.
+    """
+    c = conn or _connect()
+    try:
+        rows = c.execute(
+            """
+            SELECT n.id, n.kind, n.label, n.domain, n.created_at, n.occurred_at
+            FROM nodes n
+            JOIN edges e ON e.from_id = ? AND e.to_id = n.id AND e.kind = 'same-day'
+            WHERE n.id != ?
+            UNION
+            SELECT n.id, n.kind, n.label, n.domain, n.created_at, n.occurred_at
+            FROM nodes n
+            JOIN edges e ON e.to_id = ? AND e.from_id = n.id AND e.kind = 'same-day'
+            WHERE n.id != ?
+            """,
+            (node_id, node_id, node_id, node_id),
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    return [dict(r) for r in rows]
+
+
 # ─────────────────────────── conversations ─────────────────────────────
 
 def add_conversation(user_text: str, axi_text: str, has_screenshot: bool = False, session_id: str | None = None) -> int:
@@ -1522,35 +1560,43 @@ def upsert_vec_node(conn, *, node_id: int, vector: list[float]) -> None:
     )
 
 
+def knn_nodes_scored(conn, *, vector: list[float], k: int = 10) -> list[tuple[int, float]]:
+    """Return the k nearest node ids with their cosine DISTANCE from vec_nodes.
+
+    Delegates to knn_nodes_with_distance (which already exists further below).
+    Returns a list of (node_id, distance) tuples ordered by ascending distance.
+    Returns an empty list if vec_nodes is empty or sqlite-vec is not loaded.
+    """
+    return knn_nodes_with_distance(conn, vector=vector, k=k)
+
+
 def knn_nodes(conn, *, vector: list[float], k: int = 10) -> list[int]:
     """Return the k nearest node ids from vec_nodes ordered by cosine distance.
 
     Returns an empty list if vec_nodes is empty or sqlite-vec is not loaded.
+    Delegates to knn_nodes_scored to avoid duplicated KNN logic.
     """
-    import struct
-
-    _load_sqlite_vec(conn)
-    vec = vector[:512]
-    blob = struct.pack(f"{len(vec)}f", *vec)
-    try:
-        rows = conn.execute(
-            "SELECT node_id FROM vec_nodes WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-            (blob, k),
-        ).fetchall()
-    except Exception:  # noqa: BLE001
-        return []
-    return [int(r[0]) for r in rows]
+    return [nid for nid, _dist in knn_nodes_scored(conn, vector=vector, k=k)]
 
 
 # ─────────────────── embed worker (Slice 1) ──────────────────────────────────
 
 # Re-export embed_text from embed_client so store.py callers use a single import,
 # and tests can patch "axi.store.embed_text" cleanly.
-def embed_text(text: str, *, mode: str = "passage") -> list[float]:
-    """Thin wrapper around embed_client.embed — patchable in tests."""
+def embed_text(text: str, *, mode: str = "passage", timeout: float | None = None) -> list[float]:
+    """Thin wrapper around embed_client.embed — patchable in tests.
+
+    Args:
+        text: Text to embed.
+        mode: 'query' or 'passage' (passed to embed_client).
+        timeout: Optional HTTP timeout override. None uses embed_client default (30 s).
+    """
     from axi.embed_client import embed
 
-    return embed(text, mode=mode)  # type: ignore[arg-type]
+    kwargs: dict = {"mode": mode}  # type: ignore[arg-type]
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    return embed(text, **kwargs)
 
 
 def embed_pending_nodes(*, limit: int = 100) -> int:
@@ -1694,7 +1740,9 @@ def _embed_worker_loop() -> None:
             embed_pending_nodes(limit=_DRAIN_LIMIT)
         except Exception:  # noqa: BLE001
             log.debug("embed_worker: drain error — backing off %ss", _BACKOFF_S)
-            time.sleep(_BACKOFF_S)
+            # Use .wait() instead of time.sleep() so the stop event can interrupt
+            # the backoff immediately, enabling fast shutdown/test teardown.
+            _embed_worker_stop.wait(_BACKOFF_S)
 
 
 def _ensure_embed_worker() -> None:
@@ -1718,6 +1766,10 @@ def stop_embed_worker(timeout: float = 3.0) -> None:
     Safe to call even if the worker was never started.  Used in test teardown
     to prevent the daemon thread from touching sqlcipher during interpreter
     shutdown (which causes SIGSEGV).
+
+    Reaps ALL threads named "axi-embed-worker" (not only the currently tracked
+    one) so orphaned workers — spawned when _embed_worker_started was cleared
+    while a prior worker was still alive — are also joined within `timeout`.
     """
     global _embed_worker_thread
     _embed_worker_stop.set()
@@ -1726,8 +1778,16 @@ def stop_embed_worker(timeout: float = 3.0) -> None:
         _EMBED_QUEUE.put_nowait(-1)
     except queue.Full:
         pass
-    if _embed_worker_thread is not None and _embed_worker_thread.is_alive():
-        _embed_worker_thread.join(timeout=timeout)
+    # Collect every live thread named axi-embed-worker (handles orphans too).
+    workers = [
+        t for t in threading.enumerate()
+        if t.name == "axi-embed-worker" and t.is_alive()
+    ]
+    # Distribute the overall timeout budget across all workers.
+    deadline = time.monotonic() + timeout
+    for t in workers:
+        remaining = max(0.0, deadline - time.monotonic())
+        t.join(timeout=remaining)
     # Reset state so _ensure_embed_worker() can restart a fresh worker later.
     _embed_worker_stop.clear()
     _embed_worker_started.clear()
@@ -1740,8 +1800,12 @@ def trigger_embed_for_node(node_id: int) -> None:
     Returns immediately — never blocks fact creation.  The worker thread
     drains embed_pending_nodes(limit=50) in batches.  If the embed service is
     down, nodes stay embedding IS NULL and are retried on the next signal.
+
+    Gated by AXI_DISABLE_BG_WORKERS: when set, the implicit auto-start is
+    suppressed so test isolation is preserved (no TOCTOU race on DB_PATH).
     """
-    _ensure_embed_worker()
+    if not _BG_WORKERS_DISABLED:
+        _ensure_embed_worker()
     try:
         _EMBED_QUEUE.put_nowait(node_id)
     except queue.Full:
@@ -1817,19 +1881,31 @@ def semantic_search_nodes(
     *,
     k: int = 20,
     conn=None,
+    timeout: float | None = None,
 ) -> list[dict[str, Any]]:
     """Embed *query* and return nodes ranked by cosine similarity via vec_nodes KNN.
 
+    Each returned dict includes: id, kind, label, domain, created_at,
+    occurred_at (float|None), and distance (float, cosine distance from query).
+
     Returns an empty list if:
-      - The embed service is down (EmbedServiceError).
+      - The embed service is down or times out (EmbedServiceError / TimeoutError).
       - vec_nodes is empty or not loaded.
+
+    Args:
+        query: Text to embed for similarity search.
+        k: Number of nearest neighbours to retrieve.
+        conn: Optional connection (injected in tests).
+        timeout: Optional HTTP timeout for the embed call. None uses the embed
+            client default (30 s). Pass a short value (e.g. 2.0) from
+            build_recall_block so a slow embed cannot stall the user's turn.
 
     Never raises — callers receive an empty list on any failure.
     """
     from axi.embed_client import EmbedServiceError
 
     try:
-        vector = embed_text(query, mode="query")
+        vector = embed_text(query, mode="query", timeout=timeout)
     except EmbedServiceError:
         log.debug("semantic_search_nodes: embed service down for query %r", query)
         return []
@@ -1840,23 +1916,32 @@ def semantic_search_nodes(
     c = conn or _connect()
 
     try:
-        node_ids = knn_nodes(c, vector=vector, k=k)
+        scored = knn_nodes_scored(c, vector=vector, k=k)
     except Exception as exc:  # noqa: BLE001
         log.debug("semantic_search_nodes: knn failed: %s", exc)
         return []
 
-    if not node_ids:
+    if not scored:
         return []
+
+    node_ids = [nid for nid, _dist in scored]
+    id_to_distance = {nid: dist for nid, dist in scored}
 
     # Fetch node metadata in one query, preserving KNN order.
     placeholders = ",".join("?" * len(node_ids))
     rows = c.execute(
-        f"SELECT id, kind, label, domain, created_at FROM nodes WHERE id IN ({placeholders})",
+        f"SELECT id, kind, label, domain, created_at, occurred_at FROM nodes WHERE id IN ({placeholders})",
         node_ids,
     ).fetchall()
 
-    # Re-order by the KNN rank.
-    id_to_row = {int(r[0]): dict(r) for r in rows}
+    # Re-order by the KNN rank and attach distance.
+    id_to_row: dict[int, dict[str, Any]] = {}
+    for r in rows:
+        row = dict(r)
+        nid = int(row["id"])
+        row["distance"] = id_to_distance.get(nid, 1.0)
+        id_to_row[nid] = row
+
     return [id_to_row[nid] for nid in node_ids if nid in id_to_row]
 
 
