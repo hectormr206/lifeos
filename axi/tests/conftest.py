@@ -7,10 +7,19 @@ the cached connection.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess as _subprocess
 from unittest.mock import MagicMock
 
 import pytest
+
+# Suppress all background worker auto-triggers for the whole test session.
+# This must be set before any axi module is imported so that the module-level
+# _BG_WORKERS_DISABLED flags in store.py, events.py, and brain.py read the
+# correct value. Without this, the embed-worker / events-writer / brain-metric
+# threads race against monkeypatch DB_PATH swaps (TOCTOU) and produce HMAC
+# mismatches on the wrong SQLCipher key → SIGBUS.
+os.environ.setdefault("AXI_DISABLE_BG_WORKERS", "1")
 
 log = logging.getLogger(__name__)
 
@@ -275,9 +284,7 @@ def fresh_db(tmp_path, monkeypatch):
     # carries the wrong encryption key or an incomplete schema into the next
     # test's fixture setup.
     _events._flush_for_tests(timeout=1.0)
-    _events._write_queue.put(None)  # sentinel: terminates the worker loop
-    if _events._worker_thread is not None:
-        _events._worker_thread.join(timeout=1.0)
+    _events.stop_events_writer()
     # Stop the embed worker so it does not touch sqlcipher during interpreter
     # teardown (preventing SIGSEGV at test-suite shutdown).
     store.stop_embed_worker()

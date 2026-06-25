@@ -47,6 +47,7 @@ def conv_client(client_base, monkeypatch):
     monkeypatch.setattr(web_research, "_enabled_fn", None)
 
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "respuesta libre del brain")
+    monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: "respuesta libre del brain")
     return TestClient(dashboard.app)
 
 
@@ -69,6 +70,7 @@ def test_conversation_mode_brain_returns_persistence_word_unchanged(conv_client,
         "Ya lo tenés anotado como referencia."
     )
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: gym_answer)
+    monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: gym_answer)
 
     r = conv_client.post("/api/chat/ask", json={
         "text": "dame una rutina de gym",
@@ -92,6 +94,7 @@ def test_conversation_mode_default_no_logging_mode_field(conv_client, monkeypatc
 
     answer_with_persistence = "Guardé esto en mi memoria para futuras consultas."
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: answer_with_persistence)
+    monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: answer_with_persistence)
 
     r = conv_client.post("/api/chat/ask", json={
         "text": "recuerda que prefiero el gym los lunes",
@@ -114,13 +117,14 @@ def test_conversation_mode_brain_is_called(conv_client, monkeypatch):
         return "ok"
 
     monkeypatch.setattr(brain, "ask", tracking_brain)
+    monkeypatch.setattr(brain, "ask_with_tools", tracking_brain)
 
     r = conv_client.post("/api/chat/ask", json={
         "text": "cuéntame sobre machine learning",
         "logging_mode": False,
     })
     assert r.status_code == 200
-    assert brain_called, "brain.ask was NOT called in conversation mode"
+    assert brain_called, "brain.ask or ask_with_tools was NOT called in conversation mode"
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +353,7 @@ def test_ordinary_today_conversation_does_not_trigger_deterministic_web_research
         enabled_fn=lambda: False,
     )
     monkeypatch.setattr(brain, "ask", lambda p, **kw: (brain_called.append(p), "brain")[1])
+    monkeypatch.setattr(brain, "ask_with_tools", lambda p, **kw: (brain_called.append(p), "brain")[1])
 
     tc = TestClient(dashboard.app)
     r = tc.post("/api/chat/ask", json={
@@ -394,7 +399,9 @@ def test_conversation_mode_uses_brain_tools_when_web_enabled(monkeypatch):
     assert r.status_code == 200
     assert r.json()["answer"] == "tool answer"
     assert ask_called
-    assert ask_called[0]["kw"]["tools"][0]["function"]["name"] == "web_search"
+    tool_names = [t["function"]["name"] for t in ask_called[0]["kw"]["tools"]]
+    assert "web_search" in tool_names
+    assert "recall_memory" in tool_names
     assert tool_called[0]["results"][0]["url"] == "https://example.test"
 
 
@@ -538,6 +545,7 @@ def test_logging_mode_absent_defaults_to_conversation(monkeypatch):
 
     answer_with_persistence_verb = "Anotado y registré la información en tu perfil."
     monkeypatch.setattr(brain, "ask", lambda p, **kw: answer_with_persistence_verb)
+    monkeypatch.setattr(brain, "ask_with_tools", lambda p, **kw: answer_with_persistence_verb)
 
     tc = TestClient(dashboard.app)
     # No logging_mode field at all
@@ -717,6 +725,7 @@ def test_logging_mode_string_true_treated_as_false(monkeypatch):
 
     brain_called = []
     monkeypatch.setattr(brain, "ask", lambda p, **kw: (brain_called.append(p), "from brain")[1])
+    monkeypatch.setattr(brain, "ask_with_tools", lambda p, **kw: (brain_called.append(p), "from brain")[1])
 
     tc = TestClient(dashboard.app)
     # logging_mode is a STRING "true" — must be treated as False (conversation)
@@ -728,7 +737,7 @@ def test_logging_mode_string_true_treated_as_false(monkeypatch):
     # Brain must be called because string "true" → False (conversation mode)
     assert brain_called, (
         "String 'true' for logging_mode must be coerced to False (conversation). "
-        "brain.ask should have been called."
+        "brain.ask or ask_with_tools should have been called."
     )
 
 

@@ -23,6 +23,7 @@ Kill switch: `events_enabled` in config (default True). When False every
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import shutil
 import subprocess
@@ -32,6 +33,13 @@ from collections import deque
 from typing import Any
 
 log = logging.getLogger("axi.events")
+
+# Process-level gate: mirrors the same env var in store.py. When set, the
+# implicit auto-start of the events-writer background thread is suppressed so
+# test isolation is preserved (no TOCTOU race on DB_PATH after monkeypatch
+# restores it between tests). Explicit lifecycle calls (stop_events_writer,
+# _ensure_worker) remain unaffected.
+_BG_WORKERS_DISABLED = os.environ.get("AXI_DISABLE_BG_WORKERS", "").lower() in ("1", "true", "yes")
 
 EVENT_LEVELS: tuple[str, ...] = ("info", "warning", "error", "critical")
 _RING_MAX = 200
@@ -48,6 +56,7 @@ _write_queue: queue.Queue = queue.Queue(maxsize=_WRITE_QUEUE_MAX)
 _queue_drop_count = 0       # monotone counter of dropped events (for diagnostics)
 _worker_thread: threading.Thread | None = None
 _worker_lock = threading.Lock()
+_writer_stop = threading.Event()   # set → worker loop exits without touching the DB
 _insert_count = 0
 
 # P2.5 — libnotify rate-limit. Keyed by (source, level), value = last fire ts.
@@ -105,6 +114,7 @@ def _ensure_worker() -> None:
     with _worker_lock:
         if _worker_thread is not None and _worker_thread.is_alive():
             return
+        _writer_stop.clear()
         t = threading.Thread(target=_worker_loop, name="axi-events-writer", daemon=True)
         t.start()
         _worker_thread = t
@@ -114,7 +124,12 @@ def _worker_loop() -> None:
     global _insert_count
     while True:
         item = _write_queue.get()
-        if item is None:  # sentinel for tests
+        # Exit immediately on sentinel or stop signal — do NOT touch the DB.
+        if item is None or _writer_stop.is_set():
+            return
+        # Guard again right before the DB call: teardown may have fired while
+        # this thread was blocked on get().
+        if _writer_stop.is_set():
             return
         try:
             from axi import store  # lazy to avoid import cycles
@@ -133,6 +148,39 @@ def _worker_loop() -> None:
                     log.warning("events trim failed: %s", e)
         except Exception as e:  # noqa: BLE001
             log.warning("event SQLite insert failed: %s", e)
+
+
+def stop_events_writer(timeout: float = 3.0) -> None:
+    """Signal the events writer to stop and wait for it to exit.
+
+    Safe to call even if the worker was never started.  Used in test teardown
+    to prevent the daemon thread from calling store._connect() after the test
+    fixture has restored DB_PATH/STATE_DIR to a prior test's temp path — which
+    would produce an HMAC mismatch on the wrong SQLCipher key (Bus error).
+
+    Mirrors stop_embed_worker() in store.py: sets the stop event, puts a None
+    sentinel to unblock a blocked queue.get(), then joins every alive thread
+    named "axi-events-writer" within the overall timeout budget.
+    """
+    global _worker_thread
+    _writer_stop.set()
+    # Unblock a worker that is blocked on _write_queue.get().
+    try:
+        _write_queue.put_nowait(None)
+    except queue.Full:
+        pass
+    # Collect every live thread named axi-events-writer (handles orphans too).
+    workers = [
+        t for t in threading.enumerate()
+        if t.name == "axi-events-writer" and t.is_alive()
+    ]
+    deadline = time.monotonic() + timeout
+    for t in workers:
+        remaining = max(0.0, deadline - time.monotonic())
+        t.join(timeout=remaining)
+    # Reset state so _ensure_worker() can restart a fresh worker later.
+    _writer_stop.clear()
+    _worker_thread = None
 
 
 # ─────────────────────────────── public API ─────────────────────────────
@@ -197,7 +245,8 @@ def log_event(
                     "events._write_queue full — dropping event (total dropped: %d)",
                     _queue_drop_count,
                 )
-        _ensure_worker()
+        if not _BG_WORKERS_DISABLED:
+            _ensure_worker()
         # P2.5 — fire libnotify for critical/error. Best-effort, rate-limited.
         try:
             _maybe_notify(entry["source"], level, entry["message"])

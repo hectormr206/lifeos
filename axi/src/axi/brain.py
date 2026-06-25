@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -22,6 +23,11 @@ import urllib.request
 from datetime import datetime
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
+
+# Process-level gate: mirrors the same env var in store.py and events.py.
+# When set, the implicit per-call daemon thread spawn in _record_metric_async
+# is suppressed so test isolation is preserved.
+_BG_WORKERS_DISABLED = os.environ.get("AXI_DISABLE_BG_WORKERS", "").lower() in ("1", "true", "yes")
 
 from axi import config
 
@@ -167,17 +173,8 @@ def is_vt_alive(timeout: float = 1.0) -> bool:
         return False
 
 
-_DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-_MONTHS_ES = [
-    "enero", "febrero", "marzo", "abril", "mayo", "junio",
-    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-]
-
-_DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-_MONTHS_EN = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-]
+from axi.locale_data import DAYS_ES as _DAYS_ES, MONTHS_ES as _MONTHS_ES
+from axi.locale_data import DAYS_EN as _DAYS_EN, MONTHS_EN as _MONTHS_EN
 
 
 def temporal_context() -> str:
@@ -387,6 +384,8 @@ def _record_metric_async(
         except Exception as e:  # noqa: BLE001
             log.warning("brain metric write failed: %s", e)
 
+    if _BG_WORKERS_DISABLED:
+        return
     try:
         threading.Thread(target=_worker, name="axi-brain-metric", daemon=True).start()
     except Exception as e:  # noqa: BLE001
@@ -399,12 +398,17 @@ def _build_messages(
     image_b64: str | None = None,
     history: list[dict] | None = None,
     lang: str | None = None,
+    _skip_recall: bool = False,
 ) -> list[dict[str, Any]]:
     """Build OpenAI-compatible chat messages with Axi's live context.
 
     `lang` is the user's configured language tag (e.g. 'en', 'es-MX').
     When 'en*', English temporal context is injected; otherwise Spanish.
     Callers that do not pass `lang` get Spanish (backward-compatible default).
+
+    `_skip_recall` disables the graph recall injection for callers that manage
+    their own context augmentation (e.g. ask_with_tools). This prevents the
+    embed HTTP call from interfering with tool-calling loops.
     """
     if image_b64:
         user_content: str | list[dict[str, Any]] = [
@@ -419,7 +423,42 @@ def _build_messages(
     # producing wrong-language timestamps).
     _is_en = bool(lang and lang.split("-")[0].lower() == "en")
     _tc = temporal_context_en() if _is_en else temporal_context()
-    full_system = f"{system}\n\n{_tc}"
+
+    # Layer 3 — graph recall injection (gated by config.graph_recall).
+    # Use the text prompt as the recall query (works for both plain text and
+    # multimodal calls where prompt is always the text part).
+    # Skipped when _skip_recall=True (e.g. ask_with_tools manages its own context).
+    _mem = ""
+    if not _skip_recall and config.get("graph_recall", True):
+        try:
+            from axi import recall as _recall  # noqa: PLC0415
+            _max_dist = float(config.get("graph_recall_max_distance", 0.78))
+            _escalate = (
+                float(config.get("graph_recall_tool_max_distance", 0.9))
+                if config.get("recall_escalation_enabled", True)
+                else None
+            )
+            _mem = _recall.build_recall_block(prompt, lang=lang, max_distance=_max_dist, escalate_distance=_escalate)
+        except Exception:  # noqa: BLE001
+            _mem = ""
+
+    if _mem:
+        if _is_en:
+            _restraint = (
+                "The memories above MAY be relevant. Use only those that answer the question "
+                "and cite the date only when it makes the answer correct; "
+                "if they do not apply, ignore them."
+            )
+        else:
+            _restraint = (
+                "Los recuerdos de arriba PUEDEN ser relevantes. "
+                "Usa solo los que respondan la pregunta y cita el día/fecha solo cuando hace "
+                "la respuesta correcta; si no aplican, ignóralos."
+            )
+        full_system = f"{system}\n\n{_tc}\n\n{_mem}\n\n{_restraint}"
+    else:
+        full_system = f"{system}\n\n{_tc}"
+
     messages: list[dict[str, Any]] = [{"role": "system", "content": full_system}]
     if history:
         messages.extend(history)
@@ -488,6 +527,7 @@ def _ask_impl(
     history: list[dict] | None = None,
     lang: str | None = None,
     _retry_budget: int | None = None,
+    _skip_recall: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
     """Inner implementation: returns (text, raw_response_dict).
 
@@ -546,7 +586,12 @@ def _ask_impl(
     except Exception:  # noqa: BLE001
         pass
 
-    messages = _build_messages(prompt, system=system, image_b64=image_b64, history=history, lang=lang)
+    # _skip_recall=True on retries: recall was already embedded in the first call's
+    # messages; do not fire a second embed on the budget-retry path.
+    messages = _build_messages(
+        prompt, system=system, image_b64=image_b64, history=history, lang=lang,
+        _skip_recall=_skip_recall,
+    )
     effective_max_tokens = _retry_budget if _retry_budget is not None else max_tokens
     try:
         data = _post_chat_completion(
@@ -586,7 +631,7 @@ def _ask_impl(
                     return _ask_impl(
                         prompt, system=system, max_tokens=max_tokens, timeout=timeout,
                         think=think, image_b64=image_b64, history=history,
-                        lang=lang, _retry_budget=retry_budget,
+                        lang=lang, _retry_budget=retry_budget, _skip_recall=True,
                     )
         return content, data
     except urllib.error.URLError as e:
@@ -669,8 +714,46 @@ def _ask_with_tools_impl(
             "- No digas que necesitas /busca si ya recibiste resultados de una herramienta web_search.\n"
             "- Si los resultados son insuficientes, dilo con precisión y cita lo que sí hay."
         )
-    tool_system = system + _tool_instructions
-    messages = _build_messages(prompt, system=tool_system, image_b64=None, history=history, lang=lang)
+    # FIX 1: inject graph recall once into the INITIAL system prompt so the
+    # ask_with_tools path (used for all web-research chat) also benefits from
+    # memory context.  We compute the recall block here — before _build_messages
+    # — so we can prepend it to tool_system.  Subsequent tool-loop rounds still
+    # use _skip_recall=True so the embed fires at most once per ask_with_tools call.
+    _mem = ""
+    if config.get("graph_recall", True):
+        try:
+            from axi import recall as _recall  # noqa: PLC0415
+            _max_dist = float(config.get("graph_recall_max_distance", 0.78))
+            _escalate = (
+                float(config.get("graph_recall_tool_max_distance", 0.9))
+                if config.get("recall_escalation_enabled", True)
+                else None
+            )
+            _mem = _recall.build_recall_block(prompt, lang=lang, max_distance=_max_dist, escalate_distance=_escalate)
+        except Exception:  # noqa: BLE001
+            _mem = ""
+
+    if _mem:
+        _is_en_recall = lang is not None and lang.split("-")[0].lower() == "en"
+        if _is_en_recall:
+            _restraint = (
+                "The memories above MAY be relevant. Use only those that answer the question "
+                "and cite the date only when it makes the answer correct; "
+                "if they do not apply, ignore them."
+            )
+        else:
+            _restraint = (
+                "Los recuerdos de arriba PUEDEN ser relevantes. "
+                "Usa solo los que respondan la pregunta y cita el día/fecha solo cuando hace "
+                "la respuesta correcta; si no aplican, ignóralos."
+            )
+        tool_system = system + _tool_instructions + f"\n\n{_mem}\n\n{_restraint}"
+    else:
+        tool_system = system + _tool_instructions
+
+    # _skip_recall=True: recall already injected above (or skipped); do not
+    # re-embed on every tool-loop round inside _build_messages.
+    messages = _build_messages(prompt, system=tool_system, image_b64=None, history=history, lang=lang, _skip_recall=True)
     last_data: dict[str, Any] | None = None
     try:
         for _round in range(max_tool_rounds + 1):

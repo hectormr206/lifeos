@@ -404,6 +404,39 @@ FIELDS: tuple[ConfigField, ...] = (
         "If true, facts extracted from chat conversations are added as nodes in the "
         "semantic graph. Default off keeps the graph to structured life-domains only.",
     ),
+    # ─────── graph recall (RAG) ───────
+    ConfigField(
+        "graph_recall", "boolean", True,
+        "If true, semantically relevant graph memories are injected into the brain "
+        "system prompt as a recall block. Default on; set false to disable.",
+    ),
+    ConfigField(
+        "graph_recall_max_distance", "number", 0.78,
+        "Cosine distance upper bound for graph recall. Nodes with distance above "
+        "this threshold are excluded. 0 = identical, 1 = orthogonal. Lower values "
+        "produce tighter relevance. Default 0.78 — empirically tuned against the "
+        "Qwen3-Embedding-4B/512 model on real data: keyword and natural-language "
+        "recall queries land at 0.56-0.74 while casual chat sits at 0.83+, so 0.78 "
+        "separates them. Fully conversational compound questions embed at ~0.87 "
+        "(indistinguishable from casual) and are handled by the big-brain recall tool.",
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    ConfigField(
+        "graph_recall_tool_max_distance", "number", 0.9,
+        "Looser distance gate used when the big brain explicitly calls the "
+        "recall_memory tool (vs the tighter passive-injection default 0.78). "
+        "Tool-based recall is intentional — the model chose to search — so a "
+        "wider net is appropriate.",
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    ConfigField(
+        "recall_escalation_enabled", "boolean", True,
+        "If true, voice/plain-ask compound personal-data questions that miss the tight passive "
+        "recall gate retry at the wider graph_recall_tool_max_distance gate, gated by a "
+        "personal-data heuristic.",
+    ),
 )
 
 
