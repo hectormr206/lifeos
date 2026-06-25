@@ -74,6 +74,54 @@ def test_looks_like_personal_recall_false_react():
 
 
 # ---------------------------------------------------------------------------
+# English coverage — True cases (mirror the Spanish health/finance vocab)
+# ---------------------------------------------------------------------------
+
+def test_looks_like_personal_recall_en_blood_pressure_sleep():
+    from axi.recall import looks_like_personal_recall
+    assert looks_like_personal_recall("what was my blood pressure when I slept badly?") is True
+
+
+def test_looks_like_personal_recall_en_sleep():
+    from axi.recall import looks_like_personal_recall
+    assert looks_like_personal_recall("how did I sleep last week") is True
+
+
+def test_looks_like_personal_recall_en_weight():
+    from axi.recall import looks_like_personal_recall
+    assert looks_like_personal_recall("my weight last month") is True
+
+
+def test_looks_like_personal_recall_en_glucose():
+    from axi.recall import looks_like_personal_recall
+    assert looks_like_personal_recall("what were my glucose readings") is True
+
+
+def test_looks_like_personal_recall_en_mood():
+    from axi.recall import looks_like_personal_recall
+    assert looks_like_personal_recall("how was my mood the days I didn't sleep") is True
+
+
+# ---------------------------------------------------------------------------
+# English coverage — False cases (casual / unrelated)
+# ---------------------------------------------------------------------------
+
+def test_looks_like_personal_recall_en_false_time():
+    from axi.recall import looks_like_personal_recall
+    assert looks_like_personal_recall("what time is it") is False
+
+
+def test_looks_like_personal_recall_en_false_joke():
+    from axi.recall import looks_like_personal_recall
+    assert looks_like_personal_recall("tell me a joke") is False
+
+
+def test_looks_like_personal_recall_en_false_weather():
+    from axi.recall import looks_like_personal_recall
+    assert looks_like_personal_recall("what's the weather today") is False
+
+
+# ---------------------------------------------------------------------------
 # Helpers for build_recall_block tests
 # ---------------------------------------------------------------------------
 
