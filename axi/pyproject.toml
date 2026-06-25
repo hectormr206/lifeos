@@ -72,6 +72,7 @@ dependencies = [
     #   uv pip install openwakeword --no-deps
     # onnxruntime (already present via faster-whisper) is used automatically.
     # See: axi/src/axi/wakeword.py OWWWakeWordListener for the integration.
+    "claude-agent-sdk>=0.2.110",
 ]
 
 [build-system]
