@@ -8,6 +8,9 @@ For every supported domain (health, relationships, …), this module provides:
 - create_fact_node_for_entry(domain, entry): core (raises on error).
 - create_fact_node_for_interaction(interaction): backward-compat shim →
   create_fact_node_for_entry('relationships', interaction).
+- backfill_node_occurred_at(): one-time helper to fill occurred_at on
+  previously backfilled nodes that were inserted before the occurred_at
+  column existed. Idempotent and bounded.
 
 Thread safety: all DB writes go through axi.store._tx() (thread-local
 connections). trigger_embed_for_node uses a queue — no connection is shared
@@ -18,6 +21,7 @@ from __future__ import annotations
 import logging
 import time as _time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 log = logging.getLogger("axi.domain_bridge")
@@ -250,6 +254,49 @@ def _is_low_value(label: str, entry: Any) -> bool:
     return False
 
 
+# ─── event-date extraction ───────────────────────────────────────────────────
+
+
+def _entry_occurred_at(entry: Any) -> float | None:
+    """Extract the real event timestamp from a domain entry.
+
+    Priority: entry.ts → entry.created_at → None.
+    Accepts datetime objects, ISO-format strings, or numeric epoch values.
+    Returns a float Unix epoch (UTC seconds) or None when no timestamp is
+    available or the value cannot be parsed.
+    """
+    for attr in ("ts", "created_at"):
+        raw = getattr(entry, attr, None)
+        if raw is None:
+            continue
+        # Already a number (epoch seconds).
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        # datetime object.
+        if isinstance(raw, datetime):
+            # Attach UTC when naive (treat as UTC, consistent with the rest of the stack).
+            if raw.tzinfo is None:
+                raw = raw.replace(tzinfo=timezone.utc)
+            return raw.timestamp()
+        # ISO string (e.g. "2026-06-24 12:19:52+00:00").
+        if isinstance(raw, str):
+            raw_s = raw.strip()
+            if not raw_s:
+                continue
+            try:
+                dt = datetime.fromisoformat(raw_s)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            except (ValueError, TypeError):
+                log.debug(
+                    "_entry_occurred_at: could not parse timestamp string %r — skipping",
+                    raw_s,
+                )
+                continue
+    return None
+
+
 # ─── core: create_fact_node_for_entry ────────────────────────────────────────
 
 
@@ -292,7 +339,8 @@ def create_fact_node_for_entry(domain: str, entry: Any) -> int | None:
     if cfg.extra_data_fn is not None:
         extra = cfg.extra_data_fn(entry)
 
-    node_id = store.add_node("fact", label, data=extra or None, domain=domain)
+    occurred_at = _entry_occurred_at(entry)
+    node_id = store.add_node("fact", label, data=extra or None, domain=domain, occurred_at=occurred_at)
     store.upsert_domain_node_map(domain, entry_id, node_id)
     store.trigger_embed_for_node(node_id)
     return node_id
@@ -518,6 +566,100 @@ def backfill_all_domains(
         log.warning("backfill_all_domains: post-backfill checkpoint failed: %s", _exc)
 
     return result
+
+
+# ─── one-time occurred_at backfill helper ───────────────────────────────────
+
+
+def backfill_node_occurred_at(
+    *,
+    days: int = 36500,
+    limit: int | None = None,
+) -> int:
+    """Idempotent helper: fill occurred_at on nodes that have NULL occurred_at.
+
+    For each node in domain_node_map where occurred_at IS NULL, fetches the
+    source domain entry and sets occurred_at from the entry's real timestamp
+    (via _entry_occurred_at — same logic as create_fact_node_for_entry).
+
+    This is a one-time migration helper to fix backfilled nodes that were
+    inserted before the occurred_at column existed. Safe to run multiple times:
+    - Nodes with occurred_at already set are skipped (SELECT before UPDATE).
+    - Domains that fail to fetch are skipped with a warning (never raises).
+
+    Args:
+        days:  Look-back window passed to _fetch_domain_entries.
+               Default is 36500 (≈100 years) so ALL existing entries are
+               considered — a one-time migration must not silently skip nodes
+               whose real event date is older than the previous 365-day window.
+               Pass a smaller value only when testing or when a bounded run is
+               explicitly desired.
+        limit: Optional cap on total nodes updated in a single run.
+
+    Returns:
+        Number of nodes whose occurred_at was updated in this run.
+    """
+    from axi import store
+
+    conn = store._connect()  # noqa: SLF001
+
+    # Find nodes with occurred_at IS NULL that have a domain_node_map entry.
+    # Join gives us the domain and entry_id so we can look up the source entry.
+    rows = conn.execute(
+        "SELECT n.id AS node_id, d.domain, d.entry_id "
+        "FROM nodes n "
+        "JOIN domain_node_map d ON d.node_id = n.id "
+        "WHERE n.occurred_at IS NULL"
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    # Group by domain for efficient batch fetching.
+    by_domain: dict[str, dict[str, int]] = {}  # domain → {entry_id: node_id}
+    for row in rows:
+        domain = row["domain"]
+        if domain not in by_domain:
+            by_domain[domain] = {}
+        by_domain[domain][row["entry_id"]] = int(row["node_id"])
+
+    updated = 0
+    for domain, entry_map in by_domain.items():
+        if limit is not None and updated >= limit:
+            break
+        try:
+            entries = _fetch_domain_entries(domain, days=days)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("backfill_node_occurred_at: fetch failed for domain=%r: %s", domain, exc)
+            continue
+
+        for entry in entries:
+            if limit is not None and updated >= limit:
+                break
+            entry_id = str(entry.id)
+            node_id = entry_map.get(entry_id)
+            if node_id is None:
+                continue
+
+            epoch = _entry_occurred_at(entry)
+            if epoch is None:
+                continue
+
+            try:
+                cur = conn.execute(
+                    "UPDATE nodes SET occurred_at=? WHERE id=? AND occurred_at IS NULL",
+                    (epoch, node_id),
+                )
+                # In autocommit mode (isolation_level=None) the UPDATE commits
+                # automatically. Use rowcount so concurrent callers don't both
+                # increment when only one wins the SQLite write lock.
+                updated += cur.rowcount
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "backfill_node_occurred_at: failed to update node_id=%r: %s", node_id, exc
+                )
+
+    return updated
 
 
 # ─── backward-compat shim ────────────────────────────────────────────────────
