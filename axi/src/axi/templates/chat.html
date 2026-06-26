@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% block title %}Chat — Axi{% endblock %}
+{% block title %}{% if domain == 'health' %}Salud — Axi{% else %}Chat — Axi{% endif %}{% endblock %}
 {% block nav_chat %}active{% endblock %}
 
 {% block content %}
@@ -22,7 +22,7 @@
   <!-- Header strip -->
   <div class="flex items-baseline justify-between mb-3 gap-2 flex-wrap">
     <div class="font-semibold text-base md:text-lg flex items-center gap-2">
-      💬 Chat con Axi
+      {% if domain == 'health' %}🩺 Salud{% else %}💬 Chat con Axi{% endif %}
       <!-- Online/offline indicator + queue count when sin VPN. -->
       <span x-show="!online" x-cloak
             class="text-xs px-2 py-0.5 rounded-full panel2"
@@ -302,6 +302,9 @@ function chatApp() {
     error: null,
     lastLatencyMs: null,
     loggingMode: false,   // true = registro de datos; false = charla libre
+    // Domain scope: '' = general assistant chat; 'health' = Salud chat that
+    // POSTs to /api/health/chat (register + query + off-topic, health-only).
+    domain: '{{ domain }}',
 
     // Multimodal state
     pendingImage: null,    // base64 PNG to attach to next /api/chat/ask
@@ -860,17 +863,22 @@ function chatApp() {
       }
 
       try {
-        const r = await fetch('/api/chat/ask', {
+        // Salud chat targets the health-scoped endpoint with a minimal body.
+        const endpoint = this.domain === 'health' ? '/api/health/chat' : '/api/chat/ask';
+        const payload = this.domain === 'health'
+          ? { text, location: location || undefined }
+          : {
+              text,
+              image_b64: image_b64 || null,
+              speak: this.speakOn,
+              location: location || undefined,
+              client_ts: new Date().toISOString(),
+              logging_mode: this.loggingMode,
+            };
+        const r = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text,
-            image_b64: image_b64 || null,
-            speak: this.speakOn,
-            location: location || undefined,
-            client_ts: new Date().toISOString(),
-            logging_mode: this.loggingMode,
-          }),
+          body: JSON.stringify(payload),
         });
         if (!r.ok) {
           const detail = await r.text();
