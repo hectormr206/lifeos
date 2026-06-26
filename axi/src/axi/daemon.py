@@ -1058,6 +1058,30 @@ class Daemon:
             threading.Thread(target=_say_ack, daemon=True).start()
             return
 
+        # Intent dispatch: a wake-word command ("desarrollá X", "modo juego", …)
+        # should fire the voice-command palette instead of going to the brain.
+        # match_wake already stripped "Axi", so re-prepend it for the
+        # prefix-gated classifier. On handler error, fall through to the brain.
+        if config.get("intents_enabled", True):
+            try:
+                from axi import intents as _intents  # noqa: PLC0415
+                _intent = _intents.classify(f"axi {command}")
+            except Exception as _ie:  # noqa: BLE001
+                log.warning("wakeword intent classify raised: %s", _ie)
+                _intent = None
+            if _intent is not None:
+                _iname, _iparams = _intent
+                try:
+                    log.info("wakeword intent: %s params=%s", _iname, _iparams)
+                    _intents.INTENT_HANDLERS[_iname](self, _iparams)
+                    self._set_state("idle")
+                    return
+                except Exception as _he:  # noqa: BLE001
+                    log.warning(
+                        "wakeword intent %s handler failed: %s — falling back to brain",
+                        _iname, _he,
+                    )
+
         try:
             self._set_state("thinking")
             # Live-test harness anchor: brain ask is about to start (wake path only).

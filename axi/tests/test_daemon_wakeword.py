@@ -679,3 +679,40 @@ class TestOnWakeVisionRouting:
         assert not result["eyes_capture_called"]
         assert not result["vision_capture_called"]
         assert result["wakeword_ask_calls"][0][1] is None
+
+
+# ---------------------------------------------------------------------------
+# Wake-word intent dispatch: a voice command fires the intent, not the brain
+# ---------------------------------------------------------------------------
+
+
+class TestWakewordIntentDispatch:
+    """A wake-word command matching an intent ("desarrollá X", "modo juego") must
+    dispatch the intent handler and skip the brain. match_wake already stripped
+    "Axi", so _wakeword_ask re-prepends it for the prefix-gated classifier."""
+
+    def test_intent_command_dispatches_handler_and_skips_brain(self, monkeypatch):
+        import axi.intents as _intents
+        from axi import daemon as _d
+
+        d = _make_daemon()
+        d.brain_ask = MagicMock(return_value="brain-answer")
+        captured: dict = {}
+
+        monkeypatch.setattr(
+            _intents, "classify",
+            lambda text: ("dev_develop", {"goal": "X"}) if "desarrollá" in text else None,
+        )
+        monkeypatch.setattr(
+            _intents, "INTENT_HANDLERS",
+            {"dev_develop": lambda daemon, params=None: captured.setdefault("params", params)},
+        )
+        monkeypatch.setattr(
+            _d.config, "get",
+            lambda key, default=None: True if key == "intents_enabled" else default,
+        )
+
+        d._wakeword_ask("desarrollá X", None)
+
+        assert captured.get("params") == {"goal": "X"}
+        d.brain_ask.assert_not_called()
