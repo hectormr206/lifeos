@@ -383,6 +383,13 @@ FIELDS: tuple[ConfigField, ...] = (
         maximum=60.0,
     ),
     ConfigField(
+        "wakeword_vad_filter", "boolean", False,
+        "Whether faster-whisper's internal Silero VAD pre-filters the wake-word "
+        "audio before transcription. Default false: with it on, marginal/quiet "
+        "speech was discarded and the wake word 'Axi' was silently dropped, forcing "
+        "the user to repeat. is_hallucination + match_wake already guard false wakes.",
+    ),
+    ConfigField(
         "wakeword_vad_aggressiveness", "integer", 3,
         "WebRTC VAD aggressiveness (0–3) for the wake-word listener. Higher rejects "
         "background noise as non-speech more strongly, so it detects when you actually "

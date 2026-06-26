@@ -76,6 +76,14 @@ def transcribe_wakeword(
         WhisperServiceError,
         transcribe as _whisper_transcribe,
     )
+    from axi.config import get as _cfg_get  # noqa: PLC0415 — lazy, avoids cycle
+
+    # vad_filter=True ran faster-whisper's internal Silero VAD BEFORE transcription
+    # and discarded marginal/quiet audio, returning '' — so the wake word "Axi" was
+    # silently dropped and the user had to repeat. Default it OFF now: the
+    # is_hallucination filter + match_wake (which requires "Axi") already guard
+    # against false wakes, and a non-empty transcript is what lets "Axi" match.
+    _vad_filter = bool(_cfg_get("wakeword_vad_filter", False))
     try:
         r: TranscriptionResult = _whisper_transcribe(
             audio,
@@ -85,7 +93,7 @@ def transcribe_wakeword(
             condition_on_previous_text=False,
             no_speech_threshold=0.6,
             compression_ratio_threshold=1.35,
-            vad_filter=True,
+            vad_filter=_vad_filter,
             extra_kwargs={"temperature": 0},  # explicit greedy via server passthrough
         )
     except WhisperServiceError as e:

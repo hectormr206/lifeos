@@ -133,6 +133,49 @@ def _prepend_silence(in_path: Path, out_path: Path, seconds: float) -> Path:
     return out_path
 
 
+_ACK_CUE_PATH = Path(tempfile.gettempdir()) / "axi-ack-cue.wav"
+
+
+def _ensure_ack_cue() -> Path | None:
+    """Generate (once, cached) a short two-tone 'Axi heard you' chime."""
+    try:
+        if _ACK_CUE_PATH.exists() and _ACK_CUE_PATH.stat().st_size > 0:
+            return _ACK_CUE_PATH
+        sr = 22050
+
+        def _tone(freq: float, dur: float) -> np.ndarray:
+            t = np.linspace(0, dur, int(sr * dur), endpoint=False)
+            # quick attack + decay envelope so it doesn't click
+            env = np.clip(np.minimum(t / 0.008, (dur - t) / 0.03), 0.0, 1.0)
+            return (0.22 * env * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+        sig = np.concatenate([_tone(880.0, 0.07), _tone(1320.0, 0.10)])
+        sf.write(str(_ACK_CUE_PATH), sig, sr)
+        return _ACK_CUE_PATH
+    except Exception as e:  # noqa: BLE001
+        log.warning("ack cue generation failed: %s", e)
+        return None
+
+
+def play_ack_cue() -> None:
+    """Play the short 'I heard you' chime. Non-blocking, best-effort.
+
+    Gives the user immediate audible confirmation that the wake word was caught,
+    so they don't repeat "Axi" while the (laggy) transcription path runs.
+    """
+    p = _ensure_ack_cue()
+    if p is None:
+        return
+    try:
+        subprocess.Popen(
+            ["paplay", str(p)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log.warning("ack cue playback failed: %s", e)
+
+
 def speak(text: str) -> bool:
     """Synthesize and play. Blocking — call from a thread to keep the daemon
     responsive while the BT/laptop speaker streams the audio."""
