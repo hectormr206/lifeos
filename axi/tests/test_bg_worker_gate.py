@@ -43,12 +43,18 @@ def test_gate_on_embed_worker_does_not_start(tmp_path, monkeypatch):
 
 
 def test_gate_off_embed_worker_starts(tmp_path, monkeypatch):
-    """With AXI_DISABLE_BG_WORKERS unset, trigger_embed_for_node MUST start
-    the axi-embed-worker thread. Cleans up after itself."""
+    """With AXI_DISABLE_BG_WORKERS unset AND _EMBED_WRITER_ENABLED=True,
+    trigger_embed_for_node MUST start the axi-embed-worker thread.
+
+    Both gates must be cleared to simulate the daemon (single-writer) process.
+    The dashboard and other readers never call enable_embed_writer() so
+    _EMBED_WRITER_ENABLED stays False and the worker never starts there.
+    Cleans up after itself."""
     from axi import store
 
-    # Override the module-level flag to simulate the production (gate-off) path.
+    # Override both module-level flags to simulate the production daemon path.
     monkeypatch.setattr(store, "_BG_WORKERS_DISABLED", False)
+    monkeypatch.setattr(store, "_EMBED_WRITER_ENABLED", True)
 
     store.stop_embed_worker()  # ensure clean state
     before = _count_live("axi-embed-worker")
@@ -57,7 +63,8 @@ def test_gate_off_embed_worker_starts(tmp_path, monkeypatch):
     after = _count_live("axi-embed-worker")
     store.stop_embed_worker()  # clean up
     assert after > before, (
-        "Expected axi-embed-worker to start when AXI_DISABLE_BG_WORKERS is off"
+        "Expected axi-embed-worker to start when _BG_WORKERS_DISABLED=False "
+        "and _EMBED_WRITER_ENABLED=True (daemon process simulation)"
     )
 
 

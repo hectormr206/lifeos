@@ -398,10 +398,14 @@ class WakeWordListener:
         silence_duration_s: float = _DEFAULT_SILENCE_DURATION_S,
         max_segment_s: float = _DEFAULT_MAX_SEGMENT_S,
         sample_rate: int = SAMPLE_RATE,
+        followup_active_fn: Callable[[], bool] | None = None,
     ) -> None:
         self._transcribe_fn = transcribe_fn
         self._on_wake = on_wake
         self._stream_factory = stream_factory or _default_stream_factory
+        # Feature C: callable that returns True while a follow-up window is open.
+        # When active, speech without the wake word is routed to on_wake directly.
+        self._followup_active_fn = followup_active_fn
         self._vad_aggressiveness = vad_aggressiveness
         self._silence_duration_s = silence_duration_s
         self._max_segment_s = max_segment_s
@@ -667,6 +671,20 @@ class WakeWordListener:
         is_wake, command = match_wake(text)
 
         if not is_wake:
+            # Feature C: follow-up window — accept speech without the wake word if
+            # the window is open (Axi is expecting a reply), text is non-empty, and
+            # the transcript is not a Whisper hallucination (already filtered above).
+            if (
+                self._followup_active_fn is not None
+                and self._followup_active_fn()
+                and len(text.strip()) > 2
+            ):
+                log.info("wakeword: FOLLOW-UP DETECTED — routing without wake word: %r", text)
+                try:
+                    self._on_wake(text)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("wakeword follow-up on_wake raised: %s", e)
+                return
             log.info("wakeword: no wake match for transcript %r", text)
             return
 
@@ -793,10 +811,13 @@ class OWWWakeWordListener:
         max_segment_s: float = _DEFAULT_MAX_SEGMENT_S,
         sample_rate: int = SAMPLE_RATE,
         vad_aggressiveness: int = 2,
+        followup_active_fn: Callable[[], bool] | None = None,
     ) -> None:
         self._transcribe_fn = transcribe_fn
         self._on_wake = on_wake
         self._stream_factory = stream_factory or _default_stream_factory
+        # Feature C: callable that returns True while a follow-up window is open.
+        self._followup_active_fn = followup_active_fn
         self._oww_threshold = oww_threshold
         self._oww_model_path = oww_model_path
         self._silence_duration_s = silence_duration_s
@@ -1012,6 +1033,19 @@ class OWWWakeWordListener:
 
         is_wake, command = match_wake(text)
         if not is_wake:
+            # Feature C: follow-up window — accept command-capture transcripts that
+            # don't contain the wake word when the follow-up window is open.
+            if (
+                self._followup_active_fn is not None
+                and self._followup_active_fn()
+                and len(text.strip()) > 2
+            ):
+                log.info("oww: FOLLOW-UP DETECTED — routing without wake word: %r", text)
+                try:
+                    self._on_wake(text)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("oww follow-up on_wake raised: %s", e)
+                return
             log.info("oww: no wake match in command transcript %r — returning to idle", text)
             return
 
