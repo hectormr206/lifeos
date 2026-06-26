@@ -925,7 +925,10 @@ class Daemon:
         # considered finished. The 1.0 s default cut users off when they paused
         # to think; a longer window lets them finish ("Alexa"-style).
         _silence_s = float(config.get("wakeword_silence_seconds", 1.8))
-        _max_seg_s = float(config.get("wakeword_max_segment_seconds", 15.0))
+        _max_seg_s = float(config.get("wakeword_max_segment_seconds", 25.0))
+        # VAD aggressiveness 3 = strongest noise rejection, so ambient noise is not
+        # mistaken for continuous speech (which forced 15 s mid-sentence cuts).
+        _vad_aggr = int(config.get("wakeword_vad_aggressiveness", 3))
 
         # Feature C: follow-up window predicate — injected into the listener so
         # it can accept speech without the wake word while the window is open.
@@ -949,6 +952,7 @@ class Daemon:
                     followup_active_fn=_followup_active_fn,
                     silence_duration_s=_silence_s,
                     max_segment_s=_max_seg_s,
+                    vad_aggressiveness=_vad_aggr,
                 )
                 log.info(
                     "oww wake-word listener started (model=%s threshold=%.2f)",
@@ -969,6 +973,7 @@ class Daemon:
                 followup_active_fn=_followup_active_fn,
                 silence_duration_s=_silence_s,
                 max_segment_s=_max_seg_s,
+                vad_aggressiveness=_vad_aggr,
             )
 
         self._wakeword_listener = listener

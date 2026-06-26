@@ -375,11 +375,21 @@ FIELDS: tuple[ConfigField, ...] = (
         maximum=6.0,
     ),
     ConfigField(
-        "wakeword_max_segment_seconds", "number", 15.0,
+        "wakeword_max_segment_seconds", "number", 25.0,
         "Hard cap (seconds) on a single spoken command before it is force-flushed "
-        "to transcription, so a very long utterance still gets processed.",
+        "to transcription, so a very long utterance still gets processed. Raised so "
+        "a long sentence is not chopped at the cap before you finish.",
         minimum=4.0,
         maximum=60.0,
+    ),
+    ConfigField(
+        "wakeword_vad_aggressiveness", "integer", 3,
+        "WebRTC VAD aggressiveness (0–3) for the wake-word listener. Higher rejects "
+        "background noise as non-speech more strongly, so it detects when you actually "
+        "stop talking instead of treating ambient noise as continuous speech (which "
+        "forced 15 s mid-sentence cuts). 3 = most aggressive.",
+        minimum=0,
+        maximum=3,
     ),
     # ─────── wake-word always-on ───────
     ConfigField(
