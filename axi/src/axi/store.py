@@ -46,6 +46,24 @@ import sqlcipher3
 # auto-start normally in production).
 _BG_WORKERS_DISABLED = os.environ.get("AXI_DISABLE_BG_WORKERS", "").lower() in ("1", "true", "yes")
 
+# Process-identity opt-in for the embed writer thread.  Default is DISABLED so
+# the embed worker thread never starts unless the process explicitly calls
+# enable_embed_writer().  Only the daemon process (axi-voice) calls this at
+# startup — the dashboard and other readers must never start embed workers
+# because they would open concurrent WAL write connections, causing corruption.
+_EMBED_WRITER_ENABLED: bool = False
+
+
+def enable_embed_writer() -> None:
+    """Opt this process in to running the background embed worker thread.
+
+    Must be called once at startup by the daemon process only.  All other
+    processes (dashboard, CLI tools) must never call this so embed worker
+    threads — which write memory.db — are confined to a single OS process.
+    """
+    global _EMBED_WRITER_ENABLED
+    _EMBED_WRITER_ENABLED = True
+
 
 class RecoveryError(RuntimeError):
     """Raised when healthy backups exist but every restore attempt failed.
@@ -127,7 +145,8 @@ CREATE INDEX IF NOT EXISTS idx_events_level ON events(level);
 _SCHEMA = r"""
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
-PRAGMA synchronous=NORMAL;
+-- synchronous is intentionally absent here: _open_new_connection sets
+-- PRAGMA synchronous=FULL on every connection and _SCHEMA must not override it.
 
 -- ──────────────────────────── core graph ────────────────────────────
 
@@ -961,7 +980,9 @@ def init_db() -> None:
 def checkpoint() -> None:
     """Flush the WAL into the main DB file. Non-fatal: logs and swallows errors."""
     try:
-        _connect().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        # PASSIVE never needs the exclusive lock, avoiding "WAL reset was not
+        # sufficient" errors during multi-reader recovery.
+        _connect().execute("PRAGMA wal_checkpoint(PASSIVE)")
     except Exception as e:  # noqa: BLE001
         log.warning("wal_checkpoint failed: %s", e)
         try:
@@ -1746,7 +1767,14 @@ def _embed_worker_loop() -> None:
 
 
 def _ensure_embed_worker() -> None:
-    """Start the shared embed consumer thread if it has not been started yet."""
+    """Start the shared embed consumer thread if it has not been started yet.
+
+    Gated by _EMBED_WRITER_ENABLED: only the daemon process opts in via
+    enable_embed_writer().  This prevents embed worker threads — which write
+    memory.db — from starting in the dashboard or any other reader process.
+    """
+    if not _EMBED_WRITER_ENABLED:
+        return
     global _embed_worker_thread
     if _embed_worker_started.is_set():
         return

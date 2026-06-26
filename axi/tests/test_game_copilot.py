@@ -29,15 +29,25 @@ from axi.brain import SYSTEM_PROMPT
 class TestSelectAskParams:
     """Unit tests for _select_ask_params(game_active, copilot_enabled)."""
 
-    def test_game_inactive_returns_default_system_prompt(self):
-        """When game-mode is off, the normal SYSTEM_PROMPT is returned unchanged."""
+    def test_game_inactive_copilot_enabled_no_force_returns_default_prompt(self):
+        """Hotkey path: game_active=False, copilot_enabled=True, force_copilot=False (default)
+        → standard prompt preserved (pre-Feature-B hotkey behavior unchanged).
+        """
         system, max_tokens = _select_ask_params(game_active=False, copilot_enabled=True)
+        # force_copilot defaults to False — standard hotkey path outside game mode
         assert system == SYSTEM_PROMPT
-
-    def test_game_inactive_returns_default_max_tokens(self):
-        """When game-mode is off, max_tokens uses the standard 2048 default."""
-        system, max_tokens = _select_ask_params(game_active=False, copilot_enabled=True)
         assert max_tokens == 2048
+
+    def test_game_inactive_copilot_enabled_force_returns_copilot_prompt(self):
+        """Wake-word path: game_active=False, copilot_enabled=True, force_copilot=True
+        → co-pilot prompt (Feature B: vision/web-search outside game mode).
+        """
+        system, max_tokens = _select_ask_params(
+            game_active=False, copilot_enabled=True, force_copilot=True
+        )
+        assert system != SYSTEM_PROMPT
+        assert len(system) > 20  # co-pilot prompt has meaningful content
+        assert max_tokens == 256
 
     def test_game_active_returns_game_aware_system_prompt(self):
         """When game-mode is on and co-pilot is enabled, a game-aware prompt is returned."""
@@ -178,8 +188,13 @@ class TestDaemonStopAndAskGameMode:
         assert call["system"] != SYSTEM_PROMPT, "Expected game-aware prompt but got default"
         assert call["max_tokens"] == 256, f"Expected max_tokens=256 but got {call['max_tokens']}"
 
-    def test_game_mode_off_keeps_default_prompt(self, monkeypatch):
-        """When game-mode is inactive, brain.ask receives the standard SYSTEM_PROMPT."""
+    def test_game_mode_off_copilot_enabled_hotkey_keeps_default_prompt(self, monkeypatch):
+        """Hotkey path: game-mode inactive + copilot_enabled=True → standard prompt + 2048 tokens.
+
+        The hotkey ask path (_stop_and_ask) does NOT pass force_copilot=True, so it
+        preserves the pre-Feature-B behavior: standard prompt and 2048-token budget
+        outside game-mode. The co-pilot brevity cap only applies on the wake-word path.
+        """
         from axi import daemon as d
         from axi import extractor as e
         from axi.brain import SYSTEM_PROMPT
@@ -210,8 +225,10 @@ class TestDaemonStopAndAskGameMode:
 
         assert captured, "brain.ask was never called"
         call = captured[0]
-        # System may have facts appended but must START with SYSTEM_PROMPT
+        # Hotkey path: standard prompt preserved when game-mode is off.
         assert call["system"].startswith(SYSTEM_PROMPT), (
-            "Expected system to start with default SYSTEM_PROMPT when game-mode is off"
+            "Expected standard SYSTEM_PROMPT for hotkey path when game-mode is off"
         )
-        assert call["max_tokens"] == 2048, f"Expected default max_tokens=2048, got {call['max_tokens']}"
+        assert call["max_tokens"] == 2048, (
+            f"Expected default max_tokens=2048 for hotkey path, got {call['max_tokens']}"
+        )

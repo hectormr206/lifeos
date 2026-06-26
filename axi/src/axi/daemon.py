@@ -65,16 +65,24 @@ def _select_ask_params(
     game_active: bool,
     copilot_enabled: bool,
     lang: str | None = None,
+    force_copilot: bool = False,
 ) -> tuple[str, int]:
     """Return (system_prompt, max_tokens) for the current ask invocation.
 
     Pure function — no I/O, no side effects.  Testable in isolation.
 
-    When game-mode is active AND the co-pilot config flag is on, returns the
-    game-aware prompt (EN or ES based on lang) and a brevity cap.  Otherwise
-    returns the language-aware system prompt and standard max_tokens.
+    The co-pilot persona (game-aware system prompt + 256-token brevity cap)
+    applies when copilot_enabled is True AND either:
+      - game_active is True  (game-mode hotkey path, pre-Feature-B behavior preserved)
+      - force_copilot is True (wake-word path, Feature B: vision/web-search capable
+        outside game mode; callers pass force_copilot=True explicitly)
+
+    The hotkey ask path (_stop_and_ask) leaves force_copilot=False, so its
+    behavior is unchanged outside game mode: default prompt + 2048 tokens.
+    The wake-word path (_wakeword_ask) passes force_copilot=True so the
+    co-pilot persona applies regardless of game_active.
     """
-    if game_active and copilot_enabled:
+    if copilot_enabled and (game_active or force_copilot):
         prompt = (
             _GAME_COPILOT_SYSTEM_PROMPT_EN
             if (lang or "").startswith("en")
@@ -245,6 +253,12 @@ class Daemon:
         self.vision_capture = vision_capture or _default_vision_capture
         self.eyes_capture = eyes_capture or _default_eyes_capture
         self.meeting_factory = meeting_factory or _default_meeting_factory
+        # Follow-up conversation window: timestamp until which the listener accepts
+        # speech without requiring the wake word again (Feature C).
+        self._followup_until: float = 0.0
+        # Set while the wake-word listener is paused for an active meeting so it
+        # can be resumed when the meeting stops (meeting safety).
+        self._wakeword_paused_for_meeting: bool = False
         # Watchdog timer — armed while in "transcribing", disarmed on exit.
         self._watchdog: threading.Timer | None = None
         self._watchdog_lock = threading.Lock()
@@ -675,6 +689,9 @@ class Daemon:
                 brain_ask_fn=self.brain_ask,
             )
             mid = self.meeting.start()
+            # Pause the always-listening wake-word so Axi never interrupts a
+            # client meeting. Resumed in meeting_stop.
+            self._pause_wakeword_for_meeting()
             notify(
                 "Axi",
                 f"🎙️📷 Modo reunión activo (id #{mid})",
@@ -698,6 +715,8 @@ class Daemon:
             # the dictation_windows list we need to filter mic segments).
             session_for_processing = self.meeting
             self.meeting = None
+            # Resume the wake-word listener now that the meeting is over.
+            self._resume_wakeword_after_meeting()
             notify(
                 "Axi",
                 f"🎙️ Reunión #{mid} detenida — procesando {status['mic_chunks'] + status['system_chunks']} chunks…",
@@ -810,6 +829,13 @@ class Daemon:
 
         def _on_wake(command: str) -> None:
             """Called from the wake-word listener worker thread on wake detection."""
+            # Guard: NEVER respond while a meeting is recording — Axi must not
+            # interrupt a client meeting. The listener is normally paused for the
+            # meeting (see _pause_wakeword_for_meeting); this is defense in depth
+            # against a wake firing during the start/stop race.
+            if self.meeting is not None:
+                log.info("wakeword: skipping wake — meeting is active")
+                return
             # Guard: do not overlap with an in-progress hotkey ask.
             if self.state not in ("idle",):
                 log.info("wakeword: skipping wake while daemon state=%r", self.state)
@@ -839,6 +865,17 @@ class Daemon:
         model_path = str(config.get("wakeword_model_path", "alexa"))
         threshold = float(config.get("wakeword_threshold", 0.5))
 
+        # Feature C: follow-up window predicate — injected into the listener so
+        # it can accept speech without the wake word while the window is open.
+        _daemon_ref = self
+
+        def _followup_active_fn() -> bool:
+            return (
+                bool(config.get("wakeword_followup_enabled", True))
+                and time.time() < _daemon_ref._followup_until
+                and _daemon_ref.state == "idle"
+            )
+
         listener = None
         if engine == "openwakeword":
             try:
@@ -847,6 +884,7 @@ class Daemon:
                     on_wake=_on_wake,
                     oww_model_path=model_path,
                     oww_threshold=threshold,
+                    followup_active_fn=_followup_active_fn,
                 )
                 log.info(
                     "oww wake-word listener started (model=%s threshold=%.2f)",
@@ -864,11 +902,53 @@ class Daemon:
             listener = WakeWordListener(
                 transcribe_fn=_wakeword_transcribe_fn,
                 on_wake=_on_wake,
+                followup_active_fn=_followup_active_fn,
             )
 
         self._wakeword_listener = listener
         listener.start()
         log.info("wake-word listener started")
+
+    def _pause_wakeword_for_meeting(self) -> None:
+        """Stop the wake-word listener while a meeting records so Axi never
+        interrupts a client meeting. Sets a flag so meeting_stop knows to
+        resume it. No-op if the listener was not running."""
+        listener = getattr(self, "_wakeword_listener", None)
+        if listener is None:
+            return
+        try:
+            listener.stop()
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not stop wake-word listener for meeting: %s", e)
+        self._wakeword_listener = None
+        self._wakeword_paused_for_meeting = True
+        log.info("wake-word listener paused for meeting")
+
+    def _resume_wakeword_after_meeting(self) -> None:
+        """Restart the wake-word listener after a meeting ends, but only if it
+        was paused by _pause_wakeword_for_meeting (i.e. it had been running)."""
+        if not getattr(self, "_wakeword_paused_for_meeting", False):
+            return
+        self._wakeword_paused_for_meeting = False
+        try:
+            self.start_wakeword_listener()
+            log.info("wake-word listener resumed after meeting")
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not resume wake-word listener after meeting: %s", e)
+
+    @staticmethod
+    def _should_open_followup(answer: str) -> bool:
+        """Whether to open the wake-word follow-up window after this answer.
+
+        Only opens when the answer ends with a question mark — i.e. Axi
+        explicitly asked the user something and a reply is expected. Opening
+        the window after every answer caused runaway false triggers (it caught
+        the user's phone-call speech and replied to it). Gating on '?' fixes it.
+        """
+        return (
+            bool(config.get("wakeword_followup_enabled", True))
+            and answer.rstrip().endswith("?")
+        )
 
     def _wakeword_ask(self, command: str, screenshot: str | None) -> None:
         """Route a wake-word command through the ask pipeline.
@@ -880,6 +960,10 @@ class Daemon:
         user's configured language so the user knows Axi heard them, then return
         without routing to the brain. The user may then speak the actual question.
         """
+        # Reset follow-up window immediately on entry so a concurrent segment
+        # mid-processing cannot double-fire (window is re-opened after TTS).
+        self._followup_until = 0.0
+
         # Empty command path: the user just said "Axi" with no follow-up.
         # Speak an acknowledgment and return — do NOT call brain with empty question.
         if not command or not command.strip():
@@ -909,6 +993,7 @@ class Daemon:
                 game_active=_game_mode_active(),
                 copilot_enabled=_copilot_on,
                 lang=_lang,
+                force_copilot=True,  # Feature B: wake-word path always uses co-pilot persona
             )
             system = base_system
             if facts:
@@ -933,13 +1018,14 @@ class Daemon:
                 timeout_ms=3000,
             )
 
-            # Slice 2: deterministic web-search pipeline for wake-word game co-pilot.
-            # Mirrors the same branch in _stop_and_ask. Vision-only path is unchanged.
+            # Slice 2: deterministic web-search pipeline for wake-word co-pilot.
+            # Feature B: web-search now runs whenever copilot is enabled, not only in
+            # game-mode. _game_active_now is retained for potential future use (e.g.
+            # logging or game-specific behaviour) but no longer gates the search branch.
             _copilot_search_on = bool(config.get("copilot_web_search_enabled", True))
             _game_active_now = _game_mode_active()
             _web_search_branch = (
-                _game_active_now
-                and _copilot_on
+                _copilot_on
                 and _copilot_search_on
                 and _copilot_search.needs_search(question)
             )
@@ -1007,6 +1093,19 @@ class Daemon:
                     # Live-test harness anchor: TTS finished (wake path only).
                     log.info("wakeword-metric: tts_done t=%.3f", time.time())
                     self._set_state("idle")
+                    # Feature C: open the follow-up window ONLY when Axi's answer
+                    # ends with a question (Axi explicitly expects a reply). This
+                    # is the single natural case for continuing without the wake
+                    # word. Opening it after every answer caused runaway false
+                    # triggers — e.g. catching the user's phone-call speech and
+                    # replying to it. Gating on '?' eliminates that.
+                    if self._should_open_followup(answer):
+                        _window = float(config.get("wakeword_followup_seconds", 7.0))
+                        self._followup_until = time.time() + _window
+                        log.info(
+                            "wakeword: follow-up window open for %.1f s (Axi asked a question)",
+                            _window,
+                        )
             threading.Thread(target=_say, daemon=True).start()
         except Exception as e:  # noqa: BLE001
             log.exception("_wakeword_ask failed: %s", e)
@@ -1082,6 +1181,11 @@ def serve() -> int:
     from axi.logging_setup import setup_logging
     setup_logging(level=logging.INFO)
 
+    # Enable the background embed writer thread for this process only.
+    # The dashboard and other reader processes must never call this — only the
+    # daemon (single writer) is allowed to run threads that write memory.db.
+    store.enable_embed_writer()
+
     SOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     if SOCK_PATH.exists():
         SOCK_PATH.unlink()
@@ -1097,21 +1201,46 @@ def serve() -> int:
 
         _start_recovery_thread(daemon)
 
-        # Start the always-listening wake-word listener when requested via env var.
-        # Set AXI_WAKEWORD_ENABLED=1 in the axi-voice.service drop-in (written by
-        # axi-game-on) to activate it during game sessions. Unset = hotkey-only mode
-        # (existing behaviour is 100% unchanged).
-        if os.environ.get("AXI_WAKEWORD_ENABLED", "").strip() == "1":
-            log.info("AXI_WAKEWORD_ENABLED=1 — starting wake-word listener")
+        # Start the always-listening wake-word listener.
+        # Feature A: wakeword_always_on (config, default True) makes the listener
+        # start automatically on daemon start without requiring the env var.
+        # The legacy AXI_WAKEWORD_ENABLED=1 env var is also honoured for backward
+        # compatibility with the axi-game-on service drop-in.
+        _ww_always_on = bool(config.get("wakeword_always_on", True))
+        _ww_env_on = os.environ.get("AXI_WAKEWORD_ENABLED", "").strip() == "1"
+        if _ww_always_on:
+            log.info("wakeword_always_on=True — starting wake-word listener")
+        elif _ww_env_on:
+            log.info("AXI_WAKEWORD_ENABLED=1 — starting wake-word listener (env override)")
+        if _ww_always_on or _ww_env_on:
             try:
                 daemon.start_wakeword_listener()
             except Exception as _ww_err:  # noqa: BLE001
                 log.warning("wake-word listener failed to start: %s", _ww_err)
 
+        # Periodic semantic-memory drain — runs in the DAEMON process ONLY
+        # (the single writer of memory.db). Relocated here from the dashboard,
+        # which must not write memory.db (multi-process WAL corruption). Drains
+        # pending embeddings, backfills similar-to edges, and runs the
+        # cross-domain auto-linkers. Idempotent, bounded, embed-service-down safe.
+        _embed_drain_stop = threading.Event()
+
+        def _embed_drain_loop() -> None:
+            while not _embed_drain_stop.wait(timeout=300):  # 5 minutes
+                try:
+                    store.run_periodic_embed_drain()
+                except Exception:  # noqa: BLE001
+                    log.warning("periodic embed drain failed", exc_info=True)
+
+        threading.Thread(
+            target=_embed_drain_loop, name="axi-embed-drain", daemon=True
+        ).start()
+
         stop_signal = {"raised": False}
 
         def _shutdown(*_):
             stop_signal["raised"] = True
+            _embed_drain_stop.set()
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:

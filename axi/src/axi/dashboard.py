@@ -509,33 +509,13 @@ async def lifespan(_app: FastAPI):
     except Exception:  # noqa: BLE001
         log.exception("web research failed to configure — feature disabled")
 
-    # ── Semantic memory periodic drain (FIX 5) ──────────────────────────────
-    # One background thread wakes every 5 minutes to drain pending embeddings,
-    # backfill similar-to edges, and run the cross-domain auto-linkers.
-    # Uses run_periodic_embed_drain() which is idempotent, bounded, and
-    # handles embed-service-down gracefully (nodes stay re-queueable).
-    _embed_drain_stop = threading.Event()
-
-    def _embed_drain_loop(stop_event: threading.Event) -> None:
-        _INTERVAL_S = 300  # 5 minutes
-        while not stop_event.wait(timeout=_INTERVAL_S):
-            try:
-                from axi.store import run_periodic_embed_drain
-                run_periodic_embed_drain()
-            except Exception:  # noqa: BLE001
-                log.warning("embed drain loop: unexpected error", exc_info=True)
-
-    _embed_drain_thread = threading.Thread(
-        target=_embed_drain_loop,
-        args=(_embed_drain_stop,),
-        name="axi-embed-drain",
-        daemon=True,
-    )
-    _embed_drain_thread.start()
+    # ── Semantic memory periodic drain — REMOVED (single-writer invariant) ───
+    # This thread was removed to prevent multi-process WAL corruption.
+    # Only the daemon process (axi-voice) may write memory.db; the dashboard
+    # is read-mostly and must not run the embed drain.  The daemon already
+    # handles embedding via trigger_embed_for_node / axi-embed-worker.
 
     yield
-
-    _embed_drain_stop.set()
 
     try:
         get_scheduler().shutdown(wait=False)

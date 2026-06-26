@@ -365,6 +365,27 @@ FIELDS: tuple[ConfigField, ...] = (
         "configured (searxng_url reachable). Set to false to keep the vision-only "
         "game co-pilot path without web search.",
     ),
+    # ─────── wake-word always-on ───────
+    ConfigField(
+        "wakeword_always_on", "boolean", True,
+        "If true (default), the wake-word listener starts automatically when the "
+        "daemon starts, regardless of the AXI_WAKEWORD_ENABLED env var. Set to false "
+        "to revert to env-var-only control (legacy game-mode-only behaviour).",
+    ),
+    # ─────── wake-word follow-up window ───────
+    ConfigField(
+        "wakeword_followup_enabled", "boolean", True,
+        "If true (default), after Axi finishes speaking a response, a follow-up window "
+        "opens during which the user can reply without repeating the wake word.",
+    ),
+    ConfigField(
+        "wakeword_followup_seconds", "number", 7.0,
+        "Base duration (seconds) of the follow-up window opened after Axi speaks. "
+        "If the answer ends with a question ('?'), 3 extra seconds are added automatically. "
+        "Only active when wakeword_followup_enabled is true.",
+        minimum=1.0,
+        maximum=60.0,
+    ),
     # ─────── wake-word engine ───────
     ConfigField(
         "wakeword_engine", "string", "openwakeword",
