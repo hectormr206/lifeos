@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch, call
 import numpy as np
 import pytest
 
-from axi.daemon import Daemon, _select_ask_params
+from axi.daemon import Daemon, _select_ask_params, _route_vision
 
 
 # ---------------------------------------------------------------------------
@@ -413,3 +413,269 @@ class TestMeetingPausesWakeword:
         d._resume_wakeword_after_meeting()
 
         d.start_wakeword_listener.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2b: _route_vision — pure router
+# ---------------------------------------------------------------------------
+
+
+class TestRouteVision:
+    """Unit tests for the pure _route_vision router function."""
+
+    # game_active always → screen, even with webcam/none-looking text
+    def test_game_active_always_returns_screen(self):
+        assert _route_vision("mírame", game_active=True) == "screen"
+
+    def test_game_active_with_neutral_command_returns_screen(self):
+        assert _route_vision("qué hora es", game_active=True) == "screen"
+
+    def test_game_active_with_webcam_cue_still_returns_screen(self):
+        assert _route_vision("look at me", game_active=True) == "screen"
+
+    # webcam cues → "webcam"
+    def test_webcam_cue_mirame(self):
+        assert _route_vision("mírame", game_active=False) == "webcam"
+
+    def test_webcam_cue_me_ves(self):
+        assert _route_vision("me ves bien?", game_active=False) == "webcam"
+
+    def test_webcam_cue_como_me_veo(self):
+        assert _route_vision("cómo me veo hoy", game_active=False) == "webcam"
+
+    def test_webcam_cue_mi_cara(self):
+        assert _route_vision("cómo está mi cara", game_active=False) == "webcam"
+
+    def test_webcam_cue_que_tengo_en_la_mano(self):
+        assert _route_vision("qué tengo en la mano", game_active=False) == "webcam"
+
+    def test_webcam_cue_esto_que_tengo(self):
+        assert _route_vision("esto que tengo acá", game_active=False) == "webcam"
+
+    def test_webcam_cue_este_objeto(self):
+        assert _route_vision("qué es este objeto", game_active=False) == "webcam"
+
+    def test_webcam_cue_con_la_camara(self):
+        assert _route_vision("con la cámara mostrá", game_active=False) == "webcam"
+
+    def test_webcam_cue_por_la_camara(self):
+        assert _route_vision("mirá por la cámara", game_active=False) == "webcam"
+
+    def test_webcam_cue_toma_una_foto(self):
+        assert _route_vision("toma una foto", game_active=False) == "webcam"
+
+    def test_webcam_cue_toma_una_foto_accent(self):
+        assert _route_vision("tomá una foto", game_active=False) == "webcam"
+
+    def test_webcam_cue_foto_mia(self):
+        assert _route_vision("sacá una foto mía", game_active=False) == "webcam"
+
+    def test_webcam_cue_look_at_me(self):
+        assert _route_vision("look at me", game_active=False) == "webcam"
+
+    def test_webcam_cue_what_am_i_holding(self):
+        assert _route_vision("what am i holding", game_active=False) == "webcam"
+
+    def test_webcam_cue_with_the_camera(self):
+        assert _route_vision("take a picture with the camera", game_active=False) == "webcam"
+
+    def test_webcam_cue_take_a_photo(self):
+        assert _route_vision("take a photo please", game_active=False) == "webcam"
+
+    def test_webcam_cue_take_a_picture(self):
+        assert _route_vision("take a picture", game_active=False) == "webcam"
+
+    # screen cues → "screen"
+    def test_screen_cue_en_pantalla(self):
+        assert _route_vision("qué hay en pantalla", game_active=False) == "screen"
+
+    def test_screen_cue_esta_ventana(self):
+        assert _route_vision("qué es esta ventana", game_active=False) == "screen"
+
+    def test_screen_cue_este_codigo(self):
+        assert _route_vision("explicá este código", game_active=False) == "screen"
+
+    def test_screen_cue_este_error(self):
+        assert _route_vision("qué significa este error", game_active=False) == "screen"
+
+    def test_screen_cue_lo_que_estoy_viendo(self):
+        assert _route_vision("ayudame con lo que estoy viendo", game_active=False) == "screen"
+
+    def test_screen_cue_lo_que_ves(self):
+        assert _route_vision("lo que ves ahora", game_active=False) == "screen"
+
+    def test_screen_cue_la_pagina(self):
+        assert _route_vision("resumí la página", game_active=False) == "screen"
+
+    def test_screen_cue_esta_captura(self):
+        assert _route_vision("describí esta captura", game_active=False) == "screen"
+
+    def test_screen_cue_on_screen(self):
+        assert _route_vision("what is on screen", game_active=False) == "screen"
+
+    def test_screen_cue_on_the_screen(self):
+        assert _route_vision("what do you see on the screen", game_active=False) == "screen"
+
+    def test_screen_cue_this_window(self):
+        assert _route_vision("explain this window", game_active=False) == "screen"
+
+    def test_screen_cue_this_error(self):
+        assert _route_vision("what is this error", game_active=False) == "screen"
+
+    def test_screen_cue_this_code(self):
+        assert _route_vision("review this code", game_active=False) == "screen"
+
+    # neutral text → "none"
+    def test_neutral_que_hora_es(self):
+        assert _route_vision("qué hora es", game_active=False) == "none"
+
+    def test_neutral_hola(self):
+        assert _route_vision("hola", game_active=False) == "none"
+
+    def test_neutral_reminder(self):
+        assert _route_vision("recordame comprar leche", game_active=False) == "none"
+
+    def test_neutral_empty(self):
+        assert _route_vision("", game_active=False) == "none"
+
+    # webcam_enabled=False → webcam cue downgrades
+    def test_webcam_disabled_mirame_returns_none(self):
+        assert _route_vision("mírame", game_active=False, webcam_enabled=False) == "none"
+
+    def test_webcam_disabled_look_at_me_returns_none(self):
+        assert _route_vision("look at me", game_active=False, webcam_enabled=False) == "none"
+
+    def test_webcam_disabled_screen_cue_still_returns_screen(self):
+        assert _route_vision("este error en pantalla", game_active=False, webcam_enabled=False) == "screen"
+
+    def test_webcam_disabled_neutral_still_returns_none(self):
+        assert _route_vision("qué hora es", game_active=False, webcam_enabled=False) == "none"
+
+    # webcam priority when both patterns would match
+    def test_webcam_beats_screen_when_both_match(self):
+        # "mírame" (webcam) + "en pantalla" (screen) — webcam wins
+        assert _route_vision("mírame en pantalla", game_active=False) == "webcam"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2b: _on_wake routing integration
+# ---------------------------------------------------------------------------
+
+
+class TestOnWakeVisionRouting:
+    """Integration tests for the _on_wake vision routing inside start_wakeword_listener."""
+
+    def _run_on_wake(
+        self,
+        command: str,
+        *,
+        game_active: bool = False,
+        webcam_enabled: bool = True,
+        eyes_return: tuple = ("fake_webcam_b64", "ok"),
+        vision_return: str | None = "fake_screen_b64",
+    ) -> dict:
+        """Wire up _on_wake via start_wakeword_listener and fire it.
+
+        Returns a dict with the calls observed on the mocked helpers.
+        """
+        d = _make_daemon()
+        d.vision_capture = MagicMock(return_value=vision_return)
+        d.eyes_capture = MagicMock(return_value=eyes_return)
+
+        notify_calls: list[tuple] = []
+        wakeword_ask_calls: list[tuple] = []
+
+        def _fake_notify(title, body, **kwargs):
+            notify_calls.append((title, body))
+
+        def _fake_wakeword_ask(cmd, screenshot):
+            wakeword_ask_calls.append((cmd, screenshot))
+
+        d._wakeword_ask = _fake_wakeword_ask
+
+        listener_cls = _mock_listener_cls()
+
+        with (
+            patch("axi.daemon.config") as mock_config,
+            patch("axi.daemon._game_mode_active", return_value=game_active),
+            patch("axi.daemon.notify", side_effect=_fake_notify),
+            patch("axi.wakeword.WakeWordListener", listener_cls),
+            patch("axi.wakeword.OWWWakeWordListener", listener_cls),
+        ):
+            mock_config.get.side_effect = lambda key, default=None: {
+                "wakeword_webcam_enabled": webcam_enabled,
+                "wakeword_engine": "openwakeword",
+                "wakeword_model_path": "alexa",
+                "wakeword_threshold": 0.5,
+                "language": "es-MX",
+                "wakeword_followup_enabled": False,
+                "wakeword_followup_seconds": 7.0,
+            }.get(key, default)
+
+            d.start_wakeword_listener()
+
+            # Extract the _on_wake closure injected into the listener.
+            # The listener class constructor was called with on_wake=... kwarg.
+            ctor_kwargs = listener_cls.call_args[1]
+            _on_wake_fn = ctor_kwargs["on_wake"]
+
+            # Fire it.
+            _on_wake_fn(command)
+
+        return {
+            "vision_capture_called": d.vision_capture.called,
+            "eyes_capture_called": d.eyes_capture.called,
+            "wakeword_ask_calls": wakeword_ask_calls,
+            "notify_calls": notify_calls,
+            "pending_screenshot": d._pending_screenshot,
+        }
+
+    def test_route_none_skips_both_captures(self):
+        result = self._run_on_wake("qué hora es", game_active=False)
+        assert not result["vision_capture_called"]
+        assert not result["eyes_capture_called"]
+        assert result["wakeword_ask_calls"][0][1] is None
+        assert result["pending_screenshot"] is None
+
+    def test_route_screen_calls_vision_capture(self):
+        result = self._run_on_wake("este error en pantalla", game_active=False)
+        assert result["vision_capture_called"]
+        assert not result["eyes_capture_called"]
+        assert result["wakeword_ask_calls"][0][1] == "fake_screen_b64"
+
+    def test_route_webcam_calls_eyes_capture_and_notifies(self):
+        result = self._run_on_wake("mírame", game_active=False)
+        assert result["eyes_capture_called"]
+        assert not result["vision_capture_called"]
+        # Must notify with camera message
+        notify_bodies = [body for _, body in result["notify_calls"]]
+        assert any("cámara" in b for b in notify_bodies), f"Expected camera notify, got: {notify_bodies}"
+        assert result["wakeword_ask_calls"][0][1] == "fake_webcam_b64"
+
+    def test_route_webcam_camera_busy_falls_back_to_none_and_notifies(self):
+        result = self._run_on_wake(
+            "mírame",
+            game_active=False,
+            eyes_return=(None, "camera-busy"),
+        )
+        assert result["eyes_capture_called"]
+        assert not result["vision_capture_called"], "Must NOT fall back to screen on camera failure"
+        assert result["wakeword_ask_calls"][0][1] is None
+        notify_bodies = [body for _, body in result["notify_calls"]]
+        assert any("no disponible" in b for b in notify_bodies), f"Expected unavailable notify, got: {notify_bodies}"
+
+    def test_game_active_always_calls_vision_capture(self):
+        result = self._run_on_wake("qué hora es", game_active=True)
+        assert result["vision_capture_called"]
+        assert not result["eyes_capture_called"]
+
+    def test_game_active_with_webcam_cue_still_calls_vision_capture(self):
+        result = self._run_on_wake("mírame", game_active=True)
+        assert result["vision_capture_called"]
+        assert not result["eyes_capture_called"]
+
+    def test_webcam_disabled_mirame_falls_through_to_none(self):
+        result = self._run_on_wake("mírame", game_active=False, webcam_enabled=False)
+        assert not result["eyes_capture_called"]
+        assert not result["vision_capture_called"]
+        assert result["wakeword_ask_calls"][0][1] is None
