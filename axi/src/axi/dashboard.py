@@ -4113,6 +4113,50 @@ async def api_chat_ask(request: Request):
         except Exception as _dev_exc:  # noqa: BLE001
             log.warning("dev_develop chat intercept failed: %s", _dev_exc)
 
+        # ── General-chat auto-routing (last fast-path before the brain) ────
+        # Deterministic command/regex fast-paths above already ran. If the
+        # message is clearly domain DATA the regex missed (a measurement in
+        # natural language, a gasto, a question about your records), route it to
+        # the matching domain spec — the SAME engine the specialized chats use.
+        # A misroute (router unsure, or the domain says off_topic) returns None
+        # and we fall through to the general brain. Skipped for images and when
+        # disabled.
+        if (text and not image_b64
+                and bool(config.get("chat_autoroute_enabled", True))):
+            try:
+                from axi import chat_router
+                _tz = str(config.get("timezone", "America/Mexico_City"))
+                try:
+                    _now_local = datetime.now(ZoneInfo(_tz))
+                except Exception:  # noqa: BLE001
+                    _now_local = datetime.now(ZoneInfo("America/Mexico_City"))
+                _route_start = time.monotonic()
+                routed = chat_router.route_and_handle(text, _now_local)
+                if routed is not None:
+                    _answer = routed.get("answer", "")
+                    _domain = routed["domain"]
+                    stage_holder[0] = f"autoroute:{_domain}"
+                    # Persist scoped to the domain so the turn shows in BOTH that
+                    # domain's chat and the general (unfiltered) history.
+                    try:
+                        _conv_id, _ = mem.add(
+                            text, _answer, has_screenshot=False, session_id=_domain
+                        )
+                        if attachment_ids:
+                            store.link_attachments(_conv_id, attachment_ids)
+                    except Exception:  # noqa: BLE001
+                        log.warning("autoroute memory write failed", exc_info=True)
+                    _record_metric()
+                    return {
+                        "answer": _answer,
+                        "mode": routed.get("mode"),
+                        "domain": _domain,
+                        "entry_ids": routed.get("entry_ids", []),
+                        "latency_ms": round((time.monotonic() - _route_start) * 1000),
+                    }
+            except Exception:  # noqa: BLE001 — never break the general chat
+                log.warning("autoroute failed; using general chat", exc_info=True)
+
         # ── Conversation mode: brain.ask (no guardrail) ───────────────────
         # The nano extractor is intentionally skipped here. The user is in
         # free-conversation mode — routing to nano would silently save data
