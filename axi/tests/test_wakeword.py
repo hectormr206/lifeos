@@ -692,8 +692,11 @@ class TestWakeWordTranscriberParams:
         assert params.get("no_speech_threshold", 0) >= 0.6, (
             "no_speech_threshold must be raised (>= 0.6) for wake-word path"
         )
-        assert params.get("vad_filter") is True, (
-            "vad_filter must be True for wake-word path"
+        # vad_filter now defaults OFF (configurable via wakeword_vad_filter): the
+        # internal Silero VAD was discarding marginal speech and dropping the wake
+        # word. is_hallucination + match_wake guard false wakes instead.
+        assert params.get("vad_filter") is False, (
+            "vad_filter must default to False so marginal 'Axi' audio is not dropped"
         )
         # temperature=0 via extra_kwargs or beam_size=1 for greedy decoding
         extra = params.get("extra_kwargs") or {}

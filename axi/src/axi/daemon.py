@@ -30,7 +30,7 @@ from axi.heartbeat import game_mode_active as _game_mode_active
 from axi.meeting import MeetingSession, process_meeting, recover_interrupted_meetings
 from axi.memory import ConversationMemory
 from axi.output import notify, save_last, save_last_answer, to_clipboard, type_to_focused
-from axi.speak import speak as speak_text
+from axi.speak import speak as speak_text, play_ack_cue
 from axi.vision import capture_active_window_b64, get_active_window_title
 from axi.recorder import SAMPLE_RATE, Recorder
 from axi.transcriber import Transcriber, transcribe_wakeword as _transcribe_wakeword
@@ -884,6 +884,9 @@ class Daemon:
                 log.info("wakeword: skipping wake while daemon state=%r", self.state)
                 return
             log.info("wakeword: wake detected, command=%r", command)
+            # Immediate audible confirmation that "Axi" was caught, so the user
+            # doesn't repeat the wake word while the rest of the path runs.
+            play_ack_cue()
             notify("Axi", "🎮 Axi escuchó…", transient=True, timeout_ms=1200)
             # Intent-based vision router (Phase 2b): decide BEFORE capturing.
             _webcam_on = bool(config.get("wakeword_webcam_enabled", True))
