@@ -39,21 +39,26 @@ class TestMalformedDuringOperationTriggersRecovery:
     """When messages() catches a corruption error, attempt_self_heal is called."""
 
     def test_malformed_during_operation_triggers_recovery(self, monkeypatch):
-        """messages() must call attempt_self_heal() on a malformed-page error."""
+        """When a cheap reset can't fix it, messages() escalates to
+        attempt_self_heal() and, on success, RETRIES so the read completes."""
         heal_calls: list[bool] = []
 
         def _fake_heal():
             heal_calls.append(True)
             return True  # recovery succeeded
 
+        # Reset rung can't fix it → escalate to the heavy ladder.
+        monkeypatch.setattr(store, "reset_connection", lambda: False)
         monkeypatch.setattr(store, "attempt_self_heal", _fake_heal)
-        monkeypatch.setattr(
-            store,
-            "recent_conversations",
-            lambda *a, **kw: (_ for _ in ()).throw(
-                sqlcipher3.dbapi2.OperationalError("database disk image is malformed")
-            ),
-        )
+
+        # Throw on the first read; after self-heal the retry succeeds.
+        calls = {"n": 0}
+        def _recent(*a, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise sqlcipher3.dbapi2.OperationalError("database disk image is malformed")
+            return []
+        monkeypatch.setattr(store, "recent_conversations", _recent)
 
         mem = ConversationMemory.__new__(ConversationMemory)
         mem.max_context_turns = 20
@@ -62,20 +67,22 @@ class TestMalformedDuringOperationTriggersRecovery:
 
         result = mem.messages()
 
-        assert result == [], "messages() must return [] after corruption"
+        assert result == [], "messages() must return [] after recovery"
         assert len(heal_calls) == 1, "attempt_self_heal must be called exactly once"
+        assert calls["n"] == 2, "the read must be retried after self-heal"
         assert mem.degraded is False, (
-            "degraded must NOT be set when self-heal succeeds"
+            "degraded must NOT be set when self-heal + retry succeed"
         )
 
     def test_malformed_recovery_degrades_on_second_failure(self, monkeypatch):
-        """When self-heal itself fails, the store must end up in degraded state."""
+        """When both the reset and self-heal fail, the store ends up degraded."""
         heal_calls: list[bool] = []
 
         def _failing_heal():
             heal_calls.append(True)
             return False  # recovery failed
 
+        monkeypatch.setattr(store, "reset_connection", lambda: False)
         monkeypatch.setattr(store, "attempt_self_heal", _failing_heal)
         monkeypatch.setattr(
             store,
@@ -272,3 +279,48 @@ class TestRepairPrefersHealthyBackup:
             f"Recovery must fall back to healthy-2.bak; got: {values}"
         )
         conn.close()
+
+
+# ─────────────── Connection reset (latched "deferred error") ──────────────────
+
+
+class TestIsCorruptionError:
+    """store.is_corruption_error classifies SQLCipher latch/corruption errors."""
+
+    def test_detects_known_corruption_strings(self):
+        for msg in (
+            "hmac check failed for pgno=3",
+            "database disk image is malformed",
+            "error decrypting page 3 data",
+            "file is not a database",
+            "deferred error condition",
+        ):
+            assert store.is_corruption_error(Exception(msg)), msg
+
+    def test_ignores_unrelated_errors(self):
+        assert not store.is_corruption_error(Exception("no such table: foo"))
+        assert not store.is_corruption_error(ValueError("bad input"))
+
+
+class TestResetConnection:
+    """reset_connection drops the latched thread-local connection and reopens a
+    fresh one against the healthy file."""
+
+    def test_reset_returns_true_and_connection_works(self, tmp_path, monkeypatch):
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+        _make_encrypted_db(db, key)
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+        monkeypatch.setattr(store, "load_key", lambda: key)
+        import axi.db_migrate as _dbm
+        monkeypatch.setattr(_dbm, "migrate_to_encrypted", lambda *a, **k: None)
+
+        store.close()
+        try:
+            store._connect()  # open against the isolated db
+            assert store.reset_connection() is True
+            # The fresh connection still decrypts and queries.
+            assert store._connect().execute("SELECT 1").fetchone()[0] == 1
+        finally:
+            store.close()

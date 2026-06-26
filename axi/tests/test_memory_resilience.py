@@ -146,6 +146,45 @@ class TestMemoryGracefulDegradation:
         mem.max_context_turns = 20
         assert mem.messages() == []
 
+    def test_add_retries_after_connection_reset_persists_turn(self, monkeypatch):
+        """A latched connection (healthy file) must NOT drop the turn: on the
+        corruption error the connection is reset and the insert is retried, so
+        the turn actually persists."""
+        class _LatchThenReset:
+            """add_conversation latches once with an hmac error; reset_connection
+            'fixes' it so the retry succeeds with a real row id."""
+            def __init__(self):
+                self.attempts = 0
+                self.reset_calls = 0
+                self.heal_calls = 0
+            def add_conversation(self, *a, **kw):
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise sqlcipher3.dbapi2.DatabaseError("hmac check failed for pgno=3")
+                return 147
+            def reset_connection(self):
+                self.reset_calls += 1
+                return True
+            def attempt_self_heal(self):
+                self.heal_calls += 1
+                return False
+
+        stub = _LatchThenReset()
+        monkeypatch.setattr("axi.memory.store", stub)
+        monkeypatch.setattr("axi.memory.config.get", lambda k, d=None: False)
+        mem = ConversationMemory.__new__(ConversationMemory)
+        mem.max_context_turns = 20
+        mem._self_healed = False
+        mem.degraded = False
+
+        conv_id, node_id = mem.add("glucosa 91", "Anotado en Salud: glucosa 91.")
+
+        assert conv_id == 147          # the retry persisted the turn
+        assert stub.attempts == 2      # first failed, retry succeeded
+        assert stub.reset_calls == 1   # the cheap reset was used
+        assert stub.heal_calls == 0    # never escalated to the heavy ladder
+        assert mem.degraded is False   # not degraded — it recovered cleanly
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # LAYER 2 — Shutdown Checkpoint Discipline

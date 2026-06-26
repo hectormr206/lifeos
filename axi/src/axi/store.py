@@ -145,7 +145,25 @@ def _events_db_path() -> Path:
 
 
 _EVENTS_SCHEMA = r"""
-PRAGMA journal_mode=WAL;
+-- brain_metrics lives here (events.db), NOT memory.db: it is disposable
+-- telemetry written from a background thread on EVERY brain call, including
+-- from the dashboard process. Keeping it out of memory.db removes a
+-- high-frequency cross-process writer from the precious DB (single-writer
+-- hardening — see lifeos/dashboard-db-connection-latch).
+CREATE TABLE IF NOT EXISTS brain_metrics (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts                REAL NOT NULL,
+  latency_ms        INTEGER NOT NULL,
+  model             TEXT,
+  prompt_tokens     INTEGER,
+  completion_tokens INTEGER,
+  total_tokens      INTEGER,
+  ok                INTEGER NOT NULL DEFAULT 1,
+  error             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_brain_metrics_ts ON brain_metrics(ts DESC);
+
+PRAGMA journal_mode=TRUNCATE;
 PRAGMA synchronous=NORMAL;
 
 CREATE TABLE IF NOT EXISTS events (
@@ -161,7 +179,7 @@ CREATE INDEX IF NOT EXISTS idx_events_level ON events(level);
 """
 
 _SCHEMA = r"""
-PRAGMA journal_mode=WAL;
+PRAGMA journal_mode=TRUNCATE;
 PRAGMA foreign_keys=ON;
 -- synchronous is intentionally absent here: _open_new_connection sets
 -- PRAGMA synchronous=FULL on every connection and _SCHEMA must not override it.
@@ -260,6 +278,25 @@ CREATE TABLE IF NOT EXISTS meeting_screenshots (
   created_at   REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_screens_meeting ON meeting_screenshots(meeting_id, start_ms);
+
+-- ───────────────────────── chat attachments ───────────────────────
+-- Files stored on disk; this table holds metadata + the link back to the
+-- conversation turn. conv_id is NULL until the turn is saved (two-phase:
+-- upload first, link on send).
+
+CREATE TABLE IF NOT EXISTS chat_attachments (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  conv_id     INTEGER REFERENCES conversations(id) ON DELETE CASCADE,
+  session_id  TEXT,
+  kind        TEXT NOT NULL,
+  filename    TEXT NOT NULL,
+  mime        TEXT NOT NULL,
+  orig_name   TEXT,
+  sha256      TEXT,
+  size_bytes  INTEGER NOT NULL,
+  created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attach_conv ON chat_attachments(conv_id);
 
 -- ──────────────────────── speakers (cross-meeting) ────────────────
 
@@ -838,11 +875,18 @@ def _open_new_connection(key: str) -> sqlcipher3.Connection:
         log.warning("memory DB corrupt on open (%s) — attempting auto-recovery", exc)
         c = _repair_corrupt_db(DB_PATH, key)
 
-    # WAL + durability (idempotent — safe to set on every new connection).
-    c.execute("PRAGMA journal_mode=WAL")
+    # Rollback-journal (NOT WAL) + durability. memory.db is written by TWO OS
+    # processes (dashboard + daemon); SQLCipher's cross-process WAL salt
+    # coordination kept latching connections into "hmac check failed pgno=3"
+    # on a healthy file. Rollback-journal is SQLite's battle-tested multi-process
+    # mode (POSIX file locks, no -wal/-shm, no salt) — it eliminates that race.
+    # TRUNCATE keeps one (truncated) journal file instead of create/delete churn
+    # on btrfs. Cost: a writer briefly blocks readers (fine for this workload;
+    # busy_timeout handles contention). See lifeos/dashboard-db-connection-latch.
+    c.execute("PRAGMA journal_mode=TRUNCATE")
     c.execute("PRAGMA foreign_keys=ON")
     c.execute("PRAGMA synchronous=FULL")
-    # Retry up to 5 s when another thread (or process) holds the WAL write lock.
+    # Retry up to 5 s when another thread (or process) holds the write lock.
     c.execute("PRAGMA busy_timeout=5000")
     c.row_factory = sqlcipher3.Row
 
@@ -921,7 +965,10 @@ def _connect_events() -> sqlcipher3.Connection:
         c = sqlcipher3.connect(str(path), isolation_level=None)
         c.execute(f"PRAGMA key = \"x'{key}'\"")
 
-    c.execute("PRAGMA journal_mode=WAL")
+    # Rollback-journal, not WAL — events.db is also written by multiple
+    # processes (the events writer + brain_metrics from the dashboard). Same
+    # cross-process WAL race as memory.db; same fix.
+    c.execute("PRAGMA journal_mode=TRUNCATE")
     c.execute("PRAGMA synchronous=NORMAL")
     c.execute("PRAGMA busy_timeout=5000")
     c.row_factory = sqlcipher3.Row
@@ -1206,6 +1253,96 @@ def conversation_count() -> int:
     return c.execute("SELECT COUNT(*) AS n FROM conversations").fetchone()["n"]
 
 
+def attachments_dir() -> Path:
+    """Directory for chat attachment files. Derived from DB_PATH.parent so it
+    follows test monkeypatching (same trick as events_db_path)."""
+    d = DB_PATH.parent / "attachments"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def add_attachment(
+    *,
+    kind: str,
+    filename: str,
+    mime: str,
+    orig_name: str | None,
+    sha256: str | None,
+    size_bytes: int,
+    session_id: str | None = None,
+) -> int:
+    """Insert a new attachment row (conv_id is NULL until link_attachments is called).
+
+    Returns the new row id.
+    """
+    with _tx() as c:
+        cur = c.execute(
+            "INSERT INTO chat_attachments"
+            "(kind, filename, mime, orig_name, sha256, size_bytes, session_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, filename, mime, orig_name, sha256, size_bytes, session_id, time.time()),
+        )
+        return cur.lastrowid
+
+
+def link_attachments(conv_id: int, attachment_ids: list[int]) -> None:
+    """Bind a list of attachment rows to a conversation turn.
+
+    Only claims rows that are still unlinked (conv_id IS NULL) to prevent
+    accidental re-linking across conversations.
+    """
+    if not attachment_ids:
+        return
+    with _tx() as c:
+        for att_id in attachment_ids:
+            c.execute(
+                "UPDATE chat_attachments SET conv_id = ? WHERE id = ? AND conv_id IS NULL",
+                (conv_id, att_id),
+            )
+
+
+def get_attachment(att_id: int) -> sqlite3.Row | None:
+    """Fetch a single attachment row by id. Returns None if not found."""
+    c = _connect()
+    return c.execute(
+        "SELECT * FROM chat_attachments WHERE id = ?", (att_id,)
+    ).fetchone()
+
+
+def delete_attachment(att_id: int) -> sqlite3.Row | None:
+    """Delete an attachment row and return the row that was deleted (for file cleanup).
+
+    Returns None if the row did not exist.
+    """
+    row = get_attachment(att_id)
+    if row is None:
+        return None
+    with _tx() as c:
+        c.execute("DELETE FROM chat_attachments WHERE id = ?", (att_id,))
+    return row
+
+
+def list_attachments_for_convs(conv_ids: list[int]) -> dict[int, list[sqlite3.Row]]:
+    """Return attachment rows grouped by conversation id.
+
+    The result is a dict keyed by conv_id. Conversations with no attachments
+    do not appear in the dict. Returns {} for empty input.
+    """
+    if not conv_ids:
+        return {}
+    placeholders = ",".join("?" * len(conv_ids))
+    c = _connect()
+    rows = c.execute(
+        f"SELECT * FROM chat_attachments WHERE conv_id IN ({placeholders}) ORDER BY id",
+        conv_ids,
+    ).fetchall()
+    result: dict[int, list[sqlite3.Row]] = {}
+    for row in rows:
+        cid = row["conv_id"]
+        result.setdefault(cid, []).append(row)
+    return result
+
+
 # ─────────────────────────── helpers ────────────────────────────────────
 
 def _fts_text(data: dict[str, Any]) -> str:
@@ -1336,8 +1473,13 @@ def insert_brain_metric(
     ok: int,
     error: str | None,
 ) -> None:
-    """Persist one brain call metric row. Called from a background thread."""
-    with _tx() as c:
+    """Persist one brain call metric row. Called from a background thread.
+
+    Writes to events.db (disposable telemetry), NOT memory.db, so brain-call
+    metric writes never contend for the memory.db WAL write lock across the
+    dashboard and daemon processes.
+    """
+    with _tx_events() as c:
         c.execute(
             "INSERT INTO brain_metrics("
             "  ts, latency_ms, model, prompt_tokens, completion_tokens, "
@@ -1352,8 +1494,8 @@ def recent_brain_metrics(
     limit: int = 100,
     since_ts: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Most recent brain metrics as dicts, newest first."""
-    c = _connect()
+    """Most recent brain metrics as dicts, newest first. Reads events.db."""
+    c = _connect_events()
     if since_ts is not None:
         rows = c.execute(
             "SELECT id, ts, latency_ms, model, prompt_tokens, completion_tokens, "
@@ -1374,8 +1516,8 @@ def recent_brain_metrics(
 
 
 def trim_brain_metrics(keep: int = 5000) -> None:
-    """Keep only the most recent `keep` brain metric rows."""
-    with _tx() as c:
+    """Keep only the most recent `keep` brain metric rows. Trims events.db."""
+    with _tx_events() as c:
         c.execute(
             "DELETE FROM brain_metrics WHERE id NOT IN ("
             "  SELECT id FROM brain_metrics ORDER BY ts DESC LIMIT ?"
@@ -2261,6 +2403,49 @@ def close() -> None:
             setattr(_tl, attr, None)
 
 
+_CORRUPTION_INDICATORS = (
+    "disk image is malformed",
+    "disk i/o error",
+    "hmac check failed",
+    "error decrypting",
+    "file is not a database",
+    "deferred error",
+)
+
+
+def is_corruption_error(exc: BaseException) -> bool:
+    """True when *exc* looks like a SQLCipher page-level / latched-connection
+    error (decrypt/hmac failure, malformed image, deferred error condition)."""
+    msg = str(exc).lower()
+    return any(ind in msg for ind in _CORRUPTION_INDICATORS)
+
+
+def reset_connection() -> bool:
+    """Drop and reopen the calling thread's memory.db connection to clear a
+    latched SQLCipher "deferred error condition".
+
+    When the on-disk file is HEALTHY but the live connection hit a transient
+    decrypt/hmac error (e.g. a WAL/concurrency race between the dashboard, the
+    daemon and the heartbeat all touching memory.db), SQLCipher latches that
+    connection into a permanent error state — every subsequent statement on it
+    fails even though the file is fine. The full recovery ladder
+    (:func:`attempt_self_heal`) is overkill for that: we just need a fresh
+    connection.
+
+    This is the cheap first rung — safe to call repeatedly. Returns True when
+    the reopened connection passes a trivial smoke read, False otherwise (in
+    which case the caller should escalate to :func:`attempt_self_heal`).
+    """
+    try:
+        close()  # drop the latched thread-local connection(s)
+        c = _connect()  # reopen a fresh connection
+        c.execute("SELECT 1").fetchone()  # smoke test — proves it decrypts
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("reset_connection: reopen failed: %s", exc)
+        return False
+
+
 # ─────────────────── periodic healthy-backup rotation ────────────────────────
 
 
@@ -2349,7 +2534,7 @@ def attempt_self_heal() -> bool:
     _apply_nocow(DB_PATH)
 
     try:
-        new_conn.execute("PRAGMA journal_mode=WAL")
+        new_conn.execute("PRAGMA journal_mode=TRUNCATE")
         new_conn.execute("PRAGMA foreign_keys=ON")
         new_conn.execute("PRAGMA synchronous=FULL")
         new_conn.execute("PRAGMA busy_timeout=5000")
