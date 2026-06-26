@@ -399,6 +399,7 @@ class WakeWordListener:
         max_segment_s: float = _DEFAULT_MAX_SEGMENT_S,
         sample_rate: int = SAMPLE_RATE,
         followup_active_fn: Callable[[], bool] | None = None,
+        min_rms: float = 0.0,
     ) -> None:
         self._transcribe_fn = transcribe_fn
         self._on_wake = on_wake
@@ -406,6 +407,10 @@ class WakeWordListener:
         # Feature C: callable that returns True while a follow-up window is open.
         # When active, speech without the wake word is routed to on_wake directly.
         self._followup_active_fn = followup_active_fn
+        # Energy gate (RMS) below which a flushed segment is treated as ambient
+        # noise and not transcribed (0.0 = disabled). Stops noise being voiced as
+        # a hallucinated "Axi" false wake when vad_filter is off.
+        self._min_rms = min_rms
         self._vad_aggressiveness = vad_aggressiveness
         self._silence_duration_s = silence_duration_s
         self._max_segment_s = max_segment_s
@@ -645,6 +650,15 @@ class WakeWordListener:
         """
         if audio.size == 0:
             return
+        # Energy gate: skip low-energy (ambient-noise) segments before transcription.
+        # With faster-whisper's vad_filter off, noise gets transcribed and — biased
+        # by the "Axi." initial prompt — hallucinated as "Axi", causing false wakes.
+        # Gating on RMS lets real speech through while dropping background noise.
+        if self._min_rms > 0.0:
+            rms = float(np.sqrt(np.mean(np.square(audio, dtype=np.float64))))
+            if rms < self._min_rms:
+                log.info("wakeword: segment below energy gate (rms=%.4f) — skipping noise", rms)
+                return
         try:
             result = self._transcribe_fn(audio)
             # transcribe_fn returns (text, lang, prob) tuple
