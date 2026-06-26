@@ -1236,6 +1236,21 @@ def serve() -> int:
             target=_embed_drain_loop, name="axi-embed-drain", daemon=True
         ).start()
 
+        # Periodic known-good backup — writes a validated SQLCipher snapshot of
+        # memory.db every _HEALTHY_BACKUP_INTERVAL_S seconds (default 30 min).
+        # The recovery ladder prefers these healthy-*.bak files over forensic
+        # corrupt-*.bak snapshots, making self-healing much more reliable.
+        def _healthy_backup_loop() -> None:
+            while not _embed_drain_stop.wait(timeout=store._HEALTHY_BACKUP_INTERVAL_S):
+                try:
+                    store.do_healthy_backup()
+                except Exception:  # noqa: BLE001
+                    log.warning("periodic healthy backup failed", exc_info=True)
+
+        threading.Thread(
+            target=_healthy_backup_loop, name="axi-healthy-backup", daemon=True
+        ).start()
+
         stop_signal = {"raised": False}
 
         def _shutdown(*_):

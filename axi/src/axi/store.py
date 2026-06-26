@@ -53,6 +53,10 @@ _BG_WORKERS_DISABLED = os.environ.get("AXI_DISABLE_BG_WORKERS", "").lower() in (
 # because they would open concurrent WAL write connections, causing corruption.
 _EMBED_WRITER_ENABLED: bool = False
 
+# Interval (seconds) between periodic known-good backup snapshots. Configurable
+# via _HEALTHY_BACKUP_INTERVAL_S so tests can override without changing code.
+_HEALTHY_BACKUP_INTERVAL_S: int = 1800  # 30 minutes
+
 
 def enable_embed_writer() -> None:
     """Opt this process in to running the background embed worker thread.
@@ -112,6 +116,20 @@ def _ensure_nocow_dir(path: Path) -> None:
     except Exception:
         # Non-btrfs, chattr missing, permission denied, unsupported fs — all OK.
         log.debug("_ensure_nocow_dir: chattr +C skipped for %s (best-effort)", path)
+
+
+def _apply_nocow(path: Path) -> None:
+    """Best-effort ``chattr +C`` on a file or directory to disable CoW on btrfs.
+
+    Non-fatal: silently ignores missing chattr, non-btrfs filesystems, and any
+    other OS errors. Used to protect backup files created at runtime so they
+    inherit the same NOCOW protection as the main DB.
+    """
+    try:
+        import subprocess as _sp
+        _sp.run(["chattr", "+C", str(path)], check=False, capture_output=True)
+    except Exception:
+        pass
 
 
 def _events_db_path() -> Path:
@@ -654,11 +672,21 @@ def _repair_corrupt_db_locked(db_path: Path, key: str) -> sqlcipher3.Connection:
     # and fell through to the empty-schema rebuild, destroying memory that was
     # never actually lost (the 2026-06-20 data-loss incident). Including these
     # snapshots, gated by ``integrity_check``, is what makes recovery safe.
-    candidates = sorted(
-        db_path.parent.glob(f"{db_path.name}*.bak"),
+    #
+    # Preference order: periodic known-good snapshots (healthy-1.bak → 2 → 3)
+    # are tried first because they were validated at write time. Any other .bak
+    # files (corrupt-*.bak forensic snapshots, ad-hoc backups) follow by mtime.
+    _healthy_slots = [
+        db_path.parent / f"{db_path.name}.healthy-{i}.bak"
+        for i in (1, 2, 3)
+    ]
+    _healthy_set = set(_healthy_slots)
+    _glob_candidates = sorted(
+        [p for p in db_path.parent.glob(f"{db_path.name}*.bak") if p not in _healthy_set],
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
+    candidates = [s for s in _healthy_slots if s.exists()] + _glob_candidates
     # Track whether any candidate passed the integrity check, regardless of
     # whether its subsequent restore succeeded.  This distinguishes "no
     # recoverable data anywhere" (healthy_backup_seen=False → step 4 safe to
@@ -2231,3 +2259,108 @@ def close() -> None:
             except Exception:  # noqa: BLE001
                 pass
             setattr(_tl, attr, None)
+
+
+# ─────────────────── periodic healthy-backup rotation ────────────────────────
+
+
+def do_healthy_backup(db_path: Path = DB_PATH) -> None:
+    """Write a known-good encrypted backup of *db_path* if it passes integrity_check.
+
+    Rotates three named slots (1 = most recent):
+      <db>.healthy-1.bak → most recent
+      <db>.healthy-2.bak → previous
+      <db>.healthy-3.bak → oldest (evicted on next rotation)
+
+    Uses the SQLCipher online backup API so the snapshot is consistent even
+    under concurrent reads. Non-fatal: all errors are caught and logged as
+    WARNING so a backup failure never propagates into the daemon's event loop.
+
+    Each backup file receives ``chattr +C`` (NOCOW) on btrfs so it does not
+    accumulate CoW extents that could themselves corrupt on disk failure.
+    """
+    try:
+        if not db_path.exists():
+            return
+        key = load_key()
+
+        # Use an independent connection (not the thread-local write connection)
+        # so the integrity check and backup do not interfere with live writes.
+        src = sqlcipher3.connect(str(db_path), isolation_level=None)
+        try:
+            src.execute(f"PRAGMA key = \"x'{key}'\"")
+            result = src.execute("PRAGMA integrity_check").fetchone()
+            if not result or str(result[0]).lower() != "ok":
+                log.debug("do_healthy_backup: integrity_check not ok — skipping")
+                return
+
+            slot1 = db_path.parent / f"{db_path.name}.healthy-1.bak"
+            slot2 = db_path.parent / f"{db_path.name}.healthy-2.bak"
+            slot3 = db_path.parent / f"{db_path.name}.healthy-3.bak"
+
+            # Rotate: 2 → 3, 1 → 2, new → 1
+            if slot2.exists():
+                slot2.replace(slot3)
+                _apply_nocow(slot3)
+            if slot1.exists():
+                slot1.replace(slot2)
+                _apply_nocow(slot2)
+
+            dst = sqlcipher3.connect(str(slot1), isolation_level=None)
+            try:
+                dst.execute(f"PRAGMA key = \"x'{key}'\"")
+                src.backup(dst)
+            finally:
+                dst.close()
+
+            _apply_nocow(slot1)
+            log.info("do_healthy_backup: snapshot → %s", slot1.name)
+        finally:
+            src.close()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("do_healthy_backup: failed (non-fatal): %s", exc)
+
+
+# ─────────────────── self-healing recovery (mid-operation) ───────────────────
+
+
+def attempt_self_heal() -> bool:
+    """Recover from a corruption error detected during a live query.
+
+    Closes the calling thread's broken connection, acquires the inter-process
+    recovery lock, runs the full recovery ladder, and stores the new connection
+    as the thread-local connection so subsequent calls work immediately.
+
+    Returns True on success, False on failure. Non-raising.
+
+    Callers **must** gate invocation on a session-scoped flag (e.g.
+    ``_self_healed`` on ConversationMemory) so recovery is attempted at most
+    once per error event — infinite-loop prevention.
+    """
+    try:
+        key = load_key()
+        close()  # drop the broken thread-local connection(s)
+        with _recovery_lock(DB_PATH):
+            new_conn = _repair_corrupt_db_locked(DB_PATH, key)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("attempt_self_heal: recovery ladder failed: %s", exc)
+        return False
+
+    _apply_nocow(DB_PATH)
+
+    try:
+        new_conn.execute("PRAGMA journal_mode=WAL")
+        new_conn.execute("PRAGMA foreign_keys=ON")
+        new_conn.execute("PRAGMA synchronous=FULL")
+        new_conn.execute("PRAGMA busy_timeout=5000")
+        new_conn.row_factory = sqlcipher3.Row
+        try:
+            _load_sqlite_vec(new_conn)
+        except Exception:  # noqa: BLE001
+            pass
+        _tl.conn = new_conn
+        log.warning("attempt_self_heal: recovery succeeded — new connection stored")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("attempt_self_heal: could not configure recovered connection: %s", exc)
+        return False

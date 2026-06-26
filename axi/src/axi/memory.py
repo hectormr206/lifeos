@@ -30,6 +30,18 @@ log = logging.getLogger("axi.memory")
 
 MAX_CONTEXT_TURNS = 20  # how many recent turns feed the LLM each ask
 
+_CORRUPTION_INDICATORS = (
+    "disk image is malformed",
+    "disk i/o error",
+    "hmac check failed",
+)
+
+
+def _is_corruption_error(exc: BaseException) -> bool:
+    """Return True when *exc* looks like a SQLCipher page-level corruption."""
+    msg = str(exc).lower()
+    return any(indicator in msg for indicator in _CORRUPTION_INDICATORS)
+
 
 def _format_ts(unix_ts: float, created_tz: str | None = None) -> str:
     """Render a Unix timestamp in the user's *current* TZ. Append
@@ -58,6 +70,9 @@ class ConversationMemory:
     def __init__(self, max_context_turns: int = MAX_CONTEXT_TURNS) -> None:
         self.max_context_turns = max_context_turns
         self.degraded = False
+        # Guards against infinite recovery loops: at most one self-heal attempt
+        # per ConversationMemory instance lifetime.
+        self._self_healed: bool = False
         try:
             store.init_db()
             log.info("memory backend: %s (%d turns)", store.DB_PATH, store.conversation_count())
@@ -81,6 +96,16 @@ class ConversationMemory:
                 pass
             raise
         except Exception as exc:  # noqa: BLE001
+            if _is_corruption_error(exc) and not self._self_healed:
+                self._self_healed = True
+                log.warning("memory: corruption on init — attempting self-heal: %s", exc)
+                try:
+                    if store.attempt_self_heal():
+                        store.init_db()
+                        log.warning("memory: self-heal succeeded — DB reinited")
+                        return
+                except Exception as reinit_exc:  # noqa: BLE001
+                    log.warning("memory: self-heal retry failed: %s", reinit_exc)
             self.degraded = True
             log.warning("memory degraded: %s — running with empty history", exc)
 
@@ -119,6 +144,18 @@ class ConversationMemory:
                 pass
             return 0, 0
         except Exception as exc:  # noqa: BLE001
+            if _is_corruption_error(exc) and not getattr(self, "_self_healed", False):
+                self._self_healed = True
+                log.warning("memory: corruption in add() — attempting self-heal: %s", exc)
+                try:
+                    if store.attempt_self_heal():
+                        log.warning("memory: self-heal succeeded after add() error")
+                        return 0, 0
+                except Exception as heal_exc:  # noqa: BLE001
+                    log.warning("memory: self-heal attempt raised: %s", heal_exc)
+                self.degraded = True
+                log.warning("memory degraded: %s — turn not persisted", exc)
+                return 0, 0
             log.warning("memory degraded: %s — turn not persisted", exc)
             return 0, 0
 
@@ -150,6 +187,16 @@ class ConversationMemory:
                 pass
             return []
         except Exception as exc:  # noqa: BLE001
+            if _is_corruption_error(exc) and not getattr(self, "_self_healed", False):
+                self._self_healed = True
+                log.warning("memory: corruption in messages() — attempting self-heal: %s", exc)
+                try:
+                    if store.attempt_self_heal():
+                        log.warning("memory: self-heal succeeded after messages() error")
+                        return []
+                except Exception as heal_exc:  # noqa: BLE001
+                    log.warning("memory: self-heal attempt raised: %s", heal_exc)
+                self.degraded = True
             log.warning("memory degraded: %s — returning empty history", exc)
             return []
 
@@ -181,6 +228,16 @@ class ConversationMemory:
                 pass
             return 0
         except Exception as exc:  # noqa: BLE001
+            if _is_corruption_error(exc) and not getattr(self, "_self_healed", False):
+                self._self_healed = True
+                log.warning("memory: corruption in turn_count() — attempting self-heal: %s", exc)
+                try:
+                    if store.attempt_self_heal():
+                        log.warning("memory: self-heal succeeded after turn_count() error")
+                        return 0
+                except Exception as heal_exc:  # noqa: BLE001
+                    log.warning("memory: self-heal attempt raised: %s", heal_exc)
+                self.degraded = True
             log.warning("memory degraded: %s — turn count unavailable", exc)
             return 0
 
