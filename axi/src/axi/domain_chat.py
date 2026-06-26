@@ -158,10 +158,27 @@ def _query(spec: DomainSpec, text: str, now: datetime, brain_ask: Callable) -> d
     days = _window_days(text)
     entries_list = spec.store_list_recent(days=days, limit=200)
     system = _build_query_system(spec, now, entries_list)
-    answer = brain_ask(text, system=system, think=True, max_tokens=512)
-    if not isinstance(answer, str):
-        answer = str(answer)
-    return {"mode": "query", "answer": answer.strip()}
+
+    def _ask(think: bool, max_tokens: int) -> str:
+        a = brain_ask(text, system=system, think=think, max_tokens=max_tokens)
+        return (a if isinstance(a, str) else str(a)).strip()
+
+    # Primary: thinking ON (room to resolve relative dates). But think=True can
+    # burn the whole token budget reasoning and return an EMPTY answer. The
+    # answer is grounded in the records already in the prompt, so chain-of-
+    # thought is not required — fall back to think=False (which can't exhaust
+    # the budget on reasoning), then to a graceful message. Never return blank.
+    answer = _ask(think=True, max_tokens=768)
+    if not answer:
+        log.warning("domain_chat[%s]: query think=True returned empty — retrying think=False", spec.key)
+        try:
+            answer = _ask(think=False, max_tokens=512)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("domain_chat[%s]: query think=False retry failed: %s", spec.key, exc)
+            answer = ""
+    if not answer:
+        answer = "No pude generar una respuesta con tus registros. ¿Podés reformular la pregunta?"
+    return {"mode": "query", "answer": answer}
 
 
 # ─── register ───────────────────────────────────────────────────────────────

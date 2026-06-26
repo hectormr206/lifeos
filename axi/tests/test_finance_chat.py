@@ -103,6 +103,26 @@ def test_query_passes_today_and_records(monkeypatch):
     assert "comida" in qsys         # category present
 
 
+def test_query_falls_back_to_think_false_when_empty(monkeypatch):
+    """think=True can burn the token budget reasoning and return empty. The
+    query must retry with think=False rather than show a blank answer."""
+    _patch_store(monkeypatch, recent=[])
+    calls: list[bool] = []
+
+    def _brain(text, *, system=None, think=False, max_tokens=0):
+        calls.append(think)
+        if not think and len(calls) == 1:
+            return _extract(intent="query")   # step 1: classify+extract
+        if think:
+            return ""                          # primary query: budget exhausted
+        return "respuesta sin pensar"          # fallback query (think=False)
+
+    res = domain_chat.handle_message(FINANCE_SPEC, "cuánto gasté", now=NOW, brain_ask=_brain)
+    assert res["mode"] == "query"
+    assert res["answer"] == "respuesta sin pensar"
+    assert True in calls and calls.count(False) >= 2  # primary think + fallback no-think
+
+
 def test_off_topic_saves_nothing(monkeypatch):
     created = _patch_store(monkeypatch)
     res = domain_chat.handle_message(
