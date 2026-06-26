@@ -109,96 +109,122 @@ class ConversationMemory:
             self.degraded = True
             log.warning("memory degraded: %s — running with empty history", exc)
 
-    def add(self, user: str, axi: str, has_screenshot: bool = False) -> tuple[int, int]:
-        """Record a turn. Returns (conversation row id, conversation node id).
+    def _notify_recovery(self) -> None:
+        """Best-effort desktop notification that manual recovery may be needed."""
+        try:
+            notify(
+                "Axi — Recovery Required",
+                "Store error: recoverable data at risk. Check ~/.local/state/axi/.",
+                icon="dialog-error",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
-        Returns (0, 0) without raising when the underlying store is unavailable.
+    def _with_recovery(self, op_name, fn, default):
+        """Run *fn*; on a SQLCipher corruption/latch error, recover and RETRY so
+        the operation actually completes instead of being silently dropped.
+
+        Two rungs, cheapest first:
+
+        1. ``store.reset_connection()`` — the common case. The on-disk file is
+           healthy but the live connection latched into a "deferred error
+           condition" (a transient decrypt/hmac race between the dashboard,
+           daemon and heartbeat). A fresh connection clears it; we re-run *fn*
+           so e.g. an INSERT lands. Cheap and repeatable.
+        2. ``store.attempt_self_heal()`` — the heavy recovery ladder for genuine
+           file corruption, gated once per instance to avoid loops.
+
+        Only when both rungs fail to make *fn* succeed do we mark the memory
+        degraded and return *default*.
         """
         try:
-            conv_id = store.add_conversation(user, axi, has_screenshot=has_screenshot)
-            node_id: int | None = None
-            if config.get("graph_bridge_conversations", False):
-                node_id = store.add_node(
-                    kind="conversation",
-                    label=user[:80],
-                    data={"user": user, "axi": axi},
-                )
-                # Bridge: link the conversation row to its graph node for future
-                # fact-extraction passes.
-                with store._tx() as c:  # noqa: SLF001 — internal helper, intentional
-                    c.execute("UPDATE conversations SET node_id = ? WHERE id = ?", (node_id, conv_id))
-            return conv_id, node_id
+            return fn()
         except RecoveryError as exc:
             log.critical(
-                "RECOVERY REQUIRED — store raised RecoveryError at runtime; "
-                "turn not persisted. Manual recovery needed. Error: %s",
-                exc,
+                "RECOVERY REQUIRED in %s — store raised RecoveryError; "
+                "operation not completed. Manual recovery needed. Error: %s",
+                op_name, exc,
             )
-            try:
-                notify(
-                    "Axi — Recovery Required",
-                    "Store error: recoverable data at risk. Check ~/.local/state/axi/.",
-                    icon="dialog-error",
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            return 0, 0
+            self._notify_recovery()
+            return default
         except Exception as exc:  # noqa: BLE001
-            if _is_corruption_error(exc) and not getattr(self, "_self_healed", False):
+            if not _is_corruption_error(exc):
+                log.warning("memory degraded in %s: %s", op_name, exc)
+                return default
+            # Rung 1 — cheap connection reset + retry (healthy file, latched conn).
+            log.warning("memory: corruption in %s (%s) — resetting connection", op_name, exc)
+            try:
+                did_reset = store.reset_connection()
+            except Exception:  # noqa: BLE001
+                did_reset = False
+            if did_reset:
+                try:
+                    return fn()
+                except Exception as e2:  # noqa: BLE001
+                    log.warning("memory: %s retry after reset failed: %s", op_name, e2)
+            # Rung 2 — heavy recovery ladder, once per instance.
+            if not getattr(self, "_self_healed", False):
                 self._self_healed = True
-                log.warning("memory: corruption in add() — attempting self-heal: %s", exc)
                 try:
                     if store.attempt_self_heal():
-                        log.warning("memory: self-heal succeeded after add() error")
-                        return 0, 0
+                        try:
+                            return fn()
+                        except Exception as e3:  # noqa: BLE001
+                            log.warning("memory: %s retry after self-heal failed: %s", op_name, e3)
                 except Exception as heal_exc:  # noqa: BLE001
-                    log.warning("memory: self-heal attempt raised: %s", heal_exc)
-                self.degraded = True
-                log.warning("memory degraded: %s — turn not persisted", exc)
-                return 0, 0
-            log.warning("memory degraded: %s — turn not persisted", exc)
-            return 0, 0
+                    log.warning("memory: self-heal raised in %s: %s", op_name, heal_exc)
+            self.degraded = True
+            log.warning("memory degraded in %s: %s — operation did not complete", op_name, exc)
+            return default
+
+    def _add_once(self, user, axi, has_screenshot, session_id):
+        """The raw insert (+ optional graph bridge). Wrapped by _with_recovery."""
+        conv_id = store.add_conversation(
+            user, axi, has_screenshot=has_screenshot, session_id=session_id
+        )
+        node_id = None
+        if config.get("graph_bridge_conversations", False):
+            node_id = store.add_node(
+                kind="conversation",
+                label=user[:80],
+                data={"user": user, "axi": axi},
+            )
+            # Bridge: link the conversation row to its graph node for future
+            # fact-extraction passes.
+            with store._tx() as c:  # noqa: SLF001 — internal helper, intentional
+                c.execute("UPDATE conversations SET node_id = ? WHERE id = ?", (node_id, conv_id))
+        return conv_id, node_id
+
+    def add(self, user: str, axi: str, has_screenshot: bool = False,
+            session_id: str | None = None) -> tuple[int, int]:
+        """Record a turn. Returns (conversation row id, conversation node id).
+
+        `session_id` scopes the turn to a domain chat (e.g. "health" for the
+        Salud chat) so each specialized chat can show only its own history.
+
+        A latched connection no longer silently drops the turn: on a corruption
+        error the connection is reset and the insert is retried, so the turn
+        persists. Returns (0, 0) only when recovery fails entirely.
+        """
+        return self._with_recovery(
+            "add", lambda: self._add_once(user, axi, has_screenshot, session_id), (0, 0)
+        )
+
+    def _messages_once(self) -> list[dict]:
+        """The raw history read. Wrapped by _with_recovery."""
+        rows = store.recent_conversations(self.max_context_turns)
+        out: list[dict] = []
+        for r in rows:
+            out.append({"role": "user", "content": r["user_text"]})
+            out.append({"role": "assistant", "content": r["axi_text"]})
+        return out
 
     def messages(self) -> list[dict]:
         """OpenAI chat-completion format, oldest first.
 
         Returns [] without raising when the store is corrupt or unavailable.
         """
-        try:
-            rows = store.recent_conversations(self.max_context_turns)
-            out: list[dict] = []
-            for r in rows:
-                out.append({"role": "user", "content": r["user_text"]})
-                out.append({"role": "assistant", "content": r["axi_text"]})
-            return out
-        except RecoveryError as exc:
-            log.critical(
-                "RECOVERY REQUIRED — store raised RecoveryError fetching history; "
-                "returning empty. Error: %s",
-                exc,
-            )
-            try:
-                notify(
-                    "Axi — Recovery Required",
-                    "Store error: recoverable data at risk. Check ~/.local/state/axi/.",
-                    icon="dialog-error",
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            return []
-        except Exception as exc:  # noqa: BLE001
-            if _is_corruption_error(exc) and not getattr(self, "_self_healed", False):
-                self._self_healed = True
-                log.warning("memory: corruption in messages() — attempting self-heal: %s", exc)
-                try:
-                    if store.attempt_self_heal():
-                        log.warning("memory: self-heal succeeded after messages() error")
-                        return []
-                except Exception as heal_exc:  # noqa: BLE001
-                    log.warning("memory: self-heal attempt raised: %s", heal_exc)
-                self.degraded = True
-            log.warning("memory degraded: %s — returning empty history", exc)
-            return []
+        return self._with_recovery("messages", self._messages_once, [])
 
     def clear(self) -> int:
         n = store.clear_conversations()
@@ -210,36 +236,7 @@ class ConversationMemory:
 
         Returns 0 without raising when the store is unavailable.
         """
-        try:
-            return store.conversation_count()
-        except RecoveryError as exc:
-            log.critical(
-                "RECOVERY REQUIRED — store raised RecoveryError fetching turn count; "
-                "returning 0. Error: %s",
-                exc,
-            )
-            try:
-                notify(
-                    "Axi — Recovery Required",
-                    "Store error: recoverable data at risk. Check ~/.local/state/axi/.",
-                    icon="dialog-error",
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            return 0
-        except Exception as exc:  # noqa: BLE001
-            if _is_corruption_error(exc) and not getattr(self, "_self_healed", False):
-                self._self_healed = True
-                log.warning("memory: corruption in turn_count() — attempting self-heal: %s", exc)
-                try:
-                    if store.attempt_self_heal():
-                        log.warning("memory: self-heal succeeded after turn_count() error")
-                        return 0
-                except Exception as heal_exc:  # noqa: BLE001
-                    log.warning("memory: self-heal attempt raised: %s", heal_exc)
-                self.degraded = True
-            log.warning("memory degraded: %s — turn count unavailable", exc)
-            return 0
+        return self._with_recovery("turn_count", store.conversation_count, 0)
 
     def relevant_facts(self, query: str, limit: int = 5) -> list[str]:
         """FTS search over fact nodes. Returns lines pre-formatted with the

@@ -2553,6 +2553,10 @@ async def api_health_chat(request: Request):
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text is required")
+    attachment_ids: list[int] = [
+        int(i) for i in (body.get("attachment_ids") or [])
+        if isinstance(i, (int, float)) and int(i) > 0
+    ]
     if len(text) > 8000:
         raise HTTPException(400, "text too long (max 8000 chars)")
 
@@ -2573,7 +2577,9 @@ async def api_health_chat(request: Request):
     answer = result.get("answer", "")
     # Persist the turn to the shared chat memory (same store as /api/chat/ask).
     try:
-        _get_chat_memory().add(text, answer, has_screenshot=False)
+        conv_id, _ = _get_chat_memory().add(text, answer, has_screenshot=False, session_id="health")
+        if attachment_ids:
+            store.link_attachments(conv_id, attachment_ids)
     except Exception:  # noqa: BLE001 — memory write must never fail the reply
         log.warning("health chat memory write failed", exc_info=True)
 
@@ -3176,6 +3182,10 @@ async def api_chat_ask(request: Request):
         str(_raw_session_id).strip() if _raw_session_id and isinstance(_raw_session_id, str)
         else "default"
     )
+    attachment_ids: list[int] = [
+        int(i) for i in (body.get("attachment_ids") or [])
+        if isinstance(i, (int, float)) and int(i) > 0
+    ]
     # PWA optional fields — captured by the chat UI when the user toggles
     # the corresponding affordances. None when absent. We log them and pass
     # to the relevant domain create() as ad-hoc tag/data fields.
@@ -4158,7 +4168,9 @@ async def api_chat_ask(request: Request):
         # Tag the stored user turn so history rendering can show the image
         # marker (the image bytes themselves aren't persisted — too large).
         persisted_user = f"[imagen adjunta] {text}" if image_b64 else text
-        mem.add(persisted_user, answer, has_screenshot=bool(image_b64))
+        conv_id, _ = mem.add(persisted_user, answer, has_screenshot=bool(image_b64))
+        if attachment_ids:
+            store.link_attachments(conv_id, attachment_ids)
     except Exception as e:  # noqa: BLE001
         log.warning("chat memory.add failed: %s", e)
 
@@ -4254,6 +4266,114 @@ _CHAT_AUDIO_DIR = Path(
 ) / "axi" / "chat-audio"
 
 
+# ──────────────────────── chat attachments ──────────────────────────────
+
+ALLOWED_MIME: frozenset[str] = frozenset({
+    "image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"
+})
+EXT_MAP: dict[str, str] = {
+    "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+    "image/gif": "gif", "application/pdf": "pdf",
+}
+MAX_ATTACHMENT_BYTES: int = 25 * 1024 * 1024  # 25 MB hard cap
+
+
+@app.post("/api/chat/attachment")
+async def api_chat_attachment_upload(request: Request):
+    """Accept a base64-encoded image or PDF, persist to disk, return metadata.
+
+    Body (JSON):
+      data_b64  str   — base64-encoded file bytes (required)
+      mime      str   — MIME type, must be in ALLOWED_MIME (required)
+      orig_name str?  — original filename from the browser (optional)
+      session   str?  — session id to tag the row with (optional)
+    """
+    import base64 as _b64
+    import hashlib as _hashlib
+    import uuid as _uuid
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+
+    mime = (body.get("mime") or "").strip()
+    if mime not in ALLOWED_MIME:
+        raise HTTPException(415, f"unsupported media type: {mime!r}")
+
+    data_b64 = body.get("data_b64") or ""
+    if not isinstance(data_b64, str) or not data_b64.strip():
+        raise HTTPException(400, "data_b64 is required")
+    try:
+        raw = _b64.b64decode(data_b64, validate=False)
+    except Exception:
+        raise HTTPException(400, "data_b64 is not valid base64")
+    if not raw:
+        raise HTTPException(400, "data_b64 decoded to empty bytes")
+    if len(raw) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(413, f"attachment too large (max {MAX_ATTACHMENT_BYTES // (1024*1024)} MB)")
+
+    sha256_hex = _hashlib.sha256(raw).hexdigest()
+    kind = "image" if mime.startswith("image/") else "pdf"
+    ext = EXT_MAP.get(mime, "bin")
+    filename = f"{_uuid.uuid4().hex}.{ext}"
+    orig_name: str | None = body.get("orig_name") or None
+    session_id: str | None = body.get("session") or None
+
+    dest = store.attachments_dir() / filename
+    try:
+        dest.write_bytes(raw)
+    except OSError as e:
+        raise HTTPException(500, f"could not store attachment: {e}")
+
+    att_id = store.add_attachment(
+        kind=kind,
+        filename=filename,
+        mime=mime,
+        orig_name=orig_name,
+        sha256=sha256_hex,
+        size_bytes=len(raw),
+        session_id=session_id,
+    )
+    return {
+        "id": att_id,
+        "kind": kind,
+        "mime": mime,
+        "orig_name": orig_name,
+        "size_bytes": len(raw),
+        "url": f"/api/chat/attachment/{att_id}",
+    }
+
+
+@app.get("/api/chat/attachment/{att_id}")
+def api_chat_attachment_get(att_id: int):
+    """Serve a stored attachment file."""
+    row = store.get_attachment(att_id)
+    if row is None:
+        raise HTTPException(404, "attachment not found")
+    path = store.attachments_dir() / row["filename"]
+    if not path.exists():
+        raise HTTPException(404, "attachment file missing")
+    fname = row["orig_name"] or row["filename"]
+    return FileResponse(
+        path,
+        media_type=row["mime"],
+        headers={"Content-Disposition": f'inline; filename="{fname}"'},
+    )
+
+
+@app.delete("/api/chat/attachment/{att_id}")
+def api_chat_attachment_delete(att_id: int):
+    """Delete an attachment row and its file. Idempotent (404 never raised)."""
+    row = store.delete_attachment(att_id)
+    if row is not None:
+        path = store.attachments_dir() / row["filename"]
+        path.unlink(missing_ok=True)
+    return {"status": "ok"}
+
+
 @app.post("/api/chat/transcribe")
 async def api_chat_transcribe(request: Request):
     """Decode browser-recorded audio (webm/opus or wav), hand the temp file
@@ -4308,25 +4428,60 @@ async def api_chat_transcribe(request: Request):
 
 
 @app.get("/api/chat/history")
-def api_chat_history(limit: int = 50):
+def api_chat_history(limit: int = 50, session: str | None = None):
     if limit < 1 or limit > 500:
         raise HTTPException(400, "limit must be 1..500")
-    c = store._connect()  # noqa: SLF001
-    rows = c.execute(
-        "SELECT id, ts, user_text, axi_text FROM conversations "
-        "ORDER BY ts DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    # Oldest first for natural chat rendering.
-    return [
-        {
-            "id": r["id"],
-            "ts": r["ts"],
-            "user_text": r["user_text"],
-            "axi_text": r["axi_text"],
-        }
-        for r in reversed(rows)
-    ]
+
+    def _read():
+        c = store._connect()  # noqa: SLF001
+        # `session` scopes the history to a domain chat (e.g. session=health →
+        # only the Salud chat's turns). Without it the general chat shows all.
+        if session:
+            rows = c.execute(
+                "SELECT id, ts, user_text, axi_text FROM conversations "
+                "WHERE session_id = ? ORDER BY ts DESC LIMIT ?",
+                (session, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT id, ts, user_text, axi_text FROM conversations "
+                "ORDER BY ts DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        # Fetch attachments for all returned conversations in one query.
+        conv_ids = [r["id"] for r in rows]
+        attachments_by_conv = store.list_attachments_for_convs(conv_ids)
+        # Oldest first for natural chat rendering.
+        return [
+            {
+                "id": r["id"],
+                "ts": r["ts"],
+                "user_text": r["user_text"],
+                "axi_text": r["axi_text"],
+                "attachments": [
+                    {
+                        "id": a["id"],
+                        "kind": a["kind"],
+                        "mime": a["mime"],
+                        "orig_name": a["orig_name"],
+                        "url": f"/api/chat/attachment/{a['id']}",
+                    }
+                    for a in attachments_by_conv.get(r["id"], [])
+                ],
+            }
+            for r in reversed(rows)
+        ]
+
+    try:
+        return _read()
+    except Exception as exc:  # noqa: BLE001
+        # The dashboard's direct store reads do NOT go through ConversationMemory's
+        # recovery ladder. If the connection latched into a "deferred error
+        # condition" (healthy file, transient hmac/decrypt race), reset it and
+        # retry once before surfacing an error.
+        if store.is_corruption_error(exc) and store.reset_connection():
+            return _read()
+        raise
 
 
 # ────────────────────────── PWA assets ────────────────────────────────
