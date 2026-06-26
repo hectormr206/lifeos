@@ -661,7 +661,7 @@ class Daemon:
                     except Exception:  # noqa: BLE001
                         pass
                     try:
-                        _intents.INTENT_HANDLERS[intent_name](self)
+                        _intents.INTENT_HANDLERS[intent_name](self, params)
                         notify("Axi", f"Acción ejecutada: {intent_name}",
                                transient=True, timeout_ms=2500)
                         self._set_state("idle")

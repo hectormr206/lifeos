@@ -246,3 +246,58 @@ def test_nano_sleep_onset_only_falls_to_note(monkeypatch):
     # Must persist as note (not vital) since sleep_hours is null and kind is note.
     assert len(captured_kind) >= 1
     assert captured_kind[0] == "note"
+
+
+# ─── dev_develop chat wiring ──────────────────────────────────────────────────
+
+
+def test_chat_dev_develop_returns_ack(client, monkeypatch):
+    """A 'desarrollá X' message must return an immediate ack without calling brain.
+
+    The dashboard spawns a REAL daemon thread that calls run_dev_task. We mock
+    run_dev_task to record the goal and signal an Event, then wait briefly for the
+    daemon thread to run. We intentionally do NOT patch the global
+    ``threading.Thread`` — doing so breaks the FastAPI TestClient / anyio portal
+    teardown and hangs the interpreter on exit.
+    """
+    import threading
+
+    from axi import brain, dev_task
+
+    brain_called: list[str] = []
+    monkeypatch.setattr(brain, "ask", lambda prompt, **kw: brain_called.append("ask") or "brain reply")
+    monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: brain_called.append("tools") or "brain reply")
+
+    dev_task_calls: list[str] = []
+    done = threading.Event()
+
+    def _fake_run_dev_task(goal):
+        dev_task_calls.append(goal)
+        done.set()
+        return "ok"
+
+    monkeypatch.setattr(dev_task, "run_dev_task", _fake_run_dev_task)
+
+    r = client.post("/api/chat/ask", json={"text": "axi, desarrollá una función que sume"})
+    assert r.status_code == 200
+    body = r.json()
+
+    assert "segundo plano" in body["answer"].lower() or "dev-results" in body["answer"].lower()
+    assert not brain_called, "brain must NOT be called for dev_develop"
+    # The daemon thread runs run_dev_task; give it a moment to fire.
+    assert done.wait(timeout=5), "dev_task.run_dev_task was not invoked by the background thread"
+    assert dev_task_calls and dev_task_calls[0].strip(), "expected a non-empty goal passed to run_dev_task"
+
+
+def test_chat_non_dev_text_goes_to_brain(client, monkeypatch):
+    """Normal conversation text must still reach the brain (not intercepted as dev_develop)."""
+    from axi import brain
+
+    brain_called: list[str] = []
+    monkeypatch.setattr(brain, "ask", lambda prompt, **kw: brain_called.append(prompt) or "respuesta")
+    monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: brain_called.append(prompt) or "respuesta")
+
+    # Use a plain text that can't match dev_develop (no "axi" prefix, no develop verb)
+    r = client.post("/api/chat/ask", json={"text": "hola"})
+    assert r.status_code == 200
+    assert len(brain_called) > 0, "brain must be called for normal conversation"

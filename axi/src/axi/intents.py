@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any, Callable
@@ -57,6 +58,13 @@ _IMPERATIVES = (
     "limpia", "limpiar", "limpiá",
     "olvida", "olvidar", "olvidá",
     "sal", "salir", "salí",
+    # dev-director verbs
+    "desarrollá", "desarrolla", "desarrollar",
+    "programá", "programa", "programar",
+    "implementá", "implementa", "implementar",
+    "codeá", "codea", "codear",
+    "creá", "crea", "crear",
+    "hacé", "hace", "hacer",
 )
 
 # Trigger word at the start. We accept several Whisper-misheard variants
@@ -107,6 +115,17 @@ _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^(sal|salir|salí)\s+(del\s+)?(modo\s+)?juego\b", re.IGNORECASE), "game_off"),
     # conversation clear
     (re.compile(r"^(limpia|limpiar|limpiá|borra|borrar|borrá|olvida|olvidar|olvidá)\s+(la\s+)?(conversaci[oó]n|historial|memoria(\s+corta)?)\b", re.IGNORECASE), "clear_conversation"),
+    # dev-director: autonomous development
+    # Matches: desarrollá/programá/implementá/codeá <goal>
+    #          creá/hacé un programa/función/script/módulo/clase que/para <goal>
+    (re.compile(
+        r"^(?:"
+        r"(?:desarrollá|desarrolla|desarrollar|programá|programa|programar"
+        r"|implementá|implementa|implementar|codeá|codea|codear)"
+        r"|(?:creá|crea|crear|hacé|hace|hacer)\s+(?:un[ao]?\s+)?(?:programa|función|script|módulo|clase|api|herramienta|utilidad)\s+(?:que|para)"
+        r")\s+(?P<goal>\S.*)$",
+        re.IGNORECASE | re.DOTALL,
+    ), "dev_develop"),
 )
 
 
@@ -120,6 +139,7 @@ _KNOWN_INTENTS = (
     "game_on",
     "game_off",
     "clear_conversation",
+    "dev_develop",
 )
 
 
@@ -170,8 +190,10 @@ def classify(text: str, *, brain_ask: Callable[..., str] | None = None) -> tuple
         return None
 
     for pattern, name in _RULES:
-        if pattern.search(rest):
-            return name, {}
+        m = pattern.search(rest)
+        if m:
+            params = {k: v for k, v in m.groupdict().items() if v is not None}
+            return name, params
 
     # Brain fallback. The prompt is intentionally tiny so the model can answer
     # in <1 s; we still cap with a 2 s wall clock because llama-server can
@@ -270,39 +292,84 @@ def _script(name: str) -> str:
     return str(SCRIPT_DIR / name)
 
 
-def _h_meeting_start(daemon) -> str:
+def _h_meeting_start(daemon, params: dict | None = None) -> str:
     return _send_cmd(daemon, "meeting_start")
 
 
-def _h_meeting_stop(daemon) -> str:
+def _h_meeting_stop(daemon, params: dict | None = None) -> str:
     return _send_cmd(daemon, "meeting_stop")
 
 
-def _h_open_dashboard(daemon) -> str:
+def _h_open_dashboard(daemon, params: dict | None = None) -> str:
     return _popen(_script("axi-dashboard-open"))
 
 
-def _h_translate_on(daemon) -> str:
+def _h_translate_on(daemon, params: dict | None = None) -> str:
     return _popen(_script("axi-translate-on"))
 
 
-def _h_translate_off(daemon) -> str:
+def _h_translate_off(daemon, params: dict | None = None) -> str:
     return _popen(_script("axi-translate-off"))
 
 
-def _h_game_on(daemon) -> str:
+def _h_game_on(daemon, params: dict | None = None) -> str:
     return _popen(_script("axi-game-on"))
 
 
-def _h_game_off(daemon) -> str:
+def _h_game_off(daemon, params: dict | None = None) -> str:
     return _popen(_script("axi-game-off"))
 
 
-def _h_clear_conversation(daemon) -> str:
+def _h_clear_conversation(daemon, params: dict | None = None) -> str:
     return _send_cmd(daemon, "clear")
 
 
-INTENT_HANDLERS: dict[str, Callable[[Any], str]] = {
+def _h_dev_develop(daemon, params: dict | None = None) -> str:
+    goal = ((params or {}).get("goal") or "").strip()
+    if not goal:
+        try:
+            from axi.output import notify  # noqa: PLC0415
+            notify("Axi", "No entendí qué querés que desarrolle.", timeout_ms=3000)
+        except Exception:  # noqa: BLE001
+            pass
+        return "dev_develop:no-goal"
+
+    try:
+        from axi.output import notify  # noqa: PLC0415
+        notify("Axi", "Dale, me pongo a desarrollar eso, te aviso cuando termine.",
+               transient=True, timeout_ms=3000)
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        from axi.speak import speak as _speak  # noqa: PLC0415
+        _speak("Dale, me pongo a desarrollar eso, te aviso cuando termine.")
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _run_in_bg() -> None:
+        try:
+            from axi import dev_task  # noqa: PLC0415
+            summary = dev_task.run_dev_task(goal)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("dev_develop background task failed: %s", exc)
+            summary = f"Error al desarrollar '{goal}': {exc}"
+        try:
+            from axi.output import notify  # noqa: PLC0415
+            notify("Axi ✓ dev", summary[:300], timeout_ms=8000)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from axi.speak import speak as _speak  # noqa: PLC0415
+            _speak(summary[:300])
+        except Exception:  # noqa: BLE001
+            pass
+
+    threading.Thread(target=_run_in_bg, daemon=True).start()
+    return "dev_develop:started"
+
+
+INTENT_HANDLERS: dict[str, Callable[..., str]] = {
     "meeting_start": _h_meeting_start,
     "meeting_stop": _h_meeting_stop,
     "open_dashboard": _h_open_dashboard,
@@ -311,4 +378,5 @@ INTENT_HANDLERS: dict[str, Callable[[Any], str]] = {
     "game_on": _h_game_on,
     "game_off": _h_game_off,
     "clear_conversation": _h_clear_conversation,
+    "dev_develop": _h_dev_develop,
 }

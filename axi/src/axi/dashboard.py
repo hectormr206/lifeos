@@ -3980,6 +3980,38 @@ async def api_chat_ask(request: Request):
         return {"answer": answer, "latency_ms": latency_ms, "spoke": False, "audio_b64": None}
 
     else:
+        # ── dev_develop intent intercept ──────────────────────────────────
+        # If the user typed a develop command ("desarrollá X"), kick it off in
+        # a background thread and return an immediate ack — never block the HTTP
+        # response for a multi-minute director loop.
+        try:
+            from axi import intents as _intents_mod  # noqa: PLC0415
+            _dev_intent_result = _intents_mod.classify(text)
+            if _dev_intent_result is not None and _dev_intent_result[0] == "dev_develop":
+                _dev_goal = (_dev_intent_result[1] or {}).get("goal", "").strip()
+                import threading as _threading  # noqa: PLC0415
+                from axi import dev_task as _dev_task_mod  # noqa: PLC0415
+
+                def _run_dev_bg(_goal: str = _dev_goal) -> None:
+                    _dev_task_mod.run_dev_task(_goal)
+
+                _threading.Thread(target=_run_dev_bg, daemon=True).start()
+                _dev_ack = (
+                    "Dale, lo estoy desarrollando en segundo plano — "
+                    "te dejo el resultado en dev-results y te aviso."
+                )
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, _dev_ack, has_screenshot=False)
+                except Exception:  # noqa: BLE001
+                    pass
+                stage_holder[0] = "dev_develop"
+                _record_metric()
+                return {"answer": _dev_ack, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None}
+        except Exception as _dev_exc:  # noqa: BLE001
+            log.warning("dev_develop chat intercept failed: %s", _dev_exc)
+
         # ── Conversation mode: brain.ask (no guardrail) ───────────────────
         # The nano extractor is intentionally skipped here. The user is in
         # free-conversation mode — routing to nano would silently save data
