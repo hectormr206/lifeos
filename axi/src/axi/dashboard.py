@@ -2520,7 +2520,69 @@ def _get_chat_memory():
 
 @app.get("/chat", response_class=HTMLResponse)
 def chat_page(request: Request):
-    return templates.TemplateResponse(request, "chat.html", {})
+    # `domain` scopes the chat (e.g. ?domain=health → Salud chat). Default is
+    # the general assistant chat. The template branches on this single var so we
+    # do not fork the whole page.
+    domain = request.query_params.get("domain") or ""
+    return templates.TemplateResponse(request, "chat.html", {"domain": domain})
+
+
+@app.get("/chat/salud", response_class=HTMLResponse)
+def chat_salud_page(request: Request):
+    """SALUD (health) specialized chat — registers and queries health data."""
+    return templates.TemplateResponse(request, "chat.html", {"domain": "health"})
+
+
+@app.post("/api/health/chat")
+async def api_health_chat(request: Request):
+    """SALUD specialized chat endpoint.
+
+    Routes the message through health_chat.handle_health_message (4B brain,
+    health-scoped). Registers vitals, answers date-aware queries about the
+    user's health data, or rejects off-topic input — all scoped to Salud.
+    Persists the turn to the shared ConversationMemory like /api/chat/ask.
+    """
+    if not bool(config.get("chat_enabled", True)):
+        raise HTTPException(503, "chat is disabled (chat_enabled=false)")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    if len(text) > 8000:
+        raise HTTPException(400, "text too long (max 8000 chars)")
+
+    from axi import health_chat
+
+    # "now" = current time in the user's configured timezone (date-aware queries
+    # must resolve "diciembre" against the real current year).
+    tz_name = str(config.get("timezone", "America/Mexico_City"))
+    try:
+        now = datetime.now(ZoneInfo(tz_name))
+    except Exception:  # noqa: BLE001 — bad tz string → fall back
+        now = datetime.now(ZoneInfo("America/Mexico_City"))
+
+    start = time.monotonic()
+    result = health_chat.handle_health_message(text, now=now)
+    latency_ms = round((time.monotonic() - start) * 1000)
+
+    answer = result.get("answer", "")
+    # Persist the turn to the shared chat memory (same store as /api/chat/ask).
+    try:
+        _get_chat_memory().add(text, answer, has_screenshot=False)
+    except Exception:  # noqa: BLE001 — memory write must never fail the reply
+        log.warning("health chat memory write failed", exc_info=True)
+
+    return {
+        "answer": answer,
+        "mode": result.get("mode"),
+        "entry_ids": result.get("entry_ids", []),
+        "latency_ms": latency_ms,
+    }
 
 
 # ─── Nano-agent fallback (called from chat_ask when all regex miss) ────
