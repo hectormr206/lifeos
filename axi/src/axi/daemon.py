@@ -921,6 +921,11 @@ class Daemon:
         engine = str(config.get("wakeword_engine", "openwakeword"))
         model_path = str(config.get("wakeword_model_path", "alexa"))
         threshold = float(config.get("wakeword_threshold", 0.5))
+        # How long a pause is allowed mid-utterance before the segment is
+        # considered finished. The 1.0 s default cut users off when they paused
+        # to think; a longer window lets them finish ("Alexa"-style).
+        _silence_s = float(config.get("wakeword_silence_seconds", 1.8))
+        _max_seg_s = float(config.get("wakeword_max_segment_seconds", 15.0))
 
         # Feature C: follow-up window predicate — injected into the listener so
         # it can accept speech without the wake word while the window is open.
@@ -942,6 +947,8 @@ class Daemon:
                     oww_model_path=model_path,
                     oww_threshold=threshold,
                     followup_active_fn=_followup_active_fn,
+                    silence_duration_s=_silence_s,
+                    max_segment_s=_max_seg_s,
                 )
                 log.info(
                     "oww wake-word listener started (model=%s threshold=%.2f)",
@@ -960,6 +967,8 @@ class Daemon:
                 transcribe_fn=_wakeword_transcribe_fn,
                 on_wake=_on_wake,
                 followup_active_fn=_followup_active_fn,
+                silence_duration_s=_silence_s,
+                max_segment_s=_max_seg_s,
             )
 
         self._wakeword_listener = listener
@@ -1152,7 +1161,7 @@ class Daemon:
                     # triggers — e.g. catching the user's phone-call speech and
                     # replying to it. Gating on '?' eliminates that.
                     if self._should_open_followup(answer):
-                        _window = float(config.get("wakeword_followup_seconds", 7.0))
+                        _window = float(config.get("wakeword_followup_seconds", 12.0))
                         self._followup_until = time.time() + _window
                         log.info(
                             "wakeword: follow-up window open for %.1f s (Axi asked a question)",
@@ -1229,6 +1238,30 @@ def _handle_cmd(daemon: Daemon, cmd: str) -> tuple[str, bool]:
     return f"unknown: {cmd!r}", False
 
 
+def _configure_web_research() -> None:
+    """Wire SearXNG + fetch into lifeos.web for THIS process.
+
+    web_research DI state is per-process. The dashboard configures its own
+    copy; the daemon (voice path) is a SEPARATE process and must configure its
+    own too, otherwise lifeos.web.is_enabled() is always False here and the
+    wake-word co-pilot never web-searches. Mirrors dashboard.py.
+    """
+    try:
+        import lifeos.web as web_research  # noqa: PLC0415
+        from lifeos.web.searxng import SearXNGAdapter  # noqa: PLC0415
+        import lifeos.web.fetch as _web_fetch  # noqa: PLC0415
+        _base = str(config.get("searxng_url", web_research.SEARXNG_URL))
+        _adapter = SearXNGAdapter(base_url=_base)
+        web_research.configure(
+            search_fn=_adapter.search,
+            read_fn=_web_fetch.read,
+            enabled_fn=lambda: bool(config.get("web_research_enabled", True)),
+        )
+        log.info("web research configured (daemon): base_url=%s", _base)
+    except Exception:  # noqa: BLE001
+        log.exception("web research failed to configure in daemon — voice search disabled")
+
+
 def serve() -> int:
     from axi.logging_setup import setup_logging
     setup_logging(level=logging.INFO)
@@ -1237,6 +1270,9 @@ def serve() -> int:
     # The dashboard and other reader processes must never call this — only the
     # daemon (single writer) is allowed to run threads that write memory.db.
     store.enable_embed_writer()
+
+    # Configure web research in THIS process so the voice co-pilot can search.
+    _configure_web_research()
 
     SOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     if SOCK_PATH.exists():
