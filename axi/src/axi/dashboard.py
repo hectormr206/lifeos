@@ -2533,14 +2533,13 @@ def chat_salud_page(request: Request):
     return templates.TemplateResponse(request, "chat.html", {"domain": "health"})
 
 
-@app.post("/api/health/chat")
-async def api_health_chat(request: Request):
-    """SALUD specialized chat endpoint.
+async def _domain_chat_response(spec, request: Request) -> dict:
+    """Shared wrapper for EVERY specialized-domain chat (Salud, Finanzas, …).
 
-    Routes the message through health_chat.handle_health_message (4B brain,
-    health-scoped). Registers vitals, answers date-aware queries about the
-    user's health data, or rejects off-topic input — all scoped to Salud.
-    Persists the turn to the shared ConversationMemory like /api/chat/ask.
+    Parses/validates the body, runs the generic domain_chat engine for *spec*,
+    persists the turn scoped to spec.key, links attachments, and returns the
+    standard {answer, mode, entry_ids, latency_ms} payload. One wrapper for all
+    domains — adding a domain never duplicates this.
     """
     if not bool(config.get("chat_enabled", True)):
         raise HTTPException(503, "chat is disabled (chat_enabled=false)")
@@ -2560,7 +2559,7 @@ async def api_health_chat(request: Request):
     if len(text) > 8000:
         raise HTTPException(400, "text too long (max 8000 chars)")
 
-    from axi import health_chat
+    from axi import domain_chat
 
     # "now" = current time in the user's configured timezone (date-aware queries
     # must resolve "diciembre" against the real current year).
@@ -2571,17 +2570,19 @@ async def api_health_chat(request: Request):
         now = datetime.now(ZoneInfo("America/Mexico_City"))
 
     start = time.monotonic()
-    result = health_chat.handle_health_message(text, now=now)
+    result = domain_chat.handle_message(spec, text, now=now)
     latency_ms = round((time.monotonic() - start) * 1000)
 
     answer = result.get("answer", "")
-    # Persist the turn to the shared chat memory (same store as /api/chat/ask).
+    # Persist the turn to the shared chat memory, scoped to this domain.
     try:
-        conv_id, _ = _get_chat_memory().add(text, answer, has_screenshot=False, session_id="health")
+        conv_id, _ = _get_chat_memory().add(
+            text, answer, has_screenshot=False, session_id=spec.key
+        )
         if attachment_ids:
             store.link_attachments(conv_id, attachment_ids)
     except Exception:  # noqa: BLE001 — memory write must never fail the reply
-        log.warning("health chat memory write failed", exc_info=True)
+        log.warning("domain chat[%s] memory write failed", spec.key, exc_info=True)
 
     return {
         "answer": answer,
@@ -2589,6 +2590,24 @@ async def api_health_chat(request: Request):
         "entry_ids": result.get("entry_ids", []),
         "latency_ms": latency_ms,
     }
+
+
+@app.post("/api/chat/domain/{domain}")
+async def api_domain_chat(domain: str, request: Request):
+    """Generic specialized-domain chat endpoint. Resolves the DomainSpec from the
+    registry and runs the shared engine — ONE endpoint for every domain chat."""
+    from axi.domain_registry import get_spec
+    spec = get_spec(domain)
+    if spec is None:
+        raise HTTPException(404, f"unknown domain: {domain!r}")
+    return await _domain_chat_response(spec, request)
+
+
+@app.post("/api/health/chat")
+async def api_health_chat(request: Request):
+    """Backward-compatible Salud alias → the generic domain engine."""
+    from axi.health_chat import HEALTH_SPEC
+    return await _domain_chat_response(HEALTH_SPEC, request)
 
 
 # ─── Nano-agent fallback (called from chat_ask when all regex miss) ────
