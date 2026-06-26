@@ -14,6 +14,7 @@ codec wake-up delay (FreeClip earbuds clip the first ~1 s otherwise).
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -64,8 +65,42 @@ def _piper_model_path(lang: str | None = None) -> Path:
 WAKE_SILENCE_S = 2.5
 
 
+# ── Markdown → speech sanitizer ──────────────────────────────────────────────
+# The brain formats answers in Markdown (e.g. **bold**, `code`, # headings).
+# Piper reads those symbols literally ("**" -> "asterisco asterisco"), so every
+# string heading into TTS must be stripped of Markdown first. This is TTS-only:
+# the on-screen / stored text keeps its original formatting.
+_MD_FENCE_RE = re.compile(r"```[^\n]*\n?")          # ``` fenced code delimiters
+_MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")  # [text](url) / ![alt](url) -> text
+_MD_HEAD_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s*")    # # / ## headings
+_MD_BULLET_RE = re.compile(r"(?m)^\s*[-*+]\s+")        # -, *, + bullets
+_MD_EMPH_RE = re.compile(r"\*\*\*|\*\*|\*|___|__|_|~~|`")  # emphasis / inline-code markers
+_MULTISPACE_RE = re.compile(r"[ \t]{2,}")
+
+
+def _clean_for_tts(text: str) -> str:
+    """Strip Markdown so the TTS engine does not read symbols aloud.
+
+    Removes code fences, emphasis markers (**, *, _, ~~, `), heading hashes and
+    bullet markers, and unwraps links to their visible text. Leaves the words
+    intact. Returns the cleaned, whitespace-collapsed string.
+    """
+    if not text:
+        return text
+    t = _MD_FENCE_RE.sub("", text)
+    t = _MD_LINK_RE.sub(r"\1", t)
+    t = _MD_HEAD_RE.sub("", t)
+    t = _MD_BULLET_RE.sub("", t)
+    t = _MD_EMPH_RE.sub("", t)
+    t = _MULTISPACE_RE.sub(" ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
 def _piper_synthesize(text: str, out_wav: Path) -> bool:
     from axi import config as _cfg  # noqa: PLC0415 — lazy to avoid import cycle
+    # Strip Markdown so Piper never voices symbols like "**" or "`".
+    text = _clean_for_tts(text)
     _lang = str(_cfg.get("language", "es-MX"))
     model = _piper_model_path(_lang)
     if not shutil.which(PIPER_BIN):
