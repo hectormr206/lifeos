@@ -166,6 +166,8 @@ HEALTH_SPEC = DomainSpec(
     store_list_recent=lambda **kw: health_entries.list_recent(**kw),
     register_prefix="Anotado en Salud",
     off_topic_msg="Eso no es de Salud. Probá en el apartado correspondiente.",
+    router_hint="salud física/médica: presión, glucosa, peso, pulso, sueño, "
+                "síntomas, dolor, enfermedad, medicamentos, estudios médicos",
 )
 
 

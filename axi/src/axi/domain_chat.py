@@ -51,6 +51,8 @@ class DomainSpec:
     format_record      — (entry, local_date_str) -> one line for the query
                          prompt. Each domain shows its own fields (health uses
                          `data`; finance uses amount/currency/category).
+    router_hint        — short description of what belongs to this domain, used
+                         to auto-generate the general chat's router prompt.
     """
     key: str
     name: str
@@ -61,6 +63,7 @@ class DomainSpec:
     register_prefix: str
     off_topic_msg: str
     format_record: Callable[[Any, str], str]
+    router_hint: str
 
 
 # ─── shared helpers (domain-agnostic) ───────────────────────────────────────

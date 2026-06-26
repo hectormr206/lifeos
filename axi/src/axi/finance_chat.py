@@ -131,4 +131,6 @@ FINANCE_SPEC = DomainSpec(
     store_list_recent=lambda **kw: finance_entries.list_recent(**kw),
     register_prefix="Anotado en Finanzas",
     off_topic_msg="Eso no es de Finanzas. Probá en el apartado correspondiente.",
+    router_hint="dinero: gastos, ingresos, ahorros, pagos de deuda, sueldo, "
+                "precios, compras, presupuesto, cuentas",
 )

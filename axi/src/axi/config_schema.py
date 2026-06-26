@@ -279,6 +279,12 @@ FIELDS: tuple[ConfigField, ...] = (
         "If false, the in-dashboard text chat endpoints return 503 (P-chat kill switch).",
     ),
     ConfigField(
+        "chat_autoroute_enabled", "boolean", True,
+        "If true (default), the general chat auto-routes domain data (a measurement, "
+        "a gasto, a question about your records) to the matching domain spec before "
+        "falling back to the general brain. Set false to always use the general brain.",
+    ),
+    ConfigField(
         "chat_tts_enabled", "boolean", True,
         "If false, the chat 'speak' toggle is ignored — voice output never plays even "
         "when the request asks for it (P-chat-multimodal kill switch).",
