@@ -55,6 +55,22 @@ def test_route_dispatches_to_finance(monkeypatch):
     assert created[0]["kind"] == "expense"
 
 
+def test_classify_returns_uncertain():
+    assert chat_router.classify_domain("dato ambiguo", _brain(router_returns="uncertain")) == "uncertain"
+
+
+def test_route_returns_clarify_when_uncertain():
+    res = chat_router.route_and_handle(
+        "me pasó algo importante hoy", NOW, brain_ask=_brain(router_returns="uncertain"),
+    )
+    assert res is not None
+    assert res["mode"] == "clarify"
+    assert res["original_text"] == "me pasó algo importante hoy"
+    assert res["options"]                                  # has domain options
+    assert any(o["key"] == "health" for o in res["options"])
+    assert all("key" in o and "name" in o for o in res["options"])
+
+
 def test_route_yields_to_general_when_classified_general():
     res = chat_router.route_and_handle(
         "contame un chiste", NOW, brain_ask=_brain(router_returns="general"),

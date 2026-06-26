@@ -113,6 +113,21 @@
           <template x-if="m.role === 'axi'">
             <div>
               <div class="md" x-html="renderMarkdown(m.text)"></div>
+              <!-- Disambiguation: domain option buttons (hidden once chosen). -->
+              <template x-if="m.clarify && !m.clarify.resolved">
+                <div class="flex flex-wrap gap-2 mt-3">
+                  <template x-for="opt in m.clarify.options" :key="opt.key">
+                    <button type="button" @click="chooseDomain(m, opt.key)"
+                            :disabled="pending"
+                            class="btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;"
+                            x-text="opt.name"></button>
+                  </template>
+                  <button type="button" @click="chooseDomain(m, '__none__')"
+                          :disabled="pending"
+                          class="btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem; opacity: 0.8;"
+                  >No guardar</button>
+                </div>
+              </template>
               <template x-if="m.audio_b64">
                 <audio
                   :src="'data:audio/wav;base64,' + m.audio_b64"
@@ -785,6 +800,42 @@ function chatApp() {
       if (att && att.kind === 'image') this.lightbox = att.url;
     },
 
+    async chooseDomain(msg, key) {
+      // The user picked a domain for an ambiguous message (or "no guardar").
+      // Re-process the ORIGINAL text through that domain — the same endpoint a
+      // specialized chat uses — so it is extracted and stored correctly.
+      if (!msg.clarify || msg.clarify.resolved) return;
+      msg.clarify.resolved = true;  // hide the buttons
+      if (key === '__none__') {
+        msg.text = (msg.text || '') + '\n\n_(Listo, no lo guardé.)_';
+        return;
+      }
+      const original = msg.clarify.originalText;
+      this.pending = true;
+      try {
+        const r = await fetch('/api/chat/domain/' + key, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: original }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + await r.text());
+        const data = await r.json();
+        this.lastLatencyMs = data.latency_ms;
+        this.messages.push({ id: 'c' + Date.now() + 'a', role: 'axi', text: data.answer });
+        if (navigator.vibrate) navigator.vibrate(30);
+        try {
+          const store = Alpine.$data(document.querySelector('main'));
+          if (store && store.refresh) store.refresh();
+        } catch (e) { /* not fatal */ }
+      } catch (e) {
+        this.error = 'No pude guardarlo ahí: ' + (e.message || e);
+        msg.clarify.resolved = false;  // let the user try again
+      } finally {
+        this.pending = false;
+        this.$nextTick(() => this.scrollToBottom());
+      }
+    },
+
     async loadHistory() {
       this.loading = true;
       // Skip the fetch entirely if we already know the backend is
@@ -1082,6 +1133,11 @@ function chatApp() {
           role: 'axi',
           text: data.answer,
           audio_b64: data.audio_b64 || null,
+          // Disambiguation: Axi wasn't sure where to save this. Render the
+          // domain option buttons; clicking one re-processes via that domain.
+          clarify: data.mode === 'clarify'
+            ? { options: data.options || [], originalText: data.original_text || '', resolved: false }
+            : null,
         });
         // Auto-play the synthesized audio (when speak toggle was on). Plays
         // through the BROWSER speakers — laptop or phone speakers depending

@@ -33,17 +33,22 @@ def _build_router_system() -> str:
     lines = [f"- {spec.key}: {spec.router_hint}" for spec in DOMAINS.values()]
     return (
         "Eres el enrutador del chat de Axi. Clasifica el mensaje del usuario en "
-        "UNO de estos dominios, o en 'general'. Responde SOLO con la clave (una "
-        "palabra), sin explicar.\n\n"
+        "UNO de estos dominios, o en 'general', o en 'uncertain'. Responde SOLO "
+        "con la clave (una palabra), sin explicar.\n\n"
         "Dominios:\n" + "\n".join(lines) + "\n"
-        "- general: charla, saludos, preguntas abiertas, o cualquier cosa que NO "
-        "sea claramente registrar o consultar datos de un dominio.\n\n"
-        "Si dudas, responde 'general'. Clave del dominio:"
+        "- general: charla, saludos, opiniones, preguntas abiertas — cualquier cosa "
+        "que NO sea un dato personal para registrar.\n"
+        "- uncertain: SOLO cuando el mensaje claramente reporta un DATO PERSONAL o "
+        "un hecho que el usuario probablemente quiere registrar, pero NO podés "
+        "determinar con confianza a qué dominio pertenece. NO uses 'uncertain' para "
+        "charla ni preguntas.\n\n"
+        "Reglas: charla/pregunta → general. Dato claro de un dominio → su clave. "
+        "Dato personal pero ambiguo → uncertain. Clave:"
     )
 
 
 def classify_domain(text: str, brain_ask: Callable) -> str:
-    """Return a registered domain key, or 'general'. Never raises."""
+    """Return a registered domain key, 'uncertain', or 'general'. Never raises."""
     try:
         raw = brain_ask(text, system=_build_router_system(), think=False, max_tokens=8)
     except Exception as exc:  # noqa: BLE001
@@ -53,6 +58,8 @@ def classify_domain(text: str, brain_ask: Callable) -> str:
         return "general"
     # Take the first bare word and strip punctuation/casing.
     key = re.sub(r"[^a-z_]", "", raw.strip().lower().split()[0]) if raw.split() else ""
+    if key == "uncertain":
+        return "uncertain"
     from axi.domain_registry import get_spec
     return key if get_spec(key) is not None else "general"
 
@@ -75,6 +82,18 @@ def route_and_handle(
     key = classify_domain(text, brain_ask)
     if key == "general":
         return None
+
+    # Uncertain: it looks like data the user wants to keep, but the domain is
+    # ambiguous. Ask instead of guessing — the user picks and we re-process
+    # (the frontend re-POSTs to /api/chat/domain/{key}). Never silently lost.
+    if key == "uncertain":
+        from axi.domain_registry import DOMAINS
+        return {
+            "mode": "clarify",
+            "answer": "No estoy seguro de dónde guardar esto. ¿Querés registrarlo en alguno?",
+            "options": [{"key": s.key, "name": s.name} for s in DOMAINS.values()],
+            "original_text": text,
+        }
 
     from axi.domain_registry import get_spec
     spec = get_spec(key)
