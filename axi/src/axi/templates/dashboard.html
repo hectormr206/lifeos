@@ -2,6 +2,53 @@
 {% block nav_home %}active{% endblock %}
 
 {% block content %}
+<!-- ─── Mobile-first quick-capture home: greeting + domain tiles ─────────── -->
+<section class="mb-6">
+  <div class="flex items-center justify-between mb-3">
+    <h1 class="text-xl md:text-2xl font-semibold">Hola, Héctor 👋</h1>
+    <button onclick="document.getElementById('axi-mic-btn')?.click()"
+            class="btn" style="min-height:2.5rem;" title="Hablar con Axi">🎤</button>
+  </div>
+
+  <!-- General chat — cross-domain, full width -->
+  <a href="/chat" class="qc-general mb-3">
+    <span style="font-size:1.75rem">💬</span>
+    <div>
+      <div class="font-semibold">Charla general</div>
+      <div class="muted text-xs">Axi cruza todos tus recuerdos</div>
+    </div>
+    <span class="muted" style="margin-left:auto">→</span>
+  </a>
+
+  <!-- Domain tiles — 2 cols phone, 4 cols desktop, big touch targets -->
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <a href="/chat/salud"     class="qc-tile" style="--accent: var(--red)">    <span class="qc-ico">🩺</span><span>Salud</span></a>
+    <a href="/exercise"       class="qc-tile" style="--accent: var(--green)">  <span class="qc-ico">💪</span><span>Ejercicio</span></a>
+    <a href="/finance"        class="qc-tile" style="--accent: var(--amber)">  <span class="qc-ico">💰</span><span>Finanzas</span></a>
+    <a href="/relationships"  class="qc-tile" style="--accent: var(--pink)">   <span class="qc-ico">👥</span><span>Relaciones</span></a>
+    <a href="/spirituality"   class="qc-tile" style="--accent: var(--purple)"> <span class="qc-ico">🧘</span><span>Espiritualidad</span></a>
+    <a href="/learning"       class="qc-tile" style="--accent: var(--blue)">   <span class="qc-ico">📚</span><span>Aprendizaje</span></a>
+    <a href="/calendar"       class="qc-tile" style="--accent: var(--teal)">   <span class="qc-ico">📅</span><span>Calendario</span></a>
+    <a href="/health"         class="qc-tile" style="--accent: var(--muted)">  <span class="qc-ico">📊</span><span>Ver datos</span></a>
+  </div>
+</section>
+<style>
+  .qc-general {
+    display:flex; align-items:center; gap:0.85rem; padding:1rem 1.1rem;
+    background:var(--panel2); border:1px solid var(--border); border-left:4px solid var(--pink);
+    border-radius:0.75rem; transition:transform .1s, background .15s;
+  }
+  .qc-general:active { transform:scale(0.99); background:var(--panel); }
+  .qc-tile {
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:0.45rem; padding:1.15rem 0.5rem; text-align:center; font-size:0.9rem; font-weight:600;
+    background:var(--panel); border:1px solid var(--border); border-top:3px solid var(--accent);
+    border-radius:0.75rem; min-height:6.25rem; transition:transform .1s, background .15s;
+  }
+  .qc-tile:active { transform:scale(0.95); background:var(--panel2); }
+  .qc-ico { font-size:2rem; line-height:1; }
+</style>
+
 <template x-if="$store.snap">
   <div class="space-y-6">
 
