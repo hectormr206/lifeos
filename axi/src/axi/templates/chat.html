@@ -278,7 +278,6 @@
         placeholder="Escribe a Axi… (Enter = enviar · Shift+Enter = salto de línea)"
         class="flex-1 panel2 px-3 py-3 text-sm md:text-base resize-none leading-relaxed"
         style="border-radius: 0.5rem; max-height: 14rem; min-height: 3.75rem;"
-        :disabled="pending"
       ></textarea>
       <button
         type="submit"
@@ -829,7 +828,9 @@ function chatApp() {
       });
       this.draft = '';
       this.pendingImage = null;
-      this.$nextTick(() => { this.autogrow(); this.scrollToBottom(); });
+      // Keep focus in the input after sending so the user can keep typing
+      // without re-clicking (focus only moves if they click elsewhere).
+      this.$nextTick(() => { this.autogrow(); this.scrollToBottom(); this.$refs.input?.focus(); });
       this.pending = true;
       // Best-effort location capture before the request — non-blocking on
       // failure so a refused permission or slow GPS doesn't break sends.
