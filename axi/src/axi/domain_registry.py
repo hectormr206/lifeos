@@ -9,11 +9,16 @@ from __future__ import annotations
 from axi.domain_chat import DomainSpec
 from axi.finance_chat import FINANCE_SPEC
 from axi.health_chat import HEALTH_SPEC
+from axi.learning_chat import LEARN_SPEC
+from axi.spirituality_chat import SPIRIT_SPEC
 
-# domain key → spec. Future: EXERCISE_SPEC, RELATIONSHIPS_SPEC, …
+# domain key → spec. Pending (different stores): exercise (sessions),
+# relationships (interactions), calendar (events) — need store adapters.
 DOMAINS: dict[str, DomainSpec] = {
     HEALTH_SPEC.key: HEALTH_SPEC,
     FINANCE_SPEC.key: FINANCE_SPEC,
+    SPIRIT_SPEC.key: SPIRIT_SPEC,
+    LEARN_SPEC.key: LEARN_SPEC,
 }
 
 
