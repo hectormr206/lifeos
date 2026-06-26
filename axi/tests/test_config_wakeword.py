@@ -61,10 +61,10 @@ class TestWakewordFollowupEnabled:
 class TestWakewordFollowupSeconds:
     """Tests for the wakeword_followup_seconds config key."""
 
-    def test_default_is_7_seconds(self):
+    def test_default_is_12_seconds(self):
         d = defaults()
         assert "wakeword_followup_seconds" in d
-        assert d["wakeword_followup_seconds"] == pytest.approx(7.0)
+        assert d["wakeword_followup_seconds"] == pytest.approx(12.0)
 
     def test_field_exists_in_schema(self):
         assert "wakeword_followup_seconds" in set(field_names())

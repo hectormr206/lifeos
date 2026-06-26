@@ -365,6 +365,22 @@ FIELDS: tuple[ConfigField, ...] = (
         "configured (searxng_url reachable). Set to false to keep the vision-only "
         "game co-pilot path without web search.",
     ),
+    # ─────── wake-word speech segmentation ───────
+    ConfigField(
+        "wakeword_silence_seconds", "number", 1.8,
+        "Seconds of silence that mark the end of a spoken command to the wake-word "
+        "listener. Raise it if Axi cuts you off when you pause to think mid-sentence; "
+        "lower it for snappier turn-taking.",
+        minimum=0.4,
+        maximum=6.0,
+    ),
+    ConfigField(
+        "wakeword_max_segment_seconds", "number", 15.0,
+        "Hard cap (seconds) on a single spoken command before it is force-flushed "
+        "to transcription, so a very long utterance still gets processed.",
+        minimum=4.0,
+        maximum=60.0,
+    ),
     # ─────── wake-word always-on ───────
     ConfigField(
         "wakeword_always_on", "boolean", True,
@@ -379,7 +395,7 @@ FIELDS: tuple[ConfigField, ...] = (
         "opens during which the user can reply without repeating the wake word.",
     ),
     ConfigField(
-        "wakeword_followup_seconds", "number", 7.0,
+        "wakeword_followup_seconds", "number", 12.0,
         "Base duration (seconds) of the follow-up window opened after Axi speaks. "
         "If the answer ends with a question ('?'), 3 extra seconds are added automatically. "
         "Only active when wakeword_followup_enabled is true.",
