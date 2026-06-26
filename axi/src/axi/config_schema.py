@@ -392,6 +392,16 @@ FIELDS: tuple[ConfigField, ...] = (
         maximum=0.2,
     ),
     ConfigField(
+        "chat_min_rms", "number", 0.005,
+        "Minimum RMS energy a chat voice message must have before it is sent to "
+        "Whisper. Below this the audio is treated as silence and dropped (Whisper "
+        "would otherwise hallucinate YouTube-style filler over a near-silent clip). "
+        "Kept low so quiet speech still transcribes; raise it if silent clips still "
+        "produce garbage, lower it if quiet messages are ignored. 0 disables.",
+        minimum=0.0,
+        maximum=0.2,
+    ),
+    ConfigField(
         "wakeword_initial_prompt", "string", "",
         "Whisper initial_prompt for wake-word transcription. Empty by default: a "
         "non-empty bias like 'Axi.' made Whisper transcribe breaths/noise AS 'Axi', "
