@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Callable
 
 from axi import config, store
-from axi.brain import ask as brain_ask, SYSTEM_PROMPT, get_system_prompt as _get_system_prompt
+from axi.brain import ask as brain_ask, ask_with_tools as _brain_ask_with_tools, SYSTEM_PROMPT, get_system_prompt as _get_system_prompt
+from axi.web_tools import web_search_tool_def, web_search_handler
 from lifeos.localize import msg as _loc_msg
 from axi.clean import clean as clean_text
 from axi.extractor import extract_and_store
@@ -44,7 +45,9 @@ _GAME_COPILOT_SYSTEM_PROMPT = (
     "Mira la pantalla del juego y responde de forma breve y directa, sin Markdown, "
     "en una o dos frases. "
     "Si la pregunta es sobre lo que se ve en pantalla, describe solo lo relevante. "
-    "No uses saludos ni cierres."
+    "No uses saludos ni cierres. "
+    "Responde de forma concisa: 1-3 oraciones con lo esencial, ofrece ampliar si el usuario lo pide. "
+    "Tenés disponible la herramienta web_search para consultas actuales o verificables — decidí vos cuándo usarla."
 )
 
 # Game-aware system prompt — English product voice (for EN locale users).
@@ -53,7 +56,9 @@ _GAME_COPILOT_SYSTEM_PROMPT_EN = (
     "Look at the game screen and answer briefly and directly, no Markdown, "
     "in one or two sentences. "
     "If the question is about what is visible on screen, describe only what is relevant. "
-    "No greetings or sign-offs."
+    "No greetings or sign-offs. "
+    "Respond concisely: 1-3 sentences with the essentials, offer to expand if needed. "
+    "You have a web_search tool available for current or verifiable queries — decide when to use it."
 )
 
 # Brevity cap for the game co-pilot — gemma4-e2b-it runs on CPU in game-mode,
@@ -1018,36 +1023,31 @@ class Daemon:
                 timeout_ms=3000,
             )
 
-            # Slice 2: deterministic web-search pipeline for wake-word co-pilot.
-            # Feature B: web-search now runs whenever copilot is enabled, not only in
-            # game-mode. _game_active_now is retained for potential future use (e.g.
-            # logging or game-specific behaviour) but no longer gates the search branch.
-            _copilot_search_on = bool(config.get("copilot_web_search_enabled", True))
-            _game_active_now = _game_mode_active()
-            _web_search_branch = (
-                _copilot_on
-                and _copilot_search_on
-                and _copilot_search.needs_search(question)
-            )
-            if _web_search_branch:
+            # Phase 2a: model-driven web search — the brain decides whether to
+            # search. When copilot is enabled and lifeos.web is available, pass
+            # web_search to ask_with_tools so the brain autonomously calls it
+            # for any question that warrants a web lookup.
+            _web_enabled = False
+            if _copilot_on:
                 try:
-                    import lifeos.web as _web_research  # noqa: PLC0415
-                    _search_fn = _web_research.get_search_fn() if _web_research.is_enabled() else None
+                    import importlib  # noqa: PLC0415
+                    _web_research = importlib.import_module("lifeos.web")
+                    _web_enabled = _web_research.is_enabled()
                 except Exception:  # noqa: BLE001
-                    _search_fn = None
-            else:
-                _search_fn = None
+                    _web_enabled = False
 
-            if _web_search_branch and _search_fn is not None:
-                log.info("wakeword copilot web-search path: question=%r", question)
-                answer = _copilot_search.run(
-                    question,
-                    screenshot,
+            if _copilot_on and _web_enabled:
+                log.info("wakeword ask_with_tools path (web enabled): question=%r", question)
+                answer = _brain_ask_with_tools(
+                    ocr_question,
+                    tools=[web_search_tool_def()],
+                    tool_handlers={"web_search": web_search_handler},
+                    system=system,
+                    image_b64=screenshot,
+                    history=history,
+                    max_tokens=ask_max_tokens,
+                    tool_choice="auto",
                     lang=_lang,
-                    brain_ask=self.brain_ask,
-                    search_fn=_search_fn,
-                    window_title_fn=get_active_window_title,
-                    speak_interim=speak_text,
                 )
             else:
                 answer = self.brain_ask(

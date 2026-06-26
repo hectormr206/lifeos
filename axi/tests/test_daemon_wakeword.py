@@ -160,34 +160,39 @@ class TestSelectAskParams:
 
 
 # ---------------------------------------------------------------------------
-# Feature B: web-search branch condition (no longer requires game_active)
+# Phase 2a: _wakeword_ask routing — ask_with_tools vs brain_ask
 # ---------------------------------------------------------------------------
 
 
 class TestWebSearchBranchCondition:
-    """_wakeword_ask web-search branch fires when copilot_on=True regardless of game mode."""
+    """_wakeword_ask routes to ask_with_tools when copilot + web enabled; brain_ask otherwise."""
 
     def _run_wakeword_ask_and_capture_branch(
         self,
         *,
         game_active: bool,
         copilot_on: bool,
-        copilot_search_on: bool,
-        needs_search_result: bool,
-    ):
-        """Run _wakeword_ask with mocked dependencies; return whether web-search path ran."""
-        web_search_ran = []
+        web_enabled: bool,
+    ) -> dict:
+        """Run _wakeword_ask with mocked dependencies; return which path fired."""
+        ask_with_tools_called = []
+        brain_ask_called = []
         d = _make_daemon()
 
         def _fake_brain_ask(question, **kwargs):
+            brain_ask_called.append(True)
             return "la respuesta es 42"
 
         d.brain_ask = _fake_brain_ask
 
+        def _fake_ask_with_tools(prompt, **kwargs):
+            ask_with_tools_called.append(True)
+            return "web answer"
+
         with (
             patch("axi.daemon.config") as mock_config,
             patch("axi.daemon._game_mode_active", return_value=game_active),
-            patch("axi.daemon._copilot_search") as mock_cs,
+            patch("axi.daemon._brain_ask_with_tools", side_effect=_fake_ask_with_tools),
             patch("axi.daemon.speak_text"),
             patch("axi.daemon.notify"),
             patch("axi.daemon.to_clipboard"),
@@ -196,29 +201,30 @@ class TestWebSearchBranchCondition:
             mock_config.get.side_effect = lambda key, default=None: {
                 "game_copilot_enabled": copilot_on,
                 "language": "es-MX",
-                "copilot_web_search_enabled": copilot_search_on,
                 "fact_extraction_enabled": False,
                 "ocr_enabled": False,
                 "wakeword_followup_enabled": False,
             }.get(key, default)
 
-            mock_cs.needs_search.return_value = needs_search_result
-            mock_cs.run.side_effect = lambda *a, **kw: (
-                web_search_ran.append(True) or "web answer"
-            )
-
-            # Use a real web mock so the branch actually executes.
+            # Use a fake lifeos.web module with configurable is_enabled.
+            # NOTE: `import lifeos.web as x` compiles to IMPORT_FROM 'web',
+            # which does getattr(lifeos, 'web') — NOT a sys.modules lookup.
+            # We must patch both sys.modules["lifeos.web"] AND the attribute
+            # on the lifeos package object to guarantee isolation.
             import sys
             import types
+            import lifeos as _lifeos_pkg
 
             fake_web = types.ModuleType("lifeos.web")
-            fake_web.is_enabled = lambda: True
+            fake_web.is_enabled = lambda: web_enabled
             fake_web.get_search_fn = lambda: (lambda q: [])
             # Save and RESTORE the original module (not pop) so the real
             # lifeos.web global state does not leak to later tests that assert
             # on web_research enablement (test isolation).
             _orig_web = sys.modules.get("lifeos.web")
+            _orig_lifeos_web_attr = getattr(_lifeos_pkg, "web", None)
             sys.modules["lifeos.web"] = fake_web
+            _lifeos_pkg.web = fake_web
 
             try:
                 d._wakeword_ask("qué hago con esto", None)
@@ -230,38 +236,48 @@ class TestWebSearchBranchCondition:
                     sys.modules["lifeos.web"] = _orig_web
                 else:
                     sys.modules.pop("lifeos.web", None)
+                if _orig_lifeos_web_attr is not None:
+                    _lifeos_pkg.web = _orig_lifeos_web_attr
+                else:
+                    try:
+                        del _lifeos_pkg.web
+                    except AttributeError:
+                        pass
 
-        return bool(web_search_ran)
+        return {
+            "ask_with_tools_called": bool(ask_with_tools_called),
+            "brain_ask_called": bool(brain_ask_called),
+        }
 
-    def test_web_search_fires_without_game_active_when_copilot_on(self):
-        """Web-search branch runs when copilot_on=True even when game_active=False."""
-        ran = self._run_wakeword_ask_and_capture_branch(
+    def test_ask_with_tools_called_when_copilot_and_web_enabled(self):
+        """ask_with_tools fires (not brain_ask) when copilot_on=True and web enabled."""
+        result = self._run_wakeword_ask_and_capture_branch(
             game_active=False,
             copilot_on=True,
-            copilot_search_on=True,
-            needs_search_result=True,
+            web_enabled=True,
         )
-        assert ran, "Web-search branch should fire when copilot_on=True and needs_search=True"
+        assert result["ask_with_tools_called"], "ask_with_tools must be called when copilot+web enabled"
+        assert not result["brain_ask_called"], "brain_ask must NOT be called on the web-enabled path"
 
-    def test_web_search_does_not_fire_when_copilot_off(self):
-        """Web-search branch is skipped when copilot_on=False."""
-        ran = self._run_wakeword_ask_and_capture_branch(
+    def test_brain_ask_called_when_copilot_disabled(self):
+        """brain_ask fires (not ask_with_tools) when copilot_on=False."""
+        result = self._run_wakeword_ask_and_capture_branch(
             game_active=True,
             copilot_on=False,
-            copilot_search_on=True,
-            needs_search_result=True,
+            web_enabled=True,
         )
-        assert not ran, "Web-search branch must not run when copilot is disabled"
+        assert result["brain_ask_called"], "brain_ask must be called when copilot is disabled"
+        assert not result["ask_with_tools_called"], "ask_with_tools must NOT be called when copilot disabled"
 
-    def test_web_search_does_not_fire_when_needs_search_false(self):
-        """Web-search branch is skipped when needs_search returns False."""
-        ran = self._run_wakeword_ask_and_capture_branch(
+    def test_brain_ask_called_when_web_disabled(self):
+        """brain_ask fires (not ask_with_tools) when web research is not enabled."""
+        result = self._run_wakeword_ask_and_capture_branch(
             game_active=False,
             copilot_on=True,
-            copilot_search_on=True,
-            needs_search_result=False,
+            web_enabled=False,
         )
-        assert not ran, "Web-search branch must not run when needs_search=False"
+        assert result["brain_ask_called"], "brain_ask must be called when web is disabled"
+        assert not result["ask_with_tools_called"], "ask_with_tools must NOT be called when web disabled"
 
 
 # ---------------------------------------------------------------------------
