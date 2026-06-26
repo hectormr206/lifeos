@@ -544,6 +544,23 @@ FIELDS: tuple[ConfigField, ...] = (
         "Podman image used for the dev agent sandbox container. Must be available "
         "locally (podman pull or built from the axi Containerfile).",
     ),
+    # ─────── dev-director loop ───────
+    ConfigField(
+        "dev_director_repo", "string", "~/LifeOS/dev-workspace",
+        "Path to the isolated git repo used as the dev-director workspace. "
+        "Tilde is expanded at runtime. Must be separate from the real LifeOS repo.",
+    ),
+    ConfigField(
+        "dev_director_results_dir", "string", "~/LifeOS/dev-results",
+        "Directory where dev-director saves .patch files. Created automatically if missing. "
+        "Tilde is expanded at runtime.",
+    ),
+    ConfigField(
+        "dev_director_max_rounds", "integer", 3,
+        "Maximum director→coder→reviewer rounds per dev_develop task.",
+        minimum=1,
+        maximum=8,
+    ),
 )
 
 
