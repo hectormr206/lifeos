@@ -932,6 +932,9 @@ class Daemon:
         # VAD aggressiveness 3 = strongest noise rejection, so ambient noise is not
         # mistaken for continuous speech (which forced 15 s mid-sentence cuts).
         _vad_aggr = int(config.get("wakeword_vad_aggressiveness", 3))
+        # Energy gate: drop ambient-noise segments before transcription so they
+        # aren't hallucinated as "Axi" (false wakes). 0 disables.
+        _min_rms = float(config.get("wakeword_min_rms", 0.018))
 
         # Feature C: follow-up window predicate — injected into the listener so
         # it can accept speech without the wake word while the window is open.
@@ -977,6 +980,7 @@ class Daemon:
                 silence_duration_s=_silence_s,
                 max_segment_s=_max_seg_s,
                 vad_aggressiveness=_vad_aggr,
+                min_rms=_min_rms,
             )
 
         self._wakeword_listener = listener

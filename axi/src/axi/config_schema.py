@@ -383,6 +383,15 @@ FIELDS: tuple[ConfigField, ...] = (
         maximum=60.0,
     ),
     ConfigField(
+        "wakeword_min_rms", "number", 0.018,
+        "Minimum RMS energy a captured segment must have to be transcribed for "
+        "wake detection. Below this it is treated as ambient noise and dropped, so "
+        "background noise is not voiced as a hallucinated 'Axi' false wake. Raise it "
+        "if Axi self-activates; lower it if it misses your quiet 'Axi'. 0 disables.",
+        minimum=0.0,
+        maximum=0.2,
+    ),
+    ConfigField(
         "wakeword_vad_filter", "boolean", False,
         "Whether faster-whisper's internal Silero VAD pre-filters the wake-word "
         "audio before transcription. Default false: with it on, marginal/quiet "
