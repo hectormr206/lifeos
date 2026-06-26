@@ -7,11 +7,13 @@ and the endpoint/UI never change. This is the reusable-component invariant.
 from __future__ import annotations
 
 from axi.domain_chat import DomainSpec
+from axi.finance_chat import FINANCE_SPEC
 from axi.health_chat import HEALTH_SPEC
 
-# domain key → spec. Future: FINANCE_SPEC, EXERCISE_SPEC, RELATIONSHIPS_SPEC, …
+# domain key → spec. Future: EXERCISE_SPEC, RELATIONSHIPS_SPEC, …
 DOMAINS: dict[str, DomainSpec] = {
     HEALTH_SPEC.key: HEALTH_SPEC,
+    FINANCE_SPEC.key: FINANCE_SPEC,
 }
 
 

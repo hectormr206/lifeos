@@ -10,6 +10,7 @@ Ejercicio, …) is another spec, NOT a copy of the engine.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Callable
 
@@ -147,11 +148,18 @@ def _build_register_entries(extracted: dict[str, Any], raw_text: str) -> list[di
 
 # ─── the spec + backward-compatible wrapper ─────────────────────────────────
 
+def _format_record(e: Any, local_date: str) -> str:
+    """One query-prompt line for a health entry (id/date/kind/title/data)."""
+    data = json.dumps(e.data, ensure_ascii=False) if e.data else "{}"
+    return f"- id={e.id} fecha={local_date} kind={e.kind} title={e.title} data={data}"
+
+
 HEALTH_SPEC = DomainSpec(
     key="health",
     name="Salud",
     extract_system=_EXTRACT_SYSTEM,
     build_entries=_build_register_entries,
+    format_record=_format_record,
     # Late-bound (lambda) so the function is resolved at call time — respects
     # monkeypatching of health_entries.* in tests and any future reassignment.
     store_create=lambda **kw: health_entries.create(**kw),

@@ -2527,9 +2527,19 @@ def chat_page(request: Request):
     return templates.TemplateResponse(request, "chat.html", {"domain": domain})
 
 
+@app.get("/chat/d/{domain}", response_class=HTMLResponse)
+def chat_domain_page(domain: str, request: Request):
+    """Generic specialized-domain chat page — ONE route for every domain.
+    Renders the shared chat.html scoped to {domain}; 404 if not registered."""
+    from axi.domain_registry import get_spec
+    if get_spec(domain) is None:
+        raise HTTPException(404, f"unknown domain: {domain!r}")
+    return templates.TemplateResponse(request, "chat.html", {"domain": domain})
+
+
 @app.get("/chat/salud", response_class=HTMLResponse)
 def chat_salud_page(request: Request):
-    """SALUD (health) specialized chat — registers and queries health data."""
+    """SALUD specialized chat — backward-compatible alias of /chat/d/health."""
     return templates.TemplateResponse(request, "chat.html", {"domain": "health"})
 
 
