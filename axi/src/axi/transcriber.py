@@ -84,12 +84,17 @@ def transcribe_wakeword(
     # is_hallucination filter + match_wake (which requires "Axi") already guard
     # against false wakes, and a non-empty transcript is what lets "Axi" match.
     _vad_filter = bool(_cfg_get("wakeword_vad_filter", False))
+    # The "Axi." initial prompt biased Whisper to transcribe ANY ambiguous sound
+    # (a hard breath, ambient noise) AS "Axi", causing false wakes. Default it to
+    # empty now so non-speech transcribes to nothing/garbage instead of "Axi".
+    # Configurable via wakeword_initial_prompt if a bias is ever wanted back.
+    _init_prompt = str(_cfg_get("wakeword_initial_prompt", "") or "")
     try:
         r: TranscriptionResult = _whisper_transcribe(
             audio,
             language=language,
             beam_size=1,               # greedy decoding (no sampling)
-            initial_prompt=WAKE_INITIAL_PROMPT,
+            initial_prompt=_init_prompt,
             condition_on_previous_text=False,
             no_speech_threshold=0.6,
             compression_ratio_threshold=1.35,

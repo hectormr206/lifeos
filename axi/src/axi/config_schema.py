@@ -392,6 +392,13 @@ FIELDS: tuple[ConfigField, ...] = (
         maximum=0.2,
     ),
     ConfigField(
+        "wakeword_initial_prompt", "string", "",
+        "Whisper initial_prompt for wake-word transcription. Empty by default: a "
+        "non-empty bias like 'Axi.' made Whisper transcribe breaths/noise AS 'Axi', "
+        "causing false wakes. Leave empty unless you specifically want to bias "
+        "transcription toward certain words.",
+    ),
+    ConfigField(
         "wakeword_vad_filter", "boolean", False,
         "Whether faster-whisper's internal Silero VAD pre-filters the wake-word "
         "audio before transcription. Default false: with it on, marginal/quiet "

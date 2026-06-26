@@ -706,15 +706,16 @@ class TestWakeWordTranscriberParams:
             "Must use temperature=0 (via extra_kwargs) or beam_size=1 for greedy (anti-hallucination)"
         )
 
-    def test_transcribe_wakeword_uses_wake_initial_prompt(self, monkeypatch):
-        """The initial_prompt for wake-word transcription must bias toward 'Axi.' not YouTube."""
+    def test_transcribe_wakeword_initial_prompt_defaults_empty(self, monkeypatch):
+        """initial_prompt defaults to '' — an 'Axi.' bias made Whisper transcribe
+        breaths/noise AS 'Axi', causing false wakes."""
         from axi.transcriber import transcribe_wakeword
         import axi.whisper_client as _wc
 
         captured: list[dict] = []
 
         class _FakeResult:
-            text = "Axi."
+            text = ""
             language = "es"
             language_probability = 0.99
 
@@ -728,15 +729,31 @@ class TestWakeWordTranscriberParams:
         audio = np.zeros(1600, dtype=np.float32)
         transcribe_wakeword(audio, language="es")
 
-        params = captured[0]
-        prompt = params.get("initial_prompt", "")
-        # Must mention Axi and be short (not a YouTube-style prompt)
-        assert "Axi" in prompt or "axi" in prompt.lower(), (
-            "initial_prompt must bias toward 'Axi'"
+        # No config override -> empty default (no bias toward any word).
+        assert captured[0].get("initial_prompt", "") == ""
+
+    def test_transcribe_wakeword_initial_prompt_is_configurable(self, monkeypatch):
+        """When wakeword_initial_prompt is set, it is passed through."""
+        from axi.transcriber import transcribe_wakeword
+        import axi.whisper_client as _wc
+        import axi.config as _cfg
+
+        captured: list[dict] = []
+
+        class _FakeResult:
+            text = ""
+            language = "es"
+            language_probability = 0.99
+
+        monkeypatch.setattr(_wc, "transcribe", lambda audio, **kw: captured.append(kw) or _FakeResult())
+        monkeypatch.setattr(
+            _cfg, "get",
+            lambda key, default=None: "Axi." if key == "wakeword_initial_prompt" else default,
         )
-        assert "Suscríbete" not in prompt and "suscribete" not in prompt.lower(), (
-            "initial_prompt must NOT contain YouTube phrases"
-        )
+
+        import numpy as np
+        transcribe_wakeword(np.zeros(1600, dtype=np.float32), language="es")
+        assert captured[0].get("initial_prompt") == "Axi."
 
 
 # ===========================================================================
