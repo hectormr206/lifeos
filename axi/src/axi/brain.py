@@ -691,6 +691,7 @@ def _ask_with_tools_impl(
     max_tokens: int = 2048,
     timeout: float = 120.0,
     think: bool = False,
+    image_b64: str | None = None,
     history: list[dict] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
     max_tool_rounds: int = 2,
@@ -753,7 +754,7 @@ def _ask_with_tools_impl(
 
     # _skip_recall=True: recall already injected above (or skipped); do not
     # re-embed on every tool-loop round inside _build_messages.
-    messages = _build_messages(prompt, system=tool_system, image_b64=None, history=history, lang=lang, _skip_recall=True)
+    messages = _build_messages(prompt, system=tool_system, image_b64=image_b64, history=history, lang=lang, _skip_recall=True)
     last_data: dict[str, Any] | None = None
     try:
         for _round in range(max_tool_rounds + 1):
@@ -800,6 +801,7 @@ def ask_with_tools(
     max_tokens: int = 2048,
     timeout: float = 120.0,
     think: bool = False,
+    image_b64: str | None = None,
     history: list[dict] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
     max_tool_rounds: int = 2,
@@ -823,6 +825,7 @@ def ask_with_tools(
             max_tokens=max_tokens,
             timeout=timeout,
             think=think,
+            image_b64=image_b64,
             history=history,
             tool_choice=tool_choice,
             max_tool_rounds=max_tool_rounds,

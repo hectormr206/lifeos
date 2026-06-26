@@ -244,6 +244,29 @@ def _no_real_notifications(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_lifeos_web_state():
+    """Restore lifeos.web module-level DI state between tests.
+
+    test_chat_research.py calls lifeos.web.configure(..., enabled_fn=lambda: True)
+    which persists across the session. Without this reset any test that creates a
+    real Daemon and calls _wakeword_ask sees web research as enabled and routes to
+    _brain_ask_with_tools instead of brain_ask, breaking tests that only mock the
+    latter.
+    """
+    try:
+        import lifeos.web as _lw
+        _orig = (_lw._search_fn, _lw._read_fn, _lw._enabled_fn)
+    except Exception:
+        yield
+        return
+    yield
+    try:
+        _lw._search_fn, _lw._read_fn, _lw._enabled_fn = _orig
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def fresh_db(tmp_path, monkeypatch):
     """Point the store at a per-test temp DB and reset its global state.
 

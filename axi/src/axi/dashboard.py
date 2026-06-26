@@ -107,6 +107,7 @@ from lifeos.insights import correlate as insights_correlate
 # P8 — Web research (SearXNG + trafilatura; local-only, no cloud APIs).
 import lifeos.web as web_research
 from lifeos.web.port import TOP_N, MAX_SNIPPET_CHARS, MAX_PAGE_CHARS
+from axi.web_tools import web_search_tool_def as _web_search_tool_def, web_search_handler as _web_search_handler
 # Nano-agents PRD — fast-path instrumentation. Records which stage handled
 # each chat call + latency, so we can decide empirically whether nano-agents
 # are worth building. Stores metadata only (no text content).
@@ -637,41 +638,8 @@ def _implicit_web_research_query(user_text: str) -> str | None:
     return None
 
 
-_WEB_SEARCH_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": "Busca en internet con SearXNG local para información actual o verificable.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Consulta de búsqueda web."},
-            },
-            "required": ["query"],
-        },
-    },
-}
-
-
-def _web_search_tool_handler(args: dict[str, Any]) -> dict[str, Any]:
-    """Whitelisted local web_search tool for the big brain."""
-    query = str(args.get("query") or "").strip()
-    if not query:
-        return {"ok": False, "error": "query is required", "results": []}
-    if not web_research.is_enabled():
-        return {"ok": False, "error": "web research is disabled", "results": []}
-    search_fn = web_research.get_search_fn()
-    if search_fn is None:
-        return {"ok": False, "error": "search provider is unavailable", "results": []}
-    results = search_fn(query)[:TOP_N]
-    packed: list[dict[str, str]] = []
-    for item in results:
-        packed.append({
-            "title": item.title,
-            "url": item.url,
-            "snippet": item.snippet[:MAX_SNIPPET_CHARS],
-        })
-    return {"ok": bool(packed), "query": query, "results": packed}
+_WEB_SEARCH_TOOL = _web_search_tool_def()
+_web_search_tool_handler = _web_search_handler
 
 
 _RECALL_MEMORY_TOOL = {
