@@ -50,8 +50,18 @@
     </template>
     <template x-if="!loading && messages.length === 0">
       <div class="muted text-sm text-center py-8">
+        {% if domain == 'health' %}
+        Este es tu chat de Salud. Contame tus datos —presión, glucosa, peso,
+        sueño, síntomas— y los guardo en tu registro. También podés preguntarme
+        cosas como «¿cuál fue mi presión más alta?» o «promedio de glucosa estos
+        3 meses».
+        {% elif domain %}
+        Este es tu chat especializado. Contame lo que quieras registrar y lo
+        guardo acá; también podés preguntarme sobre tus datos.
+        {% else %}
         Hablale a Axi. Comparte el mismo recuerdo que la voz, así que puedes
         seguir conversaciones empezadas con Meta+Shift+Espacio.
+        {% endif %}
       </div>
     </template>
 
@@ -70,6 +80,35 @@
               style="max-height: 18rem;"
               alt="adjunto"
             />
+          </template>
+          <!-- Stored attachments (photos + PDFs). These come back from history,
+               so they persist across reloads. Tap an image to view it big. -->
+          <template x-if="m.attachments && m.attachments.length">
+            <div class="flex flex-wrap gap-2 mb-2">
+              <template x-for="att in m.attachments" :key="'a' + att.id">
+                <div>
+                  <template x-if="att.kind === 'image'">
+                    <img
+                      :src="att.url"
+                      @click="lightbox = att.url"
+                      class="rounded cursor-pointer"
+                      style="max-height: 12rem; max-width: 100%; object-fit: cover;"
+                      alt="adjunto"
+                    />
+                  </template>
+                  <template x-if="att.kind !== 'image'">
+                    <a
+                      :href="att.url" target="_blank" rel="noopener"
+                      class="flex items-center gap-2 panel2 rounded px-3 py-2"
+                      :title="att.name || 'archivo'"
+                    >
+                      <span style="font-size: 1.25rem;">📄</span>
+                      <span class="text-xs" x-text="att.name || (att.kind === 'pdf' ? 'PDF' : 'archivo')"></span>
+                    </a>
+                  </template>
+                </div>
+              </template>
+            </div>
           </template>
           <template x-if="m.role === 'axi'">
             <div>
@@ -124,33 +163,68 @@
     </template>
   </div>
 
-  <!-- Pending attachment preview (above input) -->
-  <template x-if="pendingImage">
-    <div class="mt-2 panel p-2 flex items-center gap-2">
-      <img
-        :src="'data:image/png;base64,' + pendingImage"
-        class="rounded"
-        style="height: 3rem; width: auto;"
-        alt="adjunto pendiente"
-      />
-      <span class="text-xs muted flex-1">Imagen lista — escribe un prompt o envía vacío.</span>
-      <button
-        type="button"
-        @click="pendingImage = null"
-        class="btn"
-        style="padding: 0.25rem 0.5rem; font-size: 0.85rem;"
-        title="Descartar imagen"
-      >✕</button>
+  <!-- Attachment tray (multi): thumbnails above the input. Images show a
+       preview (tap = lightbox); PDFs/files show a chip (tap = open in a new
+       tab). ✕ removes the attachment (and deletes the staged file server-side).
+       The user can keep adding as many as needed. -->
+  <template x-if="attachments.length > 0 || uploading > 0">
+    <div class="mt-2 panel p-2 flex flex-wrap gap-2 items-center">
+      <template x-for="att in attachments" :key="att.id">
+        <div class="relative" style="width: 3.5rem; height: 3.5rem;">
+          <template x-if="att.kind === 'image'">
+            <img
+              :src="att.url"
+              @click="openLightbox(att)"
+              class="rounded cursor-pointer"
+              style="width: 3.5rem; height: 3.5rem; object-fit: cover;"
+              alt="adjunto"
+            />
+          </template>
+          <template x-if="att.kind !== 'image'">
+            <a
+              :href="att.url" target="_blank" rel="noopener"
+              class="flex flex-col items-center justify-center rounded panel2 text-center"
+              style="width: 3.5rem; height: 3.5rem;"
+              :title="att.name || 'archivo'"
+            >
+              <span style="font-size: 1.25rem;">📄</span>
+              <span class="muted" style="font-size: 0.55rem;" x-text="att.kind === 'pdf' ? 'PDF' : 'archivo'"></span>
+            </a>
+          </template>
+          <button
+            type="button"
+            @click="removeAttachment(att)"
+            class="absolute"
+            style="top: -0.4rem; right: -0.4rem; background: var(--red); color: #fff; width: 1.3rem; height: 1.3rem; border-radius: 9999px; font-size: 0.75rem; line-height: 1;"
+            title="Quitar"
+          >✕</button>
+        </div>
+      </template>
+      <template x-if="uploading > 0">
+        <div class="flex items-center justify-center rounded panel2 muted pulse"
+             style="width: 3.5rem; height: 3.5rem;">⏳</div>
+      </template>
     </div>
   </template>
+
+  <!-- Hidden native pickers. 📷 opens the phone camera directly (the OS gives
+       the take → preview → retake → accept loop for free); 📎 opens the
+       file/gallery chooser (multiple images + PDF). -->
+  <input x-ref="cameraInput" type="file" accept="image/*" capture="environment"
+         class="hidden" @change="onPickFiles($event)" />
+  <input x-ref="fileInput" type="file" accept="image/*,application/pdf" multiple
+         class="hidden" @change="onPickFiles($event)" />
 
   <!-- Input area (sticky bottom of the column) -->
   <div class="mt-2 panel p-2 md:p-3">
     <!-- Toolbar (mobile-first: wrap, big touch targets) -->
     <div class="flex flex-wrap gap-1 mb-2">
+      {% if not domain %}
       <!-- Webcam laptop + screenshot + voz a Whisper: TODOS requieren VPN
            (la captura corre en la laptop o la transcripción usa el daemon).
-           Disabled cuando el dispositivo está offline. -->
+           Disabled cuando el dispositivo está offline.
+           Solo en el chat general — los chats de dominio son quick-capture
+           desde el celular (foto/ubicación/voz), no controlan la laptop. -->
       <button
         type="button"
         @click="captureCamera()"
@@ -175,20 +249,7 @@
         <span x-show="capturing !== 'screen'">🖥</span>
         <span x-show="capturing === 'screen'" x-cloak>⏳</span>
       </button>
-      <!-- Pixel camera (PWA on phone). Uses Web getUserMedia to capture from
-           the device this PWA is running on. Different from the 📷 button
-           above which captures from the LAPTOP webcam. -->
-      <button
-        type="button"
-        @click="capturePhoneCamera()"
-        :disabled="capturing || pending"
-        class="btn"
-        style="min-height: 2.5rem; min-width: 2.75rem;"
-        title="Cámara del dispositivo (Pixel)"
-      >
-        <span x-show="capturing !== 'phone-camera'">📱</span>
-        <span x-show="capturing === 'phone-camera'" x-cloak>⏳</span>
-      </button>
+      {% endif %}
       <!-- Geolocation toggle. When ON, the next chat message will include
            lat/lng so the backend can geo-tag finance/event entries. -->
       <button
@@ -203,27 +264,6 @@
       >
         <span x-text="locationOn ? '📍' : '📵'"></span>
       </button>
-      <!-- Mic: graba con MediaRecorder local pero la transcripción la hace
-           Whisper en la laptop. Requiere VPN. -->
-      <button
-        type="button"
-        @mousedown.prevent="startRecording()"
-        @mouseup.prevent="stopRecording()"
-        @mouseleave="stopRecording()"
-        @touchstart.prevent="startRecording()"
-        @touchend.prevent="stopRecording()"
-        @touchcancel="stopRecording()"
-        :disabled="pending || transcribing || !online"
-        class="btn"
-        :style="recording
-          ? 'min-height: 2.5rem; min-width: 2.75rem; background: rgba(238,51,51,0.25); border-color: var(--red);'
-          : (!online ? 'min-height: 2.5rem; min-width: 2.75rem; opacity: 0.4' : 'min-height: 2.5rem; min-width: 2.75rem;')"
-        :title="!online ? 'Micrófono — sin conexión a Whisper' : (recording ? 'Soltá para transcribir' : 'Mantén presionado para grabar')"
-      >
-        <span x-show="!recording && !transcribing">🎤</span>
-        <span x-show="recording" x-cloak>● REC</span>
-        <span x-show="transcribing && !recording" x-cloak>⏳</span>
-      </button>
       <!-- TTS: Piper synth corre en laptop, requiere VPN. -->
       <button
         type="button"
@@ -237,10 +277,13 @@
       >
         <span x-text="speakOn ? '🔊' : '🔇'"></span>
       </button>
+      {% if not domain %}
       <!-- Logging mode toggle. ON = data-entry (nano agents, no internet).
            OFF (default) = free conversation with the big brain.
            F1: tooltips and hint strip clearly explain the active mode without
-           leaking registro/data-format guidance into free conversation. -->
+           leaking registro/data-format guidance into free conversation.
+           Solo en el chat general — los chats de dominio YA registran en su
+           base de datos exacta sin modo, así que el toggle no aplica. -->
       <button
         type="button"
         @click="toggleLoggingMode()"
@@ -255,7 +298,9 @@
       >
         <span x-text="loggingMode ? '💾' : '💬'"></span>
       </button>
+      {% endif %}
     </div>
+    {% if not domain %}
     <!-- Mode hint strip: shown in charla mode (default) to explain the design;
          also shown in registro mode to confirm the active state. -->
     <div x-show="loggingMode" x-cloak
@@ -267,29 +312,94 @@
          class="text-xs muted mb-1 px-1">
       💬 Modo charla — hablás con Axi con internet. Para cargar datos estructurados, activá 💾.
     </div>
+    {% endif %}
 
+    <!-- WhatsApp-style input row: a rounded pill (text + 📎 attach + 📷 camera)
+         and a round button to the right that shows 🎤 when there's nothing to
+         send (press-and-hold to record a voice message) and ➤ when there's text
+         or an attachment (tap to send). -->
     <form @submit.prevent="send()" class="flex gap-2 items-end">
-      <textarea
-        x-ref="input"
-        x-model="draft"
-        @keydown.enter.prevent="onEnter($event)"
-        @input="autogrow()"
-        rows="2"
-        placeholder="Escribe a Axi… (Enter = enviar · Shift+Enter = salto de línea)"
-        class="flex-1 panel2 px-3 py-3 text-sm md:text-base resize-none leading-relaxed"
-        style="border-radius: 0.5rem; max-height: 14rem; min-height: 3.75rem;"
-      ></textarea>
+      <div class="flex-1 flex items-end gap-1 panel2 px-2 py-1"
+           style="border-radius: 1.5rem;">
+        <textarea
+          x-ref="input"
+          x-model="draft"
+          @keydown.enter.prevent="onEnter($event)"
+          @input="autogrow()"
+          rows="1"
+          placeholder="Escribir mensaje"
+          class="flex-1 px-2 py-2 text-sm md:text-base resize-none leading-relaxed"
+          style="background: transparent; border: 0; outline: none; max-height: 9rem; min-height: 2.75rem;"
+        ></textarea>
+        <!-- 📎 Adjuntar: foto de la galería o PDF (varios a la vez). -->
+        <button
+          type="button"
+          @click="$refs.fileInput.click()"
+          :disabled="pending"
+          class="self-end"
+          style="min-height: 2.75rem; padding: 0 0.5rem; font-size: 1.2rem; background: transparent; border: 0;"
+          title="Adjuntar foto o PDF"
+        >📎</button>
+        <!-- 📷 Tomar foto con la cámara del celular (preview/retake nativos). -->
+        <button
+          type="button"
+          @click="$refs.cameraInput.click()"
+          :disabled="pending"
+          class="self-end"
+          style="min-height: 2.75rem; padding: 0 0.5rem; font-size: 1.2rem; background: transparent; border: 0;"
+          title="Tomar foto"
+        >📷</button>
+      </div>
+
+      <!-- ➤ Enviar: visible cuando hay texto o adjuntos. -->
       <button
         type="submit"
-        class="btn btn-primary self-stretch px-4"
-        style="min-height: 2.75rem; min-width: 3.5rem;"
-        :disabled="pending || (!draft.trim() && !pendingImage)"
+        x-show="draft.trim().length > 0 || attachments.length > 0"
+        class="btn btn-primary"
+        style="border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem;"
+        :disabled="pending"
       >
-        <span x-show="!pending">Enviar</span>
+        <span x-show="!pending">➤</span>
         <span x-show="pending" x-cloak>…</span>
+      </button>
+
+      <!-- 🎤 Mensaje de voz: visible cuando no hay nada que enviar. Mantené
+           presionado para grabar; al soltar se transcribe al input. -->
+      <button
+        type="button"
+        x-show="draft.trim().length === 0 && attachments.length === 0"
+        x-cloak
+        @mousedown.prevent="startRecording()"
+        @mouseup.prevent="stopRecording()"
+        @mouseleave="stopRecording()"
+        @touchstart.prevent="startRecording()"
+        @touchend.prevent="stopRecording()"
+        @touchcancel="stopRecording()"
+        :disabled="pending || transcribing || !online"
+        class="btn btn-primary"
+        :style="recording
+          ? 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem; background: rgba(238,51,51,0.9); border-color: var(--red);'
+          : (!online ? 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem; opacity: 0.4;' : 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem;')"
+        :title="!online ? 'Micrófono — sin conexión a Whisper' : (recording ? 'Soltá para transcribir' : 'Mantené presionado para grabar un mensaje de voz')"
+      >
+        <span x-show="!recording && !transcribing">🎤</span>
+        <span x-show="recording" x-cloak>●</span>
+        <span x-show="transcribing && !recording" x-cloak>⏳</span>
       </button>
     </form>
   </div>
+
+  <!-- Lightbox: tap an image attachment to view it full-screen. Tap to close. -->
+  <template x-if="lightbox">
+    <div
+      @click="lightbox = null"
+      class="fixed inset-0 flex items-center justify-center"
+      style="z-index: 60; background: rgba(0,0,0,0.85);"
+    >
+      <img :src="lightbox" alt="adjunto"
+           style="max-width: 95vw; max-height: 90vh; border-radius: 0.5rem;" />
+    </div>
+  </template>
 </div>
 
 <script>
@@ -307,8 +417,10 @@ function chatApp() {
     domain: '{{ domain }}',
 
     // Multimodal state
-    pendingImage: null,    // base64 PNG to attach to next /api/chat/ask
-    capturing: null,       // 'screen' | 'camera' | 'phone-camera' | null
+    attachments: [],       // staged attachments [{id, kind, mime, name, url, b64?}]
+    uploading: 0,          // count of in-flight uploads (shows ⏳ chip)
+    lightbox: null,        // image url currently shown full-screen, or null
+    capturing: null,       // 'screen' | 'camera' | null
     recording: false,      // mic active
     transcribing: false,   // POST /api/chat/transcribe in flight
     speakOn: false,        // persists in localStorage
@@ -577,40 +689,100 @@ function chatApp() {
       });
     },
 
-    async capturePhoneCamera() {
-      // Live capture from the device this PWA is running on (Pixel camera
-      // when installed on Android). Uses getUserMedia + a hidden video
-      // element to grab one frame, then stops the stream.
-      if (this.capturing) return;
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        this.error = 'Tu navegador no soporta acceso a la cámara.';
+    // ─── Attachments (photos + PDFs) ──────────────────────────────────
+
+    async onPickFiles(ev) {
+      // Fired by the hidden 📷 (camera) and 📎 (gallery/PDF) inputs. Uploads
+      // each chosen file immediately so it shows as a thumbnail in the tray.
+      const files = Array.from(ev.target.files || []);
+      // Reset the input so picking the same file again still fires 'change'.
+      ev.target.value = '';
+      for (const f of files) await this.uploadAttachment(f);
+    },
+
+    _mimeFor(file) {
+      if (file.type) return file.type;
+      // Some Android camera intents hand back an empty type — infer from name.
+      const n = (file.name || '').toLowerCase();
+      if (n.endsWith('.pdf')) return 'application/pdf';
+      if (n.endsWith('.png')) return 'image/png';
+      if (n.endsWith('.webp')) return 'image/webp';
+      if (n.endsWith('.gif')) return 'image/gif';
+      return 'image/jpeg';
+    },
+
+    async uploadAttachment(file) {
+      const mime = this._mimeFor(file);
+      const allowed = ['image/png','image/jpeg','image/webp','image/gif','application/pdf'];
+      if (!allowed.includes(mime)) {
+        this.error = 'Tipo no soportado: ' + mime + ' (solo imágenes y PDF).';
         return;
       }
-      this.capturing = 'phone-camera';
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },  // back camera on phones
-          audio: false,
-        });
-        const video = document.createElement('video');
-        video.srcObject = stream;
-        await video.play();
-        // Wait a moment so the camera adjusts exposure
-        await new Promise(r => setTimeout(r, 250));
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        stream.getTracks().forEach(t => t.stop());
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        this.pendingImage = dataUrl.split(',')[1];   // strip "data:image/jpeg;base64,"
-        if (navigator.vibrate) navigator.vibrate(40);
-      } catch (e) {
-        this.error = 'No se pudo capturar: ' + (e.message || e);
-      } finally {
-        this.capturing = null;
+      if (file.size > 25 * 1024 * 1024) {
+        this.error = 'El archivo supera los 25 MB.';
+        return;
       }
+      if (!this.online) {
+        this.error = 'Sin conexión — no puedo subir adjuntos ahora.';
+        return;
+      }
+      try {
+        const b64 = await this._blobToB64(file);
+        await this._attachB64(b64, mime, file.name || '');
+      } catch (e) {
+        this.error = 'No pude subir el adjunto: ' + (e.message || e);
+      }
+    },
+
+    async _attachB64(b64, mime, name) {
+      // Upload already-base64 bytes (from a picked file or a laptop capture)
+      // to the attachment store and push the result to the tray. Shared by the
+      // 📎/📷 pickers and the general chat's 🖥/📷-laptop capture buttons.
+      this.uploading++;
+      try {
+        const r = await fetch('/api/chat/attachment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            data_b64: b64,
+            mime,
+            orig_name: name || null,
+            session: this.domain || undefined,
+          }),
+        });
+        if (!r.ok) {
+          const detail = await r.text();
+          throw new Error('HTTP ' + r.status + ': ' + detail);
+        }
+        const a = await r.json();
+        this.attachments.push({
+          id: a.id,
+          kind: a.kind,
+          mime: a.mime,
+          name: a.orig_name || name || '',
+          url: a.url,
+          // Keep the image bytes client-side so the general chat can still
+          // pass them to the vision model in the same turn.
+          b64: a.kind === 'image' ? b64 : null,
+        });
+        if (navigator.vibrate) navigator.vibrate(30);
+        return a;
+      } finally {
+        this.uploading--;
+      }
+    },
+
+    async removeAttachment(att) {
+      // Drop from the tray immediately; delete the staged file server-side
+      // (best-effort — it's only staged, not yet linked to a turn).
+      this.attachments = this.attachments.filter(a => a.id !== att.id);
+      try {
+        await fetch('/api/chat/attachment/' + att.id, { method: 'DELETE' });
+      } catch (e) { /* staged file cleanup is best-effort */ }
+    },
+
+    openLightbox(att) {
+      if (att && att.kind === 'image') this.lightbox = att.url;
     },
 
     async loadHistory() {
@@ -626,13 +798,19 @@ function chatApp() {
       try {
         const ctrl = new AbortController();
         const timeout = setTimeout(() => ctrl.abort(), 5000);
-        const r = await fetch('/api/chat/history?limit=50', { signal: ctrl.signal });
+        // Scope the history to this domain so the Salud chat shows ONLY its own
+        // turns (not the general chat). General chat sends no session = shows all.
+        const _hq = this.domain === 'health' ? '?limit=50&session=health' : '?limit=50';
+        const r = await fetch('/api/chat/history' + _hq, { signal: ctrl.signal });
         clearTimeout(timeout);
         if (!r.ok) throw new Error('history ' + r.status);
         const rows = await r.json();
         const out = [];
         for (const row of rows) {
-          out.push({ id: 'h' + row.id + 'u', role: 'user', text: row.user_text });
+          out.push({
+            id: 'h' + row.id + 'u', role: 'user', text: row.user_text,
+            attachments: row.attachments || [],
+          });
           out.push({ id: 'h' + row.id + 'a', role: 'axi', text: row.axi_text });
         }
         this.messages = out;
@@ -688,7 +866,7 @@ function chatApp() {
           throw new Error('HTTP ' + r.status + ': ' + detail);
         }
         const data = await r.json();
-        this.pendingImage = data.image_b64;
+        await this._attachB64(data.image_b64, 'image/png', 'captura.png');
       } catch (e) {
         this.error = 'No pude capturar pantalla: ' + e.message;
       } finally {
@@ -707,7 +885,7 @@ function chatApp() {
           throw new Error('HTTP ' + r.status + ': ' + detail);
         }
         const data = await r.json();
-        this.pendingImage = data.image_b64;
+        await this._attachB64(data.image_b64, 'image/png', 'webcam.png');
       } catch (e) {
         this.error = 'No pude capturar cámara: ' + e.message;
       } finally {
@@ -793,6 +971,11 @@ function chatApp() {
           // Append (don't clobber) — user might have typed before recording.
           this.draft = this.draft ? (this.draft + ' ' + text) : text;
           this.$nextTick(() => this.autogrow());
+        } else {
+          // Empty = silence/too quiet, or a dropped hallucination. Tell the
+          // user instead of silently doing nothing.
+          this.error = 'No te escuché bien — repetí un poco más fuerte y cerca del micrófono.';
+          if (navigator.vibrate) navigator.vibrate([60, 50, 60]);
         }
       } catch (e) {
         this.error = 'Transcripción falló: ' + e.message;
@@ -817,20 +1000,26 @@ function chatApp() {
 
     async send() {
       const text = this.draft.trim();
-      const image_b64 = this.pendingImage;
-      if (!text && !image_b64) return;
+      // Snapshot the staged attachments for this turn.
+      const atts = this.attachments.slice();
+      const attachmentIds = atts.map(a => a.id);
+      // The first image's bytes also feed the vision model in the general chat
+      // this same turn (storage is separate from "let Axi see it now").
+      const firstImageB64 = (atts.find(a => a.kind === 'image') || {}).b64 || null;
+      if (!text && atts.length === 0) return;
       if (this.pending) return;
       this.error = null;
       const tempId = 'p' + Date.now();
-      // Push optimistic user bubble (carries the image for visual continuity).
+      // Push optimistic user bubble, carrying the attachments so they render
+      // immediately (history also returns them, so they persist after reload).
       this.messages.push({
         id: tempId + 'u',
         role: 'user',
-        text: text || (image_b64 ? '(imagen)' : ''),
-        image_b64: image_b64 || null,
+        text: text || '',
+        attachments: atts.map(a => ({ id: a.id, kind: a.kind, mime: a.mime, name: a.name, url: a.url })),
       });
       this.draft = '';
-      this.pendingImage = null;
+      this.attachments = [];
       // Keep focus in the input after sending so the user can keep typing
       // without re-clicking (focus only moves if they click elsewhere).
       this.$nextTick(() => { this.autogrow(); this.scrollToBottom(); this.$refs.input?.focus(); });
@@ -845,7 +1034,7 @@ function chatApp() {
       const queueOnFailure = async (err) => {
         // Use the optimistic bubble's id as a stable tempId so we can find
         // it later when sync completes.
-        const queuedTempId = await this._enqueueChat(text, image_b64, location);
+        const queuedTempId = await this._enqueueChat(text, firstImageB64, location);
         const u = this.messages.find(m => m.id === tempId + 'u');
         if (u) {
           u.id = queuedTempId + 'u';
@@ -866,10 +1055,11 @@ function chatApp() {
         // Salud chat targets the health-scoped endpoint with a minimal body.
         const endpoint = this.domain === 'health' ? '/api/health/chat' : '/api/chat/ask';
         const payload = this.domain === 'health'
-          ? { text, location: location || undefined }
+          ? { text, location: location || undefined, attachment_ids: attachmentIds }
           : {
               text,
-              image_b64: image_b64 || null,
+              image_b64: firstImageB64 || null,
+              attachment_ids: attachmentIds,
               speak: this.speakOn,
               location: location || undefined,
               client_ts: new Date().toISOString(),
