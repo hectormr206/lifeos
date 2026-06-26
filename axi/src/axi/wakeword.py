@@ -104,6 +104,19 @@ _HALLUCINATION_BLOCKLIST: frozenset[str] = frozenset({
     "no te olvides de suscribirte",
     "subtitulado por la comunidad de amaraorg",
     "amara dot org",
+    # English YouTube/subtitle fillers — Whisper emits these on near-silence
+    # even when language is pinned to Spanish. Full phrases only, so they never
+    # clip real Spanish dictation (which won't contain these English sentences).
+    "correct them when you see this",
+    "thank you for watching",
+    "thanks for watching",
+    "thank you very much",
+    "please subscribe",
+    "subscribe to my channel",
+    "dont forget to subscribe",
+    "subtitles by the amaraorg community",
+    "see you next time",
+    "i will see you in the next video",
 })
 
 

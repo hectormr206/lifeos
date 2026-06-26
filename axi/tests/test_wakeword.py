@@ -783,6 +783,23 @@ class TestIsHallucination:
         from axi.wakeword import is_hallucination
         assert is_hallucination("No olvides suscribirte.") is True
 
+    def test_correct_them_when_you_see_this_is_hallucination(self):
+        # The exact English filler Whisper emitted over a near-silent Spanish
+        # voice message ("hola qué tal, buenos días") in the chat.
+        from axi.wakeword import is_hallucination
+        assert is_hallucination("Correct them when you see this.") is True
+
+    def test_english_youtube_fillers_are_hallucinations(self):
+        from axi.wakeword import is_hallucination
+        for phrase in (
+            "Thank you for watching!",
+            "Thanks for watching.",
+            "Please subscribe.",
+            "Subscribe to my channel",
+            "Thank you very much.",
+        ):
+            assert is_hallucination(phrase) is True, phrase
+
     def test_real_wake_phrase_is_not_hallucination(self):
         from axi.wakeword import is_hallucination
         assert is_hallucination("axi ayudame con esto") is False

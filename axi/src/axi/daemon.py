@@ -839,12 +839,28 @@ class Daemon:
             return f"error:could not parse PCM: {e}"
         if audio.size < _min_record_samples():
             return "error:audio too short"
+        # Energy gate: near-silent audio makes Whisper hallucinate YouTube-style
+        # English filler ("Correct them when you see this", "Thank you", …) over
+        # a Spanish dictation. Below the floor, skip transcription entirely and
+        # return empty so the UI can ask the user to repeat.
+        rms = float(_np.sqrt(_np.mean(_np.square(audio)))) if audio.size else 0.0
+        min_rms = float(config.get("chat_min_rms", 0.005))
+        if rms < min_rms:
+            log.info("transcribe_path: audio too quiet (rms=%.4f < %.4f) — skipping", rms, min_rms)
+            return "text:"
         try:
             text, _lang, _prob = self._safe_transcribe(audio)
         except Exception as e:  # noqa: BLE001
             log.warning("transcribe_path whisper failed: %s", e)
             return f"error:whisper failed: {e}"
         cleaned = clean_text(text) if text else ""
+        # Second layer: even above the energy floor Whisper sometimes emits a
+        # canned hallucination. Drop known phrases (and repetition loops) so the
+        # garbage never lands in the chat input.
+        from axi.wakeword import is_hallucination as _ww_is_hallucination  # noqa: PLC0415
+        if cleaned and _ww_is_hallucination(cleaned):
+            log.info("transcribe_path: dropped Whisper hallucination %r", cleaned)
+            return "text:"
         return f"text:{cleaned}"
 
     def meeting_status(self) -> str:
