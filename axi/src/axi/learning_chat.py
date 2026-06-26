@@ -49,4 +49,5 @@ LEARN_SPEC = DomainSpec(
     off_topic_msg="Eso no es de Aprendizaje. Probá en el apartado correspondiente.",
     router_hint="conocimiento: libros, cursos, artículos, ideas, preguntas de "
                 "investigación, notas de estudio, citas",
+    store_delete=lambda eid: learn_entries.delete(eid),
 )

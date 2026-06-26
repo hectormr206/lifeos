@@ -53,6 +53,8 @@ class DomainSpec:
                          `data`; finance uses amount/currency/category).
     router_hint        — short description of what belongs to this domain, used
                          to auto-generate the general chat's router prompt.
+    store_delete       — (entry_id) -> bool soft-delete, used by the data view.
+                         Optional (None when the store has no delete).
     """
     key: str
     name: str
@@ -64,6 +66,7 @@ class DomainSpec:
     off_topic_msg: str
     format_record: Callable[[Any, str], str]
     router_hint: str
+    store_delete: Callable[[str], bool] | None = None
 
 
 # ─── shared helpers (domain-agnostic) ───────────────────────────────────────

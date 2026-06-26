@@ -2543,6 +2543,77 @@ def chat_salud_page(request: Request):
     return templates.TemplateResponse(request, "chat.html", {"domain": "health"})
 
 
+# ─────────────────────── domain data views (one generic UI) ──────────────────
+
+
+def _data_tz():
+    tz_name = str(config.get("timezone", "America/Mexico_City"))
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001
+        return ZoneInfo("America/Mexico_City")
+
+
+@app.get("/data/{domain}", response_class=HTMLResponse)
+def data_view_page(domain: str, request: Request):
+    """Generic per-domain data view — ONE page for every domain (list + delete).
+    Clicking a dashboard tile lands here. 404 for an unregistered domain."""
+    from axi.domain_registry import get_spec
+    spec = get_spec(domain)
+    if spec is None:
+        raise HTTPException(404, f"unknown domain: {domain!r}")
+    return templates.TemplateResponse(request, "data_view.html", {"domain": domain, "name": spec.name})
+
+
+@app.get("/api/data/{domain}")
+def api_data_list(domain: str, days: int = 365, limit: int = 200):
+    """List a domain's stored entries (newest first) for the data view."""
+    from axi.domain_registry import get_spec
+    spec = get_spec(domain)
+    if spec is None:
+        raise HTTPException(404, f"unknown domain: {domain!r}")
+    tz = _data_tz()
+    try:
+        entries = spec.store_list_recent(days=days, limit=limit)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"could not list {domain}: {e}")
+    out: list[dict[str, Any]] = []
+    for e in entries:
+        try:
+            local = e.ts.astimezone(tz)
+            date_str, day_str = local.strftime("%Y-%m-%d %H:%M"), local.strftime("%Y-%m-%d")
+        except Exception:  # noqa: BLE001
+            date_str = day_str = str(getattr(e, "ts", ""))
+        detail = ""
+        try:
+            detail = spec.format_record(e, day_str)
+        except Exception:  # noqa: BLE001
+            pass
+        out.append({
+            "id": getattr(e, "id", ""),
+            "date": date_str,
+            "kind": getattr(e, "kind", ""),
+            "title": getattr(e, "title", ""),
+            "detail": detail,
+        })
+    return {"domain": domain, "name": spec.name, "count": len(out), "entries": out}
+
+
+@app.delete("/api/data/{domain}/{entry_id}")
+def api_data_delete(domain: str, entry_id: str):
+    """Soft-delete one entry of a domain (used by the data view, with a
+    confirmation in the UI)."""
+    from axi.domain_registry import get_spec
+    spec = get_spec(domain)
+    if spec is None or spec.store_delete is None:
+        raise HTTPException(404, f"no deletable domain: {domain!r}")
+    try:
+        ok = spec.store_delete(entry_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"delete failed: {e}")
+    return {"status": "ok", "deleted": bool(ok)}
+
+
 async def _domain_chat_response(spec, request: Request) -> dict:
     """Shared wrapper for EVERY specialized-domain chat (Salud, Finanzas, …).
 

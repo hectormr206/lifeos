@@ -133,4 +133,5 @@ FINANCE_SPEC = DomainSpec(
     off_topic_msg="Eso no es de Finanzas. Probá en el apartado correspondiente.",
     router_hint="dinero: gastos, ingresos, ahorros, pagos de deuda, sueldo, "
                 "precios, compras, presupuesto, cuentas",
+    store_delete=lambda eid: finance_entries.delete(eid),
 )
