@@ -106,6 +106,27 @@ def num(value: Any) -> float | int | None:
     return int(f) if f.is_integer() else f
 
 
+# ─── reusable builders for qualitative domains (no numeric fields) ──────────
+# Domains like Espiritualidad / Aprendizaje record a kind + a title, nothing
+# numeric. These two helpers keep their specs to just a prompt + bindings.
+
+
+def qualitative_build_entries(valid_kinds: set[str], default_kind: str):
+    """Factory → a build_entries that maps {kind, title} to ONE entry. The model
+    picks a kind; we validate it against valid_kinds, else use default_kind."""
+    def _build(extracted: dict[str, Any], raw_text: str) -> list[dict[str, Any]]:
+        raw_kind = (extracted.get("kind") or "").strip().lower()
+        kind = raw_kind if raw_kind in valid_kinds else default_kind
+        title = (extracted.get("title") or raw_text).strip()[:120] or "registro"
+        return [{"kind": kind, "title": title, "data": None, "fragment": title}]
+    return _build
+
+
+def simple_format_record(e: Any, local_date: str) -> str:
+    """format_record for domains shown as id/date/kind/title (no numeric data)."""
+    return f"- id={e.id} fecha={local_date} kind={e.kind} title={e.title}"
+
+
 # ─── query (thinking ON, date-aware) ────────────────────────────────────────
 
 _TODAY_RE = re.compile(r"\b(hoy|ayer|anoche|esta\s+noche|esta\s+mañana)\b", re.IGNORECASE)
