@@ -50,4 +50,5 @@ SPIRIT_SPEC = DomainSpec(
     off_topic_msg="Eso no es de Espiritualidad. Probá en el apartado correspondiente.",
     router_hint="vida interior: reflexión, gratitud, meditación, oración, "
                 "mindfulness, valores, propósito, paz",
+    store_delete=lambda eid: spirit_entries.delete(eid),
 )

@@ -82,4 +82,5 @@ EXERCISE_SPEC = DomainSpec(
     off_topic_msg="Eso no es de Ejercicio. Probá en el apartado correspondiente.",
     router_hint="actividad física: caminar, correr, cardio, pesas/fuerza, yoga, "
                 "deportes, gimnasio, entrenar",
+    store_delete=lambda eid: ex_sessions.delete(eid),
 )

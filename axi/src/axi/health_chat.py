@@ -168,6 +168,7 @@ HEALTH_SPEC = DomainSpec(
     off_topic_msg="Eso no es de Salud. Probá en el apartado correspondiente.",
     router_hint="salud física/médica: presión, glucosa, peso, pulso, sueño, "
                 "síntomas, dolor, enfermedad, medicamentos, estudios médicos",
+    store_delete=lambda eid: health_entries.delete(eid),
 )
 
 
