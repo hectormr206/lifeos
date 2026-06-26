@@ -112,6 +112,44 @@ def _default_eyes_capture() -> tuple[str | None, str]:
     return webcam_capture_b64()
 
 
+import re as _re
+
+_WEBCAM_RE = _re.compile(
+    r"m[ií]rame|me ves|c[oó]mo me veo|mi cara|"
+    r"qu[eé] tengo en la mano|esto que tengo|este objeto|"
+    r"con la c[aá]mara|por la c[aá]mara|"
+    r"tom[aá] una foto|foto m[ií]a|"
+    r"look at me|what am i holding|with the camera|"
+    r"take a photo|take a picture",
+    _re.IGNORECASE,
+)
+_SCREEN_RE = _re.compile(
+    r"en pantalla|esta ventana|este c[oó]digo|este error|"
+    r"lo que estoy viendo|lo que ves|la p[aá]gina|esta captura|"
+    r"on screen|on the screen|this window|this error|this code",
+    _re.IGNORECASE,
+)
+
+
+def _route_vision(command: str, *, game_active: bool, webcam_enabled: bool = True) -> str:
+    """Pure router: decide what image (if any) to capture for a wake-word turn.
+
+    Returns one of "screen", "webcam", or "none".
+    Webcam takes priority over screen when both patterns match, because it is
+    the more explicit physical-world intent. When webcam_enabled=False the
+    webcam route is disabled and the function falls through to screen/none.
+    """
+    if game_active:
+        return "screen"
+    cmd_lower = command.lower()
+    webcam_match = bool(_WEBCAM_RE.search(cmd_lower))
+    if webcam_match and webcam_enabled:
+        return "webcam"
+    if bool(_SCREEN_RE.search(cmd_lower)):
+        return "screen"
+    return "none"
+
+
 def _default_meeting_factory(*, transcribe_fn, brain_ask_fn) -> MeetingSession:
     return MeetingSession(transcribe_fn=transcribe_fn, brain_ask_fn=brain_ask_fn)
 
@@ -847,11 +885,25 @@ class Daemon:
                 return
             log.info("wakeword: wake detected, command=%r", command)
             notify("Axi", "🎮 Axi escuchó…", transient=True, timeout_ms=1200)
-            # Capture screenshot NOW (at wake confirmation time) then run ask.
-            screenshot = self.vision_capture()
-            self._pending_screenshot = screenshot
+            # Intent-based vision router (Phase 2b): decide BEFORE capturing.
+            _webcam_on = bool(config.get("wakeword_webcam_enabled", True))
+            route = _route_vision(command, game_active=_game_mode_active(), webcam_enabled=_webcam_on)
+            log.info("wakeword vision route: %s", route)
+            if route == "screen":
+                image = self.vision_capture()
+            elif route == "webcam":
+                img, _status = self.eyes_capture()
+                if img is None:
+                    notify("Axi", "📷 cámara no disponible", transient=True, timeout_ms=2000)
+                    image = None
+                else:
+                    notify("Axi", "📷 Axi miró por la cámara", transient=True, timeout_ms=1500)
+                    image = img
+            else:
+                image = None
+            self._pending_screenshot = image
             # Route through the existing ask pipeline.
-            self._wakeword_ask(command, screenshot)
+            self._wakeword_ask(command, image)
 
         # Use the wake-word-specific transcribe path (anti-hallucination settings).
         # This is SEPARATE from _safe_transcribe (which uses normal dictation params).

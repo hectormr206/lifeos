@@ -409,6 +409,14 @@ FIELDS: tuple[ConfigField, ...] = (
         minimum=0.0,
         maximum=1.0,
     ),
+    ConfigField(
+        "wakeword_webcam_enabled", "boolean", True,
+        "If true (default), the wake-word vision router may route to the webcam "
+        "when the user's command contains physical-world cues ('mírame', 'qué tengo "
+        "en la mano', 'look at me', etc.). Set to false to disable webcam capture "
+        "for wake-word turns — the router will fall through to screen or none. "
+        "Privacy opt-out; no restart required.",
+    ),
     # ─────── semantic graph bridging gates ───────
     ConfigField(
         "graph_bridge_conversations", "boolean", False,
