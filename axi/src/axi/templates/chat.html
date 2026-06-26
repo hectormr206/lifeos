@@ -1052,9 +1052,10 @@ function chatApp() {
       }
 
       try {
-        // Salud chat targets the health-scoped endpoint with a minimal body.
-        const endpoint = this.domain === 'health' ? '/api/health/chat' : '/api/chat/ask';
-        const payload = this.domain === 'health'
+        // Any domain chat targets the generic domain endpoint (one engine for
+        // all domains); the general chat uses /api/chat/ask.
+        const endpoint = this.domain ? ('/api/chat/domain/' + this.domain) : '/api/chat/ask';
+        const payload = this.domain
           ? { text, location: location || undefined, attachment_ids: attachmentIds }
           : {
               text,

@@ -1,47 +1,23 @@
-"""SALUD specialized chat — Slice 1.
+"""SALUD domain chat — the HEALTH spec for the generic domain_chat engine.
 
-A health-scoped conversational chat that BOTH registers health data and answers
-questions about it, using the Qwen3.5-4B brain (port 8080). Two responsibilities:
+This module no longer contains the chat flow (classify → dispatch → register/
+query): that lives ONCE in axi.domain_chat. Here we only declare what makes
+Salud different — the classifier prompt, the field→entry mapping, the store
+binding and the wording — as a DomainSpec. Adding another domain (Finanzas,
+Ejercicio, …) is another spec, NOT a copy of the engine.
 
-  1. Classify + extract the user message in ONE 4B call (thinking OFF, scoped
-     HEALTH prompt) into strict JSON:
-         {"intent": "register"|"query"|"off_topic",
-          "kind": str|null,
-          "systolic": int|null, "diastolic": int|null, "pulse_bpm": int|null,
-          "glucose_mg_dl": int|null, "weight_kg": number|null,
-          "sleep_hours": number|null, "title": str|null}
-
-  2. Dispatch on intent:
-       register  → map the extracted vitals to lifeos.health.entries.create(...)
-                   (one structured vital per measured value; a note fallback when
-                   nothing structured was extracted). when=now.
-       off_topic → persist NOTHING; redirect the user out of Salud.
-       query     → load the relevant entries with entries.list_recent(...) and
-                   make a SECOND brain call (thinking ON) whose system prompt
-                   carries TODAY'S date (now, user tz) and the loaded records,
-                   so the model answers ONLY from those records and resolves
-                   relative dates ("diciembre") against today.
-
-This module NEVER raises: any failure is caught and returned as
-{"mode": "error", "answer": "<clear message>"} so the endpoint stays clean.
-
-The data shapes written here MIRROR the existing chat/nano ingestion path in
-dashboard.py (blood_pressure / glucose / weight / sleep_hours vitals) so entries
-captured through this chat are queryable exactly like every other source.
+`handle_health_message` is kept as a thin backward-compatible wrapper.
 """
 from __future__ import annotations
 
-import json
-import logging
-import re
 from datetime import datetime
 from typing import Any, Callable
 
 from lifeos.health import entries as health_entries
 
-log = logging.getLogger("axi.health_chat")
+from axi.domain_chat import DomainSpec, handle_message, num
 
-# ─── Step 1: classify + extract (thinking OFF) ──────────────────────────────
+# ─── classify + extract prompt (thinking OFF) ───────────────────────────────
 
 _EXTRACT_SYSTEM = """Eres el clasificador del chat de SALUD de Axi. Tu ÚNICO trabajo
 es leer el mensaje del usuario y devolver un objeto JSON estricto. NO converses,
@@ -85,71 +61,27 @@ Reglas de extracción (solo para intent="register"):
 Devuelve SOLO el JSON, sin texto adicional."""
 
 
-def _parse_extract_json(raw: str) -> dict[str, Any]:
-    """Parse the extractor output robustly.
-
-    Tolerates code fences and stray prose around the JSON object. Raises
-    ValueError when no valid JSON object can be recovered.
-    """
-    if not raw or not raw.strip():
-        raise ValueError("empty extractor response")
-    text = raw.strip()
-    # Strip ```json ... ``` / ``` ... ``` fences if present.
-    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, flags=re.DOTALL)
-    if fence:
-        text = fence.group(1).strip()
-    # Fast path: already a clean object.
-    try:
-        obj = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        # Fallback: grab the outermost {...} span and try again.
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError("no JSON object found in extractor response")
-        obj = json.loads(text[start:end + 1])
-    if not isinstance(obj, dict):
-        raise ValueError("extractor JSON is not an object")
-    return obj
-
-
-def _num(value: Any) -> float | int | None:
-    """Coerce a possibly-string numeric field to int/float, else None."""
-    if value is None:
-        return None
-    if isinstance(value, bool):  # guard: bool is an int subclass
-        return None
-    if isinstance(value, (int, float)):
-        return value
-    try:
-        f = float(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-    return int(f) if f.is_integer() else f
-
-
-# ─── Step 2a: register ──────────────────────────────────────────────────────
+# ─── field → entry mapping (health-specific) ────────────────────────────────
 
 _VALID_KINDS = {"symptom", "medication", "vital", "condition", "note"}
 
 
 def _build_register_entries(extracted: dict[str, Any], raw_text: str) -> list[dict[str, Any]]:
-    """Translate extracted fields into a list of entries.create() kwargs.
+    """Translate extracted health fields into entries.create() specs.
 
     One structured vital per measured value (blood pressure is a single combined
     vital, mirroring dashboard.py). Falls back to a single note/symptom entry when
     no plausible structured value was extracted, so the message is never lost.
-    Returns a list of dicts: {kind, title, data, fragment} where `fragment` is the
-    Spanish confirmation snippet.
+    Each spec: {kind, title, data, fragment} (fragment = ES confirmation snippet).
     """
     out: list[dict[str, Any]] = []
 
-    systolic = _num(extracted.get("systolic"))
-    diastolic = _num(extracted.get("diastolic"))
-    pulse = _num(extracted.get("pulse_bpm"))
-    glucose = _num(extracted.get("glucose_mg_dl"))
-    weight = _num(extracted.get("weight_kg"))
-    sleep = _num(extracted.get("sleep_hours"))
+    systolic = num(extracted.get("systolic"))
+    diastolic = num(extracted.get("diastolic"))
+    pulse = num(extracted.get("pulse_bpm"))
+    glucose = num(extracted.get("glucose_mg_dl"))
+    weight = num(extracted.get("weight_kg"))
+    sleep = num(extracted.get("sleep_hours"))
 
     # Blood pressure — one combined vital (mirrors dashboard nano path).
     bp_ok = (
@@ -213,89 +145,20 @@ def _build_register_entries(extracted: dict[str, Any], raw_text: str) -> list[di
     return [{"kind": kind, "title": title, "data": None, "fragment": title}]
 
 
-def _register(extracted: dict[str, Any], raw_text: str, now: datetime) -> dict[str, Any]:
-    specs = _build_register_entries(extracted, raw_text)
-    entry_ids: list[str] = []
-    fragments: list[str] = []
-    for spec in specs:
-        entry = health_entries.create(
-            kind=spec["kind"],
-            title=spec["title"],
-            when=now,
-            body=raw_text,
-            data=spec["data"],
-            source="chat",
-            raw_utterance=raw_text,
-        )
-        entry_ids.append(entry.id)
-        fragments.append(spec["fragment"])
-    answer = "Anotado en Salud: " + ", ".join(fragments) + "."
-    return {"mode": "register", "answer": answer, "entry_ids": entry_ids}
+# ─── the spec + backward-compatible wrapper ─────────────────────────────────
 
-
-# ─── Step 2b: query (thinking ON, date-aware) ───────────────────────────────
-
-# Smaller windows for explicitly recent questions; default is broad enough to
-# reach the most recent December from mid-year.
-_TODAY_RE = re.compile(r"\b(hoy|ayer|anoche|esta\s+noche|esta\s+mañana)\b", re.IGNORECASE)
-_WEEK_RE = re.compile(r"\b(esta\s+semana|estos\s+días|últimos\s+días)\b", re.IGNORECASE)
-_MONTH_RE = re.compile(r"\b(este\s+mes|este\s+mes)\b", re.IGNORECASE)
-
-
-def _window_days(text: str) -> int:
-    t = text or ""
-    if _TODAY_RE.search(t):
-        return 3
-    if _WEEK_RE.search(t):
-        return 10
-    if _MONTH_RE.search(t):
-        return 40
-    return 120
-
-
-def _format_entries_for_prompt(entries_list: list, tz) -> str:
-    if not entries_list:
-        return "(sin registros en este periodo)"
-    lines: list[str] = []
-    for e in entries_list:
-        try:
-            local_date = e.ts.astimezone(tz).strftime("%Y-%m-%d")
-        except Exception:  # noqa: BLE001
-            local_date = e.ts.strftime("%Y-%m-%d")
-        data = json.dumps(e.data, ensure_ascii=False) if e.data else "{}"
-        lines.append(
-            f"- id={e.id} fecha={local_date} kind={e.kind} title={e.title} data={data}"
-        )
-    return "\n".join(lines)
-
-
-def _build_query_system(now: datetime, entries_list: list) -> str:
-    iso_today = now.strftime("%Y-%m-%d")
-    records = _format_entries_for_prompt(entries_list, now.tzinfo)
-    return (
-        "Eres el asistente del chat de SALUD de Axi. Respondes en español, claro y breve.\n"
-        f"HOY es {iso_today} (año {now.year}). Usa esta fecha para resolver toda "
-        "referencia temporal relativa: 'diciembre' significa el diciembre MÁS RECIENTE "
-        "anterior o igual a hoy; 'el mes pasado', 'la semana pasada', etc. se resuelven "
-        "siempre contra HOY.\n\n"
-        "Responde ÚNICAMENTE con base en los siguientes registros de salud del usuario. "
-        "NO inventes datos. Si la información pedida NO está en los registros, di "
-        "claramente que no tienes ese registro.\n\n"
-        f"REGISTROS DE SALUD (más recientes primero):\n{records}"
-    )
-
-
-def _query(text: str, now: datetime, brain_ask: Callable) -> dict[str, Any]:
-    days = _window_days(text)
-    entries_list = health_entries.list_recent(days=days, limit=200)
-    system = _build_query_system(now, entries_list)
-    answer = brain_ask(text, system=system, think=True, max_tokens=512)
-    if not isinstance(answer, str):
-        answer = str(answer)
-    return {"mode": "query", "answer": answer.strip()}
-
-
-# ─── Public entrypoint ──────────────────────────────────────────────────────
+HEALTH_SPEC = DomainSpec(
+    key="health",
+    name="Salud",
+    extract_system=_EXTRACT_SYSTEM,
+    build_entries=_build_register_entries,
+    # Late-bound (lambda) so the function is resolved at call time — respects
+    # monkeypatching of health_entries.* in tests and any future reassignment.
+    store_create=lambda **kw: health_entries.create(**kw),
+    store_list_recent=lambda **kw: health_entries.list_recent(**kw),
+    register_prefix="Anotado en Salud",
+    off_topic_msg="Eso no es de Salud. Probá en el apartado correspondiente.",
+)
 
 
 def handle_health_message(
@@ -304,55 +167,5 @@ def handle_health_message(
     now: datetime,
     brain_ask: Callable | None = None,
 ) -> dict[str, Any]:
-    """Handle one SALUD chat message. NEVER raises.
-
-    `now` MUST be a tz-aware datetime (the current time in the user's timezone).
-    `brain_ask` defaults to axi.brain.ask; resolved lazily so monkeypatching
-    brain.ask in tests/endpoints is honored.
-    """
-    if brain_ask is None:
-        from axi import brain  # lazy import so brain.ask monkeypatching works
-        brain_ask = brain.ask
-
-    try:
-        clean = (text or "").strip()
-        if not clean:
-            return {"mode": "error", "answer": "No recibí ningún mensaje de Salud."}
-
-        # Step 1 — classify + extract in ONE call, thinking OFF.
-        raw = brain_ask(clean, system=_EXTRACT_SYSTEM, think=False, max_tokens=256)
-        if not isinstance(raw, str):
-            raw = str(raw)
-        try:
-            extracted = _parse_extract_json(raw)
-        except ValueError as exc:
-            log.warning("health_chat: could not parse extractor JSON: %s", exc)
-            return {
-                "mode": "error",
-                "answer": "No pude entender tu mensaje de Salud. ¿Podés reformularlo?",
-            }
-
-        intent = str(extracted.get("intent") or "").strip().lower()
-
-        # Step 2 — dispatch.
-        if intent == "off_topic":
-            return {
-                "mode": "off_topic",
-                "answer": "Eso no es de Salud. Probá en el apartado correspondiente.",
-            }
-        if intent == "query":
-            return _query(clean, now, brain_ask)
-        if intent == "register":
-            return _register(extracted, clean, now)
-
-        # Unknown / missing intent — treat as off-topic, save nothing.
-        return {
-            "mode": "off_topic",
-            "answer": "Eso no es de Salud. Probá en el apartado correspondiente.",
-        }
-    except Exception as exc:  # noqa: BLE001 — never raise into the endpoint
-        log.warning("health_chat: unexpected failure: %s", exc, exc_info=True)
-        return {
-            "mode": "error",
-            "answer": "Hubo un problema procesando tu mensaje de Salud. Intentá de nuevo.",
-        }
+    """Backward-compatible entrypoint — delegates to the generic engine."""
+    return handle_message(HEALTH_SPEC, text, now=now, brain_ask=brain_ask)
