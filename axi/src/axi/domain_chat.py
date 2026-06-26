@@ -48,6 +48,9 @@ class DomainSpec:
     store_list_recent  — entries.list_recent-style callable (days=, limit=).
     register_prefix    — confirmation prefix, e.g. "Anotado en Salud".
     off_topic_msg      — redirect shown when the message is not for this domain.
+    format_record      — (entry, local_date_str) -> one line for the query
+                         prompt. Each domain shows its own fields (health uses
+                         `data`; finance uses amount/currency/category).
     """
     key: str
     name: str
@@ -57,6 +60,7 @@ class DomainSpec:
     store_list_recent: Callable[..., list]
     register_prefix: str
     off_topic_msg: str
+    format_record: Callable[[Any, str], str]
 
 
 # ─── shared helpers (domain-agnostic) ───────────────────────────────────────
@@ -117,7 +121,7 @@ def _window_days(text: str) -> int:
     return 120
 
 
-def _format_entries_for_prompt(entries_list: list, tz) -> str:
+def _format_entries_for_prompt(spec: DomainSpec, entries_list: list, tz) -> str:
     if not entries_list:
         return "(sin registros en este periodo)"
     lines: list[str] = []
@@ -126,17 +130,14 @@ def _format_entries_for_prompt(entries_list: list, tz) -> str:
             local_date = e.ts.astimezone(tz).strftime("%Y-%m-%d")
         except Exception:  # noqa: BLE001
             local_date = e.ts.strftime("%Y-%m-%d")
-        data = json.dumps(e.data, ensure_ascii=False) if e.data else "{}"
-        lines.append(
-            f"- id={e.id} fecha={local_date} kind={e.kind} title={e.title} data={data}"
-        )
+        lines.append(spec.format_record(e, local_date))
     return "\n".join(lines)
 
 
 def _build_query_system(spec: DomainSpec, now: datetime, entries_list: list) -> str:
     iso_today = now.strftime("%Y-%m-%d")
     upper = spec.name.upper()
-    records = _format_entries_for_prompt(entries_list, now.tzinfo)
+    records = _format_entries_for_prompt(spec, entries_list, now.tzinfo)
     return (
         f"Eres el asistente del chat de {upper} de Axi. Respondes en español, claro y breve.\n"
         f"HOY es {iso_today} (año {now.year}). Usa esta fecha para resolver toda "
