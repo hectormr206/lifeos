@@ -75,6 +75,11 @@ MAX_AUDIO_BYTES = 400 * 1024 * 1024
 # audio.size >= LONG_AUDIO_SAMPLES  →  batched (pipeline) path.
 LONG_AUDIO_SAMPLES = 16000 * 120
 
+# Batch size for the long-audio batched pipeline. Lower = less peak VRAM (this
+# GPU is shared with the LLMs — the 35B brain + VT-3B), at a small speed cost.
+# On a CUDA OOM the server falls back to the sequential path entirely.
+LONG_AUDIO_BATCH_SIZE = int(os.environ.get("AXI_WHISPER_BATCH_SIZE", "4"))
+
 # /run/user/$UID/axi/whisper.sock — same dir convention as axi voice.sock.
 RUNTIME_DIR = Path(
     os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
@@ -162,7 +167,7 @@ def _dispatch_transcription(
     if audio.size >= long_audio_samples:
         language = params.get("language")
         kwargs: dict = dict(
-            batch_size=8,
+            batch_size=LONG_AUDIO_BATCH_SIZE,
             vad_filter=vad,
             beam_size=3,
             condition_on_previous_text=True,
@@ -171,6 +176,63 @@ def _dispatch_transcription(
             kwargs["language"] = language
         return pipeline.transcribe(audio, **kwargs)
     return model.transcribe(audio, **params)
+
+
+def _is_oom(exc: BaseException) -> bool:
+    """True if an exception is a GPU out-of-memory error (CUDA/ctranslate2)."""
+    return "out of memory" in str(exc).lower()
+
+
+def _free_gpu_memory() -> None:
+    """Best-effort VRAM reclaim before a fallback transcribe. torch may not be
+    installed (ctranslate2 backend) — tolerate its absence."""
+    try:
+        import gc
+        gc.collect()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import torch  # noqa: PLC0415
+        torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _long_transcribe(audio, params, *, model, pipeline) -> tuple[str, object]:
+    """Transcribe long audio: batched pipeline for speed, but fall back to the
+    sequential model.transcribe path on a CUDA OOM (much lower peak VRAM, since
+    this GPU is shared with the LLMs). A no-VAD retry recovers when VAD strips
+    all speech. Returns (text, info)."""
+    used_sequential = False
+    try:
+        segments, info = _dispatch_transcription(audio, params, model=model, pipeline=pipeline)
+        parts: list[str] = []
+        for seg in segments:
+            parts.append(seg.text.strip())
+            _write_progress(_progress_fraction(seg.end, info.duration), " ".join(parts)[-200:])
+        text = " ".join(parts).strip()
+    except Exception as exc:  # noqa: BLE001
+        if not _is_oom(exc):
+            raise
+        # The batched pipeline ran out of VRAM. Reclaim and retry on the
+        # sequential path, which has a far smaller peak footprint.
+        log.warning("long-audio batched path OOM (%s); falling back to sequential transcribe", exc)
+        _free_gpu_memory()
+        _clear_progress()
+        used_sequential = True
+        segments, info = model.transcribe(audio, **params)
+        text = " ".join(s.text.strip() for s in segments).strip()
+
+    # VAD can over-aggressively strip an entire quiet/fast dictation → empty.
+    # Recover by retrying once WITHOUT VAD, on the same backend we ended up using.
+    if not text:
+        log.info("long-audio produced empty text; retrying without VAD")
+        if used_sequential:
+            segments, info = model.transcribe(audio, **{**params, "vad_filter": False})
+        else:
+            segments, info = _dispatch_transcription(audio, params, model=model, pipeline=pipeline, vad=False)
+        text = " ".join(s.text.strip() for s in segments).strip()
+    return text, info
 
 
 def _handle(conn: socket.socket, model: WhisperModel, pipeline: BatchedInferencePipeline, lock: threading.Lock) -> None:
@@ -197,29 +259,14 @@ def _handle(conn: socket.socket, model: WhisperModel, pipeline: BatchedInference
             _clear_progress()
         t0 = time.monotonic()
         with lock:
-            segments, info = _dispatch_transcription(
-                audio, params, model=model, pipeline=pipeline
-            )
             if is_long:
-                # Explicit per-segment loop so we can write progress after
-                # each segment.  Final text is identical to the eager join.
-                parts: list[str] = []
-                for seg in segments:
-                    parts.append(seg.text.strip())
-                    frac = _progress_fraction(seg.end, info.duration)
-                    _write_progress(frac, " ".join(parts)[-200:])
-                text = " ".join(parts).strip()
-                # VAD can over-aggressively strip an entire long dictation (quiet
-                # or fast speech) and leave empty text. Recover by retrying the
-                # same audio once WITHOUT VAD before giving up.
-                if not text:
-                    log.info("long-audio VAD removed all speech; retrying without VAD")
-                    segments, info = _dispatch_transcription(
-                        audio, params, model=model, pipeline=pipeline, vad=False
-                    )
-                    text = " ".join(s.text.strip() for s in segments).strip()
+                # Batched for speed, sequential fallback on OOM, no-VAD retry.
+                text, info = _long_transcribe(audio, params, model=model, pipeline=pipeline)
             else:
                 # Short path — eager join, no progress file written.
+                segments, info = _dispatch_transcription(
+                    audio, params, model=model, pipeline=pipeline
+                )
                 text = " ".join(s.text.strip() for s in segments).strip()
         if is_long:
             _clear_progress()
