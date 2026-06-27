@@ -601,7 +601,13 @@
     // refresh() runs on a 1s interval; if the daemon is briefly unreachable
     // (restart, etc.) the last good snapshot stays visible — no flicker.
     document.addEventListener('alpine:init', () => {
-      Alpine.store('snap', null);
+      // Init falsy but NOT null: Alpine makes store values reactive, and since
+      // `typeof null === 'object'` it runs Object.getOwnPropertyDescriptors(null),
+      // which throws inside alpine:init. That uncaught throw corrupts the reactive
+      // store, leaving every :disabled binding on the page stuck (dead buttons).
+      // `false` stays falsy (loading/offline `!$store.snap` checks keep working)
+      // but is a primitive, so Alpine never tries to proxy it.
+      Alpine.store('snap', false);
     });
 
     // PWA: register the service worker. The SW is intentionally minimal —
@@ -639,7 +645,15 @@
         async refresh() {
           try {
             const r = await fetch('/api/snapshot');
-            if (r.ok) Alpine.store('snap', await r.json());
+            if (r.ok) {
+              const snap = await r.json();
+              // NEVER store null/undefined: Alpine.store() runs
+              // Object.getOwnPropertyDescriptors() on the value, which throws
+              // "Cannot convert undefined or null to object" and breaks Alpine
+              // for the whole page. /api/snapshot returns null when the daemon
+              // is unreachable (e.g. the isolated test instance has no daemon).
+              if (snap && typeof snap === 'object') Alpine.store('snap', snap);
+            }
           } catch (e) { /* keep last good snapshot */ }
         },
         showCommandFeedback(type, title, message) {
