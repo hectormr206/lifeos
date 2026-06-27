@@ -4643,7 +4643,9 @@ async def api_chat_transcribe(request: Request):
         raise HTTPException(500, f"could not stage audio: {e}")
 
     try:
-        resp = _daemon_cmd(f"transcribe_path:{tmp_path}", timeout=30.0)
+        # 60s (not 30) tolerates Whisper's cold-start on the first segment; the
+        # frontend now sends short ~20s segments, so steady-state is well under.
+        resp = _daemon_cmd(f"transcribe_path:{tmp_path}", timeout=60.0)
     finally:
         try:
             tmp_path.unlink(missing_ok=True)

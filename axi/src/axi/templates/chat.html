@@ -366,10 +366,12 @@
         >📷</button>
       </div>
 
-      <!-- ➤ Enviar: visible cuando hay texto o adjuntos. -->
+      <!-- ➤ Enviar: visible cuando hay texto o adjuntos. Oculto mientras grabás:
+           la dictación en vivo llena el draft tramo a tramo y no queremos que el
+           botón salte a "enviar" en medio de la grabación. -->
       <button
         type="submit"
-        x-show="draft.trim().length > 0 || attachments.length > 0"
+        x-show="(draft.trim().length > 0 || attachments.length > 0) && !recording"
         class="btn btn-primary"
         style="border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem;"
         :disabled="pending"
@@ -382,7 +384,7 @@
            presionado para grabar; al soltar se transcribe al input. -->
       <button
         type="button"
-        x-show="draft.trim().length === 0 && attachments.length === 0"
+        x-show="(draft.trim().length === 0 && attachments.length === 0) || recording"
         x-cloak
         @mousedown.prevent="startRecording()"
         @mouseup.prevent="stopRecording()"
@@ -390,7 +392,7 @@
         @touchstart.prevent="startRecording()"
         @touchend.prevent="stopRecording()"
         @touchcancel="stopRecording()"
-        :disabled="pending || transcribing || !online"
+        :disabled="pending || (transcribing && !recording) || !online"
         class="btn btn-primary"
         :style="recording
           ? 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem; background: rgba(238,51,51,0.9); border-color: var(--red);'
@@ -944,6 +946,14 @@ function chatApp() {
       }
     },
 
+    // ── Segmented streaming dictation ────────────────────────────────────────
+    // The mic records in ~20s segments. Each segment closes into a self-contained
+    // webm/opus blob, gets transcribed, and its text is appended to the draft
+    // LIVE. This removes the single-shot ceiling (the old 20MB / 30s daemon limit
+    // dropped long recordings entirely) so you can dictate for 30+ minutes, and
+    // it's resilient — one failed segment never costs the whole dictation.
+    _SEGMENT_MS: 20000,
+
     async startRecording() {
       if (this.recording || this.transcribing) return;
       if (!navigator.mediaDevices || !window.MediaRecorder) {
@@ -964,47 +974,59 @@ function chatApp() {
         if (!MediaRecorder.isTypeSupported(mime)) mime = '';
       }
       this._audioMime = mime || 'audio/webm';
+      // Appends run through this chain so out-of-order network latency never
+      // scrambles the dictation — segments land in the order they were spoken.
+      this._segChain = Promise.resolve();
+      this.error = null;
+      this.recording = true;
+      this._startSegment();
+    },
+
+    _startSegment() {
+      if (!this._audioStream) return;
+      let rec;
       try {
-        this._mediaRecorder = mime
-          ? new MediaRecorder(this._audioStream, { mimeType: mime })
+        rec = this._audioMime
+          ? new MediaRecorder(this._audioStream, { mimeType: this._audioMime })
           : new MediaRecorder(this._audioStream);
       } catch (e) {
         this.error = 'No pude iniciar MediaRecorder: ' + e.message;
         this._releaseStream();
+        this.recording = false;
         return;
       }
-      this._audioChunks = [];
-      this._mediaRecorder.ondataavailable = (ev) => {
-        if (ev.data && ev.data.size > 0) this._audioChunks.push(ev.data);
-      };
-      this._mediaRecorder.onstop = () => this._finishRecording();
-      this._mediaRecorder.start();
-      this.recording = true;
+      const chunks = [];
+      rec.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) chunks.push(ev.data); };
+      rec.onstop = () => this._flushSegment(chunks);
+      this._mediaRecorder = rec;
+      rec.start();
+      // Auto-close this segment; stopRecording() (mouseup/touchend) also closes it.
+      this._segTimer = setTimeout(() => {
+        if (this.recording) { try { rec.stop(); } catch (e) {} }
+      }, this._SEGMENT_MS);
     },
 
-    stopRecording() {
-      if (!this.recording) return;
-      this.recording = false;
-      try { this._mediaRecorder && this._mediaRecorder.stop(); } catch (e) {}
+    _flushSegment(chunks) {
+      const stillRecording = this.recording;
+      // Restart capture IMMEDIATELY (the mic stream stays hot) so the gap between
+      // segments is just the MediaRecorder spin-up (~tens of ms); then transcribe
+      // the segment we just closed in the background.
+      if (stillRecording) {
+        this._startSegment();
+      } else {
+        this._releaseStream();
+      }
+      if (chunks && chunks.length) {
+        const blob = new Blob(chunks, { type: this._audioMime });
+        this._segChain = this._segChain.then(() => this._transcribeBlob(blob));
+      }
+      if (!stillRecording) {
+        this._segChain.finally(() => { this.transcribing = false; });
+      }
     },
 
-    _releaseStream() {
-      try {
-        if (this._audioStream) {
-          this._audioStream.getTracks().forEach(t => t.stop());
-        }
-      } catch (e) {}
-      this._audioStream = null;
-    },
-
-    async _finishRecording() {
-      this._releaseStream();
-      const chunks = this._audioChunks;
-      this._audioChunks = [];
-      if (!chunks.length) return;
-      const blob = new Blob(chunks, { type: this._audioMime });
+    async _transcribeBlob(blob) {
       this.transcribing = true;
-      this.error = null;
       try {
         const b64 = await this._blobToB64(blob);
         const r = await fetch('/api/chat/transcribe', {
@@ -1019,20 +1041,33 @@ function chatApp() {
         const data = await r.json();
         const text = (data.text || '').trim();
         if (text) {
-          // Append (don't clobber) — user might have typed before recording.
+          // Append (don't clobber) — keeps prior segments and any typed text.
           this.draft = this.draft ? (this.draft + ' ' + text) : text;
           this.$nextTick(() => this.autogrow());
-        } else {
-          // Empty = silence/too quiet, or a dropped hallucination. Tell the
-          // user instead of silently doing nothing.
-          this.error = 'No te escuché bien — repetí un poco más fuerte y cerca del micrófono.';
-          if (navigator.vibrate) navigator.vibrate([60, 50, 60]);
+          this.error = null;
         }
+        // Empty segment = a silent pause between phrases — skip it silently
+        // (no per-segment "no te escuché" noise during a long dictation).
       } catch (e) {
-        this.error = 'Transcripción falló: ' + e.message;
-      } finally {
-        this.transcribing = false;
+        // Whatever earlier segments appended is kept; only flag the failed tramo.
+        this.error = 'Un tramo no se transcribió (' + e.message + ') — seguí, el resto se conserva.';
       }
+    },
+
+    stopRecording() {
+      if (!this.recording) return;
+      this.recording = false;
+      if (this._segTimer) { clearTimeout(this._segTimer); this._segTimer = null; }
+      try { this._mediaRecorder && this._mediaRecorder.stop(); } catch (e) {}
+    },
+
+    _releaseStream() {
+      try {
+        if (this._audioStream) {
+          this._audioStream.getTracks().forEach(t => t.stop());
+        }
+      } catch (e) {}
+      this._audioStream = null;
     },
 
     _blobToB64(blob) {
