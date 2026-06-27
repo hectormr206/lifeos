@@ -4227,24 +4227,24 @@ async def api_chat_ask(request: Request):
 
     else:
         # ── dev_develop intent intercept ──────────────────────────────────
-        # If the user typed a develop command ("desarrollá X"), kick it off in
-        # a background thread and return an immediate ack — never block the HTTP
-        # response for a multi-minute director loop.
+        # A develop command ("desarrollá X") is FILED into the controlled
+        # Desarrollo workspace as a persistent environment, instead of running an
+        # ephemeral build inline. create_env launches a detached director, so the
+        # HTTP response returns immediately; the chat stays conversational and the
+        # actual build/test/deploy lives in /desarrollo.
         try:
             from axi import intents as _intents_mod  # noqa: PLC0415
             _dev_intent_result = _intents_mod.classify(text)
             if _dev_intent_result is not None and _dev_intent_result[0] == "dev_develop":
                 _dev_goal = (_dev_intent_result[1] or {}).get("goal", "").strip()
-                import threading as _threading  # noqa: PLC0415
-                from axi import dev_task as _dev_task_mod  # noqa: PLC0415
-
-                def _run_dev_bg(_goal: str = _dev_goal) -> None:
-                    _dev_task_mod.run_dev_task(_goal)
-
-                _threading.Thread(target=_run_dev_bg, daemon=True).start()
+                from axi import dev_env as _dev_env_mod  # noqa: PLC0415
+                try:
+                    _dev_env_mod.create_env(_dev_goal)
+                except Exception:  # noqa: BLE001
+                    log.warning("dev_develop create_env failed", exc_info=True)
                 _dev_ack = (
-                    "Dale, lo estoy desarrollando en segundo plano — "
-                    "te dejo el resultado en dev-results y te aviso."
+                    "Listo, lo armé como ambiente en Desarrollo — entrá a /desarrollo "
+                    "para probarlo aislado y, cuando esté, desplegarlo."
                 )
                 latency_ms = round((time.monotonic() - start) * 1000)
                 try:
@@ -6561,6 +6561,22 @@ async def api_start_dev_env_instance(env_id: str):
 async def api_stop_dev_env_instance(env_id: str):
     from axi import dev_env_instance as _dei  # noqa: PLC0415
     return JSONResponse(_dei.stop_instance(env_id))
+
+
+@app.post("/api/dev-envs/{env_id}/iterate")
+async def api_iterate_dev_env(env_id: str, request: Request):
+    from axi import dev_env as _de  # noqa: PLC0415
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON body")
+    prompt = (body or {}).get("prompt", "")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise HTTPException(400, "prompt required")
+    result = _de.iterate_env(env_id, prompt.strip())
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "iterate failed"))
+    return JSONResponse(result)
 
 
 @app.post("/api/dev-envs/{env_id}/reject")

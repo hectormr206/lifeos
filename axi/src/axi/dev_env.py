@@ -231,3 +231,49 @@ def reject_env(env_id: str) -> dict:
     state["worktree_path"] = None
     dev_run._write_state_file(dev_run._state_path(env_id), state)  # noqa: SLF001
     return {"ok": True}
+
+
+def iterate_env(env_id: str, prompt: str) -> dict:
+    """Refine an existing environment: relaunch the director on the SAME worktree
+    with a new instruction, resuming Claude's session so it keeps the context of
+    what it already built. Never raises.
+
+    Reuses the whole engine: keep_worktree (the worktree persists), the stable
+    branch id (the director reuses the existing worktree), and the saved
+    session_id (the detached entry passes it as resume_session_id).
+    """
+    state = get_env(env_id)
+    if state is None:
+        return {"ok": False, "error": "environment not found"}
+    if not prompt or not prompt.strip():
+        return {"ok": False, "error": "prompt required"}
+    if not state.get("worktree_path"):
+        return {"ok": False, "error": "environment has no worktree yet"}
+
+    # Stop the isolated instance so it isn't serving stale code while we rebuild.
+    try:
+        from axi import dev_env_instance  # noqa: PLC0415
+        dev_env_instance.stop_instance(env_id)
+    except Exception as exc:  # noqa: BLE001
+        log.info("iterate_env: stop_instance failed for %s (%s)", env_id, exc)
+
+    history = state.get("goal_history") or []
+    history.append(state.get("goal", ""))
+    state["goal_history"] = history
+    state["goal"] = prompt.strip()
+    state["status"] = "running"
+    state["error"] = None
+    state["resume_at"] = None
+    state["instance"] = None
+    dev_run._write_state_file(dev_run._state_path(env_id), state)  # noqa: SLF001
+
+    cmd = dev_run._build_launch_cmd(env_id)  # noqa: SLF001 — same detached entry
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        log.error("iterate launch failed for env_id=%s: %s", env_id, exc)
+        state["status"] = "error"
+        state["error"] = str(exc)
+        dev_run._write_state_file(dev_run._state_path(env_id), state)  # noqa: SLF001
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}

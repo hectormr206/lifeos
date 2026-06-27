@@ -286,3 +286,52 @@ def test_entry_env_needs_human_still_records_worktree(env_dir):
     # The worktree is still recorded so the user can inspect it.
     assert final["worktree_path"] == "/tmp/wt-bid999"
     assert final["branch"] == "axi/env/bid999"
+
+
+# ---------------------------------------------------------------------------
+# iterate_env
+# ---------------------------------------------------------------------------
+
+
+def test_iterate_env_relaunches_on_same_worktree(env_dir, monkeypatch):
+    env_id = "20260627-120000-iter11"
+    dev_run._write_state_file(dev_run._state_path(env_id), {
+        "run_id": env_id, "kind": "env", "goal": "objetivo original", "title": "T",
+        "status": "ready", "worktree_path": "/tmp/wt", "branch": "axi/env/x",
+        "session_id": "sess1", "branch_id": "bid",
+    })
+    monkeypatch.setattr("axi.dev_env_instance.stop_instance", lambda eid: {"ok": True})
+    launched: dict = {}
+
+    def fake_run(cmd, **kw):
+        launched["cmd"] = cmd
+        return _OkProc()
+
+    with patch("axi.dev_env.subprocess.run", side_effect=fake_run):
+        res = dev_env.iterate_env(env_id, "mové el botón arriba a la derecha")
+
+    assert res["ok"], res
+    st = dev_run.get_run(env_id)
+    assert st["goal"] == "mové el botón arriba a la derecha"
+    assert st["status"] == "running"
+    assert st["goal_history"] == ["objetivo original"]   # prior goal preserved
+    assert st["instance"] is None
+    assert "systemd-run" in launched["cmd"]
+
+
+def test_iterate_env_requires_prompt_and_worktree(env_dir, monkeypatch):
+    monkeypatch.setattr("axi.dev_env_instance.stop_instance", lambda eid: {"ok": True})
+    env_id = "20260627-120001-iter22"
+    dev_run._write_state_file(dev_run._state_path(env_id), {
+        "run_id": env_id, "kind": "env", "goal": "g", "status": "ready",
+        "worktree_path": "/tmp/wt",
+    })
+    assert dev_env.iterate_env(env_id, "   ")["ok"] is False    # empty prompt
+
+    env_id2 = "20260627-120002-iter33"
+    dev_run._write_state_file(dev_run._state_path(env_id2), {
+        "run_id": env_id2, "kind": "env", "goal": "g", "status": "ready",
+        "worktree_path": None,
+    })
+    res = dev_env.iterate_env(env_id2, "hacé algo")
+    assert res["ok"] is False and "worktree" in res["error"]

@@ -106,6 +106,21 @@ def test_stop_instance_endpoint(client, monkeypatch):
     assert called["id"] == "E1"
 
 
+def test_iterate_env_endpoint(client, monkeypatch):
+    from axi import dev_env
+    seen = {}
+    monkeypatch.setattr(dev_env, "iterate_env",
+                        lambda eid, p: (seen.update({"id": eid, "p": p}), {"ok": True})[1])
+    r = client.post("/api/dev-envs/E1/iterate", json={"prompt": "agrandá el botón"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert seen == {"id": "E1", "p": "agrandá el botón"}
+
+    assert client.post("/api/dev-envs/E1/iterate", json={"prompt": "  "}).status_code == 400
+
+    monkeypatch.setattr(dev_env, "iterate_env", lambda eid, p: {"ok": False, "error": "no worktree"})
+    assert client.post("/api/dev-envs/E1/iterate", json={"prompt": "x"}).status_code == 400
+
+
 def test_reject_env_endpoint(client, monkeypatch):
     from axi import dev_env
     monkeypatch.setattr(dev_env, "reject_env", lambda env_id: {"ok": True})
