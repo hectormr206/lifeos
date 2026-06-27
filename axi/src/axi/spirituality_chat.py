@@ -51,4 +51,5 @@ SPIRIT_SPEC = DomainSpec(
     router_hint="vida interior: reflexión, gratitud, meditación, oración, "
                 "mindfulness, valores, propósito, paz",
     store_delete=lambda eid: spirit_entries.delete(eid),
+    store_update_title=lambda eid, title: spirit_entries.update_title(eid, title),
 )

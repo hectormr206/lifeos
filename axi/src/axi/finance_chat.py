@@ -134,4 +134,5 @@ FINANCE_SPEC = DomainSpec(
     router_hint="dinero: gastos, ingresos, ahorros, pagos de deuda, sueldo, "
                 "precios, compras, presupuesto, cuentas",
     store_delete=lambda eid: finance_entries.delete(eid),
+    store_update_title=lambda eid, title: finance_entries.update_title(eid, title),
 )

@@ -65,3 +65,31 @@ def test_page_renders_for_known_domain(client):
     r = client.get("/data/health")
     assert r.status_code == 200
     assert "dataView" in r.text  # the Alpine component is present
+
+
+def test_update_title_calls_store_update_title(client, monkeypatch):
+    """PATCH /api/data/{domain}/{id} updates the entry title via store_update_title."""
+    from axi import finance_chat
+    updated: list = []
+    monkeypatch.setattr(
+        finance_chat.finance_entries, "update_title",
+        lambda eid, title: updated.append((eid, title)) or True,
+    )
+    r = client.patch("/api/data/finance/F1", json={"title": "nuevo título"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["updated"] is True
+    assert updated == [("F1", "nuevo título")]
+
+
+def test_update_title_empty_title_400(client):
+    """PATCH with empty title returns 400."""
+    r = client.patch("/api/data/finance/F1", json={"title": "  "})
+    assert r.status_code == 400
+
+
+def test_update_title_unknown_domain_404(client):
+    """PATCH on an unknown domain returns 404."""
+    r = client.patch("/api/data/nope/X1", json={"title": "x"})
+    assert r.status_code == 404

@@ -2614,6 +2614,27 @@ def api_data_delete(domain: str, entry_id: str):
     return {"status": "ok", "deleted": bool(ok)}
 
 
+@app.patch("/api/data/{domain}/{entry_id}")
+async def api_data_update_title(domain: str, entry_id: str, request: Request):
+    """Update the title of one entry (used by the inline-edit in the data view)."""
+    from axi.domain_registry import get_spec
+    spec = get_spec(domain)
+    if spec is None or spec.store_update_title is None:
+        raise HTTPException(404, f"no editable domain: {domain!r}")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "invalid JSON body")
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "title must not be empty")
+    try:
+        ok = spec.store_update_title(entry_id, title)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"update failed: {e}")
+    return {"status": "ok", "updated": bool(ok)}
+
+
 async def _domain_chat_response(spec, request: Request) -> dict:
     """Shared wrapper for EVERY specialized-domain chat (Salud, Finanzas, …).
 

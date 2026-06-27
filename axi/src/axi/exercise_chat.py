@@ -83,4 +83,5 @@ EXERCISE_SPEC = DomainSpec(
     router_hint="actividad física: caminar, correr, cardio, pesas/fuerza, yoga, "
                 "deportes, gimnasio, entrenar",
     store_delete=lambda eid: ex_sessions.delete(eid),
+    store_update_title=lambda eid, title: ex_sessions.update_title(eid, title),
 )

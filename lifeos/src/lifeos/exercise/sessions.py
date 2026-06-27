@@ -229,3 +229,13 @@ def delete(sid: str) -> bool:
             (sid,),
         )
         return cur.rowcount > 0
+
+
+def update_title(sid: str, title: str) -> bool:
+    """Update only the title of a non-deleted exercise session."""
+    with store.connect() as conn:
+        cur = conn.execute(
+            "UPDATE exercise_sessions SET title=? WHERE id=? AND deleted_at IS NULL",
+            (title, sid),
+        )
+        return cur.rowcount > 0

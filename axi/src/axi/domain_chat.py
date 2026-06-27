@@ -67,6 +67,7 @@ class DomainSpec:
     format_record: Callable[[Any, str], str]
     router_hint: str
     store_delete: Callable[[str], bool] | None = None
+    store_update_title: Callable[[str, str], bool] | None = None
 
 
 # ─── shared helpers (domain-agnostic) ───────────────────────────────────────
