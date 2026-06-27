@@ -138,7 +138,7 @@ def test_dispatch_long_uses_pipeline():
 
     Phase 2.1.2 — RED. Must FAIL before _dispatch_transcription exists.
     """
-    from axi.whisper_server import _dispatch_transcription
+    from axi.whisper_server import _dispatch_transcription, LONG_AUDIO_BATCH_SIZE
 
     model = _RecordingModel()
     pipeline = _RecordingPipeline()
@@ -153,7 +153,7 @@ def test_dispatch_long_uses_pipeline():
     call = pipeline.calls[0]
     assert call["vad_filter"] is True, "vad_filter must be True for batched path"
     assert call["beam_size"] == 3, "beam_size must be 3 for batched path"
-    assert call["batch_size"] == 8, "batch_size must be 8 for batched path"
+    assert call["batch_size"] == LONG_AUDIO_BATCH_SIZE, "batch_size must match LONG_AUDIO_BATCH_SIZE"
     assert call["condition_on_previous_text"] is True, \
         "condition_on_previous_text must be True for batched path"
 
@@ -257,3 +257,58 @@ def test_pipeline_constructed_once_in_main():
     # If this import fails the package is missing or the API changed.
     from faster_whisper import BatchedInferencePipeline  # noqa: F401
     assert BatchedInferencePipeline is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Long-audio OOM fallback (_long_transcribe)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _OOMPipeline:
+    """Batched pipeline that fails with a CUDA out-of-memory error."""
+    def transcribe(self, audio, **kwargs):
+        raise RuntimeError("CUDA failed with error out of memory")
+
+
+class _BoomPipeline:
+    """Batched pipeline that fails with a non-OOM error."""
+    def transcribe(self, audio, **kwargs):
+        raise ValueError("some other failure")
+
+
+@pytest.fixture
+def _no_progress(monkeypatch):
+    # _long_transcribe writes a progress file; stub it so tests touch no disk.
+    monkeypatch.setattr("axi.whisper_server._write_progress", lambda *a, **k: None)
+    monkeypatch.setattr("axi.whisper_server._clear_progress", lambda *a, **k: None)
+
+
+def test_long_transcribe_oom_falls_back_to_sequential(_no_progress):
+    """On a CUDA OOM in the batched path, _long_transcribe retries on the
+    sequential model.transcribe path and returns its text."""
+    from axi.whisper_server import _long_transcribe
+    audio = np.zeros(16000 * 121, dtype=np.float32)  # > 2 min → long path
+    model = _RecordingModel(segments=[_FakeSegment("texto secuencial")])
+    text, _info = _long_transcribe(audio, {"language": "es"}, model=model, pipeline=_OOMPipeline())
+    assert text == "texto secuencial"
+    assert len(model.calls) == 1  # sequential fallback was used
+
+
+def test_long_transcribe_uses_pipeline_when_ok(_no_progress):
+    """With no OOM, _long_transcribe uses the batched pipeline and never touches
+    the sequential model path."""
+    from axi.whisper_server import _long_transcribe
+    audio = np.zeros(16000 * 121, dtype=np.float32)
+    model = _RecordingModel(segments=[_FakeSegment("NO deberia usarse")])
+    pipeline = _RecordingPipeline(segments=[_FakeSegment("texto batched")])
+    text, _info = _long_transcribe(audio, {"language": "es"}, model=model, pipeline=pipeline)
+    assert text == "texto batched"
+    assert model.calls == []          # sequential path NOT used
+    assert len(pipeline.calls) == 1
+
+
+def test_long_transcribe_reraises_non_oom(_no_progress):
+    """A non-OOM error is not swallowed by the fallback — it propagates."""
+    from axi.whisper_server import _long_transcribe
+    audio = np.zeros(16000 * 121, dtype=np.float32)
+    with pytest.raises(ValueError):
+        _long_transcribe(audio, {"language": "es"}, model=_RecordingModel(), pipeline=_BoomPipeline())
