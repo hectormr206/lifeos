@@ -651,6 +651,24 @@ FIELDS: tuple[ConfigField, ...] = (
         minimum=60,
         maximum=86400,
     ),
+    # ─────── dev environments (persistent worktrees you test before deploy) ───────
+    ConfigField(
+        "dev_env_worktree_dir", "string", "~/LifeOS/dev-envs",
+        "Durable directory where each environment's persistent git worktree lives "
+        "(one subdirectory per environment). Unlike ephemeral dev-runs, these are "
+        "NOT deleted — you test, iterate, and deploy them. Tilde expanded at runtime.",
+    ),
+    ConfigField(
+        "dev_env_branch_prefix", "string", "axi/env",
+        "Git branch-name prefix for persistent environment worktrees.",
+    ),
+    ConfigField(
+        "dev_env_meta_timeout_s", "number", 8.0,
+        "Seconds to wait for VT-3B to generate an environment's card title/description "
+        "at creation. On timeout, a goal-derived fallback title is used instead.",
+        minimum=1.0,
+        maximum=60.0,
+    ),
     ConfigField(
         "dev_self_improve_enabled", "boolean", False,
         "If true, Axi fires ONE self-improvement dev run per day (high-stakes, "

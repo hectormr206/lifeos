@@ -51,6 +51,10 @@ def main(run_id: str) -> None:
         return
 
     goal = state.get("goal", "")
+    # Persistent-environment runs (kind == "env") keep their worktree for the
+    # user to test, iterate on, and deploy. Ephemeral runs (default) extract a
+    # patch and the worktree is deleted. Same engine, same detached machinery.
+    is_env = state.get("kind") == "env"
 
     try:
         from axi import config  # noqa: PLC0415
@@ -62,7 +66,6 @@ def main(run_id: str) -> None:
         venv_python = os.path.expanduser(
             config.get("dev_director_venv_python", "~/LifeOS/lifeos/axi/.venv/bin/python")
         )
-        branch_prefix = config.get("dev_director_branch_prefix", "axi/self-build")
         claude_timeout = float(config.get("dev_run_round_timeout_s", 3600))
         quota_wait_s = int(config.get("dev_run_quota_wait_default_s", 3600))
         results_dir = Path(os.path.expanduser(
@@ -71,21 +74,44 @@ def main(run_id: str) -> None:
 
         resume_session_id: str | None = state.get("session_id") or None
 
-        loop = run_director_loop(
-            goal,
-            repo_path,
+        loop_kwargs: dict = dict(
             max_rounds=max_rounds,
             test_command=test_command,
             venv_python=venv_python,
-            branch_prefix=branch_prefix,
             claude_timeout=claude_timeout,
             resume_session_id=resume_session_id,
         )
+        if is_env:
+            # Durable, env-scoped worktree directory + a stable branch id so a
+            # resume reuses the SAME worktree instead of creating a new one.
+            worktree_dir = os.path.expanduser(
+                config.get("dev_env_worktree_dir", "~/LifeOS/dev-envs")
+            )
+            loop_kwargs.update(
+                branch_prefix=config.get("dev_env_branch_prefix", "axi/env"),
+                keep_worktree=True,
+                worktree_parent=os.path.join(worktree_dir, run_id),
+                _branch_id=state.get("branch_id"),
+            )
+        else:
+            loop_kwargs["branch_prefix"] = config.get(
+                "dev_director_branch_prefix", "axi/self-build"
+            )
+
+        loop = run_director_loop(goal, repo_path, **loop_kwargs)
 
         # Persist session_id so the next resume (quota-wait or crash-recovery) can continue
         if loop.session_id:
             state["session_id"] = loop.session_id
         state["rounds_done"] = loop.rounds_used
+        # For environments, record where the worktree lives + its branch as soon
+        # as we know them, even on non-success paths — the user can still inspect
+        # a needs_human environment in its worktree.
+        if is_env:
+            if loop.worktree_path:
+                state["worktree_path"] = loop.worktree_path
+            if loop.branch:
+                state["branch"] = loop.branch
 
         if not loop.ok:
             error_str = loop.error or ""
@@ -111,7 +137,19 @@ def main(run_id: str) -> None:
             _notify("Axi dev ⚠", f"Requiere revisión: {loop.escalation_reason[:200]}")
             return
 
-        # Success — save patch
+        if is_env:
+            # The worktree IS the artifact — nothing to save, nothing cleaned up.
+            # "ready" = built, tests green, VT-3B approved; awaiting your test/deploy.
+            state["status"] = "ready"
+            state["result"] = (
+                f"Listo para probar en {loop.rounds_used} ronda(s). "
+                f"Costo ${loop.total_cost_usd:.4f}."
+            )
+            _write_state(state_path, state)
+            _notify("Axi dev ✓", f"Ambiente listo para probar: {state.get('title') or goal[:80]}")
+            return
+
+        # Ephemeral run success — save patch.
         if loop.final_diff:
             results_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
