@@ -1358,6 +1358,13 @@ def serve() -> int:
             except Exception as _ww_err:  # noqa: BLE001
                 log.warning("wake-word listener failed to start: %s", _ww_err)
 
+        # Reattach dev runs that were active before the daemon restarted.
+        try:
+            from axi import dev_run as _dev_run  # noqa: PLC0415
+            _dev_run.reattach_dev_runs()
+        except Exception:  # noqa: BLE001
+            log.warning("dev_run reattach failed", exc_info=True)
+
         # Periodic semantic-memory drain — runs in the DAEMON process ONLY
         # (the single writer of memory.db). Relocated here from the dashboard,
         # which must not write memory.db (multi-process WAL corruption). Drains
@@ -1391,11 +1398,28 @@ def serve() -> int:
             target=_healthy_backup_loop, name="axi-healthy-backup", daemon=True
         ).start()
 
+        # Periodic dev-run health poll — checks active runs and resumes waiting ones.
+        _dev_run_poll_stop = threading.Event()
+
+        def _dev_run_poll_loop() -> None:
+            poll_interval = int(config.get("dev_run_poll_interval_s", 300))
+            while not _dev_run_poll_stop.wait(timeout=poll_interval):
+                try:
+                    from axi import dev_run as _dev_run  # noqa: PLC0415
+                    _dev_run.poll_dev_runs()
+                except Exception:  # noqa: BLE001
+                    log.warning("dev_run poll failed", exc_info=True)
+
+        threading.Thread(
+            target=_dev_run_poll_loop, name="axi-dev-run-poll", daemon=True
+        ).start()
+
         stop_signal = {"raised": False}
 
         def _shutdown(*_):
             stop_signal["raised"] = True
             _embed_drain_stop.set()
+            _dev_run_poll_stop.set()
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:

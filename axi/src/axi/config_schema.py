@@ -613,6 +613,44 @@ FIELDS: tuple[ConfigField, ...] = (
         minimum=30,
         maximum=1800,
     ),
+    # ─────── dev-run (detached state-tracked runs) ───────
+    ConfigField(
+        "dev_run_state_dir", "string", "~/LifeOS/dev-runs",
+        "Directory where dev-run state.json files are stored. Each run gets a subdirectory. "
+        "Tilde is expanded at runtime.",
+    ),
+    ConfigField(
+        "dev_run_poll_interval_s", "integer", 300,
+        "Seconds between daemon polls that check run health and resume waiting_quota runs.",
+        minimum=30,
+        maximum=3600,
+    ),
+    ConfigField(
+        "dev_run_max_wall_clock_s", "integer", 21600,
+        "Maximum total wall-clock seconds a run may live (across all resumes). "
+        "Runs exceeding this are moved to needs_human.",
+        minimum=600,
+        maximum=86400,
+    ),
+    ConfigField(
+        "dev_run_quota_wait_default_s", "integer", 3600,
+        "Seconds to wait before retrying a run that hit a quota/usage limit.",
+        minimum=60,
+        maximum=86400,
+    ),
+    ConfigField(
+        "dev_run_max_resumes", "integer", 5,
+        "Maximum number of automatic resumes after unexpected unit death. "
+        "Runs that exceed this are moved to needs_human.",
+        minimum=0,
+        maximum=20,
+    ),
+    ConfigField(
+        "dev_run_round_timeout_s", "integer", 3600,
+        "Seconds before a single claude invocation inside a dev-run is killed.",
+        minimum=60,
+        maximum=86400,
+    ),
 )
 
 

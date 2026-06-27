@@ -335,37 +335,28 @@ def _h_dev_develop(daemon, params: dict | None = None) -> str:
         return "dev_develop:no-goal"
 
     try:
+        from axi import dev_run  # noqa: PLC0415
+        dev_run.start_dev_run(goal)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("dev_develop start_dev_run failed: %s", exc)
+
+    try:
         from axi.output import notify  # noqa: PLC0415
-        notify("Axi", "Dale, me pongo a desarrollar eso, te aviso cuando termine.",
-               transient=True, timeout_ms=3000)
+        notify(
+            "Axi",
+            "Dale, lo desarrollo en segundo plano — te aviso cuando termine.",
+            transient=True,
+            timeout_ms=3000,
+        )
     except Exception:  # noqa: BLE001
         pass
 
     try:
         from axi.speak import speak as _speak  # noqa: PLC0415
-        _speak("Dale, me pongo a desarrollar eso, te aviso cuando termine.")
+        _speak("Dale, lo desarrollo en segundo plano — te aviso cuando termine.")
     except Exception:  # noqa: BLE001
         pass
 
-    def _run_in_bg() -> None:
-        try:
-            from axi import dev_task  # noqa: PLC0415
-            summary = dev_task.run_dev_task(goal)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("dev_develop background task failed: %s", exc)
-            summary = f"Error al desarrollar '{goal}': {exc}"
-        try:
-            from axi.output import notify  # noqa: PLC0415
-            notify("Axi ✓ dev", summary[:300], timeout_ms=8000)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            from axi.speak import speak as _speak  # noqa: PLC0415
-            _speak(summary[:300])
-        except Exception:  # noqa: BLE001
-            pass
-
-    threading.Thread(target=_run_in_bg, daemon=True).start()
     return "dev_develop:started"
 
 

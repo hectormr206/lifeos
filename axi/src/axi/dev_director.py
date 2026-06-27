@@ -127,6 +127,7 @@ class DirectorLoopResult:
     tests_passed: bool = False
     needs_human: bool = False
     escalation_reason: str = ""
+    session_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -233,16 +234,24 @@ def _run_claude(
     instruction: str,
     timeout: float,
     env: dict,
-) -> tuple[str, float, int, bool]:
-    """Run claude CLI with the given instruction. Returns (summary, cost_usd, num_turns, is_error)."""
+    *,
+    resume_session_id: str | None = None,
+) -> tuple[str, float, int, bool, str | None]:
+    """Run claude CLI with the given instruction.
+
+    Returns (summary, cost_usd, num_turns, is_error, session_id).
+    Pass resume_session_id to continue a prior Claude Code session.
+    """
     extra_argv, extra_env = _claude_resilience_flags()
     run_env = {**env, **extra_env}
+    resume_argv = ["--resume", resume_session_id] if resume_session_id else []
     proc = subprocess.run(
         [
             "claude",
             "-p", instruction,
             "--output-format", "json",
             "--permission-mode", "bypassPermissions",
+            *resume_argv,
             *extra_argv,
         ],
         cwd=worktree_path,
@@ -255,15 +264,17 @@ def _run_claude(
     cost = 0.0
     turns = 0
     is_error = False
+    session_id: str | None = None
     try:
         out = json.loads(proc.stdout)
         summary = out.get("result", "")
         cost = float(out.get("total_cost_usd", 0.0))
         turns = int(out.get("num_turns", 0))
         is_error = bool(out.get("is_error", False))
+        session_id = out.get("session_id") or None
     except (json.JSONDecodeError, ValueError, TypeError):
         is_error = proc.returncode != 0
-    return summary, cost, turns, is_error
+    return summary, cost, turns, is_error, session_id
 
 
 def _run_tests(
@@ -444,7 +455,9 @@ def run_director_round(
             return DirectorResult(**_defaults, ok=False, error=err)
 
         env = os.environ.copy()
-        summary, cost, turns, is_error = _run_claude(worktree_path, instruction, claude_timeout, env)
+        summary, cost, turns, is_error, _session_id = _run_claude(
+            worktree_path, instruction, claude_timeout, env
+        )
 
         if is_error:
             return DirectorResult(
@@ -502,6 +515,7 @@ def run_director_loop(
     venv_python: str = "~/LifeOS/lifeos/axi/.venv/bin/python",
     test_timeout: int = 300,
     branch_prefix: str = "axi/self-build",
+    resume_session_id: str | None = None,
     _branch_id: str | None = None,
 ) -> DirectorLoopResult:
     """
@@ -522,6 +536,7 @@ def run_director_loop(
     last_tests_passed = False
     last_test_output = ""
     last_feedback: str | None = None
+    latest_session_id: str | None = None
 
     def _early_exit(
         *,
@@ -549,6 +564,7 @@ def run_director_loop(
             tests_passed=tests_passed,
             needs_human=needs_human,
             escalation_reason=escalation_reason,
+            session_id=latest_session_id,
         )
 
     if shutil.which("claude") is None:
@@ -591,9 +607,13 @@ def run_director_loop(
         for round_idx in range(max_rounds):
             goal_instruction = _compose_goal_instruction(goal, test_command, last_feedback)
 
-            summary, cost, turns, is_error = _run_claude(
-                worktree_path, goal_instruction, claude_timeout, env
+            round_resume = resume_session_id if round_idx == 0 else None
+            summary, cost, turns, is_error, round_session_id = _run_claude(
+                worktree_path, goal_instruction, claude_timeout, env,
+                resume_session_id=round_resume,
             )
+            if round_session_id:
+                latest_session_id = round_session_id
             total_cost += cost
             total_turns += turns
 
