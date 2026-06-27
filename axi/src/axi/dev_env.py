@@ -1,0 +1,191 @@
+"""Persistent dev environments — the controlled "Desarrollo" workspace.
+
+An *environment* is a long-lived git worktree where Axi (VT-3B directing Claude
+Code) builds a requested change. Unlike an ephemeral dev_run — which extracts a
+patch and destroys its worktree — an environment PERSISTS so you can launch it in
+isolation, test it, keep iterating with Axi, and only then deploy. The worktree
+lives in a durable directory and survives daemon restarts.
+
+This module is a thin layer over the SAME detached-execution machinery as
+dev_run (shared state dir, systemd launch, poll/resume, notify) and the SAME
+director loop (run_director_loop, here in keep_worktree mode). Environments are
+distinguished from ephemeral runs by ``kind == "env"`` in their state.json — not
+by a parallel system. The sacred invariant is unchanged: the engine never
+commits, pushes, or merges; deploy is a separate, explicit, user-driven step.
+
+Public surface:
+    create_env(goal)   → env_id   (non-blocking; launches a detached director)
+    list_envs()        → list of env state dicts (newest first)
+    get_env(env_id)    → state dict | None
+    card_status(state) → coarse display status for a UI card
+"""
+from __future__ import annotations
+
+import logging
+import os
+import subprocess
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from axi import dev_run  # reuse: state dir, launch cmd, notify, state IO
+
+log = logging.getLogger("axi.dev_env")
+
+ENV_KIND = "env"
+
+# Coarse status shown on a card, derived from the internal lifecycle status.
+# Internal statuses come from the shared poll/entry machinery (running,
+# waiting_quota, interrupted, needs_human, error) plus the env-only terminal
+# "ready" (built + tests green + VT-3B approved, awaiting your test/deploy).
+_CARD_STATUS = {
+    "running": "developing",
+    "interrupted": "developing",
+    "waiting_quota": "developing",
+    "ready": "ready",
+    "needs_human": "needs_human",
+    "error": "error",
+    "deploying": "deploying",
+    "deployed": "deployed",
+    "rejected": "rejected",
+}
+
+
+def card_status(state: dict) -> str:
+    """Map the internal lifecycle status to a coarse card status for the UI."""
+    return _CARD_STATUS.get(state.get("status", ""), "developing")
+
+
+# ---------------------------------------------------------------------------
+# Title / description generation (best-effort, never blocks creation)
+# ---------------------------------------------------------------------------
+
+_META_SYSTEM = (
+    "Sos el asistente que resume objetivos de desarrollo para tarjetas de UI. "
+    "Te dan un objetivo y devolvés DOS líneas, sin nada más:\n"
+    "TITULO: <título corto, máximo 6 palabras, sin punto final>\n"
+    "DESCRIPCION: <una frase de máximo 140 caracteres que explique de qué trata>"
+)
+
+
+def _meta_timeout() -> float:
+    from axi import config  # noqa: PLC0415
+    return float(config.get("dev_env_meta_timeout_s", 8.0))
+
+
+def _director_port() -> int:
+    from axi import config  # noqa: PLC0415
+    return int(config.get("dev_director_port", 8082))
+
+
+def _fallback_meta(goal: str) -> tuple[str, str]:
+    """Deterministic title/description from the goal text — used when the model
+    is unavailable or returns junk. Never fails."""
+    words = goal.strip().split()
+    title = " ".join(words[:6]) if words else "Nuevo ambiente"
+    if len(title) > 60:
+        title = title[:57].rstrip() + "…"
+    desc = goal.strip().replace("\n", " ")
+    if len(desc) > 140:
+        desc = desc[:139].rstrip() + "…"
+    return title, desc
+
+
+def _generate_meta(goal: str) -> tuple[str, str]:
+    """Ask VT-3B for a short title + one-line description. Best-effort: on any
+    failure (model down, timeout, unparseable) fall back to goal-derived text."""
+    try:
+        from axi.dev_director import _call_vt3b  # noqa: PLC0415
+        raw = _call_vt3b(
+            _META_SYSTEM, goal.strip(),
+            port=_director_port(), max_tokens=200, timeout=_meta_timeout(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.info("env meta generation failed (%s) — using fallback", exc)
+        return _fallback_meta(goal)
+
+    title, desc = "", ""
+    for line in raw.splitlines():
+        s = line.strip()
+        low = s.lower()
+        if low.startswith("titulo:") or low.startswith("título:"):
+            title = s.split(":", 1)[1].strip()
+        elif low.startswith("descripcion:") or low.startswith("descripción:"):
+            desc = s.split(":", 1)[1].strip()
+    if not title or not desc:
+        return _fallback_meta(goal)
+    # Trim to card limits.
+    if len(title) > 60:
+        title = title[:57].rstrip() + "…"
+    if len(desc) > 140:
+        desc = desc[:139].rstrip() + "…"
+    return title, desc
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def create_env(goal: str) -> str:
+    """Create a persistent dev environment and launch its director (detached).
+
+    Returns the env_id immediately; the build runs in the background. The card's
+    title/description are generated up front (best-effort) so it shows something
+    meaningful right away.
+    """
+    env_id = dev_run._run_id()  # noqa: SLF001 — shared id scheme
+    unit = dev_run._unit_name(env_id)  # noqa: SLF001
+    branch_id = uuid4().hex[:8]
+    title, description = _generate_meta(goal)
+    now = datetime.now(timezone.utc).isoformat()
+
+    state: dict = {
+        "run_id": env_id,          # shared key so dev_run poll/entry work as-is
+        "kind": ENV_KIND,
+        "goal": goal,
+        "title": title,
+        "description": description,
+        "branch_id": branch_id,
+        "branch": None,            # filled by the entry once the worktree exists
+        "worktree_path": None,     # filled by the entry (persistent worktree)
+        "status": "running",
+        "started_at": now,
+        "created_at": now,
+        "unit": unit,
+        "rounds_done": 0,
+        "session_id": None,
+        "result": None,
+        "resume_at": None,
+        "error": None,
+        "resumes_done": 0,
+    }
+    state_path = dev_run._state_path(env_id)  # noqa: SLF001
+    dev_run._write_state_file(state_path, state)  # noqa: SLF001
+
+    cmd = dev_run._build_launch_cmd(env_id)  # noqa: SLF001 — same detached entry
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        log.error("systemd-run launch failed for env_id=%s: %s", env_id, exc)
+        state["status"] = "error"
+        state["error"] = str(exc)
+        dev_run._write_state_file(state_path, state)  # noqa: SLF001
+        dev_run._notify("Axi dev", f"No se pudo lanzar el ambiente: {exc}")  # noqa: SLF001
+
+    return env_id
+
+
+def list_envs() -> list[dict]:
+    """Return all environment state dicts (kind == 'env'), newest first."""
+    envs = [s for s in dev_run.list_runs() if s.get("kind") == ENV_KIND]
+    # run_id starts with a UTC timestamp, so reverse-lexicographic == newest first.
+    envs.sort(key=lambda s: s.get("run_id", ""), reverse=True)
+    return envs
+
+
+def get_env(env_id: str) -> dict | None:
+    """Return a single environment's state, or None if not found / not an env."""
+    state = dev_run.get_run(env_id)
+    if state is None or state.get("kind") != ENV_KIND:
+        return None
+    return state

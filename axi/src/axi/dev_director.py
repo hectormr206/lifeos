@@ -128,6 +128,10 @@ class DirectorLoopResult:
     needs_human: bool = False
     escalation_reason: str = ""
     session_id: str | None = None
+    # Filesystem path of the worktree. Empty unless keep_worktree=True (the
+    # persistent-environment mode) — in patch mode the worktree is deleted, so
+    # there is nothing to point at.
+    worktree_path: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +145,15 @@ def _call_vt3b(
     *,
     port: int = 8082,
     max_tokens: int = 2000,
+    timeout: float | None = None,
 ) -> str:
-    """POST to OpenAI-compat endpoint, strip <think>...</think> and \\boxed{...}, return content."""
+    """POST to OpenAI-compat endpoint, strip <think>...</think> and \\boxed{...}, return content.
+
+    *timeout* (seconds) bounds the HTTP call; None keeps urllib's global default
+    (no per-call deadline) so the director's review path is unchanged. Callers
+    that must not block — e.g. generating an environment's title at creation —
+    pass a small timeout and fall back on failure.
+    """
     payload = json.dumps(
         {
             "model": "VibeThinker-3B",
@@ -161,7 +172,7 @@ def _call_vt3b(
         method="POST",
     )
 
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         body = json.loads(resp.read().decode())
 
     content: str = body["choices"][0]["message"]["content"]
@@ -188,7 +199,20 @@ def _compose_goal_instruction(goal: str, test_command: str, feedback: str | None
 
 
 def _create_worktree(repo_path: str, worktree_path: str, branch_name: str) -> tuple[bool, str]:
-    """Create a git worktree on a new branch. Returns (ok, error_message)."""
+    """Create a git worktree on a new branch. Returns (ok, error_message).
+
+    Idempotent: if *worktree_path* already exists and is registered as a worktree
+    (the persistent-environment resume case — keep_worktree left it on disk), it
+    is reused as-is rather than re-created, since `git worktree add` would fail on
+    an existing path/branch. Prior uncommitted edits in the worktree survive.
+    """
+    if os.path.isdir(worktree_path):
+        listing = subprocess.run(
+            ["git", "-C", repo_path, "worktree", "list", "--porcelain"],
+            capture_output=True, text=True,
+        )
+        if listing.returncode == 0 and worktree_path in listing.stdout:
+            return True, ""  # already a live worktree — reuse it
     result = subprocess.run(
         ["git", "worktree", "add", worktree_path, "-b", branch_name],
         cwd=repo_path,
@@ -517,13 +541,26 @@ def run_director_loop(
     test_timeout: int = 300,
     branch_prefix: str = "axi/self-build",
     resume_session_id: str | None = None,
+    keep_worktree: bool = False,
+    worktree_parent: str | None = None,
     _branch_id: str | None = None,
 ) -> DirectorLoopResult:
     """
     Multi-round loop: Claude self-iterates via /goal, tests run in the worktree,
     VT-3B does a semantic review. Stops when tests pass AND VT-3B approves.
     Escalates to needs_human=True if max_rounds is exhausted without success.
-    Nothing is ever committed or pushed; the worktree is deleted in the finally block.
+    Nothing is ever committed or pushed.
+
+    Worktree lifecycle:
+      - Patch mode (default): the worktree is created in a throwaway tempdir and
+        deleted in the finally block; only the diff survives (DirectorLoopResult
+        .final_diff). This is the ephemeral self-build path.
+      - Persistent-environment mode (keep_worktree=True): the worktree is created
+        under *worktree_parent* (a durable location the caller owns) and is NOT
+        deleted — the caller can launch, test, iterate on, and eventually deploy
+        it. DirectorLoopResult.worktree_path points at it. Re-entrant: a resume
+        reuses the existing worktree (see _create_worktree). The invariant holds
+        either way — this engine still never commits, pushes, or merges.
     """
     max_rounds = max(_MIN_ROUNDS_FLOOR, min(max_rounds, _MAX_ROUNDS_CEILING))
 
@@ -566,6 +603,7 @@ def run_director_loop(
             needs_human=needs_human,
             escalation_reason=escalation_reason,
             session_id=latest_session_id,
+            worktree_path=worktree_path if keep_worktree else "",
         )
 
     if shutil.which("claude") is None:
@@ -583,7 +621,14 @@ def run_director_loop(
             error="claude CLI not found on PATH",
         )
 
-    tmp_parent = tempfile.mkdtemp(prefix="axi-dir-loop-")
+    # Persistent-environment mode puts the worktree in a durable, caller-owned
+    # directory (so it survives across the test/iterate/deploy lifecycle and
+    # daemon restarts). Patch mode uses a throwaway tempdir.
+    if worktree_parent:
+        tmp_parent = os.path.expanduser(worktree_parent)
+        os.makedirs(tmp_parent, exist_ok=True)
+    else:
+        tmp_parent = tempfile.mkdtemp(prefix="axi-dir-loop-")
     worktree_path = os.path.join(tmp_parent, f"axi-dev-{branch_id}")
 
     try:
@@ -687,4 +732,7 @@ def run_director_loop(
         return _early_exit(done=False, ok=False, error=str(exc))
 
     finally:
-        _cleanup_worktree(repo_path, worktree_path, branch_name, tmp_parent)
+        # Persistent-environment mode keeps the worktree for the user to test,
+        # iterate on, and deploy. Patch mode deletes it (only the diff matters).
+        if not keep_worktree:
+            _cleanup_worktree(repo_path, worktree_path, branch_name, tmp_parent)
