@@ -39,7 +39,9 @@ class DomainSpec:
 
     key                — session id / route key (e.g. "health").
     name               — display name (e.g. "Salud"); also used in messages.
-    extract_system     — the classifier+extractor system prompt (thinking OFF).
+    extract_system     — the classifier+extractor prompt (thinking OFF); a str OR
+                         a callable(now)->str for prompts needing the current date
+                         (e.g. Calendario resolves "el viernes").
     build_entries      — (extracted_json, raw_text) -> list of entry specs, each
                          {kind, title, data, fragment}. Where the domain's field
                          validation / shapes live.
@@ -55,11 +57,16 @@ class DomainSpec:
                          to auto-generate the general chat's router prompt.
     store_delete       — (entry_id) -> bool soft-delete, used by the data view.
                          Optional (None when the store has no delete).
-    extract_system     — a str, OR a callable(now)->str for prompts that need the
-                         current date (e.g. Calendario resolves "el viernes").
     list_detail        — optional (entry)->str clean one-liner of the domain's
                          values for the data view (e.g. "200 MXN · comida"). The
                          title alone often suffices, so this is optional.
+    edit_fields        — ordered list of editable fields for the data view, each a
+                         dict {"key": str, "label": str, "type": "text"|"number"}.
+                         None = title-only editing (backward-compat default).
+    store_update_fields — adapter: (entry_id, {field_key: value}) -> bool. Applies
+                         a partial update merging with the existing entry; returns
+                         True on success. None when multi-field editing is not
+                         supported by the domain.
     """
     key: str
     name: str
@@ -74,6 +81,8 @@ class DomainSpec:
     store_delete: Callable[[str], bool] | None = None
     store_update_title: Callable[[str, str], bool] | None = None
     list_detail: Callable[[Any], str] | None = None
+    edit_fields: list[dict] | None = None
+    store_update_fields: Callable[[str, dict], bool] | None = None
 
 
 # ─── shared helpers (domain-agnostic) ───────────────────────────────────────

@@ -93,3 +93,101 @@ def test_update_title_unknown_domain_404(client):
     """PATCH on an unknown domain returns 404."""
     r = client.patch("/api/data/nope/X1", json={"title": "x"})
     assert r.status_code == 404
+
+
+# ── Multi-field editing (finance) ────────────────────────────────────────────
+
+def test_get_finance_includes_edit_fields_and_fields_per_entry(client, monkeypatch):
+    """GET /api/data/finance includes top-level edit_fields and per-entry fields dict."""
+    from axi import finance_chat
+    rows = [
+        _Entry(id="F1", ts=datetime(2026, 6, 10, 8, 0, tzinfo=ZoneInfo("UTC")),
+               kind="expense", title="súper", amount=200.0, currency="MXN", category="comida"),
+        _Entry(id="F2", ts=datetime(2026, 6, 11, 9, 0, tzinfo=ZoneInfo("UTC")),
+               kind="income", title="sueldo", amount=15000.0, currency="MXN", category=None),
+    ]
+    monkeypatch.setattr(finance_chat.finance_entries, "list_recent", lambda **kw: rows)
+    r = client.get("/api/data/finance")
+    assert r.status_code == 200
+    body = r.json()
+    # Top-level edit_fields
+    assert "edit_fields" in body
+    keys = [f["key"] for f in body["edit_fields"]]
+    assert keys == ["title", "amount", "category"]
+    # Per-entry fields dict
+    e0 = body["entries"][0]
+    assert "fields" in e0
+    assert e0["fields"]["title"] == "súper"
+    assert e0["fields"]["amount"] == 200.0
+    assert e0["fields"]["category"] == "comida"
+    # None category → empty string
+    e1 = body["entries"][1]
+    assert e1["fields"]["category"] == ""
+
+
+def test_patch_finance_multi_field_calls_update(client, monkeypatch):
+    """PATCH with amount+category uses store_update_fields and merges with existing entry."""
+    from axi import finance_chat
+    from datetime import timezone
+
+    existing = _Entry(
+        id="F1",
+        ts=datetime(2026, 6, 10, 8, 0, tzinfo=timezone.utc),
+        kind="expense",
+        amount=100.0,
+        currency="MXN",
+        category="comida",
+        merchant=None,
+        title="original",
+        body=None,
+    )
+    monkeypatch.setattr(finance_chat.finance_entries, "get", lambda eid, **kw: existing)
+    update_calls: list[dict] = []
+    monkeypatch.setattr(
+        finance_chat.finance_entries, "update",
+        lambda eid, **kw: update_calls.append(kw) or existing,
+    )
+
+    r = client.patch("/api/data/finance/F1", json={"amount": 250, "category": "transporte"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["updated"] is True
+    assert len(update_calls) == 1
+    kw = update_calls[0]
+    assert kw["amount"] == 250.0          # changed
+    assert kw["category"] == "transporte"  # changed
+    assert kw["title"] == "original"       # preserved from existing entry
+    assert kw["kind"] == "expense"         # preserved
+    assert kw["currency"] == "MXN"         # preserved
+
+
+def test_patch_finance_non_numeric_amount_400(client):
+    """PATCH with non-numeric amount returns 400."""
+    r = client.patch("/api/data/finance/F1", json={"amount": "not-a-number", "category": "x"})
+    assert r.status_code == 400
+
+
+def test_domain_without_edit_fields_title_only_behavior(client, monkeypatch):
+    """A domain without edit_fields still does title-only PATCH; GET has no edit_fields."""
+    from axi import health_chat
+    rows = [
+        _Entry(id="H1", ts=datetime(2026, 6, 10, 8, 0, tzinfo=ZoneInfo("UTC")),
+               kind="note", title="me duele la cabeza"),
+    ]
+    monkeypatch.setattr(health_chat.health_entries, "list_recent", lambda **kw: rows)
+    # GET: no edit_fields at top level, no fields per entry
+    r = client.get("/api/data/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert "edit_fields" not in body
+    assert "fields" not in body["entries"][0]
+    # PATCH title-only still works
+    updated: list = []
+    monkeypatch.setattr(
+        health_chat.health_entries, "update_title",
+        lambda eid, title: updated.append((eid, title)) or True,
+    )
+    r2 = client.patch("/api/data/health/H1", json={"title": "nuevo"})
+    assert r2.status_code == 200
+    assert updated == [("H1", "nuevo")]

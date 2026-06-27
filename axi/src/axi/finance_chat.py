@@ -120,6 +120,40 @@ def _list_detail(e: Any) -> str:
         return ""
 
 
+def _update_fields(eid: str, changes: dict) -> bool:
+    """Adapter for store_update_fields: merge `changes` into the existing entry.
+
+    Fetches the current entry, merges title/amount/category from `changes` (or
+    keeps the entry's current values), and calls finance_entries.update() with
+    all required args so only the touched fields differ. Returns False when the
+    entry is not found or on any error.
+    """
+    try:
+        entry = finance_entries.get(eid)
+        if entry is None:
+            return False
+        title = str(changes["title"]).strip() if "title" in changes else entry.title
+        amount = float(changes["amount"]) if "amount" in changes else entry.amount
+        category = changes.get("category", entry.category) if "category" in changes else entry.category
+        # Normalise: empty string → None for category
+        if category == "":
+            category = None
+        result = finance_entries.update(
+            eid,
+            kind=entry.kind,
+            title=title,
+            amount=amount,
+            when=entry.ts,
+            currency=entry.currency,
+            category=category,
+            merchant=entry.merchant,
+            body=entry.body,
+        )
+        return result is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _format_record(e: Any, local_date: str) -> str:
     """One query-prompt line for a finance entry (id/date/kind/title/amount/cat)."""
     cat = e.category or "—"
@@ -145,4 +179,10 @@ FINANCE_SPEC = DomainSpec(
     store_delete=lambda eid: finance_entries.delete(eid),
     store_update_title=lambda eid, title: finance_entries.update_title(eid, title),
     list_detail=_list_detail,
+    edit_fields=[
+        {"key": "title", "label": "Título", "type": "text"},
+        {"key": "amount", "label": "Monto", "type": "number"},
+        {"key": "category", "label": "Categoría", "type": "text"},
+    ],
+    store_update_fields=_update_fields,
 )
