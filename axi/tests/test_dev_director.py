@@ -342,11 +342,11 @@ def test_loop_stops_on_done(tmp_path):
 
     claude_call_count = 0
 
-    def fake_run_claude(worktree, instruction, timeout, env):
+    def fake_run_claude(worktree, instruction, timeout, env, **_kw):
         nonlocal claude_call_count
         claude_call_count += 1
         (Path(worktree) / f"file{claude_call_count}.py").write_text("# impl\n")
-        return ("done", 0.01, 2, False)
+        return ("done", 0.01, 2, False, None)
 
     review_calls = 0
 
@@ -381,7 +381,7 @@ def test_loop_runs_max_rounds(tmp_path):
     repo = _make_repo(tmp_path)
     max_r = 3
 
-    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False)), \
+    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False, None)), \
          patch.object(dev_director, "_run_tests", return_value=(False, "FAILED: 1 error")), \
          patch.object(dev_director, "_review", return_value=("NOT DONE: incomplete", False)), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"):
@@ -405,10 +405,10 @@ def test_loop_corrective_instruction(tmp_path):
     feedback = "you forgot to add error handling"
     claude_instructions: list[str] = []
 
-    def fake_run_claude(worktree, instruction, timeout, env):
+    def fake_run_claude(worktree, instruction, timeout, env, **_kw):
         claude_instructions.append(instruction)
         (Path(worktree) / f"file{len(claude_instructions)}.py").write_text("# impl\n")
-        return ("done", 0.01, 2, False)
+        return ("done", 0.01, 2, False, None)
 
     review_calls = 0
 
@@ -442,7 +442,7 @@ def test_loop_claude_error_stops(tmp_path):
     """If claude reports is_error mid-loop, the loop stops and returns ok=False."""
     repo = _make_repo(tmp_path)
 
-    with patch.object(dev_director, "_run_claude", return_value=("error msg", 0.0, 0, True)), \
+    with patch.object(dev_director, "_run_claude", return_value=("error msg", 0.0, 0, True, None)), \
          patch.object(dev_director, "_run_tests", return_value=(True, "passed")), \
          patch.object(dev_director, "_review", return_value=("DONE", True)), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"):
@@ -477,7 +477,7 @@ def test_loop_cleanup_no_commit(tmp_path):
             return ("NOT DONE: needs more", False)
         return ("DONE: complete", True)
 
-    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False)), \
+    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False, None)), \
          patch.object(dev_director, "_run_tests", return_value=(True, "5 passed")), \
          patch.object(dev_director, "_review", side_effect=fake_review), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"), \
@@ -508,7 +508,7 @@ def test_loop_max_rounds_clamped(tmp_path):
     """max_rounds is clamped to [_MIN_ROUNDS_FLOOR, _MAX_ROUNDS_CEILING]."""
     repo = _make_repo(tmp_path)
 
-    with patch.object(dev_director, "_run_claude", return_value=("done", 0.0, 1, False)), \
+    with patch.object(dev_director, "_run_claude", return_value=("done", 0.0, 1, False, None)), \
          patch.object(dev_director, "_run_tests", return_value=(False, "FAILED")), \
          patch.object(dev_director, "_review", return_value=("NOT DONE: incomplete", False)), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"):
@@ -521,7 +521,7 @@ def test_loop_max_rounds_clamped(tmp_path):
         f"expected {_MIN_ROUNDS_FLOOR} rounds with max_rounds=0, got {result_low.rounds_used}"
     )
 
-    with patch.object(dev_director, "_run_claude", return_value=("done", 0.0, 1, False)), \
+    with patch.object(dev_director, "_run_claude", return_value=("done", 0.0, 1, False, None)), \
          patch.object(dev_director, "_run_tests", return_value=(False, "FAILED")), \
          patch.object(dev_director, "_review", return_value=("NOT DONE: incomplete", False)), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"):
@@ -544,7 +544,7 @@ def test_success_tests_green_approved(tmp_path):
     """tests_passed=True and needs_human=False when tests pass and VT-3B approves."""
     repo = _make_repo(tmp_path)
 
-    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False)), \
+    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False, None)), \
          patch.object(dev_director, "_run_tests", return_value=(True, "5 passed")), \
          patch.object(dev_director, "_review", return_value=("DONE: looks good", True)), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"):
@@ -563,7 +563,7 @@ def test_escalation_tests_fail_every_round(tmp_path):
     """needs_human=True with test-failure diagnosis when tests never pass."""
     repo = _make_repo(tmp_path)
 
-    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False)), \
+    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False, None)), \
          patch.object(dev_director, "_run_tests", return_value=(False, "FAILED: 3 errors")), \
          patch.object(dev_director, "_review", return_value=("NOT DONE", False)), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"):
@@ -583,7 +583,7 @@ def test_escalation_vt3b_keeps_rejecting(tmp_path):
     """needs_human=True with VT-3B-rejection diagnosis when tests pass but reviewer never approves."""
     repo = _make_repo(tmp_path)
 
-    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False)), \
+    with patch.object(dev_director, "_run_claude", return_value=("done", 0.01, 2, False, None)), \
          patch.object(dev_director, "_run_tests", return_value=(True, "5 passed")), \
          patch.object(dev_director, "_review", return_value=("NOT DONE: semantics wrong", False)), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"):
@@ -658,7 +658,7 @@ def test_cleanup_runs_on_escalation(tmp_path):
         cleanup_calls.append(args)
         return _orig_cleanup(*args, **kwargs)
 
-    with patch.object(dev_director, "_run_claude", return_value=("done", 0.0, 1, False)), \
+    with patch.object(dev_director, "_run_claude", return_value=("done", 0.0, 1, False, None)), \
          patch.object(dev_director, "_run_tests", return_value=(False, "FAILED")), \
          patch.object(dev_director, "_review", return_value=("NOT DONE", False)), \
          patch.object(dev_director, "_cleanup_worktree", side_effect=tracking_cleanup), \
@@ -670,3 +670,79 @@ def test_cleanup_runs_on_escalation(tmp_path):
 
     assert result.needs_human is True
     assert len(cleanup_calls) == 1, "cleanup must run exactly once even on escalation"
+
+
+# ---------------------------------------------------------------------------
+# Slice 1.5b: session_id capture + resume flag
+# ---------------------------------------------------------------------------
+
+
+def test_dev_director_session_id_captured():
+    """_run_claude extracts session_id from JSON; DirectorLoopResult carries it."""
+    from axi.dev_director import _run_claude
+
+    captured_args: list = []
+
+    def fake_subprocess_run(args, **kwargs):
+        captured_args.extend(args)
+        stdout = json.dumps({
+            "result": "all done",
+            "session_id": "sess-abc123",
+            "total_cost_usd": 0.01,
+            "num_turns": 2,
+            "is_error": False,
+        })
+        return CompletedProcess(args=list(args), returncode=0, stdout=stdout, stderr="")
+
+    with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})):
+        summary, cost, turns, is_error, session_id = _run_claude("/tmp", "instr", 60.0, {})
+
+    assert session_id == "sess-abc123"
+    assert is_error is False
+    assert summary == "all done"
+
+
+def test_dev_director_session_id_in_loop_result(tmp_path):
+    """run_director_loop passes session_id through to DirectorLoopResult.session_id."""
+    repo = _make_repo(tmp_path)
+
+    def fake_run_claude(worktree, instruction, timeout, env, *, resume_session_id=None):
+        return ("done", 0.01, 2, False, "sess-loop-xyz")
+
+    with patch.object(dev_director, "_run_claude", side_effect=fake_run_claude), \
+         patch.object(dev_director, "_run_tests", return_value=(True, "passed")), \
+         patch.object(dev_director, "_review", return_value=("DONE: ok", True)), \
+         patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"):
+        result = run_director_loop(
+            "Any goal", str(repo), max_rounds=1, _branch_id="sessloop",
+            **_LOOP_KWARGS,
+        )
+
+    assert result.session_id == "sess-loop-xyz"
+
+
+def test_dev_director_resume_adds_flag():
+    """When resume_session_id is passed to _run_claude, --resume appears in argv."""
+    from axi.dev_director import _run_claude
+
+    captured_args: list = []
+
+    def fake_subprocess_run(args, **kwargs):
+        captured_args.extend(args)
+        stdout = json.dumps({
+            "result": "resumed",
+            "session_id": "sess-new",
+            "total_cost_usd": 0.0,
+            "num_turns": 1,
+            "is_error": False,
+        })
+        return CompletedProcess(args=list(args), returncode=0, stdout=stdout, stderr="")
+
+    with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})):
+        _run_claude("/tmp", "instr", 60.0, {}, resume_session_id="old-sess-id")
+
+    assert "--resume" in captured_args
+    idx = captured_args.index("--resume")
+    assert captured_args[idx + 1] == "old-sess-id"

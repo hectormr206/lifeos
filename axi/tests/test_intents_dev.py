@@ -107,33 +107,27 @@ def test_handlers_table_contains_dev_develop() -> None:
 
 def test_dev_develop_handler_no_goal() -> None:
     fake_daemon = MagicMock()
-    with patch("axi.intents.threading") as mock_threading, \
-         patch("axi.output.notify", return_value=None):
+    with patch("axi.output.notify", return_value=None):
         result = intents._h_dev_develop(fake_daemon, params={})  # noqa: SLF001
     assert "no-goal" in result
-    mock_threading.Thread.assert_not_called()
 
 
-# ── dev_develop handler: spawns thread on valid goal ────────────────────────
+# ── dev_develop handler: calls dev_run.start_dev_run on valid goal ───────────
 
-def test_dev_develop_handler_spawns_thread() -> None:
+def test_dev_develop_handler_calls_start_dev_run() -> None:
     fake_daemon = MagicMock()
-    spawned: list = []
+    started: list[str] = []
 
-    class FakeThread:
-        def __init__(self, target=None, daemon=None, **_kw):
-            spawned.append(target)
+    def fake_start(goal: str) -> str:
+        started.append(goal)
+        return "20260625-120000-abc123"
 
-        def start(self):
-            pass
-
-    with patch("axi.intents.threading") as mock_threading, \
+    with patch("axi.dev_run.start_dev_run", side_effect=fake_start), \
          patch("axi.output.notify", return_value=None), \
          patch("axi.speak.speak", return_value=True):
-        mock_threading.Thread.side_effect = FakeThread
         result = intents._h_dev_develop(  # noqa: SLF001
             fake_daemon, params={"goal": "una función de prueba"}
         )
 
     assert result == "dev_develop:started"
-    assert mock_threading.Thread.called
+    assert started == ["una función de prueba"]
