@@ -199,6 +199,35 @@ def _create_worktree(repo_path: str, worktree_path: str, branch_name: str) -> tu
     return True, ""
 
 
+def _claude_resilience_flags() -> tuple[list[str], dict[str, str]]:
+    """Flags + env that keep a long unattended headless run alive (verified vs
+    the Claude Code docs). Returns (extra_argv, extra_env).
+
+    - --bare: skip CLAUDE.md/MCP/skill discovery — the dev subprocess just codes,
+      it should NOT load the heavy LifeOS persona/engram.
+    - --max-turns / --max-budget-usd: hard runaway caps (turns + cost).
+    - --fallback-model: auto-fallback when the primary model is overloaded.
+    - CLAUDE_CODE_RETRY_WATCHDOG=1: retry 429/overload INDEFINITELY (capacity bursts).
+    - CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0: remove the 10-min background wait cap.
+    """
+    from axi import config  # noqa: PLC0415
+    max_turns = int(config.get("dev_director_max_turns", 60))
+    max_budget = float(config.get("dev_director_max_budget_usd", 5.0))
+    fallbacks = str(config.get("dev_director_fallback_models", "sonnet,haiku"))
+    argv = [
+        "--bare",
+        "--max-turns", str(max_turns),
+        "--max-budget-usd", str(max_budget),
+    ]
+    if fallbacks.strip():
+        argv += ["--fallback-model", fallbacks.strip()]
+    extra_env = {
+        "CLAUDE_CODE_RETRY_WATCHDOG": "1",
+        "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0",
+    }
+    return argv, extra_env
+
+
 def _run_claude(
     worktree_path: str,
     instruction: str,
@@ -206,18 +235,21 @@ def _run_claude(
     env: dict,
 ) -> tuple[str, float, int, bool]:
     """Run claude CLI with the given instruction. Returns (summary, cost_usd, num_turns, is_error)."""
+    extra_argv, extra_env = _claude_resilience_flags()
+    run_env = {**env, **extra_env}
     proc = subprocess.run(
         [
             "claude",
             "-p", instruction,
             "--output-format", "json",
             "--permission-mode", "bypassPermissions",
+            *extra_argv,
         ],
         cwd=worktree_path,
         timeout=timeout,
         capture_output=True,
         text=True,
-        env=env,
+        env=run_env,
     )
     summary = ""
     cost = 0.0

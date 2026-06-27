@@ -578,6 +578,23 @@ FIELDS: tuple[ConfigField, ...] = (
         maximum=8,
     ),
     ConfigField(
+        "dev_director_max_turns", "integer", 60,
+        "Hard cap on Claude Code agent turns per round (--max-turns) — runaway guard.",
+        minimum=1,
+        maximum=1000,
+    ),
+    ConfigField(
+        "dev_director_max_budget_usd", "number", 5.0,
+        "Hard spend cap per Claude Code round in USD (--max-budget-usd).",
+        minimum=0.1,
+        maximum=1000.0,
+    ),
+    ConfigField(
+        "dev_director_fallback_models", "string", "sonnet,haiku",
+        "Comma-separated --fallback-model list for Claude Code when the primary "
+        "model is overloaded. Empty disables the flag.",
+    ),
+    ConfigField(
         "dev_director_test_command", "string", "tests/test_dev_director.py -q",
         "Pytest arguments (after `-m pytest`) to run in the worktree after each Claude round. "
         "PYTHONPATH is set to <worktree>/axi/src so the worktree's code is tested, not the live install.",
