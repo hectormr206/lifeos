@@ -55,10 +55,15 @@ class DomainSpec:
                          to auto-generate the general chat's router prompt.
     store_delete       — (entry_id) -> bool soft-delete, used by the data view.
                          Optional (None when the store has no delete).
+    extract_system     — a str, OR a callable(now)->str for prompts that need the
+                         current date (e.g. Calendario resolves "el viernes").
+    list_detail        — optional (entry)->str clean one-liner of the domain's
+                         values for the data view (e.g. "200 MXN · comida"). The
+                         title alone often suffices, so this is optional.
     """
     key: str
     name: str
-    extract_system: str
+    extract_system: "str | Callable[[Any], str]"
     build_entries: Callable[[dict[str, Any], str], list[dict[str, Any]]]
     store_create: Callable[..., Any]
     store_list_recent: Callable[..., list]
@@ -68,6 +73,7 @@ class DomainSpec:
     router_hint: str
     store_delete: Callable[[str], bool] | None = None
     store_update_title: Callable[[str, str], bool] | None = None
+    list_detail: Callable[[Any], str] | None = None
 
 
 # ─── shared helpers (domain-agnostic) ───────────────────────────────────────
@@ -255,7 +261,10 @@ def handle_message(
             return {"mode": "error", "answer": f"No recibí ningún mensaje de {spec.name}."}
 
         # Step 1 — classify + extract in ONE call, thinking OFF.
-        raw = brain_ask(clean, system=spec.extract_system, think=False, max_tokens=256)
+        # extract_system may be dynamic (callable(now)) so a domain can inject the
+        # current date — e.g. Calendario resolving "el viernes" to a real date.
+        system = spec.extract_system(now) if callable(spec.extract_system) else spec.extract_system
+        raw = brain_ask(clean, system=system, think=False, max_tokens=256)
         if not isinstance(raw, str):
             raw = str(raw)
         try:

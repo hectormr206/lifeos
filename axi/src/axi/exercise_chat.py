@@ -70,6 +70,12 @@ def _format_record(e: Any, local_date: str) -> str:
     return f"- id={e.id} fecha={local_date} kind={e.kind} title={e.title}{extra}"
 
 
+def _list_detail(e: Any) -> str:
+    """Clean value line for the data view: '30 min'."""
+    dur = getattr(e, "duration_minutes", None)
+    return f"{int(dur)} min" if dur else ""
+
+
 EXERCISE_SPEC = DomainSpec(
     key="exercise",
     name="Ejercicio",
@@ -84,4 +90,5 @@ EXERCISE_SPEC = DomainSpec(
                 "deportes, gimnasio, entrenar",
     store_delete=lambda eid: ex_sessions.delete(eid),
     store_update_title=lambda eid, title: ex_sessions.update_title(eid, title),
+    list_detail=_list_detail,
 )

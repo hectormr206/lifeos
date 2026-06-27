@@ -24,35 +24,50 @@ _VALID_KINDS = {
 }
 _DEFAULT_KIND = "other"
 
-_EXTRACT_SYSTEM = """Eres el clasificador del chat de CALENDARIO de Axi. Tu ÚNICO
+_WEEKDAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+
+
+def _extract_system(now) -> str:
+    """Dynamic prompt — injects TODAY so the model resolves relative dates
+    ("el viernes", "mañana") to a real YYYY-MM-DD."""
+    today = now.strftime("%Y-%m-%d")
+    weekday = _WEEKDAYS_ES[now.weekday()]
+    return f"""Eres el clasificador del chat de CALENDARIO de Axi. Tu ÚNICO
 trabajo es leer el mensaje del usuario y devolver un objeto JSON estricto. NO
 converses, NO expliques, NO uses Markdown: SOLO el JSON.
 
+HOY es {today} ({weekday}).
+
 Esquema EXACTO (usa null cuando no aplique):
-{
+{{
   "intent": "register" | "query" | "off_topic",
   "kind": "travel" | "party" | "milestone" | "anniversary" | "birthday" | "meeting" | "deadline" | "other" | null,
   "title": cadena|null,   // resumen corto del evento
-  "date": cadena|null     // fecha del evento en formato YYYY-MM-DD, solo si el usuario la menciona explícitamente
-}
+  "date": cadena|null     // fecha del evento en formato YYYY-MM-DD
+}}
 
 CALENDARIO = eventos y fechas: viajes, cumpleaños, aniversarios, fiestas,
 reuniones, hitos de vida, plazos/deadlines. NO es de aquí: salud, ejercicio,
 finanzas, relaciones cotidianas sin fecha fija, espiritualidad, aprendizaje.
 
 Reglas de intent:
-- "off_topic": el mensaje NO es un evento con fecha. Campos en null salvo intent.
+- "off_topic": el mensaje NO es un evento. Campos en null salvo intent.
 - "query": PREGUNTA por eventos ("qué tengo esta semana", "cuándo es el viaje").
 - "register": REPORTA un evento ("tengo viaje el viernes", "cumpleaños de mamá
-  el 10 de julio", "reunión con el cliente el 2026-07-15").
+  el 10 de julio", "reunión el 2026-07-15").
 
 Reglas de kind (solo para register): travel=viaje; birthday=cumpleaños;
 anniversary=aniversario; party=fiesta/celebración; meeting=reunión/cita;
 milestone=hito de vida; deadline=plazo/entrega; other=otro. Si dudas: "other".
 
-Regla de date: extrae la fecha SOLO si el usuario la menciona claramente. Escribe
-YYYY-MM-DD. Si la fecha es relativa ("el viernes", "mañana") y no podés resolver
-el día exacto, usa null — el sistema registra la hora actual como referencia.
+Regla de date — RESOLVÉ contra HOY ({today}) y escribí SIEMPRE YYYY-MM-DD:
+- "hoy" → {today}; "mañana" → HOY+1 día; "pasado mañana" → HOY+2.
+- "el viernes" / "el próximo viernes" → el próximo viernes EN O DESPUÉS de HOY
+  (igual para cualquier día de la semana).
+- "la próxima semana" → mismo día de la semana, 7 días después de HOY.
+- "10 de julio" / "el 10/7" → ese día; si el año no se dice, usá el más próximo
+  que sea HOY o futuro.
+- Si de verdad NO hay ninguna fecha mencionada ni inferible, usa null.
 
 Devuelve SOLO el JSON, sin texto adicional."""
 
@@ -123,7 +138,7 @@ def _store_list_recent(**kw) -> list:
 CALENDAR_SPEC = DomainSpec(
     key="calendar",
     name="Calendario",
-    extract_system=_EXTRACT_SYSTEM,
+    extract_system=_extract_system,
     build_entries=_build_entries,
     format_record=simple_format_record,
     store_create=_store_create,
