@@ -235,9 +235,18 @@ def test_transcribe_rejects_invalid_b64(client):
 # ───────────────────── daemon transcribe_path: handler ──────────────────────
 
 def _make_wav(path: Path, seconds: float = 0.4, sr: int = 16000) -> None:
-    """Write a small, valid mono 16-bit WAV (silence) for fixture use."""
+    """Write a small, valid mono 16-bit WAV with a soft tone for fixture use.
+
+    Uses a low-amplitude 440 Hz sine (not pure silence): the daemon's
+    transcribe_path energy gate drops near-silent audio (RMS < 0.002) before it
+    ever reaches Whisper, so a silent fixture would never exercise the
+    transcriber. The tone's RMS (~0.04 normalized) clears that floor.
+    """
+    import math
     n = int(seconds * sr)
-    data = struct.pack(f"<{n}h", *([0] * n))
+    amp = 2000  # int16; normalized RMS ≈ 2000/32768/√2 ≈ 0.043 > 0.002 floor
+    samples = [int(amp * math.sin(2 * math.pi * 440 * i / sr)) for i in range(n)]
+    data = struct.pack(f"<{n}h", *samples)
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
