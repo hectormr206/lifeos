@@ -204,8 +204,10 @@ def _claude_resilience_flags() -> tuple[list[str], dict[str, str]]:
     """Flags + env that keep a long unattended headless run alive (verified vs
     the Claude Code docs). Returns (extra_argv, extra_env).
 
-    - --bare: skip CLAUDE.md/MCP/skill discovery — the dev subprocess just codes,
-      it should NOT load the heavy LifeOS persona/engram.
+    NOTE: --bare is intentionally NOT used — it skips the credential/login state
+    too, so a headless run reports "Not logged in" (verified live). The dev
+    subprocess therefore loads the project CLAUDE.md, but auth works.
+
     - --max-turns / --max-budget-usd: hard runaway caps (turns + cost).
     - --fallback-model: auto-fallback when the primary model is overloaded.
     - CLAUDE_CODE_RETRY_WATCHDOG=1: retry 429/overload INDEFINITELY (capacity bursts).
@@ -216,7 +218,6 @@ def _claude_resilience_flags() -> tuple[list[str], dict[str, str]]:
     max_budget = float(config.get("dev_director_max_budget_usd", 5.0))
     fallbacks = str(config.get("dev_director_fallback_models", "sonnet,haiku"))
     argv = [
-        "--bare",
         "--max-turns", str(max_turns),
         "--max-budget-usd", str(max_budget),
     ]
