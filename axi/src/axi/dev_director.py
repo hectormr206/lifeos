@@ -1,15 +1,13 @@
 """
-Axi dev-director — VT-3B directs Claude Code, reviews the result.
+Axi dev-director — Claude Code self-iterates via /goal; VT-3B does semantic review.
 
-run_director_round() orchestrates a single director round:
-  1. VT-3B produces a specific coding instruction for the given goal.
-  2. Claude Code executes the instruction in an isolated git worktree.
-  3. VT-3B reviews the resulting diff and decides DONE / NOT DONE.
-  4. The worktree is cleaned up unconditionally; nothing is committed or pushed.
-
-run_director_loop() extends this to multiple rounds sharing ONE worktree so
-changes accumulate. Corrective instructions are generated from reviewer feedback.
-Nothing is ever committed or pushed.
+run_director_round() is a single-pass helper (VT-3B-directed, legacy path).
+run_director_loop() is the main multi-round loop:
+  1. Compose a /goal instruction so Claude self-iterates to green tests.
+  2. Run the test suite in the worktree (PYTHONPATH-isolated from live install).
+  3. VT-3B reviews the diff *semantically* (does it satisfy the goal?).
+  4. Stop when tests pass AND VT-3B approves; otherwise refine + retry.
+  5. The worktree is cleaned up unconditionally; nothing is ever committed or pushed.
 
 Only stdlib is used for HTTP (urllib.request).
 """
@@ -32,16 +30,8 @@ log = logging.getLogger("axi.dev_director")
 # Regex patterns for stripping VT-3B reasoning artefacts
 # ---------------------------------------------------------------------------
 
-# <think>...</think> blocks — may be multiple, may span newlines.
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
-
-# Unclosed <think> — VibeThinker-3B sometimes runs out of tokens mid-thought,
-# leaving a `<think>` with no closing tag. Strip from the tag to end of string
-# so raw reasoning never leaks into the instruction/review.
 _THINK_UNCLOSED_RE = re.compile(r"<think>.*", re.DOTALL)
-
-# \boxed{...} — single-level brace match (does not handle nested braces, but
-# that is sufficient for the structured outputs VT-3B emits).
 _BOXED_RE = re.compile(r"\\boxed\{([^{}]*)\}")
 
 # ---------------------------------------------------------------------------
@@ -70,11 +60,6 @@ _CORRECTIVE_SYSTEM = (
     "Output only the instruction."
 )
 
-# git pathspecs that exclude build/cache artifacts from the captured diff. When
-# Claude Code runs in the worktree it generates noise (__pycache__, *.pyc, the
-# gentle-ai .atl/ skill registry, pytest caches, etc.) that pollutes the diff and
-# the review. The ":(exclude,glob)" magic makes "**" match nested paths. This only
-# filters what the diff DISPLAYS — nothing is committed (the worktree is thrown away).
 _DIFF_EXCLUDE_PATHSPECS = [
     ".",
     ":(exclude,glob)**/__pycache__/**",
@@ -139,6 +124,9 @@ class DirectorLoopResult:
     total_claude_turns: int
     ok: bool
     error: str | None = None
+    tests_passed: bool = False
+    needs_human: bool = False
+    escalation_reason: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -176,20 +164,26 @@ def _call_vt3b(
         body = json.loads(resp.read().decode())
 
     content: str = body["choices"][0]["message"]["content"]
-
-    # Strip <think>...</think> blocks (closed first, then any unclosed remainder).
     content = _THINK_RE.sub("", content)
     content = _THINK_UNCLOSED_RE.sub("", content)
-
-    # Strip \boxed{...} wrappers, keeping the inner text.
     content = _BOXED_RE.sub(r"\1", content)
-
     return content.strip()
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers (used by both run_director_round and run_director_loop)
+# Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _compose_goal_instruction(goal: str, test_command: str, feedback: str | None = None) -> str:
+    """Build the /goal instruction for Claude Code's self-iteration loop."""
+    base = (
+        f"/goal {goal} — Criterio de éxito: la funcionalidad pedida está implementada "
+        f"Y `{test_command}` pasa en verde."
+    )
+    if feedback:
+        return f"{base}\n\nFeedback anterior (incorporar):\n{feedback}"
+    return base
 
 
 def _create_worktree(repo_path: str, worktree_path: str, branch_name: str) -> tuple[bool, str]:
@@ -240,6 +234,45 @@ def _run_claude(
     return summary, cost, turns, is_error
 
 
+def _run_tests(
+    worktree_path: str,
+    env: dict,
+    test_command: str,
+    venv_python: str,
+    timeout: int = 300,
+) -> tuple[bool, str]:
+    """Run the test suite with the worktree's src on PYTHONPATH.
+
+    Prepends <worktree>/axi/src to PYTHONPATH so the editable live install is
+    shadowed by the worktree's code. Returns (passed, combined_output).
+    """
+    test_env = dict(env)
+    axi_src = os.path.join(worktree_path, "axi", "src")
+    existing_pp = test_env.get("PYTHONPATH", "")
+    test_env["PYTHONPATH"] = f"{axi_src}:{existing_pp}" if existing_pp else axi_src
+
+    cmd = [os.path.expanduser(venv_python), "-m", "pytest"] + test_command.split()
+    cwd = os.path.join(worktree_path, "axi")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=test_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            text=True,
+        )
+        output = proc.stdout or ""
+    except subprocess.TimeoutExpired:
+        return False, f"Tests timed out after {timeout}s"
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+    if len(output) > 3000:
+        output = output[-3000:]
+    return proc.returncode == 0, output
+
+
 def _stage_and_diff(worktree_path: str) -> tuple[str, list[str]]:
     """Stage all changes and return (diff_text, changed_file_list)."""
     subprocess.run(
@@ -262,9 +295,17 @@ def _stage_and_diff(worktree_path: str) -> tuple[str, list[str]]:
     return diff, changed_files
 
 
-def _review(goal: str, diff: str, port: int, max_tokens: int) -> tuple[str, bool]:
-    """Ask VT-3B to review the diff. Returns (review_text, done)."""
+def _review(
+    goal: str,
+    diff: str,
+    port: int,
+    max_tokens: int,
+    test_result: str | None = None,
+) -> tuple[str, bool]:
+    """Ask VT-3B for a semantic review of the diff. Returns (review_text, done)."""
     review_user = f"Goal: {goal}\n\nDiff:\n{diff[:8000]}"
+    if test_result is not None:
+        review_user += f"\n\nTest results:\n{test_result[:2000]}"
     review_text = _call_vt3b(
         _REVIEWER_SYSTEM,
         review_user,
@@ -312,7 +353,7 @@ def _cleanup_worktree(
 
 
 # ---------------------------------------------------------------------------
-# Director round (single pass)
+# Director round (single pass, VT-3B-directed — legacy path)
 # ---------------------------------------------------------------------------
 
 
@@ -324,6 +365,9 @@ def run_director_round(
     claude_timeout: float = 600.0,
     max_director_tokens: int = 2000,
     max_review_tokens: int = 4000,
+    test_command: str = "",
+    venv_python: str = "",
+    test_timeout: int = 300,
     _branch_id: str | None = None,
 ) -> DirectorResult:
     """One director round: VT-3B instructs → Claude Code codes → VT-3B reviews → return result (never commit)."""
@@ -331,7 +375,6 @@ def run_director_round(
     branch_id = _branch_id or uuid4().hex[:8]
     branch_name = f"axi-dev/{branch_id}"
 
-    # Defaults for the result fields in case of early exit.
     _defaults: dict = dict(
         goal=goal,
         instruction="",
@@ -345,7 +388,6 @@ def run_director_round(
         review_feedback="",
     )
 
-    # ── Guard: claude CLI must be available ──────────────────────────────────
     if shutil.which("claude") is None:
         return DirectorResult(
             **_defaults,
@@ -357,7 +399,6 @@ def run_director_round(
     worktree_path = os.path.join(tmp_parent, f"axi-dev-{branch_id}")
 
     try:
-        # Step 1: VT-3B produces a coding instruction.
         instruction = _call_vt3b(
             _DIRECTOR_SYSTEM,
             f"Goal: {goal}",
@@ -366,12 +407,10 @@ def run_director_round(
         )
         _defaults["instruction"] = instruction
 
-        # Step 2: Create an isolated git worktree on a fresh branch.
         ok, err = _create_worktree(repo_path, worktree_path, branch_name)
         if not ok:
             return DirectorResult(**_defaults, ok=False, error=err)
 
-        # Step 3: Run Claude Code with the instruction.
         env = os.environ.copy()
         summary, cost, turns, is_error = _run_claude(worktree_path, instruction, claude_timeout, env)
 
@@ -385,10 +424,7 @@ def run_director_round(
                 error="claude reported is_error=true",
             )
 
-        # Step 4: Stage all changes and capture the diff.
         diff, changed_files = _stage_and_diff(worktree_path)
-
-        # Step 5: VT-3B reviews the diff.
         review_text, review_done = _review(goal, diff, director_port, max_review_tokens)
 
         return DirectorResult(
@@ -414,12 +450,11 @@ def run_director_round(
         )
 
     finally:
-        # Always clean up the worktree and branch — never commit or push.
         _cleanup_worktree(repo_path, worktree_path, branch_name, tmp_parent)
 
 
 # ---------------------------------------------------------------------------
-# Director loop (multi-round, shared worktree)
+# Director loop (multi-round, /goal inner loop + test gate)
 # ---------------------------------------------------------------------------
 
 
@@ -430,28 +465,41 @@ def run_director_loop(
     max_rounds: int = 4,
     director_port: int = 8082,
     claude_timeout: float = 600.0,
-    max_director_tokens: int = 2000,
     max_review_tokens: int = 4000,
+    test_command: str = "tests/ -q",
+    venv_python: str = "~/LifeOS/lifeos/axi/.venv/bin/python",
+    test_timeout: int = 300,
+    branch_prefix: str = "axi/self-build",
     _branch_id: str | None = None,
 ) -> DirectorLoopResult:
     """
-    Multi-round director loop sharing ONE worktree so changes accumulate.
-
-    Round 1 uses a direct instruction from the goal. Subsequent rounds use
-    corrective instructions generated from the reviewer's feedback on the
-    accumulated diff. Nothing is ever committed or pushed; the worktree is
-    deleted in the finally block regardless of outcome.
+    Multi-round loop: Claude self-iterates via /goal, tests run in the worktree,
+    VT-3B does a semantic review. Stops when tests pass AND VT-3B approves.
+    Escalates to needs_human=True if max_rounds is exhausted without success.
+    Nothing is ever committed or pushed; the worktree is deleted in the finally block.
     """
     max_rounds = max(_MIN_ROUNDS_FLOOR, min(max_rounds, _MAX_ROUNDS_CEILING))
 
     branch_id = _branch_id or uuid4().hex[:8]
-    branch_name = f"axi-dev/{branch_id}"
+    branch_name = f"{branch_prefix.rstrip('/')}/{branch_id}"
 
     rounds: list[DirectorRoundInfo] = []
     total_cost = 0.0
     total_turns = 0
+    tests_passed_ever = False
+    last_tests_passed = False
+    last_test_output = ""
+    last_feedback: str | None = None
 
-    def _early_exit(*, done: bool, ok: bool, error: str | None = None) -> DirectorLoopResult:
+    def _early_exit(
+        *,
+        done: bool,
+        ok: bool,
+        error: str | None = None,
+        tests_passed: bool = False,
+        needs_human: bool = False,
+        escalation_reason: str = "",
+    ) -> DirectorLoopResult:
         final_diff = rounds[-1].diff if rounds else ""
         final_files = rounds[-1].changed_files if rounds else []
         return DirectorLoopResult(
@@ -466,9 +514,11 @@ def run_director_loop(
             total_claude_turns=total_turns,
             ok=ok,
             error=error,
+            tests_passed=tests_passed,
+            needs_human=needs_human,
+            escalation_reason=escalation_reason,
         )
 
-    # ── Guard: claude CLI must be available ──────────────────────────────────
     if shutil.which("claude") is None:
         return DirectorLoopResult(
             goal=goal,
@@ -488,7 +538,6 @@ def run_director_loop(
     worktree_path = os.path.join(tmp_parent, f"axi-dev-{branch_id}")
 
     try:
-        # Create ONE shared worktree for all rounds.
         ok, err = _create_worktree(repo_path, worktree_path, branch_name)
         if not ok:
             return DirectorLoopResult(
@@ -505,19 +554,13 @@ def run_director_loop(
                 error=err,
             )
 
-        # Round 1 instruction comes directly from the goal.
-        instruction = _call_vt3b(
-            _DIRECTOR_SYSTEM,
-            f"Goal: {goal}",
-            port=director_port,
-            max_tokens=max_director_tokens,
-        )
-
         env = os.environ.copy()
 
         for round_idx in range(max_rounds):
+            goal_instruction = _compose_goal_instruction(goal, test_command, last_feedback)
+
             summary, cost, turns, is_error = _run_claude(
-                worktree_path, instruction, claude_timeout, env
+                worktree_path, goal_instruction, claude_timeout, env
             )
             total_cost += cost
             total_turns += turns
@@ -525,7 +568,7 @@ def run_director_loop(
             if is_error:
                 rounds.append(DirectorRoundInfo(
                     round_index=round_idx,
-                    instruction=instruction,
+                    instruction=goal_instruction,
                     diff="",
                     changed_files=[],
                     claude_summary=summary,
@@ -537,11 +580,21 @@ def run_director_loop(
                 return _early_exit(done=False, ok=False, error="claude reported is_error=true")
 
             diff, changed_files = _stage_and_diff(worktree_path)
-            review_text, review_done = _review(goal, diff, director_port, max_review_tokens)
+
+            last_tests_passed, last_test_output = _run_tests(
+                worktree_path, env, test_command, venv_python, test_timeout
+            )
+            if last_tests_passed:
+                tests_passed_ever = True
+
+            review_text, review_done = _review(
+                goal, diff, director_port, max_review_tokens, test_result=last_test_output
+            )
+            last_feedback = review_text
 
             rounds.append(DirectorRoundInfo(
                 round_index=round_idx,
-                instruction=instruction,
+                instruction=goal_instruction,
                 diff=diff,
                 changed_files=changed_files,
                 claude_summary=summary,
@@ -551,29 +604,34 @@ def run_director_loop(
                 review_feedback=review_text,
             ))
 
-            if review_done:
-                return _early_exit(done=True, ok=True)
+            if last_tests_passed and review_done:
+                return _early_exit(done=True, ok=True, tests_passed=True)
 
-            # Generate a corrective instruction for the next round (if any remain).
-            if round_idx + 1 < max_rounds:
-                corrective_user = (
-                    f"Goal: {goal}\n\n"
-                    f"Accumulated diff so far:\n{diff[:8000]}\n\n"
-                    f"Reviewer feedback: {review_text}"
-                )
-                instruction = _call_vt3b(
-                    _CORRECTIVE_SYSTEM,
-                    corrective_user,
-                    port=director_port,
-                    max_tokens=max_director_tokens,
-                )
+        # Exhausted max_rounds — escalate with diagnosis
+        if not tests_passed_ever:
+            tail = last_test_output[-500:] if last_test_output else "(no output)"
+            escalation_reason = (
+                f"Tests did not pass after {max_rounds} rounds. "
+                f"Last test output: {tail}"
+            )
+        else:
+            escalation_reason = (
+                f"Tests passed but VT-3B reviewer did not approve after {max_rounds} rounds. "
+                f"Likely VT-3B too strict or diff is semantically incomplete per reviewer. "
+                f"Last feedback: {last_feedback}"
+            )
 
-        return _early_exit(done=False, ok=True)
+        return _early_exit(
+            done=False,
+            ok=True,
+            tests_passed=last_tests_passed,
+            needs_human=True,
+            escalation_reason=escalation_reason,
+        )
 
     except Exception as exc:  # noqa: BLE001
         log.exception("dev_director loop failed: %s", exc)
         return _early_exit(done=False, ok=False, error=str(exc))
 
     finally:
-        # Always clean up — never commit or push.
         _cleanup_worktree(repo_path, worktree_path, branch_name, tmp_parent)

@@ -25,7 +25,10 @@ def _make_slug(goal: str, max_len: int = 40) -> str:
 
 
 def _ensure_git_repo(path: Path) -> None:
-    """Create the directory + git repo with an initial commit if needed."""
+    """Create the directory + git repo with an initial commit if needed.
+
+    If path already has a .git directory (e.g. the real LifeOS repo), skip init entirely.
+    """
     path.mkdir(parents=True, exist_ok=True)
     if not (path / ".git").exists():
         _env = {
@@ -59,17 +62,33 @@ def run_dev_task(goal: str) -> str:
         from axi.dev_director import run_director_loop
 
         repo_path = Path(
-            os.path.expanduser(config.get("dev_director_repo", "~/LifeOS/dev-workspace"))
+            os.path.expanduser(config.get("dev_director_repo", "~/LifeOS/lifeos"))
         ).resolve()
         results_dir = Path(
             os.path.expanduser(config.get("dev_director_results_dir", "~/LifeOS/dev-results"))
         ).resolve()
         max_rounds: int = int(config.get("dev_director_max_rounds", 3))
+        test_command: str = config.get(
+            "dev_director_test_command", "tests/test_dev_director.py -q"
+        )
+        venv_python: str = os.path.expanduser(
+            config.get("dev_director_venv_python", "~/LifeOS/lifeos/axi/.venv/bin/python")
+        )
+        test_timeout: int = int(config.get("dev_director_test_timeout", 300))
+        branch_prefix: str = config.get("dev_director_branch_prefix", "axi/self-build")
 
         _ensure_git_repo(repo_path)
         results_dir.mkdir(parents=True, exist_ok=True)
 
-        result = run_director_loop(goal, str(repo_path), max_rounds=max_rounds)
+        result = run_director_loop(
+            goal,
+            str(repo_path),
+            max_rounds=max_rounds,
+            test_command=test_command,
+            venv_python=venv_python,
+            test_timeout=test_timeout,
+            branch_prefix=branch_prefix,
+        )
 
         slug = _make_slug(goal)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -84,6 +103,7 @@ def run_dev_task(goal: str) -> str:
                 f"Revisá los logs para más detalles."
             )
 
+        tests_note = "tests en verde" if result.tests_passed else "tests fallaron"
         status_word = "DONE" if result.done else "MAX RONDAS"
         files_str = ", ".join(result.final_changed_files[:5]) or "(ninguno)"
         if len(result.final_changed_files) > 5:
@@ -95,12 +115,19 @@ def run_dev_task(goal: str) -> str:
             else f"No hubo cambios en el diff. Archivo guardado en {patch_path}."
         )
 
-        return (
+        summary = (
             f"Listo: desarrollé '{goal}' en {result.rounds_used} ronda(s) "
-            f"({status_word}), ${result.total_cost_usd:.4f}. "
+            f"({status_word}, {tests_note}), ${result.total_cost_usd:.4f}. "
             f"Archivos: {files_str}. "
             f"{diff_note}"
         )
+
+        if result.needs_human:
+            summary += (
+                f"\n\nREQUIERE REVISIÓN HUMANA: {result.escalation_reason}"
+            )
+
+        return summary
 
     except Exception as exc:  # noqa: BLE001
         log.exception("run_dev_task failed for goal=%r: %s", goal, exc)
