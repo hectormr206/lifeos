@@ -35,23 +35,53 @@
             <span x-text="e.date"></span>
             <span x-show="e.kind" x-text="' · ' + e.kind"></span>
           </div>
-          <div class="text-sm md:text-base break-words" x-text="e.title || '(sin título)'"></div>
-        </div>
-        <div class="shrink-0">
-          <template x-if="confirmId !== e.id">
-            <button type="button" @click="confirmId = e.id"
-                    class="btn" style="padding: 0.3rem 0.55rem; font-size: 0.9rem;"
-                    title="Borrar">🗑</button>
+          <!-- Normal title display -->
+          <template x-if="editId !== e.id">
+            <div class="text-sm md:text-base break-words" x-text="e.title || '(sin título)'"></div>
           </template>
-          <template x-if="confirmId === e.id">
-            <div class="flex items-center gap-1">
-              <span class="text-xs muted">¿Borrar?</span>
-              <button type="button" @click="del(e)"
-                      class="btn" style="padding: 0.25rem 0.55rem; font-size: 0.8rem; background: rgba(238,51,51,0.2); border-color: var(--red);"
-              >Sí</button>
-              <button type="button" @click="confirmId = null"
-                      class="btn" style="padding: 0.25rem 0.55rem; font-size: 0.8rem;"
-              >No</button>
+          <!-- Inline edit input -->
+          <template x-if="editId === e.id">
+            <div class="flex items-center gap-1 mt-0.5">
+              <input type="text" x-model="draftTitle"
+                     @keydown.enter="save(e)"
+                     @keydown.escape="cancelEdit()"
+                     class="border rounded px-2 py-0.5 text-sm flex-1"
+                     style="border-color: var(--border); background: var(--surface); color: inherit;"
+                     :id="'edit-' + e.id"
+                     x-effect="editId === e.id && $nextTick(() => { const el = document.getElementById('edit-' + e.id); if (el) el.focus(); })" />
+              <button type="button" @click="save(e)"
+                      class="btn" style="padding: 0.2rem 0.5rem; font-size: 0.78rem;">Guardar</button>
+              <button type="button" @click="cancelEdit()"
+                      class="btn" style="padding: 0.2rem 0.5rem; font-size: 0.78rem;">Cancelar</button>
+            </div>
+          </template>
+        </div>
+        <div class="shrink-0 flex items-center gap-1">
+          <!-- Edit button (hidden while editing or confirming delete) -->
+          <template x-if="editId !== e.id && confirmId !== e.id">
+            <button type="button" @click="startEdit(e)"
+                    class="btn" style="padding: 0.3rem 0.55rem; font-size: 0.9rem;"
+                    title="Editar título">✏</button>
+          </template>
+          <!-- Delete with confirmation (hidden while editing) -->
+          <template x-if="editId !== e.id">
+            <div>
+              <template x-if="confirmId !== e.id">
+                <button type="button" @click="confirmId = e.id"
+                        class="btn" style="padding: 0.3rem 0.55rem; font-size: 0.9rem;"
+                        title="Borrar">🗑</button>
+              </template>
+              <template x-if="confirmId === e.id">
+                <div class="flex items-center gap-1">
+                  <span class="text-xs muted">¿Borrar?</span>
+                  <button type="button" @click="del(e)"
+                          class="btn" style="padding: 0.25rem 0.55rem; font-size: 0.8rem; background: rgba(238,51,51,0.2); border-color: var(--red);"
+                  >Sí</button>
+                  <button type="button" @click="confirmId = null"
+                          class="btn" style="padding: 0.25rem 0.55rem; font-size: 0.8rem;"
+                  >No</button>
+                </div>
+              </template>
             </div>
           </template>
         </div>
@@ -67,6 +97,8 @@ function dataView() {
     entries: [],
     loading: true,
     confirmId: null,
+    editId: null,
+    draftTitle: '',
     error: null,
 
     async load() {
@@ -81,6 +113,38 @@ function dataView() {
         this.error = 'No pude cargar los registros: ' + (e.message || e);
       } finally {
         this.loading = false;
+      }
+    },
+
+    startEdit(e) {
+      this.editId = e.id;
+      this.draftTitle = e.title || '';
+      this.confirmId = null;
+    },
+
+    cancelEdit() {
+      this.editId = null;
+      this.draftTitle = '';
+    },
+
+    async save(e) {
+      const newTitle = this.draftTitle.trim();
+      if (!newTitle) { this.error = 'El título no puede estar vacío.'; return; }
+      try {
+        const r = await fetch('/api/data/' + this.domain + '/' + encodeURIComponent(e.id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        // Update in place
+        const idx = this.entries.findIndex(x => x.id === e.id);
+        if (idx !== -1) this.entries[idx] = { ...this.entries[idx], title: newTitle };
+      } catch (err) {
+        this.error = 'No pude guardar: ' + (err.message || err);
+      } finally {
+        this.editId = null;
+        this.draftTitle = '';
       }
     },
 

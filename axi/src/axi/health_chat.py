@@ -169,6 +169,7 @@ HEALTH_SPEC = DomainSpec(
     router_hint="salud física/médica: presión, glucosa, peso, pulso, sueño, "
                 "síntomas, dolor, enfermedad, medicamentos, estudios médicos",
     store_delete=lambda eid: health_entries.delete(eid),
+    store_update_title=lambda eid, title: health_entries.update_title(eid, title),
 )
 
 

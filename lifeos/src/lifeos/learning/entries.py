@@ -236,3 +236,13 @@ def delete(eid: str) -> bool:
             (eid,),
         )
         return cur.rowcount > 0
+
+
+def update_title(eid: str, title: str) -> bool:
+    """Update only the title of a non-deleted learning entry."""
+    with store.connect() as conn:
+        cur = conn.execute(
+            "UPDATE learning_entries SET title=? WHERE id=? AND deleted_at IS NULL",
+            (title, eid),
+        )
+        return cur.rowcount > 0

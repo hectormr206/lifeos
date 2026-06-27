@@ -50,4 +50,5 @@ LEARN_SPEC = DomainSpec(
     router_hint="conocimiento: libros, cursos, artículos, ideas, preguntas de "
                 "investigación, notas de estudio, citas",
     store_delete=lambda eid: learn_entries.delete(eid),
+    store_update_title=lambda eid, title: learn_entries.update_title(eid, title),
 )
