@@ -2589,12 +2589,20 @@ def api_data_list(domain: str, days: int = 365, limit: int = 200):
             detail = spec.format_record(e, day_str)
         except Exception:  # noqa: BLE001
             pass
+        # Clean value line for the UI (e.g. "200 MXN · comida"). Optional.
+        summary = ""
+        if spec.list_detail is not None:
+            try:
+                summary = spec.list_detail(e) or ""
+            except Exception:  # noqa: BLE001
+                summary = ""
         out.append({
             "id": getattr(e, "id", ""),
             "date": date_str,
             "kind": getattr(e, "kind", ""),
             "title": getattr(e, "title", ""),
             "detail": detail,
+            "summary": summary,
         })
     return {"domain": domain, "name": spec.name, "count": len(out), "entries": out}
 

@@ -111,6 +111,15 @@ def _store_create(*, kind, title, when, body, data, source, raw_utterance):
     )
 
 
+def _list_detail(e: Any) -> str:
+    """Clean value line for the data view: '200 MXN · comida'."""
+    cat = f" · {e.category}" if getattr(e, "category", None) else ""
+    try:
+        return f"{e.amount:.0f} {e.currency}{cat}"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _format_record(e: Any, local_date: str) -> str:
     """One query-prompt line for a finance entry (id/date/kind/title/amount/cat)."""
     cat = e.category or "—"
@@ -135,4 +144,5 @@ FINANCE_SPEC = DomainSpec(
                 "precios, compras, presupuesto, cuentas",
     store_delete=lambda eid: finance_entries.delete(eid),
     store_update_title=lambda eid, title: finance_entries.update_title(eid, title),
+    list_detail=_list_detail,
 )

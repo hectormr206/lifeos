@@ -122,3 +122,12 @@ def test_off_topic_saves_nothing(monkeypatch):
 
     assert res["mode"] == "off_topic"
     assert calls == []
+
+
+def test_extract_system_is_dynamic_and_has_today():
+    """The calendar prompt must be a callable(now) that injects today's date so
+    the model can resolve relative dates like 'el viernes'."""
+    assert callable(CALENDAR_SPEC.extract_system)
+    prompt = CALENDAR_SPEC.extract_system(NOW)
+    assert "2026-06-26" in prompt          # NOW's date
+    assert "viernes" in prompt             # NOW's weekday (resolution anchor)

@@ -132,3 +132,12 @@ def test_off_topic_saves_nothing(monkeypatch):
     assert res["mode"] == "off_topic"
     assert "Finanzas" in res["answer"]
     assert created == []
+
+
+def test_list_detail_summary():
+    """list_detail gives the data view a clean value line."""
+    class _E:
+        amount = 200.0
+        currency = "MXN"
+        category = "comida"
+    assert FINANCE_SPEC.list_detail(_E()) == "200 MXN · comida"

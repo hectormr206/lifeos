@@ -37,7 +37,12 @@
           </div>
           <!-- Normal title display -->
           <template x-if="editId !== e.id">
-            <div class="text-sm md:text-base break-words" x-text="e.title || '(sin título)'"></div>
+            <div>
+              <div class="text-sm md:text-base break-words" x-text="e.title || '(sin título)'"></div>
+              <template x-if="e.summary">
+                <div class="text-xs mt-0.5" style="color: var(--blue);" x-text="e.summary"></div>
+              </template>
+            </div>
           </template>
           <!-- Inline edit input -->
           <template x-if="editId === e.id">
