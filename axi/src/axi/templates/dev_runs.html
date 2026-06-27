@@ -1,0 +1,261 @@
+{% extends "_base.html" %}
+{% block title %}Dev Runs · Axi{% endblock %}
+
+{% block content %}
+<div x-data="devRuns()" x-init="load()" class="max-w-3xl mx-auto">
+
+  <div class="flex items-center justify-between mb-4 gap-2">
+    <h1 class="text-xl font-semibold">Dev Runs</h1>
+    <button type="button" @click="load()" class="btn" style="padding: 0.35rem 0.8rem; font-size: 0.85rem;"
+            :disabled="loading">↺ Actualizar</button>
+  </div>
+
+  <template x-if="error">
+    <div class="text-sm px-3 py-2 rounded-lg mb-3"
+         style="background: rgba(238,51,51,0.1); color: var(--red); border: 1px solid var(--red)"
+         x-text="error"></div>
+  </template>
+
+  <template x-if="loading && runs.length === 0">
+    <div class="muted text-sm text-center py-10">Cargando runs…</div>
+  </template>
+
+  <template x-if="!loading && runs.length === 0">
+    <div class="muted text-sm text-center py-10">No hay dev runs todavía.</div>
+  </template>
+
+  <div class="space-y-3">
+    <template x-for="r in runs" :key="r.run_id">
+      <div class="panel p-4">
+
+        <!-- Header row -->
+        <div class="flex flex-wrap items-start justify-between gap-2 mb-1">
+          <div class="font-semibold text-sm md:text-base break-words flex-1 min-w-0" x-text="r.goal || '(sin objetivo)'"></div>
+          <span class="shrink-0 px-2 py-0.5 rounded text-xs font-mono"
+                :style="badgeStyle(r.status)"
+                x-text="statusLabel(r.status)"></span>
+        </div>
+
+        <!-- Meta row -->
+        <div class="muted text-xs mb-3 flex flex-wrap gap-x-3 gap-y-0.5">
+          <span x-text="'ID: ' + r.run_id.slice(0,16) + '…'"></span>
+          <span x-show="r.started_at" x-text="'Iniciado: ' + fmtDate(r.started_at)"></span>
+          <span x-show="r.rounds_done > 0" x-text="'Rondas: ' + r.rounds_done"></span>
+        </div>
+
+        <!-- needs_human / error info -->
+        <template x-if="r.status === 'needs_human' && r.escalation_reason">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(245,158,11,0.1); border: 1px solid var(--amber); color: var(--amber)">
+            <span class="font-semibold">Requiere revisión: </span><span x-text="r.escalation_reason"></span>
+          </div>
+        </template>
+        <template x-if="r.status === 'error' && r.error">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(238,51,51,0.1); border: 1px solid var(--red); color: var(--red)"
+               x-text="r.error"></div>
+        </template>
+
+        <!-- landed info -->
+        <template x-if="r.status === 'landed'">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(0,180,160,0.1); border: 1px solid var(--teal); color: var(--teal)">
+            Rama subida a GitHub — revisá/mergeá el PR y luego instalá.<br>
+            <span class="font-mono text-xs" x-text="r.landed_branch || ''"></span>
+            <template x-if="r.push_ok === false">
+              <span class="ml-2 text-xs opacity-70">(push falló — rama local creada pero no subida)</span>
+            </template>
+          </div>
+        </template>
+
+        <!-- Approve result (after action) -->
+        <template x-if="approveResult[r.run_id] && approveResult[r.run_id].ok">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(0,180,160,0.1); border: 1px solid var(--teal); color: var(--teal)">
+            Rama subida a GitHub — revisá/mergeá el PR y luego instalá.<br>
+            <span class="font-mono text-xs" x-text="approveResult[r.run_id].branch"></span>
+          </div>
+        </template>
+        <template x-if="approveResult[r.run_id] && !approveResult[r.run_id].ok">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(238,51,51,0.1); border: 1px solid var(--red); color: var(--red)"
+               x-text="'Error al aterrizar: ' + approveResult[r.run_id].error"></div>
+        </template>
+
+        <!-- Actions for done runs -->
+        <template x-if="r.status === 'done' && r.has_patch && !approveResult[r.run_id]">
+          <div class="flex flex-wrap gap-2 mb-3">
+            <button type="button"
+                    @click="approve(r.run_id)"
+                    :disabled="actionPending[r.run_id]"
+                    class="btn"
+                    style="background: var(--teal); color: #fff; border-color: var(--teal); padding: 0.4rem 1rem; font-size: 0.85rem;">
+              <span x-show="!actionPending[r.run_id]">Aprobar y subir</span>
+              <span x-show="actionPending[r.run_id]">Subiendo…</span>
+            </button>
+            <button type="button"
+                    @click="reject(r.run_id)"
+                    :disabled="actionPending[r.run_id]"
+                    class="btn"
+                    style="padding: 0.4rem 1rem; font-size: 0.85rem;">
+              Rechazar
+            </button>
+          </div>
+        </template>
+
+        <!-- Diff expand for done runs -->
+        <template x-if="(r.status === 'done' || r.status === 'landed') && r.has_patch">
+          <div>
+            <button type="button"
+                    @click="toggleDiff(r.run_id)"
+                    class="btn muted"
+                    style="font-size: 0.78rem; padding: 0.2rem 0.6rem; margin-bottom: 0.5rem;">
+              <span x-text="expanded === r.run_id ? 'Ocultar diff' : 'Ver diff'"></span>
+            </button>
+            <template x-if="expanded === r.run_id">
+              <div>
+                <template x-if="diffLoading">
+                  <div class="muted text-xs py-2">Cargando diff…</div>
+                </template>
+                <template x-if="!diffLoading && diffText">
+                  <pre class="text-xs rounded p-3 overflow-x-auto"
+                       style="background: var(--surface); border: 1px solid var(--border); max-height: 28rem; font-size: 0.72rem; line-height: 1.4;"
+                       x-text="diffText"></pre>
+                </template>
+                <template x-if="!diffLoading && !diffText">
+                  <div class="muted text-xs py-2">No hay diff disponible.</div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+
+      </div>
+    </template>
+  </div>
+
+</div>
+
+<script>
+function devRuns() {
+  return {
+    runs: [],
+    loading: true,
+    error: null,
+    expanded: null,
+    diffText: null,
+    diffLoading: false,
+    approveResult: {},   // run_id -> {ok, branch?, error?}
+    actionPending: {},   // run_id -> bool
+
+    async load() {
+      this.loading = true;
+      this.error = null;
+      try {
+        const r = await fetch('/api/dev-runs');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.runs = await r.json();
+      } catch (e) {
+        this.error = 'No pude cargar los runs: ' + (e.message || e);
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async toggleDiff(run_id) {
+      if (this.expanded === run_id) {
+        this.expanded = null;
+        this.diffText = null;
+        return;
+      }
+      this.expanded = run_id;
+      this.diffText = null;
+      this.diffLoading = true;
+      try {
+        const r = await fetch('/api/dev-runs/' + encodeURIComponent(run_id));
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        this.diffText = d.diff || '';
+      } catch (e) {
+        this.diffText = '';
+      } finally {
+        this.diffLoading = false;
+      }
+    },
+
+    async approve(run_id) {
+      if (this.actionPending[run_id]) return;
+      this.actionPending = { ...this.actionPending, [run_id]: true };
+      try {
+        const r = await fetch('/api/dev-runs/' + encodeURIComponent(run_id) + '/approve', {
+          method: 'POST',
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          this.approveResult = { ...this.approveResult, [run_id]: { ok: false, error: d.detail || ('HTTP ' + r.status) } };
+        } else {
+          this.approveResult = { ...this.approveResult, [run_id]: { ok: true, branch: d.branch } };
+          await this.load();
+        }
+      } catch (e) {
+        this.approveResult = { ...this.approveResult, [run_id]: { ok: false, error: e.message || String(e) } };
+      } finally {
+        this.actionPending = { ...this.actionPending, [run_id]: false };
+      }
+    },
+
+    async reject(run_id) {
+      if (this.actionPending[run_id]) return;
+      this.actionPending = { ...this.actionPending, [run_id]: true };
+      try {
+        const r = await fetch('/api/dev-runs/' + encodeURIComponent(run_id) + '/reject', {
+          method: 'POST',
+        });
+        if (r.ok) {
+          await this.load();
+        }
+      } catch (e) {
+        // swallow, UI refreshes on next manual refresh
+      } finally {
+        this.actionPending = { ...this.actionPending, [run_id]: false };
+      }
+    },
+
+    statusLabel(s) {
+      const map = {
+        running: 'En progreso',
+        done: 'Listo',
+        needs_human: 'Revisión humana',
+        error: 'Error',
+        waiting_quota: 'Esperando cuota',
+        landed: 'Aterrizó',
+        rejected: 'Rechazado',
+        interrupted: 'Interrumpido',
+      };
+      return map[s] || s || '…';
+    },
+
+    badgeStyle(s) {
+      const colors = {
+        running:       'background: rgba(99,179,237,0.18); color: var(--blue); border: 1px solid var(--blue)',
+        done:          'background: rgba(72,187,120,0.18); color: var(--green); border: 1px solid var(--green)',
+        needs_human:   'background: rgba(245,158,11,0.18); color: var(--amber); border: 1px solid var(--amber)',
+        error:         'background: rgba(238,51,51,0.18); color: var(--red); border: 1px solid var(--red)',
+        waiting_quota: 'background: rgba(128,128,128,0.18); color: var(--muted); border: 1px solid var(--muted)',
+        landed:        'background: rgba(0,150,136,0.22); color: var(--teal); border: 1px solid var(--teal)',
+        rejected:      'background: rgba(128,128,128,0.18); color: var(--muted); border: 1px solid var(--muted)',
+        interrupted:   'background: rgba(245,158,11,0.12); color: var(--amber); border: 1px solid var(--amber)',
+      };
+      return colors[s] || 'background: rgba(128,128,128,0.1); color: var(--muted); border: 1px solid var(--muted)';
+    },
+
+    fmtDate(iso) {
+      if (!iso) return '';
+      try {
+        return new Date(iso).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+      } catch { return iso; }
+    },
+  };
+}
+</script>
+{% endblock %}

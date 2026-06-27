@@ -6392,6 +6392,83 @@ async def api_spirit_schedule_weekly_retro(request: Request):
     return {"reminder_id": rem.id, "cron": cron, "first_run": rem.when_ts.isoformat()}
 
 
+# ── Dev Runs — Slice 2 Landing Gate ─────────────────────────────────────────
+
+@app.get("/dev", response_class=HTMLResponse)
+async def page_dev_runs(request: Request):
+    return templates.TemplateResponse(request, "dev_runs.html", {})
+
+
+@app.get("/api/dev-runs")
+async def api_list_dev_runs():
+    from axi import dev_run as _dr  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+    results_dir = Path(os.path.expanduser(config.get("dev_director_results_dir", "~/LifeOS/dev-results")))
+    runs = list(reversed(_dr.list_runs()))  # newest first
+    out = []
+    for r in runs:
+        rid = r.get("run_id", "")
+        patches = sorted(results_dir.glob(f"{rid}-*.patch")) if results_dir.exists() else []
+        has_patch = bool(patches and patches[-1].stat().st_size > 0)
+        out.append({
+            "run_id": rid,
+            "goal": r.get("goal", ""),
+            "status": r.get("status", ""),
+            "started_at": r.get("started_at", ""),
+            "rounds_done": r.get("rounds_done", 0),
+            "needs_human": r.get("status") == "needs_human",
+            "escalation_reason": r.get("result", "") if r.get("status") == "needs_human" else "",
+            "error": r.get("error") if r.get("status") == "error" else None,
+            "has_patch": has_patch,
+        })
+    return JSONResponse(out)
+
+
+@app.get("/api/dev-runs/{run_id}")
+async def api_get_dev_run(run_id: str):
+    from axi import dev_run as _dr  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+    r = _dr.get_run(run_id)
+    if r is None:
+        raise HTTPException(404, "run not found")
+    results_dir = Path(os.path.expanduser(config.get("dev_director_results_dir", "~/LifeOS/dev-results")))
+    patches = sorted(results_dir.glob(f"{run_id}-*.patch")) if results_dir.exists() else []
+    diff_text = ""
+    if patches:
+        p = patches[-1]
+        try:
+            diff_text = p.read_text(errors="replace")[:200_000]
+        except Exception:  # noqa: BLE001
+            diff_text = ""
+    return JSONResponse({**r, "diff": diff_text})
+
+
+@app.post("/api/dev-runs/{run_id}/approve")
+async def api_approve_dev_run(run_id: str):
+    from axi import dev_run as _dr  # noqa: PLC0415
+    from axi import dev_land  # noqa: PLC0415
+    r = _dr.get_run(run_id)
+    if r is None:
+        raise HTTPException(404, "run not found")
+    result = dev_land.land_run(run_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "land failed"))
+    return JSONResponse(result)
+
+
+@app.post("/api/dev-runs/{run_id}/reject")
+async def api_reject_dev_run(run_id: str):
+    from axi import dev_run as _dr  # noqa: PLC0415
+    from axi import dev_land  # noqa: PLC0415
+    r = _dr.get_run(run_id)
+    if r is None:
+        raise HTTPException(404, "run not found")
+    result = dev_land.reject_run(run_id)
+    return JSONResponse(result)
+
+
 # ────────────────────────── main entry ──────────────────────────────────
 
 
