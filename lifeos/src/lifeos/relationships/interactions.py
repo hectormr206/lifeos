@@ -195,3 +195,13 @@ def delete(iid: str) -> bool:
             (iid,),
         )
         return cur.rowcount > 0
+
+
+def update_title(iid: str, title: str) -> bool:
+    """Update only the title of a non-deleted interaction."""
+    with store.connect() as conn:
+        cur = conn.execute(
+            "UPDATE interactions SET title=? WHERE id=? AND deleted_at IS NULL",
+            (title, iid),
+        )
+        return cur.rowcount > 0
