@@ -189,3 +189,45 @@ def get_env(env_id: str) -> dict | None:
     if state is None or state.get("kind") != ENV_KIND:
         return None
     return state
+
+
+def reject_env(env_id: str) -> dict:
+    """Discard an environment: stop its test instance, remove the worktree +
+    branch (local only) + the env directory, and mark it rejected. Never raises.
+
+    Like the rest of the engine this never touches main and never deletes a
+    remote branch — it only cleans up the throwaway worktree it created.
+    """
+    state = get_env(env_id)
+    if state is None:
+        return {"ok": False, "error": "environment not found"}
+
+    # Stop the isolated test instance first (best-effort).
+    try:
+        from axi import dev_env_instance  # noqa: PLC0415
+        dev_env_instance.stop_instance(env_id)
+    except Exception as exc:  # noqa: BLE001
+        log.info("reject_env: stop_instance failed for %s (%s)", env_id, exc)
+
+    worktree_path = state.get("worktree_path")
+    branch = state.get("branch") or ""
+    if worktree_path:
+        try:
+            from axi import config  # noqa: PLC0415
+            from axi.dev_director import _cleanup_worktree  # noqa: PLC0415
+            repo = os.path.expanduser(config.get("dev_director_repo", "~/LifeOS/lifeos"))
+            env_dir = os.path.join(
+                os.path.expanduser(config.get("dev_env_worktree_dir", "~/LifeOS/dev-envs")),
+                env_id,
+            )
+            # Removes the worktree, deletes the LOCAL branch, prunes, and rmtrees
+            # the whole env directory (worktree + isolated instance dirs).
+            _cleanup_worktree(repo, worktree_path, branch, env_dir)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("reject_env: worktree cleanup failed for %s (%s)", env_id, exc)
+
+    state["status"] = "rejected"
+    state["instance"] = None
+    state["worktree_path"] = None
+    dev_run._write_state_file(dev_run._state_path(env_id), state)  # noqa: SLF001
+    return {"ok": True}
