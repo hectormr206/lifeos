@@ -6505,6 +6505,7 @@ def _env_card(state: dict) -> dict:
         "escalation_reason": state.get("result", "") if state.get("status") == "needs_human" else "",
         "error": state.get("error") if state.get("status") == "error" else None,
         "branch": state.get("branch"),
+        "deployed_target": state.get("deployed_target"),
         "instance": instance,
     }
 
@@ -6576,6 +6577,15 @@ async def api_iterate_dev_env(env_id: str, request: Request):
     result = _de.iterate_env(env_id, prompt.strip())
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "iterate failed"))
+    return JSONResponse(result)
+
+
+@app.post("/api/dev-envs/{env_id}/deploy")
+async def api_deploy_dev_env(env_id: str):
+    from axi import dev_env as _de  # noqa: PLC0415
+    result = _de.deploy_env(env_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "deploy failed"))
     return JSONResponse(result)
 
 

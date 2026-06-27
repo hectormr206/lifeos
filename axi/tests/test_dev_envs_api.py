@@ -121,6 +121,21 @@ def test_iterate_env_endpoint(client, monkeypatch):
     assert client.post("/api/dev-envs/E1/iterate", json={"prompt": "x"}).status_code == 400
 
 
+def test_deploy_env_endpoint(client, monkeypatch):
+    from axi import dev_env
+    monkeypatch.setattr(dev_env, "deploy_env",
+                        lambda env_id: {"ok": True, "pushed": True, "target": "main",
+                                        "restart_hint": "git pull && restart"})
+    r = client.post("/api/dev-envs/E1/deploy")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["pushed"] is True and body["target"] == "main"
+
+    monkeypatch.setattr(dev_env, "deploy_env",
+                        lambda env_id: {"ok": False, "error": "patch did not apply"})
+    assert client.post("/api/dev-envs/E1/deploy").status_code == 400
+
+
 def test_reject_env_endpoint(client, monkeypatch):
     from axi import dev_env
     monkeypatch.setattr(dev_env, "reject_env", lambda env_id: {"ok": True})

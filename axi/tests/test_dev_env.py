@@ -335,3 +335,91 @@ def test_iterate_env_requires_prompt_and_worktree(env_dir, monkeypatch):
     })
     res = dev_env.iterate_env(env_id2, "hacé algo")
     assert res["ok"] is False and "worktree" in res["error"]
+
+
+# ---------------------------------------------------------------------------
+# deploy_env
+# ---------------------------------------------------------------------------
+
+
+def _git_fake(*, diff="diff --git a/x.py b/x.py\n@@ -1 +1 @@\n+chg\n", apply_rc=0, push_rc=0):
+    """A subprocess.run stand-in that simulates the git calls deploy_env makes."""
+    calls: list = []
+
+    def run(cmd, **kw):
+        calls.append(list(cmd))
+        c = list(cmd)
+        r = type("R", (), {})()
+        r.returncode = 0
+        r.stdout = ""
+        r.stderr = ""
+        if "diff" in c and "HEAD" in c:
+            r.stdout = diff
+        elif "apply" in c:
+            r.returncode = apply_rc
+            r.stderr = "" if apply_rc == 0 else "conflict in x.py"
+        elif "push" in c:
+            r.returncode = push_rc
+            r.stderr = "" if push_rc == 0 else "! [rejected]"
+        return r
+
+    run.calls = calls
+    return run
+
+
+def _ready_env_with_worktree(env_id, tmp_path, name="wt"):
+    worktree = str(tmp_path / name)
+    Path(worktree).mkdir(parents=True, exist_ok=True)
+    dev_run._write_state_file(dev_run._state_path(env_id), {
+        "run_id": env_id, "kind": "env", "goal": "agregá X", "title": "Agregá X",
+        "status": "ready", "worktree_path": worktree, "branch": "axi/env/x",
+    })
+    return worktree
+
+
+def test_deploy_env_applies_diff_and_pushes_to_main(env_dir, tmp_path, monkeypatch):
+    env_id = "20260627-130000-dep111"
+    _ready_env_with_worktree(env_id, tmp_path)
+    monkeypatch.setattr("axi.dev_env_instance.stop_instance", lambda eid: {"ok": True})
+    fake = _git_fake()
+    monkeypatch.setattr("subprocess.run", fake)
+
+    res = dev_env.deploy_env(env_id)
+
+    assert res["ok"], res
+    assert res["target"] == "main" and res["pushed"] is True
+    # Pushed the deploy commit to main.
+    assert any("HEAD:main" in " ".join(str(x) for x in c) for c in fake.calls)
+    st = dev_run.get_run(env_id)
+    assert st["status"] == "deployed"
+    assert st["deployed_target"] == "main"
+
+
+def test_deploy_env_no_changes(env_dir, tmp_path, monkeypatch):
+    env_id = "20260627-130001-dep222"
+    _ready_env_with_worktree(env_id, tmp_path, "wtb")
+    monkeypatch.setattr("axi.dev_env_instance.stop_instance", lambda eid: {"ok": True})
+    monkeypatch.setattr("subprocess.run", _git_fake(diff=""))
+    res = dev_env.deploy_env(env_id)
+    assert res["ok"] is False and "no changes" in res["error"]
+
+
+def test_deploy_env_patch_conflict_reports_sync(env_dir, tmp_path, monkeypatch):
+    env_id = "20260627-130002-dep333"
+    _ready_env_with_worktree(env_id, tmp_path, "wtc")
+    monkeypatch.setattr("axi.dev_env_instance.stop_instance", lambda eid: {"ok": True})
+    monkeypatch.setattr("subprocess.run", _git_fake(apply_rc=1))
+    res = dev_env.deploy_env(env_id)
+    assert res["ok"] is False
+    assert "did not apply" in res["error"] or "sync" in res["error"]
+
+
+def test_deploy_env_push_failure(env_dir, tmp_path, monkeypatch):
+    env_id = "20260627-130003-dep444"
+    _ready_env_with_worktree(env_id, tmp_path, "wtd")
+    monkeypatch.setattr("axi.dev_env_instance.stop_instance", lambda eid: {"ok": True})
+    monkeypatch.setattr("subprocess.run", _git_fake(push_rc=1))
+    res = dev_env.deploy_env(env_id)
+    assert res["ok"] is False and "push" in res["error"]
+    # status NOT flipped to deployed on push failure
+    assert dev_run.get_run(env_id)["status"] == "ready"
