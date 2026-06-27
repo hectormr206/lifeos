@@ -2605,13 +2605,24 @@ def api_data_list(domain: str, days: int = 365, limit: int = 200):
             "summary": summary,
         }
         if spec.edit_fields is not None:
-            entry_dict["fields"] = {
-                f["key"]: (getattr(e, f["key"], None) or "")
-                for f in spec.edit_fields
-            }
+            # edit_fields may be a static list OR a callable(entry) — health
+            # returns different fields per vital type (BP vs single value).
+            efields = spec.edit_fields(e) if callable(spec.edit_fields) else spec.edit_fields
+            values: dict[str, Any] = {}
+            for f in efields:
+                k = f["key"]
+                v = getattr(e, k, None)
+                # Fall back to the entry's nested `data` dict (health vitals).
+                if v is None and isinstance(getattr(e, "data", None), dict):
+                    v = e.data.get(k)
+                values[k] = v if v is not None else ""
+            entry_dict["edit_fields"] = efields  # per-entry form shape
+            entry_dict["fields"] = values
         out.append(entry_dict)
     resp: dict[str, Any] = {"domain": domain, "name": spec.name, "count": len(out), "entries": out}
-    if spec.edit_fields is not None:
+    # Top-level edit_fields kept for static-shape domains (e.g. Finanzas); the
+    # frontend uses the per-entry edit_fields so callable specs work too.
+    if spec.edit_fields is not None and not callable(spec.edit_fields):
         resp["edit_fields"] = spec.edit_fields
     return resp
 

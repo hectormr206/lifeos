@@ -154,6 +154,60 @@ def _format_record(e: Any, local_date: str) -> str:
     return f"- id={e.id} fecha={local_date} kind={e.kind} title={e.title} data={data}"
 
 
+def _edit_fields(e: Any) -> list[dict]:
+    """Editable fields depend on the vital type (BP has two numbers; glucose/
+    weight/sleep have one; a note/symptom has only its title)."""
+    data = getattr(e, "data", None) or {}
+    vtype = data.get("type")
+    if vtype == "blood_pressure":
+        return [
+            {"key": "systolic", "label": "Sistólica (mmHg)", "type": "number"},
+            {"key": "diastolic", "label": "Diastólica (mmHg)", "type": "number"},
+        ]
+    if "value" in data:
+        unit = data.get("unit", "")
+        return [{"key": "value", "label": f"Valor ({unit})" if unit else "Valor", "type": "number"}]
+    return [{"key": "title", "label": "Título", "type": "text"}]
+
+
+def _update_fields(eid: str, changes: dict) -> bool:
+    """Apply an edit. For structured vitals the title is REGENERATED from the
+    (possibly edited) value so the display never drifts from the data. Returns
+    False on missing entry or any error; never raises."""
+    try:
+        e = health_entries.get(eid)
+        if e is None:
+            return False
+        data = dict(e.data) if e.data else None
+        title = e.title
+        if data and data.get("type") == "blood_pressure":
+            if "systolic" in changes:
+                data["systolic"] = int(float(changes["systolic"]))
+            if "diastolic" in changes:
+                data["diastolic"] = int(float(changes["diastolic"]))
+            title = f"presión {data['systolic']}/{data['diastolic']}"
+            if data.get("pulse_bpm"):
+                title += f", pulso {int(data['pulse_bpm'])}"
+        elif data and "value" in data and "value" in changes:
+            v = float(changes["value"])
+            vtype = data.get("type")
+            if vtype == "glucose":
+                data["value"] = int(v); title = f"glucosa {int(v)} mg/dL"
+            elif vtype == "weight":
+                data["value"] = v; title = f"peso {v} kg"
+            elif vtype == "sleep_hours":
+                data["value"] = v; title = f"dormí {v}h"
+            elif vtype == "pulse":
+                data["value"] = int(v); title = f"pulso {int(v)}"
+            else:
+                data["value"] = v
+        elif "title" in changes:
+            title = str(changes["title"]).strip() or e.title
+        return health_entries.update(eid, kind=e.kind, title=title, when=e.ts, data=data, body=e.body) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 HEALTH_SPEC = DomainSpec(
     key="health",
     name="Salud",
@@ -170,6 +224,8 @@ HEALTH_SPEC = DomainSpec(
                 "síntomas, dolor, enfermedad, medicamentos, estudios médicos",
     store_delete=lambda eid: health_entries.delete(eid),
     store_update_title=lambda eid, title: health_entries.update_title(eid, title),
+    edit_fields=_edit_fields,
+    store_update_fields=_update_fields,
 )
 
 
