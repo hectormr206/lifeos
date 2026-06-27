@@ -2596,15 +2596,24 @@ def api_data_list(domain: str, days: int = 365, limit: int = 200):
                 summary = spec.list_detail(e) or ""
             except Exception:  # noqa: BLE001
                 summary = ""
-        out.append({
+        entry_dict: dict[str, Any] = {
             "id": getattr(e, "id", ""),
             "date": date_str,
             "kind": getattr(e, "kind", ""),
             "title": getattr(e, "title", ""),
             "detail": detail,
             "summary": summary,
-        })
-    return {"domain": domain, "name": spec.name, "count": len(out), "entries": out}
+        }
+        if spec.edit_fields is not None:
+            entry_dict["fields"] = {
+                f["key"]: (getattr(e, f["key"], None) or "")
+                for f in spec.edit_fields
+            }
+        out.append(entry_dict)
+    resp: dict[str, Any] = {"domain": domain, "name": spec.name, "count": len(out), "entries": out}
+    if spec.edit_fields is not None:
+        resp["edit_fields"] = spec.edit_fields
+    return resp
 
 
 @app.delete("/api/data/{domain}/{entry_id}")
@@ -2624,15 +2633,40 @@ def api_data_delete(domain: str, entry_id: str):
 
 @app.patch("/api/data/{domain}/{entry_id}")
 async def api_data_update_title(domain: str, entry_id: str, request: Request):
-    """Update the title of one entry (used by the inline-edit in the data view)."""
+    """Update one or more fields of an entry (used by the data view edit form).
+
+    Multi-field path: when the body contains any key other than "title" AND the
+    spec has store_update_fields, validates and delegates to store_update_fields.
+    Falls back to the title-only path for domains without multi-field support.
+    """
     from axi.domain_registry import get_spec
     spec = get_spec(domain)
-    if spec is None or spec.store_update_title is None:
-        raise HTTPException(404, f"no editable domain: {domain!r}")
+    if spec is None:
+        raise HTTPException(404, f"unknown domain: {domain!r}")
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
         raise HTTPException(400, "invalid JSON body")
+
+    non_title_keys = {k for k in body if k != "title"}
+    if non_title_keys and spec.store_update_fields is not None:
+        # Multi-field update path
+        if "title" in body and not (body.get("title") or "").strip():
+            raise HTTPException(400, "title must not be empty")
+        if "amount" in body:
+            try:
+                float(body["amount"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "amount must be numeric")
+        try:
+            ok = spec.store_update_fields(entry_id, body)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(500, f"update failed: {e}")
+        return {"status": "ok", "updated": bool(ok)}
+
+    # Title-only fallback path (original behavior)
+    if spec.store_update_title is None:
+        raise HTTPException(404, f"no editable domain: {domain!r}")
     title = (body.get("title") or "").strip()
     if not title:
         raise HTTPException(400, "title must not be empty")
