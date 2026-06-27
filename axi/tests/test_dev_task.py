@@ -30,6 +30,9 @@ class FakeDirectorLoopResult:
     total_claude_turns: int = 5
     ok: bool = True
     error: str | None = None
+    tests_passed: bool = True
+    needs_human: bool = False
+    escalation_reason: str = ""
 
 
 def _make_fake_loop(result: FakeDirectorLoopResult):

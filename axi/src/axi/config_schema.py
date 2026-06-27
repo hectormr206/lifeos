@@ -562,9 +562,9 @@ FIELDS: tuple[ConfigField, ...] = (
     ),
     # ─────── dev-director loop ───────
     ConfigField(
-        "dev_director_repo", "string", "~/LifeOS/dev-workspace",
-        "Path to the isolated git repo used as the dev-director workspace. "
-        "Tilde is expanded at runtime. Must be separate from the real LifeOS repo.",
+        "dev_director_repo", "string", "~/LifeOS/lifeos",
+        "Path to the git repo used as the dev-director workspace (the real LifeOS repo). "
+        "Tilde is expanded at runtime. A worktree is created here; the main tree is never touched.",
     ),
     ConfigField(
         "dev_director_results_dir", "string", "~/LifeOS/dev-results",
@@ -576,6 +576,25 @@ FIELDS: tuple[ConfigField, ...] = (
         "Maximum director→coder→reviewer rounds per dev_develop task.",
         minimum=1,
         maximum=8,
+    ),
+    ConfigField(
+        "dev_director_test_command", "string", "tests/test_dev_director.py -q",
+        "Pytest arguments (after `-m pytest`) to run in the worktree after each Claude round. "
+        "PYTHONPATH is set to <worktree>/axi/src so the worktree's code is tested, not the live install.",
+    ),
+    ConfigField(
+        "dev_director_venv_python", "string", "~/LifeOS/lifeos/axi/.venv/bin/python",
+        "Absolute path to the venv Python used to invoke pytest. Tilde is expanded at runtime.",
+    ),
+    ConfigField(
+        "dev_director_branch_prefix", "string", "axi/self-build",
+        "Git branch-name prefix for worktree branches created by the dev-director.",
+    ),
+    ConfigField(
+        "dev_director_test_timeout", "integer", 300,
+        "Seconds before the test subprocess is killed.",
+        minimum=30,
+        maximum=1800,
     ),
 )
 
