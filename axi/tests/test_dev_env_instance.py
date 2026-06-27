@@ -37,6 +37,8 @@ def inst_env(tmp_path, monkeypatch):
         "secret_flag": True,
     }))
     monkeypatch.setattr(dev_env_instance, "_real_config_path", lambda: real_cfg)
+    # Keep tests hermetic — don't copy the machine's real TLS certs.
+    monkeypatch.setattr(dev_env_instance, "_copy_tls_certs", lambda *a, **k: None)
     return d
 
 
@@ -74,7 +76,7 @@ def test_start_instance_launches_with_isolation(inst_env, tmp_path, monkeypatch)
     assert res["ok"], res
     inst = res["instance"]
     assert inst["port"] == 9003
-    assert inst["url"] == "http://127.0.0.1:9003"
+    assert inst["url"] == "https://127.0.0.1:9003"  # HTTPS via copied mkcert certs
     assert inst["status"] == "running"
 
     cmd = launched["cmd"]
@@ -93,7 +95,9 @@ def test_start_instance_launches_with_isolation(inst_env, tmp_path, monkeypatch)
     cfg_home = [c for c in cmd if c.startswith("--setenv=XDG_CONFIG_HOME=")][0].split("=", 2)[2]
     cfg = json.loads((Path(cfg_home) / "axi" / "config.json").read_text())
     assert cfg["dashboard_port"] == 9003
-    assert cfg["dashboard_host"] == "127.0.0.1"
+    # Bind the SAME host as the real dashboard (0.0.0.0) so the instance is
+    # reachable from the phone/LAN, not forced to localhost-only.
+    assert cfg["dashboard_host"] == "0.0.0.0"
     assert cfg["secret_flag"] is True
     assert cfg["nano_endpoint"] == "http://127.0.0.1:8090"
 
