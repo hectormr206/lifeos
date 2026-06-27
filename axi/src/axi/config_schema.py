@@ -670,6 +670,26 @@ FIELDS: tuple[ConfigField, ...] = (
         maximum=60.0,
     ),
     ConfigField(
+        "dev_env_instance_port_base", "integer", 8092,
+        "First port tried when launching an environment's isolated test dashboard. "
+        "Kept above the real dashboard (8081) and the model servers (8090/8091).",
+        minimum=1024,
+        maximum=65000,
+    ),
+    ConfigField(
+        "dev_env_instance_port_count", "integer", 24,
+        "How many consecutive ports (from the base) to probe for a free one when "
+        "launching an isolated test instance.",
+        minimum=1,
+        maximum=200,
+    ),
+    ConfigField(
+        "dev_env_instance_seed_from_real", "boolean", False,
+        "If true, copy the real (encrypted) DBs + keys into the isolated test "
+        "instance so you test against your actual data (still a throwaway copy — "
+        "changes never reach the real DBs). Default false = fresh empty databases.",
+    ),
+    ConfigField(
         "dev_self_improve_enabled", "boolean", False,
         "If true, Axi fires ONE self-improvement dev run per day (high-stakes, "
         "opt-in). The result lands in /dev awaiting your approval — never auto-applied.",
