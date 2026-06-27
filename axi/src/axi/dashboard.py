@@ -6471,6 +6471,107 @@ async def api_reject_dev_run(run_id: str):
     return JSONResponse(result)
 
 
+# ── Dev Environments — the controlled "Desarrollo" workspace ────────────────
+
+def _env_worktree_diff(worktree_path: str | None) -> str:
+    """Live `git diff HEAD` of an environment's worktree (read-only)."""
+    import os as _os  # noqa: PLC0415
+    import subprocess as _sp  # noqa: PLC0415
+    if not worktree_path or not _os.path.isdir(worktree_path):
+        return ""
+    try:
+        r = _sp.run(
+            ["git", "-C", worktree_path, "diff", "HEAD"],
+            capture_output=True, text=True, timeout=15,
+        )
+        return r.stdout[:200_000]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _env_card(state: dict) -> dict:
+    """Shape an environment's state into the fields a UI card needs."""
+    from axi import dev_env as _de  # noqa: PLC0415
+    instance = state.get("instance") or None
+    return {
+        "env_id": state.get("run_id", ""),
+        "title": state.get("title", ""),
+        "description": state.get("description", ""),
+        "goal": state.get("goal", ""),
+        "status": state.get("status", ""),
+        "card_status": _de.card_status(state),
+        "created_at": state.get("created_at") or state.get("started_at", ""),
+        "rounds_done": state.get("rounds_done", 0),
+        "escalation_reason": state.get("result", "") if state.get("status") == "needs_human" else "",
+        "error": state.get("error") if state.get("status") == "error" else None,
+        "branch": state.get("branch"),
+        "instance": instance,
+    }
+
+
+@app.get("/desarrollo", response_class=HTMLResponse)
+async def page_dev_envs(request: Request):
+    return templates.TemplateResponse(request, "dev_envs.html", {})
+
+
+@app.get("/api/dev-envs")
+async def api_list_dev_envs():
+    from axi import dev_env as _de  # noqa: PLC0415
+    return JSONResponse([_env_card(s) for s in _de.list_envs()])
+
+
+@app.post("/api/dev-envs")
+async def api_create_dev_env(request: Request):
+    from axi import dev_env as _de  # noqa: PLC0415
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON body")
+    goal = (body or {}).get("goal", "")
+    if not isinstance(goal, str) or not goal.strip():
+        raise HTTPException(400, "goal required")
+    env_id = _de.create_env(goal.strip())
+    return JSONResponse({"env_id": env_id})
+
+
+@app.get("/api/dev-envs/{env_id}")
+async def api_get_dev_env(env_id: str):
+    from axi import dev_env as _de  # noqa: PLC0415
+    from axi import dev_env_instance as _dei  # noqa: PLC0415
+    state = _de.get_env(env_id)
+    if state is None:
+        raise HTTPException(404, "environment not found")
+    _dei.instance_status(env_id)  # reconcile instance status against systemctl
+    state = _de.get_env(env_id) or state
+    card = _env_card(state)
+    card["diff"] = _env_worktree_diff(state.get("worktree_path"))
+    return JSONResponse(card)
+
+
+@app.post("/api/dev-envs/{env_id}/instance/start")
+async def api_start_dev_env_instance(env_id: str):
+    from axi import dev_env_instance as _dei  # noqa: PLC0415
+    result = _dei.start_instance(env_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "could not start instance"))
+    return JSONResponse(result)
+
+
+@app.post("/api/dev-envs/{env_id}/instance/stop")
+async def api_stop_dev_env_instance(env_id: str):
+    from axi import dev_env_instance as _dei  # noqa: PLC0415
+    return JSONResponse(_dei.stop_instance(env_id))
+
+
+@app.post("/api/dev-envs/{env_id}/reject")
+async def api_reject_dev_env(env_id: str):
+    from axi import dev_env as _de  # noqa: PLC0415
+    result = _de.reject_env(env_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "reject failed"))
+    return JSONResponse(result)
+
+
 # ────────────────────────── main entry ──────────────────────────────────
 
 
