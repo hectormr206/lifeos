@@ -167,9 +167,14 @@ def _seed_isolated_dbs(state_home: Path, lifeos_state: Path) -> None:
 
 
 def _build_isolated_config(cfg_home: Path, port: int) -> None:
-    """Write an isolated config.json: a copy of the real one with the dashboard
-    port/host overridden so the instance binds elsewhere but keeps real model
-    URLs, keys, and feature flags (so it shares the running model servers)."""
+    """Write an isolated config.json: a copy of the real one with only the
+    dashboard port overridden, so the instance binds on its own port but keeps
+    real model URLs, keys, flags AND the same bind host as the real dashboard.
+
+    The host is NOT forced to 127.0.0.1: the real dashboard binds 0.0.0.0 so the
+    user reaches it from their phone/LAN, and the isolated instance must be
+    reachable the same way — otherwise "Abrir UI" opens an unreachable
+    127.0.0.1 on the user's device."""
     real_cfg = _real_config_path()
     cfg: dict = {}
     if real_cfg.exists():
@@ -178,12 +183,30 @@ def _build_isolated_config(cfg_home: Path, port: int) -> None:
         except Exception:  # noqa: BLE001
             cfg = {}
     cfg["dashboard_port"] = port
-    cfg["dashboard_host"] = "127.0.0.1"
+    cfg.setdefault("dashboard_host", "0.0.0.0")
     axi_cfg_dir = cfg_home / "axi"
     axi_cfg_dir.mkdir(parents=True, exist_ok=True)
     (axi_cfg_dir / "config.json").write_text(
         json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+
+
+def _copy_tls_certs(state_home: Path) -> None:
+    """Copy the real mkcert TLS certs into the instance's isolated state dir so
+    it serves HTTPS with the SAME trusted cert as the main dashboard. Required to
+    embed the instance in an iframe — a browser blocks http inside an https page
+    (mixed content), and the dashboard's main() enables TLS when it finds certs
+    under XDG_STATE_HOME/axi/tls. Best-effort; absent certs → instance stays http."""
+    src = _real_axi_state_dir() / "tls"
+    if not src.is_dir():
+        return
+    dest = state_home / "axi" / "tls"
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in src.glob("*.pem"):
+        try:
+            shutil.copy2(f, dest / f.name)
+        except OSError as exc:  # noqa: PERF203
+            log.info("tls copy: could not copy %s (%s)", f.name, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +244,7 @@ def start_instance(env_id: str) -> dict:
 
     try:
         _build_isolated_config(cfg_home, port)
+        _copy_tls_certs(state_home)
         if _seed_from_real():
             _seed_isolated_dbs(state_home, lifeos_state)
     except Exception as exc:  # noqa: BLE001
@@ -247,7 +271,7 @@ def start_instance(env_id: str) -> dict:
         "status": "running",
         "port": port,
         "unit": unit,
-        "url": f"http://127.0.0.1:{port}",
+        "url": f"https://127.0.0.1:{port}",  # HTTPS via copied mkcert certs
         "dir": str(root),
         "started_at": datetime.now(timezone.utc).isoformat(),
     }

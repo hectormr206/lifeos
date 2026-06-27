@@ -83,7 +83,7 @@
           <div class="text-xs mb-2 px-3 py-1.5 rounded flex items-center gap-2"
                style="background: rgba(0,180,160,0.1); border: 1px solid var(--teal); color: var(--teal)">
             <span>▶ Instancia en</span>
-            <span class="font-mono" x-text="e.instance.url"></span>
+            <span class="font-mono" x-text="instUrl(e.instance)"></span>
           </div>
         </template>
 
@@ -185,6 +185,44 @@
       </div>
     </div>
   </template>
+
+  <!-- Preview modal: the isolated instance UI, full-window, wrapped in an amber
+       "sandbox" aura so it's unmistakable you're inside the isolated environment. -->
+  <template x-if="preview.open">
+    <div class="fixed inset-0" style="z-index: 70; background: rgba(0,0,0,0.92);"
+         @keydown.escape.window="closePreview()">
+      <div class="flex flex-col" style="position: absolute; inset: 0.6rem; border-radius: 0.9rem;
+           border: 2px solid var(--amber); background: var(--panel); padding: 0.6rem;
+           box-shadow: 0 0 0 2px rgba(245,158,11,0.35), 0 0 30px 7px rgba(245,158,11,0.5);">
+        <div class="flex items-center justify-between gap-2 mb-2 px-1">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="shrink-0 px-2 py-0.5 rounded text-xs font-semibold"
+                  style="background: rgba(245,158,11,0.18); color: var(--amber); border: 1px solid var(--amber);">
+              🧪 Entorno aislado
+            </span>
+            <span class="font-semibold text-sm truncate" x-text="preview.title || 'Probar'"></span>
+          </div>
+          <div class="flex gap-2 shrink-0">
+            <a :href="preview.url" target="_blank" x-show="preview.url"
+               class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;">↗ Pestaña</a>
+            <button type="button" @click="closePreview()" class="btn btn-primary"
+                    style="padding: 0.3rem 0.9rem; font-size: 0.85rem;">✕ Cerrar</button>
+          </div>
+        </div>
+        <div class="flex-1 rounded-lg overflow-hidden" style="background: var(--panel2);">
+          <template x-if="preview.loading">
+            <div class="muted text-sm flex items-center justify-center" style="height: 100%;">
+              Levantando Axi en un entorno aislado… unos segundos.
+            </div>
+          </template>
+          <template x-if="preview.url">
+            <iframe :src="preview.url" class="w-full" style="height: 100%; border: 0;"
+                    title="Vista previa del ambiente"></iframe>
+          </template>
+        </div>
+      </div>
+    </div>
+  </template>
 </div>
 
 <script src="/static/recorder.js"></script>
@@ -197,6 +235,8 @@ function devEnvs() {
     notice: null,
     // One modal serves both "create" and "iterate" (DRY).
     modal: { open: false, mode: 'create', envId: null, text: '', busy: false },
+    // Near-fullscreen preview modal embedding the isolated instance UI.
+    preview: { open: false, url: '', title: '', loading: false },
     recording: false,
     transcribing: false,
     _recorder: null,
@@ -267,35 +307,40 @@ function devEnvs() {
     stopRec() { if (this._recorder) this._recorder.stop(); },
 
     // ── Card actions ──────────────────────────────────────────────────────────
+    // Same protocol as the page (https — the instance now serves HTTPS via the
+    // copied mkcert certs, so it can be embedded) and the host the user is
+    // browsing from (works from phone/LAN, not just localhost).
+    instUrl(inst) {
+      if (!inst || !inst.port) return '';
+      return window.location.protocol + '//' + window.location.hostname + ':' + inst.port;
+    },
+
+    closePreview() { this.preview = { open: false, url: '', title: '', loading: false }; },
+
     async openUI(e) {
-      // Already running → open directly (we're inside the click gesture).
-      if (e.instance && e.instance.status === 'running' && e.instance.url) {
-        window.open(e.instance.url, '_blank');
+      // Open the near-fullscreen preview modal and load the instance in an iframe.
+      this.preview = { open: true, url: '', title: e.title || e.goal || 'Probar', loading: true };
+      if (e.instance && e.instance.status === 'running' && this.instUrl(e.instance)) {
+        this.preview.url = this.instUrl(e.instance);
+        this.preview.loading = false;
         return;
       }
-      // Reserve a tab NOW, inside the click gesture, so the popup blocker allows
-      // it. A window.open fired later (after await / setTimeout) gets blocked —
-      // that was the "Probar y no pasa nada" bug. We navigate this tab once the
-      // instance is up.
-      const win = window.open('about:blank', '_blank');
       this.busy = { ...this.busy, [e.env_id]: true };
-      this.notice = null;
       try {
         const r = await fetch('/api/dev-envs/' + encodeURIComponent(e.env_id) + '/instance/start', { method: 'POST' });
         const d = await r.json().catch(() => ({}));
-        if (!r.ok) { if (win) win.close(); throw new Error(d.detail || ('HTTP ' + r.status)); }
+        if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
         await this.load();
-        const url = d.instance && d.instance.url;
-        if (url && win) {
-          // Give uvicorn a few seconds to bind, then point the reserved tab at it.
-          setTimeout(() => { try { win.location = url; } catch (_) {} }, 3500);
-        } else if (url) {
-          // Popup was blocked entirely — tell the user to use the now-visible button.
-          this.notice = 'Instancia lista en ' + url + ' — tocá "Abrir UI" en la tarjeta.';
-        } else if (win) {
-          win.close();
+        const url = this.instUrl(d.instance);
+        if (url) {
+          // Give uvicorn a few seconds to bind before pointing the iframe at it.
+          setTimeout(() => { this.preview.url = url; this.preview.loading = false; }, 3500);
+        } else {
+          this.closePreview();
+          this.error = 'No obtuve la URL de la instancia.';
         }
       } catch (err) {
+        this.closePreview();
         this.error = 'No pude levantar la instancia: ' + err.message;
       } finally {
         this.busy = { ...this.busy, [e.env_id]: false };
