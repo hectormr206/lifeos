@@ -277,3 +277,49 @@ def test_salud_page_renders(client):
     r = client.get("/chat/salud")
     assert r.status_code == 200
     assert "Salud" in r.text
+
+
+def test_health_edit_fields_vary_by_vital_type():
+    from axi.health_chat import _edit_fields
+    class _E:
+        def __init__(self, data): self.data = data
+    bp = _edit_fields(_E({"type": "blood_pressure", "systolic": 120, "diastolic": 80}))
+    assert [f["key"] for f in bp] == ["systolic", "diastolic"]
+    glu = _edit_fields(_E({"type": "glucose", "value": 95, "unit": "mg/dL"}))
+    assert [f["key"] for f in glu] == ["value"]
+    note = _edit_fields(_E(None))
+    assert [f["key"] for f in note] == ["title"]
+
+
+def test_health_update_regenerates_title_from_value(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from axi import health_chat
+    class _E:
+        id = "H1"; kind = "vital"; title = "glucosa 95 mg/dL"; body = None
+        ts = datetime(2026, 6, 26, tzinfo=ZoneInfo("UTC"))
+        data = {"type": "glucose", "value": 95, "unit": "mg/dL"}
+    captured = {}
+    monkeypatch.setattr(health_chat.health_entries, "get", lambda eid: _E())
+    monkeypatch.setattr(health_chat.health_entries, "update",
+                        lambda eid, **kw: captured.update(kw) or object())
+    assert health_chat._update_fields("H1", {"value": 110}) is True
+    assert captured["title"] == "glucosa 110 mg/dL"   # title regenerated
+    assert captured["data"]["value"] == 110
+
+
+def test_health_update_bp_regenerates_title(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from axi import health_chat
+    class _E:
+        id = "H2"; kind = "vital"; title = "presión 120/80"; body = None
+        ts = datetime(2026, 6, 26, tzinfo=ZoneInfo("UTC"))
+        data = {"type": "blood_pressure", "systolic": 120, "diastolic": 80, "unit": "mmHg"}
+    captured = {}
+    monkeypatch.setattr(health_chat.health_entries, "get", lambda eid: _E())
+    monkeypatch.setattr(health_chat.health_entries, "update",
+                        lambda eid, **kw: captured.update(kw) or object())
+    health_chat._update_fields("H2", {"systolic": 130, "diastolic": 85})
+    assert captured["title"] == "presión 130/85"
+    assert captured["data"]["systolic"] == 130

@@ -44,8 +44,8 @@
               </template>
             </div>
           </template>
-          <!-- Inline title-only edit (when domain has no edit_fields) -->
-          <template x-if="editId === e.id && !editFields">
+          <!-- Inline title-only edit (when this entry has no edit_fields) -->
+          <template x-if="editId === e.id && !(e.edit_fields && e.edit_fields.length)">
             <div class="flex items-center gap-1 mt-0.5">
               <input type="text" x-model="draftTitle"
                      @keydown.enter="save(e)"
@@ -60,10 +60,10 @@
                       class="btn" style="padding: 0.2rem 0.5rem; font-size: 0.78rem;">Cancelar</button>
             </div>
           </template>
-          <!-- Multi-field edit form (when domain declares edit_fields) -->
-          <template x-if="editId === e.id && editFields">
+          <!-- Multi-field edit form (when this entry declares edit_fields) -->
+          <template x-if="editId === e.id && e.edit_fields && e.edit_fields.length">
             <div class="mt-1 space-y-1.5">
-              <template x-for="f in editFields" :key="f.key">
+              <template x-for="f in e.edit_fields" :key="f.key">
                 <div class="flex flex-col gap-0.5">
                   <label class="text-xs muted" x-text="f.label"></label>
                   <input :type="f.type === 'number' ? 'number' : 'text'"
@@ -147,7 +147,8 @@ function dataView() {
     startEdit(e) {
       this.editId = e.id;
       this.confirmId = null;
-      if (this.editFields) {
+      // edit_fields is PER-ENTRY (health's vital fields differ by type).
+      if (e.edit_fields && e.edit_fields.length) {
         this.editDraft = { ...(e.fields || {}) };
       } else {
         this.draftTitle = e.title || '';
@@ -161,10 +162,10 @@ function dataView() {
     },
 
     async save(e) {
-      if (this.editFields) {
+      if (e.edit_fields && e.edit_fields.length) {
         // Multi-field save
         const changes = {};
-        for (const f of this.editFields) {
+        for (const f of e.edit_fields) {
           changes[f.key] = f.type === 'number'
             ? (this.editDraft[f.key] !== '' && this.editDraft[f.key] !== undefined ? Number(this.editDraft[f.key]) : 0)
             : (this.editDraft[f.key] || '');

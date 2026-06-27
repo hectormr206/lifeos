@@ -81,7 +81,7 @@ class DomainSpec:
     store_delete: Callable[[str], bool] | None = None
     store_update_title: Callable[[str, str], bool] | None = None
     list_detail: Callable[[Any], str] | None = None
-    edit_fields: list[dict] | None = None
+    edit_fields: "list[dict] | Callable[[Any], list[dict]] | None" = None
     store_update_fields: Callable[[str, dict], bool] | None = None
 
 

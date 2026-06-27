@@ -169,25 +169,26 @@ def test_patch_finance_non_numeric_amount_400(client):
 
 
 def test_domain_without_edit_fields_title_only_behavior(client, monkeypatch):
-    """A domain without edit_fields still does title-only PATCH; GET has no edit_fields."""
-    from axi import health_chat
+    """A title-only domain (spirituality) has no edit_fields; PATCH edits title."""
+    from axi import spirituality_chat
     rows = [
-        _Entry(id="H1", ts=datetime(2026, 6, 10, 8, 0, tzinfo=ZoneInfo("UTC")),
-               kind="note", title="me duele la cabeza"),
+        _Entry(id="S1", ts=datetime(2026, 6, 10, 8, 0, tzinfo=ZoneInfo("UTC")),
+               kind="gratitude", title="agradecí por mi familia"),
     ]
-    monkeypatch.setattr(health_chat.health_entries, "list_recent", lambda **kw: rows)
-    # GET: no edit_fields at top level, no fields per entry
-    r = client.get("/api/data/health")
+    monkeypatch.setattr(spirituality_chat.spirit_entries, "list_recent", lambda **kw: rows)
+    # GET: no edit_fields anywhere, no per-entry fields
+    r = client.get("/api/data/spirituality")
     assert r.status_code == 200
     body = r.json()
     assert "edit_fields" not in body
+    assert "edit_fields" not in body["entries"][0]
     assert "fields" not in body["entries"][0]
     # PATCH title-only still works
     updated: list = []
     monkeypatch.setattr(
-        health_chat.health_entries, "update_title",
+        spirituality_chat.spirit_entries, "update_title",
         lambda eid, title: updated.append((eid, title)) or True,
     )
-    r2 = client.patch("/api/data/health/H1", json={"title": "nuevo"})
+    r2 = client.patch("/api/data/spirituality/S1", json={"title": "nuevo"})
     assert r2.status_code == 200
-    assert updated == [("H1", "nuevo")]
+    assert updated == [("S1", "nuevo")]
