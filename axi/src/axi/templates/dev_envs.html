@@ -104,26 +104,26 @@
           <!-- Probar / Abrir UI: available once there's a worktree (ready or needs_human) -->
           <template x-if="['ready','needs_human','deployed'].includes(e.card_status)">
             <button type="button" class="btn btn-primary" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;"
-                    @click="openUI(e)" :disabled="busy[e.env_id]">
+                    @click="openUI(e)" :disabled="!!busy[e.env_id]">
               <span x-text="(e.instance && e.instance.status === 'running') ? '↗ Abrir UI' : '▶ Probar'"></span>
             </button>
           </template>
           <template x-if="e.instance && e.instance.status === 'running'">
             <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;"
-                    @click="stopInstance(e)" :disabled="busy[e.env_id]">■ Detener</button>
+                    @click="stopInstance(e)" :disabled="!!busy[e.env_id]">■ Detener</button>
           </template>
           <template x-if="['ready','needs_human'].includes(e.card_status)">
             <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;"
-                    @click="openIterate(e)" :disabled="busy[e.env_id]">↻ Iterar</button>
+                    @click="openIterate(e)" :disabled="!!busy[e.env_id]">↻ Iterar</button>
           </template>
           <template x-if="['ready','needs_human'].includes(e.card_status)">
             <button type="button" class="btn"
                     style="padding: 0.3rem 0.7rem; font-size: 0.8rem; color: var(--teal);"
-                    @click="deploy(e)" :disabled="busy[e.env_id]">🚀 Deploy</button>
+                    @click="deploy(e)" :disabled="!!busy[e.env_id]">🚀 Deploy</button>
           </template>
           <template x-if="['ready','needs_human','error'].includes(e.card_status)">
             <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem; color: var(--red);"
-                    @click="reject(e)" :disabled="busy[e.env_id]">🗑 Rechazar</button>
+                    @click="reject(e)" :disabled="!!busy[e.env_id]">🗑 Rechazar</button>
           </template>
           <template x-if="['ready','needs_human','deployed'].includes(e.card_status)">
             <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;"
