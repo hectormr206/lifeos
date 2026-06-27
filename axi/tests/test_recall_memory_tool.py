@@ -205,6 +205,13 @@ def test_routing_non_image_uses_ask_with_tools(monkeypatch):
     monkeypatch.setattr(dashboard, "_chat_memory", None)
     monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
     monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+    # Isolate the general-brain recall path: the chat auto-router is a separate
+    # layer (it makes its OWN classify brain.ask call and may route data
+    # questions to a domain spec before this path runs). Bypass it so this test
+    # exercises only the recall_memory tool wiring it is meant to cover —
+    # autoroute has its own coverage in the chat_router tests.
+    from axi import chat_router
+    monkeypatch.setattr(chat_router, "route_and_handle", lambda *a, **kw: None)
 
     ask_called = []
     ask_with_tools_called = []
@@ -233,6 +240,13 @@ def test_routing_recall_tool_always_in_tools_web_disabled(monkeypatch):
     monkeypatch.setattr(dashboard, "_chat_memory", None)
     monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
     monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
+    # Bypass the auto-router (separate layer) so this test exercises only the
+    # recall_memory tool wiring on the general-brain path. With autoroute live,
+    # "qué presión tuve?" is routed to the Salud domain (which answers from the
+    # health records directly) and never reaches this tool path — that is
+    # correct product behavior, covered by the chat_router tests.
+    from axi import chat_router
+    monkeypatch.setattr(chat_router, "route_and_handle", lambda *a, **kw: None)
 
     captured: dict = {}
 
