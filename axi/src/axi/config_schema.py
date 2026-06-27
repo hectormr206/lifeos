@@ -651,6 +651,22 @@ FIELDS: tuple[ConfigField, ...] = (
         minimum=60,
         maximum=86400,
     ),
+    ConfigField(
+        "dev_self_improve_enabled", "boolean", False,
+        "If true, Axi fires ONE self-improvement dev run per day (high-stakes, "
+        "opt-in). The result lands in /dev awaiting your approval — never auto-applied.",
+    ),
+    ConfigField(
+        "dev_self_improve_hour", "integer", 3,
+        "Hour of day (0-23, user timezone) for the daily self-improvement run.",
+        minimum=0,
+        maximum=23,
+    ),
+    ConfigField(
+        "dev_self_improve_goal", "string", "",
+        "Override the daily self-improvement meta-goal. Empty = the built-in "
+        "low-risk default (review recent work, implement one small improvement).",
+    ),
 )
 
 

@@ -1414,12 +1414,56 @@ def serve() -> int:
             target=_dev_run_poll_loop, name="axi-dev-run-poll", daemon=True
         ).start()
 
+        # Daily self-improvement — OFF by default (high-stakes, opt-in). When
+        # enabled, once a day at the configured hour Axi fires a DETACHED dev run
+        # with a meta-goal. It goes through the full pipeline (worktree, tests,
+        # VT-3B) and LANDS in /dev awaiting the user's approval — nothing is ever
+        # auto-applied or auto-deployed.
+        _self_improve_stop = threading.Event()
+        _self_improve_state = {"last_date": None}
+        _DEFAULT_SELF_IMPROVE_GOAL = (
+            "Revisá los commits y tests recientes de este proyecto. Identificá UNA "
+            "sola mejora concreta y de BAJO RIESGO (un test faltante, un bug chico, "
+            "una limpieza, o un comentario que aclare algo) e implementala con su "
+            "test correspondiente. NO modifiques el motor de auto-desarrollo "
+            "(dev_run, dev_director, dev_land, _dev_run_entry). Mantené el cambio "
+            "pequeño, enfocado, y con sus tests en verde."
+        )
+
+        def _self_improve_loop() -> None:
+            from datetime import datetime  # noqa: PLC0415
+            from zoneinfo import ZoneInfo  # noqa: PLC0415
+            while not _self_improve_stop.wait(timeout=1800):  # check every 30 min
+                try:
+                    if not bool(config.get("dev_self_improve_enabled", False)):
+                        continue
+                    tz_name = str(config.get("timezone", "America/Mexico_City"))
+                    try:
+                        now = datetime.now(ZoneInfo(tz_name))
+                    except Exception:  # noqa: BLE001
+                        now = datetime.now(ZoneInfo("America/Mexico_City"))
+                    target_hour = int(config.get("dev_self_improve_hour", 3))
+                    today = now.strftime("%Y-%m-%d")
+                    if now.hour == target_hour and _self_improve_state["last_date"] != today:
+                        _self_improve_state["last_date"] = today
+                        goal = str(config.get("dev_self_improve_goal", "") or _DEFAULT_SELF_IMPROVE_GOAL)
+                        from axi import dev_run as _dev_run  # noqa: PLC0415
+                        run_id = _dev_run.start_dev_run(goal)
+                        log.info("self-improve: started daily dev run %s", run_id)
+                except Exception:  # noqa: BLE001
+                    log.warning("self-improve loop failed", exc_info=True)
+
+        threading.Thread(
+            target=_self_improve_loop, name="axi-self-improve", daemon=True
+        ).start()
+
         stop_signal = {"raised": False}
 
         def _shutdown(*_):
             stop_signal["raised"] = True
             _embed_drain_stop.set()
             _dev_run_poll_stop.set()
+            _self_improve_stop.set()
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
