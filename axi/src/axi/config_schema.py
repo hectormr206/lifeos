@@ -690,6 +690,12 @@ FIELDS: tuple[ConfigField, ...] = (
         "changes never reach the real DBs). Default false = fresh empty databases.",
     ),
     ConfigField(
+        "dev_env_deploy_target_branch", "string", "main",
+        "Branch a deployed environment lands on. The env's diff is applied onto "
+        "origin/<branch> and pushed directly (no PR — the isolated-instance test "
+        "is the review gate). This is your production branch.",
+    ),
+    ConfigField(
         "dev_self_improve_enabled", "boolean", False,
         "If true, Axi fires ONE self-improvement dev run per day (high-stakes, "
         "opt-in). The result lands in /dev awaiting your approval — never auto-applied.",

@@ -233,6 +233,128 @@ def reject_env(env_id: str) -> dict:
     return {"ok": True}
 
 
+def _deploy_target() -> str:
+    from axi import config  # noqa: PLC0415
+    return str(config.get("dev_env_deploy_target_branch", "main"))
+
+
+def deploy_env(env_id: str) -> dict:
+    """Land a tested environment's change on the production branch (default main).
+
+    Applies ONLY the environment's diff (what Axi built, not the experimental
+    base it branched from) onto a fresh checkout of origin/<target>, commits, and
+    pushes directly to <target>. No PR: the isolated-instance test IS the review
+    gate for solo work. Never raises.
+
+    Returns {ok, pushed, target, restart_hint} or {ok: False, error}. A patch
+    that does not apply usually means <target> is behind the branch the env was
+    built on — the one-time sync is needed first.
+    """
+    state = get_env(env_id)
+    if state is None:
+        return {"ok": False, "error": "environment not found"}
+    worktree = state.get("worktree_path")
+    if not worktree or not os.path.isdir(worktree):
+        return {"ok": False, "error": "environment has no worktree to deploy"}
+
+    target = _deploy_target()
+
+    # Stop the isolated instance before we deploy.
+    try:
+        from axi import dev_env_instance  # noqa: PLC0415
+        dev_env_instance.stop_instance(env_id)
+    except Exception as exc:  # noqa: BLE001
+        log.info("deploy_env: stop_instance failed for %s (%s)", env_id, exc)
+
+    try:
+        return _deploy_env(env_id, state, worktree, target)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("deploy_env failed for %s", env_id)
+        return {"ok": False, "error": str(exc)}
+
+
+def _deploy_env(env_id: str, state: dict, worktree: str, target: str) -> dict:
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+    from axi import config  # noqa: PLC0415
+    from axi.dev_director import _cleanup_worktree  # noqa: PLC0415
+
+    repo = os.path.expanduser(config.get("dev_director_repo", "~/LifeOS/lifeos"))
+
+    # 1. The environment's diff — just what Axi built, vs the worktree's base.
+    diff_proc = subprocess.run(
+        ["git", "-C", worktree, "diff", "HEAD"],
+        capture_output=True, text=True, timeout=30,
+    )
+    diff = diff_proc.stdout
+    if not diff.strip():
+        return {"ok": False, "error": "no changes to deploy"}
+
+    # 2. Make sure we have the latest target.
+    subprocess.run(["git", "-C", repo, "fetch", "origin", target],
+                   capture_output=True, text=True, timeout=60)
+
+    tmp_parent = tempfile.mkdtemp(prefix="axi-deploy-wt-")
+    wt = os.path.join(tmp_parent, f"axi-deploy-{env_id[:12]}")
+    # Detached checkout of origin/<target> — no leftover branch to clean up.
+    add = subprocess.run(
+        ["git", "-C", repo, "worktree", "add", "--detach", wt, f"origin/{target}"],
+        capture_output=True, text=True,
+    )
+    if add.returncode != 0:
+        shutil.rmtree(tmp_parent, ignore_errors=True)
+        return {"ok": False, "error": f"could not check out origin/{target}: {add.stderr.strip()}"}
+
+    patch_path = os.path.join(tmp_parent, "env.patch")
+    Path(patch_path).write_text(diff)
+    pushed = False
+    try:
+        applied = subprocess.run(["git", "-C", wt, "apply", "--index", patch_path],
+                                 capture_output=True, text=True)
+        if applied.returncode != 0:
+            applied = subprocess.run(["git", "-C", wt, "apply", "--3way", patch_path],
+                                     capture_output=True, text=True)
+            if applied.returncode != 0:
+                return {
+                    "ok": False,
+                    "error": (f"patch did not apply onto {target} (likely {target} is behind the "
+                              f"branch this env was built on — run the one-time sync first): "
+                              f"{applied.stderr.strip()[:300]}"),
+                }
+        title = (state.get("title") or state.get("goal", "")).splitlines()[0][:72]
+        commit_msg = f"{title}\n\nDeployed from Axi environment {env_id}."
+        subprocess.run(["git", "-C", wt, "commit", "-m", commit_msg],
+                       capture_output=True, text=True, check=True)
+        push = subprocess.run(["git", "-C", wt, "push", "origin", f"HEAD:{target}"],
+                              capture_output=True, text=True)
+        pushed = push.returncode == 0
+        push_err = push.stderr.strip()
+    finally:
+        _cleanup_worktree(repo, wt, "", tmp_parent)
+
+    if not pushed:
+        return {"ok": False, "error": f"push to {target} failed: {push_err[:300]}"}
+
+    state["status"] = "deployed"
+    state["deployed_at"] = datetime.now(timezone.utc).isoformat()
+    state["deployed_target"] = target
+    state["instance"] = None
+    dev_run._write_state_file(dev_run._state_path(env_id), state)  # noqa: SLF001
+
+    return {
+        "ok": True,
+        "pushed": True,
+        "target": target,
+        "restart_hint": (
+            f"Desplegado a {target}. En la laptop (corriendo {target}): "
+            f"git pull && systemctl --user restart axi-dashboard axi-voice"
+        ),
+    }
+
+
 def iterate_env(env_id: str, prompt: str) -> dict:
     """Refine an existing environment: relaunch the director on the SAME worktree
     with a new instruction, resuming Claude's session so it keeps the context of
