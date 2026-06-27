@@ -23,6 +23,12 @@
          x-text="error"></div>
   </template>
 
+  <template x-if="notice">
+    <div class="text-sm px-3 py-2 rounded-lg mb-3"
+         style="background: rgba(0,180,160,0.1); color: var(--teal); border: 1px solid var(--teal)"
+         x-text="notice"></div>
+  </template>
+
   <template x-if="loading && envs.length === 0">
     <div class="muted text-sm text-center py-10">Cargando ambientes…</div>
   </template>
@@ -110,8 +116,8 @@
                     @click="openIterate(e)" :disabled="busy[e.env_id]">↻ Iterar</button>
           </template>
           <template x-if="['ready','needs_human'].includes(e.card_status)">
-            <button type="button" class="btn btn-primary"
-                    style="padding: 0.3rem 0.7rem; font-size: 0.8rem; background: var(--teal); border-color: var(--teal);"
+            <button type="button" class="btn"
+                    style="padding: 0.3rem 0.7rem; font-size: 0.8rem; color: var(--teal);"
                     @click="deploy(e)" :disabled="busy[e.env_id]">🚀 Deploy</button>
           </template>
           <template x-if="['ready','needs_human','error'].includes(e.card_status)">
@@ -120,7 +126,7 @@
           </template>
           <template x-if="['ready','needs_human','deployed'].includes(e.card_status)">
             <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;"
-                    @click="toggleDiff(e)">⟂ Diff</button>
+                    @click="toggleDiff(e)">Ver diff</button>
           </template>
         </div>
 
@@ -188,6 +194,7 @@ function devEnvs() {
     envs: [],
     loading: true,
     error: null,
+    notice: null,
     // One modal serves both "create" and "iterate" (DRY).
     modal: { open: false, mode: 'create', envId: null, text: '', busy: false },
     recording: false,
@@ -261,21 +268,32 @@ function devEnvs() {
 
     // ── Card actions ──────────────────────────────────────────────────────────
     async openUI(e) {
-      // If the instance is already running, just open it.
+      // Already running → open directly (we're inside the click gesture).
       if (e.instance && e.instance.status === 'running' && e.instance.url) {
         window.open(e.instance.url, '_blank');
         return;
       }
+      // Reserve a tab NOW, inside the click gesture, so the popup blocker allows
+      // it. A window.open fired later (after await / setTimeout) gets blocked —
+      // that was the "Probar y no pasa nada" bug. We navigate this tab once the
+      // instance is up.
+      const win = window.open('about:blank', '_blank');
       this.busy = { ...this.busy, [e.env_id]: true };
+      this.notice = null;
       try {
         const r = await fetch('/api/dev-envs/' + encodeURIComponent(e.env_id) + '/instance/start', { method: 'POST' });
         const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
-        const url = d.instance && d.instance.url;
+        if (!r.ok) { if (win) win.close(); throw new Error(d.detail || ('HTTP ' + r.status)); }
         await this.load();
-        if (url) {
-          // Give the dashboard a couple seconds to boot, then open it.
-          setTimeout(() => window.open(url, '_blank'), 2500);
+        const url = d.instance && d.instance.url;
+        if (url && win) {
+          // Give uvicorn a few seconds to bind, then point the reserved tab at it.
+          setTimeout(() => { try { win.location = url; } catch (_) {} }, 3500);
+        } else if (url) {
+          // Popup was blocked entirely — tell the user to use the now-visible button.
+          this.notice = 'Instancia lista en ' + url + ' — tocá "Abrir UI" en la tarjeta.';
+        } else if (win) {
+          win.close();
         }
       } catch (err) {
         this.error = 'No pude levantar la instancia: ' + err.message;
