@@ -96,6 +96,10 @@
             <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;"
                     @click="stopInstance(e)" :disabled="busy[e.env_id]">■ Detener</button>
           </template>
+          <template x-if="['ready','needs_human'].includes(e.card_status)">
+            <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;"
+                    @click="openIterate(e)" :disabled="busy[e.env_id]">↻ Iterar</button>
+          </template>
           <template x-if="['ready','needs_human','error'].includes(e.card_status)">
             <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem; color: var(--red);"
                     @click="reject(e)" :disabled="busy[e.env_id]">🗑 Rechazar</button>
@@ -117,23 +121,27 @@
     </template>
   </div>
 
-  <!-- Create modal -->
-  <template x-if="showCreate">
+  <!-- Create / Iterate modal (one component, two modes) -->
+  <template x-if="modal.open">
     <div class="fixed inset-0 flex items-center justify-center p-4" style="z-index: 60; background: rgba(0,0,0,0.7);"
-         @click="closeCreate()">
+         @click="closeModal()">
       <div class="panel p-4 w-full max-w-lg" @click.stop>
         <div class="flex items-center justify-between mb-2">
-          <h2 class="font-semibold">Nuevo ambiente de desarrollo</h2>
-          <button type="button" @click="closeCreate()" class="muted">✕</button>
+          <h2 class="font-semibold"
+              x-text="modal.mode === 'iterate' ? 'Iterar sobre el ambiente' : 'Nuevo ambiente de desarrollo'"></h2>
+          <button type="button" @click="closeModal()" class="muted">✕</button>
         </div>
-        <p class="muted text-xs mb-2">
-          Contale a Axi qué querés construir. Podés escribir o mantener presionado el micrófono para dictarlo.
-        </p>
+        <p class="muted text-xs mb-2"
+           x-text="modal.mode === 'iterate'
+             ? 'Decile a Axi qué ajustar o agregar. Sigue sobre lo que ya construyó, en el mismo worktree.'
+             : 'Contale a Axi qué querés construir. Podés escribir o mantener presionado el micrófono para dictarlo.'"></p>
         <div class="flex items-end gap-2">
-          <textarea x-model="newGoal" rows="4"
+          <textarea x-model="modal.text" rows="4"
                     class="flex-1 rounded-lg p-2 text-sm"
                     style="background: var(--panel2); border: 1px solid var(--border); resize: vertical;"
-                    placeholder="Ej: agregá un tablero kanban a la vista de Salud con columnas por estado…"></textarea>
+                    :placeholder="modal.mode === 'iterate'
+                      ? 'Ej: el botón quedó muy chico, agrandalo y movelo arriba a la derecha…'
+                      : 'Ej: agregá un tablero kanban a la vista de Salud con columnas por estado…'"></textarea>
           <button type="button"
                   @mousedown.prevent="startRec()" @mouseup.prevent="stopRec()" @mouseleave="stopRec()"
                   @touchstart.prevent="startRec()" @touchend.prevent="stopRec()" @touchcancel="stopRec()"
@@ -148,10 +156,10 @@
           </button>
         </div>
         <div class="flex justify-end gap-2 mt-3">
-          <button type="button" @click="closeCreate()" class="btn" style="padding: 0.35rem 0.9rem;">Cancelar</button>
-          <button type="button" @click="create()" class="btn btn-primary" style="padding: 0.35rem 0.9rem;"
-                  :disabled="creating || !newGoal.trim()">
-            <span x-text="creating ? 'Lanzando…' : 'Crear ambiente'"></span>
+          <button type="button" @click="closeModal()" class="btn" style="padding: 0.35rem 0.9rem;">Cancelar</button>
+          <button type="button" @click="submitModal()" class="btn btn-primary" style="padding: 0.35rem 0.9rem;"
+                  :disabled="modal.busy || !modal.text.trim()">
+            <span x-text="modal.busy ? 'Lanzando…' : (modal.mode === 'iterate' ? 'Iterar' : 'Crear ambiente')"></span>
           </button>
         </div>
       </div>
@@ -166,9 +174,8 @@ function devEnvs() {
     envs: [],
     loading: true,
     error: null,
-    showCreate: false,
-    newGoal: '',
-    creating: false,
+    // One modal serves both "create" and "iterate" (DRY).
+    modal: { open: false, mode: 'create', envId: null, text: '', busy: false },
     recording: false,
     transcribing: false,
     _recorder: null,
@@ -197,35 +204,40 @@ function devEnvs() {
       }
     },
 
-    openCreate() { this.showCreate = true; this.newGoal = ''; this.error = null; },
-    closeCreate() { if (this.recording) this.stopRec(); this.showCreate = false; },
+    openCreate() { this.modal = { open: true, mode: 'create', envId: null, text: '', busy: false }; this.error = null; },
+    openIterate(e) { this.modal = { open: true, mode: 'iterate', envId: e.env_id, text: '', busy: false }; this.error = null; },
+    closeModal() { if (this.recording) this.stopRec(); this.modal = { ...this.modal, open: false }; },
 
-    async create() {
-      const goal = this.newGoal.trim();
-      if (!goal) return;
-      this.creating = true;
+    async submitModal() {
+      const text = this.modal.text.trim();
+      if (!text) return;
+      const isIter = this.modal.mode === 'iterate';
+      this.modal = { ...this.modal, busy: true };
       try {
-        const r = await fetch('/api/dev-envs', {
+        const url = isIter
+          ? '/api/dev-envs/' + encodeURIComponent(this.modal.envId) + '/iterate'
+          : '/api/dev-envs';
+        const body = isIter ? { prompt: text } : { goal: text };
+        const r = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ goal }),
+          body: JSON.stringify(body),
         });
         if (!r.ok) { const d = await r.text(); throw new Error('HTTP ' + r.status + ': ' + d); }
-        this.showCreate = false;
-        this.newGoal = '';
+        this.modal = { ...this.modal, open: false };
         await this.load();
       } catch (e) {
-        this.error = 'No pude crear el ambiente: ' + e.message;
+        this.error = 'No pude ' + (isIter ? 'iterar' : 'crear el ambiente') + ': ' + e.message;
       } finally {
-        this.creating = false;
+        this.modal = { ...this.modal, busy: false };
       }
     },
 
-    // ── Voice dictation into the goal (shared recorder) ───────────────────────
+    // ── Voice dictation into the modal text (shared recorder) ─────────────────
     ensureRecorder() {
       if (this._recorder) return;
       this._recorder = window.createSegmentedRecorder({
-        onText: (text) => { this.newGoal = this.newGoal ? (this.newGoal + ' ' + text) : text; },
+        onText: (text) => { this.modal.text = this.modal.text ? (this.modal.text + ' ' + text) : text; },
         onError: (msg) => { this.error = msg; },
         onState: ({ recording, transcribing }) => { this.recording = recording; this.transcribing = transcribing; },
       });

@@ -251,42 +251,26 @@ def test_nano_sleep_onset_only_falls_to_note(monkeypatch):
 # ─── dev_develop chat wiring ──────────────────────────────────────────────────
 
 
-def test_chat_dev_develop_returns_ack(client, monkeypatch):
-    """A 'desarrollá X' message must return an immediate ack without calling brain.
-
-    The dashboard spawns a REAL daemon thread that calls run_dev_task. We mock
-    run_dev_task to record the goal and signal an Event, then wait briefly for the
-    daemon thread to run. We intentionally do NOT patch the global
-    ``threading.Thread`` — doing so breaks the FastAPI TestClient / anyio portal
-    teardown and hangs the interpreter on exit.
-    """
-    import threading
-
-    from axi import brain, dev_task
+def test_chat_dev_develop_files_environment(client, monkeypatch):
+    """A 'desarrollá X' message files a persistent Desarrollo environment and
+    returns an immediate ack without calling the brain. create_env launches a
+    detached director, so no background thread is needed."""
+    from axi import brain, dev_env
 
     brain_called: list[str] = []
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: brain_called.append("ask") or "brain reply")
     monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: brain_called.append("tools") or "brain reply")
 
-    dev_task_calls: list[str] = []
-    done = threading.Event()
-
-    def _fake_run_dev_task(goal):
-        dev_task_calls.append(goal)
-        done.set()
-        return "ok"
-
-    monkeypatch.setattr(dev_task, "run_dev_task", _fake_run_dev_task)
+    created: list[str] = []
+    monkeypatch.setattr(dev_env, "create_env", lambda goal: created.append(goal) or "ENVID")
 
     r = client.post("/api/chat/ask", json={"text": "axi, desarrollá una función que sume"})
     assert r.status_code == 200
     body = r.json()
 
-    assert "segundo plano" in body["answer"].lower() or "dev-results" in body["answer"].lower()
+    assert "desarrollo" in body["answer"].lower()  # points the user to /desarrollo
     assert not brain_called, "brain must NOT be called for dev_develop"
-    # The daemon thread runs run_dev_task; give it a moment to fire.
-    assert done.wait(timeout=5), "dev_task.run_dev_task was not invoked by the background thread"
-    assert dev_task_calls and dev_task_calls[0].strip(), "expected a non-empty goal passed to run_dev_task"
+    assert created and created[0].strip(), "expected a non-empty goal passed to create_env"
 
 
 def test_chat_non_dev_text_goes_to_brain(client, monkeypatch):

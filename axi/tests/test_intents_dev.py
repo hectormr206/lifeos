@@ -112,22 +112,24 @@ def test_dev_develop_handler_no_goal() -> None:
     assert "no-goal" in result
 
 
-# ── dev_develop handler: calls dev_run.start_dev_run on valid goal ───────────
+# ── dev_develop handler: files the request as a Desarrollo environment ───────
 
-def test_dev_develop_handler_calls_start_dev_run() -> None:
+def test_dev_develop_handler_creates_env() -> None:
+    """The hands-free dev request now creates a persistent environment (in the
+    controlled /desarrollo workspace), not an inline ephemeral dev run."""
     fake_daemon = MagicMock()
-    started: list[str] = []
+    created: list[str] = []
 
-    def fake_start(goal: str) -> str:
-        started.append(goal)
-        return "20260625-120000-abc123"
+    def fake_create(goal: str) -> str:
+        created.append(goal)
+        return "20260627-120000-abc123"
 
-    with patch("axi.dev_run.start_dev_run", side_effect=fake_start), \
+    with patch("axi.dev_env.create_env", side_effect=fake_create), \
          patch("axi.output.notify", return_value=None), \
          patch("axi.speak.speak", return_value=True):
         result = intents._h_dev_develop(  # noqa: SLF001
             fake_daemon, params={"goal": "una función de prueba"}
         )
 
-    assert result == "dev_develop:started"
-    assert started == ["una función de prueba"]
+    assert result == "dev_develop:env-created"
+    assert created == ["una función de prueba"]

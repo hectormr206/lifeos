@@ -325,6 +325,10 @@ def _h_clear_conversation(daemon, params: dict | None = None) -> str:
 
 
 def _h_dev_develop(daemon, params: dict | None = None) -> str:
+    """Hands-free "Axi, desarrollá X" now FILES the request into the controlled
+    Desarrollo workspace as a persistent environment, instead of running an
+    ephemeral build inline. Development (build → test isolated → iterate →
+    deploy) lives in /desarrollo; the chat itself stays conversational."""
     goal = ((params or {}).get("goal") or "").strip()
     if not goal:
         try:
@@ -335,29 +339,25 @@ def _h_dev_develop(daemon, params: dict | None = None) -> str:
         return "dev_develop:no-goal"
 
     try:
-        from axi import dev_run  # noqa: PLC0415
-        dev_run.start_dev_run(goal)
+        from axi import dev_env  # noqa: PLC0415
+        dev_env.create_env(goal)
     except Exception as exc:  # noqa: BLE001
-        log.exception("dev_develop start_dev_run failed: %s", exc)
+        log.exception("dev_develop create_env failed: %s", exc)
 
+    msg = "Listo, lo armé como ambiente en Desarrollo — entrá a /desarrollo para probarlo y desplegarlo."
     try:
         from axi.output import notify  # noqa: PLC0415
-        notify(
-            "Axi",
-            "Dale, lo desarrollo en segundo plano — te aviso cuando termine.",
-            transient=True,
-            timeout_ms=3000,
-        )
+        notify("Axi", msg, transient=True, timeout_ms=3500)
     except Exception:  # noqa: BLE001
         pass
 
     try:
         from axi.speak import speak as _speak  # noqa: PLC0415
-        _speak("Dale, lo desarrollo en segundo plano — te aviso cuando termine.")
+        _speak("Listo, lo armé como ambiente en Desarrollo. Entrá a probarlo cuando quieras.")
     except Exception:  # noqa: BLE001
         pass
 
-    return "dev_develop:started"
+    return "dev_develop:env-created"
 
 
 INTENT_HANDLERS: dict[str, Callable[..., str]] = {
