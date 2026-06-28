@@ -285,8 +285,10 @@ def _deploy_env(env_id: str, state: dict, worktree: str, target: str) -> dict:
     repo = os.path.expanduser(config.get("dev_director_repo", "~/LifeOS/lifeos"))
 
     # 1. The environment's diff — just what Axi built, vs the worktree's base.
+    #    Exclude build junk (Python bytecode) so it never lands on the target.
     diff_proc = subprocess.run(
-        ["git", "-C", worktree, "diff", "HEAD"],
+        ["git", "-C", worktree, "diff", "HEAD", "--",
+         ".", ":(exclude)**/__pycache__/**", ":(exclude)**/*.pyc"],
         capture_output=True, text=True, timeout=30,
     )
     diff = diff_proc.stdout
@@ -344,15 +346,61 @@ def _deploy_env(env_id: str, state: dict, worktree: str, target: str) -> dict:
     state["instance"] = None
     dev_run._write_state_file(dev_run._state_path(env_id), state)  # noqa: SLF001
 
+    # 3. Bring the change to the LOCAL running app (pull + restart), DETACHED so
+    #    the dashboard can restart itself without hanging this request. Guarded:
+    #    only a clean, fast-forwardable tree is touched.
+    auto_installed = False
+    if bool(config.get("dev_env_deploy_auto_install", True)):
+        auto_installed = _trigger_local_install(repo)
+
+    hint = (
+        f"Desplegado a {target} e instalando localmente — los servicios se "
+        f"reinician solos en unos segundos (el dashboard se reconecta solo)."
+        if auto_installed else
+        f"Desplegado a {target}. En la laptop (corriendo {target}): "
+        f"git pull && systemctl --user restart axi-dashboard axi-voice"
+    )
+
     return {
         "ok": True,
         "pushed": True,
         "target": target,
-        "restart_hint": (
-            f"Desplegado a {target}. En la laptop (corriendo {target}): "
-            f"git pull && systemctl --user restart axi-dashboard axi-voice"
-        ),
+        "auto_installed": auto_installed,
+        "restart_hint": hint,
     }
+
+
+def _trigger_local_install(repo: str) -> bool:
+    """Pull the freshly-deployed change into the local working tree and restart
+    the services — DETACHED via systemd-run, so the dashboard can restart itself
+    without hanging the deploy request. Returns True if the job was launched.
+
+    The detached script is GUARDED: it pulls and restarts ONLY when the tree is
+    clean and the pull is a fast-forward; otherwise it aborts (no pull, no
+    restart) and notifies, so it never clobbers uncommitted local work.
+    """
+    import shlex  # noqa: PLC0415
+    from axi import config  # noqa: PLC0415
+
+    services = str(config.get("dev_env_deploy_restart_services", "axi-dashboard axi-voice"))
+    script = (
+        f"cd {shlex.quote(repo)} && "
+        f"git diff --quiet && git diff --cached --quiet && "  # clean tree only
+        f"git pull --ff-only --quiet && "
+        f"systemctl --user restart {services} "
+        f"|| notify-send 'Axi deploy' "
+        f"'Instalación local omitida: el árbol no está limpio o no es fast-forward. "
+        f"Hacé git pull a mano.' 2>/dev/null || true"
+    )
+    try:
+        subprocess.run(
+            ["systemd-run", "--user", "--collect", "bash", "-lc", script],
+            capture_output=True, text=True, timeout=20,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("local install launch failed: %s", exc)
+        return False
 
 
 def iterate_env(env_id: str, prompt: str) -> dict:

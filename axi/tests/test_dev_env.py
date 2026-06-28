@@ -423,3 +423,39 @@ def test_deploy_env_push_failure(env_dir, tmp_path, monkeypatch):
     assert res["ok"] is False and "push" in res["error"]
     # status NOT flipped to deployed on push failure
     assert dev_run.get_run(env_id)["status"] == "ready"
+
+
+def test_deploy_env_auto_installs_locally(env_dir, tmp_path, monkeypatch):
+    """Deploy launches a detached systemd-run job that pulls + restarts the
+    services so the change reaches the local running app — one button, all of it."""
+    env_id = "20260628-000010-dep555"
+    _ready_env_with_worktree(env_id, tmp_path, "wte")
+    monkeypatch.setattr("axi.dev_env_instance.stop_instance", lambda eid: {"ok": True})
+    fake = _git_fake()
+    monkeypatch.setattr("subprocess.run", fake)
+
+    res = dev_env.deploy_env(env_id)
+
+    assert res["ok"] and res["auto_installed"] is True
+    install = [c for c in fake.calls if "systemd-run" in c]
+    assert install, "expected a detached systemd-run local-install job"
+    script = " ".join(install[-1])
+    assert "git pull --ff-only" in script and "systemctl --user restart" in script
+    assert "git diff --quiet" in script  # guarded: clean tree only
+
+
+def test_deploy_env_auto_install_can_be_disabled(env_dir, tmp_path, monkeypatch):
+    env_id = "20260628-000011-dep666"
+    _ready_env_with_worktree(env_id, tmp_path, "wtf")
+    monkeypatch.setattr("axi.dev_env_instance.stop_instance", lambda eid: {"ok": True})
+    from axi import config as _cfg
+    orig = _cfg.get
+    monkeypatch.setattr(_cfg, "get",
+                        lambda k, d=None: False if k == "dev_env_deploy_auto_install" else orig(k, d))
+    fake = _git_fake()
+    monkeypatch.setattr("subprocess.run", fake)
+
+    res = dev_env.deploy_env(env_id)
+
+    assert res["ok"] and res["auto_installed"] is False
+    assert not [c for c in fake.calls if "systemd-run" in c]  # no install job launched
