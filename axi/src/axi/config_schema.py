@@ -696,6 +696,18 @@ FIELDS: tuple[ConfigField, ...] = (
         "is the review gate). This is your production branch.",
     ),
     ConfigField(
+        "dev_env_deploy_auto_install", "boolean", True,
+        "If true, Deploy ALSO brings the change to the local running app: it pulls "
+        "the target branch and restarts the services (detached, so the dashboard "
+        "can restart itself). Guarded — only a clean, fast-forwardable tree is "
+        "touched. Set false to keep Deploy GitHub-only and install by hand.",
+    ),
+    ConfigField(
+        "dev_env_deploy_restart_services", "string", "axi-dashboard axi-voice",
+        "Space-separated systemd --user services restarted by Deploy's local "
+        "install step so the new code is picked up.",
+    ),
+    ConfigField(
         "dev_self_improve_enabled", "boolean", False,
         "If true, Axi fires ONE self-improvement dev run per day (high-stakes, "
         "opt-in). The result lands in /dev awaiting your approval — never auto-applied.",

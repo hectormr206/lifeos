@@ -8,6 +8,10 @@
 .idea/
 .vscode/
 
+# Python bytecode (keeps Axi-built modules at the repo root clean on deploy)
+__pycache__/
+*.pyc
+
 # SDD tooling (machine-specific absolute paths, regenerable via sdd-init)
 .atl/
 
