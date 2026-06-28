@@ -1,0 +1,264 @@
+{% extends "_base.html" %}
+{% block nav_calculator %}active{% endblock %}
+{% block title %}Calculadora · Axi{% endblock %}
+
+{% block content %}
+<div class="max-w-xl mx-auto space-y-4" x-data="calculatorPage()" x-init="load()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <h1 class="text-2xl font-semibold">🧮 Calculadora</h1>
+    <button @click="clearHistory()" x-show="history.length > 0"
+            class="panel2 px-3 py-2 text-sm hover:brightness-110 transition">
+      Limpiar histórico
+    </button>
+  </div>
+
+  <!-- Display -->
+  <div class="panel p-4 space-y-2">
+    <!-- Top line: the expression being built, Android style -->
+    <div class="text-right text-lg muted tabular-nums min-h-[1.75rem] break-all"
+         x-text="topLine">&nbsp;</div>
+    <!-- Main line: current entry or the latest result -->
+    <div class="text-right text-3xl font-semibold tabular-nums min-h-[2.5rem] break-all"
+         x-text="mainLine">0</div>
+
+    <!-- Keypad -->
+    <div class="grid grid-cols-4 gap-2 pt-1">
+      <button @click="clearAll()" class="panel2 py-3 text-lg hover:brightness-110 transition col-span-2" style="color: var(--red)">C</button>
+      <button @click="backspace()" class="panel2 py-3 text-lg hover:brightness-110 transition">⌫</button>
+      <button @click="setOp('/')" class="panel2 py-3 text-lg hover:brightness-110 transition" style="color: var(--pink)">÷</button>
+
+      <template x-for="d in ['7','8','9']" :key="d">
+        <button @click="press(d)" class="panel2 py-3 text-lg hover:brightness-110 transition" x-text="d"></button>
+      </template>
+      <button @click="setOp('*')" class="panel2 py-3 text-lg hover:brightness-110 transition" style="color: var(--pink)">×</button>
+
+      <template x-for="d in ['4','5','6']" :key="d">
+        <button @click="press(d)" class="panel2 py-3 text-lg hover:brightness-110 transition" x-text="d"></button>
+      </template>
+      <button @click="setOp('-')" class="panel2 py-3 text-lg hover:brightness-110 transition" style="color: var(--pink)">−</button>
+
+      <template x-for="d in ['1','2','3']" :key="d">
+        <button @click="press(d)" class="panel2 py-3 text-lg hover:brightness-110 transition" x-text="d"></button>
+      </template>
+      <button @click="setOp('+')" class="panel2 py-3 text-lg hover:brightness-110 transition" style="color: var(--pink)">+</button>
+
+      <button @click="press('0')" class="panel2 py-3 text-lg hover:brightness-110 transition col-span-2">0</button>
+      <button @click="press('.')" class="panel2 py-3 text-lg hover:brightness-110 transition">.</button>
+      <button @click="equals()" class="py-3 text-lg font-semibold rounded-lg transition"
+              style="background: linear-gradient(90deg, var(--pink), var(--purple)); color: white">=</button>
+    </div>
+  </div>
+
+  <!-- History -->
+  <div class="panel p-4 space-y-2">
+    <h2 class="text-sm font-semibold uppercase tracking-wider muted">Histórico</h2>
+    <template x-if="history.length === 0">
+      <div class="text-sm muted italic py-2">Todavía no hay operaciones.</div>
+    </template>
+    <ul class="space-y-1">
+      <template x-for="(entry, i) in history" :key="i">
+        <li @click="recall(entry)"
+            class="flex justify-between items-baseline gap-3 text-sm py-1.5 px-2 rounded cursor-pointer hover:bg-white/5 transition">
+          <span class="muted tabular-nums" x-text="entry.expression"></span>
+          <span class="font-semibold tabular-nums" x-text="entry.result"></span>
+        </li>
+      </template>
+    </ul>
+  </div>
+</div>
+
+<script>
+function calculatorPage() {
+  return {
+    // Android-style expression building:
+    //   `tokens` holds the committed parts (numbers + operators) shown up top,
+    //   `cur` is the number currently being typed.
+    // Nothing is evaluated until `=` is pressed.
+    tokens: [],       // e.g. ['12', '+', '5', '*']
+    cur: '',          // the live number segment, e.g. '3'
+    result: null,     // last evaluated result (number)
+    lastExpr: '',     // pretty expression of the last evaluation, for the top line
+    error: '',        // set when '=' hits an invalid expression (e.g. ÷ by zero)
+    done: false,      // true right after '=', so the next digit starts fresh
+    history: [],      // [{ expression, result }] — newest first
+    STORAGE_KEY: 'axi.calculator.history',
+
+    // -- displays ----------------------------------------------------------
+    get topLine() {
+      if (this.done) return this.lastExpr;
+      const parts = [...this.tokens];
+      if (this.cur !== '') parts.push(this.cur);
+      return parts.map((p) => this.symbol(p)).join(' ');
+    },
+    get mainLine() {
+      if (this.error) return this.error;
+      if (this.done) return this.fmt(this.result);
+      return this.livePreview();
+    },
+    // Running result of the expression as typed, ignoring a dangling operator.
+    // "5 + 5" -> 10, "3 + 4 +" -> 7, a lone number -> itself.
+    livePreview() {
+      const parts = [...this.tokens];
+      if (this.cur !== '') parts.push(this.cur);
+      while (parts.length && this.isOp(parts[parts.length - 1])) parts.pop();
+      if (parts.length === 0) return '0';
+      if (parts.length === 1) return this.fmt(parseFloat(parts[0]));
+      try {
+        return this.fmt(this.round(this.evaluate(parts)));
+      } catch (e) {
+        return '—'; // e.g. ÷ by zero while still typing
+      }
+    },
+
+    // -- persistence -------------------------------------------------------
+    load() {
+      try {
+        const raw = localStorage.getItem(this.STORAGE_KEY);
+        this.history = raw ? JSON.parse(raw) : [];
+      } catch (e) {
+        this.history = [];
+      }
+    },
+    save() {
+      try {
+        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.history));
+      } catch (e) { /* storage unavailable — keep going in-memory */ }
+    },
+
+    // -- input -------------------------------------------------------------
+    press(ch) {
+      // After '=', typing a digit starts a brand-new calculation.
+      if (this.done) this.clearAll();
+      if (ch === '.') {
+        if (this.cur === '') { this.cur = '0.'; return; }
+        if (!this.cur.includes('.')) this.cur += '.';
+        return;
+      }
+      this.cur = this.cur === '0' ? ch : this.cur + ch;
+    },
+    setOp(op) {
+      // After an error, an operator starts a fresh calculation.
+      if (this.error) this.clearAll();
+      // After '=', chain from the result instead of clearing it.
+      if (this.done) {
+        if (this.result === null) { this.clearAll(); return; }
+        this.tokens = [this.fmt(this.result)];
+        this.cur = '';
+        this.done = false;
+        this.result = null;
+        this.tokens.push(op);
+        return;
+      }
+      if (this.cur !== '') {
+        this.tokens.push(this.cur);
+        this.cur = '';
+      }
+      if (this.tokens.length === 0) return; // no leading operator
+      const last = this.tokens[this.tokens.length - 1];
+      if (this.isOp(last)) {
+        this.tokens[this.tokens.length - 1] = op; // swap the pending operator
+      } else {
+        this.tokens.push(op);
+      }
+    },
+    equals() {
+      if (this.done) return;
+      const parts = [...this.tokens];
+      if (this.cur !== '') parts.push(this.cur);
+      // Drop a dangling trailing operator: "5 +" evaluates as "5".
+      while (parts.length && this.isOp(parts[parts.length - 1])) parts.pop();
+      if (parts.length === 0) return;
+
+      let value;
+      try {
+        value = this.evaluate(parts);
+      } catch (e) {
+        this.lastExpr = parts.map((p) => this.symbol(p)).join(' ') + ' =';
+        this.tokens = [];
+        this.cur = '';
+        this.result = null;
+        this.error = e.message; // surface "Error: ÷ por cero"
+        this.done = true;       // next input starts fresh
+        return;
+      }
+      value = this.round(value);
+      const expression = parts.map((p) => this.symbol(p)).join(' ');
+      this.history.unshift({ expression, result: this.fmt(value) });
+      this.save();
+      this.lastExpr = expression + ' =';
+      this.result = value;
+      this.tokens = [];
+      this.cur = '';
+      this.done = true;
+    },
+    backspace() {
+      if (this.done) return;
+      if (this.cur !== '') {
+        this.cur = this.cur.slice(0, -1);
+        return;
+      }
+      this.tokens.pop(); // remove the last committed token
+    },
+    clearAll() {
+      this.tokens = [];
+      this.cur = '';
+      this.result = null;
+      this.lastExpr = '';
+      this.error = '';
+      this.done = false;
+    },
+
+    // -- history actions ---------------------------------------------------
+    recall(entry) {
+      this.clearAll();
+      this.cur = String(entry.result);
+    },
+    clearHistory() {
+      this.history = [];
+      this.save();
+    },
+
+    // -- evaluation (precedence: * / before + -) ---------------------------
+    evaluate(parts) {
+      // First pass: resolve * and / left to right.
+      const pass1 = [];
+      for (let i = 0; i < parts.length; i++) {
+        const t = parts[i];
+        if (t === '*' || t === '/') {
+          const a = parseFloat(pass1.pop());
+          const b = parseFloat(parts[++i]);
+          if (t === '/' && b === 0) throw new Error('Error: ÷ por cero');
+          pass1.push(String(t === '*' ? a * b : a / b));
+        } else {
+          pass1.push(t);
+        }
+      }
+      // Second pass: resolve + and - left to right.
+      let acc = parseFloat(pass1[0]);
+      for (let i = 1; i < pass1.length; i += 2) {
+        const op = pass1[i];
+        const n = parseFloat(pass1[i + 1]);
+        acc = op === '+' ? acc + n : acc - n;
+      }
+      return acc;
+    },
+
+    // -- helpers -----------------------------------------------------------
+    isOp(t) {
+      return t === '+' || t === '-' || t === '*' || t === '/';
+    },
+    symbol(t) {
+      return { '+': '+', '-': '−', '*': '×', '/': '÷' }[t] || t;
+    },
+    round(n) {
+      // Avoid floating-point noise like 0.1 + 0.2 = 0.30000000000000004.
+      return Math.round((n + Number.EPSILON) * 1e10) / 1e10;
+    },
+    fmt(n) {
+      const num = typeof n === 'number' ? n : parseFloat(n);
+      return String(num);
+    },
+  };
+}
+</script>
+{% endblock %}

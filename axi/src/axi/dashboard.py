@@ -5201,6 +5201,11 @@ def finance_page(request: Request):
     return templates.TemplateResponse(request, "finance.html", {})
 
 
+@app.get("/calculator", response_class=HTMLResponse)
+def calculator_page(request: Request):
+    return templates.TemplateResponse(request, "calculator.html", {})
+
+
 @app.get("/api/finance/entries")
 def api_finance_list(days: int = 30, kind: str | None = None, q: str | None = None):
     if q:
