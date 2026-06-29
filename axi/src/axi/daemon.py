@@ -24,7 +24,6 @@ from axi.brain import ask as brain_ask, ask_with_tools as _brain_ask_with_tools,
 from axi.web_tools import web_search_tool_def, web_search_handler
 from lifeos.localize import msg as _loc_msg
 from axi.clean import clean as clean_text
-from axi.extractor import extract_and_store
 from axi.eyes import capture_b64 as webcam_capture_b64
 from axi.heartbeat import game_mode_active as _game_mode_active
 from axi import power
@@ -519,18 +518,9 @@ class Daemon:
                     lang=_lang,
                 )
             log.info("answer: %s (vision=%s, history=%d, facts=%d)", answer, bool(screenshot), len(history) // 2, len(facts))
-            _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot), source="voice")
-
-            # Fact extraction in the background — does not block the response.
-            if config.get("fact_extraction_enabled", True):
-                def _extract():
-                    try:
-                        n = extract_and_store(question, answer, conv_node_id)
-                        if n:
-                            log.info("extracted %d fact(s) from turn", n)
-                    except Exception as e:  # noqa: BLE001
-                        log.warning("fact extraction failed: %s", e)
-                threading.Thread(target=_extract, daemon=True).start()
+            # memory.add now fires fact extraction in the background itself
+            # (covers voice AND typed chat), so no explicit extraction here.
+            self.memory.add(question, answer, has_screenshot=bool(screenshot), source="voice")
 
             save_last_answer(question, answer)
             to_clipboard(answer)
@@ -1184,18 +1174,8 @@ class Daemon:
                     lang=_lang,
                 )
             log.info("wakeword answer: %s", answer)
-            _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot), source="voice")
-
-            if config.get("fact_extraction_enabled", True):
-                def _extract():
-                    try:
-                        from axi.extractor import extract_and_store  # noqa: PLC0415
-                        n = extract_and_store(question, answer, conv_node_id)
-                        if n:
-                            log.info("wakeword extracted %d fact(s)", n)
-                    except Exception as e:  # noqa: BLE001
-                        log.warning("wakeword fact extraction failed: %s", e)
-                threading.Thread(target=_extract, daemon=True).start()
+            # memory.add fires fact extraction in the background itself.
+            self.memory.add(question, answer, has_screenshot=bool(screenshot), source="voice")
 
             save_last_answer(question, answer)
             to_clipboard(answer)

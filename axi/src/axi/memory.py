@@ -19,6 +19,7 @@ one, so users who never travel never see clutter.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -206,9 +207,24 @@ class ConversationMemory:
         error the connection is reset and the insert is retried, so the turn
         persists. Returns (0, 0) only when recovery fails entirely.
         """
-        return self._with_recovery(
+        conv_id, node_id = self._with_recovery(
             "add", lambda: self._add_once(user, axi, has_screenshot, session_id, source), (0, 0)
         )
+        # Background fact extraction (never blocks the turn, never raises) — builds
+        # durable graph memory from BOTH voice AND typed chat. Gated internally by
+        # graph_bridge_chat_facts inside extract_and_store; structured domains
+        # (health/finance) are skipped there to avoid duplicating their nodes.
+        if conv_id and config.get("fact_extraction_enabled", True):
+            def _extract() -> None:
+                try:
+                    from axi.extractor import extract_and_store  # noqa: PLC0415
+                    n = extract_and_store(user, axi, node_id)
+                    if n:
+                        log.info("extracted %d fact(s) from %s turn", n, source)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("fact extraction failed: %s", e)
+            threading.Thread(target=_extract, name="axi-fact-extract", daemon=True).start()
+        return conv_id, node_id
 
     def _messages_once(self) -> list[dict]:
         """The raw history read. Wrapped by _with_recovery."""
