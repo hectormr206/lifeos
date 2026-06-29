@@ -1220,6 +1220,27 @@ def same_day_neighbors(node_id: int, conn=None) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def find_fact_by_label(label: str, conn=None) -> int | None:
+    """Return the id of an existing 'fact' node with this exact label, or None.
+
+    Used by chat fact-extraction to avoid creating exact duplicates: identity /
+    preference facts are timeless, so the same label twice is a duplicate, not a
+    new event (time-series domain facts carry distinct occurred_at and are
+    handled by the domain bridge, not this path).
+    """
+    label = (label or "").strip()
+    if not label:
+        return None
+    c = conn or _connect()
+    try:
+        row = c.execute(
+            "SELECT id FROM nodes WHERE kind='fact' AND label=? LIMIT 1", (label,)
+        ).fetchone()
+    except Exception:  # noqa: BLE001
+        return None
+    return row["id"] if row else None
+
+
 def recent_facts(days: int = 2, limit: int = 8, conn=None) -> list[dict[str, Any]]:
     """Return the most recently-occurring 'fact' nodes within the last *days*,
     newest first.
