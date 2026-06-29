@@ -440,6 +440,21 @@ FIELDS: tuple[ConfigField, ...] = (
         minimum=0,
         maximum=3,
     ),
+    # ─────── wake-word CPU transcription (keep the GPU asleep) ───────
+    ConfigField(
+        "wakeword_cpu_whisper_enabled", "boolean", True,
+        "If true (default), the always-listening wake-gate transcribes voiced "
+        "segments with a small CPU Whisper model instead of the shared GPU "
+        "server, so the GPU stays asleep until a real command needs it. Falls "
+        "back to the GPU server automatically if the CPU model is unavailable.",
+    ),
+    ConfigField(
+        "wakeword_cpu_whisper_model", "string", "base",
+        "faster-whisper model for the CPU wake-gate (tiny|base|small). 'base' "
+        "balances 'Axi' detection accuracy and CPU cost; 'tiny' is cheapest, "
+        "'small' is more accurate. Only the wake-gate uses this — actual "
+        "commands still use the high-quality GPU server.",
+    ),
     # ─────── wake-word always-on ───────
     ConfigField(
         "wakeword_always_on", "boolean", True,
@@ -641,6 +656,19 @@ FIELDS: tuple[ConfigField, ...] = (
         "Runs exceeding this are moved to needs_human.",
         minimum=600,
         maximum=86400,
+    ),
+    # ─────── battery mode (power-aware behavior on battery) ───────
+    # Axi follows the external power-mode service's state file as the single
+    # source of truth (axi.power). VT-3B and the brains stay resident on battery
+    # by design (VT also serves reasoning chat) — the battery win is fewer
+    # background wakeups + the CPU wake-gate, not model eviction.
+    ConfigField(
+        "battery_loop_slowdown_factor", "integer", 4,
+        "On battery, background loop intervals (self-improve, dev-run poll, "
+        "embed drain) are multiplied by this factor to wake the "
+        "machine less often. 1 = no slowdown.",
+        minimum=1,
+        maximum=20,
     ),
     ConfigField(
         "dev_run_quota_wait_default_s", "integer", 3600,

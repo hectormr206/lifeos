@@ -27,6 +27,7 @@ from axi.clean import clean as clean_text
 from axi.extractor import extract_and_store
 from axi.eyes import capture_b64 as webcam_capture_b64
 from axi.heartbeat import game_mode_active as _game_mode_active
+from axi import power
 from axi.meeting import MeetingSession, process_meeting, recover_interrupted_meetings
 from axi.memory import ConversationMemory
 from axi.output import notify, save_last, save_last_answer, to_clipboard, type_to_focused
@@ -1003,6 +1004,17 @@ class Daemon:
         listener.start()
         log.info("wake-word listener started")
 
+        # Pre-load the CPU wake-gate model in the background so the first real
+        # "Axi" doesn't pay the one-time model-load cost. Falls back silently
+        # (transcribe_wakeword uses the GPU server if the CPU model never loads).
+        if bool(config.get("wakeword_cpu_whisper_enabled", True)):
+            from axi import wakeword_stt  # noqa: PLC0415
+            _ww_model = str(config.get("wakeword_cpu_whisper_model", "base"))
+            threading.Thread(
+                target=wakeword_stt.warm_up, args=(_ww_model,),
+                name="axi-wakegate-warmup", daemon=True,
+            ).start()
+
     def _pause_wakeword_for_meeting(self) -> None:
         """Stop the wake-word listener while a meeting records so Axi never
         interrupts a client meeting. Sets a flag so meeting_stop knows to
@@ -1373,7 +1385,10 @@ def serve() -> int:
         _embed_drain_stop = threading.Event()
 
         def _embed_drain_loop() -> None:
-            while not _embed_drain_stop.wait(timeout=300):  # 5 minutes
+            # On battery, slow down to wake the machine less often (live-read).
+            while not _embed_drain_stop.wait(
+                timeout=power.battery_scaled(300, config.get("battery_loop_slowdown_factor", 4))
+            ):  # 5 minutes on AC
                 try:
                     store.run_periodic_embed_drain()
                 except Exception:  # noqa: BLE001
@@ -1403,7 +1418,10 @@ def serve() -> int:
 
         def _dev_run_poll_loop() -> None:
             poll_interval = int(config.get("dev_run_poll_interval_s", 300))
-            while not _dev_run_poll_stop.wait(timeout=poll_interval):
+            _factor = config.get("battery_loop_slowdown_factor", 4)
+            while not _dev_run_poll_stop.wait(
+                timeout=power.battery_scaled(poll_interval, _factor)
+            ):
                 try:
                     from axi import dev_run as _dev_run  # noqa: PLC0415
                     _dev_run.poll_dev_runs()
@@ -1437,6 +1455,8 @@ def serve() -> int:
                 try:
                     if not bool(config.get("dev_self_improve_enabled", False)):
                         continue
+                    if power.on_battery():
+                        continue  # never fire a heavy self-improve dev-run on battery
                     tz_name = str(config.get("timezone", "America/Mexico_City"))
                     try:
                         now = datetime.now(ZoneInfo(tz_name))
