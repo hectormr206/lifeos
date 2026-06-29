@@ -1291,6 +1291,26 @@ def recent_conversations(limit: int = 20) -> list[sqlite3.Row]:
     return list(reversed(rows))
 
 
+def oldest_conversations(limit: int = 200) -> list[sqlite3.Row]:
+    """Return the OLDEST *limit* conversation turns (ascending by ts). Used by
+    the chat archiver to summarize + prune the tail of the log."""
+    c = _connect()
+    return list(c.execute(
+        "SELECT * FROM conversations ORDER BY ts ASC LIMIT ?", (limit,)
+    ))
+
+
+def delete_conversations(ids: list[int]) -> int:
+    """Delete conversation turns by id (batch). Graph nodes are NOT touched —
+    durable facts extracted from these turns stay in the graph. Returns count."""
+    ids = [int(i) for i in ids if i]
+    if not ids:
+        return 0
+    with _tx() as c:
+        c.executemany("DELETE FROM conversations WHERE id = ?", [(i,) for i in ids])
+    return len(ids)
+
+
 def clear_conversations() -> int:
     """Wipe chat history. Does NOT touch graph nodes — those are long-term."""
     with _tx() as c:
