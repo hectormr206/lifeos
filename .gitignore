@@ -19,3 +19,6 @@ __pycache__/
 docs/funding/
 
 .pi/
+
+# CodeGraph — local code-index (SQLite graph), machine-specific
+.codegraph/
