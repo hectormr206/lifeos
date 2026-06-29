@@ -4721,6 +4721,13 @@ def api_chat_history(limit: int = 50, session: str | None = None):
         raise
 
 
+@app.delete("/api/chat/history/{conv_id}")
+def api_delete_chat_turn(conv_id: int):
+    """Delete a single conversation turn (the user message AND Axi's reply)."""
+    deleted = store.delete_conversation(conv_id)
+    return {"deleted": deleted}
+
+
 # ────────────────────────── PWA assets ────────────────────────────────
 
 

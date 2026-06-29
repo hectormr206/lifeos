@@ -64,6 +64,15 @@ def test_conversation_source_tags_and_chat_filter():
     assert cid_chat in shown and cid_voice not in shown
 
 
+def test_delete_conversation_removes_one_turn():
+    a = store.add_conversation("hola", "qué tal")
+    b = store.add_conversation("otra cosa", "ok")
+    assert store.delete_conversation(a) is True
+    ids = [r["id"] for r in store.recent_conversations(limit=10)]
+    assert a not in ids and b in ids                 # only the targeted turn is gone
+    assert store.delete_conversation(999999) is False  # nonexistent row → False
+
+
 def test_clear_conversations_wipes_chat_only():
     nid = store.add_node("fact", "preservar")
     store.add_conversation("a", "b")

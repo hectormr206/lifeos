@@ -1256,6 +1256,14 @@ def clear_conversations() -> int:
         return n
 
 
+def delete_conversation(conv_id: int) -> bool:
+    """Delete a single conversation turn (the user message AND Axi's reply — one
+    row). Returns True if a row was removed. Graph nodes are left untouched."""
+    with _tx() as c:
+        cur = c.execute("DELETE FROM conversations WHERE id = ?", (int(conv_id),))
+        return cur.rowcount > 0
+
+
 def conversation_count() -> int:
     c = _connect()
     return c.execute("SELECT COUNT(*) AS n FROM conversations").fetchone()["n"]
