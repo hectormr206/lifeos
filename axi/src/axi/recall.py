@@ -280,6 +280,10 @@ def _build_recall_block(
         months = MONTHS_ES
         date_format = "es"
 
+    # Mark today's bullet explicitly so the 4B brain doesn't have to match the
+    # date string against "hoy" itself (it was failing that and denying / mis-
+    # dating freshly-logged data).
+    _today_str = datetime.datetime.now(tz).strftime("%Y-%m-%d")
     lines = [header]
     total_facts_emitted = 0
     for date_str in sorted_days:
@@ -295,10 +299,17 @@ def _build_recall_block(
 
         year, month_idx, day = int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10])
         month_name = months[month_idx - 1]
+        _is_today = date_str == _today_str
         if date_format == "en":
-            date_label = f"On {month_name} {day}, {year}"
+            date_label = (
+                f"TODAY ({month_name} {day}, {year})" if _is_today
+                else f"On {month_name} {day}, {year}"
+            )
         else:
-            date_label = f"El {day} de {month_name} de {year}"
+            date_label = (
+                f"HOY ({day} de {month_name} de {year})" if _is_today
+                else f"El {day} de {month_name} de {year}"
+            )
         lines.append(f"- {date_label}: {'; '.join(facts)}")
         total_facts_emitted += len(facts)
 
