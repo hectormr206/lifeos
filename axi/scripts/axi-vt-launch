@@ -17,6 +17,15 @@
 # (used by tests and smoke checks).
 
 set -u
+
+# --cpu forces ngl=0 so VT runs on CPU/RAM (game-mode / battery relocation).
+# The game drop-in also sets CUDA_VISIBLE_DEVICES= to hide the GPU entirely.
+# Default (no flag): GPU-resident (ngl from config). Passed to python via env
+# because the heredoc below is single-quoted (no bash expansion inside).
+CPU_MODE=0
+[ "${1:-}" = "--cpu" ] && CPU_MODE=1
+export AXI_VT_CPU="$CPU_MODE"
+
 exec python3 - <<'PY'
 import json, os, sys
 from pathlib import Path
@@ -79,7 +88,9 @@ if "gguf" not in cfg:
     print(f"WARNING: active_vt_model.json has no 'gguf' key; using DEFAULT config", file=sys.stderr)
     cfg = DEFAULT
 
-ngl = int(cfg.get("ngl", 999))
+# AXI_VT_CPU=1 (from `axi-vt-launch --cpu`) forces ngl=0 so VT runs on CPU/RAM.
+# Lets game/battery mode keep development alive without holding GPU VRAM.
+ngl = 0 if os.environ.get("AXI_VT_CPU") == "1" else int(cfg.get("ngl", 999))
 port = str(cfg.get("port", 8082))
 ctx = int(cfg.get("ctx", 61440))
 

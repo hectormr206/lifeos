@@ -11,6 +11,8 @@ TDD 3.5 RED (game-off VT restore guard: PREV_MODEL==qwen35-4b vs 35B)
 """
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ import pytest
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 GAME_ON = SCRIPTS_DIR / "axi-game-on"
 GAME_OFF = SCRIPTS_DIR / "axi-game-off"
+VT_LAUNCH = SCRIPTS_DIR / "axi-vt-launch"
 
 
 # ---------------------------------------------------------------------------
@@ -178,3 +181,86 @@ class TestGameOffVtRestore:
         # Both must exist (start inside if, guard message in else)
         assert start_pos != -1, "start llama-vt.service not found in game-off"
         assert guard_msg_pos != -1, "VRAM guard / leaving llama-vt message not found in game-off"
+
+
+# ===========================================================================
+# VT relocate-to-CPU (keep development alive while gaming)
+# ===========================================================================
+
+class TestGameOnVtRelocate:
+    """relocate (default) mode relocates VT-3B to CPU instead of evicting it, so
+    an in-progress Axi dev build keeps running while gaming. --offline still masks."""
+
+    def test_game_on_writes_vt_cpu_dropin(self):
+        content = _content(GAME_ON)
+        assert "write_dropin llama-vt" in content, (
+            "game-on must write a CPU drop-in for llama-vt in relocate mode"
+        )
+        assert "axi-vt-launch --cpu" in content, (
+            "the llama-vt drop-in must launch VT on CPU via 'axi-vt-launch --cpu'"
+        )
+
+    def test_game_on_relocate_uses_try_restart_not_stop(self):
+        content = _content(GAME_ON)
+        assert "try-restart llama-vt.service" in content, (
+            "relocate mode must try-restart llama-vt (CPU), not evict it"
+        )
+
+    def test_game_on_mask_is_offline_guarded(self):
+        """VT mask must live under the OFFLINE branch (relocate keeps VT on CPU)."""
+        content = _content(GAME_ON)
+        # mask appears only after an OFFLINE check; assert both tokens present and
+        # that the offline guard precedes the mask call.
+        assert 'OFFLINE" -eq 1' in content
+        offline_pos = content.find('if [ "$OFFLINE" -eq 1 ]; then\n        echo "[axi-game-on] --offline: masking llama-vt')
+        assert offline_pos != -1, (
+            "llama-vt mask must be inside the --offline branch (relocate must not mask)"
+        )
+
+
+class TestGameOffVtDropinCleanup:
+    """game-off must clean up the relocate drop-in and restore/stop VT correctly."""
+
+    def test_game_off_removes_vt_dropin(self):
+        content = _content(GAME_OFF)
+        assert "llama-vt.service.d/game-cpu.conf" in content, (
+            "game-off must remove the llama-vt CPU drop-in written in relocate mode"
+        )
+
+    def test_game_off_restarts_vt_on_restore(self):
+        content = _content(GAME_OFF)
+        assert "restart llama-vt.service" in content, (
+            "game-off must restart (not just start) llama-vt so a CPU-relocated VT re-execs on GPU"
+        )
+
+    def test_game_off_stops_vt_for_non_triad(self):
+        content = _content(GAME_OFF)
+        assert "stop llama-vt.service" in content, (
+            "game-off must actively stop llama-vt for a non-triad primary "
+            "(it may have been left running on CPU by relocate)"
+        )
+
+
+# ===========================================================================
+# axi-vt-launch --cpu (behavioral via AXI_DRY_RUN)
+# ===========================================================================
+
+def _vt_launch_ngl(args, state_dir):
+    env = {**os.environ, "AXI_DRY_RUN": "1", "XDG_STATE_HOME": str(state_dir)}
+    out = subprocess.run(
+        ["bash", str(VT_LAUNCH), *args],
+        capture_output=True, text=True, env=env,
+    )
+    toks = out.stdout.split()
+    assert "-ngl" in toks, f"no -ngl in output: {out.stdout!r} / {out.stderr!r}"
+    return toks[toks.index("-ngl") + 1]
+
+
+class TestVtLaunchCpuFlag:
+    """axi-vt-launch --cpu forces ngl=0 (CPU); default stays GPU-resident."""
+
+    def test_default_is_gpu_resident(self, tmp_path):
+        assert _vt_launch_ngl([], tmp_path) == "999"
+
+    def test_cpu_flag_forces_ngl_zero(self, tmp_path):
+        assert _vt_launch_ngl(["--cpu"], tmp_path) == "0"
