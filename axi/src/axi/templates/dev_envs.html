@@ -88,12 +88,20 @@
           </div>
         </template>
 
-        <!-- deployed banner -->
+        <!-- deployed record (worktree deleted on deploy; this is the slim history) -->
         <template x-if="e.card_status === 'deployed'">
           <div class="text-xs mb-2 px-3 py-2 rounded"
                style="background: rgba(0,180,160,0.1); border: 1px solid var(--teal); color: var(--teal)">
-            🚀 Desplegado a <span class="font-mono" x-text="e.deployed_target || 'main'"></span>.
-            En la laptop: <span class="font-mono">git pull &amp;&amp; systemctl --user restart axi-dashboard axi-voice</span>
+            🚀 En producción · <span class="font-mono" x-text="e.deployed_target || 'main'"></span><span
+                class="font-mono" x-show="e.deployed_commit" x-text="' @' + e.deployed_commit"></span>
+            <template x-if="e.prompts && e.prompts.length">
+              <details class="mt-1">
+                <summary class="cursor-pointer opacity-80">Prompts usados (<span x-text="e.prompts.length"></span>)</summary>
+                <ol class="list-decimal ml-4 mt-1 space-y-0.5" style="color: var(--text);">
+                  <template x-for="(p, i) in e.prompts" :key="i"><li x-text="p"></li></template>
+                </ol>
+              </details>
+            </template>
           </div>
         </template>
 
@@ -101,8 +109,8 @@
 
         <!-- Actions -->
         <div class="flex flex-wrap gap-2 mt-1">
-          <!-- Probar / Abrir UI: available once there's a worktree (ready or needs_human) -->
-          <template x-if="['ready','needs_human','deployed'].includes(e.card_status)">
+          <!-- Probar / Abrir UI: available while there's a worktree (ready / needs_human) -->
+          <template x-if="['ready','needs_human'].includes(e.card_status)">
             <button type="button" class="btn btn-primary" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;"
                     @click="openUI(e)" :disabled="!!busy[e.env_id]">
               <span x-text="(e.instance && e.instance.status === 'running') ? '↗ Abrir UI' : '▶ Probar'"></span>
@@ -125,7 +133,7 @@
             <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem; color: var(--red);"
                     @click="reject(e)" :disabled="!!busy[e.env_id]">🗑 Rechazar</button>
           </template>
-          <template x-if="['ready','needs_human','deployed'].includes(e.card_status)">
+          <template x-if="['ready','needs_human'].includes(e.card_status)">
             <button type="button" class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;"
                     @click="toggleDiff(e)">Ver diff</button>
           </template>
