@@ -5,7 +5,7 @@
 <!-- ─── Mobile-first quick-capture home: greeting + domain tiles ─────────── -->
 <section class="mb-6">
   <div class="flex items-center justify-between mb-3">
-    <h1 class="text-xl md:text-2xl font-semibold">Hola, Héctor 👋</h1>
+    <h1 class="text-xl md:text-2xl font-semibold">{% if user_name %}Hola, {{ user_name }} 👋{% else %}¡Hola! Soy Axi 👋{% endif %}</h1>
     <button onclick="document.getElementById('axi-mic-btn')?.click()"
             class="btn" style="min-height:2.5rem;" title="Hablar con Axi">🎤</button>
   </div>

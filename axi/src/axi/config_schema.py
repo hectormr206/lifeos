@@ -124,8 +124,11 @@ FIELDS: tuple[ConfigField, ...] = (
         choices=("es-MX", "es", "en"),
     ),
     ConfigField(
-        "user_name", "string", "Héctor",
-        "Display name addressed by the assistant.",
+        "user_name", "string", "",
+        "Display name the assistant addresses you by. Empty on a fresh install — "
+        "set during onboarding when you first introduce yourself to Axi. Also the "
+        "label of the user-hub node in the knowledge graph (per-install, not "
+        "hardcoded).",
     ),
     # ─────── feature kill switches ───────
     ConfigField(
