@@ -8,9 +8,11 @@ so each install (each person) gets their own hub.
 """
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import re
+import unicodedata
 
 from axi import config, store
 
@@ -145,6 +147,64 @@ def _entity_names(data_json: str) -> tuple[str, list[str]]:
     return d.get("role", "") or "", [str(a) for a in (d.get("aliases") or [])]
 
 
+def _norm_tokens(name: str) -> list[str]:
+    """Accent-stripped, lowercased alphanumeric tokens of a name."""
+    s = unicodedata.normalize("NFKD", (name or "").lower())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return [t for t in re.findall(r"[a-z0-9]+", s) if t]
+
+
+def _coref_score(a: str, b: str) -> float:
+    """0..1 likeness between two entity names (token overlap + edit ratio).
+    Boosted to ~0.95 when one token-set is a subset of the other AND they share
+    the first token AND ≥2 tokens overlap (e.g. 'Ana García' vs 'Ana García
+    Mateo') — a strong same-entity signal. Accent-insensitive."""
+    ta, tb = _norm_tokens(a), _norm_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    sa, sb = set(ta), set(tb)
+    score = max(
+        len(sa & sb) / len(sa | sb),  # token Jaccard
+        difflib.SequenceMatcher(None, " ".join(ta), " ".join(tb)).ratio(),  # edit
+    )
+    if (sa <= sb or sb <= sa) and ta[0] == tb[0] and len(sa & sb) >= 2:
+        score = max(score, 0.95)
+    return score
+
+
+def _llm_same_entity(name: str, candidate: str, kind: str) -> bool:
+    """Ask the brain whether two names refer to the same entity. False on error."""
+    try:
+        from axi import brain  # noqa: PLC0415
+        ans = brain.ask(
+            f"¿'{name}' y '{candidate}' se refieren a la MISMA {kind} (persona/lugar)? "
+            f"Respondé SOLO 'si' o 'no'.",
+            max_tokens=4, lang="es-MX", timeout=20.0,
+        )
+        return (ans or "").strip().lower()[:2] in ("si", "sí", "s.", "ye")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _resolve_coreference(name: str, kind: str, candidates: list) -> object | None:
+    """Pick an existing entity that *name* most likely co-refers to, or None.
+    Strong fuzzy match (>=0.9) auto-merges; medium (0.7..0.9) asks the LLM."""
+    best, best_score = None, 0.0
+    for r, names in candidates:
+        for cn in names:
+            s = _coref_score(name, cn)
+            if s > best_score:
+                best, best_score = r, s
+    if best is None:
+        return None
+    if best_score >= 0.9:
+        return best
+    if best_score >= 0.7 and config.get("entity_coref_llm", True):
+        if _llm_same_entity(name, best["label"], kind):
+            return best
+    return None
+
+
 def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
     """Get or create an entity node (person/place/org) by name OR alias
     (case-insensitive, deduped). Never returns the user hub. Returns the node id.
@@ -160,13 +220,22 @@ def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
     try:
         c = conn or store._connect()  # noqa: SLF001
         nlow = name.lower()
+        candidates = []
         for r in c.execute("SELECT id, label, data FROM nodes WHERE kind=?", (kind,)).fetchall():
             role, aliases = _entity_names(r["data"])
             if role == "user":
                 continue  # never reuse the user hub as an 'other' entity
             names = {(r["label"] or "").strip().lower()} | {a.strip().lower() for a in aliases}
             if nlow in names:
-                return r["id"]
+                return r["id"]  # exact name / known-alias hit
+            candidates.append((r, names))
+        # Coreference: resolve a NOVEL variant ("Ana Garcia" sin acento, "Anita",
+        # a typo, a partial name) to an existing entity instead of duplicating it —
+        # strong fuzzy auto-merges, medium confidence asks the LLM.
+        match = _resolve_coreference(name, kind, candidates)
+        if match is not None:
+            register_alias(match["label"], name, kind, conn=conn)
+            return match["id"]
         nid = store.add_node(kind=kind, label=name, data={"entity": True}, domain=None)
         try:
             store.trigger_embed_for_node(nid)
