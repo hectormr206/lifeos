@@ -249,6 +249,40 @@ def add_relation(relation: str, entity_name: str, kind: str = "person", conn=Non
         log.debug("add_relation failed: %s", e)
 
 
+def link_fact_to_entities(fact_id: int, text: str, conn=None) -> None:
+    """Link a fact node to every known entity whose name OR alias appears (as a
+    whole word) in *text* — edge fact --mentions--> entity. This is what makes an
+    entity a RICH profile: clicking it surfaces all the facts about it, not just
+    its typed relations. Idempotent. Never raises.
+    """
+    if not fact_id or not text:
+        return
+    try:
+        c = conn or store._connect()  # noqa: SLF001
+        for r in c.execute(
+            "SELECT id, label, data FROM nodes WHERE kind IN ('person','place','org')"
+        ).fetchall():
+            if r["id"] == fact_id:
+                continue
+            role, aliases = _entity_names(r["data"])
+            if role == "user":
+                continue  # the hub already owns every fact via 'about'
+            for nm in [(r["label"] or "").strip(), *aliases]:
+                nm = nm.strip()
+                if len(nm) <= 2:
+                    continue
+                if re.search(r"\b" + re.escape(nm) + r"\b", text, re.IGNORECASE):
+                    exists = c.execute(
+                        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='mentions' LIMIT 1",
+                        (fact_id, r["id"]),
+                    ).fetchone()
+                    if not exists:
+                        store.add_edge(fact_id, r["id"], "mentions")
+                    break  # one 'mentions' edge per entity is enough
+    except Exception as e:  # noqa: BLE001
+        log.debug("link_fact_to_entities failed: %s", e)
+
+
 def link_fact_to_user(fact_id: int, conn=None) -> None:
     """Connect a fact node to the user hub (edge kind 'about'), so everything
     radiates from the user. Idempotent (skips if the edge already exists).
