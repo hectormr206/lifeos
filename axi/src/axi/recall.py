@@ -126,6 +126,38 @@ def looks_like_personal_recall(text: str) -> bool:
     """
     return bool(_PERSONAL_RECALL_PATTERN.search(text))
 
+
+# Stopwords dropped from the lexical (FTS) recall lane so the OR-query keeps only
+# meaningful content words (ES + EN). Bounded; the FTS rank + per-day caps handle
+# the rest, and the model's restraint note guards relevance.
+_FTS_STOPWORDS = frozenset({
+    "que", "qué", "cual", "cuál", "cuales", "cuáles", "quien", "quién", "como",
+    "cómo", "donde", "dónde", "cuando", "cuándo", "cuanto", "cuánto", "cuanta",
+    "cuánta", "cuantos", "cuántos", "cuantas", "cuántas", "mi", "mis", "me",
+    "tu", "tus", "te", "el", "la", "lo", "los", "las", "un", "una", "unos",
+    "unas", "de", "del", "al", "y", "o", "u", "es", "son", "era", "fue", "ser",
+    "con", "sin", "para", "por", "en", "a", "sobre", "entre", "hacia", "desde",
+    "hasta", "tengo", "tienes", "tiene", "sabes", "sabe", "dime", "dame",
+    "cuentame", "cuéntame", "recuerdas", "recuerdo", "hay", "esta", "este",
+    "esto", "esa", "ese", "eso", "the", "what", "which", "who", "how", "when",
+    "where", "my", "is", "are", "of", "and", "or", "for", "do", "you", "tell",
+    "know", "about",
+    # greetings / fillers (not information keywords)
+    "hola", "buenas", "buenos", "dias", "días", "tardes", "noches", "gracias",
+    "estás", "estas", "estoy", "estamos", "están", "bien", "hey", "hello", "hi",
+    "thanks", "please", "oye", "ahora",
+})
+
+
+def _fts_terms(query: str) -> list[str]:
+    """Content keywords from *query* for the lexical (FTS) recall lane.
+
+    Drops stopwords and very short tokens so the OR-query stays meaningful, and
+    returns only alphanumeric terms — safe to pass into FTS5 MATCH. Capped to 6.
+    """
+    words = re.findall(r"[0-9a-zñáéíóúü]+", query.lower())
+    return [w for w in words if len(w) > 2 and w not in _FTS_STOPWORDS][:6]
+
 # Short timeout for the synchronous recall embed so a slow/hung embed server
 # cannot stall the user's turn.  If the embed exceeds this, build_recall_block
 # returns "" and the turn proceeds normally.
@@ -229,6 +261,7 @@ def _build_recall_block(
     _is_en = bool(lang and lang.split("-")[0].lower() == "en")
 
     _personal = looks_like_personal_recall(query)
+    _fts = _fts_terms(query)  # content keywords for the lexical (FTS) lane
     nodes = store.semantic_search_nodes(query, k=k, conn=conn, timeout=timeout)
     # Filter by tight distance threshold
     filtered = [n for n in nodes if n.get("distance", 1.0) <= max_distance]
@@ -236,13 +269,13 @@ def _build_recall_block(
     # reuse already-fetched nodes at the wider gate — NO second embed call.
     if not filtered and escalate_distance is not None and _personal:
         filtered = [n for n in nodes if n.get("distance", 1.0) <= escalate_distance]
-    # Personal queries (health/finance vocab) ALSO get the most recent facts
-    # injected below regardless of semantic match, so freshly-logged data (e.g.
-    # today's vitals) is always available. Non-personal queries keep the original
-    # behavior: nothing semantically relevant -> empty block.
-    if not filtered and not _personal:
+    # Nothing to work with: no semantic hit, not a personal query (no recency
+    # injection), and no content keywords for the lexical lane -> empty block.
+    # Otherwise we continue: the FTS lane and/or recency injection fill it in,
+    # so keyword matches the vector search missed are still surfaced (hybrid).
+    if not filtered and not _personal and not _fts:
         return ""
-    nodes = filtered  # may be empty for a personal query; recency fills it in
+    nodes = filtered  # may be empty; the FTS lane + recency injection fill it in
 
     tz_name = config.get("timezone", "UTC") or "UTC"
     try:
@@ -275,6 +308,20 @@ def _build_recall_block(
         _add_fact(node)
         for neighbor in store.same_day_neighbors(node["id"], conn=conn):
             _add_fact(neighbor)
+
+    # Lexical (FTS) lane — HYBRID recall. Catches keyword matches the vector
+    # search missed (e.g. "esposa" -> "Esposa de Héctor" sitting at distance
+    # 0.83, just past the gate). OR-joins the content keywords so any of them
+    # hits; skips raw conversation nodes (we want facts/entities).
+    if _fts:
+        try:
+            for row in store.search_nodes_fts(" OR ".join(_fts), limit=8):
+                r = dict(row)
+                if r.get("kind") == "conversation":
+                    continue
+                _add_fact(r)
+        except Exception:  # noqa: BLE001 — FTS can choke on odd tokens
+            pass
 
     # Recency injection: for personal queries, always fold in the most recent
     # facts so freshly-logged data appears even when its label is keyword-poor
