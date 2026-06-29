@@ -518,7 +518,7 @@ class Daemon:
                     lang=_lang,
                 )
             log.info("answer: %s (vision=%s, history=%d, facts=%d)", answer, bool(screenshot), len(history) // 2, len(facts))
-            _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
+            _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot), source="voice")
 
             # Fact extraction in the background — does not block the response.
             if config.get("fact_extraction_enabled", True):
@@ -1172,7 +1172,7 @@ class Daemon:
                     lang=_lang,
                 )
             log.info("wakeword answer: %s", answer)
-            _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot))
+            _conv_id, conv_node_id = self.memory.add(question, answer, has_screenshot=bool(screenshot), source="voice")
 
             if config.get("fact_extraction_enabled", True):
                 def _extract():

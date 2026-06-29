@@ -4669,15 +4669,19 @@ def api_chat_history(limit: int = 50, session: str | None = None):
         c = store._connect()  # noqa: SLF001
         # `session` scopes the history to a domain chat (e.g. session=health →
         # only the Salud chat's turns). Without it the general chat shows all.
+        # Voice turns are hidden from the typed chat (COALESCE: NULL legacy rows
+        # are treated as 'chat' and stay visible — we can't know they were voice).
         if session:
             rows = c.execute(
                 "SELECT id, ts, user_text, axi_text FROM conversations "
-                "WHERE session_id = ? ORDER BY ts DESC LIMIT ?",
+                "WHERE session_id = ? AND COALESCE(source,'chat') != 'voice' "
+                "ORDER BY ts DESC LIMIT ?",
                 (session, limit),
             ).fetchall()
         else:
             rows = c.execute(
                 "SELECT id, ts, user_text, axi_text FROM conversations "
+                "WHERE COALESCE(source,'chat') != 'voice' "
                 "ORDER BY ts DESC LIMIT ?",
                 (limit,),
             ).fetchall()

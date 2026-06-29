@@ -221,7 +221,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   axi_text        TEXT NOT NULL,
   session_id      TEXT,              -- group consecutive turns (V2: smart sessioning)
   has_screenshot  INTEGER DEFAULT 0,
-  node_id         INTEGER REFERENCES nodes(id) ON DELETE SET NULL
+  node_id         INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  source          TEXT DEFAULT 'chat' -- 'chat' | 'voice' — chat view hides 'voice'
 );
 CREATE INDEX IF NOT EXISTS idx_conv_ts      ON conversations(ts);
 CREATE INDEX IF NOT EXISTS idx_conv_session ON conversations(session_id);
@@ -1046,6 +1047,8 @@ def init_db() -> None:
         _create_domain_node_map(c)
         # Event-date column: stores the real event timestamp (vs. insertion time).
         migrate_nodes_occurred_at()
+        # Conversation source ('chat' | 'voice') so the chat view can hide voice.
+        migrate_conversations_source()
         # Events live in their own DB (telemetry isolated from user memory).
         # Open it here so the schema exists and any legacy events are migrated
         # at startup rather than lazily on the first write.
@@ -1219,13 +1222,18 @@ def same_day_neighbors(node_id: int, conn=None) -> list[dict[str, Any]]:
 
 # ─────────────────────────── conversations ─────────────────────────────
 
-def add_conversation(user_text: str, axi_text: str, has_screenshot: bool = False, session_id: str | None = None) -> int:
-    """Record a chat turn and return its conversation row id."""
+def add_conversation(user_text: str, axi_text: str, has_screenshot: bool = False,
+                     session_id: str | None = None, source: str = "chat") -> int:
+    """Record a turn and return its conversation row id.
+
+    `source` is 'chat' (default) or 'voice'. The dashboard chat history hides
+    'voice' turns so spoken conversations don't clutter the typed chat.
+    """
     with _tx() as c:
         cur = c.execute(
-            "INSERT INTO conversations(ts, user_text, axi_text, session_id, has_screenshot) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (time.time(), user_text, axi_text, session_id, int(has_screenshot)),
+            "INSERT INTO conversations(ts, user_text, axi_text, session_id, has_screenshot, source) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (time.time(), user_text, axi_text, session_id, int(has_screenshot), source),
         )
         return cur.lastrowid
 
@@ -1667,6 +1675,20 @@ def migrate_nodes_embedding() -> None:
     for col, col_type in new_cols:
         if col not in existing:
             c.execute(f"ALTER TABLE nodes ADD COLUMN {col} {col_type}")
+
+
+def migrate_conversations_source() -> None:
+    """Idempotent: add a `source` column to conversations ('chat' | 'voice') so
+    the dashboard chat history can hide spoken (voice) turns.
+
+    Existing rows keep NULL — the chat query treats NULL as 'chat' (shown),
+    because we cannot retroactively tell whether an old turn was voice or typed,
+    and silently hiding real history would be worse than showing it.
+    """
+    c = _connect()
+    existing = {r[1] for r in c.execute("PRAGMA table_info(conversations)").fetchall()}
+    if "source" not in existing:
+        c.execute("ALTER TABLE conversations ADD COLUMN source TEXT")
 
 
 def migrate_nodes_occurred_at() -> None:
