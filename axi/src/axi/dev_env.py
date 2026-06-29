@@ -98,6 +98,7 @@ def _generate_meta(goal: str) -> tuple[str, str]:
         raw = _call_vt3b(
             _META_SYSTEM, goal.strip(),
             port=_director_port(), max_tokens=200, timeout=_meta_timeout(),
+            retry_deadline=0,  # one-off title gen — fail fast, never block creation
         )
     except Exception as exc:  # noqa: BLE001
         log.info("env meta generation failed (%s) — using fallback", exc)

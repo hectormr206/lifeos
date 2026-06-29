@@ -20,6 +20,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from uuid import uuid4
@@ -146,13 +148,16 @@ def _call_vt3b(
     port: int = 8082,
     max_tokens: int = 2000,
     timeout: float | None = None,
+    retry_deadline: float = 90.0,
 ) -> str:
     """POST to OpenAI-compat endpoint, strip <think>...</think> and \\boxed{...}, return content.
 
-    *timeout* (seconds) bounds the HTTP call; None keeps urllib's global default
-    (no per-call deadline) so the director's review path is unchanged. Callers
-    that must not block — e.g. generating an environment's title at creation —
-    pass a small timeout and fall back on failure.
+    *timeout* (seconds) bounds each HTTP attempt; None keeps urllib's global
+    default. *retry_deadline* (seconds) keeps retrying TRANSPORT errors (VT
+    unreachable) up to that long, so an in-progress dev-run survives VT briefly
+    disappearing — e.g. relocating GPU->CPU on game-mode entry, or a restart.
+    Callers that must not block — e.g. generating an environment's title at
+    creation — pass retry_deadline=0 (and a small timeout) to fail fast.
     """
     payload = json.dumps(
         {
@@ -172,8 +177,27 @@ def _call_vt3b(
         method="POST",
     )
 
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = json.loads(resp.read().decode())
+    # Retry transport errors up to retry_deadline so an in-progress dev-run is
+    # NOT killed when VT briefly disappears (relocating GPU->CPU for game mode,
+    # or restarting). urllib's URLError is an OSError subclass, so OSError covers
+    # connection-refused / timeout / transport. A 200 with malformed JSON raises
+    # ValueError below — NOT retried (that's a real error).
+    _deadline = time.monotonic() + max(0.0, retry_deadline)
+    _delay = 1.0
+    while True:
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = json.loads(resp.read().decode())
+            break
+        except OSError as e:
+            if time.monotonic() >= _deadline:
+                raise
+            log.info(
+                "VT call failed (%s) — retrying in %.1fs (VT may be relocating to CPU)",
+                e, _delay,
+            )
+            time.sleep(_delay)
+            _delay = min(_delay * 1.6, 8.0)
 
     content: str = body["choices"][0]["message"]["content"]
     content = _THINK_RE.sub("", content)
