@@ -197,7 +197,11 @@ function learningPage() {
       this.load();
     },
     async markDone(id) {
-      const rating = prompt('Rating 1-10?', '8');
+      const rating = await window.axiPrompt({
+        title: 'Marcar como completado',
+        message: '¿Qué rating le das? (1-10)',
+        value: '8', placeholder: '1-10',
+      });
       const n = parseInt(rating, 10);
       const body = (n >= 1 && n <= 10) ? { rating: n } : {};
       await fetch('/api/learning/entries/' + id + '/done', {
