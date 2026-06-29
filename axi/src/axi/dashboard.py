@@ -6511,6 +6511,10 @@ def _env_card(state: dict) -> dict:
         "error": state.get("error") if state.get("status") == "error" else None,
         "branch": state.get("branch"),
         "deployed_target": state.get("deployed_target"),
+        "deployed_commit": state.get("deployed_commit"),
+        # Featherweight record of the prompts used (iteration history), kept after
+        # the heavy worktree is deleted on deploy.
+        "prompts": [p for p in ((state.get("goal_history") or []) + [state.get("goal")]) if p],
         "instance": instance,
     }
 

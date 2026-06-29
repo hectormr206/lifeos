@@ -355,6 +355,8 @@ def _git_fake(*, diff="diff --git a/x.py b/x.py\n@@ -1 +1 @@\n+chg\n", apply_rc=
         r.stderr = ""
         if "diff" in c and "HEAD" in c:
             r.stdout = diff
+        elif "rev-parse" in c:
+            r.stdout = "abc1234"
         elif "apply" in c:
             r.returncode = apply_rc
             r.stderr = "" if apply_rc == 0 else "conflict in x.py"
@@ -393,6 +395,10 @@ def test_deploy_env_applies_diff_and_pushes_to_main(env_dir, tmp_path, monkeypat
     st = dev_run.get_run(env_id)
     assert st["status"] == "deployed"
     assert st["deployed_target"] == "main"
+    # Deploy is terminal: the heavy worktree is removed, only the slim record stays.
+    assert st["worktree_path"] is None
+    assert st["deployed_commit"] == "abc1234"
+    assert any("worktree" in c and "remove" in c for c in fake.calls)  # cleanup ran
 
 
 def test_deploy_env_no_changes(env_dir, tmp_path, monkeypatch):

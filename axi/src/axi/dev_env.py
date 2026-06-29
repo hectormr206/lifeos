@@ -330,6 +330,10 @@ def _deploy_env(env_id: str, state: dict, worktree: str, target: str) -> dict:
         commit_msg = f"{title}\n\nDeployed from Axi environment {env_id}."
         subprocess.run(["git", "-C", wt, "commit", "-m", commit_msg],
                        capture_output=True, text=True, check=True)
+        deploy_sha = subprocess.run(
+            ["git", "-C", wt, "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True,
+        ).stdout.strip()
         push = subprocess.run(["git", "-C", wt, "push", "origin", f"HEAD:{target}"],
                               capture_output=True, text=True)
         pushed = push.returncode == 0
@@ -343,10 +347,25 @@ def _deploy_env(env_id: str, state: dict, worktree: str, target: str) -> dict:
     state["status"] = "deployed"
     state["deployed_at"] = datetime.now(timezone.utc).isoformat()
     state["deployed_target"] = target
+    state["deployed_commit"] = deploy_sha
     state["instance"] = None
+
+    # 3. Deploy is terminal: the change is in production (git + the live app), so
+    #    the env's heavy worktree (+ isolated instance dirs — several GB) is pure
+    #    residue. Remove it, keeping only the featherweight record: title, the
+    #    prompts used (goal_history), date, and the deployed commit.
+    try:
+        env_dir = os.path.join(
+            os.path.expanduser(config.get("dev_env_worktree_dir", "~/LifeOS/dev-envs")),
+            env_id,
+        )
+        _cleanup_worktree(repo, worktree, state.get("branch") or "", env_dir)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("deploy cleanup failed for %s: %s", env_id, exc)
+    state["worktree_path"] = None
     dev_run._write_state_file(dev_run._state_path(env_id), state)  # noqa: SLF001
 
-    # 3. Bring the change to the LOCAL running app (pull + restart), DETACHED so
+    # 4. Bring the change to the LOCAL running app (pull + restart), DETACHED so
     #    the dashboard can restart itself without hanging this request. Guarded:
     #    only a clean, fast-forwardable tree is touched.
     auto_installed = False
