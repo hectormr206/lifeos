@@ -46,3 +46,23 @@ def test_extract_and_store_processes_relations(monkeypatch):
                         lambda rel, ent, kind="person": seen.append((rel, ent, kind)))
     extractor.extract_and_store("mi esposa es Celia García Mateo", "ok", None)
     assert ("esposa", "Celia García Mateo", "person") in seen
+
+
+def test_extract_processes_relation_aliases(monkeypatch):
+    """Aliases on an extracted relation are registered on the entity."""
+    from axi import extractor, identity, config
+    monkeypatch.setattr(config, "get",
+                        lambda k, d=None: True if k == "graph_bridge_chat_facts" else d)
+    monkeypatch.setattr(
+        extractor, "brain_ask",
+        lambda **kw: '{"facts":[],"relations":[{"relation":"esposa",'
+                     '"entity":"Celia García Mateo","kind":"person","aliases":["Cely"]}]}',
+    )
+    rels, aliases = [], []
+    monkeypatch.setattr(identity, "add_relation",
+                        lambda r, e, k="person": rels.append((r, e, k)))
+    monkeypatch.setattr(identity, "register_alias",
+                        lambda c, a, k="person": aliases.append((c, a, k)))
+    extractor.extract_and_store("mi esposa Celia, le dicen Cely", "ok", None)
+    assert ("esposa", "Celia García Mateo", "person") in rels
+    assert ("Celia García Mateo", "Cely", "person") in aliases

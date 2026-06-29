@@ -72,7 +72,8 @@ Responde SOLO con JSON válido, sin texto antes ni después, exactamente este fo
  "relations": [
   {"relation": "vínculo de Héctor con la entidad: esposa, esposo, hijo, hija, madre, padre, hermano, amigo, jefe, mascota, vive_en, trabaja_en, …",
    "entity": "NOMBRE PROPIO más completo de la persona/lugar/organización (ej: 'Celia García Mateo')",
-   "kind": "person|place|org"}
+   "kind": "person|place|org",
+   "aliases": ["apodos/diminutivos de ESA entidad si Héctor los menciona (ej: 'Cely'); [] si no hay"]}
  ]}
 
 Solo extrae una relación si hay un NOMBRE PROPIO y un vínculo claro. Si no, deja "relations": [].
@@ -183,6 +184,10 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
             continue
         try:
             identity.add_relation(relation, entity, ekind)
+            for al in (rel.get("aliases") or []):
+                al = str(al).strip()
+                if al:
+                    identity.register_alias(entity, al, ekind)
             log.info("relation saved: --%s--> %s (%s)", relation, entity, ekind)
         except Exception as e:  # noqa: BLE001
             log.warning("could not save relation %r->%r: %s", relation, entity, e)
