@@ -367,14 +367,18 @@ function devEnvs() {
     },
 
     async deploy(e) {
-      if (!confirm('¿Desplegar a producción? Aplica el cambio a main y lo pushea directo (sin PR). ¿Ya lo probaste en la instancia aislada?')) return;
+      if (!(await window.axiConfirm({
+        title: 'Desplegar a producción',
+        message: 'Aplica el cambio a main y lo pushea directo (sin PR). ¿Ya lo probaste en la instancia aislada?',
+        confirmText: 'Desplegar', danger: true,
+      }))) return;
       this.busy = { ...this.busy, [e.env_id]: true };
       try {
         const r = await fetch('/api/dev-envs/' + encodeURIComponent(e.env_id) + '/deploy', { method: 'POST' });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
         await this.load();
-        alert(d.restart_hint || 'Desplegado a main.');
+        window.axiToast({ message: d.restart_hint || 'Desplegado a main.', type: 'success' });
       } catch (err) {
         this.error = 'No pude desplegar: ' + err.message;
       } finally {
@@ -383,7 +387,11 @@ function devEnvs() {
     },
 
     async reject(e) {
-      if (!confirm('¿Rechazar y borrar este ambiente? Se elimina el worktree (no toca main).')) return;
+      if (!(await window.axiConfirm({
+        title: 'Rechazar ambiente',
+        message: 'Se elimina el worktree (no toca main).',
+        confirmText: 'Rechazar', danger: true,
+      }))) return;
       this.busy = { ...this.busy, [e.env_id]: true };
       try {
         const r = await fetch('/api/dev-envs/' + encodeURIComponent(e.env_id) + '/reject', { method: 'POST' });

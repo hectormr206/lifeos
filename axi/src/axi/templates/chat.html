@@ -847,7 +847,11 @@ function chatApp() {
 
     async deleteTurn(m) {
       if (!m || !m.convId) return;
-      if (!confirm('¿Borrar tu mensaje y la respuesta de Axi? No se puede deshacer.')) return;
+      if (!(await window.axiConfirm({
+        title: 'Borrar mensaje',
+        message: '¿Borrar tu mensaje y la respuesta de Axi? No se puede deshacer.',
+        confirmText: 'Borrar', danger: true,
+      }))) return;
       try {
         const r = await fetch('/api/chat/history/' + encodeURIComponent(m.convId), { method: 'DELETE' });
         if (!r.ok) throw new Error('HTTP ' + r.status);

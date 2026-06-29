@@ -603,6 +603,7 @@
        pages where it would clash (/desarrollo has +Nuevo; /chat has its own bar). -->
   <div x-data="improveFab()" x-show="visible" x-cloak>
     <button type="button" @click="openModal()" title="Mejorar esta sección con Axi"
+            :style="{ bottom: fabBottom }"
             style="position: fixed; right: 1rem; bottom: 1rem; z-index: 50;
                    width: 3.25rem; height: 3.25rem; border-radius: 9999px;
                    background: linear-gradient(135deg, var(--pink), var(--purple));
@@ -648,6 +649,54 @@
         </div>
       </div>
     </template>
+  </div>
+
+  <!-- Themed in-app dialogs + toasts. Replaces the browser's native
+       confirm()/alert()/prompt() (which render as "127.0.0.1 dice…" and break
+       the theme) with LifeOS-styled UI. Exposes Promise-based globals in init():
+         window.axiConfirm({title,message,confirmText,cancelText,danger}) -> bool
+         window.axiPrompt({title,message,value,placeholder}) -> string|null
+         window.axiToast({message,type:'info'|'success'|'error',duration}) -> void -->
+  <div x-data="axiDialogs()" x-init="init()">
+    <template x-if="dialog.open">
+      <div class="fixed inset-0 flex items-center justify-center p-4"
+           style="z-index: 80; background: rgba(0,0,0,0.7);"
+           @click="cancel()" @keydown.escape.window="cancel()">
+        <div class="panel p-4 w-full max-w-sm" @click.stop>
+          <h2 class="font-semibold mb-1" x-show="dialog.title" x-text="dialog.title"></h2>
+          <p class="text-sm muted" x-show="dialog.message" x-text="dialog.message"></p>
+          <input x-show="dialog.mode === 'prompt'" x-ref="promptInput" x-model="dialog.value"
+                 @keydown.enter="accept()"
+                 class="w-full rounded-lg p-2 text-sm mt-3"
+                 style="background: var(--panel2); border: 1px solid var(--border);"
+                 :placeholder="dialog.placeholder">
+          <div class="flex justify-end gap-2 mt-4">
+            <button type="button" @click="cancel()" class="btn" style="padding: 0.35rem 0.9rem;"
+                    x-text="dialog.cancelText"></button>
+            <button type="button" @click="accept()" class="btn"
+                    style="padding: 0.35rem 0.9rem;"
+                    :class="dialog.danger ? '' : 'btn-primary'"
+                    :style="dialog.danger ? 'background: rgba(238,51,51,0.9); border-color: var(--red); color: #fff;' : ''"
+                    x-text="dialog.confirmText"></button>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- toast stack, just below the header so it never fights the chat input/FAB -->
+    <div class="fixed inset-x-0 flex flex-col items-center gap-2 px-4"
+         style="z-index: 85; top: 4.5rem; pointer-events: none;">
+      <template x-for="t in toasts" :key="t.id">
+        <div class="panel p-3 text-sm flex items-center gap-2 w-full max-w-sm"
+             x-transition.opacity style="pointer-events: auto;"
+             :style="t.type === 'error' ? 'background: rgba(238,51,51,0.12); border-color: var(--red);'
+                   : t.type === 'success' ? 'background: rgba(102,204,102,0.12); border-color: var(--green, #6c6);'
+                   : 'background: var(--panel2);'">
+          <span x-text="t.type === 'error' ? '⚠️' : t.type === 'success' ? '✓' : 'ℹ️'"></span>
+          <span class="flex-1 min-w-0" x-text="t.message"></span>
+        </div>
+      </template>
+    </div>
   </div>
 
   <script>
@@ -785,6 +834,60 @@
   <!-- Floating "Mejorar" button component (shared voice recorder for dictation). -->
   <script src="/static/recorder.js"></script>
   <script>
+    // Reusable themed dialogs/toasts — see the markup block above. One engine,
+    // registers the Promise-based globals so any page can replace native
+    // confirm()/alert()/prompt() with UI that matches LifeOS.
+    function axiDialogs() {
+      return {
+        dialog: { open: false, mode: 'confirm', title: '', message: '', value: '',
+                  placeholder: '', confirmText: 'Aceptar', cancelText: 'Cancelar',
+                  danger: false, _resolve: null },
+        toasts: [], _seq: 0,
+        init() {
+          window.axiConfirm = (opts) => this._open('confirm', opts || {});
+          window.axiPrompt  = (opts) => this._open('prompt',  opts || {});
+          window.axiToast   = (opts) => this._toast(opts || {});
+        },
+        _open(mode, o) {
+          this.dialog = {
+            open: true, mode,
+            title: o.title || '',
+            message: o.message || '',
+            value: o.value || '',
+            placeholder: o.placeholder || '',
+            confirmText: o.confirmText || (mode === 'prompt' ? 'Guardar' : 'Aceptar'),
+            cancelText: o.cancelText || 'Cancelar',
+            danger: !!o.danger,
+            _resolve: null,
+          };
+          const p = new Promise((res) => { this.dialog._resolve = res; });
+          if (mode === 'prompt') {
+            this.$nextTick(() => { if (this.$refs.promptInput) this.$refs.promptInput.focus(); });
+          }
+          return p;
+        },
+        accept() {
+          const d = this.dialog;
+          const out = d.mode === 'prompt' ? d.value : true;
+          d.open = false;
+          if (d._resolve) d._resolve(out);
+        },
+        cancel() {
+          const d = this.dialog;
+          const out = d.mode === 'prompt' ? null : false;
+          d.open = false;
+          if (d._resolve) d._resolve(out);
+        },
+        _toast(o) {
+          const opt = (typeof o === 'string') ? { message: o } : o;
+          const id = ++this._seq;
+          this.toasts.push({ id, message: opt.message || '', type: opt.type || 'info' });
+          setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); },
+                     opt.duration || 4000);
+        },
+      };
+    }
+
     function improveFab() {
       // Route → human label. Unknown routes fall back to the path itself.
       const SECTIONS = {
@@ -796,12 +899,12 @@
         '/memory': 'Memoria', '/graph': 'Grafo', '/models': 'Modelos',
         '/events': 'Eventos', '/translate': 'Traductor', '/calculator': 'Calculadora',
       };
-      // Pages where the FAB would clash or is redundant.
-      const HIDE = ['/desarrollo', '/chat'];
+      // Only hidden where it's truly redundant: /desarrollo already has "+ Nuevo".
+      const HIDE = ['/desarrollo'];
       return {
         modalOpen: false, text: '', busy: false,
         recording: false, transcribing: false, _recorder: null,
-        path: '', label: '', visible: false,
+        path: '', label: '', visible: false, fabBottom: '1rem',
 
         init() {
           this.path = window.location.pathname;
@@ -810,6 +913,9 @@
           try { inIframe = window.self !== window.top; } catch (e) { inIframe = true; }
           // Hidden inside the preview iframe (an isolated instance) and on HIDE pages.
           this.visible = !inIframe && !HIDE.includes(this.path);
+          // /chat has a tall sticky input bar at the bottom — lift the FAB above
+          // the whole block (toolbar + hint + input) so it never covers the mic.
+          this.fabBottom = (this.path === '/chat') ? '13rem' : '1rem';
         },
 
         openModal() { this.modalOpen = true; this.text = ''; },
@@ -837,7 +943,7 @@
             this.modalOpen = false;
             window.location.href = '/desarrollo';  // go watch the card build
           } catch (e) {
-            alert('No pude crear el ambiente: ' + e.message);
+            window.axiToast({ message: 'No pude crear el ambiente: ' + e.message, type: 'error' });
           } finally {
             this.busy = false;
           }
