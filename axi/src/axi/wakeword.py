@@ -219,15 +219,28 @@ def _get_trigger_re() -> re.Pattern[str]:
     return _TRIGGER_RE
 
 
-def match_wake(transcript: Any) -> tuple[bool, str]:
-    """Determine whether a transcript contains a wake word (anywhere) for Axi.
+# "Axi" must LEAD the utterance: the trigger has to start within this many
+# characters of the (stripped) transcript. Combined with the silence-based
+# segmentation (a fresh segment only begins after a pause), this means a wake is
+# "[pause] Axi, ..." — an Axi-like sound buried in continuous conversation does
+# NOT wake. Tunable via config `wakeword_max_leading_chars`; None disables it.
+_DEFAULT_MAX_LEADING_CHARS = 14
+
+
+def match_wake(
+    transcript: Any,
+    *,
+    max_leading_chars: int | None = _DEFAULT_MAX_LEADING_CHARS,
+) -> tuple[bool, str]:
+    """Determine whether a transcript is a wake invocation for Axi.
 
     Pure function — no I/O, no side effects. Unit-testable without hardware.
 
-    Rules (Fix 3 — high-recall mode):
+    Rules:
     1. transcript must be a non-empty string.
-    2. One of the _TRIGGER variants must appear ANYWHERE in the transcript,
-       at a word boundary (so "axi" inside "maximal" does not match).
+    2. One of the _TRIGGER variants must appear at a word boundary AND start
+       within `max_leading_chars` of the text (so "Axi" must LEAD the utterance,
+       not be embedded mid-conversation). Pass None to match anywhere.
     3. The command is whatever follows the trigger after stripping separators.
        An empty command is ALLOWED — "Axi" alone returns (True, "").
     4. The daemon handles an empty command by speaking an acknowledgment
@@ -249,9 +262,29 @@ def match_wake(transcript: Any) -> tuple[bool, str]:
     if m is None:
         return False, ""
 
+    if max_leading_chars is not None and m.start() > max_leading_chars:
+        # "Axi" is buried mid-utterance (continuous speech) → not a real wake.
+        return False, ""
+
     command = m.group("command").strip()
     # command may legitimately be empty (bare "Axi") — that is a valid wake.
     return True, command
+
+
+def _cfg_max_leading_chars() -> int | None:
+    """Config-driven leading-char limit for match_wake (None/negative disables)."""
+    try:
+        from axi.config import get  # noqa: PLC0415
+        v = get("wakeword_max_leading_chars", _DEFAULT_MAX_LEADING_CHARS)
+    except Exception:  # noqa: BLE001
+        return _DEFAULT_MAX_LEADING_CHARS
+    if v is None:
+        return None
+    try:
+        iv = int(v)
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_LEADING_CHARS
+    return None if iv < 0 else iv
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +728,7 @@ class WakeWordListener:
             log.info("wakeword: transcript is a known hallucination — discarding: %r", text)
             return
 
-        is_wake, command = match_wake(text)
+        is_wake, command = match_wake(text, max_leading_chars=_cfg_max_leading_chars())
 
         if not is_wake:
             # Feature C: follow-up window — accept speech without the wake word if
@@ -1058,7 +1091,7 @@ class OWWWakeWordListener:
             log.info("oww: hallucination detected — discarding: %r", text)
             return
 
-        is_wake, command = match_wake(text)
+        is_wake, command = match_wake(text, max_leading_chars=_cfg_max_leading_chars())
         if not is_wake:
             # Feature C: follow-up window — accept command-capture transcripts that
             # don't contain the wake word when the follow-up window is open.
