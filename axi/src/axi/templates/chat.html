@@ -156,6 +156,15 @@
               </template>
             </div>
           </template>
+          <!-- Per-turn delete (WhatsApp-style): removes the user msg AND Axi's
+               reply (one row). Only on persisted turns (those with a convId). -->
+          <template x-if="m.convId">
+            <div class="mt-1" :class="m.role === 'user' ? 'text-left' : 'text-right'">
+              <button type="button" @click="deleteTurn(m)"
+                      class="text-xs" style="opacity: 0.4; background: none; border: 0; cursor: pointer;"
+                      title="Borrar tu mensaje y la respuesta de Axi">🗑</button>
+            </div>
+          </template>
         </div>
       </div>
     </template>
@@ -836,6 +845,19 @@ function chatApp() {
       }
     },
 
+    async deleteTurn(m) {
+      if (!m || !m.convId) return;
+      if (!confirm('¿Borrar tu mensaje y la respuesta de Axi? No se puede deshacer.')) return;
+      try {
+        const r = await fetch('/api/chat/history/' + encodeURIComponent(m.convId), { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        // Remove BOTH bubbles of this turn — user + axi share the same convId.
+        this.messages = this.messages.filter(x => x.convId !== m.convId);
+      } catch (e) {
+        this.error = 'No pude borrar el mensaje: ' + e.message;
+      }
+    },
+
     async loadHistory() {
       this.loading = true;
       // Skip the fetch entirely if we already know the backend is
@@ -860,9 +882,9 @@ function chatApp() {
         for (const row of rows) {
           out.push({
             id: 'h' + row.id + 'u', role: 'user', text: row.user_text,
-            attachments: row.attachments || [],
+            convId: row.id, attachments: row.attachments || [],
           });
-          out.push({ id: 'h' + row.id + 'a', role: 'axi', text: row.axi_text });
+          out.push({ id: 'h' + row.id + 'a', role: 'axi', text: row.axi_text, convId: row.id });
         }
         this.messages = out;
       } catch (e) {
