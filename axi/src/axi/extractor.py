@@ -135,6 +135,7 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
     relations = parsed.get("relations") if isinstance(parsed.get("relations"), list) else []
 
     saved = 0
+    touched_facts: list[tuple[int, str]] = []  # (id, label) to link to entities below
     for f in facts:
         if not isinstance(f, dict):
             continue
@@ -160,12 +161,14 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
             existing = store.find_fact_by_label(label)
             if existing is not None:
                 identity.link_fact_to_user(existing)
+                touched_facts.append((existing, label))
                 continue
             fact_id = store.add_node(kind="fact", label=label, data={"category": kind, **data}, domain=domain)
             identity.link_fact_to_user(fact_id)  # connect every fact to the user hub
             if conversation_node_id is not None:
                 store.add_edge(fact_id, conversation_node_id, "mentioned_in")
             saved += 1
+            touched_facts.append((fact_id, label))
             log.info("fact saved [%s/%s]: %s", kind, domain or "—", label)
         except Exception as e:  # noqa: BLE001 — store can raise sqlite errors
             log.warning("could not save fact %r: %s", label, e)
@@ -191,4 +194,10 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
             log.info("relation saved: --%s--> %s (%s)", relation, entity, ekind)
         except Exception as e:  # noqa: BLE001
             log.warning("could not save relation %r->%r: %s", relation, entity, e)
+
+    # Rich entity profiles: now that this turn's entities exist (relations
+    # above), connect every fact touched this turn to the entities it mentions
+    # (fact --mentions--> entity), so each entity aggregates the facts about it.
+    for fid, lbl in touched_facts:
+        identity.link_fact_to_entities(fid, lbl)
     return saved

@@ -66,3 +66,24 @@ def test_extract_processes_relation_aliases(monkeypatch):
     extractor.extract_and_store("mi esposa Ana, le dicen Ani", "ok", None)
     assert ("esposa", "Ana Ríos", "person") in rels
     assert ("Ana Ríos", "Ani", "person") in aliases
+
+
+def test_extract_links_facts_to_entities(monkeypatch):
+    """Facts created during extraction get linked to the entities they mention."""
+    from axi import extractor, identity, store, config
+    monkeypatch.setattr(config, "get",
+                        lambda k, d=None: True if k == "graph_bridge_chat_facts" else d)
+    monkeypatch.setattr(
+        extractor, "brain_ask",
+        lambda **kw: '{"facts":[{"kind":"biographical","label":"Esposa: Ana","domain":"personal"}],'
+                     '"relations":[]}',
+    )
+    monkeypatch.setattr(store, "find_fact_by_label", lambda label, conn=None: None)
+    monkeypatch.setattr(store, "add_node", lambda **kw: 50)
+    monkeypatch.setattr(store, "add_edge", lambda *a, **k: 1)
+    monkeypatch.setattr(identity, "link_fact_to_user", lambda *a, **k: None)
+    linked = []
+    monkeypatch.setattr(identity, "link_fact_to_entities",
+                        lambda fid, text, conn=None: linked.append((fid, text)))
+    extractor.extract_and_store("mi esposa Ana", "ok", None)
+    assert (50, "Esposa: Ana") in linked
