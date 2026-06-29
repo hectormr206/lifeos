@@ -89,6 +89,20 @@ def transcribe_wakeword(
     # empty now so non-speech transcribes to nothing/garbage instead of "Axi".
     # Configurable via wakeword_initial_prompt if a bias is ever wanted back.
     _init_prompt = str(_cfg_get("wakeword_initial_prompt", "") or "")
+
+    # (A) Wake-gate on a small CPU model keeps the shared GPU whisper asleep on
+    # every voiced segment (a constant power drain even on AC). Enabled by
+    # default; if the CPU model is unavailable it falls through to the GPU
+    # server below, so the wake-gate never breaks.
+    if bool(_cfg_get("wakeword_cpu_whisper_enabled", True)):
+        from axi import wakeword_stt  # noqa: PLC0415
+        _cpu_model = str(_cfg_get("wakeword_cpu_whisper_model", "base"))
+        _cpu_res = wakeword_stt.transcribe(
+            audio, language=language, model_name=_cpu_model, initial_prompt=_init_prompt
+        )
+        if _cpu_res is not None:
+            return _cpu_res
+
     try:
         r: TranscriptionResult = _whisper_transcribe(
             audio,

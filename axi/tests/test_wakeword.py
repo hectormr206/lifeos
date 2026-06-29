@@ -713,6 +713,14 @@ class TestWakeWordTranscriberParams:
             return _FakeResult()
 
         monkeypatch.setattr(_wc, "transcribe", _fake_transcribe)
+        # These assert the GPU-server (fallback) path params; disable the CPU
+        # wake-gate (default on) so transcribe_wakeword reaches the server. The
+        # CPU path's own params are covered by tests/test_wakeword_stt.py.
+        import axi.config as _cfg
+        monkeypatch.setattr(
+            _cfg, "get",
+            lambda key, default=None: False if key == "wakeword_cpu_whisper_enabled" else default,
+        )
 
         import numpy as np
         audio = np.zeros(1600, dtype=np.float32)
@@ -759,6 +767,14 @@ class TestWakeWordTranscriberParams:
             return _FakeResult()
 
         monkeypatch.setattr(_wc, "transcribe", _fake_transcribe)
+        # These assert the GPU-server (fallback) path params; disable the CPU
+        # wake-gate (default on) so transcribe_wakeword reaches the server. The
+        # CPU path's own params are covered by tests/test_wakeword_stt.py.
+        import axi.config as _cfg
+        monkeypatch.setattr(
+            _cfg, "get",
+            lambda key, default=None: False if key == "wakeword_cpu_whisper_enabled" else default,
+        )
 
         import numpy as np
         audio = np.zeros(1600, dtype=np.float32)
@@ -783,7 +799,11 @@ class TestWakeWordTranscriberParams:
         monkeypatch.setattr(_wc, "transcribe", lambda audio, **kw: captured.append(kw) or _FakeResult())
         monkeypatch.setattr(
             _cfg, "get",
-            lambda key, default=None: "Axi." if key == "wakeword_initial_prompt" else default,
+            lambda key, default=None: (
+                "Axi." if key == "wakeword_initial_prompt"
+                else False if key == "wakeword_cpu_whisper_enabled"
+                else default
+            ),
         )
 
         import numpy as np
