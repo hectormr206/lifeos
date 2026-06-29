@@ -87,3 +87,28 @@ def test_extract_links_facts_to_entities(monkeypatch):
                         lambda fid, text, conn=None: linked.append((fid, text)))
     extractor.extract_and_store("mi esposa Celia", "ok", None)
     assert (50, "Esposa: Celia") in linked
+
+
+def test_coref_score_strong_for_name_subset_and_accents():
+    from axi.identity import _coref_score
+    assert _coref_score("Celia García", "Celia García Mateo") >= 0.9
+    assert _coref_score("Celia Garcia", "Celia García Mateo") >= 0.9  # accent-insensitive
+
+
+def test_coref_score_low_for_different_people():
+    from axi.identity import _coref_score
+    assert _coref_score("Juan García", "Pedro García") < 0.7
+
+
+def test_resolve_coreference_strong_merges():
+    from axi.identity import _resolve_coreference
+    row = {"id": 5, "label": "Celia García Mateo"}
+    cands = [(row, {"celia garcía mateo"})]
+    assert _resolve_coreference("Celia García", "person", cands) is row  # >=0.9, no LLM
+
+
+def test_resolve_coreference_no_merge_for_distinct():
+    from axi.identity import _resolve_coreference
+    row = {"id": 5, "label": "Celia García Mateo"}
+    cands = [(row, {"celia garcía mateo"})]
+    assert _resolve_coreference("Roberto Sánchez Díaz", "person", cands) is None  # <0.7
