@@ -42,3 +42,22 @@ def test_returns_none_for_empty():
 
 def test_returns_none_for_invalid_json():
     assert _parse_json_strict("{not really json}") is None
+
+
+def test_extract_skips_duplicate_facts(monkeypatch):
+    """A fact whose exact label already exists is NOT created again."""
+    from axi import extractor, identity, store, config
+    monkeypatch.setattr(config, "get",
+                        lambda k, d=None: True if k == "graph_bridge_chat_facts" else d)
+    monkeypatch.setattr(
+        extractor, "brain_ask",
+        lambda **kw: '{"facts":[{"kind":"biographical","label":"Nombre: X","domain":"personal"}],'
+                     '"relations":[]}',
+    )
+    monkeypatch.setattr(store, "find_fact_by_label", lambda label, conn=None: 999)  # exists
+    added = []
+    monkeypatch.setattr(store, "add_node", lambda **kw: (added.append(kw), 1)[1])
+    monkeypatch.setattr(identity, "link_fact_to_user", lambda *a, **k: None)
+    n = extractor.extract_and_store("soy X", "ok", None)
+    assert added == []   # add_node NOT called — duplicate skipped
+    assert n == 0

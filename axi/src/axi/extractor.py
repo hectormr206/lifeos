@@ -152,8 +152,15 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
             continue
         data = f.get("data") if isinstance(f.get("data"), dict) else {}
         try:
-            fact_id = store.add_node(kind="fact", label=label, data={"category": kind, **data}, domain=domain)
             from axi import identity  # noqa: PLC0415 — lazy, avoids import cycle
+            # Idempotency: a fact with this EXACT label already exists -> it's a
+            # duplicate (timeless chat fact), not a new event. Ensure it's linked
+            # to the hub and skip creating a copy.
+            existing = store.find_fact_by_label(label)
+            if existing is not None:
+                identity.link_fact_to_user(existing)
+                continue
+            fact_id = store.add_node(kind="fact", label=label, data={"category": kind, **data}, domain=domain)
             identity.link_fact_to_user(fact_id)  # connect every fact to the user hub
             if conversation_node_id is not None:
                 store.add_edge(fact_id, conversation_node_id, "mentioned_in")
