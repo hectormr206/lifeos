@@ -49,15 +49,20 @@ class DomainConfig:
 def _health_renderer(entry: Any) -> str:
     """Render a health entry to a short node label (≤120 chars).
 
-    Priority: raw_utterance → title → structured fallback.
-    Whitespace-only strings are treated as absent (stripped before testing).
+    TITLE-FIRST (unlike the other domains): for health the title is the
+    NORMALIZED structured summary ("presión 110/81, pulso 51"), which is both
+    semantically findable (carries keywords like "presión") AND interpretable by
+    the brain — strictly better than the raw utterance ("110 81 51 pulsos"),
+    which is keyword-poor and was being mis-read (or fabricated around) when it
+    became the recall label. Falls back to raw_utterance, then a structured
+    fallback. Whitespace-only strings are treated as absent.
     """
-    raw = getattr(entry, "raw_utterance", None)
-    if raw and raw.strip():
-        return raw.strip()[:120]
     title = getattr(entry, "title", None)
     if title and title.strip():
         return title.strip()[:120]
+    raw = getattr(entry, "raw_utterance", None)
+    if raw and raw.strip():
+        return raw.strip()[:120]
     kind = getattr(entry, "kind", "entry")
     return f"health: {kind}"
 

@@ -126,13 +126,24 @@ def test_backfill_similar_to_edges_no_limit_processes_all():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_health_renderer_uses_raw_utterance():
-    """1.3.1 RED — raw_utterance present → renderer returns it."""
+def test_health_renderer_prefers_title():
+    """TITLE-FIRST: the normalized title ("presión 110/81, pulso 51") is a far
+    better recall label than the keyword-poor raw utterance ("110 81 51 pulsos"),
+    which the brain could not interpret (and fabricated around)."""
     from axi.domain_bridge import _health_renderer
 
-    entry = HealthEntryStub(raw_utterance="slept 6h", title="ignored")
+    entry = HealthEntryStub(raw_utterance="110 81 51 pulsos", title="presión 110/81, pulso 51")
     result = _health_renderer(entry)
-    assert result == "slept 6h"
+    assert result == "presión 110/81, pulso 51"
+
+
+def test_health_renderer_falls_back_to_raw_when_no_title():
+    """No title → fall back to the raw utterance (free-form notes)."""
+    from axi.domain_bridge import _health_renderer
+
+    entry = HealthEntryStub(raw_utterance="me duele la cabeza", title=None)
+    result = _health_renderer(entry)
+    assert result == "me duele la cabeza"
 
 
 def test_health_renderer_falls_back_to_title():
