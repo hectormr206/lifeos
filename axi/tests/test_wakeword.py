@@ -95,6 +95,41 @@ class TestMatchWakeWakeCases:
         assert isinstance(command, str)
 
 
+class TestMatchWakeLeadingAnchor:
+    """'Axi' must LEAD the utterance — embedded 'Axi' (mid-conversation) must NOT wake."""
+
+    def test_embedded_axi_does_not_wake(self):
+        # "Axi" buried after several words (continuous talk) → no false wake.
+        is_wake, _ = match_wake("estaba diciendo que axi es genial para esto")
+        assert is_wake is False
+
+    def test_short_filler_before_axi_still_wakes(self):
+        # A brief lead-in is fine (within the 14-char default).
+        is_wake, command = match_wake("ok axi ayudame")
+        assert is_wake is True
+        assert "ayudame" in command
+
+    def test_anchor_disabled_matches_anywhere(self):
+        # Opt-out (max_leading_chars=None) restores match-anywhere behavior.
+        is_wake, command = match_wake(
+            "estaba diciendo que axi es genial para esto", max_leading_chars=None
+        )
+        assert is_wake is True
+
+    def test_explicit_leading_limit(self):
+        # "axi" starts at index 18 here → rejected by a tight limit, accepted by a loose one.
+        text = "por favor ayudame axi con el nivel"
+        assert match_wake(text, max_leading_chars=10)[0] is False
+        assert match_wake(text, max_leading_chars=30)[0] is True
+
+    def test_cfg_max_leading_chars_minus_one_disables(self, monkeypatch):
+        from axi import wakeword
+        import axi.config as _cfg
+        monkeypatch.setattr(_cfg, "get",
+                            lambda k, d=None: -1 if k == "wakeword_max_leading_chars" else d)
+        assert wakeword._cfg_max_leading_chars() is None
+
+
 class TestMatchWakeFalseTriggerCases:
     """Transcripts that must NOT trigger a wake (false-trigger guard)."""
 

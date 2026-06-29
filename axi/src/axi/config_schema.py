@@ -376,9 +376,19 @@ FIELDS: tuple[ConfigField, ...] = (
         "wakeword_silence_seconds", "number", 1.8,
         "Seconds of silence that mark the end of a spoken command to the wake-word "
         "listener. Raise it if Axi cuts you off when you pause to think mid-sentence; "
-        "lower it for snappier turn-taking.",
+        "lower it for snappier turn-taking. Also the pause that must precede a wake — "
+        "raise toward 2-3s for fewer false wakes during a conversation.",
         minimum=0.4,
         maximum=6.0,
+    ),
+    ConfigField(
+        "wakeword_max_leading_chars", "integer", 14,
+        "'Axi' must start within this many characters of the transcript to count as "
+        "a wake — so it must LEAD the utterance (after a pause), not be embedded in a "
+        "conversation. This stops false wakes when an Axi-like sound appears mid-talk. "
+        "Raise to be more permissive; set -1 to match 'Axi' anywhere (old behavior).",
+        minimum=-1,
+        maximum=120,
     ),
     ConfigField(
         "wakeword_max_segment_seconds", "number", 25.0,
