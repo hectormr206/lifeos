@@ -597,6 +597,59 @@
     {% block content %}{% endblock %}
   </main>
 
+  <!-- ✨ Floating "Mejorar" button — improve the CURRENT section by spinning up a
+       dev environment WITH context (the route Axi should work on). Same component
+       on every page (DRY, lives in _base). Hidden inside the preview iframe and on
+       pages where it would clash (/desarrollo has +Nuevo; /chat has its own bar). -->
+  <div x-data="improveFab()" x-show="visible" x-cloak>
+    <button type="button" @click="openModal()" title="Mejorar esta sección con Axi"
+            style="position: fixed; right: 1rem; bottom: 1rem; z-index: 50;
+                   width: 3.25rem; height: 3.25rem; border-radius: 9999px;
+                   background: linear-gradient(135deg, var(--pink), var(--purple));
+                   color: #fff; border: 0; font-size: 1.35rem; cursor: pointer;
+                   box-shadow: 0 6px 20px rgba(170,51,255,0.45);">✨</button>
+
+    <template x-if="modalOpen">
+      <div class="fixed inset-0 flex items-center justify-center p-4"
+           style="z-index: 60; background: rgba(0,0,0,0.7);" @click="closeModal()">
+        <div class="panel p-4 w-full max-w-lg" @click.stop>
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="font-semibold">✨ Mejorar <span x-text="label"></span></h2>
+            <button type="button" @click="closeModal()" class="muted">✕</button>
+          </div>
+          <p class="muted text-xs mb-2">
+            Axi sabe que estás en <span class="font-mono" x-text="path"></span> y va a trabajar sobre esa parte.
+            Escribí o mantené el micrófono para dictar qué querés agregar o cambiar.
+          </p>
+          <div class="flex items-end gap-2">
+            <textarea x-model="text" rows="4" class="flex-1 rounded-lg p-2 text-sm"
+                      style="background: var(--panel2); border: 1px solid var(--border); resize: vertical;"
+                      placeholder="Ej: agregá una gráfica de mi presión de los últimos 30 días"></textarea>
+            <button type="button"
+                    @mousedown.prevent="startRec()" @mouseup.prevent="stopRec()" @mouseleave="stopRec()"
+                    @touchstart.prevent="startRec()" @touchend.prevent="stopRec()" @touchcancel="stopRec()"
+                    class="btn btn-primary"
+                    :style="recording
+                      ? 'border-radius: 9999px; min-height: 2.75rem; min-width: 2.75rem; padding: 0; background: rgba(238,51,51,0.9); border-color: var(--red);'
+                      : 'border-radius: 9999px; min-height: 2.75rem; min-width: 2.75rem; padding: 0;'"
+                    title="Mantené presionado para dictar">
+              <span x-show="!recording && !transcribing">🎤</span>
+              <span x-show="recording" x-cloak>●</span>
+              <span x-show="transcribing && !recording" x-cloak>⏳</span>
+            </button>
+          </div>
+          <div class="flex justify-end gap-2 mt-3">
+            <button type="button" @click="closeModal()" class="btn" style="padding: 0.35rem 0.9rem;">Cancelar</button>
+            <button type="button" @click="submit()" class="btn btn-primary" style="padding: 0.35rem 0.9rem;"
+                    :disabled="busy || !text.trim()">
+              <span x-text="busy ? 'Creando…' : 'Mejorar con Axi'"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
   <script>
     // Global Alpine store used by header + page-specific data sections.
     // refresh() runs on a 1s interval; if the daemon is briefly unreachable
@@ -725,6 +778,82 @@
           this.refresh();
           setInterval(() => this.refresh(), {{ dashboard_poll_ms() }});
         },
+      };
+    }
+  </script>
+
+  <!-- Floating "Mejorar" button component (shared voice recorder for dictation). -->
+  <script src="/static/recorder.js"></script>
+  <script>
+    function improveFab() {
+      // Route → human label. Unknown routes fall back to the path itself.
+      const SECTIONS = {
+        '/': 'el Dashboard', '/health': 'Salud', '/finance': 'Finanzas',
+        '/relationships': 'Relaciones', '/exercise': 'Ejercicio',
+        '/spirituality': 'Espiritualidad', '/learning': 'Aprendizaje',
+        '/calendar': 'Calendario', '/reminders': 'Recordatorios',
+        '/insights': 'Insights', '/posture': 'Postura', '/meetings': 'Reuniones',
+        '/memory': 'Memoria', '/graph': 'Grafo', '/models': 'Modelos',
+        '/events': 'Eventos', '/translate': 'Traductor', '/calculator': 'Calculadora',
+      };
+      // Pages where the FAB would clash or is redundant.
+      const HIDE = ['/desarrollo', '/chat'];
+      return {
+        modalOpen: false, text: '', busy: false,
+        recording: false, transcribing: false, _recorder: null,
+        path: '', label: '', visible: false,
+
+        init() {
+          this.path = window.location.pathname;
+          this.label = SECTIONS[this.path] || ('la página ' + this.path);
+          let inIframe = false;
+          try { inIframe = window.self !== window.top; } catch (e) { inIframe = true; }
+          // Hidden inside the preview iframe (an isolated instance) and on HIDE pages.
+          this.visible = !inIframe && !HIDE.includes(this.path);
+        },
+
+        openModal() { this.modalOpen = true; this.text = ''; },
+        closeModal() { if (this.recording) this.stopRec(); this.modalOpen = false; },
+
+        _contextGoal() {
+          // Give Axi the route so it can find the handler + template, plus the ask.
+          return 'Mejorá la sección «' + this.label + '» del dashboard de LifeOS (ruta '
+            + this.path + '). Encontrá su handler (@app.get("' + this.path + '")) y su '
+            + 'template, y aplicá este cambio manteniendo el estilo y los componentes '
+            + 'existentes: ' + this.text.trim();
+        },
+
+        async submit() {
+          const t = this.text.trim();
+          if (!t) return;
+          this.busy = true;
+          try {
+            const r = await fetch('/api/dev-envs', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ goal: this._contextGoal() }),
+            });
+            if (!r.ok) { const d = await r.text(); throw new Error('HTTP ' + r.status + ': ' + d); }
+            this.modalOpen = false;
+            window.location.href = '/desarrollo';  // go watch the card build
+          } catch (e) {
+            alert('No pude crear el ambiente: ' + e.message);
+          } finally {
+            this.busy = false;
+          }
+        },
+
+        // Voice dictation into the prompt (shared segmented recorder).
+        ensureRecorder() {
+          if (this._recorder) return;
+          this._recorder = window.createSegmentedRecorder({
+            onText: (txt) => { this.text = this.text ? (this.text + ' ' + txt) : txt; },
+            onError: () => {},
+            onState: ({ recording, transcribing }) => { this.recording = recording; this.transcribing = transcribing; },
+          });
+        },
+        startRec() { if (this.recording || this.transcribing) return; this.ensureRecorder(); this._recorder.start(); },
+        stopRec() { if (this._recorder) this._recorder.stop(); },
       };
     }
   </script>
