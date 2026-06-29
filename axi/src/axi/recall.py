@@ -57,6 +57,30 @@ _PERSONAL_RECALL_PATTERN = re.compile(
     | \bmedicamento\b        # medication
     | \bpastilla\b           # pill / tablet
     | \bfrecuencia\s+card[ií]aca\b  # frecuencia cardíaca (heart rate)
+    # Identity / family / relationships / biographical (Spanish). Lets the graph
+    # surface "who you are" facts (spouse, family, key dates, your name) for
+    # profile/identity queries. The 0.9 distance backstop still bounds false
+    # positives — a match only escalates if a node actually sits within 0.9.
+    | \bespos[oa]\b          # esposa / esposo
+    | \bmarido\b | \bmujer\b | \bpareja\b
+    | \bnovi[oa]s?\b         # novio / novia / novios
+    | \bcasad[oa]s?\b        # casado / casada / casados
+    | \bmatrimonio\b | \bboda\b | \baniversario\b
+    | \bfamilia\b | \bhij[oa]s?\b | \bherman[oa]s?\b
+    | \bmam[aá]\b | \bpap[aá]\b | \bmadre\b | \bpadre\b
+    | \bnombre\b | \bllamo\b | \bcumplea[nñ]os\b
+    | \bqui[eé]n\s+soy\b
+    | \bsobre\s+m[ií]\b | \bde\s+m[ií]\b   # sobre mí / de mí ("qué sabes de mí")
+    | \bsabes\b | \brecuerd[ao]s?\b
+    | \brelaci[oó]n\b
+    # Identity / family (English)
+    | \bwife\b | \bhusband\b | \bspouse\b | \bpartner\b
+    | \bgirlfriend\b | \bboyfriend\b
+    | \bmarried\b | \bmarriage\b | \bwedding\b | \banniversary\b
+    | \bfamily\b | \bson\b | \bdaughter\b | \bmother\b | \bfather\b
+    | \bbrother\b | \bsister\b
+    | \bmy\s+name\b | \babout\s+me\b | \bwho\s+am\s+i\b
+    | \bremember\b | \bbirthday\b
     # English health / finance vocabulary (mirrors the Spanish set). Bare
     # ambiguous tokens (gas, sugar, ran, felt) are intentionally omitted; the
     # 0.9 distance backstop bounds any false positive.

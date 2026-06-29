@@ -519,9 +519,12 @@ FIELDS: tuple[ConfigField, ...] = (
         "Default off (meetings are noisy and pollute the life-facts graph).",
     ),
     ConfigField(
-        "graph_bridge_chat_facts", "boolean", False,
-        "If true, facts extracted from chat conversations are added as nodes in the "
-        "semantic graph. Default off keeps the graph to structured life-domains only.",
+        "graph_bridge_chat_facts", "boolean", True,
+        "If true (default), durable facts from free chat (identity, preferences, "
+        "biographical, relationships) are extracted into the semantic graph so Axi "
+        "builds long-term, relatable memory of who you are — not just structured "
+        "life-domains. Structured domains (health/finance) are skipped here to avoid "
+        "duplicating their own bridged nodes.",
     ),
     # ─────── graph recall (RAG) ───────
     ConfigField(

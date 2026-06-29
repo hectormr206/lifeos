@@ -29,6 +29,11 @@ from axi.brain import ask as brain_ask
 
 log = logging.getLogger("axi.extractor")
 
+# Structured domains own their own graph nodes (via domain_bridge); chat
+# extraction skips these to avoid duplicating logged vitals/transactions and
+# instead captures the REST (identity, preferences, biographical, relationships).
+_STRUCTURED_DOMAINS = {"health", "finance"}
+
 EXTRACTOR_SYSTEM = """Eres un extractor de hechos para la memoria de largo plazo de Axi.
 Te paso un intercambio entre Héctor (usuario) y Axi (asistente).
 Tu trabajo: identificar de 0 a 4 hechos DURADEROS sobre Héctor que valga la pena recordar
@@ -40,6 +45,12 @@ Eso permite que en el futuro, si un hecho cambia (ej: "mic favorito" pasa de Hyp
 a Huawei), las versiones nuevas superseden a las viejas por timestamp. Por eso es
 importante que el `label` sea SIEMPRE en presente y específico — describiendo el estado
 ACTUAL declarado por Héctor en este intercambio.
+
+El `label` DEBE incluir los datos CONCRETOS textuales: nombres propios COMPLETOS,
+fechas EXACTAS y cantidades. Ejemplo CORRECTO: "Esposa: Ana Ríos (civil
+14/03/2020, iglesia 08/06/2020)". Ejemplo MALO (pierde lo importante): "Esposa de
+Héctor". NUNCA resumas quitando nombres, fechas o números — son lo más valioso de
+recordar. Si no caben en el label, ponlos COMPLETOS en data.detail.
 
 NO extraigas:
 - Datos efímeros ("hoy hace frío")
@@ -121,6 +132,12 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
         domain = f.get("domain") or None
         if domain == "null":
             domain = None
+        # Structured domains (health, finance, …) own their own graph nodes via
+        # the domain bridge — skip them here so free-chat extraction does not
+        # duplicate logged vitals/transactions. Chat extraction captures the
+        # REST: identity, preferences, biographical, decisions, relationships.
+        if kind in _STRUCTURED_DOMAINS or (domain in _STRUCTURED_DOMAINS):
+            continue
         data = f.get("data") if isinstance(f.get("data"), dict) else {}
         try:
             fact_id = store.add_node(kind="fact", label=label, data={"category": kind, **data}, domain=domain)
