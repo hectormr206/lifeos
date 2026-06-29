@@ -529,6 +529,27 @@ FIELDS: tuple[ConfigField, ...] = (
         "life-domains. Structured domains (health/finance) are skipped here to avoid "
         "duplicating their own bridged nodes.",
     ),
+    # ─────── chat archive (bound the log as it grows) ───────
+    ConfigField(
+        "chat_archive_enabled", "boolean", True,
+        "If true (default), once the chat log grows past hot_turns+batch, the "
+        "oldest batch of turns is summarized into a graph node and the raw turns "
+        "are deleted — durable facts already live in the graph, so knowledge is "
+        "kept while the log stays bounded.",
+    ),
+    ConfigField(
+        "chat_archive_hot_turns", "integer", 400,
+        "How many recent chat turns to always keep raw (the 'hot' window). Archiving "
+        "only touches turns older than this.",
+        minimum=50,
+        maximum=10000,
+    ),
+    ConfigField(
+        "chat_archive_batch", "integer", 200,
+        "How many old turns to summarize+prune per archive pass.",
+        minimum=20,
+        maximum=2000,
+    ),
     # ─────── graph recall (RAG) ───────
     ConfigField(
         "graph_recall", "boolean", True,

@@ -1393,6 +1393,23 @@ def serve() -> int:
             target=_healthy_backup_loop, name="axi-healthy-backup", daemon=True
         ).start()
 
+        # Periodic chat archive — summarize + prune the oldest turns when the log
+        # grows large (no-op until then). Runs every ~6h; slower on battery.
+        _chat_archive_stop = threading.Event()
+
+        def _chat_archive_loop() -> None:
+            _factor = config.get("battery_loop_slowdown_factor", 4)
+            while not _chat_archive_stop.wait(timeout=power.battery_scaled(21600, _factor)):
+                try:
+                    from axi import chat_archive  # noqa: PLC0415
+                    chat_archive.summarize_and_archive()
+                except Exception:  # noqa: BLE001
+                    log.warning("chat archive failed", exc_info=True)
+
+        threading.Thread(
+            target=_chat_archive_loop, name="axi-chat-archive", daemon=True
+        ).start()
+
         # Periodic dev-run health poll — checks active runs and resumes waiting ones.
         _dev_run_poll_stop = threading.Event()
 
