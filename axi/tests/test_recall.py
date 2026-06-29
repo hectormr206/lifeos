@@ -482,3 +482,53 @@ def test_recency_injection_skipped_for_non_personal_query(monkeypatch):
     result = build_recall_block("contame un chiste", lang="es-MX")
     assert result == ""
     assert called["recent"] is False
+
+
+# ---------------------------------------------------------------------------
+# Hybrid recall — lexical (FTS) lane catches keyword matches the vector search
+# missed (e.g. "esposa" -> "Esposa: Celia ..." sitting just past the distance gate)
+# ---------------------------------------------------------------------------
+
+def test_fts_lane_surfaces_keyword_match_when_semantic_missed(monkeypatch):
+    import axi.store as _store
+    monkeypatch.setattr(_store, "semantic_search_nodes", lambda *a, **kw: [])
+    monkeypatch.setattr(_store, "same_day_neighbors", lambda nid, conn=None: [])
+    monkeypatch.setattr(_store, "recent_facts", lambda **kw: [])
+    fts_node = {
+        "id": 5, "kind": "fact", "label": "Esposa: Celia García Mateo",
+        "domain": "personal", "occurred_at": time.time(), "created_at": time.time(),
+    }
+    monkeypatch.setattr(_store, "search_nodes_fts", lambda q, limit=10: [fts_node])
+
+    from axi.recall import build_recall_block
+    out = build_recall_block("quién es mi esposa", lang="es-MX")
+    assert "Celia García Mateo" in out
+
+
+def test_fts_lane_skips_conversation_nodes(monkeypatch):
+    import axi.store as _store
+    monkeypatch.setattr(_store, "semantic_search_nodes", lambda *a, **kw: [])
+    monkeypatch.setattr(_store, "same_day_neighbors", lambda nid, conn=None: [])
+    monkeypatch.setattr(_store, "recent_facts", lambda **kw: [])
+    conv = {"id": 9, "kind": "conversation", "label": "hola que onda esposa",
+            "domain": None, "occurred_at": time.time(), "created_at": time.time()}
+    monkeypatch.setattr(_store, "search_nodes_fts", lambda q, limit=10: [conv])
+    from axi.recall import build_recall_block
+    out = build_recall_block("quién es mi esposa", lang="es-MX")
+    assert out == ""  # raw chat node skipped -> nothing else -> empty
+
+
+def test_fts_terms_keeps_content_drops_stopwords():
+    from axi.recall import _fts_terms
+    terms = _fts_terms("¿Quién es mi esposa y cuándo nos casamos?")
+    assert "esposa" in terms and "casamos" in terms
+    assert "quien" not in terms and "quién" not in terms and "mi" not in terms
+
+
+def test_casual_query_no_fts_no_recall(monkeypatch):
+    import axi.store as _store
+    monkeypatch.setattr(_store, "semantic_search_nodes", lambda *a, **kw: [])
+    # search_nodes_fts must NOT even be needed; a casual query yields no terms.
+    from axi.recall import _fts_terms, build_recall_block
+    assert _fts_terms("hola cómo estás") == []
+    assert build_recall_block("hola cómo estás", lang="es-MX") == ""
