@@ -344,9 +344,17 @@ def get_system_prompt(lang: str | None) -> str:
     function instead of importing SYSTEM_PROMPT directly when they are
     language-aware.
     """
-    if lang and lang.split("-")[0].lower() == "en":
-        return SYSTEM_PROMPT_EN
-    return SYSTEM_PROMPT
+    _is_en = bool(lang and lang.split("-")[0].lower() == "en")
+    base = SYSTEM_PROMPT_EN if _is_en else SYSTEM_PROMPT
+    # Personalize: the prompt is authored about "Héctor"; substitute the actual
+    # configured user name so each install addresses its own owner (not a
+    # hardcoded name). Empty name (fresh install, pre-onboarding) -> generic.
+    name = (config.get("user_name", "") or "").strip()
+    if name == "Héctor":
+        return base
+    if not name:
+        name = "the user" if _is_en else "tu usuario"
+    return base.replace("Héctor", name)
 
 
 log = logging.getLogger("axi.brain")
@@ -498,14 +506,14 @@ def _build_messages(
             if _is_en:
                 _nomem = (
                     "(No saved memory is relevant to this question. Do NOT assert any "
-                    "specific personal fact about Héctor —tastes, dates, people, numbers— "
+                    "specific personal fact about the user —tastes, dates, people, numbers— "
                     "that is not in THIS conversation; if asked for one, say you don't have "
                     "it saved. Answer general knowledge normally.)"
                 )
             else:
                 _nomem = (
                     "(No hay memoria guardada relevante a esta pregunta. NO afirmes ningún "
-                    "dato personal específico de Héctor —gustos, fechas, personas, números— "
+                    "dato personal específico tuyo —gustos, fechas, personas, números— "
                     "que no esté en ESTA conversación; si te preguntan uno, di que no lo "
                     "tienes guardado. El conocimiento general respóndelo normal.)"
                 )

@@ -347,6 +347,8 @@ def create_fact_node_for_entry(domain: str, entry: Any) -> int | None:
     occurred_at = _entry_occurred_at(entry)
     node_id = store.add_node("fact", label, data=extra or None, domain=domain, occurred_at=occurred_at)
     store.upsert_domain_node_map(domain, entry_id, node_id)
+    from axi import identity  # noqa: PLC0415 — lazy, avoids import cycle
+    identity.link_fact_to_user(node_id)  # connect every domain fact to the user hub
     store.trigger_embed_for_node(node_id)
     return node_id
 

@@ -141,6 +141,8 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
         data = f.get("data") if isinstance(f.get("data"), dict) else {}
         try:
             fact_id = store.add_node(kind="fact", label=label, data={"category": kind, **data}, domain=domain)
+            from axi import identity  # noqa: PLC0415 — lazy, avoids import cycle
+            identity.link_fact_to_user(fact_id)  # connect every fact to the user hub
             if conversation_node_id is not None:
                 store.add_edge(fact_id, conversation_node_id, "mentioned_in")
             saved += 1

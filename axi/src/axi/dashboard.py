@@ -1047,7 +1047,10 @@ def _meeting_summary_row(row) -> dict[str, Any]:
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse(request, "dashboard.html", {})
+    return templates.TemplateResponse(
+        request, "dashboard.html",
+        {"user_name": (config.get("user_name", "") or "").strip()},
+    )
 
 
 @app.get("/axi-rootCA.crt")
@@ -3444,6 +3447,24 @@ async def api_chat_ask(request: Request):
             )
         except Exception:  # noqa: BLE001
             log.warning("fastpath metric record failed", exc_info=True)
+
+    # ─── Onboarding: first run (no name yet) → capture the introduction ──────
+    # Before any routing/brain: if onboarding is pending, the first message is
+    # the user introducing themselves. Capture the name, create the graph hub,
+    # and welcome them. No-op once the name is set.
+    if not image_b64:
+        from axi import identity  # noqa: PLC0415
+        _welcome = identity.onboarding_capture(text)
+        if _welcome is not None:
+            latency_ms = round((time.monotonic() - start) * 1000)
+            try:
+                mem.add(text, _welcome, has_screenshot=False)
+            except Exception:  # noqa: BLE001
+                pass
+            stage_holder[0] = "onboarding"
+            _record_metric()
+            return {"answer": _welcome, "latency_ms": latency_ms,
+                    "spoke": False, "audio_b64": None}
 
     # ─── L3 Correction UX: deshacer / corregir command ─────────────────────
     # Detect "deshacer", "corregir", or "borrar eso" before ALL other paths.
@@ -6194,7 +6215,7 @@ def api_setup_status():
         out["config"] = {
             "language": str(config.get("language", "es-MX")),
             "timezone": str(config.get("timezone", "America/Mexico_City")),
-            "user_name": str(config.get("user_name", "Héctor")),
+            "user_name": str(config.get("user_name", "")),
             "autonomous_enabled": bool(config.get("autonomous_enabled", False)),
             "posture_enabled": bool(config.get("posture_enabled", False)),
             "chat_enabled": bool(config.get("chat_enabled", True)),
