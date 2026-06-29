@@ -49,6 +49,21 @@ def test_add_conversation_and_recent():
     assert [r["id"] for r in rows] == [cid1, cid2]
 
 
+def test_conversation_source_tags_and_chat_filter():
+    """Turns carry a source ('chat' default | 'voice'); the chat-history filter
+    (COALESCE(source,'chat') != 'voice') hides voice turns but keeps chat ones."""
+    cid_chat = store.add_conversation("hola", "qué tal")            # default 'chat'
+    cid_voice = store.add_conversation("axi qué hora", "07:30", source="voice")
+    c = store._connect()  # noqa: SLF001
+    src = {r["id"]: r["source"] for r in c.execute("SELECT id, source FROM conversations")}
+    assert src[cid_chat] == "chat"
+    assert src[cid_voice] == "voice"
+    shown = [r["id"] for r in c.execute(
+        "SELECT id FROM conversations WHERE COALESCE(source,'chat') != 'voice' ORDER BY id"
+    )]
+    assert cid_chat in shown and cid_voice not in shown
+
+
 def test_clear_conversations_wipes_chat_only():
     nid = store.add_node("fact", "preservar")
     store.add_conversation("a", "b")

@@ -177,10 +177,10 @@ class ConversationMemory:
             log.warning("memory degraded in %s: %s — operation did not complete", op_name, exc)
             return default
 
-    def _add_once(self, user, axi, has_screenshot, session_id):
+    def _add_once(self, user, axi, has_screenshot, session_id, source="chat"):
         """The raw insert (+ optional graph bridge). Wrapped by _with_recovery."""
         conv_id = store.add_conversation(
-            user, axi, has_screenshot=has_screenshot, session_id=session_id
+            user, axi, has_screenshot=has_screenshot, session_id=session_id, source=source
         )
         node_id = None
         if config.get("graph_bridge_conversations", False):
@@ -196,7 +196,7 @@ class ConversationMemory:
         return conv_id, node_id
 
     def add(self, user: str, axi: str, has_screenshot: bool = False,
-            session_id: str | None = None) -> tuple[int, int]:
+            session_id: str | None = None, source: str = "chat") -> tuple[int, int]:
         """Record a turn. Returns (conversation row id, conversation node id).
 
         `session_id` scopes the turn to a domain chat (e.g. "health" for the
@@ -207,7 +207,7 @@ class ConversationMemory:
         persists. Returns (0, 0) only when recovery fails entirely.
         """
         return self._with_recovery(
-            "add", lambda: self._add_once(user, axi, has_screenshot, session_id), (0, 0)
+            "add", lambda: self._add_once(user, axi, has_screenshot, session_id, source), (0, 0)
         )
 
     def _messages_once(self) -> list[dict]:
