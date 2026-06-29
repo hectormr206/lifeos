@@ -29,3 +29,20 @@ def test_extract_name_none_for_long_non_introduction():
 def test_onboarding_capture_noop_when_name_already_set(monkeypatch):
     monkeypatch.setattr(identity, "user_name", lambda: "Héctor")
     assert identity.onboarding_capture("soy Juan") is None
+
+
+def test_extract_and_store_processes_relations(monkeypatch):
+    """The extractor's 'relations' are turned into typed hub edges."""
+    from axi import extractor, identity, config
+    monkeypatch.setattr(config, "get",
+                        lambda k, d=None: True if k == "graph_bridge_chat_facts" else d)
+    monkeypatch.setattr(
+        extractor, "brain_ask",
+        lambda **kw: '{"facts": [], "relations": '
+                     '[{"relation": "esposa", "entity": "Celia García Mateo", "kind": "person"}]}',
+    )
+    seen = []
+    monkeypatch.setattr(identity, "add_relation",
+                        lambda rel, ent, kind="person": seen.append((rel, ent, kind)))
+    extractor.extract_and_store("mi esposa es Celia García Mateo", "ok", None)
+    assert ("esposa", "Celia García Mateo", "person") in seen
