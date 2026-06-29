@@ -136,9 +136,21 @@ def onboarding_capture(text: str) -> str | None:
 _ENTITY_KINDS = {"person", "place", "org"}
 
 
+def _entity_names(data_json: str) -> tuple[str, list[str]]:
+    """Return (role, aliases) parsed from a node's data JSON. Safe on garbage."""
+    try:
+        d = json.loads(data_json or "{}")
+    except (ValueError, TypeError):
+        return "", []
+    return d.get("role", "") or "", [str(a) for a in (d.get("aliases") or [])]
+
+
 def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
-    """Get or create an entity node (person/place/org) by name (case-insensitive,
-    deduped). Never returns the user hub. Returns its node id, or None.
+    """Get or create an entity node (person/place/org) by name OR alias
+    (case-insensitive, deduped). Never returns the user hub. Returns the node id.
+
+    Alias-aware: if *name* is "Ani" and an entity "Ana Ríos" lists
+    "Ani" in its aliases, the EXISTING Ana node is returned (no duplicate).
     """
     name = (name or "").strip()
     if not name:
@@ -149,14 +161,12 @@ def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
         c = conn or store._connect()  # noqa: SLF001
         nlow = name.lower()
         for r in c.execute("SELECT id, label, data FROM nodes WHERE kind=?", (kind,)).fetchall():
-            if (r["label"] or "").strip().lower() != nlow:
-                continue
-            try:
-                if json.loads(r["data"] or "{}").get("role") == "user":
-                    continue  # never reuse the user hub as an 'other' entity
-            except (ValueError, TypeError):
-                pass
-            return r["id"]
+            role, aliases = _entity_names(r["data"])
+            if role == "user":
+                continue  # never reuse the user hub as an 'other' entity
+            names = {(r["label"] or "").strip().lower()} | {a.strip().lower() for a in aliases}
+            if nlow in names:
+                return r["id"]
         nid = store.add_node(kind=kind, label=name, data={"entity": True}, domain=None)
         try:
             store.trigger_embed_for_node(nid)
@@ -166,6 +176,54 @@ def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
     except Exception as e:  # noqa: BLE001
         log.debug("ensure_entity failed: %s", e)
         return None
+
+
+def register_alias(canonical_name: str, alias: str, kind: str = "person", conn=None) -> None:
+    """Record *alias* as an alias of the entity *canonical_name*, and MERGE any
+    separate node that already exists for the alias (its edges move onto the
+    canonical node, then it is deleted). Idempotent. Never raises.
+    """
+    canonical_name = (canonical_name or "").strip()
+    alias = (alias or "").strip()
+    if not canonical_name or not alias or alias.lower() == canonical_name.lower():
+        return
+    try:
+        cid = ensure_entity(canonical_name, kind, conn=conn)
+        if not cid:
+            return
+        c = conn or store._connect()  # noqa: SLF001
+        # 1) add the alias to the canonical entity's data.aliases
+        row = c.execute("SELECT data FROM nodes WHERE id=?", (cid,)).fetchone()
+        try:
+            d = json.loads(row["data"] or "{}") if row else {}
+        except (ValueError, TypeError):
+            d = {}
+        aliases = [str(a) for a in (d.get("aliases") or [])]
+        if alias.lower() not in {a.lower() for a in aliases}:
+            aliases.append(alias)
+            d["aliases"] = aliases
+            d.setdefault("entity", True)
+            with store._tx() as tx:  # noqa: SLF001
+                tx.execute("UPDATE nodes SET data=? WHERE id=?",
+                           (json.dumps(d, ensure_ascii=False), cid))
+        # 2) merge any SEPARATE node labelled with the alias into the canonical
+        alow = alias.lower()
+        for r in c.execute("SELECT id, label FROM nodes WHERE kind=?", (kind,)).fetchall():
+            if r["id"] == cid or (r["label"] or "").strip().lower() != alow:
+                continue
+            did = r["id"]
+            with store._tx() as tx:  # noqa: SLF001
+                tx.execute("UPDATE edges SET from_id=? WHERE from_id=?", (cid, did))
+                tx.execute("UPDATE edges SET to_id=? WHERE to_id=?", (cid, did))
+                tx.execute("DELETE FROM nodes WHERE id=?", (did,))
+                tx.execute("DELETE FROM nodes_fts WHERE rowid=?", (did,))
+                try:
+                    tx.execute("DELETE FROM vec_nodes WHERE node_id=?", (did,))
+                except Exception:  # noqa: BLE001
+                    pass
+            log.info("merged alias node %r (%d) into %r (%d)", alias, did, canonical_name, cid)
+    except Exception as e:  # noqa: BLE001
+        log.debug("register_alias failed: %s", e)
 
 
 def add_relation(relation: str, entity_name: str, kind: str = "person", conn=None) -> None:
