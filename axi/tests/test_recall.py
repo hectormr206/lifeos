@@ -441,3 +441,44 @@ def test_build_recall_block_returns_empty_on_embed_timeout(monkeypatch):
     from axi.recall import build_recall_block
     result = build_recall_block("query", timeout=0.001)
     assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Recency injection — personal queries surface freshly-logged facts even when
+# semantic search misses a keyword-poor label ("110 81 51 pulsos" vs "presión")
+# ---------------------------------------------------------------------------
+
+def test_recency_injection_for_personal_query(monkeypatch):
+    """A personal query folds in recent facts even with NO semantic match."""
+    import axi.store as _store
+    monkeypatch.setattr(_store, "semantic_search_nodes", lambda *a, **kw: [])
+    monkeypatch.setattr(_store, "same_day_neighbors", lambda nid, conn=None: [])
+    recent = [{
+        "id": 99, "kind": "fact", "label": "110 81 51 pulsos", "domain": "health",
+        "occurred_at": time.time(), "created_at": time.time(),
+    }]
+    monkeypatch.setattr(_store, "recent_facts", lambda **kw: recent)
+
+    from axi.recall import build_recall_block
+    result = build_recall_block(
+        "opinión sobre mi presión de hoy", lang="es-MX", escalate_distance=0.9
+    )
+    assert "110 81 51 pulsos" in result
+
+
+def test_recency_injection_skipped_for_non_personal_query(monkeypatch):
+    """A non-personal query never triggers recency injection (no noise)."""
+    import axi.store as _store
+    monkeypatch.setattr(_store, "semantic_search_nodes", lambda *a, **kw: [])
+    called = {"recent": False}
+
+    def _rf(**kw):
+        called["recent"] = True
+        return []
+
+    monkeypatch.setattr(_store, "recent_facts", _rf)
+
+    from axi.recall import build_recall_block
+    result = build_recall_block("contame un chiste", lang="es-MX")
+    assert result == ""
+    assert called["recent"] is False

@@ -107,6 +107,12 @@ def looks_like_personal_recall(text: str) -> bool:
 # returns "" and the turn proceeds normally.
 _RECALL_EMBED_TIMEOUT = 2.0
 
+# Recency injection (personal queries only): always fold in 'fact' nodes from
+# the last _RECENCY_DAYS days so freshly-logged data surfaces even when its
+# label is keyword-poor and KNN misses it. Bounded by _RECENCY_LIMIT.
+_RECENCY_DAYS = 2
+_RECENCY_LIMIT = 8
+
 
 def build_recall_block(
     query: str,
@@ -198,16 +204,21 @@ def _build_recall_block(
 
     _is_en = bool(lang and lang.split("-")[0].lower() == "en")
 
+    _personal = looks_like_personal_recall(query)
     nodes = store.semantic_search_nodes(query, k=k, conn=conn, timeout=timeout)
     # Filter by tight distance threshold
     filtered = [n for n in nodes if n.get("distance", 1.0) <= max_distance]
     # Escalation: if tight filter is empty and escalate_distance is set and query looks personal,
     # reuse already-fetched nodes at the wider gate — NO second embed call.
-    if not filtered and escalate_distance is not None and looks_like_personal_recall(query):
+    if not filtered and escalate_distance is not None and _personal:
         filtered = [n for n in nodes if n.get("distance", 1.0) <= escalate_distance]
-    if not filtered:
+    # Personal queries (health/finance vocab) ALSO get the most recent facts
+    # injected below regardless of semantic match, so freshly-logged data (e.g.
+    # today's vitals) is always available. Non-personal queries keep the original
+    # behavior: nothing semantically relevant -> empty block.
+    if not filtered and not _personal:
         return ""
-    nodes = filtered  # continue using filtered set
+    nodes = filtered  # may be empty for a personal query; recency fills it in
 
     tz_name = config.get("timezone", "UTC") or "UTC"
     try:
@@ -219,29 +230,39 @@ def _build_recall_block(
     # We track the timestamp alongside the label to enable within-day recency sort.
     day_facts: dict[str, list[tuple[float, str]]] = {}
 
-    for node in nodes:
-        # Pull same-day neighbors (BOTH directions)
-        neighbors = store.same_day_neighbors(node["id"], conn=conn)
-        all_facts = [node] + neighbors
+    def _add_fact(fact: dict) -> None:
+        # FIX 7 NIT: use explicit None check so occurred_at=0.0 is not dropped.
+        occurred_at = fact.get("occurred_at")
+        created_at = fact.get("created_at")
+        ts = occurred_at if occurred_at is not None else created_at
+        if ts is None:
+            return
+        dt = datetime.datetime.fromtimestamp(ts, tz=tz)
+        date_str = dt.strftime("%Y-%m-%d")
+        label = (fact.get("label") or "").strip()
+        if not label:
+            return
+        bucket = day_facts.setdefault(date_str, [])
+        if label not in {lbl for _, lbl in bucket}:  # dedup by label
+            bucket.append((ts, label))
 
-        for fact in all_facts:
-            # FIX 7 NIT: use explicit None check so occurred_at=0.0 is not dropped.
-            occurred_at = fact.get("occurred_at")
-            created_at = fact.get("created_at")
-            ts = occurred_at if occurred_at is not None else created_at
-            if ts is None:
-                continue
-            dt = datetime.datetime.fromtimestamp(ts, tz=tz)
-            date_str = dt.strftime("%Y-%m-%d")
-            label = fact.get("label", "").strip()
-            if not label:
-                continue
-            if date_str not in day_facts:
-                day_facts[date_str] = []
-            # Dedup by label
-            existing_labels = {lbl for _, lbl in day_facts[date_str]}
-            if label not in existing_labels:
-                day_facts[date_str].append((ts, label))
+    for node in nodes:
+        # The node itself + its same-day neighbors (BOTH edge directions).
+        _add_fact(node)
+        for neighbor in store.same_day_neighbors(node["id"], conn=conn):
+            _add_fact(neighbor)
+
+    # Recency injection: for personal queries, always fold in the most recent
+    # facts so freshly-logged data appears even when its label is keyword-poor
+    # (e.g. "110 81 51 pulsos" vs the query "presión"). Bounded + deduped, and
+    # still subject to the per-day / total caps below.
+    if _personal:
+        try:
+            recent = store.recent_facts(days=_RECENCY_DAYS, limit=_RECENCY_LIMIT, conn=conn)
+        except Exception:  # noqa: BLE001
+            recent = []
+        for fact in recent:
+            _add_fact(fact)
 
     if not day_facts:
         return ""

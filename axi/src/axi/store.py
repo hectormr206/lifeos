@@ -1220,6 +1220,29 @@ def same_day_neighbors(node_id: int, conn=None) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def recent_facts(days: int = 2, limit: int = 8, conn=None) -> list[dict[str, Any]]:
+    """Return the most recently-occurring 'fact' nodes within the last *days*,
+    newest first.
+
+    Used by recall to ALWAYS surface freshly-logged personal data (e.g. today's
+    vitals) regardless of semantic similarity: a numeric-only label like
+    "110 81 51 pulsos" sits far from a query like "presión", so KNN alone misses
+    it. Returns [] on any error.
+    """
+    c = conn or _connect()
+    cutoff = time.time() - max(0, days) * 86400.0
+    try:
+        rows = c.execute(
+            "SELECT id, kind, label, domain, created_at, occurred_at FROM nodes "
+            "WHERE kind = 'fact' AND COALESCE(occurred_at, created_at) >= ? "
+            "ORDER BY COALESCE(occurred_at, created_at) DESC LIMIT ?",
+            (cutoff, int(limit)),
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    return [dict(r) for r in rows]
+
+
 # ─────────────────────────── conversations ─────────────────────────────
 
 def add_conversation(user_text: str, axi_text: str, has_screenshot: bool = False,
