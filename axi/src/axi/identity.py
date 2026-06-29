@@ -133,6 +133,64 @@ def onboarding_capture(text: str) -> str | None:
     )
 
 
+_ENTITY_KINDS = {"person", "place", "org"}
+
+
+def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
+    """Get or create an entity node (person/place/org) by name (case-insensitive,
+    deduped). Never returns the user hub. Returns its node id, or None.
+    """
+    name = (name or "").strip()
+    if not name:
+        return None
+    if kind not in _ENTITY_KINDS:
+        kind = "person"
+    try:
+        c = conn or store._connect()  # noqa: SLF001
+        nlow = name.lower()
+        for r in c.execute("SELECT id, label, data FROM nodes WHERE kind=?", (kind,)).fetchall():
+            if (r["label"] or "").strip().lower() != nlow:
+                continue
+            try:
+                if json.loads(r["data"] or "{}").get("role") == "user":
+                    continue  # never reuse the user hub as an 'other' entity
+            except (ValueError, TypeError):
+                pass
+            return r["id"]
+        nid = store.add_node(kind=kind, label=name, data={"entity": True}, domain=None)
+        try:
+            store.trigger_embed_for_node(nid)
+        except Exception:  # noqa: BLE001
+            pass
+        return nid
+    except Exception as e:  # noqa: BLE001
+        log.debug("ensure_entity failed: %s", e)
+        return None
+
+
+def add_relation(relation: str, entity_name: str, kind: str = "person", conn=None) -> None:
+    """Create a TYPED edge from the user hub to an entity: hub --relation--> entity
+    (e.g. Héctor --esposa--> Ana Ríos). Idempotent. Never raises.
+    """
+    relation = (relation or "").strip().lower().replace(" ", "_")
+    if not relation:
+        return
+    try:
+        hub = ensure_user_hub(conn=conn)
+        ent = ensure_entity(entity_name, kind, conn=conn)
+        if not hub or not ent or hub == ent:
+            return
+        c = conn or store._connect()  # noqa: SLF001
+        exists = c.execute(
+            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+            (hub, ent, relation),
+        ).fetchone()
+        if not exists:
+            store.add_edge(hub, ent, relation)
+    except Exception as e:  # noqa: BLE001
+        log.debug("add_relation failed: %s", e)
+
+
 def link_fact_to_user(fact_id: int, conn=None) -> None:
     """Connect a fact node to the user hub (edge kind 'about'), so everything
     radiates from the user. Idempotent (skips if the edge already exists).

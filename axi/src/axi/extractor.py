@@ -58,15 +58,25 @@ NO extraigas:
 - Hechos sobre el mundo en general
 - Cosas que Axi dijo si NO confirmadas por Héctor
 
+También extrae RELACIONES: cuando Héctor menciona una ENTIDAD con nombre propio con
+la que tiene un vínculo (su esposa Ana, su jefe Sergio, su ciudad, su mascota…),
+emitila como un triple para que viva en el grafo conectada a Héctor.
+
 Responde SOLO con JSON válido, sin texto antes ni después, exactamente este formato:
 {"facts": [
   {"kind": "preference|biographical|decision|plan|setup|health|finance|work|relationship",
    "label": "descripción corta del hecho (máx 80 chars)",
    "data": {"detail": "explicación más larga si vale la pena"},
    "domain": "health|finance|work|home|setup|personal|null"}
-]}
+],
+ "relations": [
+  {"relation": "vínculo de Héctor con la entidad: esposa, esposo, hijo, hija, madre, padre, hermano, amigo, jefe, mascota, vive_en, trabaja_en, …",
+   "entity": "NOMBRE PROPIO más completo de la persona/lugar/organización (ej: 'Ana Ríos')",
+   "kind": "person|place|org"}
+ ]}
 
-Si no hay nada que extraer, responde: {"facts": []}"""
+Solo extrae una relación si hay un NOMBRE PROPIO y un vínculo claro. Si no, deja "relations": [].
+Si no hay nada que extraer, responde: {"facts": [], "relations": []}"""
 
 
 def _parse_json_strict(text: str) -> dict[str, Any] | None:
@@ -117,12 +127,14 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
         history=None,
     )
     parsed = _parse_json_strict(raw)
-    if not parsed or not isinstance(parsed.get("facts"), list):
-        log.info("no facts extracted (raw=%r)", raw[:200] if raw else None)
+    if not parsed:
+        log.info("no extraction (raw=%r)", raw[:200] if raw else None)
         return 0
+    facts = parsed.get("facts") if isinstance(parsed.get("facts"), list) else []
+    relations = parsed.get("relations") if isinstance(parsed.get("relations"), list) else []
 
     saved = 0
-    for f in parsed["facts"]:
+    for f in facts:
         if not isinstance(f, dict):
             continue
         label = (f.get("label") or "").strip()
@@ -149,4 +161,22 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
             log.info("fact saved [%s/%s]: %s", kind, domain or "—", label)
         except Exception as e:  # noqa: BLE001 — store can raise sqlite errors
             log.warning("could not save fact %r: %s", label, e)
+
+    # Typed relations — create entity nodes + a typed edge from the user hub
+    # (e.g. Héctor --esposa--> Ana Ríos), so people/places/orgs become
+    # first-class graph entities, not just text inside a fact label.
+    from axi import identity  # noqa: PLC0415 — lazy, avoids import cycle
+    for rel in relations:
+        if not isinstance(rel, dict):
+            continue
+        relation = (rel.get("relation") or "").strip()
+        entity = (rel.get("entity") or "").strip()
+        ekind = (rel.get("kind") or "person").strip()
+        if not relation or not entity:
+            continue
+        try:
+            identity.add_relation(relation, entity, ekind)
+            log.info("relation saved: --%s--> %s (%s)", relation, entity, ekind)
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not save relation %r->%r: %s", relation, entity, e)
     return saved
