@@ -56,6 +56,7 @@ from axi import model_params_schema
 # LifeOS — life-system layer. Sibling package. P1 ships reminders + scheduler.
 from lifeos import reminders as lifeos_reminders
 from lifeos import push as lifeos_push
+from axi import briefing
 from lifeos import localize as lifeos_localize
 from lifeos.scheduler import get_scheduler
 # P2 — Health domain (encrypted store + DAO + chat ingestion).
@@ -778,19 +779,20 @@ def _llama_alive() -> bool:
 def _vram_snapshot() -> dict[str, Any]:
     try:
         out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu,name",
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu,name",
              "--format=csv,noheader,nounits"],
             text=True, timeout=3,
         ).strip()
-        used, total, util, name = [p.strip() for p in out.split(",")]
+        used, total, util, temp, name = [p.strip() for p in out.split(",")]
         return {
             "name": name,
             "used_mb": int(used),
             "total_mb": int(total),
             "util_pct": int(util),
+            "temp_c": int(temp),
         }
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired, ValueError):
-        return {"name": None, "used_mb": 0, "total_mb": 0, "util_pct": 0}
+        return {"name": None, "used_mb": 0, "total_mb": 0, "util_pct": 0, "temp_c": None}
 
 
 def _ram_snapshot() -> dict[str, Any]:
@@ -804,9 +806,10 @@ def _ram_snapshot() -> dict[str, Any]:
         total = mem.get("MemTotal", 0)
         avail = mem.get("MemAvailable", 0)
         used = total - avail
-        return {"used": used, "total": total, "pct": round(100 * used / total, 1) if total else 0}
+        return {"used": used, "total": total, "pct": round(100 * used / total, 1) if total else 0,
+                "temp_c": _ram_temp_c()}
     except OSError:
-        return {"used": 0, "total": 0, "pct": 0}
+        return {"used": 0, "total": 0, "pct": 0, "temp_c": None}
 
 
 def _friendly_from_cmdline(cmdline: str) -> str | None:
@@ -949,6 +952,42 @@ def _cpu_pct() -> float:
     i2, t2 = _read()
     dt, di = t2 - t1, i2 - i1
     return round(100 * (1 - di / dt), 1) if dt else 0.0
+
+
+def _hwmon_temp_c(*names: str) -> float | None:
+    """Hottest temp1_input (°C) across hwmon devices whose name matches.
+
+    Used for both the CPU package ('coretemp'/'acpitz') and the DDR5 module
+    sensors ('spd5118'). Returns the max so the reading reflects worst-case
+    thermal state, or None when no matching sensor exists.
+    """
+    wanted = set(names)
+    temps: list[float] = []
+    try:
+        bases = sorted(os.listdir("/sys/class/hwmon"))
+    except OSError:
+        return None
+    for base in bases:
+        hwmon = os.path.join("/sys/class/hwmon", base)
+        try:
+            with open(os.path.join(hwmon, "name"), encoding="utf-8") as f:
+                if f.read().strip() not in wanted:
+                    continue
+            with open(os.path.join(hwmon, "temp1_input"), encoding="utf-8") as f:
+                value = int(f.read().strip()) / 1000.0
+            if value > 0:
+                temps.append(value)
+        except (OSError, ValueError):
+            continue
+    return round(max(temps)) if temps else None
+
+
+def _cpu_temp_c() -> int | None:
+    return _hwmon_temp_c("coretemp", "acpitz")
+
+
+def _ram_temp_c() -> int | None:
+    return _hwmon_temp_c("spd5118")
 
 
 # ────────────────────────── store helpers ──────────────────────────────
@@ -1101,6 +1140,7 @@ def snapshot():
         "vram": _vram_snapshot(),
         "ram": _ram_snapshot(),
         "cpu_pct": _cpu_pct(),
+        "cpu_temp_c": _cpu_temp_c(),
         "models": _models_snapshot(),
         "eyes": _eye_capabilities(),
         "autonomous": {
@@ -4146,6 +4186,47 @@ async def api_chat_ask(request: Request):
             except Exception as e:  # noqa: BLE001
                 log.warning("lifeos finance fast-path failed: %s — falling back to brain", e)
 
+        # ── Agentic briefing intent ("tráeme las noticias … todos los días") ──
+        # Runs BEFORE the static reminder parser so fetch/curate phrasing
+        # becomes an agentic task (action_kind='agentic') rather than a static
+        # message reminder. The brain runs the prompt on each fire; results
+        # land as a card in the Briefings panel.
+        try:
+            from lifeos.parser import parse_agentic_reminder
+            agi = parse_agentic_reminder(parse_text)
+        except Exception:  # noqa: BLE001
+            agi = None
+        if agi is not None:
+            try:
+                rem = lifeos_reminders.create(
+                    when=agi.when, message=agi.message, channel="push",
+                    recurrence=agi.recurrence,
+                    action_kind="agentic", action_prompt=agi.action_prompt,
+                )
+                get_scheduler().schedule(rem)
+                if agi.recurrence:
+                    answer = (
+                        f"Listo. Voy a preparar «{agi.action_prompt}» de forma "
+                        f"recurrente y lo vas a ver en Boletines."
+                    )
+                else:
+                    answer = (
+                        f"Listo. Voy a preparar «{agi.action_prompt}» y lo vas a "
+                        f"ver en Boletines."
+                    )
+                latency_ms = round((time.monotonic() - start) * 1000)
+                try:
+                    mem.add(text, answer, has_screenshot=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("chat memory.add failed: %s", e)
+                stage_holder[0] = "briefings"
+                _record_metric()
+                return {"answer": answer, "latency_ms": latency_ms,
+                        "spoke": False, "audio_b64": None,
+                        "reminder_id": rem.id, "briefing": True}
+            except Exception as e:  # noqa: BLE001
+                log.warning("lifeos agentic fast-path failed: %s — falling back", e)
+
         try:
             from lifeos.parser import parse_reminder
             from axi.reminder_brain import parse_when_brain
@@ -4810,6 +4891,14 @@ def _lifeos_push_dispatcher(rem: lifeos_reminders.Reminder) -> None:
     service worker renders Impulsiva/Planeada action buttons inline. The
     sw.js detects the prefix and wires the action handlers.
     """
+    # Agentic reminders (Briefings): run the prompt through the brain with
+    # web-search tools, persist the curated digest on the row, and push a
+    # notification deep-linking to that reminder's card. Never raises: on
+    # failure a graceful "could not generate" digest is still pushed.
+    if rem.action_kind == "agentic":
+        _dispatch_agentic_briefing(rem)
+        return
+
     if rem.channel == "log":
         log.info("REMINDER FIRED [log] %s", rem.message)
         return
@@ -4841,6 +4930,54 @@ def _lifeos_push_dispatcher(rem: lifeos_reminders.Reminder) -> None:
         raise RuntimeError(f"all push attempts failed: {result}")
 
 
+def _dispatch_agentic_briefing(rem: lifeos_reminders.Reminder) -> None:
+    """Run an agentic reminder: curate a digest, persist it, push a deep-link.
+
+    Robust by contract — never raises. On agentic failure it still pushes a
+    graceful notice and logs to events so the scheduler keeps the reminder
+    pending (recurring) rather than marking it failed.
+    """
+    url = f"/briefings#{rem.id}"
+    tag = f"briefing:{rem.id}"
+    try:
+        digest = briefing.run_agentic_briefing(rem.action_prompt or rem.message)
+    except Exception as e:  # noqa: BLE001 — engine is defensive, this is belt-and-suspenders
+        log.exception("agentic briefing engine raised for reminder %s", rem.id)
+        digest = {
+            "title": "Boletín", "summary": "No pude generar el boletín.",
+            "items": [], "markdown": "No pude generar el boletín.",
+            "ok": False, "error": str(e)[:300],
+        }
+    # Persist the latest result (overwrites — cards show the latest run only).
+    try:
+        meta = json.dumps({
+            "title": digest.get("title"),
+            "summary": digest.get("summary"),
+            "items": digest.get("items") or [],
+            "ok": digest.get("ok", True),
+        })
+        lifeos_reminders.set_last_result(
+            rem.id, result=digest.get("markdown") or "", meta=meta
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("failed to persist briefing result for reminder %s", rem.id)
+    if not digest.get("ok", True):
+        try:
+            events.log_error("briefings", f"agentic briefing failed: {rem.id}")
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        result = lifeos_push.send_to_all(
+            title=str(digest.get("title") or "Boletín"),
+            body=str(digest.get("summary") or "")[:300],
+            url=url,
+            tag=tag,
+        )
+        log.info("briefing %s push: %s", rem.id, result)
+    except Exception:  # noqa: BLE001
+        log.exception("briefing push failed for reminder %s", rem.id)
+
+
 def _reminder_to_dict(r: lifeos_reminders.Reminder) -> dict:
     return {
         "id": r.id,
@@ -4855,12 +4992,58 @@ def _reminder_to_dict(r: lifeos_reminders.Reminder) -> dict:
         "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
         "ends_at": r.ends_at.isoformat() if r.ends_at else None,
         "occurrences_left": r.occurrences_left,
+        "action_kind": r.action_kind,
+        "action_prompt": r.action_prompt,
+        "last_result_at": r.last_result_at.isoformat() if r.last_result_at else None,
+    }
+
+
+def _briefing_to_dict(r: lifeos_reminders.Reminder) -> dict:
+    """Serialize an agentic reminder as a Briefings card (latest result only)."""
+    result: dict | None = None
+    if r.last_result_meta:
+        try:
+            meta = json.loads(r.last_result_meta)
+            result = {
+                "title": meta.get("title"),
+                "summary": meta.get("summary"),
+                "items": meta.get("items") or [],
+                "ok": meta.get("ok", True),
+                "markdown": r.last_result,
+            }
+        except Exception:  # noqa: BLE001
+            result = {
+                "title": None, "summary": None, "items": [],
+                "ok": True, "markdown": r.last_result,
+            }
+    return {
+        "id": r.id,
+        "message": r.message,
+        "action_prompt": r.action_prompt,
+        "recurrence": r.recurrence,
+        "status": r.status,
+        "when_ts": r.when_ts.isoformat(),
+        "last_result_at": r.last_result_at.isoformat() if r.last_result_at else None,
+        "result": result,
     }
 
 
 @app.get("/reminders", response_class=HTMLResponse)
 def reminders_page(request: Request):
     return templates.TemplateResponse(request, "reminders.html", {})
+
+
+@app.get("/briefings", response_class=HTMLResponse)
+def briefings_page(request: Request):
+    """Briefings panel: one card per agentic recurring task (latest result)."""
+    return templates.TemplateResponse(request, "briefings.html", {})
+
+
+@app.get("/api/briefings")
+def api_briefings_list():
+    """List agentic reminders with their latest structured result (one card each)."""
+    items = lifeos_reminders.list_agentic()
+    return {"briefings": [_briefing_to_dict(r) for r in items]}
 
 
 @app.get("/api/reminders")
@@ -4928,9 +5111,20 @@ async def api_reminders_create(request: Request):
         if not isinstance(occurrences_left, int) or occurrences_left < 1:
             raise HTTPException(400, "occurrences_left must be a positive integer")
 
+    # Agentic reminders (Briefings): an action_prompt the brain runs on fire.
+    action_kind = body.get("action_kind", "message")
+    if action_kind not in ("message", "agentic"):
+        raise HTTPException(400, "action_kind must be 'message' or 'agentic'")
+    action_prompt = (body.get("action_prompt") or "").strip() or None
+    if action_kind == "agentic" and not action_prompt:
+        raise HTTPException(400, "action_prompt is required for agentic reminders")
+    if action_prompt and len(action_prompt) > 1000:
+        raise HTTPException(400, "action_prompt too long (max 1000 chars)")
+
     rem = lifeos_reminders.create(
         when=when, message=message, channel=channel, recurrence=recurrence,
         ends_at=ends_at, occurrences_left=occurrences_left,
+        action_kind=action_kind, action_prompt=action_prompt,
     )
     get_scheduler().schedule(rem)
     return _reminder_to_dict(rem)

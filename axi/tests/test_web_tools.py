@@ -126,6 +126,70 @@ class TestWebSearchHandler:
         assert result["ok"] is False
         assert "error" in result
 
+    def test_handler_passes_time_range_and_categories_through(self):
+        """time_range/categories from tool args reach the search fn (FIX 4)."""
+        captured: dict = {}
+        hit = types.SimpleNamespace(title="t", url="https://e.example", snippet="s")
+
+        fake = types.ModuleType("lifeos.web")
+        fake.is_enabled = lambda: True
+
+        def _search_fn(q, **kw):
+            captured["q"] = q
+            captured["kw"] = kw
+            return [hit]  # non-empty → no widening retry
+
+        fake.get_search_fn = lambda: _search_fn
+        fake_port = self._make_fake_port()
+        orig_web, orig_port = self._inject(fake, fake_port)
+        try:
+            web_search_handler({"query": "q", "time_range": "day", "categories": "news"})
+        finally:
+            self._restore(orig_web, orig_port)
+
+        assert captured["q"] == "q"
+        assert captured["kw"].get("time_range") == "day"
+        assert captured["kw"].get("categories") == "news"
+
+    def test_handler_widens_when_time_range_returns_empty(self):
+        """If a time_range search returns 0 results, retry once WITHOUT
+        time_range (the local index returns nothing for 'day'). categories is
+        preserved so the freshness bias survives."""
+        calls: list[dict] = []
+        hit = types.SimpleNamespace(title="t", url="https://e.example", snippet="s")
+
+        fake = types.ModuleType("lifeos.web")
+        fake.is_enabled = lambda: True
+
+        def _search_fn(q, **kw):
+            calls.append(dict(kw))
+            # First call (with time_range) returns nothing; retry returns a hit.
+            return [] if "time_range" in kw else [hit]
+
+        fake.get_search_fn = lambda: _search_fn
+        fake_port = self._make_fake_port()
+        orig_web, orig_port = self._inject(fake, fake_port)
+        try:
+            out = web_search_handler(
+                {"query": "q", "time_range": "day", "categories": "news"}
+            )
+        finally:
+            self._restore(orig_web, orig_port)
+
+        assert len(calls) == 2
+        assert "time_range" in calls[0]
+        assert "time_range" not in calls[1]
+        assert calls[1].get("categories") == "news"  # bias preserved on retry
+        assert out["ok"] is True and len(out["results"]) == 1
+
+    def test_tool_def_exposes_time_range(self):
+        result = web_search_tool_def()
+        props = result["function"]["parameters"]["properties"]
+        assert "time_range" in props
+        assert set(props["time_range"]["enum"]) == {"day", "week", "month", "year"}
+        # time_range stays optional (query remains the only required field).
+        assert result["function"]["parameters"]["required"] == ["query"]
+
     def test_web_disabled_returns_error(self):
         fake_web = self._make_fake_lifeos_web(enabled=False)
         fake_port = self._make_fake_port()

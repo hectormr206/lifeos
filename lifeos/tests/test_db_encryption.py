@@ -89,11 +89,11 @@ def test_key_file_persisted_across_connects(tmp_path: Path) -> None:
 
 
 def test_apply_migrations_on_encrypted_db(tmp_path: Path) -> None:
-    """All 8 migrations apply cleanly to a fresh encrypted DB."""
+    """All 9 migrations apply cleanly to a fresh encrypted DB."""
     from lifeos import store
 
     version = store.apply_migrations()
-    assert version == 8, f"expected version 8, got {version}"
+    assert version == 9, f"expected version 9, got {version}"
 
     # Spot-check all expected tables exist
     conn = store.connect()

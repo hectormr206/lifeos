@@ -130,6 +130,27 @@ class ReminderIntent:
     message: str
     when: datetime           # tz-aware UTC (first run for recurring)
     recurrence: str | None = None  # cron string ("0 9 * * *") or None
+    action_kind: str = "message"   # "message" | "agentic"
+    action_prompt: str | None = None  # task to run on each fire (agentic)
+
+
+# Agentic triggers — verbs that mean "go fetch/curate something for me", as
+# opposed to replaying a static message. Distinct from _REMINDER_TRIGGER.
+_AGENTIC_TRIGGER = re.compile(
+    r"^\s*(?:axi[,:\s]+)?"
+    r"(?:tr[aá]eme|m[aá]ndame|b[uú]scame|cons[ií]gueme|"
+    r"res[uú]meme|prep[aá]rame|[aá]rmame|dame)\s+"
+    r"(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Content signal — required alongside an agentic trigger so casual phrasing
+# ("dame un abrazo") never misfires into an agentic task.
+_AGENTIC_CONTENT = re.compile(
+    r"\b(?:noticias|titulares|res[uú]men(?:es)?|clima|pron[oó]stico|"
+    r"novedades|reporte|briefing|actualizaci[oó]n|tendencias)\b",
+    re.IGNORECASE,
+)
 
 
 # Spanish weekday name → cron weekday number (Monday=1, Sunday=0).
@@ -313,6 +334,95 @@ def parse_reminder(
         when_utc = when_utc + timedelta(days=1)
 
     return ReminderIntent(message=message, when=when_utc, recurrence=recurrence)
+
+
+def parse_agentic_reminder(
+    text: str,
+    *,
+    tz: str = "America/Mexico_City",
+) -> Optional[ReminderIntent]:
+    """Parse `text` as an agentic recurring/one-shot task. Returns None if it
+    doesn't fit.
+
+    Recognizes agentic triggers (tráeme/búscame/mándame …) that the static
+    reminder parser ignores. Requires a content signal (noticias/clima/…) so
+    casual phrasing never misfires. The resulting intent carries
+    ``action_kind='agentic'`` and ``action_prompt`` (the curated task text);
+    recurrence and first-run time are extracted with the same machinery as
+    static reminders.
+    """
+    if not text or not isinstance(text, str):
+        return None
+
+    m = _AGENTIC_TRIGGER.match(text.strip())
+    if not m:
+        return None
+    rest = m.group(1).strip()
+    if not rest or not _AGENTIC_CONTENT.search(rest):
+        return None
+
+    recurrence, rest = _detect_recurrence(rest)
+    rest = rest.strip(" ,;:.-")
+    if not rest:
+        return None
+
+    # Split off a trailing time expression (if any). Everything before the
+    # earliest time marker is the task prompt; from the marker on is "when".
+    lower = rest.lower()
+    cut_idx = -1
+    for marker in _WHEN_MARKERS:
+        i = lower.find(marker)
+        if i != -1 and (cut_idx == -1 or i < cut_idx):
+            cut_idx = i
+
+    if cut_idx == 0:
+        # The whole remainder is a time expression — no task content.
+        return None
+
+    if cut_idx < 0:
+        # No explicit time. Acceptable only for recurring tasks.
+        if not recurrence:
+            return None
+        action_prompt = rest
+        when_utc = _next_cron_match(recurrence, tz)
+        if when_utc is None:
+            return None
+        return ReminderIntent(
+            message=action_prompt, when=when_utc, recurrence=recurrence,
+            action_kind="agentic", action_prompt=action_prompt,
+        )
+
+    action_prompt = rest[:cut_idx].strip(" ,;:.-")
+    when_text = rest[cut_idx:].strip(" ,;:.-")
+    if not action_prompt or not when_text:
+        return None
+
+    parsed = dateparser.parse(
+        _normalize_when(when_text),
+        languages=["es"],
+        settings={
+            "TIMEZONE": tz,
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "PREFER_DATES_FROM": "future",
+        },
+    )
+    if parsed is None:
+        if recurrence:
+            when_utc = _next_cron_match(recurrence, tz)
+            if when_utc is None:
+                return None
+        else:
+            return None
+    else:
+        when_utc = parsed.astimezone(timezone.utc)
+        if when_utc <= datetime.now(timezone.utc):
+            from datetime import timedelta
+            when_utc = when_utc + timedelta(days=1)
+
+    return ReminderIntent(
+        message=action_prompt, when=when_utc, recurrence=recurrence,
+        action_kind="agentic", action_prompt=action_prompt,
+    )
 
 
 def _next_cron_match(cron: str, tz_name: str) -> datetime | None:

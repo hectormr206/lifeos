@@ -20,6 +20,20 @@ def web_search_tool_def() -> dict[str, Any]:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Consulta de búsqueda web."},
+                    "time_range": {
+                        "type": "string",
+                        "enum": ["day", "week", "month", "year"],
+                        "description": (
+                            "Ventana temporal para sesgar resultados a contenido "
+                            "fresco. Usá 'day' para noticias de hoy."
+                        ),
+                    },
+                    "categories": {
+                        "type": "string",
+                        "description": (
+                            "Categoría de SearXNG (ej. 'news' para noticias)."
+                        ),
+                    },
                 },
                 "required": ["query"],
             },
@@ -47,7 +61,26 @@ def web_search_handler(args: dict[str, Any]) -> dict[str, Any]:
     search_fn = _web_research.get_search_fn()
     if search_fn is None:
         return {"ok": False, "error": "search provider is unavailable", "results": []}
-    results = search_fn(query)[:TOP_N]
+    # Forward freshness hints only when present so providers / injected fakes
+    # that take a bare (query) keep working unchanged.
+    search_kwargs: dict[str, Any] = {}
+    time_range = str(args.get("time_range") or "").strip()
+    if time_range:
+        search_kwargs["time_range"] = time_range
+    categories = str(args.get("categories") or "").strip()
+    if categories:
+        search_kwargs["categories"] = categories
+    results = search_fn(query, **search_kwargs)
+    # Resilience: some local SearXNG indexes return ZERO for a narrow
+    # time_range (notably 'day', whose engines drop undated results). Rather
+    # than handing the model an empty result set — which makes it loop and
+    # burn its tool rounds — widen the window once by dropping time_range and
+    # retry. categories (e.g. 'news') is kept so the bias toward fresh sources
+    # survives.
+    if not results and "time_range" in search_kwargs:
+        retry_kwargs = {k: v for k, v in search_kwargs.items() if k != "time_range"}
+        results = search_fn(query, **retry_kwargs)
+    results = results[:TOP_N]
     packed: list[dict[str, str]] = []
     for item in results:
         packed.append({

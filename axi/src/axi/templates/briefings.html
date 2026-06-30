@@ -1,0 +1,125 @@
+{% extends "_base.html" %}
+{% block nav_briefings %}active{% endblock %}
+{% block title %}Boletines · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="briefingsPage()" x-init="load(); startPolling()" x-destroy="stopPolling()">
+  <div class="flex justify-between items-baseline gap-4 flex-wrap">
+    <div>
+      <h1 class="text-2xl font-semibold">Boletines</h1>
+      <p class="text-sm muted mt-1">
+        Tareas agénticas recurrentes. Cada tarjeta muestra el último resultado.
+      </p>
+    </div>
+    <button class="btn" @click="load()">Refrescar</button>
+  </div>
+
+  <template x-if="loading">
+    <div class="muted py-12 text-center">Cargando…</div>
+  </template>
+
+  <template x-if="!loading && cards.length === 0">
+    <div class="panel p-12 text-center muted">
+      Todavía no hay boletines. Decile a Axi en el chat:
+      "tráeme las 10 noticias tech del día todos los días a las 8".
+    </div>
+  </template>
+
+  <div class="grid gap-3" x-show="cards.length > 0">
+    <template x-for="c in cards" :key="c.id">
+      <div class="panel p-4 space-y-3" :id="c.id">
+        <div class="flex items-start justify-between gap-3 flex-wrap">
+          <div class="min-w-0">
+            <h2 class="text-lg font-semibold"
+                x-text="(c.result && c.result.title) ? c.result.title : c.action_prompt"></h2>
+            <div class="text-xs muted mt-1">
+              <span x-text="c.action_prompt"></span>
+              <template x-if="c.recurrence">
+                <span class="ml-1 px-1.5 py-0.5 panel2 rounded" x-text="'🔁 ' + c.recurrence"></span>
+              </template>
+            </div>
+          </div>
+          <div class="text-xs muted whitespace-nowrap">
+            <template x-if="c.last_result_at">
+              <span x-text="'Actualizado: ' + fmtWhen(c.last_result_at)"></span>
+            </template>
+            <template x-if="!c.last_result_at">
+              <span class="muted">Aún no se ejecutó</span>
+            </template>
+          </div>
+        </div>
+
+        <template x-if="c.result && c.result.summary">
+          <p class="text-sm" x-text="c.result.summary"></p>
+        </template>
+
+        <template x-if="c.result && c.result.items && c.result.items.length > 0">
+          <ul class="space-y-2">
+            <template x-for="(it, idx) in c.result.items" :key="idx">
+              <li class="text-sm border-l-2 pl-3" style="border-color: var(--border)">
+                <!-- url is server-validated to http(s) or '' (see briefing._safe_url);
+                     only render a clickable link when one survived, else plain text. -->
+                <template x-if="it.url">
+                  <a :href="it.url" target="_blank" rel="noopener noreferrer"
+                     class="font-medium hover:underline" style="color: var(--teal)"
+                     x-text="it.title || it.url"></a>
+                </template>
+                <template x-if="!it.url">
+                  <span class="font-medium" x-text="it.title"></span>
+                </template>
+                <div class="muted text-xs mt-0.5" x-text="it.summary"></div>
+              </li>
+            </template>
+          </ul>
+        </template>
+
+        <template x-if="c.last_result_at && (!c.result || !c.result.items || c.result.items.length === 0)">
+          <p class="text-sm muted" x-text="(c.result && c.result.markdown) ? c.result.markdown : 'Sin resultados estructurados.'"></p>
+        </template>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function briefingsPage() {
+  return {
+    cards: [],
+    loading: true,
+    _pollHandle: null,
+    async load() {
+      try {
+        const r = await fetch('/api/briefings');
+        if (r.ok) {
+          const data = await r.json();
+          this.cards = data.briefings || [];
+          // If the URL carries a card anchor, scroll to it.
+          if (location.hash) {
+            this.$nextTick(() => {
+              const el = document.getElementById(location.hash.slice(1));
+              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+          }
+        }
+      } catch (e) { /* network blip — keep showing existing cards */ }
+      this.loading = false;
+    },
+    startPolling() {
+      this.stopPolling();
+      this._pollHandle = setInterval(() => this.load(), 15000);
+    },
+    stopPolling() {
+      if (this._pollHandle) { clearInterval(this._pollHandle); this._pollHandle = null; }
+    },
+    fmtWhen(iso) {
+      try {
+        return new Date(iso).toLocaleString('es-MX', {
+          weekday: 'short', day: 'numeric', month: 'short',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch (e) { return iso; }
+    },
+  };
+}
+</script>
+{% endblock %}

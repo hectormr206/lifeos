@@ -38,16 +38,33 @@ class SearXNGAdapter:
         self._urlopen = urlopen
         self._timeout = timeout
 
-    def search(self, query: str, *, limit: int = TOP_N) -> list[SearchResult]:
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = TOP_N,
+        time_range: str | None = None,
+        categories: str | None = None,
+    ) -> list[SearchResult]:
         """Return up to ``limit`` SearchResult entries for ``query``.
+
+        ``time_range`` (``day``/``week``/``month``/``year``) and ``categories``
+        (e.g. ``news``) bias results toward fresh / topical content; both are
+        forwarded to SearXNG only when provided, so callers that omit them keep
+        the exact prior behavior.
 
         Returns an empty list on any error (URLError, timeout, bad JSON).
         Never raises.
         """
-        url = (
-            f"{self._base_url}/search"
-            f"?format=json&q={urllib.parse.quote(query, safe='')}"
-        )
+        params = [
+            ("format", "json"),
+            ("q", query),
+        ]
+        if time_range:
+            params.append(("time_range", time_range))
+        if categories:
+            params.append(("categories", categories))
+        url = f"{self._base_url}/search?" + urllib.parse.urlencode(params)
         req = urllib.request.Request(url)
         try:
             with self._urlopen(req, timeout=self._timeout) as resp:
