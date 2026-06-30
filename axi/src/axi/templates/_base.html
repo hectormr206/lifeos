@@ -162,6 +162,14 @@
     const PROBE_URL = '/api/badge/count';
     const _originalFetch = window.fetch.bind(window);
     let _probeInFlight = false;
+    // Number of real backend requests currently in flight (e.g. a chat
+    // generation). The backend runs the LLM call synchronously, which blocks
+    // its event loop, so the lightweight probe can't be answered until the
+    // generation finishes. A probe timeout DURING our own request does NOT
+    // mean "offline" — it means "busy". We use this to suppress false offline.
+    let _inFlightBackend = 0;
+    // Consecutive probe failures, for debounce (one slow probe must not flip us).
+    let _probeFailStreak = 0;
 
     function _dispatchReachability(state) {
       if (state === window.AXI_REACHABLE) return;  // no change → no dispatch
@@ -175,12 +183,24 @@
         _dispatchReachability(false);
         return;
       }
+      // We're actively talking to the backend → it IS reachable, just busy
+      // generating. Skip the probe so a busy backend never shows as offline.
+      if (_inFlightBackend > 0) return;
       _probeInFlight = true;
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 2000);
+      // 8s (was 2s): the backend can be busy generating; tolerate that instead
+      // of declaring it dead the moment a request takes a couple seconds.
+      const t = setTimeout(() => ctrl.abort(), 8000);
       _originalFetch(PROBE_URL, { signal: ctrl.signal, cache: 'no-store' })
-        .then(r => { clearTimeout(t); _probeInFlight = false; _dispatchReachability(!!r.ok); })
-        .catch(() => { clearTimeout(t); _probeInFlight = false; _dispatchReachability(false); });
+        .then(r => { clearTimeout(t); _probeInFlight = false; _probeFailStreak = 0; _dispatchReachability(!!r.ok); })
+        .catch(() => {
+          clearTimeout(t); _probeInFlight = false;
+          // Debounce: only declare offline after 2 consecutive failures AND
+          // when no real request is in flight, so a single slow probe during a
+          // generation never trips the banner.
+          _probeFailStreak += 1;
+          if (_probeFailStreak >= 2 && _inFlightBackend === 0) _dispatchReachability(false);
+        });
     }
 
     // Initial probe at page load.
@@ -236,13 +256,21 @@
       if (window.AXI_REACHABLE === false) {
         throw new TypeError('AXI: backend unreachable');
       }
+      _inFlightBackend += 1;
       try {
-        return await _originalFetch(input, init);
+        const resp = await _originalFetch(input, init);
+        // A real response is definitive proof we're connected. Clear any stale
+        // offline state immediately instead of waiting for the next probe.
+        _probeFailStreak = 0;
+        _dispatchReachability(true);
+        return resp;
       } catch (e) {
         // Network failure — possibly VPN just dropped. Trigger a re-probe
         // so the banner + global state updates quickly.
         if (e instanceof TypeError) _probe();
         throw e;
+      } finally {
+        _inFlightBackend -= 1;
       }
     };
 
