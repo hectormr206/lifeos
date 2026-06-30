@@ -136,12 +136,70 @@ class ReminderIntent:
 
 # Agentic triggers — verbs that mean "go fetch/curate something for me", as
 # opposed to replaying a static message. Distinct from _REMINDER_TRIGGER.
-_AGENTIC_TRIGGER = re.compile(
+#
+# We accept THREE shapes so word order and conjugation don't matter:
+#   1. Enclitic imperative at the START ("tráeme/mándame/búscame/… las noticias").
+#   2. Natural framed phrasing anywhere: "(quiero|necesito|quisiera|me gustaría)
+#      que … me <verbo>" or bare indicative "me mandás/me mandas/me envías …".
+#   3. Polite infinitive: "podrías/podés mandarme/enviarme/traerme/…".
+#
+# A content signal (or an http(s) URL) is still required so casual phrasing
+# ("dame un abrazo") never misfires into an agentic task.
+
+# Shape 1 — enclitic imperative. Matched anywhere (word-boundary bounded) so a
+# leading recurrence phrase ("diariamente tráeme …") doesn't hide the verb. The
+# content/URL signal below guards against casual misfires.
+_AGENTIC_ENCLITIC = re.compile(
+    r"\b(?:tr[aá]eme|m[aá]ndame|b[uú]scame|cons[ií]gueme|conseguime|"
+    r"res[uú]meme|prep[aá]rame|[aá]rmame|dame)\b",
+    re.IGNORECASE,
+)
+
+# Shape 2 — "me <verbo>" in subjunctive or indicative, anywhere in the text.
+_AGENTIC_NATURAL = re.compile(
+    r"\bme\s+(?:"
+    r"mand[aáeé]s?|env[ií][aeé]s?|envi[eé]s|traig[ao]s|tra[eé]s|"
+    r"des|das|busqu[eé]s|busc[aá]s|consig[ao]s|conse?gu[ií]s|"
+    r"resum[ao]s|resum[ií]s|prepar[aeé]s?|arm[aeé]s?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Shape 3 — polite infinitive with enclitic "-me".
+_AGENTIC_INFINITIVE = re.compile(
+    r"\b(?:mandarme|enviarme|traerme|darme|buscarme|conseguirme|"
+    r"resumirme|prepararme|armarme)\b",
+    re.IGNORECASE,
+)
+
+# Leading scheduling/intent framing to strip from the action prompt. Removes
+# "(quiero|necesito|…) que", an optional "podrías/podés", an optional "me",
+# and the delivery verb itself — keeping the actual content (and any URL).
+_AGENTIC_FRAMING = re.compile(
     r"^\s*(?:axi[,:\s]+)?"
-    r"(?:tr[aá]eme|m[aá]ndame|b[uú]scame|cons[ií]gueme|"
-    r"res[uú]meme|prep[aá]rame|[aá]rmame|dame)\s+"
-    r"(.+)$",
-    re.IGNORECASE | re.DOTALL,
+    r"(?:(?:quiero|necesito|quisiera|me\s+gustar[ií]a)\s+que\s+)?"
+    r"(?:podr[ií]as|pod[eé]s)?\s*"
+    r"(?:me\s+)?"
+    r"(?:tr[aá]eme|m[aá]ndame|b[uú]scame|cons[ií]gueme|conseguime|"
+    r"res[uú]meme|prep[aá]rame|[aá]rmame|dame|"
+    r"mand[aáeé]s?|env[ií][aeé]s?|envi[eé]s|traig[ao]s|tra[eé]s|"
+    r"des|das|busqu[eé]s|busc[aá]s|consig[ao]s|conse?gu[ií]s|"
+    r"resum[ao]s|resum[ií]s|prepar[aeé]s?|arm[aeé]s?|"
+    r"mandarme|enviarme|traerme|darme|buscarme|conseguirme|"
+    r"resumirme|prepararme|armarme)"
+    r"\s+(?:de\s+|que\s+)?",
+    re.IGNORECASE,
+)
+
+# An http(s) URL counts as a content signal on its own.
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+# Word-boundary-aware time-marker matcher. Substring search (str.find) misfires
+# on markers embedded in words (e.g. "en " inside "resumen"); a leading \b
+# avoids that while still catching "a las 7", "en 30 minutos", "mañana", …
+_WHEN_MARKER_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(m) for m in _WHEN_MARKERS) + ")",
+    re.IGNORECASE,
 )
 
 # Content signal — required alongside an agentic trigger so casual phrasing
@@ -206,6 +264,23 @@ def _detect_recurrence(text: str) -> tuple[str | None, str]:
     if re.search(r"\bcada\s+minuto\b", s):
         residual = re.sub(r"\bcada\s+minuto\b", "", text, count=1, flags=re.IGNORECASE)
         return "* * * * *", residual
+
+    # Daily/recurring WITHOUT an explicit hour. A "morning briefing" defaults
+    # to 08:00. Covers "todos los días", "diariamente", "a diario",
+    # "cada día"/"cada dia", "todas las mañanas". Checked AFTER the explicit
+    # "... a las HH" forms above so an hour, when present, always wins.
+    daily = re.search(
+        r"\b(?:todos\s+los\s+d[ií]as|diariamente|a\s+diario|"
+        r"cada\s+d[ií]a|todas\s+las\s+ma(?:ñ|n)anas)\b",
+        s,
+    )
+    if daily:
+        residual = re.sub(
+            r"\b(?:todos\s+los\s+d[ií]as|diariamente|a\s+diario|"
+            r"cada\s+d[ií]a|todas\s+las\s+ma(?:ñ|n)anas)\b",
+            "", text, count=1, flags=re.IGNORECASE,
+        )
+        return "0 8 * * *", residual
 
     return None, text
 
@@ -354,70 +429,76 @@ def parse_agentic_reminder(
     if not text or not isinstance(text, str):
         return None
 
-    m = _AGENTIC_TRIGGER.match(text.strip())
-    if not m:
-        return None
-    rest = m.group(1).strip()
-    if not rest or not _AGENTIC_CONTENT.search(rest):
-        return None
+    text = text.strip()
 
-    recurrence, rest = _detect_recurrence(rest)
-    rest = rest.strip(" ,;:.-")
-    if not rest:
-        return None
-
-    # Split off a trailing time expression (if any). Everything before the
-    # earliest time marker is the task prompt; from the marker on is "when".
-    lower = rest.lower()
-    cut_idx = -1
-    for marker in _WHEN_MARKERS:
-        i = lower.find(marker)
-        if i != -1 and (cut_idx == -1 or i < cut_idx):
-            cut_idx = i
-
-    if cut_idx == 0:
-        # The whole remainder is a time expression — no task content.
-        return None
-
-    if cut_idx < 0:
-        # No explicit time. Acceptable only for recurring tasks.
-        if not recurrence:
-            return None
-        action_prompt = rest
-        when_utc = _next_cron_match(recurrence, tz)
-        if when_utc is None:
-            return None
-        return ReminderIntent(
-            message=action_prompt, when=when_utc, recurrence=recurrence,
-            action_kind="agentic", action_prompt=action_prompt,
-        )
-
-    action_prompt = rest[:cut_idx].strip(" ,;:.-")
-    when_text = rest[cut_idx:].strip(" ,;:.-")
-    if not action_prompt or not when_text:
-        return None
-
-    parsed = dateparser.parse(
-        _normalize_when(when_text),
-        languages=["es"],
-        settings={
-            "TIMEZONE": tz,
-            "RETURN_AS_TIMEZONE_AWARE": True,
-            "PREFER_DATES_FROM": "future",
-        },
+    # ── 1. Agentic intent: a delivery/fetch verb in any of the broadened
+    #       shapes, AND a content signal (or a URL). Order-independent.
+    has_verb = bool(
+        _AGENTIC_ENCLITIC.search(text)
+        or _AGENTIC_NATURAL.search(text)
+        or _AGENTIC_INFINITIVE.search(text)
     )
-    if parsed is None:
-        if recurrence:
-            when_utc = _next_cron_match(recurrence, tz)
-            if when_utc is None:
-                return None
-        else:
-            return None
+    if not has_verb:
+        return None
+    if not (_AGENTIC_CONTENT.search(text) or _URL_RE.search(text)):
+        return None
+
+    # ── 2. Recurrence over the WHOLE text (word order doesn't matter). The
+    #       residual has the recurrence phrase removed.
+    recurrence, residual = _detect_recurrence(text)
+
+    # An agentic "task" needs a schedule: either a recurrence or an explicit
+    # time marker somewhere in the text. Otherwise it's just chatter.
+    has_time_marker = _WHEN_MARKER_RE.search(text) is not None
+    if not recurrence and not has_time_marker:
+        return None
+
+    # ── 3. Build the action prompt: drop the leading intent/scheduling framing
+    #       and the delivery verb, then drop any trailing time expression. Keep
+    #       the content and any URL.
+    core = _AGENTIC_FRAMING.sub("", residual, count=1).strip(" ,;:.-")
+
+    # Locate a trailing time expression in `core` (used both to clean the
+    # prompt and, for one-shot tasks, to compute the first-run time).
+    mt = _WHEN_MARKER_RE.search(core)
+    cut_idx = mt.start() if mt else -1
+
+    when_text = ""
+    if cut_idx == 0:
+        # The remainder is purely a time expression — no task content left.
+        return None
+    if cut_idx > 0:
+        when_text = core[cut_idx:].strip(" ,;:.-")
+        action_prompt = core[:cut_idx].strip(" ,;:.-")
     else:
+        action_prompt = core
+    if not action_prompt:
+        return None
+
+    # ── 4. Compute first-run time. Recurrence wins (next cron match); else use
+    #       the parsed explicit time.
+    when_utc: datetime | None = None
+    if when_text and not recurrence:
+        parsed = dateparser.parse(
+            _normalize_when(when_text),
+            languages=["es"],
+            settings={
+                "TIMEZONE": tz,
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "PREFER_DATES_FROM": "future",
+            },
+        )
+        if parsed is None:
+            return None
         when_utc = parsed.astimezone(timezone.utc)
         if when_utc <= datetime.now(timezone.utc):
             from datetime import timedelta
             when_utc = when_utc + timedelta(days=1)
+    elif recurrence:
+        when_utc = _next_cron_match(recurrence, tz)
+
+    if when_utc is None:
+        return None
 
     return ReminderIntent(
         message=action_prompt, when=when_utc, recurrence=recurrence,

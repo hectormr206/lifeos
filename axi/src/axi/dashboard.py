@@ -2773,6 +2773,7 @@ async def _domain_chat_response(spec, request: Request) -> dict:
 
     answer = result.get("answer", "")
     # Persist the turn to the shared chat memory, scoped to this domain.
+    conv_id = None
     try:
         conv_id, _ = _get_chat_memory().add(
             text, answer, has_screenshot=False, session_id=spec.key
@@ -2787,6 +2788,7 @@ async def _domain_chat_response(spec, request: Request) -> dict:
         "mode": result.get("mode"),
         "entry_ids": result.get("entry_ids", []),
         "latency_ms": latency_ms,
+        "conv_id": conv_id,
     }
 
 
@@ -4204,15 +4206,33 @@ async def api_chat_ask(request: Request):
                     action_kind="agentic", action_prompt=agi.action_prompt,
                 )
                 get_scheduler().schedule(rem)
-                if agi.recurrence:
+                # State the scheduled local time in the confirmation so the user
+                # knows when it fires — important when the hour was defaulted
+                # (e.g. "todos los días" with no hour → 08:00) and can be changed.
+                local_when = agi.when.astimezone(ZoneInfo("America/Mexico_City"))
+                hhmm = local_when.strftime("%H:%M")
+                cron_parts = (agi.recurrence or "").split()
+                is_daily = (
+                    len(cron_parts) == 5
+                    and cron_parts[1].isdigit()
+                    and cron_parts[2] == "*"
+                    and cron_parts[3] == "*"
+                    and cron_parts[4] == "*"
+                )
+                if agi.recurrence and is_daily:
                     answer = (
-                        f"Listo. Voy a preparar «{agi.action_prompt}» de forma "
-                        f"recurrente y lo vas a ver en Boletines."
+                        f"Listo, lo programé todos los días a las {hhmm}; "
+                        f"lo vas a ver en Boletines. Si querés otro horario, decime."
+                    )
+                elif agi.recurrence:
+                    answer = (
+                        f"Listo, lo voy a preparar de forma recurrente "
+                        f"(próximo a las {hhmm}); lo vas a ver en Boletines."
                     )
                 else:
                     answer = (
-                        f"Listo. Voy a preparar «{agi.action_prompt}» y lo vas a "
-                        f"ver en Boletines."
+                        f"Listo, lo programé a las {hhmm}; "
+                        f"lo vas a ver en Boletines."
                     )
                 latency_ms = round((time.monotonic() - start) * 1000)
                 try:
@@ -4497,6 +4517,7 @@ async def api_chat_ask(request: Request):
                 pass
             raise HTTPException(502, f"brain error: {e}")
     latency_ms = round((time.monotonic() - start) * 1000)
+    conv_id = None
     try:
         # Tag the stored user turn so history rendering can show the image
         # marker (the image bytes themselves aren't persisted — too large).
@@ -4528,7 +4549,7 @@ async def api_chat_ask(request: Request):
     # brain fallback path — stage_holder still "brain" (default).
     _record_metric()
     return {"answer": answer, "latency_ms": latency_ms,
-            "spoke": spoke, "audio_b64": audio_b64}
+            "spoke": spoke, "audio_b64": audio_b64, "conv_id": conv_id}
 
 
 @app.post("/api/chat/capture-screen")

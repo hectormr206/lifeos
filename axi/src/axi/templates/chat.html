@@ -1099,10 +1099,17 @@ function chatApp() {
         }
         const data = await r.json();
         this.lastLatencyMs = data.latency_ms;
+        // Both bubbles of a turn share the same convId (see deleteTurn + history
+        // load). Stamping it now makes the per-turn 🗑 control render immediately,
+        // without waiting for a history reload.
+        const convId = data.conv_id ?? null;
+        const u = this.messages.find(m => m.id === tempId + 'u');
+        if (u && convId != null) u.convId = convId;
         this.messages.push({
           id: tempId + 'a',
           role: 'axi',
           text: data.answer,
+          convId: convId,
           audio_b64: data.audio_b64 || null,
           // Disambiguation: Axi wasn't sure where to save this. Render the
           // domain option buttons; clicking one re-processes via that domain.
