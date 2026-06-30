@@ -43,14 +43,15 @@ def _fake_brain(extract_json: str, query_answer: str = "respuesta de salud",
                 capture: list | None = None):
     """Return a brain_ask stub.
 
-    think=False  → extract step → returns scripted JSON.
-    think=True   → query step   → returns scripted prose.
-    Every call is recorded in `capture` when provided.
+    The two steps are told apart by the SYSTEM prompt (not `think`): the query
+    step's system carries "REGISTROS DE …"; everything else is the extract step.
+    (The query step now runs think=False, so `think` no longer distinguishes
+    them.) Every call is recorded in `capture` when provided.
     """
     def _ask(prompt, **kw):
         if capture is not None:
             capture.append({"prompt": prompt, **kw})
-        if kw.get("think"):
+        if "REGISTROS DE" in (kw.get("system") or ""):
             return query_answer
         return extract_json
     return _ask
@@ -150,11 +151,13 @@ def test_query_consults_recent_and_passes_today_and_records(monkeypatch):
     assert res["answer"] == "respuesta de salud"
     # list_recent was consulted.
     assert list_calls, "list_recent must be consulted on a query"
-    # The SECOND (think=True) call is the query call; its system prompt must
-    # carry today's date AND the loaded records.
-    query_calls = [c for c in captured if c.get("think")]
+    # The query call carries today's date AND the loaded records. It now runs
+    # think=False (grounded in the records, no chain-of-thought needed — and
+    # think=True bloated the answer + let the 4B fabricate dates).
+    query_calls = [c for c in captured if "REGISTROS DE" in (c.get("system") or "")]
     assert len(query_calls) == 1
     qsys = query_calls[0]["system"]
+    assert query_calls[0].get("think") is False
     assert "2026" in qsys                 # today's year for date disambiguation
     assert "paracetamol" in qsys          # the loaded record is in context
     assert "01AAA" in qsys                # entry id passed
@@ -173,7 +176,7 @@ def test_query_is_date_aware_for_relative_december(monkeypatch):
         "qué tomé para la gripa de diciembre",
         now=NOW, brain_ask=_fake_brain(extract, capture=captured),
     )
-    qsys = [c for c in captured if c.get("think")][0]["system"]
+    qsys = [c for c in captured if "REGISTROS DE" in (c.get("system") or "")][0]["system"]
     assert "2026-06-26" in qsys
     # The brain is instructed to resolve relative months against today.
     assert "diciembre" in qsys.lower() or "december" in qsys.lower()
