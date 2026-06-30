@@ -286,22 +286,33 @@ def _build_recall_block(
     # Collect all facts: {date_str -> [(occurred_ts_for_sort, label)]}
     # We track the timestamp alongside the label to enable within-day recency sort.
     day_facts: dict[str, list[tuple[float, str]]] = {}
+    # Facts WITHOUT a real measurement date (occurred_at is None). These are NOT
+    # bucketed by created_at — doing so presents a logging timestamp as if it
+    # were the measurement date, which makes the model fabricate a day-by-day
+    # timeline (e.g. inventing "el 24 de junio: presión X" for readings dumped in
+    # one chat). They are shown in a separate "Sin fecha registrada" group so the
+    # model knows it CANNOT date them. created_at is kept only for sort order.
+    nodate_facts: list[tuple[float, str]] = []
 
     def _add_fact(fact: dict) -> None:
-        # FIX 7 NIT: use explicit None check so occurred_at=0.0 is not dropped.
-        occurred_at = fact.get("occurred_at")
-        created_at = fact.get("created_at")
-        ts = occurred_at if occurred_at is not None else created_at
-        if ts is None:
-            return
-        dt = datetime.datetime.fromtimestamp(ts, tz=tz)
-        date_str = dt.strftime("%Y-%m-%d")
         label = (fact.get("label") or "").strip()
         if not label:
             return
-        bucket = day_facts.setdefault(date_str, [])
-        if label not in {lbl for _, lbl in bucket}:  # dedup by label
-            bucket.append((ts, label))
+        # FIX 7 NIT: use explicit None check so occurred_at=0.0 is not dropped.
+        occurred_at = fact.get("occurred_at")
+        if occurred_at is not None:
+            dt = datetime.datetime.fromtimestamp(occurred_at, tz=tz)
+            date_str = dt.strftime("%Y-%m-%d")
+            bucket = day_facts.setdefault(date_str, [])
+            if label not in {lbl for _, lbl in bucket}:  # dedup by label
+                bucket.append((occurred_at, label))
+            return
+        # No measurement date → undated group (never dated by created_at).
+        created_at = fact.get("created_at")
+        if created_at is None:
+            return
+        if label not in {lbl for _, lbl in nodate_facts}:
+            nodate_facts.append((created_at, label))
 
     for node in nodes:
         # The node itself + its same-day neighbors (BOTH edge directions).
@@ -335,7 +346,7 @@ def _build_recall_block(
         for fact in recent:
             _add_fact(fact)
 
-    if not day_facts:
+    if not day_facts and not nodate_facts:
         return ""
 
     # Sort days descending (most recent first), cap to max_days
@@ -383,6 +394,20 @@ def _build_recall_block(
             )
         lines.append(f"- {date_label}: {'; '.join(facts)}")
         total_facts_emitted += len(facts)
+
+    # Undated facts last, under an explicit "no recorded date" label so the
+    # model never assigns them a date or builds a timeline from them. Kept in
+    # INSERTION order (semantic + FTS query-matches first, recency injection
+    # last) so the query-relevant facts win the cap — NOT created_at order,
+    # which would surface recently-logged biographical facts over the readings
+    # the question is actually about.
+    if nodate_facts and total_facts_emitted < max_total_facts:
+        cap = min(max_labels_per_day, max_total_facts - total_facts_emitted)
+        facts = [lbl for _, lbl in nodate_facts[:cap]]
+        if facts:
+            nd_label = "Without a recorded date" if _is_en else "Sin fecha registrada"
+            lines.append(f"- {nd_label}: {'; '.join(facts)}")
+            total_facts_emitted += len(facts)
 
     if len(lines) <= 1:
         return ""
