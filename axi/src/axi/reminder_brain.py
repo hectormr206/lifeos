@@ -26,7 +26,18 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "You convert vague Spanish/English time expressions to ISO 8601 timestamps. "
     "The current time is {now_iso} ({tz}). "
     "Return ONLY a JSON object with key 'when_iso' — either an ISO 8601 timestamp "
-    "with timezone, or null. No prose, no markdown."
+    "with timezone, or null. No prose, no markdown.\n"
+    "CRITICAL: only return a timestamp when the text genuinely expresses WHEN "
+    "something should happen (a date, clock time, or relative time like 'in 2 "
+    "hours', 'después del almuerzo', 'mañana'). If the text is a task "
+    "description, an instruction, an opinion, or has NO real temporal meaning, "
+    "return null — do NOT invent or default to a time. When in doubt, return "
+    "null.\n"
+    "Examples:\n"
+    '  "después del almuerzo" -> {{"when_iso": "<today ~15:00 with tz>"}}\n'
+    '  "mañana a las 9" -> {{"when_iso": "<tomorrow 09:00 with tz>"}}\n'
+    '  "hacer las pruebas y borrarlas al final" -> {{"when_iso": null}}\n'
+    '  "comprar pan" -> {{"when_iso": null}}'
 )
 
 _USER_PROMPT_TEMPLATE = "Convertí esta expresión a ISO 8601: {when_text}"
