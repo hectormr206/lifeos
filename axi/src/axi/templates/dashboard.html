@@ -414,7 +414,10 @@
         <div class="text-sm muted mb-3">VRAM
           <span class="muted text-xs" x-text="$store.snap.vram.name || ''"></span>
         </div>
-        <div class="text-3xl font-mono" x-text="$store.snap.vram.util_pct + '%'"></div>
+        <div class="flex items-baseline gap-2">
+          <span class="text-3xl font-mono" x-text="$store.snap.vram.util_pct + '%'"></span>
+          <span class="text-sm font-mono muted" x-text="($store.snap.vram.temp_c != null ? $store.snap.vram.temp_c + '°C' : '')"></span>
+        </div>
         <div class="text-xs muted mt-1">
           <span x-text="(($store.snap.vram.used_mb / 1024)|0) + '.' + ((($store.snap.vram.used_mb % 1024) * 10 / 1024)|0) + 'G'"></span>
           /
@@ -428,13 +431,19 @@
       <div class="panel p-4">
         <div class="text-sm muted mb-3">CPU / RAM</div>
         <div class="text-sm flex justify-between mb-2">
-          <span>CPU</span><span class="font-mono" x-text="$store.snap.cpu_pct + '%'"></span>
+          <span>CPU</span>
+          <span class="font-mono">
+            <span x-text="$store.snap.cpu_pct + '%'"></span><span class="muted" x-text="($store.snap.cpu_temp_c != null ? ' · ' + $store.snap.cpu_temp_c + '°C' : '')"></span>
+          </span>
         </div>
         <div class="h-2 mb-3 rounded-full" style="background: var(--panel2)">
           <div class="h-2 rounded-full" :style="'width:' + $store.snap.cpu_pct + '%; background: var(--blue)'"></div>
         </div>
         <div class="text-sm flex justify-between mb-2">
-          <span>RAM</span><span class="font-mono" x-text="$store.snap.ram.pct + '%'"></span>
+          <span>RAM</span>
+          <span class="font-mono">
+            <span x-text="$store.snap.ram.pct + '%'"></span><span class="muted" x-text="($store.snap.ram.temp_c != null ? ' · ' + $store.snap.ram.temp_c + '°C' : '')"></span>
+          </span>
         </div>
         <div class="h-2 rounded-full" style="background: var(--panel2)">
           <div class="h-2 rounded-full" :style="'width:' + $store.snap.ram.pct + '%; background: var(--green)'"></div>

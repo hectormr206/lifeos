@@ -758,8 +758,15 @@ def _ask_with_tools_impl(
     tool_choice: str | dict[str, Any] = "auto",
     max_tool_rounds: int = 2,
     lang: str | None = None,
+    final_synthesis_prompt: str | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
-    """Run a small OpenAI tool-calling loop against local llama-server."""
+    """Run a small OpenAI tool-calling loop against local llama-server.
+
+    ``final_synthesis_prompt``: when set, the LAST round drops the tools and
+    appends this instruction as a user turn, forcing the model to synthesize a
+    final answer from what it gathered instead of looping on tool calls. Needed
+    for small models that never stop searching on their own.
+    """
     _is_en = lang is not None and lang.split("-")[0].lower() == "en"
     if _is_en:
         _tool_instructions = (
@@ -826,6 +833,21 @@ def _ask_with_tools_impl(
             # ask_with_tools ALWAYS uses 4B (8080). VT-3B has no tools support
             # (no --jinja tool schema, no mmproj) — routing is intentionally
             # bypassed here. No think-strip applied (4B uses enable_thinking:false).
+            is_final = _round == max_tool_rounds
+            # Final-round forced synthesis: small models (4B) tend to keep
+            # calling the tool every round and never stop to answer, exhausting
+            # the loop. When the caller supplies a synthesis nudge, the LAST
+            # round drops the tools entirely and appends an explicit "you have
+            # enough — answer now" instruction, forcing a final text answer
+            # instead of returning the no-result sentinel. tool_choice="none"
+            # alone is not enough (the model emits a fake text tool_call), so we
+            # remove the tools from the payload.
+            if is_final and final_synthesis_prompt is not None:
+                messages.append({"role": "user", "content": final_synthesis_prompt})
+                payload = _base_payload(messages, max_tokens=max_tokens, think=think, engine="4b")
+                data = _post_chat_completion(payload, timeout=timeout, endpoint=ENDPOINT)
+                last_data = data
+                return (data["choices"][0]["message"].get("content") or "").strip(), data
             payload = _base_payload(messages, max_tokens=max_tokens, think=think, engine="4b")
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
@@ -871,12 +893,17 @@ def ask_with_tools(
     tool_choice: str | dict[str, Any] = "auto",
     max_tool_rounds: int = 2,
     lang: str | None = None,
+    final_synthesis_prompt: str | None = None,
 ) -> str:
     """Ask the local brain with whitelisted OpenAI-compatible tools.
 
     Tool handlers receive parsed JSON arguments and return a string or JSON-ish
     value. Unknown tools, invalid arguments, and handler exceptions are returned
     to the model as tool-result errors instead of raising into FastAPI.
+
+    ``final_synthesis_prompt`` forces a final answer on the last round (drops
+    tools + appends this nudge) so a small model that keeps searching still
+    produces output. See ``_ask_with_tools_impl``.
     """
     start = time.monotonic()
     err_obj: BaseException | None = None
@@ -895,6 +922,7 @@ def ask_with_tools(
             tool_choice=tool_choice,
             max_tool_rounds=max_tool_rounds,
             lang=lang,
+            final_synthesis_prompt=final_synthesis_prompt,
         )
         return text
     except BaseException as e:  # noqa: BLE001

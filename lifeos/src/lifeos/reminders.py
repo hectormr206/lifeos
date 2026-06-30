@@ -36,10 +36,19 @@ class Reminder:
     last_fired_at: datetime | None = None
     ends_at: datetime | None = None
     occurrences_left: int | None = None
+    action_kind: str = "message"
+    action_prompt: str | None = None
+    last_result: str | None = None
+    last_result_at: datetime | None = None
+    last_result_meta: str | None = None
 
     @property
     def is_recurring(self) -> bool:
         return bool(self.recurrence)
+
+    @property
+    def is_agentic(self) -> bool:
+        return self.action_kind == "agentic"
 
 
 def _row_to_reminder(row) -> Reminder:
@@ -69,6 +78,23 @@ def _row_to_reminder(row) -> Reminder:
             if "occurrences_left" in keys and row["occurrences_left"] is not None
             else None
         ),
+        action_kind=(
+            row["action_kind"]
+            if "action_kind" in keys and row["action_kind"]
+            else "message"
+        ),
+        action_prompt=(
+            row["action_prompt"] if "action_prompt" in keys else None
+        ),
+        last_result=row["last_result"] if "last_result" in keys else None,
+        last_result_at=(
+            _parse_iso(row["last_result_at"])
+            if "last_result_at" in keys and row["last_result_at"]
+            else None
+        ),
+        last_result_meta=(
+            row["last_result_meta"] if "last_result_meta" in keys else None
+        ),
     )
 
 
@@ -89,33 +115,73 @@ def _to_iso_utc(dt: datetime) -> str:
 def create(*, when: datetime, message: str, channel: Channel = "push",
            recurrence: str | None = None,
            ends_at: datetime | None = None,
-           occurrences_left: int | None = None) -> Reminder:
+           occurrences_left: int | None = None,
+           action_kind: str = "message",
+           action_prompt: str | None = None) -> Reminder:
     """Insert a new pending reminder.
 
     Optional end conditions for recurring reminders:
       - `ends_at`: scheduler stops firing after this instant.
       - `occurrences_left`: countdown of remaining fires.
     Both are mutually compatible (whichever hits first wins).
+
+    Agentic reminders (Briefings):
+      - `action_kind='agentic'` + `action_prompt`: when the reminder fires,
+        the dispatcher runs the prompt through the brain with web-search
+        tools and stores the curated result on the row.
     """
     if when.tzinfo is None:
         raise ValueError("when must be tz-aware (got naive datetime)")
     if ends_at is not None and ends_at.tzinfo is None:
         raise ValueError("ends_at must be tz-aware")
+    if action_kind not in ("message", "agentic"):
+        raise ValueError("action_kind must be 'message' or 'agentic'")
     rid = str(ulid.new())
     with store.connect() as conn:
         conn.execute(
             "INSERT INTO reminders(id, when_ts, message, channel, status, "
-            "recurrence, ends_at, occurrences_left) "
-            "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
+            "recurrence, ends_at, occurrences_left, action_kind, action_prompt) "
+            "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
             (
                 rid, _to_iso_utc(when), message, channel, recurrence,
                 _to_iso_utc(ends_at) if ends_at else None,
-                occurrences_left,
+                occurrences_left, action_kind, action_prompt,
             ),
         )
     fetched = get(rid)
     assert fetched is not None
     return fetched
+
+
+def set_last_result(rid: str, *, result: str, meta: str | None = None) -> None:
+    """Store the latest agentic-briefing result on a reminder row.
+
+    Overwrites the previous result (cards show the LATEST run only) and
+    stamps `last_result_at` with the current UTC instant. `meta` is a JSON
+    string of structured items so the card can render title/summary/url.
+    """
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE reminders SET last_result = ?, last_result_meta = ?, "
+            "last_result_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
+            "WHERE id = ?",
+            (result, meta, rid),
+        )
+
+
+def list_agentic() -> list[Reminder]:
+    """All non-cancelled agentic reminders, newest activity first.
+
+    Used by the Briefings dashboard: one card per agentic reminder. Cancelled
+    reminders are excluded so a deleted (soft-cancelled) task stops showing.
+    """
+    with store.connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM reminders WHERE action_kind = 'agentic' "
+            "AND status != 'cancelled' "
+            "ORDER BY COALESCE(last_result_at, when_ts) DESC"
+        ).fetchall()
+    return [_row_to_reminder(r) for r in rows]
 
 
 def mark_recurring_fired(rid: str) -> None:

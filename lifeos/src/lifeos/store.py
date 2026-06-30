@@ -279,6 +279,32 @@ def _migration_007_fastpath_metrics(conn: sqlcipher3.Connection) -> None:
     )
 
 
+def _migration_009_reminder_actions(conn: sqlcipher3.Connection) -> None:
+    # Agentic reminders (Briefings). A reminder can carry an `action_prompt`
+    # that, when it fires, runs through the brain with web-search tools and
+    # produces a curated digest stored back on the row. The push notification
+    # then deep-links to that reminder's card in the Briefings dashboard.
+    # - action_kind: 'message' (current behavior) | 'agentic'
+    # - action_prompt: the natural-language task to run on each fire
+    # - last_result: latest rendered markdown (overwritten each run)
+    # - last_result_at: ISO8601 UTC timestamp of the latest run
+    # - last_result_meta: JSON of structured items so the card can render
+    #   title/summary/url per item.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(reminders)").fetchall()}
+    if "action_kind" not in cols:
+        conn.execute(
+            "ALTER TABLE reminders ADD COLUMN action_kind TEXT DEFAULT 'message'"
+        )
+    if "action_prompt" not in cols:
+        conn.execute("ALTER TABLE reminders ADD COLUMN action_prompt TEXT")
+    if "last_result" not in cols:
+        conn.execute("ALTER TABLE reminders ADD COLUMN last_result TEXT")
+    if "last_result_at" not in cols:
+        conn.execute("ALTER TABLE reminders ADD COLUMN last_result_at TEXT")
+    if "last_result_meta" not in cols:
+        conn.execute("ALTER TABLE reminders ADD COLUMN last_result_meta TEXT")
+
+
 MIGRATIONS: list[Migration] = [
     _migration_001_schema_version,
     _migration_002_reminders,
@@ -288,6 +314,7 @@ MIGRATIONS: list[Migration] = [
     _migration_006_edges,
     _migration_007_fastpath_metrics,
     _migration_008_notif_log,
+    _migration_009_reminder_actions,
 ]
 
 

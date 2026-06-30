@@ -94,3 +94,144 @@ def test_remove_subscription() -> None:
     assert len(list_subscriptions()) == 1
     remove_subscription("https://x/y")
     assert len(list_subscriptions()) == 0
+
+
+# ---------------------------------------------------------------------------
+# Clickable desktop notifications (FIX 3)
+# ---------------------------------------------------------------------------
+
+
+def test_absolute_dashboard_url_prefixes_relative(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lifeos import push
+
+    monkeypatch.setenv("LIFEOS_DASHBOARD_URL", "https://host:9000")
+    assert push._absolute_dashboard_url("/briefings#abc") == "https://host:9000/briefings#abc"
+    # Already absolute → untouched.
+    assert push._absolute_dashboard_url("https://x/y") == "https://x/y"
+    # Default base when env unset.
+    monkeypatch.delenv("LIFEOS_DASHBOARD_URL", raising=False)
+    assert push._absolute_dashboard_url("/p").startswith("https://127.0.0.1:8081")
+
+
+def test_os_notification_without_url_has_no_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lifeos import push
+
+    monkeypatch.setattr(push.shutil, "which", lambda _b: "/usr/bin/notify-send")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(push.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd))
+
+    assert push.send_os_notification("T", "B") is True
+    assert len(calls) == 1
+    assert not any(str(a).startswith("--action") for a in calls[0])
+
+
+def test_os_notification_with_url_spawns_thread_and_returns_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lifeos import push
+
+    monkeypatch.setattr(push.shutil, "which", lambda _b: "/usr/bin/notify-send")
+    started: list[bool] = []
+
+    class _FakeThread:
+        def __init__(self, *a, **kw):
+            self.daemon = kw.get("daemon", False)
+
+        def start(self):
+            started.append(self.daemon)
+
+    monkeypatch.setattr(push.threading, "Thread", _FakeThread)
+    # Returns immediately (does not block on notify-send) and spawns a daemon thread.
+    assert push.send_os_notification("T", "B", url="/briefings#x") is True
+    assert started == [True]
+
+
+def test_click_worker_includes_action_in_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lifeos import push
+
+    calls: list[list[str]] = []
+
+    class _Proc:
+        stdout = ""
+
+    monkeypatch.setattr(push.subprocess, "run",
+                        lambda cmd, **kw: (calls.append(cmd), _Proc())[1])
+    monkeypatch.setattr(push.shutil, "which", lambda _b: None)
+
+    push._notify_click_worker("/usr/bin/notify-send", "icon", "T", "B",
+                              "https://host/briefings#x")
+    assert len(calls) == 1  # only notify-send, no xdg-open (stdout empty)
+    assert any(str(a).startswith("--action=default=") for a in calls[0])
+
+
+def test_click_worker_opens_url_when_action_clicked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lifeos import push
+
+    calls: list[list[str]] = []
+
+    class _Proc:
+        stdout = "default\n"
+
+    monkeypatch.setattr(push.subprocess, "run",
+                        lambda cmd, **kw: (calls.append(cmd), _Proc())[1])
+    monkeypatch.setattr(push.shutil, "which",
+                        lambda b: "/usr/bin/xdg-open" if b == "xdg-open" else None)
+
+    push._notify_click_worker("/usr/bin/notify-send", "icon", "T", "B",
+                              "https://host/briefings#x")
+    assert len(calls) == 2
+    assert calls[1] == ["/usr/bin/xdg-open", "https://host/briefings#x"]
+
+
+def test_click_worker_no_open_on_other_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lifeos import push
+
+    calls: list[list[str]] = []
+
+    class _Proc:
+        stdout = "closed"
+
+    monkeypatch.setattr(push.subprocess, "run",
+                        lambda cmd, **kw: (calls.append(cmd), _Proc())[1])
+    monkeypatch.setattr(push.shutil, "which", lambda b: "/usr/bin/xdg-open")
+
+    push._notify_click_worker("/usr/bin/notify-send", "icon", "T", "B",
+                              "https://host/briefings#x")
+    assert len(calls) == 1  # no xdg-open
+
+
+def test_click_worker_never_raises_when_xdg_open_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lifeos import push
+
+    class _Proc:
+        stdout = "default"
+
+    monkeypatch.setattr(push.subprocess, "run", lambda cmd, **kw: _Proc())
+    monkeypatch.setattr(push.shutil, "which", lambda _b: None)  # xdg-open absent
+
+    # Must not raise even though the user clicked but xdg-open is unavailable.
+    push._notify_click_worker("/usr/bin/notify-send", "icon", "T", "B", "https://h/x")
+
+
+def test_send_os_notification_returns_false_when_notify_send_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lifeos import push
+
+    monkeypatch.setattr(push.shutil, "which", lambda _b: None)
+    assert push.send_os_notification("T", "B", url="/p") is False
+
+
+def test_send_to_all_passes_url_to_os_notification(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lifeos import push
+
+    captured: dict = {}
+
+    def _fake_os(title, body, url=None):
+        captured["url"] = url
+        return True
+
+    monkeypatch.setattr(push, "send_os_notification", _fake_os)
+    push.send_to_all("Boletín", "cuerpo", url="/briefings#abc", tag="briefing:abc")
+    assert captured["url"] == "/briefings#abc"

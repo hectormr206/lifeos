@@ -18,6 +18,7 @@ import os
 import shutil
 import stat
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -142,12 +143,74 @@ def remove_subscription(endpoint: str) -> None:
         )
 
 
-def send_os_notification(title: str, body: str) -> bool:
+def _absolute_dashboard_url(url: str) -> str:
+    """Turn a relative dashboard path (e.g. ``/briefings#id``) into an absolute
+    URL that ``xdg-open`` can hand to the browser.
+
+    Already-absolute http(s) URLs pass through untouched. The base is read from
+    ``LIFEOS_DASHBOARD_URL`` (default ``https://127.0.0.1:8081``) so desktop and
+    web-push deep-links agree on the destination.
+    """
+    u = (url or "").strip()
+    if u.startswith("http://") or u.startswith("https://"):
+        return u
+    base = os.environ.get("LIFEOS_DASHBOARD_URL", "https://127.0.0.1:8081").rstrip("/")
+    if not u:
+        return base
+    if not u.startswith("/"):
+        u = "/" + u
+    return base + u
+
+
+def _resolve_notify_icon() -> str:
+    # Resolve icon without coupling `lifeos` to `axi`'s filesystem layout.
+    # `LIFEOS_NOTIFY_ICON` lets the embedder (the axi dashboard / systemd unit)
+    # point at axi/static/axi-192.png; absent that, fall back to a themed icon.
+    icon = os.environ.get("LIFEOS_NOTIFY_ICON", "").strip()
+    if not icon or not Path(icon).exists():
+        icon = "dialog-information"  # themed icon name (always renderable)
+    return icon
+
+
+def _notify_click_worker(binary: str, icon: str, title: str, body: str,
+                         abs_url: str) -> None:
+    """Run a clickable `notify-send` and open `abs_url` if the user clicks.
+
+    `notify-send --action=default=...` BLOCKS until the notification is closed
+    and prints the invoked action id (``default``) to stdout on click. This
+    runs in a detached daemon thread, so blocking here never stalls the caller
+    (scheduler worker). Never raises — a desktop notification must not take the
+    briefing dispatcher down.
+    """
+    try:
+        proc = subprocess.run(
+            [binary, "--app-name=Axi", "--icon", icon, "--urgency=normal",
+             "--action=default=Abrir", title, body],
+            check=False, timeout=300, capture_output=True, text=True,
+        )
+        if (getattr(proc, "stdout", "") or "").strip() == "default":
+            opener = shutil.which("xdg-open")
+            if opener:
+                subprocess.run([opener, abs_url], check=False, timeout=10)
+            else:
+                log.warning("xdg-open not found — cannot open %s", abs_url)
+    except Exception as e:  # noqa: BLE001
+        log.warning("clickable desktop notification failed: %s", e)
+
+
+def send_os_notification(title: str, body: str, url: str | None = None) -> bool:
     """Fire a desktop notification on the user's session (KDE/GNOME/etc.).
 
     Uses `notify-send` (libnotify). Available out-of-the-box on most Linux
     desktops. Returns True if the command launched OK. The notification
     daemon decides how to render (toast, persistent, etc.).
+
+    When `url` is provided, the notification carries a default action ("Abrir")
+    and, on click, opens the (absolutized) url with `xdg-open`. Because
+    `notify-send --action` blocks until the toast is closed, that path runs in
+    a detached daemon thread and returns immediately, so the caller (the
+    scheduler worker) is never blocked. When `url` is None the original
+    non-blocking behavior is preserved for existing callers.
 
     This is fired from inside the dashboard service, which runs under the
     user's systemd --user instance, so the DBus session is the user's own.
@@ -156,22 +219,32 @@ def send_os_notification(title: str, body: str) -> bool:
     if not binary:
         log.warning("notify-send not found — skipping OS notification")
         return False
-    # Resolve icon without coupling `lifeos` to `axi`'s filesystem layout.
-    # `LIFEOS_NOTIFY_ICON` lets the embedder (the axi dashboard / systemd unit)
-    # point at axi/static/axi-192.png; absent that, fall back to a themed icon.
-    icon = os.environ.get("LIFEOS_NOTIFY_ICON", "").strip()
-    if not icon or not Path(icon).exists():
-        icon = "dialog-information"  # themed icon name (always renderable)
+    icon = _resolve_notify_icon()
+    if url is None:
+        # Legacy non-blocking path — unchanged for existing callers.
+        try:
+            subprocess.run(
+                [binary, "--app-name=Axi", "--icon", icon, "--urgency=normal",
+                 title, body],
+                check=False, timeout=5,
+            )
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.warning("notify-send failed: %s", e)
+            return False
+    # Clickable path: spawn a detached daemon thread so the blocking
+    # `notify-send --action` never stalls the caller.
+    abs_url = _absolute_dashboard_url(url)
     try:
-        subprocess.run(
-            [binary, "--app-name=Axi", "--icon", icon, "--urgency=normal",
-             title, body],
-            check=False, timeout=5,
-        )
-        return True
+        threading.Thread(
+            target=_notify_click_worker,
+            args=(binary, icon, title, body, abs_url),
+            daemon=True,
+        ).start()
     except Exception as e:  # noqa: BLE001
-        log.warning("notify-send failed: %s", e)
+        log.warning("could not spawn notify-send thread: %s", e)
         return False
+    return True
 
 
 def send_to_all(title: str, body: str, *, url: str = "/reminders",
@@ -244,7 +317,7 @@ def send_to_all(title: str, body: str, *, url: str = "/reminders",
         except Exception as e:  # noqa: BLE001
             failed += 1
             log.exception("push send unexpected error: %s", e)
-    os_fired = 1 if (include_os and send_os_notification(title, body)) else 0
+    os_fired = 1 if (include_os and send_os_notification(title, body, url=url)) else 0
 
     # Record with original title/body so dedup hashes against caller intent
     notif_budget.record(

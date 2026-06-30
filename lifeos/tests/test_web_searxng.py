@@ -122,6 +122,43 @@ def test_search_snippet_truncation():
 
 
 # ---------------------------------------------------------------------------
+# Freshness params (FIX 4): time_range / categories forwarding
+# ---------------------------------------------------------------------------
+
+
+def test_search_forwards_time_range_and_categories():
+    """time_range/categories are forwarded as query params when provided."""
+    from lifeos.web.searxng import SearXNGAdapter
+
+    captured: dict = {}
+
+    def _capture(req, timeout=None):
+        captured["url"] = req.full_url
+        return _json_resp([])
+
+    adapter = SearXNGAdapter(base_url="http://localhost:8888", urlopen=_capture)
+    adapter.search("q", time_range="day", categories="news")
+    assert "time_range=day" in captured["url"]
+    assert "categories=news" in captured["url"]
+
+
+def test_search_omits_freshness_params_when_not_given():
+    """Backward compatible: no time_range/categories in the request by default."""
+    from lifeos.web.searxng import SearXNGAdapter
+
+    captured: dict = {}
+
+    def _capture(req, timeout=None):
+        captured["url"] = req.full_url
+        return _json_resp([])
+
+    adapter = SearXNGAdapter(base_url="http://localhost:8888", urlopen=_capture)
+    adapter.search("q")
+    assert "time_range" not in captured["url"]
+    assert "categories" not in captured["url"]
+
+
+# ---------------------------------------------------------------------------
 # C1: search() must never raise — malformed JSON bodies
 # ---------------------------------------------------------------------------
 

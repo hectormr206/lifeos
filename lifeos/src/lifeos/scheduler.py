@@ -42,7 +42,13 @@ class Scheduler:
     """Thin wrapper around BackgroundScheduler."""
 
     def __init__(self, dispatcher: Dispatcher | None = None) -> None:
-        self._scheduler = BackgroundScheduler(timezone="UTC")
+        # max_instances=1: a job (e.g. a slow agentic briefing that does
+        # web+LLM work) must never overlap itself if a run outlasts its next
+        # trigger. Make the guarantee explicit rather than relying on the
+        # APScheduler default.
+        self._scheduler = BackgroundScheduler(
+            timezone="UTC", job_defaults={"max_instances": 1}
+        )
         self._dispatcher: Dispatcher = dispatcher or _default_dispatcher
         self._lock = threading.Lock()
 
