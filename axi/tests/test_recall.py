@@ -550,8 +550,8 @@ def test_undated_reading_grouped_under_sin_fecha_not_created_at(monkeypatch):
     result = build_recall_block("cómo está mi presión", max_distance=0.6)
 
     assert "presión 108/80" in result
-    assert "Sin fecha registrada" in result
+    assert "Sin fecha de medición" in result
     # The reading must be on the 'Sin fecha' line, NOT on a dated ("El …"/"HOY") line.
     for ln in result.splitlines():
         if "presión 108/80" in ln:
-            assert "Sin fecha registrada" in ln, f"undated reading was dated: {ln!r}"
+            assert "Sin fecha de medición" in ln, f"undated reading was dated: {ln!r}"

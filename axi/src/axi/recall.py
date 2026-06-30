@@ -405,7 +405,14 @@ def _build_recall_block(
         cap = min(max_labels_per_day, max_total_facts - total_facts_emitted)
         facts = [lbl for _, lbl in nodate_facts[:cap]]
         if facts:
-            nd_label = "Without a recorded date" if _is_en else "Sin fecha registrada"
+            # The label is read by a small model as data, so the instruction is
+            # inline and forceful — a separate prompt rule alone was ignored by
+            # the 4B in the tool-calling path (it still invented dates).
+            nd_label = (
+                "No recorded date (do NOT invent a date or order these by day)"
+                if _is_en else
+                "Sin fecha de medición (NO les inventes una fecha ni las ordenes por día)"
+            )
             lines.append(f"- {nd_label}: {'; '.join(facts)}")
             total_facts_emitted += len(facts)
 

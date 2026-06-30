@@ -189,7 +189,16 @@ def _build_query_system(spec: DomainSpec, now: datetime, entries_list: list) -> 
         "siempre contra HOY.\n\n"
         f"Responde ÚNICAMENTE con base en los siguientes registros de {spec.name} del usuario. "
         "NO inventes datos. Si la información pedida NO está en los registros, di "
-        "claramente que no tienes ese registro.\n\n"
+        "claramente que no tienes ese registro.\n"
+        "REGLAS ABSOLUTAS SOBRE FECHAS Y VALORES:\n"
+        "- Usa EXACTAMENTE la fecha que aparece en cada registro. JAMÁS inventes "
+        "ni infieras una fecha distinta. Si varios registros comparten la misma "
+        "fecha, NO los repartas en días distintos.\n"
+        "- Copia los valores TAL CUAL (no cambies un 83 por 85). No estimes.\n"
+        "- Para preguntas de TENDENCIA o '¿cómo va/cómo se ha comportado X?': "
+        "responde BREVE (2-3 frases) con la tendencia general (estable/sube/baja, "
+        "rango aproximado) y el valor MÁS RECIENTE con su fecha. NO enumeres cada "
+        "registro uno por uno.\n\n"
         f"REGISTROS DE {upper} (más recientes primero):\n{records}"
     )
 
@@ -203,18 +212,18 @@ def _query(spec: DomainSpec, text: str, now: datetime, brain_ask: Callable) -> d
         a = brain_ask(text, system=system, think=think, max_tokens=max_tokens)
         return (a if isinstance(a, str) else str(a)).strip()
 
-    # Primary: thinking ON (room to resolve relative dates). But think=True can
-    # burn the whole token budget reasoning and return an EMPTY answer. The
-    # answer is grounded in the records already in the prompt, so chain-of-
-    # thought is not required — fall back to think=False (which can't exhaust
-    # the budget on reasoning), then to a graceful message. Never return blank.
-    answer = _ask(think=True, max_tokens=768)
+    # think=False, bounded tokens: the answer is grounded in the records already
+    # in the prompt, so chain-of-thought is NOT needed — and think=True both
+    # bloated the answer (the user's "mucho choro") and let the 4B fabricate a
+    # per-day timeline (spreading same-date records across invented days). A
+    # bounded think=False call is concise, fast, and far less prone to that.
+    answer = _ask(think=False, max_tokens=400)
     if not answer:
-        log.warning("domain_chat[%s]: query think=True returned empty — retrying think=False", spec.key)
+        log.warning("domain_chat[%s]: query think=False returned empty — retrying", spec.key)
         try:
             answer = _ask(think=False, max_tokens=512)
         except Exception as exc:  # noqa: BLE001
-            log.warning("domain_chat[%s]: query think=False retry failed: %s", spec.key, exc)
+            log.warning("domain_chat[%s]: query retry failed: %s", spec.key, exc)
             answer = ""
     if not answer:
         answer = "No pude generar una respuesta con tus registros. ¿Podés reformular la pregunta?"
