@@ -57,9 +57,9 @@ def try_create_reminder(text: str) -> str | None:
     if ri is None:
         try:
             from lifeos.parser import looks_schedulish
-            from axi.reminder_brain import parse_reminder_brain
+            from axi.reminder_brain import cached_or_brain_parse
             if looks_schedulish(text):
-                ri = parse_reminder_brain(text, tz_name)
+                ri = cached_or_brain_parse(text, tz_name)
         except Exception:  # noqa: BLE001
             log.exception("schedule brain fallback raised — falling through")
             ri = None

@@ -305,6 +305,45 @@ def _migration_009_reminder_actions(conn: sqlcipher3.Connection) -> None:
         conn.execute("ALTER TABLE reminders ADD COLUMN last_result_meta TEXT")
 
 
+def _migration_010_schedule_cache(conn: sqlcipher3.Connection) -> None:
+    # Learned schedule-parse cache + miss log. When the deterministic regex
+    # parsers miss but the 4B LLM fallback succeeds on a RECURRING task, we
+    # cache (normalized phrasing → stable schedule) so the same/near phrasing
+    # next time is resolved by an instant DB lookup instead of re-invoking the
+    # 4B. Only recurring parses are cached (recurrence is the cron and is always
+    # present). One-shot (relative-time) intents are never cached.
+    #
+    # `schedule_miss_log` records every "regex-missed → 4B" event for later
+    # HUMAN-reviewed regex improvement. It is DATA only — nothing here ever
+    # auto-modifies regex or code.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schedule_cache (
+            norm_text TEXT PRIMARY KEY,
+            kind TEXT,
+            recurrence TEXT NOT NULL,
+            content TEXT,
+            hits INTEGER DEFAULT 0,
+            created_at TEXT,
+            last_used_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schedule_miss_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_text TEXT,
+            norm_text TEXT,
+            resolved INTEGER,
+            kind TEXT,
+            recurrence TEXT,
+            created_at TEXT
+        )
+        """
+    )
+
+
 MIGRATIONS: list[Migration] = [
     _migration_001_schema_version,
     _migration_002_reminders,
@@ -315,7 +354,96 @@ MIGRATIONS: list[Migration] = [
     _migration_007_fastpath_metrics,
     _migration_008_notif_log,
     _migration_009_reminder_actions,
+    _migration_010_schedule_cache,
 ]
+
+
+# Wall-clock timestamp expression matching the rest of the store (UTC, ISO8601).
+_NOW_TS = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+
+
+def schedule_cache_get(norm_text: str) -> dict | None:
+    """Return the cached {kind, recurrence, content} for `norm_text`, or None.
+
+    On a hit, increments `hits` and updates `last_used_at`. Never raises — a
+    cache failure must never break reminder creation, so errors are logged and
+    None is returned.
+    """
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT kind, recurrence, content FROM schedule_cache "
+                "WHERE norm_text = ?",
+                (norm_text,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                f"UPDATE schedule_cache SET hits = hits + 1, last_used_at = {_NOW_TS} "
+                "WHERE norm_text = ?",
+                (norm_text,),
+            )
+            return {
+                "kind": row["kind"],
+                "recurrence": row["recurrence"],
+                "content": row["content"],
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("schedule_cache_get failed for %r", norm_text, exc_info=True)
+        return None
+
+
+def schedule_cache_put(
+    norm_text: str, *, kind: str, recurrence: str, content: str | None
+) -> None:
+    """Upsert a learned (norm_text → schedule) cache row. Never raises.
+
+    `created_at` is set on first insert and preserved on update; `hits` is
+    preserved across updates. Only RECURRING parses are cached, so `recurrence`
+    (the cron) is always present.
+    """
+    try:
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO schedule_cache "
+                "(norm_text, kind, recurrence, content, hits, created_at, last_used_at) "
+                f"VALUES (?, ?, ?, ?, 0, {_NOW_TS}, {_NOW_TS}) "
+                "ON CONFLICT(norm_text) DO UPDATE SET "
+                "kind = excluded.kind, recurrence = excluded.recurrence, "
+                f"content = excluded.content, last_used_at = {_NOW_TS}",
+                (norm_text, kind, recurrence, content),
+            )
+    except Exception:  # noqa: BLE001
+        log.warning("schedule_cache_put failed for %r", norm_text, exc_info=True)
+
+
+def schedule_miss_log_add(
+    *,
+    raw_text: str,
+    norm_text: str,
+    resolved: bool,
+    kind: str | None,
+    recurrence: str | None,
+) -> None:
+    """Append a "regex-missed → 4B" event to the miss log. Never raises.
+
+    Kept bounded: after each insert, rows beyond the most recent 1000 are
+    pruned (a simple cap). DATA only — for later human-reviewed regex work.
+    """
+    try:
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO schedule_miss_log "
+                "(raw_text, norm_text, resolved, kind, recurrence, created_at) "
+                f"VALUES (?, ?, ?, ?, ?, {_NOW_TS})",
+                (raw_text, norm_text, 1 if resolved else 0, kind, recurrence),
+            )
+            conn.execute(
+                "DELETE FROM schedule_miss_log WHERE id NOT IN "
+                "(SELECT id FROM schedule_miss_log ORDER BY id DESC LIMIT 1000)"
+            )
+    except Exception:  # noqa: BLE001
+        log.warning("schedule_miss_log_add failed for %r", raw_text, exc_info=True)
 
 
 def apply_migrations(conn: sqlcipher3.Connection | None = None) -> int:
