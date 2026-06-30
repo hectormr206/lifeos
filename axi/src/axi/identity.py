@@ -135,7 +135,34 @@ def onboarding_capture(text: str) -> str | None:
     )
 
 
-_ENTITY_KINDS = {"person", "place", "org"}
+# Broadened, validated entity taxonomy: extraction now captures ANY meaningful
+# NAMED thing across every domain, not just proper-noun people/places/orgs.
+# Unknown kinds fall back to the catch-all "thing".
+_ENTITY_KINDS = {
+    "person", "place", "org", "medication", "condition", "product",
+    "food", "activity", "document", "event", "brand", "tool", "thing",
+}
+
+# Pronouns/terms that mean "the user" as a relation subject. The configured
+# user_name is matched in addition to these (accent/case-insensitive).
+_USER_SUBJECT_TERMS = {"yo", "mi", "me", "mí"}
+
+
+def _norm(s: str) -> str:
+    """Accent-stripped, lowercased, trimmed form for case/accent-insensitive cmp."""
+    s = unicodedata.normalize("NFKD", (s or "").strip().lower())
+    return "".join(ch for ch in s if not unicodedata.combining(ch))
+
+
+def _is_user_subject(name: str) -> bool:
+    """True when *name* refers to the user (pronoun or the configured name)."""
+    n = _norm(name)
+    if not n:
+        return False
+    if n in {_norm(t) for t in _USER_SUBJECT_TERMS}:
+        return True
+    un = _norm(user_name())
+    return bool(un) and n == un
 
 
 def _entity_names(data_json: str) -> tuple[str, list[str]]:
@@ -216,7 +243,7 @@ def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
     if not name:
         return None
     if kind not in _ENTITY_KINDS:
-        kind = "person"
+        kind = "thing"
     try:
         c = conn or store._connect()  # noqa: SLF001
         nlow = name.lower()
@@ -316,6 +343,50 @@ def add_relation(relation: str, entity_name: str, kind: str = "person", conn=Non
             store.add_edge(hub, ent, relation)
     except Exception as e:  # noqa: BLE001
         log.debug("add_relation failed: %s", e)
+
+
+def add_entity_relation(
+    subject: str,
+    relation: str,
+    obj: str,
+    *,
+    subject_kind: str = "thing",
+    object_kind: str = "thing",
+    conn=None,
+) -> None:
+    """Create a TYPED edge between two entities: subject --relation--> obj
+    (e.g. hipertensión --tratada_con--> losartán). Both endpoints go through the
+    coreference-aware ``ensure_entity`` so variants dedupe to existing nodes.
+
+    When *subject* refers to the user (the configured name or a pronoun like
+    "yo"/"me"/"mí"), the edge is routed FROM the user hub via ``add_relation`` so
+    user->entity relations stay consistent with the hub-centric model.
+
+    Idempotent (no duplicate subject/relation/obj edge). Never raises.
+    """
+    relation = (relation or "").strip().lower().replace(" ", "_")
+    subject = (subject or "").strip()
+    obj = (obj or "").strip()
+    if not relation or not subject or not obj:
+        return
+    try:
+        # User-as-subject -> reuse the hub-centric helper (Héctor --rel--> obj).
+        if _is_user_subject(subject):
+            add_relation(relation, obj, object_kind, conn=conn)
+            return
+        subj_id = ensure_entity(subject, subject_kind, conn=conn)
+        obj_id = ensure_entity(obj, object_kind, conn=conn)
+        if not subj_id or not obj_id or subj_id == obj_id:
+            return
+        c = conn or store._connect()  # noqa: SLF001
+        exists = c.execute(
+            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+            (subj_id, obj_id, relation),
+        ).fetchone()
+        if not exists:
+            store.add_edge(subj_id, obj_id, relation)
+    except Exception as e:  # noqa: BLE001
+        log.debug("add_entity_relation failed: %s", e)
 
 
 def link_fact_to_entities(fact_id: int, text: str, conn=None) -> None:
