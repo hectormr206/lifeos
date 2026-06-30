@@ -58,9 +58,23 @@ NO extraigas:
 - Hechos sobre el mundo en general
 - Cosas que Axi dijo si NO confirmadas por Héctor
 
-También extrae RELACIONES: cuando Héctor menciona una ENTIDAD con nombre propio con
-la que tiene un vínculo (su esposa Ana, su jefe Sergio, su ciudad, su mascota…),
-emitila como un triple para que viva en el grafo conectada a Héctor.
+También extrae RELACIONES: cualquier ENTIDAD NOMBRADA y específica que aparezca y
+los VÍNCULOS entre ellas, para que vivan en el grafo conectadas. No te limites a
+personas: captura también medicamentos, enfermedades/condiciones, productos,
+comidas, actividades, lugares, organizaciones, documentos, eventos, marcas y
+herramientas — siempre que sean algo NOMBRADO y concreto.
+
+Cada relación es un TRIPLE sujeto-predicado-objeto con el TIPO de cada extremo:
+- El sujeto puede ser Héctor (usá "Héctor" o "yo") O otra entidad.
+- Capturá relaciones ENTIDAD-A-ENTIDAD, no solo Héctor->entidad. Ej: una condición
+  "diagnosticada_por" un doctor, o "tratada_con" un medicamento.
+
+Tipos de entidad válidos (kind): person, place, org, medication, condition,
+product, food, activity, document, event, brand, tool, thing.
+
+Predicados típicos: padece, tiene, diagnosticada_por, tratada_con, recetado_por,
+toma, comió, hizo, vive_en, trabaja_en, esposa, esposo, hijo, hija, madre, padre,
+hermano, amigo, jefe, mascota, usa, compró…
 
 Responde SOLO con JSON válido, sin texto antes ni después, exactamente este formato:
 {"facts": [
@@ -70,13 +84,30 @@ Responde SOLO con JSON válido, sin texto antes ni después, exactamente este fo
    "domain": "health|finance|work|home|setup|personal|null"}
 ],
  "relations": [
-  {"relation": "vínculo de Héctor con la entidad: esposa, esposo, hijo, hija, madre, padre, hermano, amigo, jefe, mascota, vive_en, trabaja_en, …",
-   "entity": "NOMBRE PROPIO más completo de la persona/lugar/organización (ej: 'Ana Ríos')",
-   "kind": "person|place|org",
-   "aliases": ["apodos/diminutivos de ESA entidad si Héctor los menciona (ej: 'Ani'); [] si no hay"]}
+  {"subject": "<entidad sujeto, o 'Héctor'/'yo' si es el usuario>",
+   "subject_kind": "<tipo del sujeto: person|condition|medication|…>",
+   "relation": "<predicado: padece, diagnosticada_por, tratada_con, esposa, vive_en, …>",
+   "object": "<NOMBRE de la entidad objeto, lo más completo posible>",
+   "object_kind": "<tipo del objeto>",
+   "aliases": ["apodos/diminutivos del OBJETO si los menciona (ej: 'Ani'); [] si no hay"]}
  ]}
 
-Solo extrae una relación si hay un NOMBRE PROPIO y un vínculo claro. Si no, deja "relations": [].
+Ejemplos de relations:
+- "mi esposa Ana Ríos, le dicen Ani" ->
+  [{"subject":"Héctor","subject_kind":"person","relation":"esposa",
+    "object":"Ana Ríos","object_kind":"person","aliases":["Ani"]}]
+- "hace 2 años la Dra Tere me diagnosticó hipertensión y me recetó losartán" ->
+  [{"subject":"Héctor","subject_kind":"person","relation":"padece",
+    "object":"hipertensión","object_kind":"condition","aliases":[]},
+   {"subject":"hipertensión","subject_kind":"condition","relation":"diagnosticada_por",
+    "object":"Dra. López","object_kind":"person","aliases":[]},
+   {"subject":"hipertensión","subject_kind":"condition","relation":"tratada_con",
+    "object":"losartán","object_kind":"medication","aliases":[]}]
+
+Solo extrae una relación si hay una ENTIDAD NOMBRADA y concreta y un vínculo claro.
+NUNCA inventes entidades de palabras genéricas ("agua", "cosas", "un rato") ni de
+números de vitales sueltos. Ante la duda, omití. Si no hay relaciones, deja
+"relations": [].
 Si no hay nada que extraer, responde: {"facts": [], "relations": []}"""
 
 
@@ -173,27 +204,54 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
         except Exception as e:  # noqa: BLE001 — store can raise sqlite errors
             log.warning("could not save fact %r: %s", label, e)
 
-    # Typed relations — create entity nodes + a typed edge from the user hub
-    # (e.g. Héctor --esposa--> Ana Ríos), so people/places/orgs become
-    # first-class graph entities, not just text inside a fact label.
+    # Typed relations — create entity nodes + typed edges so any NAMED thing
+    # (people, places, orgs, medications, conditions, products, …) becomes a
+    # first-class graph entity, and ENTITY-TO-ENTITY links (e.g. hipertensión
+    # --tratada_con--> losartán) are captured, not just Héctor->entity ones.
+    #
+    # Two relation shapes are accepted:
+    #   NEW (preferred): {"subject","subject_kind","relation","object","object_kind"}
+    #   OLD (back-compat): {"relation","entity","kind"} -> treated as user->entity.
     from axi import identity  # noqa: PLC0415 — lazy, avoids import cycle
     for rel in relations:
         if not isinstance(rel, dict):
             continue
         relation = (rel.get("relation") or "").strip()
-        entity = (rel.get("entity") or "").strip()
-        ekind = (rel.get("kind") or "person").strip()
-        if not relation or not entity:
+        if not relation:
             continue
         try:
-            identity.add_relation(relation, entity, ekind)
-            for al in (rel.get("aliases") or []):
-                al = str(al).strip()
-                if al:
-                    identity.register_alias(entity, al, ekind)
-            log.info("relation saved: --%s--> %s (%s)", relation, entity, ekind)
+            if rel.get("subject") is not None or rel.get("object") is not None:
+                # New subject-predicate-object triple shape.
+                subject = (rel.get("subject") or "").strip()
+                obj = (rel.get("object") or "").strip()
+                if not subject or not obj:
+                    continue
+                subject_kind = (rel.get("subject_kind") or "thing").strip()
+                object_kind = (rel.get("object_kind") or "thing").strip()
+                identity.add_entity_relation(
+                    subject, relation, obj,
+                    subject_kind=subject_kind, object_kind=object_kind,
+                )
+                for al in (rel.get("aliases") or []):
+                    al = str(al).strip()
+                    if al:
+                        identity.register_alias(obj, al, object_kind)
+                log.info("relation saved: %s --%s--> %s (%s/%s)",
+                         subject, relation, obj, subject_kind, object_kind)
+            else:
+                # Old hub-centric shape: Héctor --relation--> entity.
+                entity = (rel.get("entity") or "").strip()
+                if not entity:
+                    continue
+                ekind = (rel.get("kind") or "person").strip()
+                identity.add_relation(relation, entity, ekind)
+                for al in (rel.get("aliases") or []):
+                    al = str(al).strip()
+                    if al:
+                        identity.register_alias(entity, al, ekind)
+                log.info("relation saved: --%s--> %s (%s)", relation, entity, ekind)
         except Exception as e:  # noqa: BLE001
-            log.warning("could not save relation %r->%r: %s", relation, entity, e)
+            log.warning("could not save relation %r: %s", rel, e)
 
     # Rich entity profiles: now that this turn's entities exist (relations
     # above), connect every fact touched this turn to the entities it mentions

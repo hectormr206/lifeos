@@ -169,6 +169,51 @@ _RECALL_EMBED_TIMEOUT = 2.0
 _RECENCY_DAYS = 2
 _RECENCY_LIMIT = 8
 
+# Structural/internal edge kinds — NOT user-meaningful relations, so they are
+# excluded from the graph-relations recall section.
+_STRUCTURAL_EDGE_KINDS = frozenset({
+    "same-day", "same_day", "mentioned_in", "mentions", "about",
+    "similar-to", "similar_to",
+})
+
+
+def _graph_relation_lines(matched_ids: set, conn, *, max_rel: int = 8) -> list[str]:
+    """Typed graph relations touching the matched nodes, e.g.
+    'hipertensión diagnosticada por Dra. López', so who/what/where questions can
+    be answered from the graph. Skips structural edges. Never raises."""
+    if not matched_ids:
+        return []
+    try:
+        ids = list(matched_ids)
+        ph = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            "SELECT nf.label AS f, e.kind AS k, nt.label AS t "
+            "FROM edges e JOIN nodes nf ON e.from_id = nf.id "
+            "JOIN nodes nt ON e.to_id = nt.id "
+            f"WHERE e.from_id IN ({ph}) OR e.to_id IN ({ph})",
+            ids + ids,
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for r in rows:
+        k = (r["k"] or "").strip()
+        if not k or k in _STRUCTURAL_EDGE_KINDS:
+            continue
+        f = (r["f"] or "").strip()
+        t = (r["t"] or "").strip()
+        if not f or not t:
+            continue
+        line = f"{f} {k.replace('_', ' ')} {t}"
+        if line in seen:
+            continue
+        seen.add(line)
+        out.append(line)
+        if len(out) >= max_rel:
+            break
+    return out
+
 
 def build_recall_block(
     query: str,
@@ -314,9 +359,17 @@ def _build_recall_block(
         if label not in {lbl for _, lbl in nodate_facts}:
             nodate_facts.append((created_at, label))
 
+    # Node ids that matched the query — used below to traverse their typed
+    # graph relations (e.g. hipertensión --diagnosticada_por--> Dra. López) so a
+    # question like "¿quién me detectó X?" can be answered from the graph.
+    matched_ids: set[int] = set()
+
     for node in nodes:
         # The node itself + its same-day neighbors (BOTH edge directions).
         _add_fact(node)
+        nid = node.get("id")
+        if nid is not None:
+            matched_ids.add(nid)
         for neighbor in store.same_day_neighbors(node["id"], conn=conn):
             _add_fact(neighbor)
 
@@ -330,6 +383,8 @@ def _build_recall_block(
                 r = dict(row)
                 if r.get("kind") == "conversation":
                     continue
+                if r.get("id") is not None:
+                    matched_ids.add(r["id"])
                 _add_fact(r)
         except Exception:  # noqa: BLE001 — FTS can choke on odd tokens
             pass
@@ -415,6 +470,31 @@ def _build_recall_block(
             )
             lines.append(f"- {nd_label}: {'; '.join(facts)}")
             total_facts_emitted += len(facts)
+
+    # Always include the user hub so the user's OWN relations (padece, toma,
+    # trabaja_en, esposa…) surface for who/what questions — not only the
+    # query-matched nodes. Most relations connect to the hub, so e.g. "Héctor
+    # toma losartán" appears even when the query only matched "hipertensión".
+    try:
+        # Find the hub by its role marker (data.role == 'user'), NOT by name —
+        # the configured user_name can drift (e.g. reset to a placeholder), but
+        # the hub node is always tagged role=user.
+        _hub = (conn or store._connect()).execute(
+            "SELECT id FROM nodes WHERE kind='person' "
+            "AND data LIKE '%\"role\": \"user\"%' LIMIT 1"
+        ).fetchone()
+        if _hub:
+            matched_ids.add(_hub["id"])
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Graph relations touching the matched nodes — lets the model answer
+    # who/what/where questions ("¿quién me detectó hipertensión?") by reading the
+    # typed edges (hipertensión diagnosticada por Dra. López; tratada con losartán).
+    rel_lines = _graph_relation_lines(matched_ids, conn or store._connect())
+    if rel_lines:
+        rel_header = "RELATIONS (graph connections)" if _is_en else "RELACIONES (conexiones del grafo)"
+        lines.append(f"- {rel_header}: " + "; ".join(rel_lines))
 
     if len(lines) <= 1:
         return ""

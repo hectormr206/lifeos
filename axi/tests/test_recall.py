@@ -555,3 +555,34 @@ def test_undated_reading_grouped_under_sin_fecha_not_created_at(monkeypatch):
     for ln in result.splitlines():
         if "presión 108/80" in ln:
             assert "Sin fecha de medición" in ln, f"undated reading was dated: {ln!r}"
+
+
+def test_graph_relation_lines_formats_dedups_and_skips_structural():
+    """The graph-relations recall section: typed edges become readable lines,
+    structural edges (about/same_day/…) are excluded, and duplicates collapse."""
+    from axi.recall import _graph_relation_lines
+
+    rows = [
+        {"f": "hipertensión", "k": "diagnosticada_por", "t": "Dra. López"},
+        {"f": "Héctor", "k": "toma", "t": "losartán de 50 mg"},
+        {"f": "Héctor", "k": "about", "t": "dormí 8h"},            # structural → skip
+        {"f": "hipertensión", "k": "diagnosticada_por", "t": "Dra. López"},  # dup
+    ]
+
+    class _Conn:
+        def execute(self, sql, params):
+            class _C:
+                def fetchall(self_inner):
+                    return rows
+            return _C()
+
+    out = _graph_relation_lines({1, 2}, _Conn())
+    assert "hipertensión diagnosticada por Dra. López" in out
+    assert "Héctor toma losartán de 50 mg" in out
+    assert not any("about" in line for line in out)   # structural excluded
+    assert len(out) == len(set(out))                  # deduped
+
+
+def test_graph_relation_lines_empty_when_no_matches():
+    from axi.recall import _graph_relation_lines
+    assert _graph_relation_lines(set(), None) == []
