@@ -530,6 +530,57 @@ def parse_agentic_reminder(
     )
 
 
+# Recurrence words that signal a repeating schedule. "cada" is included on its
+# own (broad) per the gate's purpose: it only decides whether the LLM fallback
+# is worth trying AFTER the regex parsers have already failed.
+_RECURRENCE_WORDS = re.compile(
+    r"\b(?:todos\s+los\s+d[ií]as|diariamente|a\s+diario|cada\s+d[ií]a|"
+    r"cada\s+semana|semanal(?:mente)?|todas\s+las\s+ma(?:ñ|n)anas|cada)\b",
+    re.IGNORECASE,
+)
+
+# A bare clock time ("8:30") or an am/pm time ("7 am", "7pm"). Complements
+# _WHEN_MARKER_RE / _HOUR_AT which already cover "a las …" and "mañana/hoy".
+_CLOCK_RE = re.compile(
+    r"\b\d{1,2}:\d{2}\b|\b\d{1,2}\s*[ap]\.?\s?m\.?\b", re.IGNORECASE
+)
+
+
+def looks_schedulish(text: str) -> bool:
+    """Cheap regex-only gate: does `text` carry ANY scheduling signal?
+
+    Used to decide whether the (expensive) LLM schedule-parser fallback is worth
+    invoking. Never calls an LLM. Returns True when the text contains a reminder
+    trigger, an agentic delivery verb, a recurrence word, or a time marker
+    (markers, "a las", "mañana", "hoy", a clock time, or am/pm); False otherwise.
+
+    Deliberately permissive: an agentic verb ("tráeme las noticias") or a bare
+    "cada" counts on its own, because the gate runs only AFTER the deterministic
+    regex parsers have already declined, so a false positive costs at most one
+    short, thinking-disabled brain call.
+    """
+    if not text or not isinstance(text, str):
+        return False
+    t = text.strip()
+    if not t:
+        return False
+    if _REMINDER_TRIGGER.match(t):
+        return True
+    if (
+        _AGENTIC_ENCLITIC.search(t)
+        or _AGENTIC_NATURAL.search(t)
+        or _AGENTIC_INFINITIVE.search(t)
+    ):
+        return True
+    if _RECURRENCE_WORDS.search(t):
+        return True
+    if _WHEN_MARKER_RE.search(t):
+        return True
+    if _CLOCK_RE.search(t):
+        return True
+    return False
+
+
 def _next_cron_match(cron: str, tz_name: str) -> datetime | None:
     """Compute the next firing time for a cron expression. Returns None on
     invalid cron strings."""

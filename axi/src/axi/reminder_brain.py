@@ -15,7 +15,8 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 log = logging.getLogger("axi.reminder_brain")
@@ -100,4 +101,152 @@ def parse_when_brain(when_text: str, tz: str) -> datetime | None:
 
     except Exception:  # noqa: BLE001
         log.info("parse_when_brain failed for %r", when_text, exc_info=True)
+        return None
+
+
+# Full schedule parser fallback (reminder OR agentic task). Distinct from
+# parse_when_brain (which only resolves a vague TIME phrase): this asks the LLM
+# to classify the WHOLE message into a scheduling intent and returns a
+# ReminderIntent ready for creation. Used only when the deterministic regex
+# parsers decline AND lifeos.parser.looks_schedulish(text) is True.
+_SCHEDULE_SYSTEM_TEMPLATE = (
+    "You convert a user's Spanish/English message into a scheduling intent. "
+    "The current time is {now_iso} ({tz}). "
+    "Return ONLY a JSON object — no prose, no markdown — with EXACTLY these keys:\n"
+    '{{"is_reminder": true|false, "kind": "agentic"|"message", '
+    '"recurring": true|false, "cron": "<5-field cron>"|null, '
+    '"when_iso": "<ISO8601 with timezone offset>"|null, '
+    '"content": "<the task or reminder text>"}}\n'
+    "Rules:\n"
+    "- is_reminder=false if the text is NOT a request to schedule a reminder or "
+    "recurring task (plain chat, a question, an opinion). When in doubt, false.\n"
+    '- kind="agentic" when fulfilling it requires fetching or curating current '
+    "information (news, weather, 'tráeme/búscame/mándame', or a URL is present). "
+    'kind="message" for a plain personal reminder.\n'
+    "- recurring=true with a 5-field cron (minute hour day-of-month month "
+    "day-of-week) for a repeating schedule; otherwise recurring=false and put a "
+    "single ISO8601 timestamp WITH timezone offset in when_iso.\n"
+    "- CRON RULES: keep day-of-month and month as '*' UNLESS the user explicitly "
+    "names a day number or month. For weekdays use the day-of-week field only "
+    "(Mon=1..Sun=0; ranges '1-5', lists '1,4'). For an hour range like '9 a 18' "
+    "use the hour field range ('9-18'). Never put weekdays into the day-of-month "
+    "field.\n"
+    "- content is the task to run (agentic) or the thing to be reminded "
+    "(message), stripped of the scheduling words.\n"
+    "Examples:\n"
+    '  "tráeme las noticias todos los días a las 8" -> '
+    '{{"is_reminder": true, "kind": "agentic", "recurring": true, '
+    '"cron": "0 8 * * *", "when_iso": null, "content": "las noticias"}}\n'
+    '  "cada lunes y jueves a las 8 tráeme un resumen" -> '
+    '{{"is_reminder": true, "kind": "agentic", "recurring": true, '
+    '"cron": "0 8 * * 1,4", "when_iso": null, "content": "un resumen"}}\n'
+    '  "avísame cada hora de 9 a 18 que revise el correo" -> '
+    '{{"is_reminder": true, "kind": "message", "recurring": true, '
+    '"cron": "0 9-18 * * *", "when_iso": null, "content": "revisar el correo"}}\n'
+    '  "recordame llamar al dentista mañana a las 9" -> '
+    '{{"is_reminder": true, "kind": "message", "recurring": false, '
+    '"cron": null, "when_iso": "<tomorrow 09:00 with offset>", '
+    '"content": "llamar al dentista"}}\n'
+    '  "hola cómo estás" -> '
+    '{{"is_reminder": false, "kind": "message", "recurring": false, '
+    '"cron": null, "when_iso": null, "content": ""}}'
+)
+
+_SCHEDULE_USER_TEMPLATE = "Convertí este mensaje a JSON: {text}"
+
+
+def parse_reminder_brain(
+    text: str,
+    tz: str,
+    *,
+    ask: Optional[Callable[..., str]] = None,
+):
+    """Ask the LLM to parse `text` into a full scheduling intent.
+
+    Returns a ``lifeos.parser.ReminderIntent`` on success, or ``None`` on ANY
+    failure (timeout, invalid JSON, not-a-reminder, invalid cron, naive/missing
+    datetime, missing fields). NEVER raises.
+
+    `ask` is an injectable brain-call callable (default: ``axi.brain.ask``) so
+    tests don't hit a real LLM. The model is invoked with thinking disabled
+    (``think=False``) and a small token budget + short timeout.
+    """
+    if not text or not isinstance(text, str):
+        return None
+
+    try:
+        from lifeos.parser import ReminderIntent, _next_cron_match
+
+        _ask = ask
+        if _ask is None:
+            from axi import brain as _brain
+
+            _ask = _brain.ask
+
+        local_tz = ZoneInfo(tz)
+        now_iso = datetime.now(local_tz).isoformat(timespec="seconds")
+        system = _SCHEDULE_SYSTEM_TEMPLATE.format(now_iso=now_iso, tz=tz)
+        prompt = _SCHEDULE_USER_TEMPLATE.format(text=text)
+
+        raw = _ask(
+            prompt=prompt,
+            system=system,
+            max_tokens=200,
+            timeout=6.0,
+            think=False,
+        )
+
+        m = _FENCE_RE.search(raw)
+        if m:
+            raw = m.group(1)
+        data = json.loads(raw.strip())
+    except Exception:  # noqa: BLE001
+        log.info("parse_reminder_brain: brain/JSON step failed for %r", text, exc_info=True)
+        return None
+
+    try:
+        if not isinstance(data, dict) or not data.get("is_reminder"):
+            return None
+
+        kind = data.get("kind")
+        if kind not in ("agentic", "message"):
+            kind = "message"
+
+        content = (data.get("content") or "").strip()
+        if not content:
+            return None
+
+        if bool(data.get("recurring")):
+            cron = data.get("cron")
+            if not isinstance(cron, str) or len(cron.split()) != 5:
+                return None
+            from apscheduler.triggers.cron import CronTrigger
+
+            CronTrigger.from_crontab(cron)  # raises on invalid → caught below
+            when = _next_cron_match(cron, tz)
+            if when is None:
+                return None
+            recurrence: str | None = cron
+        else:
+            when_iso = data.get("when_iso")
+            if not when_iso:
+                return None
+            parsed = datetime.fromisoformat(str(when_iso))
+            if parsed.tzinfo is None:
+                return None
+            when = parsed.astimezone(timezone.utc)
+            if when <= datetime.now(timezone.utc):
+                # Mirror parse_reminder: a past one-shot is bumped to the future.
+                when = when + timedelta(days=1)
+            recurrence = None
+
+        return ReminderIntent(
+            message=content,
+            when=when,
+            recurrence=recurrence,
+            action_kind=kind,
+            action_prompt=content if kind == "agentic" else None,
+        )
+    except Exception:  # noqa: BLE001
+        log.info("parse_reminder_brain: intent build failed for %r", text, exc_info=True)
         return None

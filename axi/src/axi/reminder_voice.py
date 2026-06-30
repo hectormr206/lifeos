@@ -51,6 +51,19 @@ def try_create_reminder(text: str) -> str | None:
         log.exception("parse_reminder raised unexpectedly — falling through")
         return None
 
+    # LLM schedule fallback: the regex parser declined. If the text still looks
+    # schedulish, ask the brain (thinking disabled). Non-schedulish speech never
+    # pays this cost — it falls straight through to the intent classifier.
+    if ri is None:
+        try:
+            from lifeos.parser import looks_schedulish
+            from axi.reminder_brain import parse_reminder_brain
+            if looks_schedulish(text):
+                ri = parse_reminder_brain(text, tz_name)
+        except Exception:  # noqa: BLE001
+            log.exception("schedule brain fallback raised — falling through")
+            ri = None
+
     if ri is None:
         return None
 
@@ -60,6 +73,8 @@ def try_create_reminder(text: str) -> str | None:
             message=ri.message,
             channel="push",
             recurrence=ri.recurrence,
+            action_kind=ri.action_kind,
+            action_prompt=ri.action_prompt,
         )
         get_scheduler().schedule(rem)
 

@@ -84,6 +84,8 @@ def test_creates_reminder_when_parser_succeeds():
         message=intent.message,
         channel="push",
         recurrence=intent.recurrence,
+        action_kind=intent.action_kind,
+        action_prompt=intent.action_prompt,
     )
 
     # scheduler.schedule(reminder) must be called
@@ -105,6 +107,7 @@ def test_handles_parser_returning_none():
 
     with (
         patch("axi.reminder_voice.parse_reminder", return_value=None),
+        patch("axi.reminder_brain.parse_reminder_brain", return_value=None),
         patch("axi.reminder_voice.reminders.create") as mock_create,
     ):
         result = try_create_reminder("recordame algo")
@@ -150,10 +153,53 @@ def test_brain_fallback_is_wired():
         captured["brain_fallback"] = brain_fallback
         return None  # no reminder — just capturing the kwarg
 
-    with patch("axi.reminder_voice.parse_reminder", side_effect=fake_parse):
+    with (
+        patch("axi.reminder_voice.parse_reminder", side_effect=fake_parse),
+        patch("axi.reminder_brain.parse_reminder_brain", return_value=None),
+    ):
         try_create_reminder("recordame algo después de comer")
 
     assert captured.get("brain_fallback") is parse_when_brain
+
+
+# ---------------------------------------------------------------------------
+# test_brain_schedule_fallback_creates_reminder
+# ---------------------------------------------------------------------------
+
+def test_brain_schedule_fallback_creates_reminder():
+    """parse_reminder returns None but text is schedulish → brain fallback runs
+    and its intent is created/scheduled."""
+    from axi.reminder_voice import try_create_reminder
+
+    intent = _make_reminder_intent(message="las noticias")
+    fake_rem = _make_reminder(rid="REMBR", message="las noticias")
+
+    with (
+        patch("axi.reminder_voice.parse_reminder", return_value=None),
+        patch("axi.reminder_brain.parse_reminder_brain", return_value=intent) as mock_brain,
+        patch("axi.reminder_voice.reminders.create", return_value=fake_rem) as mock_create,
+        patch("axi.reminder_voice.get_scheduler", return_value=MagicMock()),
+        patch("axi.reminder_voice.notify"),
+    ):
+        result = try_create_reminder("todos los días tráeme las noticias")
+
+    assert result == "REMBR"
+    mock_brain.assert_called_once()
+    mock_create.assert_called_once()
+
+
+def test_brain_fallback_skipped_for_non_schedulish():
+    """Non-schedulish speech must NOT invoke the brain schedule fallback."""
+    from axi.reminder_voice import try_create_reminder
+
+    with (
+        patch("axi.reminder_voice.parse_reminder", return_value=None),
+        patch("axi.reminder_brain.parse_reminder_brain") as mock_brain,
+    ):
+        result = try_create_reminder("hola cómo estás")
+
+    assert result is None
+    mock_brain.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
