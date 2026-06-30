@@ -250,3 +250,99 @@ def parse_reminder_brain(
     except Exception:  # noqa: BLE001
         log.info("parse_reminder_brain: intent build failed for %r", text, exc_info=True)
         return None
+
+
+def cached_or_brain_parse(
+    text: str,
+    tz: str,
+    *,
+    ask: Optional[Callable[..., str]] = None,
+):
+    """Resolve a schedule from the learned cache, else fall back to the 4B.
+
+    Shared orchestrator for both call sites (chat + voice). It sits in FRONT of
+    ``parse_reminder_brain``:
+
+    1. Normalize the phrasing into a stable key.
+    2. On a cache HIT for a recurring schedule, rebuild a ``ReminderIntent``
+       from the cached (kind, recurrence, content) WITHOUT calling the 4B —
+       ``when`` is the next cron match. If the cached cron can't be resolved
+       (corrupt/uninvalidatable row), treat it as a miss and fall through.
+    3. On a cache MISS, call ``parse_reminder_brain``, log the
+       "regex-missed → 4B" event, and — for RECURRING results only — cache the
+       (normalized phrasing → schedule) so the next near-identical phrasing is
+       served instantly. One-shot (relative-time) intents are never cached.
+
+    Cache/log are best-effort DATA only: any failure is swallowed and the 4B
+    result still flows. NEVER raises.
+
+    `ask` is forwarded to ``parse_reminder_brain`` so tests can inject a fake
+    brain and assert it is called exactly once across repeated phrasings.
+    """
+    try:
+        from lifeos import store
+        from lifeos.parser import (
+            ReminderIntent,
+            _next_cron_match,
+            normalize_schedule_text,
+        )
+    except Exception:  # noqa: BLE001
+        # Cache layer unavailable — degrade gracefully to a plain brain call.
+        return parse_reminder_brain(text, tz, ask=ask)
+
+    norm = ""
+    hit = None
+    try:
+        norm = normalize_schedule_text(text)
+        if norm:
+            hit = store.schedule_cache_get(norm)
+    except Exception:  # noqa: BLE001
+        log.info("cached_or_brain_parse: cache lookup failed for %r", text, exc_info=True)
+        hit = None
+
+    if hit:
+        try:
+            recurrence = hit.get("recurrence")
+            kind = hit.get("kind") or "message"
+            content = (hit.get("content") or "").strip()
+            when = _next_cron_match(recurrence, tz) if recurrence else None
+            if when is not None and content:
+                return ReminderIntent(
+                    message=content,
+                    when=when,
+                    recurrence=recurrence,
+                    action_kind=kind,
+                    action_prompt=content if kind == "agentic" else None,
+                )
+            # Corrupt/uninvalidatable row → fall through to the 4B.
+        except Exception:  # noqa: BLE001
+            log.info("cached_or_brain_parse: cache rebuild failed for %r", text, exc_info=True)
+
+    # Cache MISS (or unusable hit): invoke the 4B.
+    ri = parse_reminder_brain(text, tz, ask=ask)
+
+    try:
+        store.schedule_miss_log_add(
+            raw_text=text,
+            norm_text=norm,
+            resolved=(ri is not None),
+            kind=ri.action_kind if ri else None,
+            recurrence=ri.recurrence if ri else None,
+        )
+    except Exception:  # noqa: BLE001
+        log.info("cached_or_brain_parse: miss-log failed for %r", text, exc_info=True)
+
+    try:
+        # ONLY recurring parses are cached (stable cron). One-shots have a
+        # relative time and MUST be re-parsed every time.
+        if ri is not None and ri.recurrence:
+            store.schedule_cache_put(
+                norm,
+                kind=ri.action_kind,
+                recurrence=ri.recurrence,
+                content=ri.action_prompt or ri.message,
+            )
+    except Exception:  # noqa: BLE001
+        log.info("cached_or_brain_parse: cache put failed for %r", text, exc_info=True)
+
+    return ri

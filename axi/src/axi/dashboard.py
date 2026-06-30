@@ -4358,9 +4358,9 @@ async def api_chat_ask(request: Request):
         if _schedulish:
             ri = None
             try:
-                from axi.reminder_brain import parse_reminder_brain
+                from axi.reminder_brain import cached_or_brain_parse
                 _tz = str(config.get("timezone", "America/Mexico_City"))
-                ri = parse_reminder_brain(parse_text, _tz)
+                ri = cached_or_brain_parse(parse_text, _tz)
             except Exception:  # noqa: BLE001
                 ri = None
             if ri is not None:

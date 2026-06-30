@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -22,6 +23,28 @@ from typing import Callable, Optional
 import dateparser
 
 log = logging.getLogger("lifeos.parser")
+
+
+# Punctuation/space stripped from the ends of a normalized schedule key.
+_NORM_STRIP = " \t\n\r.,;:!?¡¿\"'`()[]{}-—–…"
+
+
+def normalize_schedule_text(text: str) -> str:
+    """Normalize a schedule phrasing into a stable cache key.
+
+    Lowercases, strips accents (NFKD decompose + drop combining marks),
+    collapses any whitespace run to a single space, and strips leading/trailing
+    punctuation and spaces. So "Quiero que todos los días me mandes X" and
+    "quiero  que todos los dias me mandes x." map to the same key.
+
+    Pure function — stdlib only, no side effects.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    decomposed = unicodedata.normalize("NFKD", text)
+    no_accents = "".join(c for c in decomposed if not unicodedata.combining(c))
+    collapsed = re.sub(r"\s+", " ", no_accents.lower())
+    return collapsed.strip(_NORM_STRIP)
 
 
 # Trigger verbs at the start of the message (with optional leading "axi, ").

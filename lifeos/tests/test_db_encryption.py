@@ -89,11 +89,11 @@ def test_key_file_persisted_across_connects(tmp_path: Path) -> None:
 
 
 def test_apply_migrations_on_encrypted_db(tmp_path: Path) -> None:
-    """All 9 migrations apply cleanly to a fresh encrypted DB."""
+    """All 10 migrations apply cleanly to a fresh encrypted DB."""
     from lifeos import store
 
     version = store.apply_migrations()
-    assert version == 9, f"expected version 9, got {version}"
+    assert version == 10, f"expected version 10, got {version}"
 
     # Spot-check all expected tables exist
     conn = store.connect()
@@ -111,6 +111,8 @@ def test_apply_migrations_on_encrypted_db(tmp_path: Path) -> None:
         "edges",
         "fastpath_metrics",
         "notif_log",
+        "schedule_cache",
+        "schedule_miss_log",
     }
     missing = expected - tables
     assert not missing, f"missing tables after migrations: {missing}"
