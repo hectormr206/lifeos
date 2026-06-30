@@ -746,6 +746,9 @@
       return {
         commandFeedback: null,
         _commandFeedbackTimer: null,
+        // Name of the quick-action command currently in flight, so the tile that
+        // fired it can show an "activating" state. null when nothing is running.
+        activeCmd: null,
         async refresh() {
           try {
             const r = await fetch('/api/snapshot');
@@ -806,21 +809,51 @@
             message: ' — respuesta inesperada del daemon: ' + (response || 'vacía'),
           };
         },
+        // Friendly confirmation for the non-meeting quick actions (toggle, ask,
+        // look, clear). The daemon only returns rich text for meetings, so here
+        // we describe what the user just triggered — that's the "info on
+        // activation" each tile lacked before. `wasBusy` lets toggle explain its
+        // direction (started listening vs. stopped).
+        genericCommandFeedback(name, data, httpOk, wasBusy) {
+          const failed = !httpOk || (data && data.ok === false);
+          if (failed) {
+            return {
+              type: 'error',
+              title: 'No pude completar la acción',
+              message: ' — ' + ((data && data.error) || (data && data.response) || 'sin respuesta del daemon'),
+            };
+          }
+          const map = {
+            toggle: wasBusy
+              ? { title: 'Listo', message: ' — dejé de escuchar.' }
+              : { title: 'Te escucho', message: ' — hablá, estoy grabando.' },
+            ask:   { title: 'Mirando tu pantalla', message: ' — Axi analiza lo que ves y responde.' },
+            look:  { title: 'Mirando la cámara', message: ' — Axi está usando la webcam para responder.' },
+            clear: { title: 'Charla reiniciada', message: ' — borré el contexto, arrancamos de cero.' },
+          };
+          const base = map[name] || { title: 'Acción enviada', message: '' };
+          return { type: 'success', ...base };
+        },
         async cmd(name) {
           const isMeetingCommand = name === 'meeting_start' || name === 'meeting_stop';
+          // Snapshot the "busy" state BEFORE the command so toggle feedback knows
+          // whether it just started or stopped listening. Self-contained (no
+          // global isBusy()) so cmd() works on every page that uses this store.
+          const prevState = Alpine.store('snap')?.state || '';
+          const wasBusy = ['recording', 'thinking', 'speaking'].includes(prevState) || prevState.startsWith('transcribing');
+          this.activeCmd = name;
           try {
             const r = await fetch('/api/cmd/' + name, { method: 'POST' });
             let data = {};
             try { data = await r.json(); } catch (e) { data = { ok: false, error: 'respuesta JSON inválida' }; }
-            if (isMeetingCommand) {
-              const feedback = this.meetingCommandFeedback(name, data, r.ok);
-              this.showCommandFeedback(feedback.type, feedback.title, feedback.message);
-            }
+            const feedback = isMeetingCommand
+              ? this.meetingCommandFeedback(name, data, r.ok)
+              : this.genericCommandFeedback(name, data, r.ok, wasBusy);
+            this.showCommandFeedback(feedback.type, feedback.title, feedback.message);
           } catch (e) {
-            if (isMeetingCommand) {
-              this.showCommandFeedback('error', 'No pude comunicarme con el dashboard', ' — ' + (e && e.message ? e.message : e));
-            }
+            this.showCommandFeedback('error', 'No pude comunicarme con el dashboard', ' — ' + (e && e.message ? e.message : e));
           } finally {
+            this.activeCmd = null;
             await this.refresh();
           }
         },
