@@ -48,6 +48,29 @@
   }
   .qc-tile:active { transform:scale(0.95); background:var(--panel2); }
   .qc-ico { font-size:2rem; line-height:1; }
+  /* Quick-action tiles — same visual language as .qc-tile (accent border-top,
+     panel bg, press feedback) but left-aligned with a title + a live subtitle.
+     The subtitle is where each action explains itself and surfaces live state. */
+  .qa-tile {
+    display:flex; flex-direction:column; align-items:flex-start; gap:0.3rem;
+    padding:0.8rem 0.9rem; text-align:left; width:100%;
+    font:inherit; color:inherit; cursor:pointer;
+    background:var(--panel); border:1px solid var(--border);
+    border-top:3px solid var(--accent, var(--border));
+    border-radius:0.65rem; min-height:5.4rem; transition:transform .1s, background .15s;
+  }
+  .qa-tile:hover { background:var(--panel2); }
+  .qa-tile:active { transform:scale(0.97); }
+  .qa-tile.qa-active { background:rgba(255,107,157,0.12); border-color:var(--pink); }
+  /* qa-busy: the tile whose command is mid-flight. Lifts toward its own accent
+     and pulses so the click registers instantly, before the toast lands. */
+  .qa-tile.qa-busy { background:var(--panel2); box-shadow:0 0 0 1px var(--accent, var(--border)) inset; animation:qaBusy 0.9s ease-in-out infinite; }
+  @keyframes qaBusy { 0%,100%{opacity:1} 50%{opacity:0.6} }
+  @media (prefers-reduced-motion: reduce){ .qa-tile.qa-busy { animation:none; } }
+  .qa-tile .qa-icon { font-size:1.5rem; line-height:1; }
+  .qa-tile .qa-title { font-weight:600; font-size:0.92rem; }
+  .qa-tile .qa-sub { font-size:0.72rem; line-height:1.25; }
+  .qa-wide { flex-direction:row; align-items:center; gap:0.7rem; min-height:auto; }
 </style>
 
 <template x-if="$store.snap">
@@ -369,31 +392,92 @@
     </section>
 
     <!-- ─── quick actions ─── -->
+    <!-- Each action is a self-describing tile (icon + title + live subtitle)
+         instead of a cramped row of terse buttons. The subtitle explains what
+         the action does and, while it runs, surfaces live snapshot state so the
+         user always sees WHAT is happening. Color-coded accents mirror the
+         domain tiles above for a consistent, intuitive language. -->
     <section class="panel p-4">
-      <div class="text-sm muted mb-3">Acciones rápidas</div>
-      <div class="flex flex-wrap gap-2">
-        <!-- btn-primary is applied dynamically: highlight only when Axi is in
-             an active capture/process state, not as a permanent style. -->
-        <button class="btn" :class="{'btn-primary': isBusy()}" @click="cmd('toggle')">🎤 Dictar / detener</button>
-        <button class="btn" @click="cmd('ask')">👁 Preguntar con pantalla</button>
-        <button class="btn" @click="cmd('look')">📷 Preguntar con cámara</button>
+      <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+        <div class="text-sm muted">Acciones rápidas</div>
+        <!-- live overall state, so the header itself is informative -->
+        <div class="text-xs flex items-center gap-2" :style="isBusy() ? 'color: var(--pink)' : 'color: var(--muted)'">
+          <span class="state-dot" :class="['state-' + ($store.snap.state || 'unknown').split(':')[0], isBusy() ? 'pulse' : '']"></span>
+          <span x-text="stateLabel($store.snap.state || 'unknown')"></span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <!-- Dictar: reflects live capture state; highlights while Axi is busy and
+             while its own command is in flight. -->
+        <button type="button" class="qa-tile" :class="{'qa-active': isBusy(), 'qa-busy': activeCmd === 'toggle'}"
+                style="--accent: var(--pink)" :aria-pressed="isBusy()"
+                :disabled="activeCmd && activeCmd !== 'toggle'" @click="cmd('toggle')">
+          <span class="qa-icon" x-text="activeCmd === 'toggle' ? '⏳' : '🎤'"></span>
+          <span class="qa-title" x-text="isBusy() ? 'Detener' : 'Dictar'"></span>
+          <span class="qa-sub muted"
+                x-text="isBusy() ? stateLabel($store.snap.state || '') : 'Hablá y Axi te escucha'"></span>
+        </button>
+
+        <!-- Preguntar con pantalla -->
+        <button type="button" class="qa-tile" :class="{'qa-busy': activeCmd === 'ask'}"
+                style="--accent: var(--blue)" :disabled="activeCmd && activeCmd !== 'ask'" @click="cmd('ask')">
+          <span class="qa-icon" x-text="activeCmd === 'ask' ? '⏳' : '👁'"></span>
+          <span class="qa-title">Ver pantalla</span>
+          <span class="qa-sub muted" x-text="activeCmd === 'ask' ? 'Analizando tu pantalla…' : 'Axi mira tu pantalla y responde'"></span>
+        </button>
+
+        <!-- Preguntar con cámara -->
+        <button type="button" class="qa-tile" :class="{'qa-busy': activeCmd === 'look'}"
+                style="--accent: var(--teal)" :disabled="activeCmd && activeCmd !== 'look'" @click="cmd('look')">
+          <span class="qa-icon" x-text="activeCmd === 'look' ? '⏳' : '📷'"></span>
+          <span class="qa-title">Ver cámara</span>
+          <span class="qa-sub muted" x-text="activeCmd === 'look' ? 'Mirando por la webcam…' : 'Axi usa la webcam y responde'"></span>
+        </button>
+
+        <!-- Conversación nueva -->
+        <button type="button" class="qa-tile" :class="{'qa-busy': activeCmd === 'clear'}"
+                style="--accent: var(--muted)" :disabled="activeCmd && activeCmd !== 'clear'" @click="cmd('clear')">
+          <span class="qa-icon" x-text="activeCmd === 'clear' ? '⏳' : '🧹'"></span>
+          <span class="qa-title">Nueva charla</span>
+          <span class="qa-sub muted" x-text="activeCmd === 'clear' ? 'Borrando el contexto…' : 'Borra el contexto y arranca de cero'"></span>
+        </button>
+      </div>
+
+      <!-- Reunión: one card that turns into a live panel when active. Inactive →
+           an "iniciar" tile; active → duration + mic/sys/screens telemetry. This
+           replaces the old separate start/stop buttons + detached banner. -->
+      <div class="mt-3">
         <template x-if="!$store.snap.meeting.active">
-          <button class="btn" @click="cmd('meeting_start')">🎙 Iniciar reunión</button>
+          <button type="button" class="qa-tile qa-wide" :class="{'qa-busy': activeCmd === 'meeting_start'}"
+                  style="--accent: var(--purple)" :disabled="activeCmd && activeCmd !== 'meeting_start'" @click="cmd('meeting_start')">
+            <span class="qa-icon" x-text="activeCmd === 'meeting_start' ? '⏳' : '🎙'"></span>
+            <span>
+              <span class="qa-title" style="display:block">Iniciar reunión</span>
+              <span class="qa-sub muted">Graba micrófono + audio del sistema + pantalla</span>
+            </span>
+          </button>
         </template>
         <template x-if="$store.snap.meeting.active">
-          <button class="btn" @click="cmd('meeting_stop')" style="border-color: var(--red); color: var(--red);">⏹ Detener reunión</button>
+          <div class="panel2 p-3" style="border-color: var(--red)">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <div class="flex items-center gap-2 text-sm">
+                <span class="state-dot pulse" style="background: var(--red)"></span>
+                <strong style="color: var(--red)">Reunión activa</strong>
+                <span class="muted">#<span x-text="$store.snap.meeting.id"></span></span>
+                <span class="font-mono" x-text="formatDuration($store.snap.meeting.duration_s)"></span>
+              </div>
+              <button class="btn" @click="cmd('meeting_stop')"
+                      style="border-color: var(--red); color: var(--red);">⏹ Detener reunión</button>
+            </div>
+            <div class="flex flex-wrap gap-4 mt-2 text-xs muted">
+              <span>🎤 mic <span x-text="$store.snap.meeting.mic"></span></span>
+              <span>🔊 sistema <span x-text="$store.snap.meeting.sys"></span></span>
+              <span>🖥 pantallas <span x-text="$store.snap.meeting.screens"></span></span>
+            </div>
+          </div>
         </template>
-        <button class="btn ml-auto" @click="cmd('clear')">🧹 Conversación nueva</button>
       </div>
-      <template x-if="$store.snap.meeting.active">
-        <div class="mt-3 p-3 panel2 text-sm">
-          🎙 <strong>Reunión activa</strong> #<span x-text="$store.snap.meeting.id"></span>
-          · <span x-text="formatDuration($store.snap.meeting.duration_s)"></span>
-          · mic <span x-text="$store.snap.meeting.mic"></span>
-          · sys <span x-text="$store.snap.meeting.sys"></span>
-          · screens <span x-text="$store.snap.meeting.screens"></span>
-        </div>
-      </template>
     </section>
 
     <!-- ─── service health + system stats ─── -->
