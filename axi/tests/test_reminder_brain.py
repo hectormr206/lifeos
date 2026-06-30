@@ -92,3 +92,36 @@ def test_parse_when_brain_passes_now_and_tz_to_prompt() -> None:
     assert "2026" in system or "2026" in prompt
     # User prompt must contain the original when_text
     assert "almuerzo" in prompt
+
+
+def test_system_prompt_instructs_null_for_non_temporal_text() -> None:
+    """The prompt must tell the model to return null for non-temporal text so
+    instructions like 'hacer las pruebas y borrarlas' don't become reminders."""
+    from axi.reminder_brain import parse_when_brain
+
+    captured: dict = {}
+
+    def _fake_ask(prompt: str, system: str = "", **kwargs):
+        captured["system"] = system
+        return json.dumps({"when_iso": None})
+
+    with patch("axi.brain.ask", side_effect=_fake_ask):
+        parse_when_brain("hacer las pruebas y borrarlas", "America/Mexico_City")
+
+    system = captured.get("system", "").lower()
+    assert "null" in system
+    # Must explicitly steer away from inventing/defaulting a time.
+    assert "task" in system or "instruction" in system or "no real temporal" in system
+
+
+def test_non_temporal_instruction_returns_none_when_brain_says_null() -> None:
+    """End-to-end of the guard: a task instruction (the model returns null)
+    yields no datetime, so parse_reminder won't create a bogus reminder."""
+    from axi.reminder_brain import parse_when_brain
+
+    with patch("axi.brain.ask", return_value=json.dumps({"when_iso": None})):
+        result = parse_when_brain(
+            "hacer tus pruebas y tus tests, pero borrarlos", "America/Mexico_City"
+        )
+
+    assert result is None
