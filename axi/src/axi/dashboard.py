@@ -3371,6 +3371,63 @@ def _try_nano_extract(
         return None
 
 
+def _create_and_confirm_reminder(ri, lang: str):
+    """Create + schedule a reminder from a ReminderIntent and build its Spanish
+    confirmation string. Returns ``(reminder, answer)``.
+
+    Centralizes the create/schedule/confirmation logic shared by the regex
+    fast-paths and the LLM schedule fallback. Handles both ``action_kind``
+    values: agentic (Boletines) and message (static reminder). The confirmation
+    always states the scheduled local time and whether it recurs.
+    """
+    rem = lifeos_reminders.create(
+        when=ri.when, message=ri.message, channel="push",
+        recurrence=ri.recurrence,
+        action_kind=ri.action_kind, action_prompt=ri.action_prompt,
+    )
+    get_scheduler().schedule(rem)
+
+    local_when = ri.when.astimezone(ZoneInfo("America/Mexico_City"))
+    hhmm = local_when.strftime("%H:%M")
+
+    if ri.action_kind == "agentic":
+        cron_parts = (ri.recurrence or "").split()
+        is_daily = (
+            len(cron_parts) == 5
+            and cron_parts[1].isdigit()
+            and cron_parts[2] == "*"
+            and cron_parts[3] == "*"
+            and cron_parts[4] == "*"
+        )
+        if ri.recurrence and is_daily:
+            answer = (
+                f"Listo, lo programé todos los días a las {hhmm}; "
+                f"lo vas a ver en Boletines. Si querés otro horario, decime."
+            )
+        elif ri.recurrence:
+            answer = (
+                f"Listo, lo voy a preparar de forma recurrente "
+                f"(próximo a las {hhmm}); lo vas a ver en Boletines."
+            )
+        else:
+            answer = (
+                f"Listo, lo programé a las {hhmm}; lo vas a ver en Boletines."
+            )
+    else:
+        formatted_when = lifeos_localize.format_local_when(local_when, lang)
+        if ri.recurrence:
+            answer = lifeos_localize.msg(
+                "reminder_recurring", lang,
+                cron=ri.recurrence, when=formatted_when, message=ri.message,
+            )
+        else:
+            answer = lifeos_localize.msg(
+                "reminder_one_shot", lang,
+                when=formatted_when, message=ri.message,
+            )
+    return rem, answer
+
+
 @app.post("/api/chat/ask")
 async def api_chat_ask(request: Request):
     if not bool(config.get("chat_enabled", True)):
@@ -4286,6 +4343,45 @@ async def api_chat_ask(request: Request):
                         "reminder_id": rem.id}
             except Exception as e:  # noqa: BLE001
                 log.warning("lifeos reminder fast-path failed: %s — falling back to brain", e)
+
+        # ── LLM schedule fallback ────────────────────────────────────────
+        # The deterministic regex parsers above didn't match. If the text still
+        # LOOKS schedulish (cheap regex gate), ask the 4B brain (thinking
+        # disabled, small budget) to parse it. Normal chat (gate=False) never
+        # pays this cost — no extra LLM call.
+        _schedulish = False
+        try:
+            from lifeos.parser import looks_schedulish
+            _schedulish = looks_schedulish(parse_text)
+        except Exception:  # noqa: BLE001
+            _schedulish = False
+        if _schedulish:
+            ri = None
+            try:
+                from axi.reminder_brain import parse_reminder_brain
+                _tz = str(config.get("timezone", "America/Mexico_City"))
+                ri = parse_reminder_brain(parse_text, _tz)
+            except Exception:  # noqa: BLE001
+                ri = None
+            if ri is not None:
+                try:
+                    lang = str(config.get("language", "es-MX"))
+                    rem, answer = _create_and_confirm_reminder(ri, lang)
+                    latency_ms = round((time.monotonic() - start) * 1000)
+                    try:
+                        mem.add(text, answer, has_screenshot=False)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("chat memory.add failed: %s", e)
+                    stage_holder[0] = (
+                        "briefings" if ri.action_kind == "agentic" else "reminders"
+                    )
+                    _record_metric()
+                    return {"answer": answer, "latency_ms": latency_ms,
+                            "spoke": False, "audio_b64": None,
+                            "reminder_id": rem.id,
+                            "briefing": ri.action_kind == "agentic"}
+                except Exception as e:  # noqa: BLE001
+                    log.warning("lifeos brain schedule fallback failed: %s — falling back", e)
 
     # ─── Fallback routing (logging_mode controls the path) ─────────────
     #
