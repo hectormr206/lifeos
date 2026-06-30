@@ -46,10 +46,11 @@ def test_page_text_is_frozen_dataclass():
     from lifeos.web.port import PageText
 
     fields = {f.name for f in dataclasses.fields(PageText)}
-    assert fields == {"url", "text", "ok"}
+    assert fields == {"url", "text", "ok", "links"}
 
     p = PageText(url="http://x.com", text="hello", ok=True)
     assert p.ok is True
+    assert p.links == ()  # defaulted so existing callers/fakes keep working
 
     with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
         p.ok = False  # type: ignore[misc]

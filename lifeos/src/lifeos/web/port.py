@@ -40,6 +40,12 @@ class PageText:
     url: str
     text: str       # extracted plain text, truncated to MAX_PAGE_CHARS
     ok: bool        # False when fetch or extraction failed
+    # Real hyperlinks extracted from the page's anchors, resolved to absolute
+    # URLs: a tuple of {"text": <anchor text>, "url": <absolute href>}. Trafilatura
+    # strips links, so for link-aggregator pages (e.g. Hacker News) this is the
+    # ONLY source of real item URLs — without it a model would have to invent
+    # them. Empty when none were found. Defaulted so existing callers/fakes work.
+    links: tuple = ()
 
 
 # ---------------------------------------------------------------------------

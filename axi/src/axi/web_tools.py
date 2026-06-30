@@ -89,3 +89,62 @@ def web_search_handler(args: dict[str, Any]) -> dict[str, Any]:
             "snippet": item.snippet[:MAX_SNIPPET_CHARS],
         })
     return {"ok": bool(packed), "query": query, "results": packed}
+
+
+def web_fetch_tool_def() -> dict[str, Any]:
+    """OpenAI-compatible web_fetch tool schema.
+
+    Reads ONE specific URL and returns its extracted page text — use this when
+    the user named a concrete site/page (e.g. a news front page) instead of
+    searching the open web.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": (
+                "Lee el contenido ACTUAL de una URL específica (la portada o "
+                "página que el usuario pidió). Usala cuando el pedido trae un "
+                "enlace concreto, en vez de web_search."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL http(s) a leer."},
+                },
+                "required": ["url"],
+            },
+        },
+    }
+
+
+def web_fetch_handler(args: dict[str, Any]) -> dict[str, Any]:
+    """Whitelisted local web_fetch tool handler: read one URL's page text.
+
+    Mirrors web_search_handler's gating. Only http(s) URLs are fetched; the
+    underlying read_fn never raises and truncates to MAX_PAGE_CHARS.
+    """
+    import importlib  # noqa: PLC0415
+    _web_research = importlib.import_module("lifeos.web")
+    _port = importlib.import_module("lifeos.web.port")
+    MAX_PAGE_CHARS = _port.MAX_PAGE_CHARS
+
+    url = str(args.get("url") or "").strip()
+    if not url:
+        return {"ok": False, "error": "url is required", "url": ""}
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return {"ok": False, "error": "only http(s) URLs are allowed", "url": url}
+    if not _web_research.is_enabled():
+        return {"ok": False, "error": "web research is disabled", "url": url}
+    read_fn = _web_research.get_read_fn()
+    if read_fn is None:
+        return {"ok": False, "error": "fetch provider is unavailable", "url": url}
+    page = read_fn(url)
+    text = (getattr(page, "text", "") or "")[:MAX_PAGE_CHARS]
+    links = list(getattr(page, "links", ()) or ())
+    return {
+        "ok": bool(getattr(page, "ok", False) and (text or links)),
+        "url": url,
+        "text": text,
+        "links": links,  # real [{text, url}] anchors — cite these, never invent
+    }

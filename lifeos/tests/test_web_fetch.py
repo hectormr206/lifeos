@@ -152,3 +152,48 @@ def test_read_size_cap(monkeypatch):
         f"resp.read() called with n={captured_n[0]!r}; expected MAX_PAGE_BYTES={MAX_PAGE_BYTES}"
     )
     assert result.url == "http://example.com"
+
+
+# ---------------------------------------------------------------------------
+# Link extraction (real anchors — what lets a model cite genuine URLs)
+# ---------------------------------------------------------------------------
+
+_HN_LIKE = (
+    b'<html><body>'
+    b'<a href="https://quesma.com/blog/qwen">Qwen 3.6 is the sweet spot</a>'
+    b'<a href="item?id=123">42 comments</a>'                 # relative -> resolved
+    b'<a href="#top">top</a>'                                 # fragment -> skipped
+    b'<a href="javascript:void(0)">x</a>'                     # js -> skipped
+    b'<a href="https://quesma.com/blog/qwen">dup</a>'         # dup url -> skipped
+    b'</body></html>'
+)
+
+
+def test_read_extracts_real_links(monkeypatch):
+    import lifeos.web.fetch as fetch_mod
+    import trafilatura
+    monkeypatch.setattr(trafilatura, "extract", lambda html, **kw: "some text")  # noqa: ARG005
+
+    result = fetch_mod.read(
+        "https://news.ycombinator.com/",
+        urlopen=lambda req, timeout=None: _FakeResp(_HN_LIKE),
+    )
+
+    urls = [l["url"] for l in result.links]
+    # Absolute kept, relative resolved against base, fragment/js/dup dropped.
+    assert "https://quesma.com/blog/qwen" in urls
+    assert "https://news.ycombinator.com/item?id=123" in urls
+    assert all(not u.startswith("#") and "javascript:" not in u for u in urls)
+    assert len(urls) == len(set(urls))  # deduped
+    # Anchor text is carried so the model can match title -> url.
+    first = next(l for l in result.links if l["url"].endswith("/blog/qwen"))
+    assert "Qwen" in first["text"]
+
+
+def test_links_empty_on_fetch_failure(monkeypatch):
+    import lifeos.web.fetch as fetch_mod
+    import urllib.error
+    def boom(req, timeout=None):
+        raise urllib.error.URLError("down")
+    result = fetch_mod.read("http://example.com", urlopen=boom)
+    assert result.links == ()

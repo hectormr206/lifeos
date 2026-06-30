@@ -201,3 +201,86 @@ class TestWebSearchHandler:
 
         assert result["ok"] is False
         assert "disabled" in result["error"]
+
+
+class TestWebFetchTool:
+    """web_fetch reads ONE specific URL via the injected read_fn."""
+
+    def _inject(self, fake_web, fake_port):
+        orig_web = sys.modules.get("lifeos.web")
+        orig_port = sys.modules.get("lifeos.web.port")
+        sys.modules["lifeos.web"] = fake_web
+        sys.modules["lifeos.web.port"] = fake_port
+        return orig_web, orig_port
+
+    def _restore(self, orig_web, orig_port):
+        for name, orig in (("lifeos.web", orig_web), ("lifeos.web.port", orig_port)):
+            if orig is not None:
+                sys.modules[name] = orig
+            else:
+                sys.modules.pop(name, None)
+
+    def _fakes(self, *, enabled=True, page=None):
+        web = types.ModuleType("lifeos.web")
+        web.is_enabled = lambda: enabled
+        if page is None:
+            page = types.SimpleNamespace(url="https://news.ycombinator.com/",
+                                         text="Show HN: cool thing", ok=True)
+        web.get_read_fn = lambda: (lambda url: page)
+        port = types.ModuleType("lifeos.web.port")
+        port.MAX_PAGE_CHARS = 3000
+        return web, port
+
+    def test_tool_def_requires_url(self):
+        from axi.web_tools import web_fetch_tool_def
+        d = web_fetch_tool_def()
+        assert d["function"]["name"] == "web_fetch"
+        assert d["function"]["parameters"]["required"] == ["url"]
+
+    def test_reads_url_text(self):
+        from axi.web_tools import web_fetch_handler
+        web, port = self._fakes()
+        orig = self._inject(web, port)
+        try:
+            out = web_fetch_handler({"url": "https://news.ycombinator.com/"})
+        finally:
+            self._restore(*orig)
+        assert out["ok"] is True
+        assert "Show HN" in out["text"]
+
+    def test_rejects_non_http_url(self):
+        from axi.web_tools import web_fetch_handler
+        web, port = self._fakes()
+        orig = self._inject(web, port)
+        try:
+            out = web_fetch_handler({"url": "javascript:alert(1)"})
+        finally:
+            self._restore(*orig)
+        assert out["ok"] is False
+        assert "http" in out["error"]
+
+    def test_disabled_returns_error(self):
+        from axi.web_tools import web_fetch_handler
+        web, port = self._fakes(enabled=False)
+        orig = self._inject(web, port)
+        try:
+            out = web_fetch_handler({"url": "https://example.com"})
+        finally:
+            self._restore(*orig)
+        assert out["ok"] is False
+        assert "disabled" in out["error"]
+
+    def test_passes_through_real_links(self):
+        from axi.web_tools import web_fetch_handler
+        page = types.SimpleNamespace(
+            url="https://news.ycombinator.com/", text="front page", ok=True,
+            links=({"text": "Qwen 3.6", "url": "https://quesma.com/blog/qwen"},),
+        )
+        web, port = self._fakes(page=page)
+        orig = self._inject(web, port)
+        try:
+            out = web_fetch_handler({"url": "https://news.ycombinator.com/"})
+        finally:
+            self._restore(*orig)
+        assert out["ok"] is True
+        assert out["links"] == [{"text": "Qwen 3.6", "url": "https://quesma.com/blog/qwen"}]
