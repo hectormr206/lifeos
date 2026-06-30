@@ -399,8 +399,13 @@ def link_fact_to_entities(fact_id: int, text: str, conn=None) -> None:
         return
     try:
         c = conn or store._connect()  # noqa: SLF001
+        # Scan ALL entity kinds (person/place/org PLUS condition/medication/
+        # product/…) so a fact mentioning e.g. "hipertensión" or "losartán" links
+        # to those entities, not only people/places/orgs.
+        placeholders = ",".join("?" * len(_ENTITY_KINDS))
         for r in c.execute(
-            "SELECT id, label, data FROM nodes WHERE kind IN ('person','place','org')"
+            f"SELECT id, label, data FROM nodes WHERE kind IN ({placeholders})",
+            tuple(_ENTITY_KINDS),
         ).fetchall():
             if r["id"] == fact_id:
                 continue

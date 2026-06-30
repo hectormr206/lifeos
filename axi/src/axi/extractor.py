@@ -19,10 +19,12 @@ Heuristics to avoid hallucinated facts:
 """
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import re
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from axi import config, store
 from axi.brain import ask as brain_ask
@@ -34,7 +36,52 @@ log = logging.getLogger("axi.extractor")
 # instead captures the REST (identity, preferences, biographical, relationships).
 _STRUCTURED_DOMAINS = {"health", "finance"}
 
-EXTRACTOR_SYSTEM = """Eres un extractor de hechos para la memoria de largo plazo de Axi.
+# A fact is skipped only when it is a PURE NUMERIC VITAL/MEASUREMENT that the
+# domain bridge already logs (presión 120/80, glucosa 95, peso 64, dormí 7h, a
+# bare NNN/NN). Narrative health/finance facts — diagnoses, medications + doses,
+# treatment status, temporal qualifiers, doctors, plans — are NOT vitals and are
+# kept as durable graph facts. These patterns intentionally match the LOGGED
+# measurement shapes only, never prose.
+_VITAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Blood pressure "120/80", "114/81". Negative look-around so calendar dates
+    # like "14/03/2020" (three groups) are NOT mistaken for a reading.
+    re.compile(r"(?<![\d/])\d{2,3}\s*/\s*\d{2,3}(?![\d/])"),
+    # "presión 120", "tensión 120/80"
+    re.compile(r"\b(?:presi[oó]n|tensi[oó]n)\b[^.\d]{0,12}\d", re.IGNORECASE),
+    # "glucosa 95", "glucemia 110", "azúcar 90"
+    re.compile(r"\b(?:glucosa|glucemia|az[uú]car)\b[^.\d]{0,12}\d", re.IGNORECASE),
+    # "peso 64", "pesé 64"
+    re.compile(r"\b(?:peso|pes[ée])\b[^.\d]{0,12}\d", re.IGNORECASE),
+    # "temperatura 36.8"
+    re.compile(r"\btemperatura\b[^.\d]{0,12}\d", re.IGNORECASE),
+    # "pulso 70", "frecuencia cardíaca 72", "72 bpm"
+    re.compile(r"\b(?:pulso|frecuencia\s+card[ií]aca|fc|bpm)\b[^.\d]{0,12}\d", re.IGNORECASE),
+    re.compile(r"\b\d{2,3}\s*bpm\b", re.IGNORECASE),
+    # "dormí 7h", "dormí 8 horas"
+    re.compile(r"\bdorm[ií]\w*\b[^.\d]{0,12}\d+\s*h", re.IGNORECASE),
+    re.compile(r"\b\d+\s*h(?:oras)?\s+de\s+sue[ñn]o\b", re.IGNORECASE),
+)
+
+
+def _is_logged_vital(label: str, kind: str | None = None, domain: str | None = None) -> bool:
+    """True only when *label* is a pure numeric vital/measurement the domain
+    bridge already logs (e.g. "presión 120/80", "glucosa 95", "dormí 7h",
+    "114/81"). Narrative facts ("diagnosticada hace ~2 años", "le recetaron
+    losartán", "hipertensión") return False so they are kept.
+
+    ``kind``/``domain`` are accepted for call-site symmetry and future tuning but
+    the decision is driven by the measurement-shaped regexes, which never match
+    prose.
+    """
+    del kind, domain  # reserved; decision is regex-driven
+    text = (label or "").strip()
+    if not text:
+        return False
+    return any(p.search(text) for p in _VITAL_PATTERNS)
+
+_EXTRACTOR_SYSTEM_TEMPLATE = """Eres un extractor de hechos para la memoria de largo plazo de Axi.
+HOY es {HOY}. Usá esta fecha para convertir tiempos RELATIVOS en una referencia
+absoluta APROXIMADA (ver más abajo). NUNCA inventes una fecha exacta.
 Te paso un intercambio entre Héctor (usuario) y Axi (asistente).
 Tu trabajo: identificar de 0 a 4 hechos DURADEROS sobre Héctor que valga la pena recordar
 para futuras conversaciones (preferencias, datos biográficos, decisiones, planes,
@@ -52,7 +99,26 @@ fechas EXACTAS y cantidades. Ejemplo CORRECTO: "Esposa: Ana Ríos (civil
 Héctor". NUNCA resumas quitando nombres, fechas o números — son lo más valioso de
 recordar. Si no caben en el label, ponlos COMPLETOS en data.detail.
 
+CAPTURÁ explícitamente, como HECHOS, los matices TEMPORALES, de ESTADO y de
+PRESCRIPCIÓN cuando aparezcan en temas de salud/finanzas — NO los descartes:
+- TEMPORAL: "hace ~2 años", duraciones, "desde ~2024", "todas las mañanas". Si
+  Héctor da un tiempo RELATIVO ("hace más de 2 años") y conocés HOY, el label
+  debe registrar AMBOS: la frase relativa Y un absoluto APROXIMADO y EXPLÍCITAMENTE
+  difuso. Ej: "Hipertensión diagnosticada hace ~2 años (≈2024)". NUNCA pongas una
+  fecha exacta inventada (nada de "15/03/2024"): siempre "≈AAAA" o "hace ~N años".
+- ESTADO: "medicación suspendida", "dejó el losartán", "estable sin medicamento",
+  "automonitoreo matutino". Es un hecho duradero por sí mismo.
+- PRESCRIPCIÓN como HISTORIA, distinta del uso actual: si le recetaron algo aunque
+  lo haya suspendido, guardá un hecho tipo "Le recetaron media pastilla de losartán
+  50 mg (suspendido)" para que "¿qué me recetó?" sea respondible aunque ya no lo tome.
+El label de cada uno de estos hechos DEBE MENCIONAR el/los nombres de las entidades
+relevantes (hipertensión / losartán / Dra. López) para que queden conectados en el grafo.
+Sé conciso y factual; no inundes el grafo: capturá solo los matices con valor.
+
 NO extraigas:
+- Mediciones numéricas sueltas de vitales ("presión 120/80", "glucosa 95",
+  "peso 64", "dormí 7h"): esas las registra otro canal; acá NO las repitas. Pero
+  SÍ guardá el diagnóstico, la condición, la medicación y su estado/temporalidad.
 - Datos efímeros ("hoy hace frío")
 - Especulaciones ("quizás Héctor está cansado")
 - Hechos sobre el mundo en general
@@ -108,7 +174,43 @@ Solo extrae una relación si hay una ENTIDAD NOMBRADA y concreta y un vínculo c
 NUNCA inventes entidades de palabras genéricas ("agua", "cosas", "un rato") ni de
 números de vitales sueltos. Ante la duda, omití. Si no hay relaciones, deja
 "relations": [].
-Si no hay nada que extraer, responde: {"facts": [], "relations": []}"""
+Si no hay nada que extraer, responde: {"facts": [], "relations": []}
+
+EJEMPLO COMPLETO (temporal + estado + prescripción). Si HOY fuera 2026-06-30 y
+Héctor dijera: "hace más de 2 años la Dra Tere me diagnosticó hipertensión, me
+recetó media pastilla de losartán de 50 mg pero la dejé y me reviso casi todas
+las mañanas, estable sin medicamento" -> responder:
+{"facts": [
+  {"kind":"health","label":"Hipertensión diagnosticada hace ~2 años (≈2024) por la Dra. López","data":{},"domain":"health"},
+  {"kind":"health","label":"Le recetaron media pastilla de losartán 50 mg (suspendido)","data":{},"domain":"health"},
+  {"kind":"health","label":"Hipertensión estable sin medicamento, automonitoreo matutino","data":{},"domain":"health"}
+ ],
+ "relations": [
+  {"subject":"Héctor","subject_kind":"person","relation":"padece","object":"hipertensión","object_kind":"condition","aliases":[]},
+  {"subject":"hipertensión","subject_kind":"condition","relation":"diagnosticada_por","object":"Dra. López","object_kind":"person","aliases":[]},
+  {"subject":"hipertensión","subject_kind":"condition","relation":"tratada_con","object":"losartán","object_kind":"medication","aliases":[]}
+ ]}
+Notá: NINGÚN hecho repite el vital numérico, pero el diagnóstico (con su
+temporalidad ≈2024), la prescripción suspendida y el estado SÍ se guardan."""
+
+
+def _build_extractor_system(today_str: str) -> str:
+    """Build the extractor system prompt with today's date injected so the model
+    can turn relative times ("hace 2 años") into an approximate absolute (≈2024).
+    The date is only a reference for fuzzy approximation — the prompt forbids
+    fabricating exact dates.
+    """
+    return _EXTRACTOR_SYSTEM_TEMPLATE.replace("{HOY}", today_str)
+
+
+def _today_str() -> str:
+    """Today's date (YYYY-MM-DD) in the user's configured timezone."""
+    tz_name = config.get("timezone", "America/Mexico_City") or "America/Mexico_City"
+    try:
+        tz = ZoneInfo(str(tz_name))
+    except Exception:  # noqa: BLE001
+        tz = ZoneInfo("UTC")
+    return datetime.datetime.now(tz).strftime("%Y-%m-%d")
 
 
 def _parse_json_strict(text: str) -> dict[str, Any] | None:
@@ -149,9 +251,10 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
         return 0
 
     exchange = f"Héctor dijo: {user_text}\n\nAxi respondió: {axi_text}"
+    system = _build_extractor_system(_today_str())
     raw = brain_ask(
         prompt=exchange,
-        system=EXTRACTOR_SYSTEM,
+        system=system,
         max_tokens=512,
         timeout=60.0,
         think=False,
@@ -177,11 +280,13 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
         domain = f.get("domain") or None
         if domain == "null":
             domain = None
-        # Structured domains (health, finance, …) own their own graph nodes via
-        # the domain bridge — skip them here so free-chat extraction does not
-        # duplicate logged vitals/transactions. Chat extraction captures the
-        # REST: identity, preferences, biographical, decisions, relationships.
-        if kind in _STRUCTURED_DOMAINS or (domain in _STRUCTURED_DOMAINS):
+        # Narrowed skip: drop ONLY pure numeric vitals/measurements that the
+        # domain bridge already logs (presión 120/80, glucosa 95, dormí 7h, …).
+        # NARRATIVE health/finance facts — diagnoses, medications + doses,
+        # treatment status, temporal qualifiers, doctors, plans — are kept as
+        # durable graph facts so questions like "¿hace cuánto me diagnosticaron?"
+        # are answerable from memory.
+        if _is_logged_vital(label, kind, domain):
             continue
         data = f.get("data") if isinstance(f.get("data"), dict) else {}
         try:
