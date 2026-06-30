@@ -285,3 +285,19 @@ def test_chat_non_dev_text_goes_to_brain(client, monkeypatch):
     r = client.post("/api/chat/ask", json={"text": "hola"})
     assert r.status_code == 200
     assert len(brain_called) > 0, "brain must be called for normal conversation"
+
+
+def test_chat_ask_response_includes_conv_id(client, monkeypatch):
+    """The /api/chat/ask JSON must carry the conversation id so the frontend
+    can render the per-turn delete control without waiting for a history reload.
+    """
+    from axi import brain
+    monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "respuesta")
+    monkeypatch.setattr(brain, "ask_with_tools", lambda prompt, **kw: "respuesta")
+
+    r = client.post("/api/chat/ask", json={"text": "hola"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "conv_id" in body
+    assert isinstance(body["conv_id"], int)
+    assert body["conv_id"] > 0
