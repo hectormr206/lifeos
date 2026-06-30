@@ -86,6 +86,25 @@ def test_run_agentic_briefing_uses_injected_brain() -> None:
     assert "tráeme las noticias tech del día" in captured["prompt"]
 
 
+def test_run_agentic_briefing_offers_web_fetch_tool() -> None:
+    """The briefing exposes BOTH web_search and web_fetch so the model can read
+    a specific URL the user named instead of only searching."""
+    from axi import briefing
+
+    captured: dict = {}
+
+    def fake_ask(prompt, *, tools, tool_handlers, system, **kwargs):
+        captured["tool_names"] = [t["function"]["name"] for t in tools]
+        captured["handlers"] = set(tool_handlers)
+        return json.dumps({"title": "B", "items": []})
+
+    briefing.run_agentic_briefing("leé https://news.ycombinator.com/", ask_with_tools=fake_ask)
+
+    assert "web_search" in captured["tool_names"]
+    assert "web_fetch" in captured["tool_names"]
+    assert {"web_search", "web_fetch"} <= captured["handlers"]
+
+
 def test_run_agentic_briefing_defensive_on_brain_error() -> None:
     from axi import briefing
 
@@ -268,3 +287,13 @@ def test_looks_agentic_false_cases() -> None:
     assert not briefing.looks_agentic("recordame llamar al dentista")
     assert not briefing.looks_agentic("dame un abrazo")
     assert not briefing.looks_agentic("hola cómo estás")
+
+
+def test_prompt_forbids_inventing_urls_and_cites_links() -> None:
+    """With a small model, the tool must hand real URLs and the prompt must ban
+    fabrication — the HN failure was the model inventing item ids."""
+    from axi import briefing
+    low = briefing.build_briefing_system("2026-06-29").lower()
+    assert "nunca inventes" in low or "jamás" in low
+    assert "links" in low          # tells the model where real URLs come from
+    assert "web_fetch" in low      # read-a-URL path is documented

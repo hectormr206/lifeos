@@ -74,8 +74,13 @@ def build_briefing_system(today: str) -> str:
         f"Estás respondiendo con fecha de HOY = {today}. "
         "Para CUALQUIER consulta que dependa de información ACTUAL (noticias, "
         "lanzamientos, 'lo más reciente', 'los más actuales', precios, estado "
-        f"del arte), interpretá el pedido como '… a fecha de hoy {today}' y "
-        "comunicá esa actualidad EXPLÍCITAMENTE al buscador así: "
+        f"del arte), interpretá el pedido como '… a fecha de hoy {today}'.\n"
+        "Si el pedido incluye una URL concreta (un sitio o portada que el "
+        "usuario nombró), usá la herramienta web_fetch para LEER esa página "
+        "directamente — esa es la fuente que pidió — en vez de web_search. "
+        "web_fetch devuelve un campo 'links' con las URLs REALES de la página; "
+        "tomá de ahí el enlace de cada ítem.\n"
+        "Para búsquedas, comunicá la actualidad EXPLÍCITAMENTE al buscador así: "
         "(a) para NOTICIAS usá categories='news'; "
         "(b) incluí marcadores de recencia en la propia QUERY de web_search "
         f"(el año o mes de hoy —p. ej. '{today[:4]}'— o palabras como 'más "
@@ -92,8 +97,12 @@ def build_briefing_system(today: str) -> str:
         "noticias ni fechas: si no encontraste nada actual, devolvé pocos ítems "
         "o ninguno y decílo en el resumen.\n"
         "Seleccioná los ítems MÁS relevantes (máximo 10), escribí para CADA "
-        "uno un resumen corto de 1 a 2 líneas EN ESPAÑOL e incluí SIEMPRE la "
-        "URL de la fuente.\n\n"
+        "uno un resumen corto de 1 a 2 líneas EN ESPAÑOL.\n"
+        "REGLA ABSOLUTA sobre las URLs: usá ÚNICAMENTE URLs REALES que te "
+        "devolvieron las herramientas (el campo 'url'/'links' de web_search o "
+        "web_fetch). NUNCA inventes, adivines ni construyas una URL. Si para un "
+        "ítem no tenés una URL real de las herramientas, dejá su 'url' vacío "
+        "(\"\") — jamás un enlace inventado.\n\n"
         "Respondé ÚNICAMENTE con un objeto JSON con esta forma exacta:\n"
         '{"title": "<título del boletín>", "summary": "<resumen general breve>", '
         '"items": [{"title": "<título del ítem>", "summary": "<resumen 1-2 líneas>", '
@@ -266,12 +275,19 @@ def run_agentic_briefing(
     Never raises: on any failure returns a graceful digest with ``ok=False``
     so the dispatcher can still push a "could not generate" notification.
     """
-    from axi.web_tools import web_search_handler, web_search_tool_def  # noqa: PLC0415
+    from axi.web_tools import (  # noqa: PLC0415
+        web_fetch_handler,
+        web_fetch_tool_def,
+        web_search_handler,
+        web_search_tool_def,
+    )
 
     ask = ask_with_tools or _default_ask_with_tools
     system = build_briefing_system(today or _today_in_config_tz())
-    tools = [web_search_tool_def()]
-    handlers = {"web_search": web_search_handler}
+    # Offer BOTH tools: web_search for open-web discovery, web_fetch to read a
+    # specific URL the user named (e.g. a news front page) directly.
+    tools = [web_search_tool_def(), web_fetch_tool_def()]
+    handlers = {"web_search": web_search_handler, "web_fetch": web_fetch_handler}
     try:
         # The 4B model tends to keep searching a new subtopic every round and
         # never stops to write the JSON. So we cap tool rounds low and force a
