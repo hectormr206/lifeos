@@ -532,3 +532,26 @@ def test_casual_query_no_fts_no_recall(monkeypatch):
     from axi.recall import _fts_terms, build_recall_block
     assert _fts_terms("hola cómo estás") == []
     assert build_recall_block("hola cómo estás", lang="es-MX") == ""
+
+
+def test_undated_reading_grouped_under_sin_fecha_not_created_at(monkeypatch):
+    """A reading with occurred_at=None must land under 'Sin fecha registrada' and
+    NEVER be dated by its created_at — that fallback let the model fabricate a
+    per-day timeline from undated readings (the BP-trend bug)."""
+    import axi.store as _store
+
+    # created some days ago, but NO measurement date (occurred_at=None)
+    node = _node_dict(7, "presión 108/80", distance=0.2,
+                      occurred_at=None, created_at=1750636800.0)
+    monkeypatch.setattr(_store, "semantic_search_nodes", lambda *a, **kw: [node])
+    monkeypatch.setattr(_store, "same_day_neighbors", lambda nid, conn=None: [])
+
+    from axi.recall import build_recall_block
+    result = build_recall_block("cómo está mi presión", max_distance=0.6)
+
+    assert "presión 108/80" in result
+    assert "Sin fecha registrada" in result
+    # The reading must be on the 'Sin fecha' line, NOT on a dated ("El …"/"HOY") line.
+    for ln in result.splitlines():
+        if "presión 108/80" in ln:
+            assert "Sin fecha registrada" in ln, f"undated reading was dated: {ln!r}"
