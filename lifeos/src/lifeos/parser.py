@@ -218,6 +218,39 @@ _WEEKDAYS = {
     "jueves": 4, "viernes": 5, "sábado": 6, "sabado": 6, "domingo": 0,
 }
 
+# Explicit clock time ANYWHERE in the text (am/pm aware). "a las 9", "a las
+# 9:30", "a las 9 am", "a las 9 de la mañana", or a bare "9am"/"9 pm". Used so a
+# daily recurrence can pick up an hour even when it is NOT adjacent to the
+# recurrence phrase (e.g. "todos los días me mandes X a las 9 am").
+_HOUR_AT = re.compile(
+    r"\ba\s+las\s+(\d{1,2})(?::(\d{2}))?\s*"
+    r"(a\.?\s?m\.?|p\.?\s?m\.?|de\s+la\s+(?:ma(?:ñ|n)ana|tarde|noche))?",
+    re.IGNORECASE,
+)
+_HOUR_BARE = re.compile(
+    r"\b(\d{1,2})(?::(\d{2}))?\s*(a\.?\s?m\.?|p\.?\s?m\.?)\b", re.IGNORECASE
+)
+
+
+def _extract_hour(s: str) -> tuple[int, int] | None:
+    """Find an explicit (hour, minute) anywhere in `s`, am/pm aware. None if absent."""
+    m = _HOUR_AT.search(s) or _HOUR_BARE.search(s)
+    if not m:
+        return None
+    h = int(m.group(1))
+    mm = int(m.group(2) or 0)
+    mod = (m.group(3) or "").replace(".", "").replace(" ", "").lower()
+    if mod:
+        pm = mod.startswith("pm") or "tarde" in mod or "noche" in mod
+        am = mod.startswith("am") or "mañana" in mod or "manana" in mod
+        if pm and h < 12:
+            h += 12
+        elif am and h == 12:
+            h = 0
+    if not (0 <= h <= 23 and 0 <= mm <= 59):
+        return None
+    return h, mm
+
 
 def _detect_recurrence(text: str) -> tuple[str | None, str]:
     """If `text` describes a recurring pattern, return (cron_string, residual_text).
@@ -228,13 +261,6 @@ def _detect_recurrence(text: str) -> tuple[str | None, str]:
     residual="a las 9").
     """
     s = text.lower()
-
-    # "todos los días a las HH(:MM)"
-    m = re.search(r"\btodos\s+los\s+d[ií]as\s+a\s+las\s+(\d{1,2})(?::(\d{2}))?\b", s)
-    if m:
-        h = int(m.group(1)); mm = int(m.group(2) or 0)
-        residual = re.sub(r"\btodos\s+los\s+d[ií]as\s+", "", text, count=1, flags=re.IGNORECASE)
-        return f"{mm} {h} * * *", residual
 
     # "cada [weekday] a las HH(:MM)"
     weekdays_alt = "|".join(_WEEKDAYS.keys())
@@ -265,22 +291,20 @@ def _detect_recurrence(text: str) -> tuple[str | None, str]:
         residual = re.sub(r"\bcada\s+minuto\b", "", text, count=1, flags=re.IGNORECASE)
         return "* * * * *", residual
 
-    # Daily/recurring WITHOUT an explicit hour. A "morning briefing" defaults
-    # to 08:00. Covers "todos los días", "diariamente", "a diario",
-    # "cada día"/"cada dia", "todas las mañanas". Checked AFTER the explicit
-    # "... a las HH" forms above so an hour, when present, always wins.
-    daily = re.search(
+    # Daily/recurring. Covers "todos los días", "diariamente", "a diario",
+    # "cada día"/"cada dia", "todas las mañanas". The hour is detected over the
+    # WHOLE text (am/pm aware) — NOT required to be adjacent to the recurrence
+    # phrase — so "todos los días me mandes X a las 9 am" → 09:00, and a daily
+    # request with no hour at all defaults to 08:00 (morning briefing).
+    daily_pat = (
         r"\b(?:todos\s+los\s+d[ií]as|diariamente|a\s+diario|"
-        r"cada\s+d[ií]a|todas\s+las\s+ma(?:ñ|n)anas)\b",
-        s,
+        r"cada\s+d[ií]a|todas\s+las\s+ma(?:ñ|n)anas)\b"
     )
-    if daily:
-        residual = re.sub(
-            r"\b(?:todos\s+los\s+d[ií]as|diariamente|a\s+diario|"
-            r"cada\s+d[ií]a|todas\s+las\s+ma(?:ñ|n)anas)\b",
-            "", text, count=1, flags=re.IGNORECASE,
-        )
-        return "0 8 * * *", residual
+    if re.search(daily_pat, s):
+        residual = re.sub(daily_pat, "", text, count=1, flags=re.IGNORECASE)
+        hh = _extract_hour(s)
+        h, mm = hh if hh else (8, 0)
+        return f"{mm} {h} * * *", residual
 
     return None, text
 
