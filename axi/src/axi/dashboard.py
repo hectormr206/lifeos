@@ -3581,6 +3581,35 @@ async def api_chat_ask(request: Request):
         return {"answer": undo_answer, "latency_ms": latency_ms,
                 "spoke": False, "audio_b64": None}
 
+    # ─── Forget: confirmation-gated graph deletion ─────────────────────────
+    # The user asks Axi to delete something from its graph memory
+    # ("olvidá que tomo losartán"). NOTHING is deleted on the first turn — Axi
+    # previews the exact candidates and waits for an explicit "sí". A pending
+    # confirmation for this session is also handled here (sí/no). Returns None
+    # when there is no forget intent and no pending deletion → normal flow.
+    if text and not image_b64:
+        try:
+            from axi import forget  # noqa: PLC0415
+            _forget = forget.handle_chat_forget(text, chat_session_id)
+        except Exception:  # noqa: BLE001 — never break chat on a forget error
+            log.warning("forget handling failed; using general chat", exc_info=True)
+            _forget = None
+        if _forget is not None:
+            latency_ms = round((time.monotonic() - start) * 1000)
+            try:
+                mem.add(text, _forget["answer"], has_screenshot=False)
+            except Exception:  # noqa: BLE001
+                pass
+            stage_holder[0] = f"forget:{_forget.get('mode', 'forget')}"
+            _record_metric()
+            return {
+                "answer": _forget["answer"],
+                "mode": _forget.get("mode"),
+                "latency_ms": latency_ms,
+                "spoke": False,
+                "audio_b64": None,
+            }
+
     # ─── Web research fast-path (/busca, /investiga, current news) ──────────
     # Must run BEFORE any domain parsers — explicit command tokens and narrow
     # natural current-news intents take priority over regex classifiers that

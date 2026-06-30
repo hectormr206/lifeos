@@ -1151,6 +1151,67 @@ def add_edge(
         return cur.lastrowid
 
 
+def delete_node(node_id: int) -> bool:
+    """Delete a node and everything attached to it.
+
+    Removes the node plus ALL its edges (from_id or to_id), and its
+    nodes_fts / vec_nodes rows if present. Returns True if a node row was
+    deleted, False otherwise.
+
+    SAFETY: refuses to delete the user-hub node (data role=user) — you cannot
+    delete "yourself". Returns False in that case without touching anything.
+
+    Defensive: never raises; returns False on bad input or any error.
+    """
+    try:
+        nid = int(node_id)
+    except (TypeError, ValueError):
+        return False
+    c = _connect()
+    row = c.execute("SELECT data FROM nodes WHERE id = ?", (nid,)).fetchone()
+    if row is None:
+        return False
+    # Hub guard: never delete the user's own anchor node.
+    try:
+        if json.loads(row["data"] or "{}").get("role") == "user":
+            log.warning("delete_node refused: node %d is the user hub", nid)
+            return False
+    except (ValueError, TypeError):
+        pass
+    try:
+        with _tx() as tx:
+            tx.execute("DELETE FROM edges WHERE from_id = ? OR to_id = ?", (nid, nid))
+            tx.execute("DELETE FROM nodes_fts WHERE rowid = ?", (nid,))
+            # vec_nodes may not exist / sqlite-vec may be unloaded — best-effort.
+            try:
+                tx.execute("DELETE FROM vec_nodes WHERE node_id = ?", (nid,))
+            except Exception:  # noqa: BLE001
+                pass
+            cur = tx.execute("DELETE FROM nodes WHERE id = ?", (nid,))
+        return cur.rowcount > 0
+    except Exception:  # noqa: BLE001
+        log.warning("delete_node failed for %d", nid, exc_info=True)
+        return False
+
+
+def delete_edge(edge_id: int) -> bool:
+    """Delete one edge by id. Returns True if a row was removed.
+
+    Defensive: never raises; returns False on bad input or any error.
+    """
+    try:
+        eid = int(edge_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        with _tx() as tx:
+            cur = tx.execute("DELETE FROM edges WHERE id = ?", (eid,))
+        return cur.rowcount > 0
+    except Exception:  # noqa: BLE001
+        log.warning("delete_edge failed for %d", eid, exc_info=True)
+        return False
+
+
 def search_nodes_fts(query: str, limit: int = 10) -> list[sqlite3.Row]:
     """FTS5 lexical search over node labels + data text."""
     if not query.strip():
