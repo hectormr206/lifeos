@@ -110,3 +110,30 @@ def test_recurring_daily_with_explicit_hour_still_works() -> None:
     intent = parse_agentic_reminder("tráeme las noticias todos los días a las 8")
     assert intent is not None
     assert intent.recurrence == "0 8 * * *"
+
+
+def test_daily_hour_detected_when_separated_from_recurrence():
+    """Regression for the real bug: 'todos los días ... a las 9 am' must
+    schedule 09:00, not default to 08:00, even though 'todos los días' and the
+    hour are far apart in the sentence."""
+    from lifeos.parser import parse_agentic_reminder
+
+    r = parse_agentic_reminder(
+        "Quiero que todos los dias me mandes las ultimas 10 noticias de "
+        "https://news.ycombinator.com/ a las 9 am"
+    )
+    assert r is not None
+    assert r.recurrence == "0 9 * * *"
+
+
+def test_daily_hour_am_pm_and_minutes():
+    from lifeos.parser import parse_agentic_reminder
+
+    assert parse_agentic_reminder("todos los días tráeme el clima a las 9 pm").recurrence == "0 21 * * *"
+    assert parse_agentic_reminder("diariamente tráeme noticias a las 9:30").recurrence == "30 9 * * *"
+    assert parse_agentic_reminder("todos los días tráeme las noticias a las 7 am").recurrence == "0 7 * * *"
+
+
+def test_daily_without_any_hour_defaults_to_8():
+    from lifeos.parser import parse_agentic_reminder
+    assert parse_agentic_reminder("todos los días tráeme el clima").recurrence == "0 8 * * *"
