@@ -35,6 +35,18 @@ def health_isolated_db(tmp_path, monkeypatch):
 @pytest.fixture
 def client(monkeypatch, health_isolated_db):
     from axi import dashboard
+    # Neutralize the reminder schedule fallback so /api/chat/ask routing stays
+    # deterministic and NEVER reaches a live llama-server. The endpoint's LLM
+    # schedule fallback (dashboard: cached_or_brain_parse / parse_when_brain) is
+    # NOT mocked otherwise, so a text like "glucosa en 95 esta mañana" trips
+    # looks_schedulish() → a real brain.ask() classifies "esta mañana" as a
+    # schedulable reminder ~non-deterministically, hijacking the request away
+    # from the nano health fast-path (flaky test + hits the live model). Both
+    # symbols are imported lazily inside the endpoint from axi.reminder_brain,
+    # so patch them at their source module.
+    from axi import reminder_brain
+    monkeypatch.setattr(reminder_brain, "cached_or_brain_parse", lambda *_a, **_k: None)
+    monkeypatch.setattr(reminder_brain, "parse_when_brain", lambda *_a, **_k: None)
     monkeypatch.setattr(dashboard, "_daemon_cmd", lambda *_a, **_k: "idle")
     monkeypatch.setattr(dashboard, "_llama_alive", lambda: False)
     monkeypatch.setattr(dashboard, "_service_state", lambda *_a, **_k: "active")
