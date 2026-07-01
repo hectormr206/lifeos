@@ -179,6 +179,8 @@ def test_chat_ask_speak_killswitch_blocks_tts(client, monkeypatch):
 def test_chat_ask_speak_false_does_not_speak(client, monkeypatch):
     from axi import brain, speak as speak_mod
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "silencio")
+    # Conversation mode routes through ask_with_tools — mock it so no live model call.
+    monkeypatch.setattr(brain, "ask_with_tools", lambda *a, **kw: "silencio")
     called: list[str] = []
     monkeypatch.setattr(speak_mod, "speak", lambda text: called.append(text) or True)
     r = client.post("/api/chat/ask", json={"text": "x"})

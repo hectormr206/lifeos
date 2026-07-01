@@ -38,6 +38,7 @@ def test_purchase_consult_receives_correlation_bundle(client, monkeypatch):
         return PurchaseConsultResult(answer="ok", context=PurchaseContext())
 
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "no debería llamarse")
+    monkeypatch.setattr(brain, "ask_with_tools", lambda *a, **kw: "no debería llamarse")
     monkeypatch.setattr(dashboard.decide_purchase, "consult", spy_consult)
 
     r = client.post("/api/chat/ask", json={"text": "¿puedo comprar una laptop?"})

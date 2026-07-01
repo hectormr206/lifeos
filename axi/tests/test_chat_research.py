@@ -362,6 +362,8 @@ def test_buscalo_is_not_a_research_command(monkeypatch):
     monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
     monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
     monkeypatch.setattr(brain, "ask", lambda p, **kw: "respuesta normal")
+    # The normal (non-research) chat path uses ask_with_tools, not ask.
+    monkeypatch.setattr(brain, "ask_with_tools", lambda *a, **kw: "respuesta normal")
 
     tc = TestClient(dashboard.app)
     r = tc.post("/api/chat/ask", json={"text": "/buscalo en internet"})
@@ -387,6 +389,8 @@ def test_investigalo_is_not_a_research_command(monkeypatch):
     monkeypatch.setattr(dashboard, "_chat_memory_lock", None)
     monkeypatch.setattr(dashboard, "_try_nano_extract", lambda *a, **kw: None)
     monkeypatch.setattr(brain, "ask", lambda p, **kw: "respuesta normal")
+    # The normal (non-research) chat path uses ask_with_tools, not ask.
+    monkeypatch.setattr(brain, "ask_with_tools", lambda *a, **kw: "respuesta normal")
 
     tc = TestClient(dashboard.app)
     r = tc.post("/api/chat/ask", json={"text": "/investigalo algo"})
