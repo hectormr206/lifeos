@@ -279,6 +279,32 @@ def fresh_db(tmp_path, monkeypatch):
     from axi import store
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
+    # Isolate the axi config the same way: point CONFIG_DIR/CONFIG_PATH at the
+    # per-test tmp dir so any test that writes config (config.save, or an
+    # /api/config endpoint via TestClient) can NEVER clobber the developer's real
+    # ~/.config/axi/config.json — this is what kept silently resetting user_name
+    # (e.g. to a stray "x") on every suite run.
+    #
+    # COPY the real config into the temp dir first (when it exists) so tests read
+    # the SAME values they always did — only writes are redirected. Starting from
+    # empty schema defaults instead would change routing/tool behavior in the many
+    # tests that (pre-existing) rely on the ambient config's non-default values.
+    import shutil as _shutil
+    from axi import config as _config
+    # Use a DEDICATED subdir (not tmp_path root) so this never collides with tests
+    # that manage their own config at tmp_path/config.json (e.g. config_schema).
+    _cfg_dir = tmp_path / "_axi_config"
+    _cfg_dir.mkdir(exist_ok=True)
+    _real_config = _config.CONFIG_PATH
+    _tmp_config = _cfg_dir / "config.json"
+    try:
+        if _real_config.exists():
+            _shutil.copy(_real_config, _tmp_config)
+    except OSError:
+        pass
+    monkeypatch.setattr(_config, "CONFIG_DIR", _cfg_dir)
+    monkeypatch.setattr(_config, "CONFIG_PATH", _tmp_config)
+    _config.reload()  # reload from the temp copy so writes never touch the real file
     # Force the calling thread to open a fresh connection bound to the temp DB.
     # With thread-local connections there is no module-level _conn; closing the
     # current thread's connection (if any) is sufficient — _connect() will
@@ -324,3 +350,7 @@ def fresh_db(tmp_path, monkeypatch):
     store.close()
     # Reset events ring/state so spillover from prior test doesn't pollute.
     _events._reset_for_tests()
+    # Drop the config cache so the tmp-dir values don't leak past this test
+    # (monkeypatch restores CONFIG_PATH; the next read reloads from the real file).
+    from axi import config as _config
+    _config._cache = None

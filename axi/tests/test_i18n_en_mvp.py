@@ -32,23 +32,30 @@ def _fake_config(values: dict):
 # 1. brain — get_system_prompt
 # ════════════════════════════════════════════════════════════════════════════
 
-def test_get_system_prompt_es_returns_spanish():
+def test_get_system_prompt_es_returns_spanish(monkeypatch):
     """get_system_prompt('es') must return SYSTEM_PROMPT (Spanish)."""
     import axi.brain as brain
+    # get_system_prompt personalizes the prompt with config.user_name; when the
+    # name is the authored "Héctor" it returns the base constant unchanged, which
+    # is what this language-selection test asserts. Pin it so the test does not
+    # depend on the ambient config value.
+    monkeypatch.setattr(brain.config, "get", _fake_config({"user_name": "Héctor"}))
     result = brain.get_system_prompt("es")
     assert result is brain.SYSTEM_PROMPT
 
 
-def test_get_system_prompt_es_mx_returns_spanish():
+def test_get_system_prompt_es_mx_returns_spanish(monkeypatch):
     """get_system_prompt('es-MX') is the default path — must return SYSTEM_PROMPT."""
     import axi.brain as brain
+    monkeypatch.setattr(brain.config, "get", _fake_config({"user_name": "Héctor"}))
     result = brain.get_system_prompt("es-MX")
     assert result is brain.SYSTEM_PROMPT
 
 
-def test_get_system_prompt_en_returns_english():
+def test_get_system_prompt_en_returns_english(monkeypatch):
     """get_system_prompt('en') must return SYSTEM_PROMPT_EN (English)."""
     import axi.brain as brain
+    monkeypatch.setattr(brain.config, "get", _fake_config({"user_name": "Héctor"}))
     result = brain.get_system_prompt("en")
     assert result is brain.SYSTEM_PROMPT_EN
 

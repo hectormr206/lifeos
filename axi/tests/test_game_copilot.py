@@ -19,7 +19,7 @@ import pytest
 # Imports under test (will fail until implementation exists — RED phase)
 # ---------------------------------------------------------------------------
 from axi.daemon import _select_ask_params
-from axi.brain import SYSTEM_PROMPT
+from axi.brain import SYSTEM_PROMPT, get_system_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +34,11 @@ class TestSelectAskParams:
         → standard prompt preserved (pre-Feature-B hotkey behavior unchanged).
         """
         system, max_tokens = _select_ask_params(game_active=False, copilot_enabled=True)
-        # force_copilot defaults to False — standard hotkey path outside game mode
-        assert system == SYSTEM_PROMPT
+        # force_copilot defaults to False — standard hotkey path outside game mode.
+        # The default path returns get_system_prompt(None), which personalizes the
+        # prompt with config.user_name — so compare against that, not the raw
+        # (Héctor-authored) SYSTEM_PROMPT constant.
+        assert system == get_system_prompt(None)
         assert max_tokens == 2048
 
     def test_game_inactive_copilot_enabled_force_returns_copilot_prompt(self):
@@ -64,7 +67,7 @@ class TestSelectAskParams:
     def test_game_active_but_copilot_disabled_returns_default_prompt(self):
         """When co-pilot is disabled via config, game-mode does NOT change the prompt."""
         system, max_tokens = _select_ask_params(game_active=True, copilot_enabled=False)
-        assert system == SYSTEM_PROMPT
+        assert system == get_system_prompt(None)
 
     def test_game_active_but_copilot_disabled_returns_default_max_tokens(self):
         """When co-pilot is disabled via config, max_tokens stays at default."""
@@ -217,7 +220,9 @@ class TestDaemonStopAndAskGameMode:
 
         monkeypatch.setattr(d, "_game_mode_active", lambda: False)
         monkeypatch.setattr(d.config, "get", lambda key, default=None: (
-            True if key == "game_copilot_enabled" else default
+            True if key == "game_copilot_enabled"
+            else "Héctor" if key == "user_name"  # pin so the prompt is not personalized away
+            else default
         ))
 
         daemon._start_ask()
