@@ -161,6 +161,11 @@ FIELDS: tuple[ConfigField, ...] = (
         "If true, daily digest endpoint generates a brain summary paragraph (P1.3).",
     ),
     ConfigField(
+        "single_writer", "boolean", False,
+        "If true, only the daemon writes memory.db; other processes forward their "
+        "writes to it over write.sock (eliminates multi-process write corruption).",
+    ),
+    ConfigField(
         "notify_send_enabled", "boolean", True,
         "If true, critical/error events fire libnotify desktop notifications (P2.5).",
     ),

@@ -376,6 +376,19 @@ def fresh_db(tmp_path, monkeypatch):
             _shutil.copy(_real_config, _tmp_config)
     except OSError:
         pass
+    # Force single_writer OFF in the test config. Once it is enabled in the
+    # developer's real config (production flip), the copy above would otherwise
+    # carry single_writer=True into every test — tripping store.init_db()'s
+    # single-writer guard so fresh_db never materializes the schema ("no such
+    # table: nodes"). Tests that exercise routing enable it explicitly via
+    # monkeypatch; the ambient default must be OFF.
+    try:
+        import json as _json
+        _cfg = _json.loads(_tmp_config.read_text()) if _tmp_config.exists() else {}
+        _cfg["single_writer"] = False
+        _tmp_config.write_text(_json.dumps(_cfg, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        pass
     monkeypatch.setattr(_config, "CONFIG_DIR", _cfg_dir)
     monkeypatch.setattr(_config, "CONFIG_PATH", _tmp_config)
     _config.reload()  # reload from the temp copy so writes never touch the real file

@@ -470,21 +470,39 @@ class WriteServer:
 def forward_write(op: str, args: dict, timeout: float = 5.0) -> Any:
     """Forward a write *op* to the sole writer and return its result.
 
-    Raises ``WriteServerUnavailable`` when the socket cannot be connected
-    (server down or missing), and ``WriteRouterError`` when the server executed
-    the op but reported a failure.
+    At-most-once semantics — the failure phase decides whether a direct-write
+    fallback is safe:
+
+    - ``WriteServerUnavailable`` (→ callers fall back to a DIRECT local write):
+      raised only when the request definitely did NOT reach the server — a failed
+      connect, or a failure DURING send. The op did not execute anywhere, so
+      writing it directly cannot duplicate it.
+    - ``WriteRouterError`` (→ callers must NOT fall back): the request WAS
+      delivered but the reply was lost/failed (recv error, empty reply), or the
+      server reported an error. The op MAY have executed on the writer, so a
+      silent direct-write fallback would risk a double-write; fail loudly instead.
     """
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
+        # ── connect phase ── failure ⇒ server never saw the request ⇒ safe fallback
         try:
             sock.connect(str(WRITE_SOCK_PATH))
         except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
             raise WriteServerUnavailable(str(e)) from e
-        _send_frame(sock, {"op": op, "args": args})
-        reply = _recv_frame(sock)
+        # ── send phase ── failure ⇒ request not (fully) delivered ⇒ safe fallback
+        try:
+            _send_frame(sock, {"op": op, "args": args})
+        except OSError as e:
+            raise WriteServerUnavailable(f"send failed, request not delivered: {e}") from e
+        # ── recv phase ── the request IS delivered; a failure here is UNCERTAIN
+        # (the write may already have landed on the daemon) ⇒ do NOT fall back.
+        try:
+            reply = _recv_frame(sock)
+        except OSError as e:
+            raise WriteRouterError(f"reply lost after request was sent (write may have landed): {e}") from e
         if reply is None:
-            raise WriteRouterError("no reply from write server")
+            raise WriteRouterError("no reply from write server (write may have landed)")
         if reply.get("ok"):
             return reply.get("result")
         raise WriteRouterError(reply.get("error", "unknown write error"))
