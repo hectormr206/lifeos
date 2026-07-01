@@ -249,6 +249,24 @@ _NEGATE_RE = re.compile(
 )
 
 
+def _parse_indices(text: str, n: int) -> list[int] | None:
+    """Extract 1-based candidate indices from a confirmation-turn selection.
+
+    Lets the user delete a SUBSET of the previewed candidates ("solo el 2",
+    "el 1 y el 3", "borrá el 2 y 4") instead of confirming the whole list.
+
+    Returns:
+      - a sorted, unique list of in-range indices  → delete exactly those,
+      - ``[]``  → digits were given but NONE are in ``[1, n]`` (invalid selection;
+        caller should re-ask rather than fall back to deleting everything),
+      - ``None`` → no digit selection at all (caller applies plain sí/no logic).
+    """
+    nums = re.findall(r"\d+", text or "")
+    if not nums:
+        return None
+    return sorted({int(x) for x in nums if 1 <= int(x) <= n})
+
+
 def _prune_expired() -> None:
     now = time.monotonic()
     for sid in [s for s, p in _PENDING.items() if now - p.get("ts", 0.0) > _PENDING_TTL_S]:
@@ -293,11 +311,36 @@ def handle_chat_forget(text: str, session_id: str, *, conn=None) -> dict | None:
 
     pending = _PENDING.get(session_id)
     if pending:
+        candidates = pending["candidates"]
+        # Negation wins first — a message opening with "no" is never a selection,
+        # so an ambiguous "no, el 2" cancels (safe) rather than deleting.
         if _NEGATE_RE.match(text):
             _PENDING.pop(session_id, None)
             return {"answer": "Ok, no borré nada.", "mode": "forget_cancelled"}
+        # Subset selection by index ("solo el 2", "el 1 y el 3").
+        sel = _parse_indices(text, len(candidates))
+        if sel is not None:
+            if not sel:
+                # Digits given but none in range — re-ask instead of nuking all.
+                return {
+                    "answer": (
+                        f"Ese número no está en la lista (hay {len(candidates)}). "
+                        "Decime cuál borrar: " + _format_list(candidates)
+                        + " — o 'sí' para todos, 'no' para cancelar."
+                    ),
+                    "mode": "forget_confirm",
+                }
+            chosen = [candidates[i - 1] for i in sel]
+            deleted = _delete_candidates(chosen, conn=conn)
+            _PENDING.pop(session_id, None)
+            if not deleted:
+                return {
+                    "answer": "No pude borrar lo que elegiste; puede que ya no exista.",
+                    "mode": "forget_none",
+                }
+            return {"answer": "Listo, borré: " + "; ".join(deleted) + ".", "mode": "forget_done"}
         if _CONFIRM_RE.match(text):
-            deleted = _delete_candidates(pending["candidates"], conn=conn)
+            deleted = _delete_candidates(candidates, conn=conn)
             _PENDING.pop(session_id, None)
             if not deleted:
                 return {
@@ -307,7 +350,10 @@ def handle_chat_forget(text: str, session_id: str, *, conn=None) -> dict | None:
             return {"answer": "Listo, borré: " + "; ".join(deleted) + ".", "mode": "forget_done"}
         # Ambiguous — keep pending and re-ask, showing exactly what will go.
         return {
-            "answer": "¿Confirmás que borro: " + _format_list(pending["candidates"]) + "? (sí/no)",
+            "answer": (
+                "¿Confirmás que borro: " + _format_list(candidates)
+                + "? (sí = todos / no = cancelar / o decime cuál, ej. 'solo el 2')"
+            ),
             "mode": "forget_confirm",
         }
 
@@ -323,7 +369,12 @@ def handle_chat_forget(text: str, session_id: str, *, conn=None) -> dict | None:
         }
 
     _PENDING[session_id] = {"candidates": candidates, "ts": time.monotonic()}
+    tail = (
+        " ¿Confirmás? (sí = todos / no = cancelar / o decime cuál, ej. 'solo el 2')"
+        if len(candidates) > 1
+        else " ¿Confirmás? (sí/no)"
+    )
     return {
-        "answer": "Voy a borrar: " + _format_list(candidates) + " ¿Confirmás? (sí/no)",
+        "answer": "Voy a borrar: " + _format_list(candidates) + tail,
         "mode": "forget_confirm",
     }

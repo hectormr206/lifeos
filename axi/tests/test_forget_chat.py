@@ -116,6 +116,75 @@ def test_expired_pending_pruned(graph, monkeypatch):
     assert "s1" not in forget._PENDING
 
 
+# ─────────────────────── subset selection by index ──────────────────────
+
+def _seed_three_pending(session: str = "s1") -> list[int]:
+    """Create 3 deletable fact nodes and mark them pending for *session*."""
+    import time as _t
+    ids = [store.add_node(kind="fact", label=f"hecho {i}", domain="health")
+           for i in (1, 2, 3)]
+    cands = [{"type": "node", "id": nid, "label": f"hecho {i}", "detail": f"hecho {i}"}
+             for i, nid in zip((1, 2, 3), ids)]
+    forget._PENDING[session] = {"candidates": cands, "ts": _t.monotonic()}
+    return ids
+
+
+def _alive(nid: int) -> bool:
+    c = store._connect()
+    return c.execute("SELECT COUNT(*) AS n FROM nodes WHERE id=?", (nid,)).fetchone()["n"] == 1
+
+
+def test_parse_indices_unit():
+    assert forget._parse_indices("solo el 2", 3) == [2]
+    assert forget._parse_indices("el 1 y el 3", 3) == [1, 3]
+    assert forget._parse_indices("borrá el 2 y 3", 3) == [2, 3]
+    assert forget._parse_indices("el 2 y el 2", 3) == [2]      # deduped
+    assert forget._parse_indices("el 9", 3) == []              # out of range
+    assert forget._parse_indices("sí", 3) is None              # no digits
+    assert forget._parse_indices("dale", 3) is None
+
+
+def test_forget_subset_single_index_deletes_only_that_one():
+    ids = _seed_three_pending("s1")
+    resp = forget.handle_chat_forget("solo el 2", "s1")
+    assert resp["mode"] == "forget_done"
+    assert _alive(ids[0]) and not _alive(ids[1]) and _alive(ids[2])
+    assert "s1" not in forget._PENDING
+
+
+def test_forget_subset_multi_index():
+    ids = _seed_three_pending("s1")
+    resp = forget.handle_chat_forget("el 1 y el 3", "s1")
+    assert resp["mode"] == "forget_done"
+    assert not _alive(ids[0]) and _alive(ids[1]) and not _alive(ids[2])
+    assert "s1" not in forget._PENDING
+
+
+def test_forget_out_of_range_index_reasks_and_deletes_nothing():
+    ids = _seed_three_pending("s1")
+    resp = forget.handle_chat_forget("borrá el 9", "s1")
+    assert resp["mode"] == "forget_confirm"          # re-ask, not a deletion
+    assert all(_alive(nid) for nid in ids)           # nothing removed
+    assert "s1" in forget._PENDING                   # still pending
+
+
+def test_forget_confirm_all_still_deletes_everything():
+    ids = _seed_three_pending("s1")
+    resp = forget.handle_chat_forget("sí", "s1")
+    assert resp["mode"] == "forget_done"
+    assert all(not _alive(nid) for nid in ids)
+    assert "s1" not in forget._PENDING
+
+
+def test_forget_negation_before_index_cancels_safely():
+    """'no, el 2' must cancel (safe) — negation is checked before selection."""
+    ids = _seed_three_pending("s1")
+    resp = forget.handle_chat_forget("no, el 2", "s1")
+    assert resp["mode"] == "forget_cancelled"
+    assert all(_alive(nid) for nid in ids)
+    assert "s1" not in forget._PENDING
+
+
 # ─────────────────────────── integration (endpoint) ─────────────────────
 
 @pytest.fixture
