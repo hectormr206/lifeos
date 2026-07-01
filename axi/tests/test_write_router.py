@@ -13,6 +13,7 @@ Covers:
 from __future__ import annotations
 
 import socket
+import threading
 
 import pytest
 
@@ -468,3 +469,69 @@ class TestCompoundRoutesViaLeaves:
                          (a, b)).fetchone()["n"] == 2
         assert c.execute("SELECT from_id, to_id FROM edges WHERE id = ?",
                          (eid,)).fetchone()["from_id"] == a
+
+
+# ─── at-most-once: failure phase decides fallback safety ───────────────────
+
+class TestForwardWriteFailurePhases:
+    """connect/send failure → WriteServerUnavailable (safe direct-write fallback);
+    recv failure / no reply → WriteRouterError (NO fallback — write may have landed)."""
+
+    def _recv_then_close_server(self, path):
+        """Server that accepts one connection, reads the request frame, then closes
+        WITHOUT replying — simulates the writer crashing after it received the op."""
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(str(path))
+        srv.listen(1)
+
+        def _run():
+            try:
+                conn, _ = srv.accept()
+                write_router._recv_frame(conn)  # consume the request, then drop it
+                conn.close()
+            except Exception:
+                pass
+            finally:
+                srv.close()
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        return t
+
+    def test_recv_failure_is_router_error_not_unavailable(self, tmp_path, monkeypatch):
+        path = tmp_path / "recv-fail.sock"
+        monkeypatch.setattr(write_router, "WRITE_SOCK_PATH", path)
+        t = self._recv_then_close_server(path)
+        try:
+            with pytest.raises(write_router.WriteRouterError) as ei:
+                write_router.forward_write("add_conversation", {"user_text": "x", "axi_text": "y"})
+            # Must NOT be the fallback-triggering subclass — a lost reply is uncertain.
+            assert not isinstance(ei.value, write_router.WriteServerUnavailable), (
+                "recv failure must not raise WriteServerUnavailable (would trigger an unsafe direct-write fallback)"
+            )
+        finally:
+            t.join(timeout=1.0)
+
+    def test_maybe_forward_does_not_fall_back_on_recv_failure(self, tmp_path, monkeypatch):
+        path = tmp_path / "recv-fail2.sock"
+        monkeypatch.setattr(write_router, "WRITE_SOCK_PATH", path)
+        monkeypatch.setattr(write_router, "single_writer_enabled", lambda: True)
+        monkeypatch.setattr(write_router, "is_owner", lambda: False)
+        t = self._recv_then_close_server(path)
+        try:
+            # maybe_forward catches ONLY WriteServerUnavailable, so a WriteRouterError
+            # from a lost reply propagates → caller sees the error, never a silent
+            # (potentially duplicating) direct write.
+            with pytest.raises(write_router.WriteRouterError):
+                write_router.maybe_forward("add_conversation", {"user_text": "x", "axi_text": "y"})
+        finally:
+            t.join(timeout=1.0)
+
+    def test_connect_failure_still_falls_back(self, tmp_path, monkeypatch):
+        # No server listening → connect fails → WriteServerUnavailable → maybe_forward
+        # returns (False, None) so the caller does a safe direct local write.
+        monkeypatch.setattr(write_router, "WRITE_SOCK_PATH", tmp_path / "no-server.sock")
+        monkeypatch.setattr(write_router, "single_writer_enabled", lambda: True)
+        monkeypatch.setattr(write_router, "is_owner", lambda: False)
+        routed, result = write_router.maybe_forward("add_conversation", {"user_text": "x", "axi_text": "y"})
+        assert routed is False and result is None
