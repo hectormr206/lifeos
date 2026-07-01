@@ -57,6 +57,13 @@ _EMBED_WRITER_ENABLED: bool = False
 # via _HEALTHY_BACKUP_INTERVAL_S so tests can override without changing code.
 _HEALTHY_BACKUP_INTERVAL_S: int = 1800  # 30 minutes
 
+# Data-loss guard for do_healthy_backup: refuse to overwrite the good healthy
+# slots when a key table's row count collapses (a truncation that integrity_check
+# cannot see). Growth and small deletions are always allowed.
+_GUARD_TABLES: tuple[str, ...] = ("conversations", "nodes", "edges")
+_GUARD_MIN_PREV: int = 10       # only guard once the prior backup held real data
+_GUARD_DROP_RATIO: float = 0.5  # current < 50% of prior count ⇒ treat as data loss
+
 
 def enable_embed_writer() -> None:
     """Opt this process in to running the background embed worker thread.
@@ -2618,6 +2625,17 @@ def reset_connection() -> bool:
 # ─────────────────── periodic healthy-backup rotation ────────────────────────
 
 
+def _guard_row_counts(conn: sqlcipher3.Connection) -> dict[str, int | None]:
+    """Row counts for the guard tables on *conn* (None per table on any error)."""
+    out: dict[str, int | None] = {}
+    for t in _GUARD_TABLES:
+        try:
+            out[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        except Exception:  # noqa: BLE001 — missing table / read error ⇒ don't guard on it
+            out[t] = None
+    return out
+
+
 def do_healthy_backup(db_path: Path = DB_PATH) -> None:
     """Write a known-good encrypted backup of *db_path* if it passes integrity_check.
 
@@ -2651,6 +2669,40 @@ def do_healthy_backup(db_path: Path = DB_PATH) -> None:
             slot1 = db_path.parent / f"{db_path.name}.healthy-1.bak"
             slot2 = db_path.parent / f"{db_path.name}.healthy-2.bak"
             slot3 = db_path.parent / f"{db_path.name}.healthy-3.bak"
+
+            # Data-loss guard. integrity_check proves the DB is STRUCTURALLY sound,
+            # but a truncated DB (rows lost without corruption) also passes it — so
+            # without this guard a data-loss event silently poisons the healthy
+            # slots that recovery later restores from (exactly how ~140 rows were
+            # lost once). Refuse to snapshot when a key table dropped sharply vs the
+            # most recent good backup; the existing healthy slots are preserved and
+            # an alert is emitted. Growth and small deletions are always allowed.
+            if slot1.exists():
+                cur_counts = _guard_row_counts(src)
+                prev_counts: dict[str, int | None] = {}
+                try:
+                    _prev = sqlcipher3.connect(str(slot1), isolation_level=None)
+                    _prev.execute(f"PRAGMA key = \"x'{key}'\"")
+                    prev_counts = _guard_row_counts(_prev)
+                    _prev.close()
+                except Exception:  # noqa: BLE001
+                    prev_counts = {}
+                for _t in _GUARD_TABLES:
+                    _p = prev_counts.get(_t)
+                    _c = cur_counts.get(_t)
+                    if (_p is not None and _c is not None
+                            and _p >= _GUARD_MIN_PREV and _c < _p * _GUARD_DROP_RATIO):
+                        _msg = (
+                            f"do_healthy_backup: REFUSING snapshot — {_t} dropped "
+                            f"{_p}→{_c} (>{int((1-_GUARD_DROP_RATIO)*100)}% loss); "
+                            "preserving existing healthy backups"
+                        )
+                        log.warning(_msg)
+                        _emit_recovery_event(
+                            "critical", _msg,
+                            {"table": _t, "prev": _p, "now": _c},
+                        )
+                        return
 
             # Rotate: 2 → 3, 1 → 2, new → 1
             if slot2.exists():

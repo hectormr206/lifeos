@@ -324,3 +324,72 @@ class TestResetConnection:
             assert store._connect().execute("SELECT 1").fetchone()[0] == 1
         finally:
             store.close()
+
+
+# ─────────── Data-loss guard: refuse to snapshot a truncated DB ───────────
+
+def _make_db_with_conversations(path: Path, key: str, n: int) -> None:
+    """Encrypted DB with a `conversations` table holding *n* rows."""
+    c = sqlcipher3.connect(str(path), isolation_level=None)
+    c.execute(f"PRAGMA key = \"x'{key}'\"")
+    c.execute("CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY, user_text TEXT)")
+    for i in range(n):
+        c.execute("INSERT INTO conversations(user_text) VALUES (?)", (f"turn {i}",))
+    c.close()
+
+
+def _conv_count(path: Path, key: str) -> int:
+    c = sqlcipher3.connect(str(path), isolation_level=None)
+    c.execute(f"PRAGMA key = \"x'{key}'\"")
+    n = c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
+    c.close()
+    return n
+
+
+def _truncate(db: Path, key: str, keep_max_id: int) -> None:
+    c = sqlcipher3.connect(str(db), isolation_level=None)
+    c.execute(f"PRAGMA key = \"x'{key}'\"")
+    c.execute("DELETE FROM conversations WHERE id > ?", (keep_max_id,))
+    c.close()
+
+
+class TestHealthyBackupDataLossGuard:
+    """do_healthy_backup must NOT overwrite good slots when rows collapse
+    (a truncation that integrity_check cannot detect — the real data-loss bug)."""
+
+    def _wire(self, tmp_path, monkeypatch, n):
+        db = tmp_path / "memory.db"
+        key = "a" * 64
+        _make_db_with_conversations(db, key, n)
+        monkeypatch.setattr(store, "DB_PATH", db)
+        monkeypatch.setattr(store, "load_key", lambda: key)
+        return db, key
+
+    def test_refuses_snapshot_on_sharp_row_drop(self, tmp_path, monkeypatch):
+        db, key = self._wire(tmp_path, monkeypatch, 100)
+        store.do_healthy_backup(db)
+        slot1 = tmp_path / "memory.db.healthy-1.bak"
+        assert _conv_count(slot1, key) == 100
+        _truncate(db, key, keep_max_id=3)          # 100 → 3 (data loss)
+        store.do_healthy_backup(db)
+        assert _conv_count(slot1, key) == 100, (
+            "guard must preserve the good backup after a >50% row collapse"
+        )
+
+    def test_allows_snapshot_on_growth(self, tmp_path, monkeypatch):
+        db, key = self._wire(tmp_path, monkeypatch, 50)
+        store.do_healthy_backup(db)
+        c = sqlcipher3.connect(str(db), isolation_level=None)
+        c.execute(f"PRAGMA key = \"x'{key}'\"")
+        for _ in range(10):
+            c.execute("INSERT INTO conversations(user_text) VALUES ('new')")
+        c.close()
+        store.do_healthy_backup(db)
+        assert _conv_count(tmp_path / "memory.db.healthy-1.bak", key) == 60
+
+    def test_small_deletion_still_snapshots(self, tmp_path, monkeypatch):
+        db, key = self._wire(tmp_path, monkeypatch, 100)
+        store.do_healthy_backup(db)
+        _truncate(db, key, keep_max_id=90)         # 100 → 90 (within tolerance)
+        store.do_healthy_backup(db)
+        assert _conv_count(tmp_path / "memory.db.healthy-1.bak", key) == 90
