@@ -96,31 +96,34 @@ def test_query_passes_today_and_records(monkeypatch):
         brain_ask=_fake_brain(_extract(intent="query"), capture=capture),
     )
     assert res["mode"] == "query"
-    qsys = [c for c in capture if c["think"]][0]["system"]
+    # The query call is think=False (concise, no fabrication) since 25ccc25; it is
+    # the call carrying the records, so match it by its system marker, not think.
+    qsys = [c for c in capture if "REGISTROS" in (c["system"] or "")][0]["system"]
     assert "2026" in qsys           # today's year for date disambiguation
     assert "F9" in qsys             # record id present
     assert "350" in qsys            # amount present
     assert "comida" in qsys         # category present
 
 
-def test_query_falls_back_to_think_false_when_empty(monkeypatch):
-    """think=True can burn the token budget reasoning and return empty. The
-    query must retry with think=False rather than show a blank answer."""
+def test_query_falls_back_to_larger_budget_when_empty(monkeypatch):
+    """A bounded think=False query can still return empty; it must retry with a
+    larger token budget rather than show a blank answer. Calls are distinguished
+    by max_tokens: 256 = extract, 400 = primary query, 512 = retry."""
     _patch_store(monkeypatch, recent=[])
-    calls: list[bool] = []
+    calls: list[int] = []
 
     def _brain(text, *, system=None, think=False, max_tokens=0):
-        calls.append(think)
-        if not think and len(calls) == 1:
+        calls.append(max_tokens)
+        if max_tokens == 256:
             return _extract(intent="query")   # step 1: classify+extract
-        if think:
-            return ""                          # primary query: budget exhausted
-        return "respuesta sin pensar"          # fallback query (think=False)
+        if max_tokens == 400:
+            return ""                          # primary query: empty
+        return "respuesta sin pensar"          # retry with larger budget
 
     res = domain_chat.handle_message(FINANCE_SPEC, "cuánto gasté", now=NOW, brain_ask=_brain)
     assert res["mode"] == "query"
     assert res["answer"] == "respuesta sin pensar"
-    assert True in calls and calls.count(False) >= 2  # primary think + fallback no-think
+    assert 400 in calls and 512 in calls  # primary query + retry
 
 
 def test_off_topic_saves_nothing(monkeypatch):
