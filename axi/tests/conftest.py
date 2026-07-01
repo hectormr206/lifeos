@@ -30,6 +30,11 @@ _BLOCKED_COMMANDS: frozenset[str] = frozenset(
     {"systemctl", "loginctl", "notify-send", "nvidia-smi"}
 )
 
+# Localhost ports of the live model servers (brain :8080, VibeThinker :8082,
+# nano :8090, embeddings :8091). No test may reach them: a real inference call
+# loads the model (VRAM) on the developer's live machine AND is non-deterministic.
+_MODEL_SERVER_PORTS: tuple[str, ...] = (":8080", ":8082", ":8090", ":8091")
+
 
 def _is_blocked(args) -> bool:
     """Return True if the subprocess call targets a live-system mutator."""
@@ -105,6 +110,47 @@ def _apply_lifeos_migrations_to_tmp() -> None:
         _pos.apply_migrations()
     except Exception:
         log.debug("lifeos posture store migration skipped", exc_info=True)
+
+
+@pytest.fixture(autouse=True)
+def _block_live_model_calls(monkeypatch):
+    """Guarantee NO test reaches a live model server (machine safety + determinism).
+
+    Every model boundary (brain.ask/ask_with_tools, embeddings, nano runtime,
+    is_alive) ultimately calls ``urllib.request.urlopen`` against a localhost
+    model port. Properly-mocked tests never reach this layer, so they are
+    unaffected; the guard only trips when a test would otherwise hit the live
+    llama-server (which loads VRAM and returns non-deterministic output — the
+    exact bug behind the flaky client_ts health tests).
+
+    Two behaviors, so the guard is safe to always apply:
+    - ``/health`` probes → raise URLError, i.e. behave as "server down". is_alive()
+      already catches URLError and returns False, so callers degrade gracefully.
+    - inference / embedding calls → raise a LOUD RuntimeError naming the URL, so an
+      unmocked model call fails the test instead of silently loading the machine.
+
+    A test that legitimately needs a model response mocks the Python-level boundary
+    (brain.ask, etc.) and never reaches urlopen.
+    """
+    import urllib.request as _ur
+    import urllib.error as _ue
+
+    _real_urlopen = _ur.urlopen
+
+    def _guarded_urlopen(url, *args, **kwargs):
+        target = url.full_url if hasattr(url, "full_url") else str(url)
+        if any(port in target for port in _MODEL_SERVER_PORTS):
+            if target.rstrip("/").endswith("/health"):
+                raise _ue.URLError("blocked live model /health probe in test")
+            raise RuntimeError(
+                f"BLOCKED: test reached a live model server at {target}. "
+                "Mock the model boundary (brain.ask / brain.ask_with_tools, the "
+                "embed client, or the nano runtime) in your test — never hit the "
+                "live llama-server."
+            )
+        return _real_urlopen(url, *args, **kwargs)
+
+    monkeypatch.setattr(_ur, "urlopen", _guarded_urlopen)
 
 
 @pytest.fixture(autouse=True)
