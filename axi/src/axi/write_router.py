@@ -267,7 +267,68 @@ def _handle_set_conversation_node_id(args: dict) -> bool:
     return store.set_conversation_node_id(**args)
 
 
-# Ops the server knows how to execute. Stage 2 wires all LEAF store writers.
+# ── identity ops (Stage 2b) ───────────────────────────────────────────────────
+#
+# These forward WHOLE identity write functions (not leaf helpers) because they
+# do RAW ``store._tx`` writes and/or compound merges that must run atomically on
+# the sole writer. Each handler lazy-imports identity and calls it with conn=None
+# (conn is intentionally never sent over the socket): the daemon handler thread
+# runs as the owner (``_tl_owner``), so the identity function's internal
+# store/add_node/add_edge/raw-_tx writes take the DIRECT path on the daemon's own
+# connection instead of forwarding back to this server.
+
+
+def _handle_identity_ensure_user_hub(args: dict) -> int | None:
+    """Execute a forwarded identity.ensure_user_hub; returns the hub node id."""
+    from axi import identity
+
+    return identity.ensure_user_hub(**args)
+
+
+def _handle_identity_ensure_entity(args: dict) -> int | None:
+    """Execute a forwarded identity.ensure_entity; returns the entity node id."""
+    from axi import identity
+
+    return identity.ensure_entity(**args)
+
+
+def _handle_identity_register_alias(args: dict) -> None:
+    """Execute a forwarded identity.register_alias (returns None)."""
+    from axi import identity
+
+    return identity.register_alias(**args)
+
+
+def _handle_identity_add_relation(args: dict) -> None:
+    """Execute a forwarded identity.add_relation (returns None)."""
+    from axi import identity
+
+    return identity.add_relation(**args)
+
+
+def _handle_identity_add_entity_relation(args: dict) -> None:
+    """Execute a forwarded identity.add_entity_relation (returns None)."""
+    from axi import identity
+
+    return identity.add_entity_relation(**args)
+
+
+def _handle_identity_link_fact_to_entities(args: dict) -> None:
+    """Execute a forwarded identity.link_fact_to_entities (returns None)."""
+    from axi import identity
+
+    return identity.link_fact_to_entities(**args)
+
+
+def _handle_identity_link_fact_to_user(args: dict) -> None:
+    """Execute a forwarded identity.link_fact_to_user (returns None)."""
+    from axi import identity
+
+    return identity.link_fact_to_user(**args)
+
+
+# Ops the server knows how to execute. Stage 2 wires all LEAF store writers;
+# Stage 2b adds the identity write functions as whole (atomic) ops.
 OP_HANDLERS: dict[str, Callable[[dict], Any]] = {
     "add_conversation": _handle_add_conversation,
     "add_node": _handle_add_node,
@@ -281,6 +342,13 @@ OP_HANDLERS: dict[str, Callable[[dict], Any]] = {
     "delete_attachment": _handle_delete_attachment,
     "upsert_domain_node_map": _handle_upsert_domain_node_map,
     "set_conversation_node_id": _handle_set_conversation_node_id,
+    "identity.ensure_user_hub": _handle_identity_ensure_user_hub,
+    "identity.ensure_entity": _handle_identity_ensure_entity,
+    "identity.register_alias": _handle_identity_register_alias,
+    "identity.add_relation": _handle_identity_add_relation,
+    "identity.add_entity_relation": _handle_identity_add_entity_relation,
+    "identity.link_fact_to_entities": _handle_identity_link_fact_to_entities,
+    "identity.link_fact_to_user": _handle_identity_link_fact_to_user,
 }
 
 
