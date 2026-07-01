@@ -164,6 +164,35 @@ def _window_days(text: str) -> int:
     return 120
 
 
+def _graph_memory_block(text: str) -> str:
+    """Durable graph facts + relations relevant to *text* (or "").
+
+    The per-domain records (health_entries, finance_entries, …) hold the raw
+    logged rows, but the KNOWLEDGE GRAPH holds the distilled, related facts —
+    the exact prescription dose, who diagnosed a condition, an org a product
+    belongs to. Injecting this block lets EVERY domain query answer with graph
+    precision ("media pastilla de losartán 50 mg") instead of only what a single
+    record's title happened to summarize. Reused engine → all domains benefit.
+
+    Never raises; returns "" when disabled, empty, or on any error.
+    """
+    try:
+        from axi import config  # noqa: PLC0415
+        if not config.get("graph_recall", True):
+            return ""
+        from axi import recall as _recall  # noqa: PLC0415
+        # A DOMAIN query is, by definition, already a personal-data lookup for
+        # this domain — so the tight semantic gate (0.78) and the "does this look
+        # personal?" escalation heuristic are both redundant here. Use the WIDE
+        # gate directly so paraphrases like "que me recetaron" still reach facts
+        # stored as "Recetado media pastilla de losartán 50 mg". The anti-invention
+        # rules in the prompt keep any looser matches honest.
+        wide = float(config.get("graph_recall_tool_max_distance", 0.9))
+        return _recall.build_recall_block(text, max_distance=wide)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _format_entries_for_prompt(spec: DomainSpec, entries_list: list, tz) -> str:
     if not entries_list:
         return "(sin registros en este periodo)"
@@ -177,19 +206,36 @@ def _format_entries_for_prompt(spec: DomainSpec, entries_list: list, tz) -> str:
     return "\n".join(lines)
 
 
-def _build_query_system(spec: DomainSpec, now: datetime, entries_list: list) -> str:
+def _build_query_system(
+    spec: DomainSpec, now: datetime, entries_list: list, recall_block: str = ""
+) -> str:
     iso_today = now.strftime("%Y-%m-%d")
     upper = spec.name.upper()
     records = _format_entries_for_prompt(spec, entries_list, now.tzinfo)
+    # The graph memory (durable facts + relations) is an ADDITIONAL trusted
+    # source alongside the raw records — it carries the distilled precision a
+    # single record's title may omit (exact dose, who prescribed, etc.).
+    graph_intro = (
+        f"Responde con base en los siguientes registros de {spec.name} del usuario "
+        "Y en la MEMORIA DEL GRAFO (hechos y relaciones duraderos) que aparece al final. "
+        if recall_block.strip()
+        else f"Responde ÚNICAMENTE con base en los siguientes registros de {spec.name} del usuario. "
+    )
+    graph_section = (
+        f"\n\nMEMORIA DEL GRAFO (hechos y relaciones duraderos — úsalos como fuente "
+        f"confiable, con las MISMAS reglas anti-invención):\n{recall_block.strip()}"
+        if recall_block.strip()
+        else ""
+    )
     return (
         f"Eres el asistente del chat de {upper} de Axi. Respondes en español, claro y breve.\n"
         f"HOY es {iso_today} (año {now.year}). Usa esta fecha para resolver toda "
         "referencia temporal relativa: 'diciembre' significa el diciembre MÁS RECIENTE "
         "anterior o igual a hoy; 'el mes pasado', 'la semana pasada', etc. se resuelven "
         "siempre contra HOY.\n\n"
-        f"Responde ÚNICAMENTE con base en los siguientes registros de {spec.name} del usuario. "
-        "NO inventes datos. Si la información pedida NO está en los registros, di "
-        "claramente que no tienes ese registro.\n"
+        + graph_intro +
+        "NO inventes datos. Si la información pedida NO está en los registros ni en la "
+        "memoria del grafo, di claramente que no tienes ese registro.\n"
         "REGLAS ABSOLUTAS SOBRE FECHAS Y VALORES:\n"
         "- Usa EXACTAMENTE la fecha que aparece en cada registro. JAMÁS inventes "
         "ni infieras una fecha distinta. Si varios registros comparten la misma "
@@ -200,13 +246,15 @@ def _build_query_system(spec: DomainSpec, now: datetime, entries_list: list) -> 
         "rango aproximado) y el valor MÁS RECIENTE con su fecha. NO enumeres cada "
         "registro uno por uno.\n\n"
         f"REGISTROS DE {upper} (más recientes primero):\n{records}"
+        + graph_section
     )
 
 
 def _query(spec: DomainSpec, text: str, now: datetime, brain_ask: Callable) -> dict[str, Any]:
     days = _window_days(text)
     entries_list = spec.store_list_recent(days=days, limit=200)
-    system = _build_query_system(spec, now, entries_list)
+    recall_block = _graph_memory_block(text)
+    system = _build_query_system(spec, now, entries_list, recall_block)
 
     def _ask(think: bool, max_tokens: int) -> str:
         a = brain_ask(text, system=system, think=think, max_tokens=max_tokens)
