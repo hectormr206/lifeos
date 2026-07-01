@@ -223,7 +223,11 @@ def test_ask_with_tools_recall_not_injected_when_disabled(monkeypatch):
 
     first_messages = captured_payloads[0]["messages"]
     system_content = first_messages[0]["content"]
-    assert "MEMORIA RELEVANTE" not in system_content
+    # The base prompt now MENTIONS the phrase "MEMORIA RELEVANTE" as instruction,
+    # so it is not a reliable "was recall injected?" signal. Assert on the mock's
+    # unique injected fact and the restraint line (both added ONLY on injection).
+    assert "- hecho" not in system_content
+    assert "Los recuerdos de arriba" not in system_content
 
 
 def test_ask_with_tools_recall_not_injected_when_block_empty(monkeypatch):
@@ -249,8 +253,10 @@ def test_ask_with_tools_recall_not_injected_when_block_empty(monkeypatch):
     brain.ask_with_tools("query", tools=[], tool_handlers={})
 
     system_content = captured_payloads[0]["messages"][0]["content"]
-    assert "MEMORIA RELEVANTE" not in system_content
-    assert "RELEVANT MEMORY" not in system_content
+    # Empty recall block → nothing injected. The restraint line is the reliable
+    # signal (the phrase "MEMORIA RELEVANTE" also appears in the base instruction).
+    assert "Los recuerdos de arriba" not in system_content
+    assert "memories above" not in system_content.lower()
 
 
 # ---------------------------------------------------------------------------

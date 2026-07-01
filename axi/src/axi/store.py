@@ -912,7 +912,20 @@ def _connect() -> sqlcipher3.Connection:
     """
     conn = getattr(_tl, "conn", None)
     if conn is not None:
-        return conn
+        # A cached connection is only valid while it still points at the current
+        # DB_PATH. In production DB_PATH never changes, so this is always true and
+        # the fast path is a single Path comparison. But a FastAPI TestClient
+        # runs endpoints in worker threads whose thread-local connection is NOT
+        # closed by the test harness swapping DB_PATH between tests — so that
+        # thread would keep writing to a previous test's (now removed / re-keyed)
+        # temp DB, surfacing as "hmac check failed". Reopen when the path drifts.
+        if getattr(_tl, "conn_path", None) == DB_PATH:
+            return conn
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        _tl.conn = None
 
     with _conn_lock:
         # One-time, transparent upgrade: an older plaintext memory.db is
@@ -935,6 +948,7 @@ def _connect() -> sqlcipher3.Connection:
         pass
 
     _tl.conn = c
+    _tl.conn_path = DB_PATH
     return c
 
 

@@ -81,7 +81,8 @@ def test_learning_query_passes_records(monkeypatch):
         brain_ask=_brain(_extract(intent="query"), capture=capture),
     )
     assert res["mode"] == "query"
-    qsys = [c for c in capture if c["think"]][0]["system"]
+    # Query is think=False since 25ccc25 — match the records-carrying call by marker.
+    qsys = [c for c in capture if "REGISTROS" in (c["system"] or "")][0]["system"]
     assert "L9" in qsys and "Clean Code" in qsys
 
 
