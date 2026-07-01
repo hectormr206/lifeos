@@ -47,7 +47,16 @@ def ensure_user_hub(conn=None) -> int | None:
 
     Renames it in place if the configured name changed. Returns its node id, or
     None on failure (never raises).
+
+    When called WITHOUT a *conn* under single-writer routing, the whole call is
+    forwarded to the sole writer so its raw ``_tx`` rename runs on the daemon.
+    An explicit *conn* means the caller owns the transaction: execute directly.
     """
+    if conn is None:
+        from axi import write_router  # lazy: avoid import cycle
+        routed, _res = write_router.maybe_forward("identity.ensure_user_hub", {})
+        if routed:
+            return _res
     name = user_name() or _DEFAULT_HUB_LABEL
     try:
         c = conn or store._connect()  # noqa: SLF001
@@ -249,7 +258,17 @@ def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
 
     Alias-aware: if *name* is "Ani" and an entity "Ana Ríos" lists
     "Ani" in its aliases, the EXISTING Ana node is returned (no duplicate).
+
+    Without a *conn* under single-writer routing, the whole call is forwarded so
+    its coreference merge (via ``register_alias``) runs atomically on the daemon.
     """
+    if conn is None:
+        from axi import write_router  # lazy: avoid import cycle
+        routed, _res = write_router.maybe_forward(
+            "identity.ensure_entity", {"name": name, "kind": kind}
+        )
+        if routed:
+            return _res
     name = (name or "").strip()
     if not name:
         return None
@@ -289,7 +308,19 @@ def register_alias(canonical_name: str, alias: str, kind: str = "person", conn=N
     """Record *alias* as an alias of the entity *canonical_name*, and MERGE any
     separate node that already exists for the alias (its edges move onto the
     canonical node, then it is deleted). Idempotent. Never raises.
+
+    Without a *conn* under single-writer routing, the whole merge (raw ``_tx``
+    UPDATE/DELETE across nodes/edges) is forwarded so it runs atomically on the
+    sole writer instead of hitting memory.db from the dashboard.
     """
+    if conn is None:
+        from axi import write_router  # lazy: avoid import cycle
+        routed, _res = write_router.maybe_forward(
+            "identity.register_alias",
+            {"canonical_name": canonical_name, "alias": alias, "kind": kind},
+        )
+        if routed:
+            return _res
     canonical_name = (canonical_name or "").strip()
     alias = (alias or "").strip()
     if not canonical_name or not alias or alias.lower() == canonical_name.lower():
@@ -336,7 +367,18 @@ def register_alias(canonical_name: str, alias: str, kind: str = "person", conn=N
 def add_relation(relation: str, entity_name: str, kind: str = "person", conn=None) -> None:
     """Create a TYPED edge from the user hub to an entity: hub --relation--> entity
     (e.g. Héctor --esposa--> Ana Ríos). Idempotent. Never raises.
+
+    Without a *conn* under single-writer routing, the whole call is forwarded so
+    its hub/entity resolution and edge insert run atomically on the sole writer.
     """
+    if conn is None:
+        from axi import write_router  # lazy: avoid import cycle
+        routed, _res = write_router.maybe_forward(
+            "identity.add_relation",
+            {"relation": relation, "entity_name": entity_name, "kind": kind},
+        )
+        if routed:
+            return _res
     relation = (relation or "").strip().lower().replace(" ", "_")
     if not relation:
         return
@@ -374,7 +416,24 @@ def add_entity_relation(
     user->entity relations stay consistent with the hub-centric model.
 
     Idempotent (no duplicate subject/relation/obj edge). Never raises.
+
+    Without a *conn* under single-writer routing, the whole call is forwarded so
+    both endpoints' resolution and the edge insert run atomically on the writer.
     """
+    if conn is None:
+        from axi import write_router  # lazy: avoid import cycle
+        routed, _res = write_router.maybe_forward(
+            "identity.add_entity_relation",
+            {
+                "subject": subject,
+                "relation": relation,
+                "obj": obj,
+                "subject_kind": subject_kind,
+                "object_kind": object_kind,
+            },
+        )
+        if routed:
+            return _res
     relation = (relation or "").strip().lower().replace(" ", "_")
     subject = (subject or "").strip()
     obj = (obj or "").strip()
@@ -405,7 +464,17 @@ def link_fact_to_entities(fact_id: int, text: str, conn=None) -> None:
     whole word) in *text* — edge fact --mentions--> entity. This is what makes an
     entity a RICH profile: clicking it surfaces all the facts about it, not just
     its typed relations. Idempotent. Never raises.
+
+    Without a *conn* under single-writer routing, the whole scan-and-link runs on
+    the sole writer so its ``mentions`` edges are inserted there, not from here.
     """
+    if conn is None:
+        from axi import write_router  # lazy: avoid import cycle
+        routed, _res = write_router.maybe_forward(
+            "identity.link_fact_to_entities", {"fact_id": fact_id, "text": text}
+        )
+        if routed:
+            return _res
     if not fact_id or not text:
         return
     try:
@@ -443,7 +512,17 @@ def link_fact_to_user(fact_id: int, conn=None) -> None:
     """Connect a fact node to the user hub (edge kind 'about'), so everything
     radiates from the user. Idempotent (skips if the edge already exists).
     Never raises — graph hygiene must not break the write path.
+
+    Without a *conn* under single-writer routing, the whole call is forwarded so
+    the hub resolution and the ``about`` edge insert run on the sole writer.
     """
+    if conn is None:
+        from axi import write_router  # lazy: avoid import cycle
+        routed, _res = write_router.maybe_forward(
+            "identity.link_fact_to_user", {"fact_id": fact_id}
+        )
+        if routed:
+            return _res
     if not fact_id:
         return
     try:
