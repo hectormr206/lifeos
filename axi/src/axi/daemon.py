@@ -1315,6 +1315,23 @@ def serve() -> int:
     # daemon (single writer) is allowed to run threads that write memory.db.
     store.enable_embed_writer()
 
+    # Single-writer: mark THIS process (the daemon) as the sole writer and stand
+    # up the write server so other processes can forward their writes here. This
+    # runs regardless of the `single_writer` config flag — the server is harmless
+    # when nothing forwards, and starting it unconditionally lets the operator
+    # flip the flag without restarting the daemon just for the socket. Wrapped so
+    # a socket problem never crashes the daemon.
+    from axi import write_router
+    write_router.enable_write_owner()
+    write_server: "write_router.WriteServer | None" = None
+    try:
+        write_server = write_router.WriteServer()
+        write_server.start()
+        log.info("write server listening on %s", write_router.WRITE_SOCK_PATH)
+    except Exception:  # noqa: BLE001
+        log.exception("write server failed to start — single-writer forwarding disabled")
+        write_server = None
+
     # Configure web research in THIS process so the voice co-pilot can search.
     _configure_web_research()
 
@@ -1523,6 +1540,14 @@ def serve() -> int:
         # crashed during startup, or was killed via SIGTERM mid-write.
         # This is the primary defense against "disk image is malformed"
         # corruption caused by uncheckpointed partial WAL pages.
+        # Stop the write server BEFORE closing the store so no forwarded write
+        # can land mid-checkpoint. Wrapped so a socket problem never breaks the
+        # clean-shutdown checkpoint below.
+        if write_server is not None:
+            try:
+                write_server.stop()
+            except Exception:  # noqa: BLE001
+                log.exception("write server failed to stop cleanly")
         store.checkpoint()
         store.close()
     log.info("bye")

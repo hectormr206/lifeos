@@ -327,6 +327,21 @@ def _handle_identity_link_fact_to_user(args: dict) -> None:
     return identity.link_fact_to_user(**args)
 
 
+# ── diarize ops (Stage 3) ─────────────────────────────────────────────────────
+
+
+def _handle_diarize_rename_speaker(args: dict) -> int:
+    """Execute a forwarded diarize.rename_speaker; returns segments relabeled.
+
+    rename_speaker does a raw ``store._tx`` UPDATE across speakers +
+    meeting_segments. It is the last dashboard-called writer; running it whole on
+    the sole writer keeps the multi-table rename atomic.
+    """
+    from axi import diarize  # lazy
+
+    return diarize.rename_speaker(**args)
+
+
 # Ops the server knows how to execute. Stage 2 wires all LEAF store writers;
 # Stage 2b adds the identity write functions as whole (atomic) ops.
 OP_HANDLERS: dict[str, Callable[[dict], Any]] = {
@@ -349,6 +364,7 @@ OP_HANDLERS: dict[str, Callable[[dict], Any]] = {
     "identity.add_entity_relation": _handle_identity_add_entity_relation,
     "identity.link_fact_to_entities": _handle_identity_link_fact_to_entities,
     "identity.link_fact_to_user": _handle_identity_link_fact_to_user,
+    "diarize.rename_speaker": _handle_diarize_rename_speaker,
 }
 
 

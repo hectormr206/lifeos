@@ -364,7 +364,19 @@ def rename_speaker(speaker_id: int, new_name: str) -> int:
     every segment that was attributed to this speaker (across meetings).
 
     Returns the number of segments retroactively relabeled.
+
+    Called from the dashboard endpoint. Under single-writer routing the whole
+    rename (raw ``store._tx`` UPDATE across speakers + meeting_segments) is
+    forwarded so it runs atomically on the sole writer instead of hitting
+    memory.db from the dashboard process.
     """
+    from axi import write_router  # lazy: avoid import cycle
+    routed, _res = write_router.maybe_forward(
+        "diarize.rename_speaker",
+        {"speaker_id": speaker_id, "new_name": new_name},
+    )
+    if routed:
+        return _res
     new_name = (new_name or "").strip()
     if not new_name:
         raise ValueError("name cannot be empty")
