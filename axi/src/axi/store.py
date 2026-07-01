@@ -1355,6 +1355,18 @@ def add_conversation(user_text: str, axi_text: str, has_screenshot: bool = False
     `source` is 'chat' (default) or 'voice'. The dashboard chat history hides
     'voice' turns so spoken conversations don't clutter the typed chat.
     """
+    from axi import write_router  # lazy, avoid import cycle
+    if write_router.single_writer_enabled() and not write_router.is_owner():
+        try:
+            return write_router.forward_write("add_conversation", {
+                "user_text": user_text,
+                "axi_text": axi_text,
+                "has_screenshot": has_screenshot,
+                "session_id": session_id,
+                "source": source,
+            })
+        except write_router.WriteServerUnavailable:
+            pass  # writer down → fall back to a direct local write (degraded)
     with _tx() as c:
         cur = c.execute(
             "INSERT INTO conversations(ts, user_text, axi_text, session_id, has_screenshot, source) "
