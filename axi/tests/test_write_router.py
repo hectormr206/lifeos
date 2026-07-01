@@ -243,3 +243,228 @@ class TestAddConversationRouting:
             "SELECT user_text FROM conversations WHERE id = ?", (conv_id,)
         ).fetchone()
         assert row["user_text"] == "off"
+
+
+# ─────────────────────────── maybe_forward helper ────────────────────────────
+
+
+class TestMaybeForward:
+    """The DRY routing decision helper every wired leaf calls at its top."""
+
+    def test_disabled_returns_local(self, monkeypatch):
+        monkeypatch.setattr(write_router, "single_writer_enabled", lambda: False)
+        assert write_router.maybe_forward("add_node", {"x": 1}) == (False, None)
+
+    def test_owner_returns_local(self, monkeypatch):
+        monkeypatch.setattr(write_router, "single_writer_enabled", lambda: True)
+        monkeypatch.setattr(write_router, "is_owner", lambda: True)
+        assert write_router.maybe_forward("add_node", {"x": 1}) == (False, None)
+
+    def test_forwards_when_enabled_and_not_owner(self, write_server, monkeypatch):
+        monkeypatch.setattr(write_router, "single_writer_enabled", lambda: True)
+        monkeypatch.setitem(
+            write_router.OP_HANDLERS, "stub_echo", lambda args: {"got": args}
+        )
+        routed, res = write_router.maybe_forward("stub_echo", {"a": 1})
+        assert routed is True
+        assert res == {"got": {"a": 1}}
+
+    def test_writer_down_falls_back_to_local(self, tmp_path, monkeypatch):
+        """Writer socket missing → (False, None): caller does a degraded direct write."""
+        monkeypatch.setattr(write_router, "single_writer_enabled", lambda: True)
+        monkeypatch.setattr(
+            write_router, "WRITE_SOCK_PATH", tmp_path / "no-server.sock"
+        )
+        assert write_router.maybe_forward("add_node", {"x": 1}) == (False, None)
+
+
+# ─────────────────────── leaf store-writer routing (Stage 2) ──────────────────
+
+
+class TestLeafWriterRouting:
+    """Each wired leaf store helper forwards to the running server, which runs
+    the REAL helper against the per-test temp DB. Verified by reading the table
+    directly. single_writer is ON and the client thread is not the owner.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _routing_on(self, write_server, monkeypatch):
+        monkeypatch.setattr(write_router, "single_writer_enabled", lambda: True)
+        assert write_router.is_owner() is False  # client thread is not the owner
+
+    def test_add_node_forwarded(self):
+        nid = store.add_node(kind="fact", label="pizza", data={"k": "v"})
+        assert isinstance(nid, int)
+        row = store._connect().execute(
+            "SELECT kind, label FROM nodes WHERE id = ?", (nid,)
+        ).fetchone()
+        assert row["kind"] == "fact"
+        assert row["label"] == "pizza"
+
+    def test_add_edge_forwarded(self):
+        a = store.add_node(kind="fact", label="a")
+        b = store.add_node(kind="fact", label="b")
+        eid = store.add_edge(a, b, kind="rel", data={"w": 1})
+        assert isinstance(eid, int)
+        row = store._connect().execute(
+            "SELECT from_id, to_id, kind FROM edges WHERE id = ?", (eid,)
+        ).fetchone()
+        assert (row["from_id"], row["to_id"], row["kind"]) == (a, b, "rel")
+
+    def test_delete_node_forwarded(self):
+        nid = store.add_node(kind="fact", label="doomed")
+        assert store.delete_node(nid) is True
+        gone = store._connect().execute(
+            "SELECT id FROM nodes WHERE id = ?", (nid,)
+        ).fetchone()
+        assert gone is None
+
+    def test_delete_edge_forwarded(self):
+        a = store.add_node(kind="fact", label="a")
+        b = store.add_node(kind="fact", label="b")
+        eid = store.add_edge(a, b, kind="rel")
+        assert store.delete_edge(eid) is True
+        gone = store._connect().execute(
+            "SELECT id FROM edges WHERE id = ?", (eid,)
+        ).fetchone()
+        assert gone is None
+
+    def test_delete_conversation_forwarded(self):
+        cid = store.add_conversation("q", "a")
+        assert store.delete_conversation(cid) is True
+        gone = store._connect().execute(
+            "SELECT id FROM conversations WHERE id = ?", (cid,)
+        ).fetchone()
+        assert gone is None
+
+    def test_delete_conversations_batch_forwarded(self):
+        c1 = store.add_conversation("q1", "a1")
+        c2 = store.add_conversation("q2", "a2")
+        n = store.delete_conversations([c1, c2])
+        assert n == 2
+        rows = store._connect().execute(
+            "SELECT id FROM conversations WHERE id IN (?, ?)", (c1, c2)
+        ).fetchall()
+        assert rows == []
+
+    def test_add_attachment_forwarded(self):
+        aid = store.add_attachment(
+            kind="image",
+            filename="f.png",
+            mime="image/png",
+            orig_name="orig.png",
+            sha256="deadbeef",
+            size_bytes=123,
+        )
+        assert isinstance(aid, int)
+        row = store._connect().execute(
+            "SELECT filename, size_bytes FROM chat_attachments WHERE id = ?", (aid,)
+        ).fetchone()
+        assert row["filename"] == "f.png"
+        assert row["size_bytes"] == 123
+
+    def test_link_attachments_forwarded(self):
+        cid = store.add_conversation("q", "a")
+        aid = store.add_attachment(
+            kind="image", filename="f.png", mime="image/png",
+            orig_name=None, sha256=None, size_bytes=1,
+        )
+        store.link_attachments(cid, [aid])
+        row = store._connect().execute(
+            "SELECT conv_id FROM chat_attachments WHERE id = ?", (aid,)
+        ).fetchone()
+        assert row["conv_id"] == cid
+
+    def test_delete_attachment_forwarded_returns_dict(self):
+        aid = store.add_attachment(
+            kind="image", filename="del.png", mime="image/png",
+            orig_name=None, sha256=None, size_bytes=1,
+        )
+        result = store.delete_attachment(aid)
+        # Routed result is a plain dict (Row is not JSON-serialisable); the
+        # dashboard indexes result["filename"] which works on a dict.
+        assert isinstance(result, dict)
+        assert result["filename"] == "del.png"
+        gone = store._connect().execute(
+            "SELECT id FROM chat_attachments WHERE id = ?", (aid,)
+        ).fetchone()
+        assert gone is None
+
+    def test_delete_attachment_missing_returns_none(self):
+        assert store.delete_attachment(999999) is None
+
+    def test_upsert_domain_node_map_forwarded(self):
+        nid = store.add_node(kind="fact", label="mapped")
+        got = store.upsert_domain_node_map("health", "entry-1", nid)
+        assert got == nid
+        # Idempotent: second call with a different node_id keeps the canonical one.
+        again = store.upsert_domain_node_map("health", "entry-1", nid + 12345)
+        assert again == nid
+        row = store._connect().execute(
+            "SELECT node_id FROM domain_node_map WHERE domain=? AND entry_id=?",
+            ("health", "entry-1"),
+        ).fetchone()
+        assert row["node_id"] == nid
+
+    def test_set_conversation_node_id_forwarded(self):
+        cid = store.add_conversation("q", "a")
+        nid = store.add_node(kind="conversation", label="q")
+        assert store.set_conversation_node_id(cid, nid) is True
+        row = store._connect().execute(
+            "SELECT node_id FROM conversations WHERE id = ?", (cid,)
+        ).fetchone()
+        assert row["node_id"] == nid
+
+
+class TestLeafOwnerShortCircuit:
+    """When this thread is the owner, a leaf writer writes directly and never
+    touches the socket — representative check on add_node."""
+
+    def test_add_node_owner_direct(self, monkeypatch):
+        monkeypatch.setattr(write_router, "single_writer_enabled", lambda: True)
+        monkeypatch.setattr(write_router, "is_owner", lambda: True)
+
+        def _fail(*a, **kw):
+            raise AssertionError("owner must not forward writes")
+
+        monkeypatch.setattr(write_router, "forward_write", _fail)
+
+        nid = store.add_node(kind="fact", label="local")
+        assert isinstance(nid, int)
+        row = store._connect().execute(
+            "SELECT label FROM nodes WHERE id = ?", (nid,)
+        ).fetchone()
+        assert row["label"] == "local"
+
+
+class TestCompoundRoutesViaLeaves:
+    """A compound write built from several leaf writers routes every leaf.
+
+    Proves the Stage-2 design premise: because compound ops bottom out in the
+    leaf store helpers, routing the leaves is sufficient — no compound op needs
+    its own op. Here: add_node twice + add_edge → three forwards, all landed.
+    """
+
+    def test_three_leaf_writes_all_forward_and_land(self, write_server, monkeypatch):
+        monkeypatch.setattr(write_router, "single_writer_enabled", lambda: True)
+
+        forwarded_ops: list[str] = []
+        real_forward = write_router.forward_write
+
+        def _spy(op, args, *a, **kw):
+            forwarded_ops.append(op)
+            return real_forward(op, args, *a, **kw)
+
+        monkeypatch.setattr(write_router, "forward_write", _spy)
+
+        a = store.add_node(kind="fact", label="alpha")
+        b = store.add_node(kind="fact", label="beta")
+        eid = store.add_edge(a, b, kind="same-day")
+
+        assert forwarded_ops == ["add_node", "add_node", "add_edge"]
+
+        c = store._connect()
+        assert c.execute("SELECT COUNT(*) AS n FROM nodes WHERE id IN (?, ?)",
+                         (a, b)).fetchone()["n"] == 2
+        assert c.execute("SELECT from_id, to_id FROM edges WHERE id = ?",
+                         (eid,)).fetchone()["from_id"] == a

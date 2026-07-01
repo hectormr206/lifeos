@@ -191,9 +191,9 @@ class ConversationMemory:
                 data={"user": user, "axi": axi},
             )
             # Bridge: link the conversation row to its graph node for future
-            # fact-extraction passes.
-            with store._tx() as c:  # noqa: SLF001 — internal helper, intentional
-                c.execute("UPDATE conversations SET node_id = ? WHERE id = ?", (node_id, conv_id))
+            # fact-extraction passes. Uses the routable store helper so this
+            # write also flows through the sole writer under single_writer.
+            store.set_conversation_node_id(conv_id, node_id)
         return conv_id, node_id
 
     def add(self, user: str, axi: str, has_screenshot: bool = False,

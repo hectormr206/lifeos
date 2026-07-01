@@ -15,8 +15,11 @@ This module provides the routing infrastructure:
   * a process-identity owner flag and a config gate so the behaviour is opt-in
     and defaults OFF (production behaviour unchanged).
 
-Stage 1 wires exactly one op: ``add_conversation``. The dispatch table is the
-extension point for later ops.
+Stage 1 wired exactly one op: ``add_conversation``. Stage 2 wires every LEAF
+store write helper (add_node/add_edge, the delete_* helpers, the attachment
+helpers, upsert_domain_node_map, set_conversation_node_id) so that because every
+high-level compound write bottoms out in these leaves, the dashboard never
+writes memory.db directly. The dispatch table is the extension point for ops.
 
 All imports of ``store`` are lazy: ``store`` imports this module, so importing
 ``store`` at module load time would create an import cycle.
@@ -143,6 +146,29 @@ def single_writer_enabled() -> bool:
         return False
 
 
+# ─────────────────────────── routing helper ──────────────────────────────────
+
+
+def maybe_forward(op: str, args: dict) -> tuple[bool, Any]:
+    """Decide whether a leaf write should be forwarded to the sole writer.
+
+    Returns ``(True, result)`` when the write was forwarded and executed by the
+    sole writer (the caller should return ``result`` verbatim). Returns
+    ``(False, None)`` when the caller should execute the write locally, which
+    happens when routing is disabled, this process/thread is the owner, or the
+    writer socket was unavailable (degraded direct-write fallback).
+
+    This is the DRY core every routed leaf store helper calls at its top,
+    matching the hand-written pattern add_conversation established in Stage 1.
+    """
+    if single_writer_enabled() and not is_owner():
+        try:
+            return True, forward_write(op, args)
+        except WriteServerUnavailable:
+            return False, None  # writer down → degraded direct-write fallback
+    return False, None
+
+
 # ─────────────────────────── dispatch table ──────────────────────────────────
 
 
@@ -153,9 +179,108 @@ def _handle_add_conversation(args: dict) -> int:
     return store.add_conversation(**args)
 
 
-# Ops the server knows how to execute. Stage 1 registers exactly one.
+def _handle_add_node(args: dict) -> int:
+    """Execute a forwarded add_node and return the new node id."""
+    from axi import store
+
+    return store.add_node(**args)
+
+
+def _handle_add_edge(args: dict) -> int:
+    """Execute a forwarded add_edge and return the new edge id."""
+    from axi import store
+
+    return store.add_edge(**args)
+
+
+def _handle_delete_node(args: dict) -> bool:
+    """Execute a forwarded delete_node and return whether a row was deleted."""
+    from axi import store
+
+    return store.delete_node(**args)
+
+
+def _handle_delete_edge(args: dict) -> bool:
+    """Execute a forwarded delete_edge and return whether a row was deleted."""
+    from axi import store
+
+    return store.delete_edge(**args)
+
+
+def _handle_delete_conversation(args: dict) -> bool:
+    """Execute a forwarded delete_conversation and return whether a row was removed."""
+    from axi import store
+
+    return store.delete_conversation(**args)
+
+
+def _handle_delete_conversations(args: dict) -> int:
+    """Execute a forwarded delete_conversations (batch) and return the count."""
+    from axi import store
+
+    return store.delete_conversations(**args)
+
+
+def _handle_add_attachment(args: dict) -> int:
+    """Execute a forwarded add_attachment and return the new attachment id."""
+    from axi import store
+
+    return store.add_attachment(**args)
+
+
+def _handle_link_attachments(args: dict) -> None:
+    """Execute a forwarded link_attachments (returns None)."""
+    from axi import store
+
+    return store.link_attachments(**args)
+
+
+def _handle_delete_attachment(args: dict) -> dict | None:
+    """Execute a forwarded delete_attachment.
+
+    delete_attachment returns a ``sqlite3.Row`` (or None) so callers can clean
+    up the on-disk file. A Row is NOT JSON-serialisable, so convert it to a
+    plain dict before it crosses the socket. The dashboard caller accesses the
+    result with ``row["filename"]``, which works identically on a dict.
+    """
+    from axi import store
+
+    row = store.delete_attachment(**args)
+    return dict(row) if row is not None else None
+
+
+def _handle_upsert_domain_node_map(args: dict) -> int:
+    """Execute a forwarded upsert_domain_node_map and return the canonical node id.
+
+    The whole insert-or-ignore + follow-up SELECT runs on the daemon, so the
+    canonical id (existing wins on conflict) is resolved by the sole writer.
+    """
+    from axi import store
+
+    return store.upsert_domain_node_map(**args)
+
+
+def _handle_set_conversation_node_id(args: dict) -> bool:
+    """Execute a forwarded set_conversation_node_id and return whether a row changed."""
+    from axi import store
+
+    return store.set_conversation_node_id(**args)
+
+
+# Ops the server knows how to execute. Stage 2 wires all LEAF store writers.
 OP_HANDLERS: dict[str, Callable[[dict], Any]] = {
     "add_conversation": _handle_add_conversation,
+    "add_node": _handle_add_node,
+    "add_edge": _handle_add_edge,
+    "delete_node": _handle_delete_node,
+    "delete_edge": _handle_delete_edge,
+    "delete_conversation": _handle_delete_conversation,
+    "delete_conversations": _handle_delete_conversations,
+    "add_attachment": _handle_add_attachment,
+    "link_attachments": _handle_link_attachments,
+    "delete_attachment": _handle_delete_attachment,
+    "upsert_domain_node_map": _handle_upsert_domain_node_map,
+    "set_conversation_node_id": _handle_set_conversation_node_id,
 }
 
 

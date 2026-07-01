@@ -1139,6 +1139,16 @@ def add_node(
                      linkers can group by the actual event day rather than the
                      day data was backfilled into the graph.
     """
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("add_node", {
+        "kind": kind,
+        "label": label,
+        "data": data,
+        "domain": domain,
+        "occurred_at": occurred_at,
+    })
+    if routed:
+        return _res
     now = time.time()
     payload = json.dumps(data or {}, ensure_ascii=False)
     tz = _current_tz()
@@ -1162,6 +1172,15 @@ def add_edge(
     kind: str,
     data: dict[str, Any] | None = None,
 ) -> int:
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("add_edge", {
+        "from_id": from_id,
+        "to_id": to_id,
+        "kind": kind,
+        "data": data,
+    })
+    if routed:
+        return _res
     payload = json.dumps(data or {}, ensure_ascii=False)
     with _tx() as c:
         cur = c.execute(
@@ -1184,6 +1203,10 @@ def delete_node(node_id: int) -> bool:
 
     Defensive: never raises; returns False on bad input or any error.
     """
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("delete_node", {"node_id": node_id})
+    if routed:
+        return _res
     try:
         nid = int(node_id)
     except (TypeError, ValueError):
@@ -1220,6 +1243,10 @@ def delete_edge(edge_id: int) -> bool:
 
     Defensive: never raises; returns False on bad input or any error.
     """
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("delete_edge", {"edge_id": edge_id})
+    if routed:
+        return _res
     try:
         eid = int(edge_id)
     except (TypeError, ValueError):
@@ -1376,6 +1403,27 @@ def add_conversation(user_text: str, axi_text: str, has_screenshot: bool = False
         return cur.lastrowid
 
 
+def set_conversation_node_id(conv_id: int, node_id: int) -> bool:
+    """Bind a conversation row to its graph node (conversations.node_id).
+
+    Routable leaf writer so the dashboard's conversation→node bridge in
+    ConversationMemory._add_once goes through the sole writer instead of a raw
+    _tx() UPDATE. Returns True if a row was updated.
+    """
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("set_conversation_node_id", {
+        "conv_id": conv_id,
+        "node_id": node_id,
+    })
+    if routed:
+        return _res
+    with _tx() as c:
+        cur = c.execute(
+            "UPDATE conversations SET node_id = ? WHERE id = ?", (node_id, conv_id)
+        )
+        return cur.rowcount > 0
+
+
 def recent_conversations(limit: int = 20) -> list[sqlite3.Row]:
     """Latest turns, OLDEST FIRST for LLM context order."""
     c = _connect()
@@ -1397,6 +1445,10 @@ def oldest_conversations(limit: int = 200) -> list[sqlite3.Row]:
 def delete_conversations(ids: list[int]) -> int:
     """Delete conversation turns by id (batch). Graph nodes are NOT touched —
     durable facts extracted from these turns stay in the graph. Returns count."""
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("delete_conversations", {"ids": ids})
+    if routed:
+        return _res
     ids = [int(i) for i in ids if i]
     if not ids:
         return 0
@@ -1417,6 +1469,10 @@ def clear_conversations() -> int:
 def delete_conversation(conv_id: int) -> bool:
     """Delete a single conversation turn (the user message AND Axi's reply — one
     row). Returns True if a row was removed. Graph nodes are left untouched."""
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("delete_conversation", {"conv_id": conv_id})
+    if routed:
+        return _res
     with _tx() as c:
         cur = c.execute("DELETE FROM conversations WHERE id = ?", (int(conv_id),))
         return cur.rowcount > 0
@@ -1449,6 +1505,18 @@ def add_attachment(
 
     Returns the new row id.
     """
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("add_attachment", {
+        "kind": kind,
+        "filename": filename,
+        "mime": mime,
+        "orig_name": orig_name,
+        "sha256": sha256,
+        "size_bytes": size_bytes,
+        "session_id": session_id,
+    })
+    if routed:
+        return _res
     with _tx() as c:
         cur = c.execute(
             "INSERT INTO chat_attachments"
@@ -1465,6 +1533,13 @@ def link_attachments(conv_id: int, attachment_ids: list[int]) -> None:
     Only claims rows that are still unlinked (conv_id IS NULL) to prevent
     accidental re-linking across conversations.
     """
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("link_attachments", {
+        "conv_id": conv_id,
+        "attachment_ids": attachment_ids,
+    })
+    if routed:
+        return _res
     if not attachment_ids:
         return
     with _tx() as c:
@@ -1487,7 +1562,15 @@ def delete_attachment(att_id: int) -> sqlite3.Row | None:
     """Delete an attachment row and return the row that was deleted (for file cleanup).
 
     Returns None if the row did not exist.
+
+    Note: when routed to the sole writer the result is a plain dict (a
+    sqlite3.Row is not JSON-serialisable); callers only index it (row["filename"]),
+    which works the same on a dict.
     """
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("delete_attachment", {"att_id": att_id})
+    if routed:
+        return _res
     row = get_attachment(att_id)
     if row is None:
         return None
@@ -2368,6 +2451,14 @@ def upsert_domain_node_map(domain: str, entry_id: str, node_id: int) -> int:
 
     Returns the node_id (existing or newly inserted).
     """
+    from axi import write_router  # lazy, avoid import cycle
+    routed, _res = write_router.maybe_forward("upsert_domain_node_map", {
+        "domain": domain,
+        "entry_id": entry_id,
+        "node_id": node_id,
+    })
+    if routed:
+        return _res
     with _tx() as c:
         c.execute(
             "INSERT OR IGNORE INTO domain_node_map(domain, entry_id, node_id, created_at) "
