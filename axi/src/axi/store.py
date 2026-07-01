@@ -25,6 +25,7 @@ import sqlite3
 import stat
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -1054,6 +1055,24 @@ def _tx_events() -> Iterator[sqlcipher3.Connection]:
 def init_db() -> None:
     with _init_lock:
         c = _connect()
+        # Single-writer guard: schema/migration writes must run ONLY on the sole
+        # writer (the daemon). A non-owner running executescript/migrations under
+        # single_writer opens a concurrent-write window against memory.db. When
+        # routing is on and this process is not the owner, just open the
+        # connection (schema is already present, materialized by the owner) and
+        # skip every write-migration below. No-op when routing is off.
+        try:
+            from axi import write_router  # lazy: write_router imports store
+
+            if write_router.single_writer_enabled() and not write_router.is_owner():
+                log.info(
+                    "init_db: single_writer non-owner — skipping schema/migration "
+                    "writes (owner materializes the schema)"
+                )
+                _connect_events()
+                return
+        except Exception:  # noqa: BLE001 — guard is best-effort, fall through to init
+            pass
         c.executescript(_SCHEMA)
         c.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', '1')")
         # Slice 1: embedding columns + vec_nodes virtual table.
@@ -1094,6 +1113,51 @@ def checkpoint() -> None:
             pass
 
 
+# ─────────────────────────── single-writer tripwire ─────────────────────────
+#
+# Observability only: when single_writer routing is ON and THIS process is not
+# the sole writer, a direct memory.db write means either an UNROUTED path (a bug
+# to fix — a write helper that skipped maybe_forward) or a degraded writer-down
+# fallback. We log it loudly with the call site so missed paths surface at
+# runtime. We NEVER block or change the write — the fallback must stay functional.
+#
+# Throttled by call-site signature so each unique unrouted site logs at most once
+# per process run, avoiding log spam on hot paths.
+_TRIPWIRE_SEEN: set[tuple[str, ...]] = set()
+
+
+def _single_writer_tripwire() -> None:
+    """Log/emit once per unique call site when a non-owner writes directly.
+
+    No-op (single cheap config read short-circuits) when single_writer is off,
+    which is the common case. Never raises.
+    """
+    try:
+        from axi import write_router  # lazy: write_router imports store
+
+        if not write_router.single_writer_enabled() or write_router.is_owner():
+            return
+        # Frames: [-1] is this helper, [-2] is _tx, so the real call site is the
+        # frames above _tx. Build a dedupe signature from the top 3 caller frames.
+        stack = traceback.extract_stack(limit=8)
+        caller = stack[:-2]  # drop this helper + _tx
+        signature = tuple(f"{fr.filename}:{fr.name}:{fr.lineno}" for fr in caller[-3:])
+        if signature in _TRIPWIRE_SEEN:
+            return
+        _TRIPWIRE_SEEN.add(signature)
+        where = " <- ".join(
+            f"{Path(fr.filename).name}:{fr.name}:{fr.lineno}" for fr in caller[-3:]
+        )
+        msg = (
+            "single_writer: DIRECT memory.db write from non-owner process "
+            "(unrouted path or writer-down fallback)"
+        )
+        log.warning("%s | call site: %s", msg, where)
+        _emit_recovery_event("warning", msg, {"call_site": where})
+    except Exception:  # noqa: BLE001 — tripwire is best-effort, never break a write
+        pass
+
+
 @contextmanager
 def _tx() -> Iterator[sqlite3.Connection]:
     """Begin/commit a transaction on the calling thread's own connection.
@@ -1101,6 +1165,7 @@ def _tx() -> Iterator[sqlite3.Connection]:
     No shared lock needed — each thread has its own connection object.
     SQLite WAL + busy_timeout handle cross-thread write serialization.
     """
+    _single_writer_tripwire()
     c = _connect()
     c.execute("BEGIN")
     try:
