@@ -155,14 +155,25 @@ def _norm(s: str) -> str:
 
 
 def _is_user_subject(name: str) -> bool:
-    """True when *name* refers to the user (pronoun or the configured name)."""
+    """True when *name* refers to the user (pronoun, configured name, or the
+    hub node's actual label). Matching the hub label too makes this robust to a
+    ``user_name`` config drift (e.g. a stale placeholder) that would otherwise
+    turn the user's own name into a DUPLICATE entity instead of the hub."""
     n = _norm(name)
     if not n:
         return False
     if n in {_norm(t) for t in _USER_SUBJECT_TERMS}:
         return True
     un = _norm(user_name())
-    return bool(un) and n == un
+    if un and n == un:
+        return True
+    try:
+        row = _find_hub_row(store._connect())
+        if row and _norm(row["label"]) == n:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
 
 
 def _entity_names(data_json: str) -> tuple[str, list[str]]:
