@@ -154,6 +154,34 @@ def _block_live_model_calls(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_single_writer_state():
+    """Reset the single-writer routing module globals around every test.
+
+    write_router._WRITE_OWNER, the _tl_owner thread-local, and store._TRIPWIRE_SEEN
+    are process-level globals with no per-test lifecycle. A test that calls
+    enable_write_owner() (or runs a WriteServer handler) would otherwise leak
+    is_owner()=True into later tests, breaking their forward assertions. Reset
+    before AND after so the single-writer state is hermetic in both directions.
+    """
+    def _reset():
+        try:
+            from axi import write_router
+            write_router._WRITE_OWNER = False
+            if hasattr(write_router._tl_owner, "active"):
+                write_router._tl_owner.active = False
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from axi import store
+            store._TRIPWIRE_SEEN.clear()
+        except Exception:  # noqa: BLE001
+            pass
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.fixture(autouse=True)
 def _block_live_system_subprocess(monkeypatch):
     """Intercept subprocess calls that would mutate the live system.
 
