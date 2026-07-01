@@ -26,6 +26,25 @@ from axi import domain_chat
 
 log = logging.getLogger("axi.chat_router")
 
+# Interrogatives — a message that opens with one (or ends with '?') is a
+# QUESTION, never data to save. The 4B classifier is unreliable here (it labels
+# "¿qué me recetaron?" as 'uncertain'), so this deterministic guard keeps
+# questions out of the "where do I save this?" clarify path.
+_QUESTION_RE = re.compile(
+    r"^\s*¿?\s*(?:qu[eé]|qui[eé]n(?:es)?|c[oó]mo|cu[aá]ndo|d[oó]nde|cu[aá]nto?s?|"
+    r"cu[aá]l(?:es)?|por\s+qu[eé]|para\s+qu[eé]|hace\s+cu[aá]nto|sab[eé]s|"
+    r"me\s+puedes?|recuerdas?|qu[eé]\s+sab[eé]s)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_question(text: str) -> bool:
+    """True when the message reads as a question (not data to register)."""
+    if not text:
+        return False
+    t = text.strip()
+    return t.endswith("?") or bool(_QUESTION_RE.match(t))
+
 
 def _build_router_system() -> str:
     """Build the classifier prompt from the live domain registry."""
@@ -86,7 +105,12 @@ def route_and_handle(
     # Uncertain: it looks like data the user wants to keep, but the domain is
     # ambiguous. Ask instead of guessing — the user picks and we re-process
     # (the frontend re-POSTs to /api/chat/domain/{key}). Never silently lost.
+    # BUT a QUESTION is never "data to save": "¿qué me recetaron?" / "¿quién me
+    # detectó?" must fall through to the general brain (which answers from graph
+    # recall), not get a "where do I save this?" prompt.
     if key == "uncertain":
+        if _looks_like_question(text):
+            return None
         from axi.domain_registry import DOMAINS
         return {
             "mode": "clarify",
