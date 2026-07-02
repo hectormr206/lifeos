@@ -128,6 +128,45 @@
     }
     /* ──────────────────────────────────────────────────────────────────── */
 
+    /* ── Axi living mascot — system-status indicator ─────────────────────
+       html[data-axi-state] is the single source of truth (set by the script
+       next to the reachability probe). Three states, priority
+       asleep > thinking > awake:
+         awake    → mascot as-is (no rules needed)
+         thinking → gentle bob/pulse while backend requests are in flight
+         asleep   → grayscale + dimmed + a tiny "z z" above the mascot
+       Both brand instances (mobile header + desktop sidebar) share the
+       .axi-mascot / .axi-mascot-wrap classes, so one rule drives both. */
+    .axi-mascot-wrap { position: relative; display: inline-flex; }
+    html[data-axi-state="asleep"] .axi-mascot { filter: grayscale(0.9); opacity: 0.55; }
+    html[data-axi-state="asleep"] .axi-mascot-wrap::after {
+      content: 'z z';
+      position: absolute; top: -0.6rem; right: -0.5rem;
+      font-size: 0.55rem; font-weight: 600; letter-spacing: 0.1em;
+      color: var(--teal); opacity: 0.85; pointer-events: none;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      html[data-axi-state="thinking"] .axi-mascot {
+        animation: axiMascotBob 1.2s ease-in-out infinite;
+        transform-origin: center bottom;
+      }
+      @keyframes axiMascotBob {
+        0%, 100% { transform: translateY(0) scale(1); }
+        50%      { transform: translateY(-2px) scale(1.05); }
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      /* No movement: a subtle opacity pulse signals "thinking" instead. */
+      html[data-axi-state="thinking"] .axi-mascot {
+        animation: axiMascotPulse 1.2s ease-in-out infinite;
+      }
+      @keyframes axiMascotPulse {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.7; }
+      }
+    }
+    /* ──────────────────────────────────────────────────────────────────── */
+
     /* Markdown rendering inside .md (meeting summaries, notes, etc.). Kept
        simple — matches the panel typography rather than fighting it. */
     .md h1, .md h2, .md h3 { font-weight: 600; color: var(--text); margin-top: 1rem; margin-bottom: 0.5rem; }
@@ -283,6 +322,7 @@
         throw new TypeError('AXI: backend unreachable');
       }
       _inFlightBackend += 1;
+      _axiMascotInFlightChanged();
       try {
         const resp = await _originalFetch(input, init);
         // A real response is definitive proof we're connected. Clear any stale
@@ -297,8 +337,66 @@
         throw e;
       } finally {
         _inFlightBackend -= 1;
+        _axiMascotInFlightChanged();
       }
     };
+
+    // ─── Axi living mascot — state machine ──────────────────────────
+    //
+    // Single source of truth: document.documentElement.dataset.axiState
+    // ('awake' | 'thinking' | 'asleep'), consumed by CSS on both mascot
+    // instances (mobile header + desktop sidebar). Priority:
+    //   asleep (AXI_REACHABLE === false)  >  thinking  >  awake
+    //
+    // This block only OBSERVES the existing machinery: it listens to the
+    // 'axi-reachability' event and hooks the _inFlightBackend counter's
+    // increment/decrement sites above. The only timer is a single 400ms
+    // debounce so fast calls never flicker the thinking animation.
+    const _AXI_MASCOT_TITLES = {
+      awake: 'Axi está aquí',
+      thinking: 'Axi está pensando…',
+      asleep: 'Axi no responde (¿VPN? ¿servicio?)',
+    };
+    let _axiMascotThinking = false;
+    let _axiMascotTimer = null;
+
+    function _axiApplyMascotState() {
+      const state = (window.AXI_REACHABLE === false)
+        ? 'asleep'
+        : (_axiMascotThinking ? 'thinking' : 'awake');
+      document.documentElement.dataset.axiState = state;
+      document.querySelectorAll('.axi-mascot-wrap').forEach((el) => {
+        el.title = _AXI_MASCOT_TITLES[state];
+      });
+    }
+
+    function _axiMascotInFlightChanged() {
+      if (_inFlightBackend > 0) {
+        // 0 → 1 transition: arm the debounce; only enter thinking if
+        // something is STILL in flight when it fires (fast calls skip it).
+        if (!_axiMascotThinking && _axiMascotTimer === null) {
+          _axiMascotTimer = setTimeout(() => {
+            _axiMascotTimer = null;
+            if (_inFlightBackend > 0) {
+              _axiMascotThinking = true;
+              _axiApplyMascotState();
+            }
+          }, 400);
+        }
+      } else {
+        if (_axiMascotTimer !== null) { clearTimeout(_axiMascotTimer); _axiMascotTimer = null; }
+        if (_axiMascotThinking) {
+          _axiMascotThinking = false;
+          _axiApplyMascotState();
+        }
+      }
+    }
+
+    // Reachability drives asleep/awake; re-apply once the body exists so
+    // the tooltips pick up the initial state (this script runs in <head>).
+    window.addEventListener('axi-reachability', _axiApplyMascotState);
+    document.addEventListener('DOMContentLoaded', _axiApplyMascotState);
+    document.documentElement.dataset.axiState = 'awake';
 
     // Auto-reload when connection comes back, EXCEPT for pages that handle
     // their own reconnect (set window.AXI_HANDLES_RECONNECT = true).
@@ -333,7 +431,7 @@
   <aside id="sidebar" class="hidden lg:flex flex-col fixed inset-y-0 left-0 w-64 border-r overflow-y-auto z-50"
          style="border-color: var(--border); background: var(--panel);">
     <a href="/" class="flex items-center px-4 py-4 font-semibold text-lg hover:opacity-80 transition flex-shrink-0"
-       title="Ir al dashboard"><img src="/static/axi-mark.svg" alt="Axi" style="height:1.8rem;width:auto;margin-right:0.45rem">LifeOS</a>
+       title="Ir al dashboard"><span class="axi-mascot-wrap" style="margin-right:0.45rem" title="Axi está aquí"><img src="/static/axi-mark.svg" alt="Axi" class="axi-mascot" style="height:1.8rem;width:auto"></span>LifeOS</a>
     <nav class="flex flex-col px-2 pb-6 text-sm gap-0.5">
       {{ navlink('/', '🏠 Hoy', request.url.path) }}
       {{ navlink('/chat', '💬 Chat', request.url.path) }}
@@ -383,7 +481,7 @@
            :title="'Eventos críticos sin leer: ' + ($store.snap?.unread_critical_events || 0)"></a>
         <!-- Brand: mobile-only — on lg+ it lives in the sidebar (no duplication). -->
         <a href="/" class="font-semibold text-lg hover:opacity-80 transition flex items-center lg:hidden"
-           title="Ir al dashboard"><img src="/static/axi-mark.svg" alt="Axi" style="height:1.6rem;width:auto;vertical-align:middle;margin-right:0.45rem;display:inline-block">LifeOS</a>
+           title="Ir al dashboard"><span class="axi-mascot-wrap" style="vertical-align:middle;margin-right:0.45rem" title="Axi está aquí"><img src="/static/axi-mark.svg" alt="Axi" class="axi-mascot" style="height:1.6rem;width:auto"></span>LifeOS</a>
         <span class="muted text-sm" x-data x-text="$store.snap?.now?.time || '—'">—</span>
         <!-- P2.4 — Whisper restart-pending pill. Shown when the user changed
              whisper_model_name / whisper_beam_size / whisper_initial_prompt
