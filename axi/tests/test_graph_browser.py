@@ -539,3 +539,130 @@ def test_brain3d_alias_aware_search_markers(client):
     # searchInput scores/ranks rather than doing a bare label substring match.
     assert "aliasScore" in html
     assert "isEntityKind" in html
+
+
+# ── /api/graph/search — server-side search over the FULL node table ──────────
+
+def test_graph_search_finds_fts_and_alias_hits(client):
+    """Search returns a node matched only via FTS AND one matched only via the
+    alias LIKE fallback; conversation nodes are excluded."""
+    from axi import store
+
+    # Matched via FTS (a token in the label): "Querétaro".
+    fact = store.add_node("fact", "Rodrigo vive en Querétaro", domain="relationships")
+    # Matched only via alias LIKE fallback: label doesn't contain "cely",
+    # the alias does. (FTS would also index the alias, but this proves aliases
+    # are searchable regardless of the pass.)
+    person = store.add_node(
+        "person", "Celia García Mateo",
+        data={"aliases": ["Cely"]}, domain="relationships",
+    )
+    # Must be excluded even though its label contains the query term.
+    store.add_node("conversation", "charla sobre Querétaro y Cely")
+
+    r = client.get("/api/graph/search", params={"q": "queretaro"})
+    assert r.status_code == 200
+    assert fact in [n["id"] for n in r.json()]
+
+    r2 = client.get("/api/graph/search", params={"q": "cely"})
+    ids2 = [n["id"] for n in r2.json()]
+    assert person in ids2
+    # No conversation node ever surfaces.
+    kinds = [n["kind"] for n in r2.json()]
+    assert "conversation" not in kinds
+
+
+def test_graph_search_result_shape_includes_aliases(client):
+    from axi import store
+
+    pid = store.add_node(
+        "person", "Celia García Mateo",
+        data={"aliases": ["Cely", "Celia Garcia"]}, domain="relationships",
+    )
+    rows = client.get("/api/graph/search", params={"q": "celia"}).json()
+    hit = next(n for n in rows if n["id"] == pid)
+    assert set(hit.keys()) == {"id", "label", "kind", "domain", "aliases"}
+    assert hit["aliases"] == ["Cely", "Celia Garcia"]
+    assert hit["domain"] == "relationships"
+
+
+def test_graph_search_entity_ranked_above_fact(client):
+    """When both an entity and a fact match, the entity kind ranks first."""
+    from axi import store
+
+    store.add_node("fact", "Nota sobre Celaya", domain="relationships")
+    person = store.add_node("person", "Celaya López", domain="relationships")
+
+    rows = client.get("/api/graph/search", params={"q": "celaya"}).json()
+    assert rows[0]["id"] == person
+    assert rows[0]["kind"] == "person"
+
+
+def test_graph_search_accent_insensitive(client):
+    """A query WITHOUT accents finds an accented label (FTS remove_diacritics)."""
+    from axi import store
+
+    pid = store.add_node("person", "José Ramírez", domain="relationships")
+    rows = client.get("/api/graph/search", params={"q": "jose ramirez"}).json()
+    assert pid in [n["id"] for n in rows]
+
+
+def test_graph_search_internal_substring_via_like_fallback(client):
+    """A mid-word substring FTS's token-prefix match misses is caught by the
+    normalized LIKE fallback (and it stays accent-insensitive)."""
+    from axi import store
+
+    pid = store.add_node("person", "José Ramírez", domain="relationships")
+    # "amire" is inside "Ramirez" (normalized), not a token prefix → FTS misses.
+    rows = client.get("/api/graph/search", params={"q": "amire"}).json()
+    assert pid in [n["id"] for n in rows]
+
+
+def test_graph_search_blank_query_returns_empty(client):
+    from axi import store
+
+    store.add_node("person", "Rodrigo", domain="relationships")
+    assert client.get("/api/graph/search", params={"q": ""}).json() == []
+    assert client.get("/api/graph/search", params={"q": "   "}).json() == []
+
+
+def test_graph_search_limit_respected_and_capped(client):
+    from axi import store
+
+    for i in range(8):
+        store.add_node("person", f"Testperson {i}", domain="relationships")
+
+    rows = client.get("/api/graph/search", params={"q": "testperson", "limit": 3}).json()
+    assert len(rows) == 3
+
+    # Hard cap: limit above 50 is clamped (no crash, no over-return).
+    capped = client.get("/api/graph/search", params={"q": "testperson", "limit": 999}).json()
+    assert len(capped) <= 50
+
+
+def test_graph_search_no_match_returns_empty(client):
+    from axi import store
+
+    store.add_node("person", "Rodrigo", domain="relationships")
+    assert client.get("/api/graph/search", params={"q": "zzznomatch"}).json() == []
+
+
+# ── brain3d.html server-search markers + i18n (both locales) ─────────────────
+
+def test_brain3d_server_search_markers(client):
+    """The client wires the server search: fetch, debounce, stale guard, merge,
+    and navigateTo for out-of-view results."""
+    html = client.get("/brain3d").text
+    assert "/api/graph/search?q=" in html          # server endpoint call
+    assert "_serverSearch" in html                  # merge routine
+    assert "_searchDebounce" in html                # ~200ms debounce
+    assert "_searchSeq" in html                     # stale-response guard
+    assert "remote: true" in html                   # server-only rows flagged
+    assert "await this.navigateTo(r.id)" in html    # click injects neighborhood
+
+
+def test_brain3d_server_search_i18n_both_locales(client):
+    html = client.get("/brain3d").text
+    assert "tUi('notLoaded')" in html               # marker rendered from i18n
+    assert "'fuera de vista'" in html               # es
+    assert "'not loaded'" in html                   # en
