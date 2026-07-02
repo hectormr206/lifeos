@@ -573,16 +573,16 @@ def test_extract_forwards_custom_temperature_to_call_nano(monkeypatch):
 
 
 def test_extract_default_temperature_is_unchanged(monkeypatch):
-    """When no temperature override is passed, extract() uses the 0.1 default
-    so production behavior is unchanged."""
+    """When no temperature override is passed, extract() uses the deterministic
+    0.0 default (changed intentionally in 3f3e3ac4 for reproducible extraction)."""
     rec = _FullRecorder(_ok(_VALID_JSON))
     monkeypatch.setattr(runtime, "call_nano", rec)
 
     extractor.extract("me tomé la presión, 120/80")
 
     assert rec.calls, "call_nano must have been called"
-    assert rec.calls[0]["temperature"] == 0.1, (
-        f"Default temperature must be 0.1, got {rec.calls[0]['temperature']}"
+    assert rec.calls[0]["temperature"] == 0.0, (
+        f"Default temperature must be 0.0, got {rec.calls[0]['temperature']}"
     )
 
 
@@ -600,16 +600,17 @@ def test_extract_forwards_seed_to_call_nano(monkeypatch):
         )
 
 
-def test_extract_default_seed_is_none(monkeypatch):
-    """When no seed is passed, extract() passes seed=None (no seed constraint)."""
+def test_extract_default_seed_is_zero(monkeypatch):
+    """When no seed is passed, extract() defaults to seed=0 (deterministic
+    sampling, changed intentionally in 3f3e3ac4)."""
     rec = _FullRecorder(_ok(_VALID_JSON))
     monkeypatch.setattr(runtime, "call_nano", rec)
 
     extractor.extract("me tomé la presión, 120/80")
 
     assert rec.calls, "call_nano must have been called"
-    assert rec.calls[0].get("seed") is None, (
-        f"Default seed must be None, got {rec.calls[0].get('seed')!r}"
+    assert rec.calls[0].get("seed") == 0, (
+        f"Default seed must be 0, got {rec.calls[0].get('seed')!r}"
     )
 
 
