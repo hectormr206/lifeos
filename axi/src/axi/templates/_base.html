@@ -35,6 +35,18 @@
     .nav-link { padding: 0.5rem 1rem; border-radius: 0.5rem; }
     .nav-link.active { background: var(--panel2); color: var(--pink); }
     .nav-link:hover { background: var(--panel2); }
+    /* ── Navigation: desktop sidebar + mobile bottom tab bar ───────────── */
+    .sidebar-section { padding: 1rem 1rem 0.35rem; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .badge-count { min-width: 1.1rem; height: 1.1rem; padding: 0 0.3rem; border-radius: 9999px; background: var(--pink); color: #fff; font-size: 0.65rem; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+    .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.15rem; padding: 0.5rem 0; font-size: 0.65rem; color: var(--muted); min-height: 3.6rem; }
+    .tab .tab-icon { font-size: 1.3rem; line-height: 1; }
+    .tab.active { color: var(--pink); }
+    .nav-tile { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; padding: 0.6rem 0.25rem; border-radius: 0.5rem; text-align: center; }
+    .nav-tile:hover { background: var(--panel2); }
+    .nav-tile.active { background: var(--panel2); }
+    .nav-tile.active .nav-tile-label { color: var(--pink); }
+    .nav-tile-icon { font-size: 1.4rem; line-height: 1; }
+    .nav-tile-label { font-size: 0.65rem; color: var(--muted); }
     .state-dot { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 50%; vertical-align: middle; }
     .state-idle { background: #8888aa; }
     .state-recording { background: var(--green); }
@@ -289,7 +301,63 @@
   </script>
 </head>
 <body class="min-h-screen">
-  <header class="border-b sticky top-0 z-40" style="border-color: var(--border); background: var(--panel)" x-data="{ navOpen: false }">
+  {# ── Nav link helpers. `path` is passed explicitly because Jinja macros
+        don't see the request context. ─────────────────────────────────── #}
+  {% macro navlink(href, label, path) -%}
+  <a href="{{ href }}" class="nav-link block{% if path == href %} active{% endif %}">{{ label }}</a>
+  {%- endmacro %}
+  {% macro navtile(href, icon, label, path) -%}
+  <a href="{{ href }}" class="nav-tile{% if path == href %} active{% endif %}">
+    <span class="nav-tile-icon">{{ icon }}</span>
+    <span class="nav-tile-label">{{ label }}</span>
+  </a>
+  {%- endmacro %}
+
+  <!-- ── Desktop sidebar (lg+). Flat groups, always visible — replaces the
+          old hamburger drawer on desktop. Scrolls internally when taller
+          than the viewport. -->
+  <aside id="sidebar" class="hidden lg:flex flex-col fixed inset-y-0 left-0 w-64 border-r overflow-y-auto z-50"
+         style="border-color: var(--border); background: var(--panel);">
+    <a href="/" class="flex items-center px-4 py-4 font-semibold text-lg hover:opacity-80 transition flex-shrink-0"
+       title="Ir al dashboard"><img src="/static/axi-mark.svg" alt="Axi" style="height:1.8rem;width:auto;margin-right:0.45rem">LifeOS</a>
+    <nav class="flex flex-col px-2 pb-6 text-sm gap-0.5">
+      {{ navlink('/', '🏠 Hoy', request.url.path) }}
+      {{ navlink('/chat', '💬 Chat', request.url.path) }}
+      <a href="/reminders" x-data="navBadge()"
+         class="nav-link flex items-center justify-between{% if request.url.path == '/reminders' %} active{% endif %}">
+        <span>🔔 Avisos</span>
+        <span x-show="count > 0" x-cloak class="badge-count" x-text="count"></span>
+      </a>
+      <div class="sidebar-section">Tu vida</div>
+      {{ navlink('/health', '🩺 Salud', request.url.path) }}
+      {{ navlink('/finance', '💰 Finanzas', request.url.path) }}
+      {{ navlink('/relationships', '👥 Relaciones', request.url.path) }}
+      {{ navlink('/exercise', '🏋️ Ejercicio', request.url.path) }}
+      {{ navlink('/spirituality', '🧘 Espiritualidad', request.url.path) }}
+      {{ navlink('/learning', '📚 Aprendizaje', request.url.path) }}
+      {{ navlink('/calendar', '📅 Calendario', request.url.path) }}
+      {{ navlink('/insights', '🔮 Insights', request.url.path) }}
+      <div class="sidebar-section">Axi</div>
+      {{ navlink('/briefings', '🗞️ Boletines', request.url.path) }}
+      {{ navlink('/meetings', '🎙️ Reuniones', request.url.path) }}
+      {{ navlink('/graph', '🕸️ Grafo', request.url.path) }}
+      {{ navlink('/memory', '🧩 Memoria', request.url.path) }}
+      {{ navlink('/translate', '🌐 Traductor', request.url.path) }}
+      {{ navlink('/calculator', '🧮 Calculadora', request.url.path) }}
+      {{ navlink('/conversations', '🗨️ Conversaciones', request.url.path) }}
+      {{ navlink('/posture', '🪑 Postura', request.url.path) }}
+      <div class="sidebar-section">Sistema</div>
+      {{ navlink('/models', '🧠 Modelos', request.url.path) }}
+      {{ navlink('/desarrollo', '🛠️ Desarrollo', request.url.path) }}
+      {{ navlink('/setup', '🩹 Setup & Salud', request.url.path) }}
+      {{ navlink('/events', '🔔 Eventos', request.url.path) }}
+      {{ navlink('/config', '⚙️ Config', request.url.path) }}
+    </nav>
+  </aside>
+
+  <!-- Content column — shifted right of the fixed sidebar on lg+. -->
+  <div class="lg:pl-64">
+  <header class="border-b sticky top-0 z-40" style="border-color: var(--border); background: var(--panel)">
     <div class="max-w-7xl mx-auto px-3 md:px-6 py-3 md:py-4 flex items-center justify-between gap-2 md:gap-4">
       <div class="flex items-center gap-2 md:gap-3 flex-shrink-0">
         <span class="state-dot flex-shrink-0" :class="'state-' + ($store.snap?.state || 'unknown')" x-data></span>
@@ -299,7 +367,8 @@
            x-cloak
            class="state-dot event-critical-dot pulse"
            :title="'Eventos críticos sin leer: ' + ($store.snap?.unread_critical_events || 0)"></a>
-        <a href="/" class="font-semibold text-lg hover:opacity-80 transition flex items-center"
+        <!-- Brand: mobile-only — on lg+ it lives in the sidebar (no duplication). -->
+        <a href="/" class="font-semibold text-lg hover:opacity-80 transition flex items-center lg:hidden"
            title="Ir al dashboard"><img src="/static/axi-mark.svg" alt="Axi" style="height:1.6rem;width:auto;vertical-align:middle;margin-right:0.45rem;display:inline-block">LifeOS</a>
         <span class="muted text-sm" x-data x-text="$store.snap?.now?.time || '—'">—</span>
         <!-- P2.4 — Whisper restart-pending pill. Shown when the user changed
@@ -425,107 +494,6 @@
               x-text="(($store.snap?.vram?.used_mb ?? 0) / 1024).toFixed(1) + '/' + (($store.snap?.vram?.total_mb ?? 0) / 1024).toFixed(0)">—</span>
       </a>
 
-      <!-- Hamburger (always active) -->
-      <button
-        type="button"
-        @click="navOpen = !navOpen"
-        class="p-2 rounded-lg panel2 text-base"
-        aria-label="Abrir menú"
-        style="min-width: 2.75rem; min-height: 2.75rem;"
-      >
-        <span x-show="!navOpen">☰</span>
-        <span x-show="navOpen" x-cloak>✕</span>
-      </button>
-    </div>
-
-    <!-- Mobile drawer — fixed overlay so it works even on pages that have
-         body{overflow:hidden} (e.g. /chat). Anchored full-width below the
-         header, max-height with internal scroll so 9 items fit on small
-         screens. Backdrop tap closes. -->
-    <div
-      x-show="navOpen"
-      x-cloak
-      x-transition.opacity
-      class="fixed inset-x-0 z-50 border-t shadow-2xl"
-      style="border-color: var(--border); background: var(--panel); top: 3.5rem; max-height: calc(100dvh - 3.5rem); overflow-y: auto;"
-      @click.outside="navOpen = false"
-    >
-      <nav class="flex flex-col text-base">
-        <!-- Always-visible: most-used entry points -->
-        <a href="/" class="px-4 py-3 nav-link">🏠 Home</a>
-        <a href="/chat" class="px-4 py-3 nav-link">💬 Chat</a>
-        <a href="/conversations" class="px-4 py-3 nav-link">🗨️ Conversaciones</a>
-
-        <!-- LifeOS — tu vida (open by default — the meat of the system) -->
-        <div x-data="{ open: true }" class="border-t" style="border-color: var(--border)">
-          <button @click="open = !open"
-                  class="w-full px-4 py-2 text-xs uppercase tracking-wider muted flex justify-between items-center hover:bg-white/5 transition">
-            <span>LifeOS · tu vida</span>
-            <span x-text="open ? '−' : '+'"></span>
-          </button>
-          <div x-show="open" x-transition.opacity x-cloak>
-            <a href="/health" class="px-4 py-3 nav-link block">🩺 Salud</a>
-            <a href="/finance" class="px-4 py-3 nav-link block">💰 Finanzas</a>
-            <a href="/relationships" class="px-4 py-3 nav-link block">👥 Relaciones</a>
-            <a href="/exercise" class="px-4 py-3 nav-link block">🏋️ Ejercicio</a>
-            <a href="/spirituality" class="px-4 py-3 nav-link block">🧘 Espiritualidad</a>
-            <a href="/learning" class="px-4 py-3 nav-link block">📚 Aprendizaje</a>
-            <a href="/calendar" class="px-4 py-3 nav-link block">📅 Calendario</a>
-          </div>
-        </div>
-
-        <!-- Proactivo (collapsed by default — accessed less often) -->
-        <div x-data="{ open: false }" class="border-t" style="border-color: var(--border)">
-          <button @click="open = !open"
-                  class="w-full px-4 py-2 text-xs uppercase tracking-wider muted flex justify-between items-center hover:bg-white/5 transition">
-            <span>Proactivo</span>
-            <span x-text="open ? '−' : '+'"></span>
-          </button>
-          <div x-show="open" x-transition.opacity x-cloak>
-            <a href="/reminders" class="px-4 py-3 nav-link block">⏰ Recordatorios</a>
-            <a href="/briefings" class="px-4 py-3 nav-link block">🗞️ Boletines</a>
-            <a href="/insights" class="px-4 py-3 nav-link block">🔮 Insights</a>
-            <a href="/posture" class="px-4 py-3 nav-link block">🪑 Postura</a>
-          </div>
-        </div>
-
-        <!-- Axi tools (collapsed) -->
-        <div x-data="{ open: false }" class="border-t" style="border-color: var(--border)">
-          <button @click="open = !open"
-                  class="w-full px-4 py-2 text-xs uppercase tracking-wider muted flex justify-between items-center hover:bg-white/5 transition">
-            <span>Axi · herramientas</span>
-            <span x-text="open ? '−' : '+'"></span>
-          </button>
-          <div x-show="open" x-transition.opacity x-cloak>
-            <a href="/translate" class="px-4 py-3 nav-link block">🌐 Traductor</a>
-            <a href="/meetings" class="px-4 py-3 nav-link block">🎙️ Reuniones</a>
-            <a href="/memory" class="px-4 py-3 nav-link block">🧩 Memoria</a>
-            <a href="/graph" class="px-4 py-3 nav-link block">🕸️ Grafo</a>
-            <a href="/models" class="px-4 py-3 nav-link block">🧠 Modelos</a>
-            <a href="/desarrollo" class="px-4 py-3 nav-link block">🛠️ Desarrollo</a>
-            <a href="/calculator" class="px-4 py-3 nav-link block">🧮 Calculadora</a>
-          </div>
-        </div>
-
-        <!-- Sistema (collapsed) -->
-        <div x-data="{ open: false }" class="border-t" style="border-color: var(--border)">
-          <button @click="open = !open"
-                  class="w-full px-4 py-2 text-xs uppercase tracking-wider muted flex justify-between items-center hover:bg-white/5 transition">
-            <span>Sistema</span>
-            <span x-text="open ? '−' : '+'"></span>
-          </button>
-          <div x-show="open" x-transition.opacity x-cloak>
-            <a href="/setup" class="px-4 py-3 nav-link block">🩹 Setup & Salud</a>
-            <a href="/events" class="px-4 py-3 nav-link block">🔔 Eventos</a>
-            <a href="/config" class="px-4 py-3 nav-link block">⚙️ Config</a>
-          </div>
-        </div>
-
-        <div class="px-4 py-3 border-t flex items-center justify-between text-xs muted" style="border-color: var(--border)">
-          <span>modo: <span x-data x-text="$store.snap?.models?.mode || '—'"></span></span>
-          <span>VRAM <span x-data x-text="(($store.snap?.vram?.used_mb ?? 0) / 1024).toFixed(1) + '/' + (($store.snap?.vram?.total_mb ?? 0) / 1024).toFixed(0) + ' GB'"></span></span>
-        </div>
-      </nav>
     </div>
   </header>
 
@@ -625,6 +593,99 @@
     </template>
     {% block content %}{% endblock %}
   </main>
+  </div><!-- /content column (lg:pl-64) -->
+
+  <!-- ── Mobile bottom tab bar + sheets (below lg). Pages that own the
+          bottom edge (e.g. /chat's input bar) override this block empty:
+          {% raw %}{% block tabbar %}{% endblock %}{% endraw %} -->
+  {% block tabbar %}
+  <style>
+    /* Reserve room under the content so nothing hides behind the tab bar.
+       --tabbar-clearance also lifts the floating FAB above the bar. */
+    @media (max-width: 1023.98px) {
+      :root { --tabbar-clearance: calc(4.5rem + env(safe-area-inset-bottom)); }
+      main { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
+    }
+  </style>
+  <div class="lg:hidden" x-data="{ sheet: null }" @keydown.escape.window="sheet = null">
+    <!-- Backdrop — tap closes the open sheet. -->
+    <div x-show="sheet" x-cloak x-transition.opacity class="fixed inset-0 z-40"
+         style="background: rgba(0,0,0,0.6);" @click="sheet = null"></div>
+
+    <!-- "Vida" sheet: the 7 life domains + Insights as a 4-col icon grid. -->
+    <div id="sheet-vida" x-show="sheet === 'vida'" x-cloak x-transition.opacity
+         class="fixed inset-x-0 z-50 border-t rounded-t-2xl p-4 shadow-2xl"
+         style="border-color: var(--border); background: var(--panel);
+                bottom: calc(3.9rem + env(safe-area-inset-bottom)); max-height: 65dvh; overflow-y: auto;">
+      <div class="text-xs uppercase tracking-wider muted mb-3">Tu vida</div>
+      <div class="grid grid-cols-4 gap-2">
+        {{ navtile('/health', '🩺', 'Salud', request.url.path) }}
+        {{ navtile('/finance', '💰', 'Finanzas', request.url.path) }}
+        {{ navtile('/relationships', '👥', 'Relaciones', request.url.path) }}
+        {{ navtile('/exercise', '🏋️', 'Ejercicio', request.url.path) }}
+        {{ navtile('/spirituality', '🧘', 'Espiritualidad', request.url.path) }}
+        {{ navtile('/learning', '📚', 'Aprendizaje', request.url.path) }}
+        {{ navtile('/calendar', '📅', 'Calendario', request.url.path) }}
+        {{ navtile('/insights', '🔮', 'Insights', request.url.path) }}
+      </div>
+    </div>
+
+    <!-- "Más" sheet: Axi tools + Sistema grids + mode/VRAM footer. -->
+    <div id="sheet-mas" x-show="sheet === 'mas'" x-cloak x-transition.opacity
+         class="fixed inset-x-0 z-50 border-t rounded-t-2xl p-4 shadow-2xl"
+         style="border-color: var(--border); background: var(--panel);
+                bottom: calc(3.9rem + env(safe-area-inset-bottom)); max-height: 65dvh; overflow-y: auto;">
+      <div class="text-xs uppercase tracking-wider muted mb-3">Axi</div>
+      <div class="grid grid-cols-4 gap-2 mb-4">
+        {{ navtile('/briefings', '🗞️', 'Boletines', request.url.path) }}
+        {{ navtile('/meetings', '🎙️', 'Reuniones', request.url.path) }}
+        {{ navtile('/graph', '🕸️', 'Grafo', request.url.path) }}
+        {{ navtile('/memory', '🧩', 'Memoria', request.url.path) }}
+        {{ navtile('/translate', '🌐', 'Traductor', request.url.path) }}
+        {{ navtile('/calculator', '🧮', 'Calculadora', request.url.path) }}
+        {{ navtile('/conversations', '🗨️', 'Conversaciones', request.url.path) }}
+        {{ navtile('/posture', '🪑', 'Postura', request.url.path) }}
+      </div>
+      <div class="text-xs uppercase tracking-wider muted mb-3">Sistema</div>
+      <div class="grid grid-cols-4 gap-2">
+        {{ navtile('/models', '🧠', 'Modelos', request.url.path) }}
+        {{ navtile('/desarrollo', '🛠️', 'Desarrollo', request.url.path) }}
+        {{ navtile('/setup', '🩹', 'Setup', request.url.path) }}
+        {{ navtile('/events', '🔔', 'Eventos', request.url.path) }}
+        {{ navtile('/config', '⚙️', 'Config', request.url.path) }}
+      </div>
+      <div class="mt-4 pt-3 border-t flex items-center justify-between text-xs muted" style="border-color: var(--border)">
+        <span>modo: <span x-data x-text="$store.snap?.models?.mode || '—'"></span></span>
+        <span>VRAM <span x-data x-text="(($store.snap?.vram?.used_mb ?? 0) / 1024).toFixed(1) + '/' + (($store.snap?.vram?.total_mb ?? 0) / 1024).toFixed(0) + ' GB'"></span></span>
+      </div>
+    </div>
+
+    <!-- Tab bar — thumb-first, always visible, safe-area aware (PWA). -->
+    <nav id="tabbar" class="fixed inset-x-0 bottom-0 z-50 border-t grid grid-cols-5"
+         style="border-color: var(--border); background: var(--panel); padding-bottom: env(safe-area-inset-bottom);">
+      <a href="/" class="tab{% if request.url.path == '/' %} active{% endif %}">
+        <span class="tab-icon">🏠</span><span>Hoy</span>
+      </a>
+      <a href="/chat" class="tab{% if request.url.path.startswith('/chat') %} active{% endif %}">
+        <span class="tab-icon">💬</span><span>Chat</span>
+      </a>
+      <button type="button" class="tab" :class="sheet === 'vida' ? 'active' : ''"
+              @click="sheet = (sheet === 'vida' ? null : 'vida')">
+        <span class="tab-icon">🩺</span><span>Vida</span>
+      </button>
+      <a href="/reminders" x-data="navBadge()"
+         class="tab{% if request.url.path == '/reminders' %} active{% endif %}">
+        <span class="tab-icon relative">🔔<span x-show="count > 0" x-cloak
+              class="badge-count absolute" style="top: -0.35rem; right: -0.8rem;"
+              x-text="count"></span></span><span>Avisos</span>
+      </a>
+      <button type="button" class="tab" :class="sheet === 'mas' ? 'active' : ''"
+              @click="sheet = (sheet === 'mas' ? null : 'mas')">
+        <span class="tab-icon">☰</span><span>Más</span>
+      </button>
+    </nav>
+  </div>
+  {% endblock %}
 
   <!-- ✨ Floating "Mejorar" button — improve the CURRENT section by spinning up a
        dev environment WITH context (the route Axi should work on). Same component
@@ -768,6 +829,21 @@
       } catch (e) {
         return text;
       }
+    }
+
+    // Small unread-count badge for the "Avisos" nav entries (mobile tab +
+    // desktop sidebar). Reuses the same endpoint the PWA icon badge polls
+    // (see refreshBadge() in chat.html) — response shape: { count }.
+    function navBadge() {
+      return {
+        count: 0,
+        async init() {
+          try {
+            const r = await fetch('/api/badge/count');
+            if (r.ok) this.count = (await r.json()).count || 0;
+          } catch (e) { /* offline — keep the badge hidden */ }
+        },
+      };
     }
 
     function dashboardStore() {
@@ -977,7 +1053,11 @@
           this.visible = !inIframe && !HIDE.includes(this.path);
           // /chat has a tall sticky input bar at the bottom — lift the FAB above
           // the whole block (toolbar + hint + input) so it never covers the mic.
-          this.fabBottom = (this.path === '/chat') ? '13rem' : '1rem';
+          // Elsewhere, --tabbar-clearance (set only below lg, where the bottom
+          // tab bar exists) lifts the FAB above the tab bar.
+          this.fabBottom = (this.path === '/chat')
+            ? '13rem'
+            : 'calc(1rem + var(--tabbar-clearance, 0rem))';
         },
 
         openModal() { this.modalOpen = true; this.text = ''; },
