@@ -615,10 +615,13 @@
   {% block tabbar %}
   <style>
     /* Reserve room under the content so nothing hides behind the tab bar.
-       --tabbar-clearance also lifts the floating FAB above the bar. */
+       --tabbar-clearance also lifts the floating FAB above the bar.
+       !important: <main> carries utility padding classes (py-3/md:py-6) whose
+       class selectors outrank this element selector — without it the clearance
+       is silently overridden and the last card hides behind the bar. */
     @media (max-width: 1023.98px) {
       :root { --tabbar-clearance: calc(4.5rem + env(safe-area-inset-bottom)); }
-      main { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
+      main { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)) !important; }
     }
   </style>
   <div class="lg:hidden" x-data="{ sheet: null }" @keydown.escape.window="sheet = null">
