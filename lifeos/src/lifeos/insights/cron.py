@@ -35,6 +35,13 @@ _DEFAULT_WEEKLY_HOUR = 20
 _DEFAULT_WEEKLY_MINUTE = 0
 _LOCAL_TZ = "America/Mexico_City"
 
+# The reschedule job recomputes the adaptive daily hour at a FIXED time each
+# day so its own cadence never drifts with the digest hour it manages. 04:00
+# local sits safely inside quiet hours (the digest is clamped to 19:00-23:00),
+# so recompute never collides with the digest firing.
+_RESCHEDULE_HOUR = 4
+_RESCHEDULE_MINUTE = 0
+
 
 # Callable signature for the push dispatch — injected by the dashboard so
 # this module stays free of axi imports.
@@ -48,6 +55,15 @@ NarratorFn = Callable[[str], str]     # (digest_text) -> narrated_body
 
 _push_fn: PushFn | None = None
 _narrator_fn: NarratorFn | None = None
+
+# Adaptive-hour reschedule state — set by start_jobs, read by the daily
+# reschedule job so it can recompute the digest hour without any DI (mirrors
+# how _narrator_fn stores injected state at module scope). The current hour is
+# tracked so the recompute is idempotent: it only re-registers the daily job
+# when the freshly computed hour actually differs.
+_adaptive_enabled: bool = False
+_current_daily_hour: int = _DEFAULT_DAILY_HOUR
+_current_daily_minute: int = _DEFAULT_DAILY_MINUTE
 
 
 def set_push(fn: PushFn) -> None:
@@ -200,30 +216,53 @@ def resolve_daily_schedule(adaptive_enabled: bool) -> tuple[int, int, str]:
     return _DEFAULT_DAILY_HOUR, _DEFAULT_DAILY_MINUTE, "default"
 
 
+def _daily_cron_trigger(hour: int, minute: int) -> CronTrigger:
+    """Build the daily-digest CronTrigger in the local tz.
+
+    Shared by initial registration and the reschedule job so both stay
+    consistent on timezone handling.
+    """
+    return CronTrigger(hour=hour, minute=minute, timezone=ZoneInfo(_LOCAL_TZ))
+
+
 def start_jobs(*, daily_hour: int = _DEFAULT_DAILY_HOUR,
                daily_minute: int = _DEFAULT_DAILY_MINUTE,
                weekly_weekday: int = _DEFAULT_WEEKLY_WEEKDAY,
                weekly_hour: int = _DEFAULT_WEEKLY_HOUR,
-               weekly_minute: int = _DEFAULT_WEEKLY_MINUTE) -> dict[str, str]:
-    """Register the two insight jobs on the global scheduler.
+               weekly_minute: int = _DEFAULT_WEEKLY_MINUTE,
+               adaptive_enabled: bool = False) -> dict[str, str]:
+    """Register the insight jobs on the global scheduler.
 
     Idempotent — `replace_existing=True` means calling this multiple times
     (e.g. across dashboard restarts) updates the jobs in place.
 
+    `adaptive_enabled` is stored so the daily reschedule job knows whether it
+    may recompute the adaptive hour. When True, a lightweight job at
+    _RESCHEDULE_HOUR:_RESCHEDULE_MINUTE local re-derives the digest hour from
+    the sleep median each day, so the schedule tracks the user's drifting
+    bedtime WITHOUT waiting for a dashboard restart.
+
     Returns the cron strings for the dashboard to display.
     """
+    global _adaptive_enabled, _current_daily_hour, _current_daily_minute
+
     sched = get_scheduler()
     if not sched.running:
         log.warning("lifeos scheduler not running — skipping insight cron registration")
         return {}
 
+    _adaptive_enabled = adaptive_enabled
+    _current_daily_hour = daily_hour
+    _current_daily_minute = daily_minute
+
     tz = ZoneInfo(_LOCAL_TZ)
-    daily_trigger = CronTrigger(
-        hour=daily_hour, minute=daily_minute, timezone=tz,
-    )
+    daily_trigger = _daily_cron_trigger(daily_hour, daily_minute)
     weekly_trigger = CronTrigger(
         day_of_week=weekly_weekday, hour=weekly_hour, minute=weekly_minute,
         timezone=tz,
+    )
+    reschedule_trigger = CronTrigger(
+        hour=_RESCHEDULE_HOUR, minute=_RESCHEDULE_MINUTE, timezone=tz,
     )
 
     sched._scheduler.add_job(
@@ -236,17 +275,67 @@ def start_jobs(*, daily_hour: int = _DEFAULT_DAILY_HOUR,
         id="lifeos.insights.weekly", replace_existing=True,
         misfire_grace_time=7200,
     )
+    # Daily adaptive-hour recompute. Registered unconditionally (idempotent via
+    # replace_existing); it is a no-op at run time when adaptive is disabled.
+    sched._scheduler.add_job(
+        func=_safe_reschedule_daily, trigger=reschedule_trigger,
+        id="lifeos.insights.reschedule", replace_existing=True,
+        misfire_grace_time=3600,
+    )
     # Register correlation_snapshot (hourly, defined in correlate.py).
     _register_correlation(sched)
 
     log.info(
-        "insight jobs registered: daily=%02d:%02d, weekly=day%d@%02d:%02d",
+        "insight jobs registered: daily=%02d:%02d, weekly=day%d@%02d:%02d, "
+        "reschedule=%02d:%02d (adaptive=%s)",
         daily_hour, daily_minute, weekly_weekday, weekly_hour, weekly_minute,
+        _RESCHEDULE_HOUR, _RESCHEDULE_MINUTE, adaptive_enabled,
     )
     return {
         "daily": f"{daily_minute} {daily_hour} * * *",
         "weekly": f"{weekly_minute} {weekly_hour} * * {weekly_weekday}",
     }
+
+
+def reschedule_daily(adaptive_enabled: bool | None = None) -> bool:
+    """Recompute the adaptive daily hour and re-register the daily job if it
+    changed. Returns True if the daily job was re-registered, else False.
+
+    `adaptive_enabled` defaults to the flag captured by start_jobs; callers
+    (e.g. the dashboard, Option B) may pass it explicitly. When adaptive is
+    disabled this is a no-op — the fixed hour stays put.
+
+    Idempotent: if the recomputed (hour, minute) equals the currently-scheduled
+    value, the scheduler is left untouched (no churn).
+    """
+    global _current_daily_hour, _current_daily_minute
+
+    enabled = _adaptive_enabled if adaptive_enabled is None else adaptive_enabled
+    if not enabled:
+        return False
+
+    hour, minute, source = resolve_daily_schedule(enabled)
+    if (hour, minute) == (_current_daily_hour, _current_daily_minute):
+        return False  # no drift — don't churn the scheduler
+
+    sched = get_scheduler()
+    if not sched.running:
+        log.warning("lifeos scheduler not running — skipping daily reschedule")
+        return False
+
+    old_hour, old_minute = _current_daily_hour, _current_daily_minute
+    sched._scheduler.add_job(
+        func=_safe_run_daily, trigger=_daily_cron_trigger(hour, minute),
+        id="lifeos.insights.daily", replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    _current_daily_hour = hour
+    _current_daily_minute = minute
+    log.info(
+        "daily digest rescheduled: %02d:%02d -> %02d:%02d (%s)",
+        old_hour, old_minute, hour, minute, source,
+    )
+    return True
 
 
 def _safe_run_daily() -> None:
@@ -261,3 +350,12 @@ def _safe_run_weekly() -> None:
         run_weekly_now()
     except Exception:  # noqa: BLE001
         log.exception("scheduled weekly insight crashed")
+
+
+def _safe_reschedule_daily() -> None:
+    """apscheduler entry point for the daily adaptive-hour recompute. Must
+    never throw out of the job — a bad recompute keeps the existing schedule."""
+    try:
+        reschedule_daily()
+    except Exception:  # noqa: BLE001
+        log.exception("daily digest reschedule crashed — keeping current schedule")

@@ -1150,3 +1150,151 @@ def test_symptom_en_vital_wins_over_symptom() -> None:
     assert h is not None
     assert h.kind == "vital"
     assert h.data["type"] == "glucose"
+
+
+# ─── Temperature (bilingual, keyword-anchored) ─────────────────────────
+
+def test_vital_temperature_es_keyword_first() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("temperatura 37.5")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data == {"type": "temperature", "value": 37.5, "unit": "°C"}
+    assert h.title == "temperatura 37.5°C"
+
+
+def test_vital_temperature_es_number_first() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("tengo 38 de temperatura")
+    assert h is not None
+    assert h.data["type"] == "temperature"
+    assert h.data["value"] == 38.0
+
+
+def test_vital_temperature_es_fiebre_de() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("fiebre de 38.5")
+    assert h is not None
+    assert h.data["type"] == "temperature"
+    assert h.data["value"] == 38.5
+
+
+def test_vital_temperature_en() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("my temperature is 37.5")
+    assert h is not None
+    assert h.data["type"] == "temperature"
+    assert h.data["value"] == 37.5
+    h2 = parse_health("I have a fever of 38")
+    assert h2 is not None
+    assert h2.data["type"] == "temperature"
+    assert h2.data["value"] == 38.0
+
+
+def test_vital_temperature_out_of_range_rejected() -> None:
+    from lifeos.health.ingestion import parse_health
+    # 34.0-43.0 gate: "temperatura 500" must not log a vital.
+    h = parse_health("temperatura 500")
+    assert h is None or h.data.get("type") != "temperature"
+
+
+def test_temperature_bare_fever_stays_symptom_es() -> None:
+    """'tengo fiebre' (no number) must NOT become a temperature vital."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("tengo fiebre")
+    assert h is None or h.data.get("type") != "temperature"
+
+
+def test_temperature_bare_fever_stays_symptom_en() -> None:
+    """'I have a fever' (no number) is a symptom, not a temperature vital."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I have a fever")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert h.data.get("symptom") == "fever"
+
+
+# ─── Blood oxygen / SpO2 (bilingual, keyword-anchored) ─────────────────
+
+def test_vital_oxygen_es() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("oxígeno 98")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data == {"type": "oxygen", "value": 98, "unit": "%"}
+    assert h.title == "oxígeno 98%"
+
+
+def test_vital_oxygen_es_saturacion() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("saturación de oxígeno 96%")
+    assert h is not None
+    assert h.data["type"] == "oxygen"
+    assert h.data["value"] == 96
+
+
+def test_vital_oxygen_en_variants() -> None:
+    from lifeos.health.ingestion import parse_health
+    for text, val in [("SpO2 97", 97), ("blood oxygen 96", 96),
+                      ("O2 sat 95", 95), ("oxygen saturation 98%", 98)]:
+        h = parse_health(text)
+        assert h is not None, text
+        assert h.data["type"] == "oxygen"
+        assert h.data["value"] == val
+
+
+def test_vital_oxygen_out_of_range_rejected() -> None:
+    from lifeos.health.ingestion import parse_health
+    # 70-100 gate: "oxígeno 50" is implausible SpO2, must not log.
+    h = parse_health("oxígeno 50")
+    assert h is None or h.data.get("type") != "oxygen"
+
+
+# ─── Standalone heart-rate / pulse (bilingual, keyword-anchored) ───────
+
+def test_vital_heart_rate_es() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("pulso 55")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data == {"type": "heart_rate", "value": 55, "unit": "bpm"}
+    assert h.title == "pulso 55 bpm"
+
+
+def test_vital_heart_rate_es_variants() -> None:
+    from lifeos.health.ingestion import parse_health
+    for text, val in [("mi pulso es 60", 60), ("frecuencia cardiaca 58", 58),
+                      ("ritmo cardiaco 62", 62)]:
+        h = parse_health(text)
+        assert h is not None, text
+        assert h.data["type"] == "heart_rate"
+        assert h.data["value"] == val
+
+
+def test_vital_heart_rate_en_variants() -> None:
+    from lifeos.health.ingestion import parse_health
+    for text, val in [("heart rate 55", 55), ("my heart rate is 60", 60),
+                      ("pulse 58", 58), ("HR 62", 62),
+                      ("heart rate of 66 bpm", 66)]:
+        h = parse_health(text)
+        assert h is not None, text
+        assert h.data["type"] == "heart_rate"
+        assert h.data["value"] == val
+
+
+def test_vital_heart_rate_out_of_range_rejected() -> None:
+    from lifeos.health.ingestion import parse_health
+    # 30-220 gate: "pulso 900" is implausible, must not log.
+    h = parse_health("pulso 900")
+    assert h is None or h.data.get("type") != "heart_rate"
+
+
+def test_heart_rate_does_not_shadow_blood_pressure() -> None:
+    """A sys/dia pair with trailing pulse stays blood_pressure, not heart_rate."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("116 82 55 pulsos")
+    assert h is not None
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 116
+    assert h.data["diastolic"] == 82
+    assert h.data["pulse_bpm"] == 55
