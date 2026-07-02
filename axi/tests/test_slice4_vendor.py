@@ -59,9 +59,10 @@ def test_vendor_3d_force_graph_exists():
     assert (VENDOR_DIR / "3d-force-graph.min.js").exists()
 
 
-def test_vendor_cytoscape_exists():
-    """cytoscape.min.js must be present in static/vendor."""
-    assert (VENDOR_DIR / "cytoscape.min.js").exists()
+def test_vendor_cytoscape_removed():
+    """cytoscape.min.js was deleted in Stage 2 — the 2D viewer is fully retired
+    (graph.html gone, /api/graph endpoint removed, precache already dropped it)."""
+    assert not (VENDOR_DIR / "cytoscape.min.js").exists()
 
 
 # ── 4.6 — GET /brain3d returns 200 ─────────────────────────────────────────

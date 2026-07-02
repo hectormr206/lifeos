@@ -18,7 +18,7 @@
 //   - The OS decides WHEN to fire — typically within minutes of reconnecting.
 //   - Each sync event has ~12s CPU budget; large queues may need multiple fires.
 
-const CACHE_VERSION = 'axi-shell-v18';
+const CACHE_VERSION = 'axi-shell-v19';
 const SHELL_URLS = [
   '/',
   '/chat',

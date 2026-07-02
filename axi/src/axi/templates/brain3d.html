@@ -59,6 +59,31 @@
     </div>
   </div>
 
+  <!-- ─── filters bar: novedades quick-view + date presets ─── -->
+  <template x-if="!loading && nodeCount > 0">
+    <div class="flex items-center gap-3 flex-wrap text-sm">
+      <!-- "Novedades de la semana" — the pulse of your memory -->
+      <button type="button" id="new-week-btn" @click="openNewThisWeek()"
+              class="px-3 py-1.5 rounded-full font-medium flex items-center gap-1.5"
+              style="background: var(--teal, #00D4AA); color:#06251f; border:0; cursor:pointer;">
+        <span aria-hidden="true">✨</span>
+        <span x-text="tUi('newThisWeek')"></span>
+      </button>
+      <!-- date presets (client-side, combines with domain filters via AND) -->
+      <div class="flex items-center gap-1 flex-wrap">
+        <span class="muted text-xs" x-text="tUi('date') + ':'"></span>
+        <template x-for="opt in datePresets" :key="opt.k">
+          <button type="button" @click="setDateFilter(opt.k)"
+                  class="text-xs px-2 py-1 rounded-full"
+                  :style="dateFilter === opt.k
+                    ? 'background: var(--teal, #00D4AA); color:#06251f; border:0; cursor:pointer;'
+                    : 'background: var(--panel2); color:inherit; border:1px solid var(--border,#2a3040); cursor:pointer;'"
+                  x-text="tUi(opt.label)"></button>
+        </template>
+      </div>
+    </div>
+  </template>
+
   <!-- ─── loading state ─── -->
   <template x-if="loading">
     <div class="panel p-12 text-center">
@@ -83,15 +108,26 @@
       <div class="flex-1 panel" style="position:relative; overflow:hidden; border-radius:0.75rem;">
         <div id="brain3d-graph" style="width:100%; height:100%;"></div>
 
-        <!-- Legend overlay -->
-        <div class="absolute top-3 left-3 panel2 p-2 text-xs space-y-1" style="max-width:160px; border-radius:0.5rem;">
-          <div class="muted font-semibold mb-1" x-text="tUi('domainLegend')"></div>
+        <!-- Legend overlay — each row is an INTERACTIVE domain toggle. -->
+        <div class="absolute top-3 left-3 panel2 p-2 text-xs space-y-1" style="max-width:170px; border-radius:0.5rem;">
+          <div class="flex items-center justify-between mb-1">
+            <span class="muted font-semibold" x-text="tUi('domainLegend')"></span>
+            <button type="button" @click="resetFilters()"
+                    class="text-xs px-1.5 py-0.5 rounded"
+                    style="background:var(--panel);border:0;color:inherit;cursor:pointer;"
+                    x-text="tUi('filterAll')"></button>
+          </div>
           <template x-for="[domain, color] in Object.entries(DOMAIN_COLOR)" :key="domain">
-            <div class="flex items-center gap-2">
+            <button type="button" @click="toggleDomain(domain)"
+                    class="flex items-center gap-2 w-full text-left"
+                    style="background:transparent;border:0;color:inherit;cursor:pointer;padding:0;"
+                    :style="hiddenDomains[domain] ? 'opacity:0.35' : 'opacity:1'"
+                    :aria-pressed="!hiddenDomains[domain]">
               <span style="width:10px;height:10px;border-radius:50%;flex-shrink:0;"
-                    :style="'background:' + color"></span>
+                    :style="'background:' + (hiddenDomains[domain] ? 'transparent' : color) + ';border:1px solid ' + color"></span>
               <span x-text="tLabel(domain)"></span>
-            </div>
+              <span class="ml-auto" x-show="hiddenDomains[domain]" aria-hidden="true">✕</span>
+            </button>
           </template>
           <!-- In focus mode the palette is overridden by relevance, so hint it. -->
           <template x-if="focusId !== null">
@@ -215,6 +251,72 @@
                   <div class="muted text-xs mt-3" x-text="tUi('noDetail')"></div>
                 </template>
 
+                <!-- ─── fusionar (merge duplicate) ─── -->
+                <!-- Hidden for the hub + conversations: those can never be merged. -->
+                <template x-if="detail.node && detail.node.kind !== 'conversation' && !(detail.node.data && detail.node.data.role === 'user')">
+                  <div class="mt-4">
+                    <template x-if="!mergeMode">
+                      <button type="button" id="merge-node-btn" @click="enterMergeMode()"
+                              class="w-full px-3 py-1.5 text-sm rounded-lg font-medium"
+                              style="background: var(--panel2); color: var(--teal, #00D4AA); border: 1px solid var(--teal, #00D4AA); cursor: pointer;"
+                              x-text="tUi('mergeWith')"></button>
+                    </template>
+                    <template x-if="mergeMode">
+                      <div class="panel2 p-2 rounded space-y-2">
+                        <div class="muted text-xs" x-text="tUi('mergePickHint')"></div>
+                        <!-- partner search (reuses the accent-insensitive matcher) -->
+                        <div class="relative">
+                          <input type="search" x-model="mergeSearchQuery" @input="mergeSearchInput()"
+                                 :placeholder="tUi('mergeSearchPlaceholder')" autocomplete="off"
+                                 class="w-full px-2 py-1 text-xs rounded"
+                                 style="background: var(--panel); border: 1px solid var(--border, #2a3040); color: inherit; outline: none;">
+                          <div x-show="mergeSearchResults.length > 0"
+                               class="mt-1 panel rounded overflow-hidden"
+                               style="max-height:160px; overflow-y:auto;">
+                            <template x-for="mr in mergeSearchResults" :key="mr.id">
+                              <button type="button" @click="selectMergeResult(mr)"
+                                      class="w-full text-left px-2 py-1 text-xs hover:opacity-80"
+                                      style="background:transparent; border:0; color:inherit; cursor:pointer;">
+                                <span x-text="mr.label"></span>
+                                <span class="muted" x-text="' · ' + tLabel(mr.kind)"></span>
+                              </button>
+                            </template>
+                          </div>
+                        </div>
+                        <!-- pending state: which one survives -->
+                        <template x-if="mergePartner">
+                          <div class="text-xs space-y-1">
+                            <div x-text="tUi('mergePending')
+                              .replace('{dup}', (mergeSwap ? selectedNode.label : mergePartner.label))
+                              .replace('{canonical}', (mergeSwap ? mergePartner.label : selectedNode.label))"></div>
+                            <div class="font-medium" style="color: var(--teal, #00D4AA);">
+                              <span x-text="tUi('mergeSurvivor')"></span>
+                              <span x-text="mergeSwap ? mergePartner.label : selectedNode.label"></span>
+                            </div>
+                            <button type="button" @click="toggleMergeSwap()"
+                                    class="text-xs underline"
+                                    style="background:0; border:0; color:inherit; cursor:pointer; padding:0;"
+                                    x-text="tUi('mergeSwap')"></button>
+                          </div>
+                        </template>
+                        <div class="flex gap-2">
+                          <button type="button" id="confirm-merge-btn" @click="confirmMerge()"
+                                  :disabled="!mergePartner"
+                                  class="flex-1 px-2 py-1 text-xs rounded font-medium"
+                                  :style="mergePartner
+                                    ? 'background: var(--teal, #00D4AA); color:#06251f; border:0; cursor:pointer;'
+                                    : 'background: var(--panel); color: var(--muted, #888); border:0; cursor:not-allowed; opacity:.6;'"
+                                  x-text="tUi('mergeDo')"></button>
+                          <button type="button" @click="cancelMerge()"
+                                  class="px-2 py-1 text-xs rounded"
+                                  style="background: var(--panel); color: inherit; border: 1px solid var(--border, #2a3040); cursor: pointer;"
+                                  x-text="tUi('mergeCancel')"></button>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+
                 <!-- ─── forget node ─── -->
                 <button type="button" id="forget-node-btn" @click="forgetNode()"
                         class="w-full mt-4 px-3 py-1.5 text-sm rounded-lg font-medium"
@@ -225,6 +327,51 @@
           </div>
         </template>
       </div>
+    </div>
+  </template>
+
+  <!-- ─── novedades de la semana: summary panel (pulse of your memory) ─── -->
+  <template x-if="newPanelOpen">
+    <div id="new-week-panel"
+         class="fixed panel2 p-4 rounded-lg text-sm"
+         style="top: 5rem; right: 1.5rem; width: 290px; max-height: 70vh; overflow-y: auto; z-index: 95; box-shadow: 0 8px 24px rgba(0,0,0,.5); border: 1px solid var(--border, #2a3040);">
+      <div class="flex justify-between items-center mb-2">
+        <div class="font-semibold" x-text="tUi('newThisWeekTitle')"></div>
+        <button type="button" @click="closeNewPanel()"
+                class="text-xs px-2 py-0.5 rounded"
+                style="background: var(--panel); border:0; color:inherit; cursor:pointer;"
+                x-text="tUi('close')"></button>
+      </div>
+      <template x-if="newItems.length === 0">
+        <div class="muted text-xs py-4 text-center" x-text="tUi('newThisWeekEmpty')"></div>
+      </template>
+      <template x-if="newItems.length > 0">
+        <div>
+          <div class="muted text-xs mb-2">
+            <span x-text="newItems.length"></span> <span x-text="tUi('nodes')"></span>
+          </div>
+          <!-- counts by domain -->
+          <div class="flex flex-wrap gap-1 mb-3">
+            <template x-for="cc in newCounts" :key="cc.domain">
+              <span class="text-xs px-2 py-0.5 rounded-full" style="background: var(--panel);">
+                <span x-text="tLabel(cc.domain)"></span>: <span x-text="cc.count"></span>
+              </span>
+            </template>
+          </div>
+          <!-- labels added in the last 7 days (clickable → focus) -->
+          <div class="space-y-1">
+            <template x-for="it in newItems" :key="it.id">
+              <button type="button" @click="focusOn(it.id); closeNewPanel();"
+                      class="w-full text-left panel p-2 rounded text-xs hover:opacity-80 flex items-center gap-2"
+                      style="border:0; color:inherit; cursor:pointer;">
+                <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;"
+                      :style="'background:' + (DOMAIN_COLOR[it.domain] || DOMAIN_COLOR['default'])"></span>
+                <span class="truncate" x-text="it.label"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+      </template>
     </div>
   </template>
 
@@ -350,6 +497,32 @@ const LABELS = {
       deleteHub:    'No puedes olvidar tu propio nodo central.',
       deleteConversation: 'Las conversaciones se gestionan desde su propia página.',
       deleteFailed: 'No se pudo olvidar el nodo.',
+      // ── Stage 2: filters + date + novedades ──
+      filterAll:    'Todos',
+      dateAll:      'Todo',
+      dateToday:    'Hoy',
+      dateWeek:     'Esta semana',
+      dateMonth:    'Este mes',
+      newThisWeek:  'Novedades de la semana',
+      newThisWeekTitle: 'Novedades de la semana',
+      newThisWeekEmpty: 'Sin novedades esta semana.',
+      close:        'Cerrar',
+      // ── Stage 2: merge (fuse duplicates) ──
+      mergeWith:    'Fusionar con…',
+      mergePickHint: 'Elegí otro nodo (buscá o hacé click en la escena) para fusionar.',
+      mergeSearchPlaceholder: 'Buscar nodo a fusionar…',
+      mergePending: "Fusionar '{dup}' → '{canonical}'",
+      mergeSurvivor: 'Se conservará:',
+      mergeSwap:    'Intercambiar cuál se conserva',
+      mergeDo:      'Fusionar',
+      mergeCancel:  'Cancelar',
+      mergeConfirm: "¿Fusionar '{dup}' en '{canonical}'? Sus relaciones se moverán y '{dup}' desaparecerá.",
+      merged:       'Fusionado.',
+      mergeKindMismatch: 'Solo se pueden fusionar nodos del mismo tipo.',
+      mergeHub:     'No puedes fusionar tu propio nodo central.',
+      mergeConversation: 'Las conversaciones no se pueden fusionar.',
+      mergeSameId:  'No puedes fusionar un nodo consigo mismo.',
+      mergeFailed:  'No se pudo fusionar.',
     },
   },
   en: {
@@ -410,6 +583,32 @@ const LABELS = {
       deleteHub:    'You cannot forget your own hub node.',
       deleteConversation: 'Conversations are managed from their own page.',
       deleteFailed: 'Could not forget the node.',
+      // ── Stage 2: filters + date + novedades ──
+      filterAll:    'All',
+      dateAll:      'All time',
+      dateToday:    'Today',
+      dateWeek:     'This week',
+      dateMonth:    'This month',
+      newThisWeek:  "This week's highlights",
+      newThisWeekTitle: "This week's highlights",
+      newThisWeekEmpty: 'Nothing new this week.',
+      close:        'Close',
+      // ── Stage 2: merge (fuse duplicates) ──
+      mergeWith:    'Merge with…',
+      mergePickHint: 'Pick another node (search or click it in the scene) to merge.',
+      mergeSearchPlaceholder: 'Search a node to merge…',
+      mergePending: "Merge '{dup}' → '{canonical}'",
+      mergeSurvivor: 'Will be kept:',
+      mergeSwap:    'Swap which one is kept',
+      mergeDo:      'Merge',
+      mergeCancel:  'Cancel',
+      mergeConfirm: "Merge '{dup}' into '{canonical}'? Its relations will move and '{dup}' will disappear.",
+      merged:       'Merged.',
+      mergeKindMismatch: 'You can only merge nodes of the same kind.',
+      mergeHub:     'You cannot merge your own hub node.',
+      mergeConversation: 'Conversations cannot be merged.',
+      mergeSameId:  'You cannot merge a node with itself.',
+      mergeFailed:  'Could not merge.',
     },
   },
 };
@@ -466,6 +665,26 @@ function brain3dPage() {
     focusId: null,
     focusLabel: '',
     _focusNeighbors: new Set(),   // 1-hop neighbor ids of focusId (relevance recolor)
+    _focusKeep: null,             // Set of ids in the focused subgraph (or null = full universe)
+    // ── Stage 2: filters (client-side, over the loaded universe) ──
+    hiddenDomains: {},            // reactive: domainKey -> true when that domain is toggled OFF
+    dateFilter: 'all',            // 'all' | 'today' | 'week' | 'month'
+    datePresets: [
+      { k: 'all',   label: 'dateAll' },
+      { k: 'today', label: 'dateToday' },
+      { k: 'week',  label: 'dateWeek' },
+      { k: 'month', label: 'dateMonth' },
+    ],
+    // ── Stage 2: novedades de la semana ──
+    newPanelOpen: false,
+    newItems: [],                 // [{id, label, domain}] added in the last 7 days
+    newCounts: [],                // [{domain, count}]
+    // ── Stage 2: merge (fuse duplicates) ──
+    mergeMode: false,             // detail panel is in "pick a partner" mode
+    mergePartner: null,           // {id, label, kind} chosen partner
+    mergeSwap: false,             // when true, the survivor is the partner (not the panel node)
+    mergeSearchQuery: '',
+    mergeSearchResults: [],
     // Deferred-delete / undo grace window state
     pendingUndo: null,            // reactive: { label, secondsLeft } (drives undo bar)
     _pending: null,               // machinery: { snap, timerId, tickId }
@@ -565,7 +784,11 @@ function brain3dPage() {
         .linkOpacity(0.5)
         .linkWidth(l => self._linkWidthAcc(l))
         .graphData({ nodes: gfNodes, links: gfLinks })
-        .onNodeClick(node => { self._selectNode(node); });
+        .onNodeClick(node => {
+          // In merge mode a click PICKS the partner instead of re-selecting.
+          if (self.mergeMode) self._pickMergePartner(node);
+          else self._selectNode(node);
+        });
 
       // 3d-force-graph locks the canvas to the container size at creation. Inside
       // the dashboard's modal iframe the container often isn't at its final size
@@ -621,19 +844,12 @@ function brain3dPage() {
         }
         frontier = next;
       }
-      // Reuse the SAME node/link objects so 3d-force-graph keeps positions.
-      const subNodes = this._gfNodes.filter(n => keep.has(n.id));
-      const subLinks = this._gfLinks.filter(l => {
-        const s = typeof l.source === 'object' ? l.source.id : l.source;
-        const t = typeof l.target === 'object' ? l.target.id : l.target;
-        return keep.has(s) && keep.has(t);
-      });
       this.focusId = nodeId;
       this.focusLabel = node.label;
+      this._focusKeep = keep;   // subgraph bound; filters still apply within it
       // 1-hop neighbors: "the ones that light up" — reuse the adjacency map.
       this._focusNeighbors = new Set(this._adj[nodeId] || []);
-      this._graph.graphData({ nodes: subNodes, links: subLinks });
-      this._refreshVisuals();
+      this._renderGraphData();  // reuses the SAME node/link refs → positions persist
       this._selectNode(node);
       // Fly the camera to the focused node once the re-heated layout settles a bit.
       setTimeout(() => this._flyTo(node), 500);
@@ -643,11 +859,99 @@ function brain3dPage() {
       this.focusId = null;
       this.focusLabel = '';
       this._focusNeighbors = new Set();
+      this._focusKeep = null;
       if (this._graph) {
-        this._graph.graphData({ nodes: this._gfNodes, links: this._gfLinks });
-        this._refreshVisuals();
+        this._renderGraphData();
         setTimeout(() => { if (this._graph) this._graph.zoomToFit(800, 40); }, 500);
       }
+    },
+
+    // ─── Stage 2: central visible-set computation + graphData swap ───
+    // The single place that decides which nodes/links the scene shows, honoring
+    // (a) focus subgraph bound and (b) domain + date filters (AND). Always reuses
+    // the SAME gfNode/gfLink object refs so 3d-force-graph keeps layout positions.
+    _domainKey(n) {
+      // Mirror the color fallback so a legend row filters exactly what it colors.
+      if (n.domain && DOMAIN_COLOR[n.domain]) return n.domain;
+      if (n.kind && DOMAIN_COLOR[n.kind]) return n.kind;
+      return 'default';
+    },
+    _passesDate(n, now) {
+      if (this.dateFilter === 'all') return true;
+      const ca = n.created_at;
+      if (ca == null) return false;   // no timestamp → excluded from date-bounded views
+      let win;
+      if (this.dateFilter === 'today') win = 24 * 3600;
+      else if (this.dateFilter === 'week') win = 7 * 24 * 3600;
+      else if (this.dateFilter === 'month') win = 30 * 24 * 3600;
+      else return true;
+      return ca >= (now - win);
+    },
+    _visibleNodeIds() {
+      const baseIds = (this.focusId !== null) ? this._focusKeep : null;
+      const now = Date.now() / 1000;
+      const keep = new Set();
+      for (const n of this._gfNodes) {
+        if (baseIds && !baseIds.has(n.id)) continue;
+        if (this.hiddenDomains[this._domainKey(n)]) continue;
+        if (!this._passesDate(n, now)) continue;
+        keep.add(n.id);
+      }
+      return keep;
+    },
+    _renderGraphData() {
+      if (!this._graph) return;
+      const keep = this._visibleNodeIds();
+      const nodes = this._gfNodes.filter(n => keep.has(n.id));
+      const links = this._gfLinks.filter(l => {
+        const [s, t] = this._linkEnds(l);
+        return keep.has(s) && keep.has(t);
+      });
+      this._graph.graphData({ nodes, links });
+      this._refreshVisuals();
+    },
+
+    // ─── Stage 2: domain + date filter controls ───
+    toggleDomain(domain) {
+      // Reassign the object so Alpine's reactivity picks up the change.
+      const next = Object.assign({}, this.hiddenDomains);
+      if (next[domain]) delete next[domain]; else next[domain] = true;
+      this.hiddenDomains = next;
+      this._renderGraphData();
+    },
+    resetFilters() {
+      this.hiddenDomains = {};
+      this.dateFilter = 'all';
+      this._renderGraphData();
+    },
+    setDateFilter(k) {
+      this.dateFilter = k;
+      this._renderGraphData();
+    },
+
+    // ─── Stage 2: novedades de la semana (last-7-days pulse) ───
+    openNewThisWeek() {
+      // Apply the "Esta semana" date filter and clear any domain hiding so the
+      // full week's pulse is visible, then summarize.
+      this.hiddenDomains = {};
+      this.dateFilter = 'week';
+      this._renderGraphData();
+      const cutoff = Date.now() / 1000 - 7 * 24 * 3600;
+      const items = [];
+      const counts = {};
+      for (const n of this._gfNodes) {
+        if (n.created_at != null && n.created_at >= cutoff) {
+          const dk = this._domainKey(n);
+          items.push({ id: n.id, label: n.label, domain: dk });
+          counts[dk] = (counts[dk] || 0) + 1;
+        }
+      }
+      this.newItems = items;
+      this.newCounts = Object.entries(counts).map(([domain, count]) => ({ domain, count }));
+      this.newPanelOpen = true;
+    },
+    closeNewPanel() {
+      this.newPanelOpen = false;
     },
 
     // Re-setting the accessors forces 3d-force-graph to re-evaluate node/link
@@ -727,6 +1031,8 @@ function brain3dPage() {
 
     // ─── selection + detail panel (on-demand /api/graph/node/{id}) ───
     async _selectNode(node) {
+      // Selecting a (different) node exits any in-progress merge picking.
+      this._resetMerge();
       this.selectedNode = node;
       this.detail = null;
       this.detailLoading = true;
@@ -878,15 +1184,11 @@ function brain3dPage() {
           this.focusId = null;
           this.focusLabel = '';
           this._focusNeighbors = new Set();
-          this._graph.graphData({ nodes: this._gfNodes, links: this._gfLinks });
-          this._refreshVisuals();
-        } else {
-          const cur = this._graph.graphData();
-          this._graph.graphData({
-            nodes: cur.nodes.filter(n => n.id !== nodeId),
-            links: cur.links.filter(l => !linkGone(l)),
-          });
+          this._focusKeep = null;
+        } else if (this._focusKeep) {
+          this._focusKeep.delete(nodeId);
         }
+        this._renderGraphData();  // recompute honoring active filters
       }
       return snap;
     },
@@ -904,21 +1206,141 @@ function brain3dPage() {
       }
       this.nodeCount = this._gfNodes.length;
       this.edgeCount = this._gfLinks.length;
-      if (this._graph) {
-        const cur = this._graph.graphData();
-        const nodes = cur.nodes.slice();
-        if (!nodes.some(n => n.id === snap.nodeId)) nodes.push(snap.nodeObj);
-        const present = new Set(nodes.map(n => n.id));
-        const links = cur.links.slice();
-        for (const l of snap.links) {
-          if (links.indexOf(l) !== -1) continue;
-          const s = typeof l.source === 'object' ? l.source.id : l.source;
-          const t = typeof l.target === 'object' ? l.target.id : l.target;
-          if (present.has(s) && present.has(t)) links.push(l);
+      // If this node belonged to the active focus subgraph, put it back in-bounds.
+      if (this._focusKeep) this._focusKeep.add(snap.nodeId);
+      if (this._graph) this._renderGraphData();  // recompute honoring active filters
+    },
+
+    // ─── Stage 2: merge (fuse a duplicate into the selected node) ───
+    _resetMerge() {
+      this.mergeMode = false;
+      this.mergePartner = null;
+      this.mergeSwap = false;
+      this.mergeSearchQuery = '';
+      this.mergeSearchResults = [];
+    },
+    enterMergeMode() {
+      this._resetMerge();
+      this.mergeMode = true;
+    },
+    cancelMerge() {
+      this._resetMerge();
+    },
+    toggleMergeSwap() {
+      this.mergeSwap = !this.mergeSwap;
+    },
+    mergeSearchInput() {
+      const q = normText(this.mergeSearchQuery.trim());
+      if (!q) { this.mergeSearchResults = []; return; }
+      const out = [];
+      for (const n of this._gfNodes) {
+        if (this.selectedNode && n.id === this.selectedNode.id) continue;  // never itself
+        if (normText(n.label).includes(q)) {
+          out.push({ id: n.id, label: n.label, kind: n.kind });
+          if (out.length >= 12) break;
         }
-        this._graph.graphData({ nodes, links });
-        this._refreshVisuals();
       }
+      this.mergeSearchResults = out;
+    },
+    selectMergeResult(r) {
+      this.mergeSearchResults = [];
+      this.mergeSearchQuery = '';
+      this._pickMergePartner(this._nodeById[r.id] || r);
+    },
+    // Validate + set the merge partner (from a search hit or a scene click).
+    _pickMergePartner(node) {
+      if (!this.selectedNode || !node) return;
+      if (node.id === this.selectedNode.id) { this._toast(tUi('mergeSameId'), 'error'); return; }
+      const p = this._nodeById[node.id] || node;
+      if (p.kind === 'conversation') { this._toast(tUi('mergeConversation'), 'error'); return; }
+      if (p.kind !== this.selectedNode.kind) { this._toast(tUi('mergeKindMismatch'), 'error'); return; }
+      this.mergePartner = { id: p.id, label: p.label, kind: p.kind };
+      this.mergeSearchResults = [];
+      this.mergeSearchQuery = '';
+    },
+    _mergeReasonMsg(reason) {
+      switch (reason) {
+        case 'kind_mismatch': return tUi('mergeKindMismatch');
+        case 'hub':           return tUi('mergeHub');
+        case 'conversation':  return tUi('mergeConversation');
+        case 'same_id':       return tUi('mergeSameId');
+        default:              return tUi('mergeFailed');
+      }
+    },
+    async confirmMerge() {
+      if (!this.selectedNode || !this.mergePartner) return;
+      const survivor = this.mergeSwap ? this.mergePartner : this.selectedNode;
+      const dup = this.mergeSwap ? this.selectedNode : this.mergePartner;
+      const msg = tUi('mergeConfirm')
+        .replace('{dup}', dup.label)
+        .replace('{canonical}', survivor.label);
+      let ok;
+      if (window.axiConfirm) ok = await window.axiConfirm({ message: msg, danger: true });
+      else ok = window.confirm(msg);
+      if (!ok) return;
+      try {
+        const resp = await fetch('/api/graph/merge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ canonical_id: survivor.id, duplicate_id: dup.id }),
+        });
+        let body = null;
+        try { body = await resp.json(); } catch (e) { body = null; }
+        if (resp.ok && body && body.merged) {
+          // Reflect the DB in the loaded graph WITHOUT a full reload.
+          this._absorbNode(dup.id, survivor.id);
+          this._resetMerge();
+          this._toast(tUi('merged'));
+          const sv = this._nodeById[survivor.id];
+          if (sv) this._selectNode(sv);   // survivor stays selected
+          return;
+        }
+        this._toast(this._mergeReasonMsg(body && body.reason), 'error');
+      } catch (e) {
+        console.error('[brain3d] merge failed:', e);
+        this._toast(tUi('mergeFailed'), 'error');
+      }
+    },
+    // Fold the absorbed node into the survivor in the loaded graph: repoint its
+    // links onto the survivor, drop it from master data + adjacency, re-render.
+    _absorbNode(dupId, survivorId) {
+      const survivor = this._nodeById[survivorId];
+      const links = [];
+      for (const l of this._gfLinks) {
+        let s = typeof l.source === 'object' ? l.source.id : l.source;
+        let t = typeof l.target === 'object' ? l.target.id : l.target;
+        if (s === dupId) { l.source = survivor || survivorId; s = survivorId; }
+        if (t === dupId) { l.target = survivor || survivorId; t = survivorId; }
+        if (s === t) continue;   // drop self-loops created by the repoint
+        links.push(l);
+      }
+      this._gfLinks = links;
+      this._gfNodes = this._gfNodes.filter(n => n.id !== dupId);
+      delete this._nodeById[dupId];
+      // Adjacency: move the dup's neighbors onto the survivor.
+      const dupAdj = this._adj[dupId] || new Set();
+      for (const nb of dupAdj) {
+        if (this._adj[nb]) {
+          this._adj[nb].delete(dupId);
+          if (nb !== survivorId) this._adj[nb].add(survivorId);
+        }
+        if (nb !== survivorId) (this._adj[survivorId] = this._adj[survivorId] || new Set()).add(nb);
+      }
+      if (this._adj[survivorId]) this._adj[survivorId].delete(survivorId);
+      delete this._adj[dupId];
+      this.nodeCount = this._gfNodes.length;
+      this.edgeCount = this._gfLinks.length;
+      // Focus bookkeeping.
+      if (this.focusId === dupId) {
+        this.focusOn(survivorId);   // re-focus the survivor (recomputes keep/neighbors)
+        return;
+      }
+      if (this._focusKeep && this._focusKeep.has(dupId)) {
+        this._focusKeep.delete(dupId);
+        this._focusKeep.add(survivorId);
+      }
+      if (this.focusId !== null) this._focusNeighbors = new Set(this._adj[this.focusId] || []);
+      this._renderGraphData();
     },
 
     _toast(message, type) {

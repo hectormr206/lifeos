@@ -156,29 +156,10 @@ def test_config_roundtrip(client, tmp_path, monkeypatch):
     assert r.json()["timezone"] == "Europe/Madrid"
 
 
-def test_graph_endpoint_returns_cytoscape_shape(client):
-    from axi import store
-    a = store.add_node("fact", "fact A", domain="setup")
-    b = store.add_node("person", "Héctor")
-    store.add_edge(a, b, "belongs_to")
-    r = client.get("/api/graph")
-    assert r.status_code == 200
-    data = r.json()
-    assert "nodes" in data
-    assert "edges" in data
-    assert len(data["nodes"]) == 2
-    # The single edge connects two visible nodes → must come through.
-    assert len(data["edges"]) == 1
-    assert data["edges"][0]["data"]["kind"] == "belongs_to"
-
-
-def test_graph_excludes_conversation_nodes(client):
-    from axi import store
-    store.add_node("conversation", "old chat turn")
-    store.add_node("fact", "real fact")
-    r = client.get("/api/graph")
-    data = r.json()
-    assert len(data["nodes"]) == 1
+def test_legacy_graph_endpoint_removed(client):
+    """The legacy 2D Cytoscape /api/graph endpoint was retired in Stage 2 —
+    the 3D browser uses /api/graph/full. It must now 404."""
+    assert client.get("/api/graph").status_code == 404
 
 
 # ─────────────────────────── axi-living-avatar: backend contract ────────────

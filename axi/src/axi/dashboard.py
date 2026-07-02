@@ -20,9 +20,10 @@ Endpoints:
   GET  /api/config             → read config
   POST /api/config             → write config
   GET  /graph                  → 301 redirect to /brain3d (old 2D viewer retired)
-  GET  /api/graph              → graph data (nodes + edges) for visualization
+  GET  /api/graph/full         → unified graph (nodes + edges) for the 3D browser
   GET  /api/graph/node/{id}    → node detail (facts, relations, provenance)
   DELETE /api/graph/node/{id}  → forget a node (refuses hub + conversation)
+  POST /api/graph/merge        → fold a duplicate node into a canonical survivor
 """
 from __future__ import annotations
 
@@ -2066,46 +2067,6 @@ def brain3d_page(request: Request):
     return templates.TemplateResponse(request, "brain3d.html", {"lang": lang, "tz": tz})
 
 
-@app.get("/api/graph")
-def graph_data(limit: int = 200):
-    """Return graph nodes + edges in Cytoscape.js format."""
-    c = store._connect()  # noqa: SLF001
-    node_rows = c.execute(
-        "SELECT id, kind, label, domain FROM nodes "
-        "WHERE kind != 'conversation' "
-        "ORDER BY created_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    node_ids = {r["id"] for r in node_rows}
-    nodes = [
-        {
-            "data": {
-                "id": str(r["id"]),
-                "label": r["label"][:50],
-                "kind": r["kind"],
-                "domain": r["domain"] or "—",
-            }
-        }
-        for r in node_rows
-    ]
-    edge_rows = c.execute(
-        "SELECT id, from_id, to_id, kind FROM edges"
-    ).fetchall()
-    edges = [
-        {
-            "data": {
-                "id": f"e{r['id']}",
-                "source": str(r["from_id"]),
-                "target": str(r["to_id"]),
-                "kind": r["kind"],
-            }
-        }
-        for r in edge_rows
-        if r["from_id"] in node_ids and r["to_id"] in node_ids
-    ]
-    return {"nodes": nodes, "edges": edges}
-
-
 # ────────── /api/graph/full — unified System A + System B graph ──────────
 
 
@@ -2185,7 +2146,7 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
 
     # ── System A: nodes ──────────────────────────────────────────────────────
     node_rows = c.execute(
-        "SELECT id, kind, label, domain, embedding, occurred_at FROM nodes "
+        "SELECT id, kind, label, domain, embedding, created_at, occurred_at FROM nodes "
         "ORDER BY created_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
@@ -2197,6 +2158,7 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
             "kind": r["kind"],
             "domain": r["domain"] or "",
             "has_embedding": r["embedding"] is not None,
+            "created_at": r["created_at"],  # ingest epoch (float) — drives date filters
             "occurred_at": r["occurred_at"],  # real event epoch (float) or null
         }
         for r in node_rows
@@ -2383,6 +2345,101 @@ def graph_node_delete(node_id: int):
         return JSONResponse({"deleted": False, "reason": "hub"}, status_code=400)
     deleted = store.delete_node(node_id)
     return {"deleted": bool(deleted)}
+
+
+@app.post("/api/graph/merge")
+async def graph_merge(request: Request):
+    """Fold a duplicate node into a canonical survivor.
+
+    Body: {canonical_id, duplicate_id}. The SURVIVOR is always canonical_id;
+    duplicate_id disappears and its edges are repointed onto the survivor.
+
+    The merge itself reuses identity.register_alias — the same primitive the
+    coreference pipeline uses — so edge-repointing lives in ONE place and runs
+    inside the single-writer path (it self-routes via write_router, exactly as
+    DELETE's store.delete_node does). register_alias merges by LABEL: it resolves
+    the canonical entity by its label and absorbs any separate node carrying the
+    duplicate's label, so passing canonical_label + duplicate_label guarantees
+    the surviving node is the canonical one.
+
+    Refusals (400, machine reason mapped to Spanish in the UI):
+      - same_id       — canonical_id == duplicate_id
+      - hub           — either endpoint is the user hub (data.role == 'user')
+      - conversation  — either endpoint is a conversation node
+      - kind_mismatch — the two nodes are different kinds (e.g. person vs place)
+      - merge_failed  — register_alias could not fold the duplicate (e.g. the two
+                        labels are identical, which register_alias treats as a
+                        no-op; a rare edge case, surfaced rather than faked)
+    Unknown id → 404.
+
+    Destructive and NOT reversible here: unlike DELETE there is no undo window
+    (edge-repointing is hard to unwind). The UI therefore requires an explicit
+    confirm dialog and never auto-merges. Merge-undo is a Stage-3 candidate.
+    """
+    from axi import identity  # lazy: identity imports store/config
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be JSON object")
+    canonical_id = body.get("canonical_id")
+    duplicate_id = body.get("duplicate_id")
+    if not isinstance(canonical_id, int) or not isinstance(duplicate_id, int):
+        raise HTTPException(400, "canonical_id and duplicate_id must be integers")
+
+    if canonical_id == duplicate_id:
+        return JSONResponse({"merged": False, "reason": "same_id"}, status_code=400)
+
+    c = store._connect()  # noqa: SLF001  (pre-checks are read-only)
+
+    def _load(nid: int):
+        return c.execute(
+            "SELECT id, kind, label, data FROM nodes WHERE id = ?", (nid,)
+        ).fetchone()
+
+    crow = _load(canonical_id)
+    drow = _load(duplicate_id)
+    if crow is None or drow is None:
+        raise HTTPException(404, detail="node not found")
+
+    # Guards — refuse before touching the writer.
+    for row in (crow, drow):
+        if row["kind"] == "conversation":
+            return JSONResponse(
+                {"merged": False, "reason": "conversation"}, status_code=400
+            )
+        try:
+            if json.loads(row["data"] or "{}").get("role") == "user":
+                return JSONResponse(
+                    {"merged": False, "reason": "hub"}, status_code=400
+                )
+        except (ValueError, TypeError):
+            pass
+    if crow["kind"] != drow["kind"]:
+        return JSONResponse(
+            {"merged": False, "reason": "kind_mismatch"}, status_code=400
+        )
+
+    # Fold duplicate → canonical. register_alias self-routes to the sole writer
+    # (conn=None), mirroring how DELETE delegates to store.delete_node.
+    identity.register_alias(crow["label"], drow["label"], kind=crow["kind"])
+
+    # Verify the outcome from a fresh read: the survivor must remain and the
+    # duplicate must be gone. If not (e.g. identical labels made register_alias
+    # a no-op), surface it rather than reporting a merge that did not happen.
+    c2 = store._connect()  # noqa: SLF001
+    survivor = c2.execute(
+        "SELECT 1 FROM nodes WHERE id = ?", (canonical_id,)
+    ).fetchone()
+    absorbed_gone = c2.execute(
+        "SELECT 1 FROM nodes WHERE id = ?", (duplicate_id,)
+    ).fetchone() is None
+    if survivor is not None and absorbed_gone:
+        return {
+            "merged": True,
+            "survivor_id": canonical_id,
+            "absorbed_id": duplicate_id,
+        }
+    return JSONResponse({"merged": False, "reason": "merge_failed"}, status_code=400)
 
 
 # ────────────────────────── model selector ────────────────────────────
