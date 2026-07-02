@@ -1,0 +1,15 @@
+/*
+ * Tailwind entry file for the compiled Axi stylesheet.
+ *
+ * `base` (Preflight) is included because the Play CDN build the app previously
+ * used also shipped Preflight; dropping it would change default margins,
+ * borders and box-sizing across the whole UI. `components` and `utilities`
+ * provide the actual class rules that templates use.
+ *
+ * The app's own component classes (.btn, .panel, .state-dot, brand color
+ * custom properties, etc.) live in <style> blocks inside the templates and are
+ * intentionally NOT part of this file — they are plain CSS, not Tailwind.
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
