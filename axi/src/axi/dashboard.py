@@ -19,8 +19,10 @@ Endpoints:
   GET  /config                 → config editor page
   GET  /api/config             → read config
   POST /api/config             → write config
-  GET  /graph                  → graph visualization (Cytoscape)
+  GET  /graph                  → 301 redirect to /brain3d (old 2D viewer retired)
   GET  /api/graph              → graph data (nodes + edges) for visualization
+  GET  /api/graph/node/{id}    → node detail (facts, relations, provenance)
+  DELETE /api/graph/node/{id}  → forget a node (refuses hub + conversation)
 """
 from __future__ import annotations
 
@@ -44,7 +46,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    FileResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
@@ -2037,9 +2045,13 @@ def api_brain_metrics(limit: int = 100, since_minutes: int | None = None):
 
 # ────────── graph ──────────
 
-@app.get("/graph", response_class=HTMLResponse)
-def graph_page(request: Request):
-    return templates.TemplateResponse(request, "graph.html", {})
+@app.get("/graph")
+def graph_page():
+    """Old 2D graph viewer — permanently redirected to the 3D knowledge browser.
+
+    301 keeps old bookmarks/links working after the /graph page retirement.
+    """
+    return RedirectResponse(url="/brain3d", status_code=301)
 
 
 @app.get("/brain3d", response_class=HTMLResponse)
@@ -2233,6 +2245,144 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
         "edges": all_edges,
         "partial": partial,
     }
+
+
+# ────────── /api/graph/node — knowledge-browser node detail + forget ──────────
+
+
+@app.get("/api/graph/node/{node_id}")
+def graph_node_detail(node_id: int) -> dict[str, Any]:
+    """Everything the brain3d detail panel needs for one node.
+
+    Response shape:
+        {
+          node: {id, kind, label, domain, created_at, occurred_at, data},
+          facts: [{id, label, created_at}],
+          relations: [{other_id, other_label, other_kind, kind, direction}],
+          conversations: [{id, ts, user_text_snippet}],
+        }
+
+    - facts: fact-kind neighbors connected via mentions/about edges (either direction).
+    - relations: typed human edges only — structural kinds are filtered out.
+    - conversations: provenance via mentioned_in edges → conversation nodes →
+      their conversations row when resolvable. Best-effort: [] on any miss.
+    """
+    from axi.recall import _STRUCTURAL_EDGE_KINDS  # single source of truth
+
+    c = store._connect()  # noqa: SLF001  (read-only — reads don't route)
+    row = c.execute(
+        "SELECT id, kind, label, domain, data, created_at, occurred_at "
+        "FROM nodes WHERE id = ?",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, detail="node not found")
+
+    try:
+        data = json.loads(row["data"] or "{}")
+    except (ValueError, TypeError):
+        data = {}
+    node = {
+        "id": row["id"],
+        "kind": row["kind"],
+        "label": row["label"],
+        "domain": row["domain"],
+        "created_at": row["created_at"],
+        "occurred_at": row["occurred_at"],
+        "data": data,
+    }
+
+    # All edges touching this node, joined with the neighbor node.
+    edge_rows = c.execute(
+        "SELECT e.kind AS ekind, e.from_id, e.to_id, "
+        "       n.id AS oid, n.kind AS okind, n.label AS olabel, n.created_at AS ocreated "
+        "FROM edges e "
+        "JOIN nodes n ON n.id = CASE WHEN e.from_id = ? THEN e.to_id ELSE e.from_id END "
+        "WHERE e.from_id = ? OR e.to_id = ?",
+        (node_id, node_id, node_id),
+    ).fetchall()
+
+    facts: list[dict[str, Any]] = []
+    relations: list[dict[str, Any]] = []
+    conv_node_ids: list[int] = []
+    seen_facts: set[int] = set()
+    for er in edge_rows:
+        ekind = er["ekind"] or ""
+        direction = "out" if er["from_id"] == node_id else "in"
+        if ekind in ("mentions", "about") and er["okind"] == "fact":
+            if er["oid"] not in seen_facts:
+                seen_facts.add(er["oid"])
+                facts.append({
+                    "id": er["oid"],
+                    "label": er["olabel"],
+                    "created_at": er["ocreated"],
+                })
+        if ekind == "mentioned_in" and er["okind"] == "conversation":
+            conv_node_ids.append(er["oid"])
+        if ekind and ekind not in _STRUCTURAL_EDGE_KINDS:
+            relations.append({
+                "other_id": er["oid"],
+                "other_label": er["olabel"],
+                "other_kind": er["okind"],
+                "kind": ekind,
+                "direction": direction,
+            })
+
+    # Provenance: conversation nodes → conversations rows. Best-effort.
+    conversations: list[dict[str, Any]] = []
+    if conv_node_ids:
+        try:
+            ph = ",".join("?" for _ in conv_node_ids)
+            conv_rows = c.execute(
+                f"SELECT id, ts, user_text FROM conversations WHERE node_id IN ({ph}) "
+                "ORDER BY ts DESC LIMIT 10",
+                conv_node_ids,
+            ).fetchall()
+            conversations = [
+                {
+                    "id": cr["id"],
+                    "ts": cr["ts"],
+                    "user_text_snippet": (cr["user_text"] or "")[:160],
+                }
+                for cr in conv_rows
+            ]
+        except Exception:  # noqa: BLE001  — provenance is best-effort
+            conversations = []
+
+    return {
+        "node": node,
+        "facts": facts,
+        "relations": relations,
+        "conversations": conversations,
+    }
+
+
+@app.delete("/api/graph/node/{node_id}")
+def graph_node_delete(node_id: int):
+    """Forget a node: delete it and everything attached (edges/fts/vec).
+
+    Delegates to store.delete_node, which is single-writer-aware and refuses
+    the user-hub node. Conversation nodes can't be deleted from here either —
+    that's what the conversations page is for.
+    """
+    c = store._connect()  # noqa: SLF001  (pre-checks are read-only)
+    row = c.execute(
+        "SELECT kind, data FROM nodes WHERE id = ?", (node_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, detail="node not found")
+    if row["kind"] == "conversation":
+        return JSONResponse(
+            {"deleted": False, "reason": "conversation"}, status_code=400
+        )
+    try:
+        is_hub = json.loads(row["data"] or "{}").get("role") == "user"
+    except (ValueError, TypeError):
+        is_hub = False
+    if is_hub:
+        return JSONResponse({"deleted": False, "reason": "hub"}, status_code=400)
+    deleted = store.delete_node(node_id)
+    return {"deleted": bool(deleted)}
 
 
 # ────────────────────────── model selector ────────────────────────────

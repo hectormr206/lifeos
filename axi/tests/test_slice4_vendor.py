@@ -17,20 +17,11 @@ STATIC_DIR = Path(__file__).parent.parent / "src" / "axi" / "static"
 TEMPLATES_DIR = Path(__file__).parent.parent / "src" / "axi" / "templates"
 
 
-# ── 4.2 — graph.html must NOT reference CDN for Cytoscape ──────────────────
+# ── /graph retired — the old 2D Cytoscape viewer redirects to /brain3d ──────
 
-def test_graph_html_no_cytoscape_cdn():
-    """Task 4.2 RED: graph.html references vendored cytoscape, not CDN."""
-    graph_html = (TEMPLATES_DIR / "graph.html").read_text()
-    # Must NOT have any external CDN for Cytoscape.
-    assert "cdn.jsdelivr.net/npm/cytoscape" not in graph_html
-    assert "unpkg.com/cytoscape" not in graph_html
-
-
-def test_graph_html_references_vendored_cytoscape():
-    """Task 4.3 GREEN (file assertion): graph.html uses /static/vendor/cytoscape.min.js."""
-    graph_html = (TEMPLATES_DIR / "graph.html").read_text()
-    assert "/static/vendor/cytoscape.min.js" in graph_html
+def test_graph_html_template_removed():
+    """graph.html was retired with the /graph → /brain3d redirect."""
+    assert not (TEMPLATES_DIR / "graph.html").exists()
 
 
 # ── 4.4 — sw.js CACHE_VERSION bumped and new vendor files in precache ────────
@@ -55,10 +46,10 @@ def test_sw_precache_includes_3d_force_graph():
     assert "/static/vendor/3d-force-graph.min.js" in sw_content
 
 
-def test_sw_precache_includes_cytoscape():
-    """Task 4.5 RED: sw.js precache list includes /static/vendor/cytoscape.min.js."""
+def test_sw_precache_excludes_cytoscape():
+    """cytoscape left the shell precache when graph.html was retired."""
     sw_content = (STATIC_DIR / "sw.js").read_text()
-    assert "/static/vendor/cytoscape.min.js" in sw_content
+    assert "/static/vendor/cytoscape.min.js" not in sw_content
 
 
 # ── vendor files exist on disk ───────────────────────────────────────────────
