@@ -68,6 +68,10 @@ _DIFF_EXCLUDE_PATHSPECS = [
     ":(exclude,glob)**/*.pyc",
     ":(exclude,glob)**/*.pyo",
     ":(exclude,glob).atl/**",
+    # The containerized coder's Claude Code state dir (CLAUDE_CONFIG_DIR) lives
+    # inside the worktree so `--rm` containers can resume sessions across rounds.
+    # It is machine state, not an authored code change — keep it out of the diff.
+    ":(exclude,glob).axi-claude/**",
     ":(exclude,glob)**/.pytest_cache/**",
     ":(exclude,glob)**/.mypy_cache/**",
     ":(exclude,glob)**/.ruff_cache/**",
@@ -278,6 +282,74 @@ def _claude_resilience_flags() -> tuple[list[str], dict[str, str]]:
     return argv, extra_env
 
 
+# Container-side path for Claude Code's config/session state. It sits INSIDE the
+# mounted worktree (/work) so session state written on one `--rm` round survives
+# into the next round's fresh container — that is what makes `--resume` work
+# across rounds without mounting the host ~/.claude (which stays invisible).
+_CLAUDE_CONFIG_DIR_CONTAINER = "/work/.axi-claude"
+
+
+def build_claude_podman_argv(
+    *,
+    worktree_path: str,
+    instruction: str,
+    image: str,
+    resilience_argv: list[str],
+    resilience_env: dict[str, str],
+    resume_session_id: str | None = None,
+    podman_path: str = "podman",
+    api_key_env: str = "ANTHROPIC_API_KEY",
+    config_dir_container: str = _CLAUDE_CONFIG_DIR_CONTAINER,
+) -> list[str]:
+    """Build the podman argv that runs the `claude` CLI inside the axi-coder image.
+
+    Pure function: no I/O, no side effects. The caller invokes the result.
+
+    Containment (mirrors dev_agent.build_podman_argv):
+    - Exactly one mount: the worktree at /work (writable, :Z). /home is NOT
+      mounted, so host ~/.ssh, the encrypted memory.db, .env files, etc. are
+      invisible to the coder.
+    - Host env is scrubbed: only ANTHROPIC_API_KEY is forwarded FROM the host
+      (via the `-e NAME` inherit form). Everything else the coder needs is set
+      explicitly to a known value (CLAUDE_CONFIG_DIR + resilience env), never
+      inherited from the host.
+    - --userns=keep-id: files the coder writes are owned by the host UID.
+    - --rm: the container is removed after each round.
+    - Network is intentionally left ON (the coder must reach api.anthropic.com).
+      There is deliberately NO --network=none here.
+    - CLAUDE_CONFIG_DIR points inside /work so Claude Code session state persists
+      across successive `--rm` rounds and `--resume` keeps working.
+
+    The in-container command is:
+        claude -p <instruction> --output-format json
+               --permission-mode bypassPermissions [--resume <id>] <resilience-argv>
+    with the container workdir (-w) set to the mounted worktree.
+    """
+    resume_argv = ["--resume", resume_session_id] if resume_session_id else []
+    # ANTHROPIC_API_KEY is inherited from the host env (`-e NAME`); the config
+    # dir and resilience env are set to explicit values (`-e NAME=VALUE`) so the
+    # container never inherits arbitrary host variables.
+    env_flags = [
+        "-e", api_key_env,
+        "-e", f"CLAUDE_CONFIG_DIR={config_dir_container}",
+    ]
+    for key, value in resilience_env.items():
+        env_flags += ["-e", f"{key}={value}"]
+    return [
+        podman_path, "run", "--rm", "--userns=keep-id",
+        "-v", f"{worktree_path}:/work:Z",
+        "-w", "/work",
+        *env_flags,
+        image,
+        "claude",
+        "-p", instruction,
+        "--output-format", "json",
+        "--permission-mode", "bypassPermissions",
+        *resume_argv,
+        *resilience_argv,
+    ]
+
+
 def _run_claude(
     worktree_path: str,
     instruction: str,
@@ -286,23 +358,75 @@ def _run_claude(
     *,
     resume_session_id: str | None = None,
 ) -> tuple[str, float, int, bool, str | None]:
-    """Run claude CLI with the given instruction.
+    """Run the `claude` CLI with the given instruction.
 
     Returns (summary, cost_usd, num_turns, is_error, session_id).
     Pass resume_session_id to continue a prior Claude Code session.
+
+    Containment: when config `dev_agent_sandbox` is True (default), the coder
+    runs INSIDE the axi-coder podman container (host FS invisible). If podman or
+    the image is unavailable, this FAILS CLOSED — it returns the standard failed
+    round shape (is_error=True) rather than falling back to an uncontained host
+    run. Set `dev_agent_sandbox` False to explicitly opt into the legacy
+    uncontained host run (logged as a warning).
     """
+    from axi import config  # noqa: PLC0415
+
     extra_argv, extra_env = _claude_resilience_flags()
-    run_env = {**env, **extra_env}
-    resume_argv = ["--resume", resume_session_id] if resume_session_id else []
-    proc = subprocess.run(
-        [
+    sandbox = bool(config.get("dev_agent_sandbox", True))
+
+    if sandbox:
+        image = str(config.get("dev_agent_image", "localhost/axi-coder:latest"))
+        podman_bin = shutil.which("podman")
+        image_ok = False
+        if podman_bin:
+            img_check = subprocess.run(
+                [podman_bin, "image", "exists", image],
+                capture_output=True,
+            )
+            image_ok = img_check.returncode == 0
+        if not podman_bin or not image_ok:
+            # FAIL CLOSED: never run the coder uncontained. Return the same
+            # failed-round shape the director loop already handles (is_error).
+            reason = "refusing to run the coder uncontained (podman/image unavailable)"
+            log.error(
+                "dev_director: %s (podman=%s, image=%r, image_present=%s)",
+                reason, bool(podman_bin), image, image_ok,
+            )
+            return reason, 0.0, 0, True, None
+
+        argv = build_claude_podman_argv(
+            worktree_path=worktree_path,
+            instruction=instruction,
+            image=image,
+            resilience_argv=extra_argv,
+            resilience_env=extra_env,
+            resume_session_id=resume_session_id,
+            podman_path=podman_bin,
+        )
+        # podman inherits ANTHROPIC_API_KEY from this env (forwarded via -e NAME).
+        # Resilience env crosses explicitly inside build_claude_podman_argv.
+        run_env = env
+    else:
+        # Explicit opt-out: legacy uncontained host run (bypassPermissions on the
+        # host FS). Preserved for users who disable the sandbox.
+        log.warning(
+            "dev_director: dev_agent_sandbox is disabled — running the coder "
+            "UNCONTAINED on the host with --permission-mode bypassPermissions"
+        )
+        resume_argv = ["--resume", resume_session_id] if resume_session_id else []
+        argv = [
             "claude",
             "-p", instruction,
             "--output-format", "json",
             "--permission-mode", "bypassPermissions",
             *resume_argv,
             *extra_argv,
-        ],
+        ]
+        run_env = {**env, **extra_env}
+
+    proc = subprocess.run(
+        argv,
         cwd=worktree_path,
         timeout=timeout,
         capture_output=True,
