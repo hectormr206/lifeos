@@ -888,3 +888,159 @@ def test_weight_en_negative_implausible() -> None:
     from lifeos.health.ingestion import parse_health
     h = parse_health("weight 500")
     assert h is None or h.data.get("type") != "weight"
+
+
+# Bare scale sequence
+
+def test_bare_scale_full_six_number_reading() -> None:
+    """Canonical scale dictation: weight fat visceral muscle bmr bmi."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("59.9 13.2 7 34.6 1326 23.4")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "body_composition"
+    assert h.data["entry_mode"] == "bare_sequence"
+    assert h.data["weight_kg"] == 59.9
+    assert h.data["body_fat_pct"] == 13.2
+    assert h.data["visceral_fat"] == 7
+    assert h.data["muscle_pct"] == 34.6
+    assert h.data["basal_metabolic_rate"] == 1326
+    assert h.data["bmi"] == 23.4
+    assert "báscula" in h.title
+
+
+def test_bare_scale_rotated_start_at_visceral() -> None:
+    """Dictation starting mid-cycle: visceral muscle bmr bmi (4 numbers)."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("7 34.6 1326 23.4")
+    assert h is not None
+    assert h.data["type"] == "body_composition"
+    assert h.data["entry_mode"] == "bare_sequence"
+    assert h.data["visceral_fat"] == 7
+    assert h.data["muscle_pct"] == 34.6
+    assert h.data["basal_metabolic_rate"] == 1326
+    assert h.data["bmi"] == 23.4
+    assert "weight_kg" not in h.data
+    assert "body_fat_pct" not in h.data
+
+
+def test_bare_scale_decimal_comma_and_units() -> None:
+    """Decimal commas + sprinkled unit words parse like the plain form."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("59,9 kg 13,2 % 7 34,6 1326 kcal 23,4")
+    assert h is not None
+    assert h.data["type"] == "body_composition"
+    assert h.data["weight_kg"] == 59.9
+    assert h.data["body_fat_pct"] == 13.2
+    assert h.data["visceral_fat"] == 7
+    assert h.data["muscle_pct"] == 34.6
+    assert h.data["basal_metabolic_rate"] == 1326
+    assert h.data["bmi"] == 23.4
+
+
+def test_bare_scale_ambiguous_rotations_rejected() -> None:
+    """4 numbers fitting ≥2 rotations must return None (never guess).
+
+    "45 50 20 25" fits offset 0 (weight 45, fat 50, visceral 20, muscle 25)
+    AND offset 5 (bmi 45, weight 50, fat 20, visceral 25) — ambiguous."""
+    from lifeos.health.ingestion import _try_bare_scale_sequence, parse_health
+    assert _try_bare_scale_sequence("45 50 20 25") is None
+    h = parse_health("45 50 20 25")
+    assert h is None or h.data.get("type") != "body_composition"
+
+
+def test_bare_scale_does_not_shadow_blood_pressure() -> None:
+    """2-3 bare numbers stay owned by the BP path; this parser never fires."""
+    from lifeos.health.ingestion import _try_bare_scale_sequence, parse_health
+    assert _try_bare_scale_sequence("109 80 52") is None
+    assert _try_bare_scale_sequence("120 80") is None
+    # Whole-pipeline behavior for 2-3 bare numbers is unchanged: they are
+    # never claimed as body composition (bare BP without a pulse keyword is
+    # rejected as too ambiguous — see test_three_bare_numbers_no_keyword_rejected).
+    for text in ("109 80 52", "120 80"):
+        h = parse_health(text)
+        assert h is None or h.data.get("type") == "blood_pressure"
+    # A keyworded bare BP form still parses as blood pressure.
+    h = parse_health("116/84 pulso 72")
+    assert h is not None
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 116
+    assert h.data["pulse_bpm"] == 72
+
+
+def test_bare_scale_text_with_words_flows_to_labeled_path() -> None:
+    """Letters in the message reject this parser; labeled path takes over."""
+    from lifeos.health.ingestion import _try_bare_scale_sequence, parse_health
+    text = "peso 59.9 fat 13.2"
+    assert _try_bare_scale_sequence(text) is None
+    h = parse_health(text)
+    assert h is not None
+    assert h.data["type"] == "body_composition"
+    assert h.data.get("entry_mode") != "bare_sequence"
+    assert h.data["weight_kg"] == 59.9
+    assert h.data["body_fat_pct"] == 13.2
+
+
+def test_bare_scale_more_than_seven_numbers_rejected() -> None:
+    from lifeos.health.ingestion import _try_bare_scale_sequence
+    assert _try_bare_scale_sequence("59.9 13.2 7 34.6 1326 23.4 60 14") is None
+
+
+def test_bare_scale_config_reorder_honored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A monkeypatched scale_sequence reorder drives slot assignment."""
+    import axi.config as axi_config
+    from lifeos.health.ingestion import parse_health
+    monkeypatch.setattr(
+        axi_config, "get",
+        lambda key, default=None: (
+            "bmi,bmr,muscle,visceral,fat,weight"
+            if key == "scale_sequence" else default
+        ),
+    )
+    h = parse_health("23.4 1326 34.6 7 13.2 59.9")
+    assert h is not None
+    assert h.data["entry_mode"] == "bare_sequence"
+    assert h.data["bmi"] == 23.4
+    assert h.data["basal_metabolic_rate"] == 1326
+    assert h.data["muscle_pct"] == 34.6
+    assert h.data["visceral_fat"] == 7
+    assert h.data["body_fat_pct"] == 13.2
+    assert h.data["weight_kg"] == 59.9
+
+
+def test_bare_scale_invalid_config_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown field names in scale_sequence → canonical default order."""
+    import axi.config as axi_config
+    from lifeos.health.ingestion import parse_health
+    monkeypatch.setattr(
+        axi_config, "get",
+        lambda key, default=None: (
+            "weight,banana,bmi" if key == "scale_sequence" else default
+        ),
+    )
+    h = parse_health("59.9 13.2 7 34.6 1326 23.4")
+    assert h is not None
+    assert h.data["entry_mode"] == "bare_sequence"
+    assert h.data["weight_kg"] == 59.9
+    assert h.data["basal_metabolic_rate"] == 1326
+
+
+# Labeled visceral typo forms ("viseralfat 7" — missing c, glued to fat)
+
+def test_visceral_typo_viseralfat_single_field() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("viseralfat 7")
+    assert h is not None
+    assert h.data["type"] == "visceral_fat"
+    assert h.data["value"] == 7
+
+
+def test_visceral_typo_glued_in_multi_field_message() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("peso 60, visceralfat 8")
+    assert h is not None
+    assert h.data["type"] == "body_composition"
+    assert h.data["visceral_fat"] == 8
+    assert h.data["weight_kg"] == 60
