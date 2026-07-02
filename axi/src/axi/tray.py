@@ -81,16 +81,40 @@ STATE_LABELS: dict[str, str] = {
 }
 
 
-def _make_icon(rgb: tuple[int, int, int]) -> QtGui.QIcon:
+_MASCOT_PNG = Path(__file__).parent / "static" / "axi-192.png"
+
+
+def _make_icon(rgb: tuple[int, int, int], state: str = "idle") -> QtGui.QIcon:
+    """Tray icon: the Axi mascot with a state-colored dot badge.
+
+    The mascot face stays recognizable at tray size; the corner dot carries the
+    state color (same palette as before). When the daemon does not respond
+    ('unknown') the mascot goes grayscale + translucent — Axi asleep. Falls back
+    to the original plain colored circle if the mascot asset is missing.
+    """
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.ellipse(
-        [3, 3, size - 3, size - 3],
-        fill=rgb + (255,),
-        outline=(20, 20, 20, 220),
-        width=2,
-    )
+    try:
+        mascot = Image.open(_MASCOT_PNG).convert("RGBA").resize(
+            (size, size), Image.LANCZOS
+        )
+        if state == "unknown":
+            gray = mascot.convert("LA").convert("RGBA")
+            alpha = mascot.getchannel("A").point(lambda a: int(a * 0.55))
+            gray.putalpha(alpha)
+            mascot = gray
+        img.alpha_composite(mascot)
+        # State dot badge, bottom-right, with a dark ring for contrast.
+        dot = [size - 26, size - 26, size - 4, size - 4]
+        d.ellipse(dot, fill=rgb + (255,), outline=(15, 15, 20, 230), width=3)
+    except Exception:  # noqa: BLE001 — asset missing/corrupt → legacy circle
+        d.ellipse(
+            [3, 3, size - 3, size - 3],
+            fill=rgb + (255,),
+            outline=(20, 20, 20, 220),
+            width=2,
+        )
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     pix = QtGui.QPixmap()
@@ -146,7 +170,7 @@ class AxiTray(QtCore.QObject):
     def __init__(self, app: QtWidgets.QApplication) -> None:
         super().__init__()
         self.app = app
-        self.icons = {state: _make_icon(rgb) for state, rgb in STATE_COLORS.items()}
+        self.icons = {state: _make_icon(rgb, state) for state, rgb in STATE_COLORS.items()}
         self.tray = QtWidgets.QSystemTrayIcon(self.icons["idle"])
         self.tray.setToolTip("Axi · inactivo")
         self.current_state = "idle"
