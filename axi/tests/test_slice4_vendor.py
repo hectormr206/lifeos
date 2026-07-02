@@ -224,3 +224,15 @@ def test_brain3d_has_empty_state():
     """brain3d.html shows a friendly message when nodes list is empty."""
     brain3d_html = (TEMPLATES_DIR / "brain3d.html").read_text()
     assert "nodos" in brain3d_html.lower() or "vacío" in brain3d_html or "sin datos" in brain3d_html.lower()
+
+
+def test_dompurify_vendored_and_wired():
+    """renderMarkdown output is injected via x-html — it MUST be sanitized.
+    Assert DOMPurify is vendored, script-included, and used in renderMarkdown."""
+    base = (TEMPLATES_DIR / "_base.html").read_text()
+    assert '/static/vendor/purify.min.js' in base, "DOMPurify script not included"
+    assert "DOMPurify.sanitize" in base, "renderMarkdown does not sanitize"
+    purify = STATIC_DIR / "vendor" / "purify.min.js"
+    assert purify.exists() and "DOMPurify" in purify.read_text(), "DOMPurify not vendored"
+    assert '/static/vendor/purify.min.js' in (STATIC_DIR / "sw.js").read_text(), \
+        "DOMPurify not precached for offline"
