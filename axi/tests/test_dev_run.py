@@ -403,7 +403,8 @@ def test_dev_director_session_id_captured():
         return CompletedProcess(args=list(cmd), returncode=0, stdout=stdout, stderr="")
 
     with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
-         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})):
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
+         patch("axi.config.get", side_effect=lambda k, d=None: False if k == "dev_agent_sandbox" else d):
         summary, cost, turns, is_error, session_id = _run_claude("/tmp", "do stuff", 60.0, {})
 
     assert session_id == "sess-capture-test"
@@ -428,7 +429,8 @@ def test_dev_director_resume_adds_flag():
         return CompletedProcess(args=list(cmd), returncode=0, stdout=stdout, stderr="")
 
     with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
-         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})):
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
+         patch("axi.config.get", side_effect=lambda k, d=None: False if k == "dev_agent_sandbox" else d):
         _run_claude("/tmp", "instr", 60.0, {}, resume_session_id="old-sess-42")
 
     assert "--resume" in captured

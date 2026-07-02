@@ -38,6 +38,27 @@ def _notify(title: str, body: str) -> None:
         pass
 
 
+def _log_terminal(state: dict, status: str) -> None:
+    """Best-effort outcome log for self-improve runs reaching a terminal state."""
+    if state.get("origin") != "self_improve":
+        return
+    try:
+        from axi import config  # noqa: PLC0415
+        from axi import self_improve as _si  # noqa: PLC0415
+        state_dir = os.path.expanduser(config.get("dev_run_state_dir", "~/LifeOS/dev-runs"))
+        _si.append_outcome_log(
+            state_dir,
+            _si.build_outcome_record(
+                run_id=state.get("run_id", ""),
+                started_at=state.get("started_at"),
+                goal=state.get("goal", ""),
+                status=status,
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def main(run_id: str) -> None:
     state_path = _state_path(run_id)
     if not state_path.exists():
@@ -127,6 +148,7 @@ def main(run_id: str) -> None:
             state["status"] = "error"
             state["error"] = error_str
             _write_state(state_path, state)
+            _log_terminal(state, "failed")
             _notify("Axi dev ✗", f"Error: {error_str[:200]}")
             return
 
@@ -134,6 +156,7 @@ def main(run_id: str) -> None:
             state["status"] = "needs_human"
             state["result"] = loop.escalation_reason
             _write_state(state_path, state)
+            _log_terminal(state, "needs_human")
             _notify("Axi dev ⚠", f"Requiere revisión: {loop.escalation_reason[:200]}")
             return
 
@@ -169,6 +192,7 @@ def main(run_id: str) -> None:
             state["status"] = "error"
             state["error"] = str(exc)
             _write_state(state_path, state)
+            _log_terminal(state, "failed")
         except Exception:  # noqa: BLE001
             pass
         _notify("Axi dev ✗", f"Error inesperado: {str(exc)[:200]}")

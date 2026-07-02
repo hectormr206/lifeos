@@ -86,6 +86,25 @@ def _notify(title: str, body: str) -> None:
         pass
 
 
+def _log_terminal(state: dict, status: str) -> None:
+    """Best-effort outcome log for self-improve runs reaching a terminal state."""
+    if state.get("origin") != "self_improve":
+        return
+    try:
+        from axi import self_improve as _si  # noqa: PLC0415
+        _si.append_outcome_log(
+            _state_dir(),
+            _si.build_outcome_record(
+                run_id=state.get("run_id", ""),
+                started_at=state.get("started_at"),
+                goal=state.get("goal", ""),
+                status=status,
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _build_launch_cmd(run_id: str) -> list[str]:
     return [
         "systemd-run", "--user", "--collect",
@@ -111,13 +130,19 @@ def _relaunch_run(state: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def start_dev_run(goal: str) -> str:
-    """Create state.json and launch the run as a detached systemd unit. Non-blocking."""
+def start_dev_run(goal: str, origin: str = "user") -> str:
+    """Create state.json and launch the run as a detached systemd unit. Non-blocking.
+
+    ``origin`` tags where the run came from: "user" (default, back-compatible for
+    all existing callers) or "self_improve" for nightly self-improvement runs.
+    Self-improve-origin runs are subject to the dev-engine land guard.
+    """
     run_id = _run_id()
     unit = _unit_name(run_id)
     state: dict = {
         "run_id": run_id,
         "goal": goal,
+        "origin": origin,
         "status": "running",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "unit": unit,
@@ -186,6 +211,7 @@ def poll_dev_runs() -> list[dict]:
                         pass
                     state["status"] = "needs_human"
                     state_file.write_text(json.dumps(state, indent=2))
+                    _log_terminal(state, "needs_human")
                     _notify(
                         "Axi dev ⚠",
                         f"La tarea tardó demasiado y fue cancelada: {state.get('goal', '')[:80]}",
@@ -235,6 +261,7 @@ def poll_dev_runs() -> list[dict]:
         if resumes_done >= max_res:
             state["status"] = "needs_human"
             state_file.write_text(json.dumps(state, indent=2))
+            _log_terminal(state, "needs_human")
             _notify(
                 "Axi dev ⚠",
                 f"La tarea fue interrumpida demasiadas veces: {state.get('goal', '')[:80]}",
