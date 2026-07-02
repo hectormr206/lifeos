@@ -813,6 +813,16 @@ FIELDS: tuple[ConfigField, ...] = (
         "Override the daily self-improvement meta-goal. Empty = the built-in "
         "low-risk default (review recent work, implement one small improvement).",
     ),
+    ConfigField(
+        "scale_sequence", "string", "weight,fat,visceral,muscle,bmr,bmi",
+        "Order in which the smart scale cycles its readings, as comma-separated "
+        "field names (weight, fat, visceral, muscle, bmr, bmi). Used by the "
+        "bare-numbers dictation parser in health ingestion: when a chat message "
+        "is ONLY 4-7 numbers (e.g. '59.9 13.2 7 34.6 1326 23.4'), each number "
+        "is assigned to a field by matching this cycle from any starting offset "
+        "against per-field plausibility ranges. Invalid values fall back to "
+        "this default.",
+    ),
 )
 
 

@@ -321,7 +321,9 @@ _SINGLE_RM_RE = re.compile(
     re.IGNORECASE,
 )
 _SINGLE_VISCERAL_RE = re.compile(
-    r"\bvisceral(?:\s+(?:fat|fac))?\s*[:=]?\s*(\d{1,2}(?:\.\d{1,2})?)\b",
+    # `visc?eral` tolerates the dictation typo "viseral" (missing c) and
+    # `\s*` tolerates the glued form "viseralfat 7" / "visceralfat 8".
+    r"\bvisc?eral(?:\s*(?:fat|fac))?\s*[:=]?\s*(\d{1,2}(?:\.\d{1,2})?)\b",
     re.IGNORECASE,
 )
 
@@ -342,7 +344,9 @@ _BODY_FIELD_PATTERNS = [
     #  optional unit). Order matters: more specific patterns first so
     #  "visceral fat" is captured separately from plain "fat".
     ("visceral_fat",
-     re.compile(r"\bvisceral(?:\s+(?:fat|fac))?\s*[:=]?\s*(\d{1,2}(?:\.\d{1,2})?)\b", re.IGNORECASE),
+     # `visc?eral` + `\s*` before fat/fac tolerate dictation typos like
+     # "viseralfat 7" (missing c, glued to fat).
+     re.compile(r"\bvisc?eral(?:\s*(?:fat|fac))?\s*[:=]?\s*(\d{1,2}(?:\.\d{1,2})?)\b", re.IGNORECASE),
      ""),
     ("body_fat_pct",
      re.compile(r"\b(?:grasa(?:\s+corporal)?|fat|fac)\s*[:=]?\s*(\d{1,2}(?:\.\d{1,2})?)\s*%?\b", re.IGNORECASE),
@@ -420,6 +424,144 @@ def _try_body_composition(text: str) -> HealthIntent | None:
         title="composición: " + ", ".join(title_parts),
         data={"type": "body_composition", **fields},
         confidence=0.85,
+    )
+
+
+# ─── Bare scale sequence: numbers-only dictation from the smart scale ──
+#
+# The user dictates ONLY the numbers his scale cycles through, no labels:
+#   "59.9 13.2 7 34.6 1326 23.4"
+#   → weight 59.9 kg, fat 13.2%, visceral 7, muscle 34.6%, BMR 1326, BMI 23.4
+#
+# The scale cycles its readings in a FIXED order (default below, overridable
+# via the axi `scale_sequence` config key). The dictation may start mid-cycle
+# ("7 34.6 1326 23.4" starting at visceral), so we try every rotation of the
+# cycle and accept ONLY when exactly one rotation is plausible for every
+# number. 2-3 bare numbers stay owned by the blood-pressure parsers; fewer
+# than 4 is too ambiguous and more than 7 is not a scale reading.
+
+_SCALE_DEFAULT_SEQUENCE: tuple[str, ...] = (
+    "weight", "fat", "visceral", "muscle", "bmr", "bmi",
+)
+
+# slot key → (output field name, (min, max), must be integer-valued)
+_SCALE_SLOT_SPECS: dict[str, tuple[str, tuple[float, float], bool]] = {
+    "weight": ("weight_kg", (30.0, 250.0), False),
+    "fat": ("body_fat_pct", (3.0, 60.0), False),
+    "visceral": ("visceral_fat", (1.0, 30.0), True),
+    "muscle": ("muscle_pct", (15.0, 60.0), False),
+    "bmr": ("basal_metabolic_rate", (800.0, 4000.0), False),
+    "bmi": ("bmi", (10.0, 60.0), False),
+}
+
+# A number with optional decimal part; decimal comma accepted ("59,9").
+_SCALE_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)?")
+# Unit words the user may sprinkle while dictating. Removed before checking
+# that nothing but numbers and separators remain.
+_SCALE_UNIT_RE = re.compile(
+    r"\b(?:kg|kilos?|kcal|kilocalor[íi]as?)\b|%",
+    re.IGNORECASE,
+)
+
+_scale_sequence_warned = False
+
+
+def _scale_sequence() -> tuple[str, ...]:
+    """Return the configured scale cycle, or the default.
+
+    Reads the axi `scale_sequence` config key lazily so lifeos stays
+    soft-decoupled from axi (mirrors the lazy `from axi import store`
+    pattern in insights/digest.py). Any import/config failure or an
+    invalid value falls back to the canonical default."""
+    global _scale_sequence_warned
+    try:
+        from axi import config as axi_config  # noqa: PLC0415
+        raw = axi_config.get("scale_sequence", None)
+    except Exception:  # noqa: BLE001
+        return _SCALE_DEFAULT_SEQUENCE
+    if not raw or not isinstance(raw, str):
+        return _SCALE_DEFAULT_SEQUENCE
+    parts = tuple(p.strip().lower() for p in raw.split(",") if p.strip())
+    if (
+        parts
+        and all(p in _SCALE_SLOT_SPECS for p in parts)
+        and len(parts) == len(set(parts))
+    ):
+        return parts
+    if not _scale_sequence_warned:
+        log.warning(
+            "invalid scale_sequence config %r; falling back to default %s",
+            raw, ",".join(_SCALE_DEFAULT_SEQUENCE),
+        )
+        _scale_sequence_warned = True
+    return _SCALE_DEFAULT_SEQUENCE
+
+
+def _try_bare_scale_sequence(text: str) -> HealthIntent | None:
+    """Parse a bare-numbers scale dictation like "59.9 13.2 7 34.6 1326 23.4".
+
+    Trigger (strict, precision-first): the message contains ONLY numbers,
+    separators (spaces, commas, semicolons, periods, 'y') and unit words
+    (kg, %, kcal), with 4-7 numbers total. Then every rotation of the scale
+    cycle is tried; a rotation matches iff every number fits its slot's
+    plausibility range. Exactly ONE matching rotation is required — on 0 or
+    ≥2 we return None and let the labeled path handle it. Never guess."""
+    if not text:
+        return None
+    nums_raw = _SCALE_NUMBER_RE.findall(text)
+    if not (4 <= len(nums_raw) <= 7):
+        return None
+    # Anything left after removing numbers, units, and separators means the
+    # message has real words → not a bare dictation; labeled parsers own it.
+    leftover = _SCALE_NUMBER_RE.sub(" ", text)
+    leftover = _SCALE_UNIT_RE.sub(" ", leftover)
+    leftover_tokens = re.sub(r"[\s,.;]+", " ", leftover).strip().lower().split()
+    if any(tok != "y" for tok in leftover_tokens):
+        return None
+    try:
+        nums = [float(tok.replace(",", ".")) for tok in nums_raw]
+    except ValueError:
+        return None
+
+    sequence = _scale_sequence()
+    n = len(sequence)
+    matched_slots: list[str] | None = None
+    for offset in range(n):
+        slots = [sequence[(offset + i) % n] for i in range(len(nums))]
+        if len(set(slots)) != len(slots):
+            continue  # run wraps onto a repeated slot — never guess
+        ok = True
+        for slot, v in zip(slots, nums):
+            _, (lo, hi), needs_int = _SCALE_SLOT_SPECS[slot]
+            if not (lo <= v <= hi) or (needs_int and v != int(v)):
+                ok = False
+                break
+        if ok:
+            if matched_slots is not None:
+                return None  # ≥2 plausible rotations → ambiguous
+            matched_slots = slots
+    if matched_slots is None:
+        return None
+
+    fields: dict[str, Any] = {}
+    title_parts: list[str] = []
+    for slot, v in zip(matched_slots, nums):
+        field_name = _SCALE_SLOT_SPECS[slot][0]
+        fields[field_name] = v
+        label = {
+            "weight": f"peso {v:g}",
+            "fat": f"grasa {v:g}%",
+            "visceral": f"visceral {v:g}",
+            "muscle": f"músculo {v:g}%",
+            "bmr": f"RM {int(v)}",
+            "bmi": f"IMC {v:g}",
+        }[slot]
+        title_parts.append(label)
+    return HealthIntent(
+        kind="vital",
+        title="báscula: " + ", ".join(title_parts),
+        data={"type": "body_composition", "entry_mode": "bare_sequence", **fields},
+        confidence=0.80,  # inferred from position, slightly below labeled
     )
 
 
@@ -899,8 +1041,12 @@ def _try_medication(text: str) -> HealthIntent | None:
 #   ≥2 fields are present, so it won't steal single-field inputs.
 # Natural-language sleep runs BEFORE _try_vital so 'me dormí a la una y
 # desperté ahorita' picks up over the simpler 'dormí N horas' shape.
+# Bare scale sequence runs next: its trigger requires a numbers-only message
+# with 4-7 numbers, so it can't steal labeled body-composition text (letters
+# reject it) nor bare blood pressure (2-3 numbers stay below its threshold).
 _PARSERS = (
     _try_body_composition,
+    _try_bare_scale_sequence,
     _try_natural_sleep,
     _try_vital,
     _try_symptom,
