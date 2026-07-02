@@ -18,7 +18,8 @@ OLD_DRAWER_ROUTES = [
     # Proactivo
     "/reminders", "/briefings", "/insights", "/posture",
     # Axi · herramientas
-    "/translate", "/meetings", "/memory", "/graph",
+    # (/graph retired → 301 redirect to /brain3d, the knowledge-graph browser)
+    "/translate", "/meetings", "/memory", "/brain3d",
     "/models", "/desarrollo", "/calculator",
     # Sistema
     "/setup", "/events", "/config",

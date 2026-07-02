@@ -12,9 +12,43 @@
 <div class="space-y-4" x-data="brain3dPage()" x-init="load()">
 
   <!-- ─── header ─── -->
-  <div class="flex justify-between items-baseline flex-wrap gap-2">
+  <div class="flex justify-between items-center flex-wrap gap-2">
     <h1 class="text-2xl font-semibold" x-text="tUi('title')"></h1>
+
+    <!-- ─── search box (Stage 1: knowledge browser) ─── -->
+    <div id="graph-search" class="relative flex-1" style="max-width: 340px; min-width: 200px;"
+         @click.outside="searchResults = []">
+      <input type="search" x-model="searchQuery" @input="searchInput()"
+             @keydown.escape="searchResults = []; searchQuery = ''"
+             :placeholder="tUi('searchPlaceholder')" autocomplete="off"
+             class="w-full px-3 py-1.5 text-sm rounded-lg"
+             style="background: var(--panel2); border: 1px solid var(--border, #2a3040); color: inherit; outline: none;">
+      <!-- results dropdown -->
+      <div x-show="searchResults.length > 0" x-cloak
+           class="absolute w-full mt-1 panel2 rounded-lg overflow-hidden"
+           style="z-index: 50; max-height: 320px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,.45);">
+        <template x-for="r in searchResults" :key="r.id">
+          <button type="button" @click="selectSearchResult(r)"
+                  class="w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 hover:opacity-80"
+                  style="background: transparent; border: 0; color: inherit; cursor: pointer;">
+            <span x-text="r.label" class="truncate"></span>
+            <span class="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0"
+                  style="background: var(--panel); opacity: .8;" x-text="tLabel(r.kind)"></span>
+          </button>
+        </template>
+      </div>
+    </div>
+
     <div class="flex items-center gap-3 text-sm">
+      <!-- focus-mode chip: "Enfocado en: <label> ✕" -->
+      <template x-if="focusId !== null">
+        <button type="button" @click="clearFocus()"
+                class="text-xs px-2 py-1 rounded-full flex items-center gap-1"
+                style="background: var(--panel2); color: var(--teal, #00D4AA); border: 1px solid var(--teal, #00D4AA); cursor: pointer;">
+          <span x-text="tUi('focusedOn') + ' ' + focusLabel"></span>
+          <span aria-hidden="true">✕</span>
+        </button>
+      </template>
       <span class="muted" x-text="nodeCount + ' ' + tUi('nodes') + ' · ' + edgeCount + ' ' + tUi('relations')"></span>
       <!-- Partial indicator: cross-domain edges temporarily unavailable -->
       <template x-if="partial">
@@ -81,43 +115,107 @@
           <div>
             <!-- Node header -->
             <div class="font-semibold text-base mb-1" x-text="selectedNode.label"></div>
+            <div class="flex flex-wrap gap-1 mb-2">
+              <span class="text-xs px-2 py-0.5 rounded-full"
+                    style="background: var(--panel2);" x-text="tLabel(selectedNode.kind)"></span>
+              <template x-if="selectedNode.domain">
+                <span class="text-xs px-2 py-0.5 rounded-full"
+                      style="background: var(--panel2);" x-text="tLabel(selectedNode.domain)"></span>
+              </template>
+            </div>
             <div class="muted text-xs space-y-0.5">
-              <div>
-                <span class="font-medium" x-text="tUi('typeLabel') + ':'"></span>
-                <span x-text="tLabel(selectedNode.kind)"></span>
-              </div>
-              <div x-show="selectedNode.domain">
-                <span class="font-medium" x-text="tUi('domainLabel') + ':'"></span>
-                <span x-text="tLabel(selectedNode.domain)"></span>
-              </div>
-              <div>
-                <span class="font-medium">Embedding:</span>
-                <span x-text="selectedNode.has_embedding ? '✓ ' + tUi('yes') : '—'"></span>
+              <div x-show="detail && detail.node && detail.node.created_at">
+                <span class="font-medium" x-text="tUi('createdLabel') + ':'"></span>
+                <span x-text="detail && detail.node ? fmtDate(detail.node.created_at) : ''"></span>
               </div>
               <div x-show="selectedNode.occurred_at != null">
                 <span class="font-medium" x-text="tUi('date') + ':'"></span>
-                <span x-text="selectedNode.occurred_at ? new Date(selectedNode.occurred_at * 1000).toLocaleDateString(LANG === 'en' ? 'en-US' : 'es-ES', { timeZone: TZ }) : '—'"></span>
+                <span x-text="selectedNode.occurred_at ? fmtDate(selectedNode.occurred_at) : '—'"></span>
               </div>
             </div>
 
-            <!-- Connected edges -->
-            <template x-if="neighborEdges.length > 0">
-              <div class="mt-4">
-                <div class="font-semibold text-xs muted mb-2"><span x-text="tUi('connections')"></span> (<span x-text="neighborEdges.length"></span>)</div>
-                <div class="space-y-1.5 max-h-64 overflow-y-auto">
-                  <template x-for="edge in neighborEdges" :key="edge._key">
-                    <div class="panel2 p-2 text-xs rounded">
-                      <div class="font-medium" x-text="tEdge(edge.kind)"></div>
-                      <div class="muted mt-0.5" x-text="edge.direction + ' ' + edge.neighborLabel"></div>
-                      <div x-show="edge.system" class="muted text-xs" x-text="tUi('system') + ' ' + edge.system"></div>
-                    </div>
-                  </template>
-                </div>
-              </div>
+            <template x-if="detailLoading">
+              <div class="muted text-xs mt-3" x-text="tUi('loadingDetail')"></div>
             </template>
 
-            <template x-if="neighborEdges.length === 0">
-              <div class="muted text-xs mt-3">Sin conexiones visibles</div>
+            <template x-if="!detailLoading && detail">
+              <div>
+                <!-- ─── RELACIONES: typed human edges ─── -->
+                <template x-if="detail.relations.length > 0">
+                  <div class="mt-4">
+                    <div class="font-semibold text-xs muted mb-2">
+                      <span x-text="tUi('relationsTitle')"></span> (<span x-text="detail.relations.length"></span>)
+                    </div>
+                    <div class="space-y-1.5 max-h-48 overflow-y-auto">
+                      <template x-for="(rel, i) in detail.relations" :key="i">
+                        <div class="panel2 p-2 text-xs rounded">
+                          <!-- human-readable direction: "Héctor —primo→ Rodrigo" -->
+                          <template x-if="rel.direction === 'out'">
+                            <span>
+                              <span x-text="selectedNode.label"></span>
+                              <span class="muted" x-text="' —' + tEdge(rel.kind).replace(/_/g, ' ') + '→ '"></span>
+                              <a href="#" @click.prevent="navigateTo(rel.other_id)"
+                                 class="font-medium" style="color: var(--teal, #00D4AA); text-decoration: underline;"
+                                 x-text="rel.other_label"></a>
+                            </span>
+                          </template>
+                          <template x-if="rel.direction === 'in'">
+                            <span>
+                              <a href="#" @click.prevent="navigateTo(rel.other_id)"
+                                 class="font-medium" style="color: var(--teal, #00D4AA); text-decoration: underline;"
+                                 x-text="rel.other_label"></a>
+                              <span class="muted" x-text="' —' + tEdge(rel.kind).replace(/_/g, ' ') + '→ '"></span>
+                              <span x-text="selectedNode.label"></span>
+                            </span>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- ─── HECHOS: connected fact nodes ─── -->
+                <template x-if="detail.facts.length > 0">
+                  <div class="mt-4">
+                    <div class="font-semibold text-xs muted mb-2">
+                      <span x-text="tUi('factsTitle')"></span> (<span x-text="detail.facts.length"></span>)
+                    </div>
+                    <div class="space-y-1.5 max-h-48 overflow-y-auto">
+                      <template x-for="f in detail.facts" :key="f.id">
+                        <div class="panel2 p-2 text-xs rounded">
+                          <div x-text="f.label"></div>
+                          <div class="muted mt-0.5" x-text="f.created_at ? fmtDate(f.created_at) : ''"></div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- ─── PROCEDENCIA: conversation snippets ─── -->
+                <template x-if="detail.conversations.length > 0">
+                  <div class="mt-4">
+                    <div class="font-semibold text-xs muted mb-2" x-text="tUi('provenanceTitle')"></div>
+                    <div class="space-y-1.5 max-h-40 overflow-y-auto">
+                      <template x-for="cv in detail.conversations" :key="cv.id">
+                        <div class="panel2 p-2 text-xs rounded">
+                          <div class="italic" x-text="'“' + cv.user_text_snippet + '”'"></div>
+                          <div class="muted mt-0.5" x-text="cv.ts ? fmtDate(cv.ts) : ''"></div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+
+                <template x-if="detail.relations.length === 0 && detail.facts.length === 0 && detail.conversations.length === 0">
+                  <div class="muted text-xs mt-3" x-text="tUi('noDetail')"></div>
+                </template>
+
+                <!-- ─── forget node ─── -->
+                <button type="button" id="forget-node-btn" @click="forgetNode()"
+                        class="w-full mt-4 px-3 py-1.5 text-sm rounded-lg font-medium"
+                        style="background: rgba(220, 60, 60, .15); color: #ff6b6b; border: 1px solid rgba(220, 60, 60, .4); cursor: pointer;"
+                        x-text="tUi('forget')"></button>
+              </div>
             </template>
           </div>
         </template>
@@ -208,6 +306,20 @@ const LABELS = {
       yes:          'Sí',
       connections:  'Conexiones',
       system:       'sistema',
+      searchPlaceholder: 'Buscar en tu memoria…',
+      focusedOn:    'Enfocado en:',
+      createdLabel: 'Creado',
+      loadingDetail: 'Cargando detalles…',
+      relationsTitle: 'Relaciones',
+      factsTitle:   'Hechos',
+      provenanceTitle: 'Procedencia',
+      noDetail:     'Sin relaciones, hechos ni procedencia registrados',
+      forget:       '🗑️ Olvidar este nodo',
+      forgotten:    'Olvidado.',
+      confirmDelete: "¿Borrar '{label}' y todas sus conexiones? Esta acción no se puede deshacer.",
+      deleteHub:    'No puedes olvidar tu propio nodo central.',
+      deleteConversation: 'Las conversaciones se gestionan desde su propia página.',
+      deleteFailed: 'No se pudo olvidar el nodo.',
     },
   },
   en: {
@@ -250,6 +362,20 @@ const LABELS = {
       yes:          'Yes',
       connections:  'Connections',
       system:       'system',
+      searchPlaceholder: 'Search your memory…',
+      focusedOn:    'Focused on:',
+      createdLabel: 'Created',
+      loadingDetail: 'Loading details…',
+      relationsTitle: 'Relations',
+      factsTitle:   'Facts',
+      provenanceTitle: 'Provenance',
+      noDetail:     'No relations, facts or provenance recorded',
+      forget:       '🗑️ Forget this node',
+      forgotten:    'Forgotten.',
+      confirmDelete: "Delete '{label}' and all its connections? This action cannot be undone.",
+      deleteHub:    'You cannot forget your own hub node.',
+      deleteConversation: 'Conversations are managed from their own page.',
+      deleteFailed: 'Could not forget the node.',
     },
   },
 };
@@ -284,6 +410,23 @@ function tUi(key) {
   return ui[key] !== undefined ? ui[key] : (LABELS['es'].ui || {})[key] || key;
 }
 
+// Normalize for case/accent-insensitive search: "Médico" → "medico".
+function normText(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+// Brighten a #rrggbb color toward white — used to highlight the focused node.
+function brightenColor(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return '#ffffff';
+  const v = parseInt(m[1], 16);
+  const ch = (x) => Math.min(255, x + 0x50).toString(16).padStart(2, '0');
+  return '#' + ch((v >> 16) & 0xff) + ch((v >> 8) & 0xff) + ch(v & 0xff);
+}
+
 function brain3dPage() {
   return {
     loading: true,
@@ -291,10 +434,22 @@ function brain3dPage() {
     edgeCount: 0,
     partial: false,
     selectedNode: null,
-    neighborEdges: [],
+    // Search state
+    searchQuery: '',
+    searchResults: [],
+    // Focus mode state
+    focusId: null,
+    focusLabel: '',
+    // Detail panel state (from /api/graph/node/{id})
+    detail: null,
+    detailLoading: false,
     _graphData: null,
     _graph: null,
-    DOMAIN_COLOR,  // expose for Alpine x-for
+    _gfNodes: [],
+    _gfLinks: [],
+    _nodeById: {},
+    _adj: {},        // node id → Set of neighbor ids (client-side, for 2-hop focus)
+    DOMAIN_COLOR,    // expose for Alpine x-for
 
     async load() {
       this.loading = true;
@@ -315,6 +470,13 @@ function brain3dPage() {
         console.error('[brain3d] fetch failed:', e);
         this.loading = false;
       }
+    },
+
+    fmtDate(epoch) {
+      try {
+        return new Date(epoch * 1000).toLocaleDateString(
+          LANG === 'en' ? 'en-US' : 'es-ES', { timeZone: TZ });
+      } catch (e) { return ''; }
     },
 
     _render(data) {
@@ -348,22 +510,33 @@ function brain3dPage() {
         color: e.kind === 'similar-to' ? '#3a5a6a' : '#5a7a4a',
       }));
 
+      // Adjacency map for client-side 2-hop focus (built BEFORE 3d-force-graph
+      // mutates link.source/target from ids into node object refs).
+      const adj = {};
+      for (const e of data.edges) {
+        (adj[e.source] = adj[e.source] || new Set()).add(e.target);
+        (adj[e.target] = adj[e.target] || new Set()).add(e.source);
+      }
+
+      this._gfNodes = gfNodes;
+      this._gfLinks = gfLinks;
+      this._nodeById = nodeById;
+      this._adj = adj;
+
       const self = this;
 
       this._graph = ForceGraph3D()(container)
         .backgroundColor('#0b0e13')
         .showNavInfo(false)
         .nodeLabel(n => `<div style="background:#1a1f2b;color:#e6edf3;padding:4px 8px;border-radius:4px;font-size:12px;max-width:200px">${escHtml(n.label)}</div>`)
-        .nodeColor(n => n.color)
+        .nodeColor(n => n.id === self.focusId ? brightenColor(n.color) : n.color)
         .nodeOpacity(0.9)
-        .nodeVal(n => n.has_embedding ? 4 : 2)
+        .nodeVal(n => n.id === self.focusId ? 12 : (n.has_embedding ? 4 : 2))
         .linkColor(l => l.color)
         .linkOpacity(0.5)
         .linkWidth(l => l.system === 'B' ? 2 : 1)
         .graphData({ nodes: gfNodes, links: gfLinks })
-        .onNodeClick(node => {
-          self._selectNode(node, data.edges, nodeById);
-        });
+        .onNodeClick(node => { self._selectNode(node); });
 
       // 3d-force-graph locks the canvas to the container size at creation. Inside
       // the dashboard's modal iframe the container often isn't at its final size
@@ -383,24 +556,203 @@ function brain3dPage() {
       }
     },
 
-    _selectNode(node, edges, nodeById) {
+    // ─── search (case/accent-insensitive over loaded node labels) ───
+    searchInput() {
+      const q = normText(this.searchQuery.trim());
+      if (!q) { this.searchResults = []; return; }
+      const out = [];
+      for (const n of this._gfNodes) {
+        if (normText(n.label).includes(q)) {
+          out.push({ id: n.id, label: n.label, kind: n.kind });
+          if (out.length >= 12) break;
+        }
+      }
+      this.searchResults = out;
+    },
+
+    selectSearchResult(r) {
+      this.searchResults = [];
+      this.searchQuery = '';
+      this.focusOn(r.id);
+    },
+
+    // ─── focus mode: selected node + 2-hop neighborhood subgraph ───
+    focusOn(nodeId) {
+      const node = this._nodeById[nodeId];
+      if (!node || !this._graph) return;
+      // BFS up to 2 hops over the client-side adjacency of the loaded universe.
+      const keep = new Set([nodeId]);
+      let frontier = [nodeId];
+      for (let hop = 0; hop < 2; hop++) {
+        const next = [];
+        for (const id of frontier) {
+          for (const nb of (this._adj[id] || [])) {
+            if (!keep.has(nb)) { keep.add(nb); next.push(nb); }
+          }
+        }
+        frontier = next;
+      }
+      // Reuse the SAME node/link objects so 3d-force-graph keeps positions.
+      const subNodes = this._gfNodes.filter(n => keep.has(n.id));
+      const subLinks = this._gfLinks.filter(l => {
+        const s = typeof l.source === 'object' ? l.source.id : l.source;
+        const t = typeof l.target === 'object' ? l.target.id : l.target;
+        return keep.has(s) && keep.has(t);
+      });
+      this.focusId = nodeId;
+      this.focusLabel = node.label;
+      this._graph.graphData({ nodes: subNodes, links: subLinks });
+      this._refreshVisuals();
+      this._selectNode(node);
+      // Fly the camera to the focused node once the re-heated layout settles a bit.
+      setTimeout(() => this._flyTo(node), 500);
+    },
+
+    clearFocus() {
+      this.focusId = null;
+      this.focusLabel = '';
+      if (this._graph) {
+        this._graph.graphData({ nodes: this._gfNodes, links: this._gfLinks });
+        this._refreshVisuals();
+        setTimeout(() => { if (this._graph) this._graph.zoomToFit(800, 40); }, 500);
+      }
+    },
+
+    // Re-setting the accessors forces 3d-force-graph to re-evaluate node size/color.
+    _refreshVisuals() {
+      if (!this._graph) return;
+      this._graph.nodeVal(this._graph.nodeVal()).nodeColor(this._graph.nodeColor());
+    },
+
+    // Camera flight toward a node (3d-force-graph cameraPosition pattern):
+    // place the camera on the ray origin→node, a fixed distance past the node.
+    _flyTo(node) {
+      if (!this._graph) return;
+      if (node.x == null || node.y == null || node.z == null) {
+        this._graph.zoomToFit(800, 60);
+        return;
+      }
+      const dist = 140;
+      const len = Math.hypot(node.x, node.y, node.z) || 1;
+      const ratio = 1 + dist / len;
+      this._graph.cameraPosition(
+        { x: node.x * ratio, y: node.y * ratio, z: node.z * ratio },
+        node,       // lookAt
+        1200        // transition ms
+      );
+    },
+
+    // Navigate from a related-node link in the panel: re-center focus on it.
+    navigateTo(nodeId) {
+      if (this._nodeById[nodeId]) {
+        this.focusOn(nodeId);
+      } else {
+        // Node outside the loaded universe (limit cutoff) — show detail only.
+        this._selectNode({ id: nodeId, label: '…', kind: '', domain: '', occurred_at: null });
+      }
+    },
+
+    // ─── selection + detail panel (on-demand /api/graph/node/{id}) ───
+    async _selectNode(node) {
       this.selectedNode = node;
-      // Build neighbor edge list.
-      const nid = node.id;
-      this.neighborEdges = edges
-        .filter(e => e.source === nid || e.target === nid)
-        .map((e, i) => {
-          const isOutbound = e.source === nid;
-          const neighborId = isOutbound ? e.target : e.source;
-          const neighbor = nodeById[neighborId];
-          return {
-            _key: i,
-            kind: e.kind,
-            system: e.system,
-            direction: isOutbound ? '→' : '←',
-            neighborLabel: neighbor ? neighbor.label : String(neighborId),
-          };
+      this.detail = null;
+      this.detailLoading = true;
+      try {
+        const resp = await fetch('/api/graph/node/' + encodeURIComponent(node.id));
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const d = await resp.json();
+        // Ignore stale responses if the user already clicked another node.
+        if (this.selectedNode && this.selectedNode.id === node.id) {
+          this.detail = d;
+          // Fill panel header from authoritative data (navigateTo stub case).
+          this.selectedNode = Object.assign({}, this.selectedNode, {
+            label: d.node.label,
+            kind: d.node.kind,
+            domain: d.node.domain,
+            occurred_at: d.node.occurred_at,
+          });
+        }
+      } catch (e) {
+        console.error('[brain3d] node detail fetch failed:', e);
+        if (this.selectedNode && this.selectedNode.id === node.id) {
+          this.detail = { node: node, facts: [], relations: [], conversations: [] };
+        }
+      } finally {
+        if (this.selectedNode && this.selectedNode.id === node.id) {
+          this.detailLoading = false;
+        }
+      }
+    },
+
+    // ─── forget (delete) the selected node ───
+    async forgetNode() {
+      const node = this.selectedNode;
+      if (!node) return;
+      const msg = tUi('confirmDelete').replace('{label}', node.label);
+      let ok;
+      if (window.axiConfirm) {
+        ok = await window.axiConfirm({ message: msg, danger: true });
+      } else {
+        ok = window.confirm(msg);
+      }
+      if (!ok) return;
+      let body = null;
+      try {
+        const resp = await fetch('/api/graph/node/' + encodeURIComponent(node.id), { method: 'DELETE' });
+        try { body = await resp.json(); } catch (e) { body = null; }
+        if (resp.ok && body && body.deleted) {
+          this._removeNodeFromScene(node.id);
+          this.selectedNode = null;
+          this.detail = null;
+          this._toast(tUi('forgotten'));
+          return;
+        }
+        // Refusals: hub / conversation / generic failure.
+        const reason = body && body.reason;
+        if (reason === 'hub') this._toast(tUi('deleteHub'), 'error');
+        else if (reason === 'conversation') this._toast(tUi('deleteConversation'), 'error');
+        else this._toast(tUi('deleteFailed'), 'error');
+      } catch (e) {
+        console.error('[brain3d] delete failed:', e);
+        this._toast(tUi('deleteFailed'), 'error');
+      }
+    },
+
+    // Remove a node + its edges from the master data AND the live 3D scene
+    // in place — no full reload.
+    _removeNodeFromScene(nodeId) {
+      const linkGone = (l) => {
+        const s = typeof l.source === 'object' ? l.source.id : l.source;
+        const t = typeof l.target === 'object' ? l.target.id : l.target;
+        return s === nodeId || t === nodeId;
+      };
+      this._gfNodes = this._gfNodes.filter(n => n.id !== nodeId);
+      this._gfLinks = this._gfLinks.filter(l => !linkGone(l));
+      delete this._nodeById[nodeId];
+      for (const k of Object.keys(this._adj)) this._adj[k].delete(nodeId);
+      delete this._adj[nodeId];
+      this.nodeCount = this._gfNodes.length;
+      this.edgeCount = this._gfLinks.length;
+      if (!this._graph) return;
+      if (this.focusId === nodeId) {
+        // Deleted the focused node → drop focus back to the full universe.
+        this.focusId = null;
+        this.focusLabel = '';
+        this._graph.graphData({ nodes: this._gfNodes, links: this._gfLinks });
+        this._refreshVisuals();
+      } else {
+        // Prune the node from whatever view is currently displayed.
+        const cur = this._graph.graphData();
+        this._graph.graphData({
+          nodes: cur.nodes.filter(n => n.id !== nodeId),
+          links: cur.links.filter(l => !linkGone(l)),
         });
+      }
+    },
+
+    _toast(message, type) {
+      if (window.axiToast) window.axiToast({ message, type: type || 'info' });
+      else console.log('[brain3d]', message);
     },
   };
 }
