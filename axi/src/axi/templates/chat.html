@@ -398,18 +398,18 @@
         type="button"
         x-show="(draft.trim().length === 0 && attachments.length === 0) || recording"
         x-cloak
-        @mousedown.prevent="startRecording()"
-        @mouseup.prevent="stopRecording()"
-        @mouseleave="stopRecording()"
-        @touchstart.prevent="startRecording()"
-        @touchend.prevent="stopRecording()"
-        @touchcancel="stopRecording()"
+        @mousedown.prevent="micPress()"
+        @mouseup.prevent="micRelease()"
+        @mouseleave="micLeave()"
+        @touchstart.prevent="micPress()"
+        @touchend.prevent="micRelease()"
+        @touchcancel="micLeave()"
         :disabled="pending || (transcribing && !recording) || !online"
         class="btn btn-primary"
         :style="recording
           ? 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem; background: rgba(238,51,51,0.9); border-color: var(--red);'
           : (!online ? 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem; opacity: 0.4;' : 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem;')"
-        :title="!online ? 'Micrófono — sin conexión a Whisper' : (recording ? 'Soltá para transcribir' : 'Mantené presionado para grabar un mensaje de voz')"
+        :title="!online ? 'Micrófono — sin conexión a Whisper' : (recording ? 'Tocá de nuevo (o soltá) para transcribir' : 'Tocá para dictar (o mantené presionado)')"
       >
         <span x-show="!recording && !transcribing">🎤</span>
         <span x-show="recording" x-cloak>●</span>
@@ -997,14 +997,44 @@ function chatApp() {
       });
     },
 
-    startRecording() {
-      if (this.recording || this.transcribing) return;
+    // Mic gestures — BOTH interaction models:
+    //   * TAP (press <350ms): toggle — starts recording and STAYS recording
+    //     until the next tap. The natural "activate the mic" gesture.
+    //   * HOLD (press ≥350ms): walkie-talkie — records while held, transcribes
+    //     on release (the original push-to-talk behavior).
+    _micPressT0: 0,
+    _micToggled: false,   // true = recording started by a tap; ignore release
+    micPress() {
+      if (this.recording) {
+        // Second tap while toggled on → stop and transcribe.
+        this._micToggled = false;
+        this._micPressT0 = 0;
+        if (this._recorder) this._recorder.stop();
+        return;
+      }
+      if (this.transcribing) return;
       this.error = null;
+      this._micPressT0 = Date.now();
       this._ensureRecorder();
       this._recorder.start();
     },
-
-    stopRecording() {
+    micRelease() {
+      if (!this._micPressT0) return;  // release after a toggle-off press
+      const held = Date.now() - this._micPressT0;
+      this._micPressT0 = 0;
+      if (held < 350) {
+        this._micToggled = true;      // quick tap → keep recording (toggle on)
+        return;
+      }
+      this._micToggled = false;       // long hold → classic release-to-send
+      if (this._recorder) this._recorder.stop();
+    },
+    micLeave() {
+      // Leaving the button only stops a HOLD in progress — never a toggled
+      // recording (that would make tap-mode unusable the moment the cursor
+      // drifts off the button).
+      if (this._micToggled || !this._micPressT0) return;
+      this._micPressT0 = 0;
       if (this._recorder) this._recorder.stop();
     },
 
