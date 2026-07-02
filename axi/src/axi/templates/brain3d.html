@@ -93,6 +93,11 @@
               <span x-text="tLabel(domain)"></span>
             </div>
           </template>
+          <!-- In focus mode the palette is overridden by relevance, so hint it. -->
+          <template x-if="focusId !== null">
+            <div class="muted pt-1 mt-1" style="border-top:1px solid var(--border,#2a3040)"
+                 x-text="tUi('focusHint')"></div>
+          </template>
         </div>
 
         <!-- Instructions hint -->
@@ -222,6 +227,21 @@
       </div>
     </div>
   </template>
+
+  <!-- ─── undo bar: deferred-delete grace window (Gmail "undo send" pattern) ─── -->
+  <template x-if="pendingUndo">
+    <div id="undo-bar"
+         class="fixed left-1/2 bottom-6 panel2 px-4 py-2 rounded-lg flex items-center gap-3 text-sm"
+         style="transform: translateX(-50%); z-index: 100; box-shadow: 0 8px 24px rgba(0,0,0,.5); border: 1px solid var(--border, #2a3040);">
+      <span x-text="tUi('undoDone').replace('{label}', pendingUndo.label)"></span>
+      <button type="button" id="undo-delete-btn" @click="undoDelete()"
+              class="px-2 py-1 rounded font-medium"
+              style="background: var(--teal, #00D4AA); color: #06251f; border: 0; cursor: pointer;">
+        <span x-text="tUi('undo')"></span>
+        <span x-text="'(' + pendingUndo.secondsLeft + ')'"></span>
+      </button>
+    </div>
+  </template>
 </div>
 
 <!-- Vendored 3d-force-graph (no CDN) — bundles Three.js internally -->
@@ -261,6 +281,12 @@ const DOMAIN_COLOR = {
   spirituality:  '#ff44aa',  // rose
   default:       '#888888',  // grey
 };
+
+// Focus-mode overlay colors. In FOCUS MODE the domain palette is overridden so
+// relevance to the focused node is unmistakable (the full universe view keeps
+// the domain palette untouched).
+const FOCUS_TEAL = '#00D4AA';  // brand teal — the focused node/link anchor
+const FOCUS_DIM  = '#3a4048';  // dim gray — 2nd-hop context, de-emphasized
 
 // i18n label maps for domain/kind keys and edge kind keys.
 // Add a new locale by extending with a new top-level key.
@@ -316,7 +342,11 @@ const LABELS = {
       noDetail:     'Sin relaciones, hechos ni procedencia registrados',
       forget:       '🗑️ Olvidar este nodo',
       forgotten:    'Olvidado.',
-      confirmDelete: "¿Borrar '{label}' y todas sus conexiones? Esta acción no se puede deshacer.",
+      confirmDelete: "¿Olvidar '{label}'? Podrás deshacerlo unos segundos.",
+      undo:         'Deshacer',
+      undoDone:     "Olvidado '{label}'.",
+      recovered:    'Recuperado.',
+      focusHint:    'Enfoque: teal = enfocado, gris = contexto',
       deleteHub:    'No puedes olvidar tu propio nodo central.',
       deleteConversation: 'Las conversaciones se gestionan desde su propia página.',
       deleteFailed: 'No se pudo olvidar el nodo.',
@@ -372,7 +402,11 @@ const LABELS = {
       noDetail:     'No relations, facts or provenance recorded',
       forget:       '🗑️ Forget this node',
       forgotten:    'Forgotten.',
-      confirmDelete: "Delete '{label}' and all its connections? This action cannot be undone.",
+      confirmDelete: "Forget '{label}'? You will be able to undo it for a few seconds.",
+      undo:         'Undo',
+      undoDone:     "Forgotten '{label}'.",
+      recovered:    'Recovered.',
+      focusHint:    'Focus: teal = focused, gray = context',
       deleteHub:    'You cannot forget your own hub node.',
       deleteConversation: 'Conversations are managed from their own page.',
       deleteFailed: 'Could not forget the node.',
@@ -418,15 +452,6 @@ function normText(s) {
     .toLowerCase();
 }
 
-// Brighten a #rrggbb color toward white — used to highlight the focused node.
-function brightenColor(hex) {
-  const m = /^#([0-9a-f]{6})$/i.exec(String(hex || ''));
-  if (!m) return '#ffffff';
-  const v = parseInt(m[1], 16);
-  const ch = (x) => Math.min(255, x + 0x50).toString(16).padStart(2, '0');
-  return '#' + ch((v >> 16) & 0xff) + ch((v >> 8) & 0xff) + ch(v & 0xff);
-}
-
 function brain3dPage() {
   return {
     loading: true,
@@ -440,6 +465,10 @@ function brain3dPage() {
     // Focus mode state
     focusId: null,
     focusLabel: '',
+    _focusNeighbors: new Set(),   // 1-hop neighbor ids of focusId (relevance recolor)
+    // Deferred-delete / undo grace window state
+    pendingUndo: null,            // reactive: { label, secondsLeft } (drives undo bar)
+    _pending: null,               // machinery: { snap, timerId, tickId }
     // Detail panel state (from /api/graph/node/{id})
     detail: null,
     detailLoading: false,
@@ -529,12 +558,12 @@ function brain3dPage() {
         .backgroundColor('#0b0e13')
         .showNavInfo(false)
         .nodeLabel(n => `<div style="background:#1a1f2b;color:#e6edf3;padding:4px 8px;border-radius:4px;font-size:12px;max-width:200px">${escHtml(n.label)}</div>`)
-        .nodeColor(n => n.id === self.focusId ? brightenColor(n.color) : n.color)
+        .nodeColor(n => self._nodeColorAcc(n))
         .nodeOpacity(0.9)
-        .nodeVal(n => n.id === self.focusId ? 12 : (n.has_embedding ? 4 : 2))
-        .linkColor(l => l.color)
+        .nodeVal(n => self._nodeValAcc(n))
+        .linkColor(l => self._linkColorAcc(l))
         .linkOpacity(0.5)
-        .linkWidth(l => l.system === 'B' ? 2 : 1)
+        .linkWidth(l => self._linkWidthAcc(l))
         .graphData({ nodes: gfNodes, links: gfLinks })
         .onNodeClick(node => { self._selectNode(node); });
 
@@ -601,6 +630,8 @@ function brain3dPage() {
       });
       this.focusId = nodeId;
       this.focusLabel = node.label;
+      // 1-hop neighbors: "the ones that light up" — reuse the adjacency map.
+      this._focusNeighbors = new Set(this._adj[nodeId] || []);
       this._graph.graphData({ nodes: subNodes, links: subLinks });
       this._refreshVisuals();
       this._selectNode(node);
@@ -611,6 +642,7 @@ function brain3dPage() {
     clearFocus() {
       this.focusId = null;
       this.focusLabel = '';
+      this._focusNeighbors = new Set();
       if (this._graph) {
         this._graph.graphData({ nodes: this._gfNodes, links: this._gfLinks });
         this._refreshVisuals();
@@ -618,10 +650,51 @@ function brain3dPage() {
       }
     },
 
-    // Re-setting the accessors forces 3d-force-graph to re-evaluate node size/color.
+    // Re-setting the accessors forces 3d-force-graph to re-evaluate node/link
+    // size + color — used whenever focus state changes (enter/clear/restore).
     _refreshVisuals() {
       if (!this._graph) return;
-      this._graph.nodeVal(this._graph.nodeVal()).nodeColor(this._graph.nodeColor());
+      this._graph
+        .nodeVal(this._graph.nodeVal())
+        .nodeColor(this._graph.nodeColor())
+        .linkColor(this._graph.linkColor())
+        .linkWidth(this._graph.linkWidth());
+    },
+
+    // ─── focus-relevance accessors (pure; a recolor is just an accessor swap) ───
+    // Full universe (focusId === null) → domain palette untouched.
+    // Focus mode → focused node teal, 1-hop neighbors keep their domain color,
+    // everything else (2nd hop) dimmed gray + smaller.
+    _linkEnds(l) {
+      const s = typeof l.source === 'object' ? l.source.id : l.source;
+      const t = typeof l.target === 'object' ? l.target.id : l.target;
+      return [s, t];
+    },
+    _nodeColorAcc(n) {
+      if (this.focusId === null) return n.color;
+      if (n.id === this.focusId) return FOCUS_TEAL;
+      if (this._focusNeighbors.has(n.id)) return n.color;
+      return FOCUS_DIM;
+    },
+    _nodeValAcc(n) {
+      if (this.focusId === null) return n.has_embedding ? 4 : 2;
+      if (n.id === this.focusId) return 14;                 // largest anchor
+      if (this._focusNeighbors.has(n.id)) return n.has_embedding ? 4 : 2;
+      return 1;                                             // dim context, smaller
+    },
+    _linkColorAcc(l) {
+      if (this.focusId === null) return l.color;
+      const [s, t] = this._linkEnds(l);
+      if (s === this.focusId || t === this.focusId) return FOCUS_TEAL;
+      if (this._focusNeighbors.has(s) && this._focusNeighbors.has(t)) return l.color;
+      return FOCUS_DIM;
+    },
+    _linkWidthAcc(l) {
+      const [s, t] = this._linkEnds(l);
+      if (this.focusId === null) return l.system === 'B' ? 2 : 1;
+      if (s === this.focusId || t === this.focusId) return 3;          // brighter/thicker
+      if (this._focusNeighbors.has(s) && this._focusNeighbors.has(t)) return l.system === 'B' ? 2 : 1;
+      return 0.5;                                                       // dim context
     },
 
     // Camera flight toward a node (3d-force-graph cameraPosition pattern):
@@ -684,10 +757,22 @@ function brain3dPage() {
       }
     },
 
-    // ─── forget (delete) the selected node ───
+    // ─── forget (delete) the selected node — DEFERRED delete + undo window ───
+    // Removes the node from the view instantly but delays the DELETE API call
+    // behind an 8s grace window ("undo send" pattern). Sacred data: never a
+    // silent hard delete.
     async forgetNode() {
       const node = this.selectedNode;
       if (!node) return;
+
+      // Client-side hub/conversation guard BEFORE the optimistic remove: since
+      // the DELETE now fires late, we must not optimistically remove a node the
+      // server would refuse. detail.node carries kind + data.role (the button
+      // only renders once detail is loaded); fall back to selectedNode.
+      const dn = (this.detail && this.detail.node) || node;
+      if (dn.kind === 'conversation') { this._toast(tUi('deleteConversation'), 'error'); return; }
+      if (dn.data && dn.data.role === 'user') { this._toast(tUi('deleteHub'), 'error'); return; }
+
       const msg = tUi('confirmDelete').replace('{label}', node.label);
       let ok;
       if (window.axiConfirm) {
@@ -696,36 +781,89 @@ function brain3dPage() {
         ok = window.confirm(msg);
       }
       if (!ok) return;
+
+      // Only ONE pending delete at a time: commit the previous one first so we
+      // never lose track (fire its DELETE now, then open the new window).
+      if (this._pending) this._commitPending();
+
+      // Optimistic in-memory + scene removal (feels instant). DELETE deferred.
+      const snap = this._snapshotAndRemove(node);
+      this.selectedNode = null;
+      this.detail = null;
+
+      // Open the undo grace window.
+      const SECS = 8;
+      this.pendingUndo = { label: snap.label, secondsLeft: SECS };
+      const p = { snap, timerId: null, tickId: null };
+      p.tickId = setInterval(() => {
+        if (!this.pendingUndo) return;
+        this.pendingUndo.secondsLeft = Math.max(0, this.pendingUndo.secondsLeft - 1);
+      }, 1000);
+      p.timerId = setTimeout(() => this._commitPending(), SECS * 1000);
+      this._pending = p;
+    },
+
+    // User clicked "Deshacer" within the window: restore, never call the API.
+    undoDelete() {
+      const p = this._pending;
+      if (!p) return;
+      if (p.timerId) clearTimeout(p.timerId);
+      if (p.tickId) clearInterval(p.tickId);
+      this._pending = null;
+      this.pendingUndo = null;
+      this._restoreSnapshot(p.snap);
+      this._toast(tUi('recovered'));
+    },
+
+    // Window elapsed (or a second delete arrived): NOW fire the DELETE.
+    // Detaches the pending state synchronously first so a leftover timer can
+    // never double-fire the API. On server refusal/failure the node is restored.
+    async _commitPending() {
+      const p = this._pending;
+      if (!p) return;
+      if (p.timerId) clearTimeout(p.timerId);
+      if (p.tickId) clearInterval(p.tickId);
+      this._pending = null;
+      this.pendingUndo = null;
+      const snap = p.snap;
       let body = null;
       try {
-        const resp = await fetch('/api/graph/node/' + encodeURIComponent(node.id), { method: 'DELETE' });
+        const resp = await fetch('/api/graph/node/' + encodeURIComponent(snap.nodeId), { method: 'DELETE' });
         try { body = await resp.json(); } catch (e) { body = null; }
-        if (resp.ok && body && body.deleted) {
-          this._removeNodeFromScene(node.id);
-          this.selectedNode = null;
-          this.detail = null;
-          this._toast(tUi('forgotten'));
-          return;
-        }
-        // Refusals: hub / conversation / generic failure.
+        if (resp.ok && body && body.deleted) return;  // already gone from view
+        // Server kept the node (refusal that slipped through, or failure):
+        // restore so the user never thinks it's gone when it isn't.
+        this._restoreSnapshot(snap);
         const reason = body && body.reason;
         if (reason === 'hub') this._toast(tUi('deleteHub'), 'error');
         else if (reason === 'conversation') this._toast(tUi('deleteConversation'), 'error');
         else this._toast(tUi('deleteFailed'), 'error');
       } catch (e) {
         console.error('[brain3d] delete failed:', e);
+        this._restoreSnapshot(snap);
         this._toast(tUi('deleteFailed'), 'error');
       }
     },
 
-    // Remove a node + its edges from the master data AND the live 3D scene
-    // in place — no full reload.
-    _removeNodeFromScene(nodeId) {
+    // Snapshot a node + its edges, then remove them from master data AND the
+    // live 3D scene in place. Same node/link object refs are kept in the
+    // snapshot so a restore preserves positions and graph state exactly.
+    _snapshotAndRemove(node) {
+      const nodeId = node.id;
       const linkGone = (l) => {
         const s = typeof l.source === 'object' ? l.source.id : l.source;
         const t = typeof l.target === 'object' ? l.target.id : l.target;
         return s === nodeId || t === nodeId;
       };
+      const snap = {
+        nodeId,
+        label: node.label,
+        nodeObj: this._nodeById[nodeId],                     // real ref (positions)
+        links: this._gfLinks.filter(linkGone),               // removed link refs
+        adjSet: this._adj[nodeId] ? new Set(this._adj[nodeId]) : new Set(),
+        neighbors: Array.from(this._adj[nodeId] || []),
+      };
+      // Master data.
       this._gfNodes = this._gfNodes.filter(n => n.id !== nodeId);
       this._gfLinks = this._gfLinks.filter(l => !linkGone(l));
       delete this._nodeById[nodeId];
@@ -733,20 +871,53 @@ function brain3dPage() {
       delete this._adj[nodeId];
       this.nodeCount = this._gfNodes.length;
       this.edgeCount = this._gfLinks.length;
-      if (!this._graph) return;
-      if (this.focusId === nodeId) {
-        // Deleted the focused node → drop focus back to the full universe.
-        this.focusId = null;
-        this.focusLabel = '';
-        this._graph.graphData({ nodes: this._gfNodes, links: this._gfLinks });
-        this._refreshVisuals();
-      } else {
-        // Prune the node from whatever view is currently displayed.
+      // Live scene.
+      if (this._graph) {
+        if (this.focusId === nodeId) {
+          // Removed the focused node → drop focus back to the full universe.
+          this.focusId = null;
+          this.focusLabel = '';
+          this._focusNeighbors = new Set();
+          this._graph.graphData({ nodes: this._gfNodes, links: this._gfLinks });
+          this._refreshVisuals();
+        } else {
+          const cur = this._graph.graphData();
+          this._graph.graphData({
+            nodes: cur.nodes.filter(n => n.id !== nodeId),
+            links: cur.links.filter(l => !linkGone(l)),
+          });
+        }
+      }
+      return snap;
+    },
+
+    // Re-insert a snapshotted node + its edges into master data and the live
+    // scene, using the same object refs so positions/graph state are preserved.
+    _restoreSnapshot(snap) {
+      if (this._nodeById[snap.nodeId]) return;  // already present — no-op
+      this._gfNodes.push(snap.nodeObj);
+      this._nodeById[snap.nodeId] = snap.nodeObj;
+      for (const l of snap.links) this._gfLinks.push(l);
+      this._adj[snap.nodeId] = new Set(snap.adjSet);
+      for (const nb of snap.neighbors) {
+        (this._adj[nb] = this._adj[nb] || new Set()).add(snap.nodeId);
+      }
+      this.nodeCount = this._gfNodes.length;
+      this.edgeCount = this._gfLinks.length;
+      if (this._graph) {
         const cur = this._graph.graphData();
-        this._graph.graphData({
-          nodes: cur.nodes.filter(n => n.id !== nodeId),
-          links: cur.links.filter(l => !linkGone(l)),
-        });
+        const nodes = cur.nodes.slice();
+        if (!nodes.some(n => n.id === snap.nodeId)) nodes.push(snap.nodeObj);
+        const present = new Set(nodes.map(n => n.id));
+        const links = cur.links.slice();
+        for (const l of snap.links) {
+          if (links.indexOf(l) !== -1) continue;
+          const s = typeof l.source === 'object' ? l.source.id : l.source;
+          const t = typeof l.target === 'object' ? l.target.id : l.target;
+          if (present.has(s) && present.has(t)) links.push(l);
+        }
+        this._graph.graphData({ nodes, links });
+        this._refreshVisuals();
       }
     },
 
