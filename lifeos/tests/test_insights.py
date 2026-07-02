@@ -34,6 +34,17 @@ def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LIFEOS_EVENTS_DB_PATH", str(tmp_path / "ev.db"))
     monkeypatch.setenv("LIFEOS_EVENTS_KEY_PATH", str(tmp_path / "ev.key"))
 
+    # Stub the axi graph (used by digest._section_graph_facts) so tests
+    # never read the real encrypted axi memory.db.
+    import sys
+    import types
+    fake_axi_store = types.ModuleType("axi.store")
+    fake_axi_store.recent_facts = lambda days=7, limit=50: []
+    fake_axi = types.ModuleType("axi")
+    fake_axi.store = fake_axi_store
+    monkeypatch.setitem(sys.modules, "axi", fake_axi)
+    monkeypatch.setitem(sys.modules, "axi.store", fake_axi_store)
+
     from lifeos import store as core_store
     from lifeos.health import store as h_store
     from lifeos.finance import store as f_store

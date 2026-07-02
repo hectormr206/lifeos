@@ -166,6 +166,18 @@ FIELDS: tuple[ConfigField, ...] = (
         "writes to it over write.sock (eliminates multi-process write corruption).",
     ),
     ConfigField(
+        "digest_narrate_enabled", "boolean", True,
+        "If true, the nightly insights digest push is narrated by the brain "
+        "(4-6 warm sentences grounded ONLY in the computed facts); on any "
+        "narrator failure the deterministic template body is used instead.",
+    ),
+    ConfigField(
+        "digest_adaptive_hour", "boolean", True,
+        "If true, the daily digest hour adapts to the user's median bedtime "
+        "(fires 90 min before it, clamped to 19:00-23:00; needs >=5 sleep "
+        "logs). If false, the fixed default hour (21:00) is used.",
+    ),
+    ConfigField(
         "notify_send_enabled", "boolean", True,
         "If true, critical/error events fire libnotify desktop notifications (P2.5).",
     ),
