@@ -376,3 +376,14 @@ def test_transcribe_header_only_shell_returns_empty_text(client, monkeypatch):
     r = client.post("/api/chat/transcribe", json={"audio_b64": shell})
     assert r.status_code == 200
     assert r.json()["text"] == ""
+
+
+def test_transcribe_too_short_is_silent_not_503(client, monkeypatch):
+    """A daemon 'audio too short' (quick tap / near-silence) must come back as
+    {"text": ""}, not a scary 503 toast."""
+    from axi import dashboard
+    monkeypatch.setattr(dashboard, "_daemon_cmd", lambda cmd, timeout=2.0: "error:audio too short")
+    audio_b64 = base64.b64encode(b"x" * 4096).decode("ascii")
+    r = client.post("/api/chat/transcribe", json={"audio_b64": audio_b64})
+    assert r.status_code == 200
+    assert r.json()["text"] == ""
