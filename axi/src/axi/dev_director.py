@@ -305,7 +305,7 @@ def build_claude_podman_argv(
 
     Pure function: no I/O, no side effects. The caller invokes the result.
 
-    Containment (mirrors dev_agent.build_podman_argv):
+    Containment:
     - Exactly one mount: the worktree at /work (writable, :Z). /home is NOT
       mounted, so host ~/.ssh, the encrypted memory.db, .env files, etc. are
       invisible to the coder.
