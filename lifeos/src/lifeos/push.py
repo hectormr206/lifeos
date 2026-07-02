@@ -302,6 +302,13 @@ def send_to_all(title: str, body: str, *, url: str = "/reminders",
                 vapid_private_key=keys.private_b64url,
                 vapid_claims={"sub": keys.subject},
                 ttl=86400,
+                # Without a timeout, requests hangs FOREVER when the first
+                # resolved address is unreachable (e.g. an ISP that advertises
+                # IPv6 but blackholes it — getaddrinfo returns IPv6 first, the
+                # connect never fails, and every push stalls the caller). With a
+                # timeout, each address attempt fails fast and the connect falls
+                # through to the working IPv4 address.
+                timeout=10,
             )
             sent += 1
         except WebPushException as e:
