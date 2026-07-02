@@ -38,8 +38,16 @@
                 <span class="text-xs muted flex-shrink-0" x-text="'(' + r.alias + ')'"></span>
               </template>
             </span>
-            <span class="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0"
-                  style="background: var(--panel); opacity: .8;" x-text="tLabel(r.kind)"></span>
+            <span class="flex items-center gap-1 flex-shrink-0">
+              <!-- server-only hit: not in the loaded scene; clicking fetches its neighborhood -->
+              <template x-if="r.remote">
+                <span class="text-xs px-1.5 py-0.5 rounded-full muted"
+                      style="border: 1px dashed var(--border, #2a3040);"
+                      x-text="tUi('notLoaded')"></span>
+              </template>
+              <span class="text-xs px-1.5 py-0.5 rounded-full"
+                    style="background: var(--panel); opacity: .8;" x-text="tLabel(r.kind)"></span>
+            </span>
           </button>
         </template>
       </div>
@@ -546,6 +554,8 @@ const LABELS = {
       mergeUndone:  'Fusión deshecha.',
       actionFailed: 'No se pudo completar la acción.',
       navTruncated: 'Mostrando parte de su vecindario.',
+      // Search result marked as living outside the loaded scene (server search).
+      notLoaded:    'fuera de vista',
     },
   },
   en: {
@@ -641,6 +651,8 @@ const LABELS = {
       mergeUndone:  'Merge undone.',
       actionFailed: 'Could not complete the action.',
       navTruncated: 'Showing part of its neighborhood.',
+      // Search result marked as living outside the loaded scene (server search).
+      notLoaded:    'not loaded',
     },
   },
 };
@@ -700,6 +712,8 @@ function brain3dPage() {
     // Search state
     searchQuery: '',
     searchResults: [],
+    _searchSeq: 0,          // monotonic id; guards against stale server responses
+    _searchDebounce: null,  // pending setTimeout for the debounced server search
     // Focus mode state
     focusId: null,
     focusLabel: '',
@@ -858,44 +872,107 @@ function brain3dPage() {
     // Tie-breaker within a tier: entity kinds (_ENTITY_KINDS) rank ABOVE the
     // fact/conversation text blobs — this is what makes "Ani" surface the
     // person "Ana Ríos" above a fact sentence mentioning her.
-    searchInput() {
-      const q = normText(this.searchQuery.trim());
-      if (!q) { this.searchResults = []; return; }
+    // Local ranking helper: score {label, aliases} against a normalized query.
+    // Returns {score, matchedAlias} — matchedAlias is set only when an alias
+    // (not the label) is the strongest reason this node matched.
+    _scoreMatch(label, aliases, q) {
+      const nl = normText(label);
+      let labelScore = 0;
+      if (nl === q || nl.startsWith(q)) labelScore = 4;
+      else if (nl.includes(q)) labelScore = 2;
+      let aliasScore = 0;
+      let matchedAlias = null;
+      for (const a of (aliases || [])) {
+        const na = normText(a);
+        if (!na) continue;
+        let s = 0;
+        if (na === q || na.startsWith(q)) s = 3;
+        else if (na.includes(q)) s = 1;
+        if (s > aliasScore) { aliasScore = s; matchedAlias = a; }
+      }
+      return {
+        score: Math.max(labelScore, aliasScore),
+        matchedAlias: aliasScore > labelScore ? matchedAlias : null,
+      };
+    },
+
+    // Instant search over the LOADED universe (the ~500 nodes in the scene).
+    _localSearchResults(q) {
       const scored = [];
       for (const n of this._gfNodes) {
-        const nl = normText(n.label);
-        let labelScore = 0;
-        if (nl === q || nl.startsWith(q)) labelScore = 4;
-        else if (nl.includes(q)) labelScore = 2;
-        // Keep the strongest alias hit (and which alias produced it).
-        let aliasScore = 0;
-        let matchedAlias = null;
-        for (const a of (n.aliases || [])) {
-          const na = normText(a);
-          if (!na) continue;
-          let s = 0;
-          if (na === q || na.startsWith(q)) s = 3;
-          else if (na.includes(q)) s = 1;
-          if (s > aliasScore) { aliasScore = s; matchedAlias = a; }
-        }
-        const score = Math.max(labelScore, aliasScore);
+        const { score, matchedAlias } = this._scoreMatch(n.label, n.aliases, q);
         if (score === 0) continue;  // no match on label or any alias
         scored.push({
           id: n.id, label: n.label, kind: n.kind, score,
           entity: isEntityKind(n.kind),
-          // Surface the alias only when it (not the label) is why this matched.
-          alias: aliasScore > labelScore ? matchedAlias : null,
+          alias: matchedAlias,
+          remote: false,            // present in the scene, already positioned
         });
       }
       // score desc, then entity kinds above fact/conversation within the tier.
       scored.sort((a, b) => (b.score - a.score) || (Number(b.entity) - Number(a.entity)));
-      this.searchResults = scored.slice(0, 12);
+      return scored;
     },
 
-    selectSearchResult(r) {
+    searchInput() {
+      const raw = this.searchQuery.trim();
+      const q = normText(raw);
+      // Bump the sequence so any in-flight server response for an OLDER query is
+      // ignored when it lands (stale-response guard).
+      const seq = ++this._searchSeq;
+      if (!q) {
+        this.searchResults = [];
+        if (this._searchDebounce) { clearTimeout(this._searchDebounce); this._searchDebounce = null; }
+        return;
+      }
+      // 1) Instant LOCAL results (unchanged behavior for the loaded universe).
+      const local = this._localSearchResults(q);
+      this.searchResults = local.slice(0, 15);
+      // 2) Debounced SERVER search finds nodes BEYOND the loaded ~500. It merges
+      //    after the local ones; a network failure just keeps the local results.
+      if (raw.length < 2) return;
+      if (this._searchDebounce) clearTimeout(this._searchDebounce);
+      this._searchDebounce = setTimeout(() => this._serverSearch(raw, q, seq, local), 200);
+    },
+
+    // Fetch /api/graph/search and MERGE server-only results after the local ones.
+    // Server hits that are already loaded are dropped (local wins — it's already
+    // positioned in the scene). Out-of-view hits are marked so the user knows a
+    // click will fetch their neighborhood (navigateTo → _injectNeighborhood).
+    async _serverSearch(raw, q, seq, local) {
+      let serverRows;
+      try {
+        const resp = await fetch('/api/graph/search?q=' + encodeURIComponent(raw) + '&limit=20');
+        if (!resp.ok) return;               // keep local results on server error
+        serverRows = await resp.json();
+      } catch (e) {
+        return;                             // network failure must NOT break local search
+      }
+      if (seq !== this._searchSeq) return;  // stale: the query changed since we fired
+      if (!Array.isArray(serverRows)) return;
+      const localIds = new Set(local.map(r => r.id));
+      const merged = local.slice();         // local first (already positioned)
+      for (const s of serverRows) {
+        if (localIds.has(s.id)) continue;   // dedupe by id: local wins
+        const { matchedAlias } = this._scoreMatch(s.label, s.aliases, q);
+        merged.push({
+          id: s.id, label: s.label, kind: s.kind,
+          entity: isEntityKind(s.kind),
+          alias: matchedAlias,
+          remote: true,                     // out of view → show a "fuera de vista" tag
+        });
+      }
+      this.searchResults = merged.slice(0, 15);
+    },
+
+    async selectSearchResult(r) {
       this.searchResults = [];
       this.searchQuery = '';
-      this.focusOn(r.id);
+      if (this._searchDebounce) { clearTimeout(this._searchDebounce); this._searchDebounce = null; }
+      this._searchSeq++;                    // cancel any in-flight server response
+      // navigateTo injects the neighborhood for ids not in the loaded universe
+      // (server-only results) before focusing; for loaded ids it just focuses.
+      await this.navigateTo(r.id);
     },
 
     // ─── focus mode: selected node + 2-hop neighborhood subgraph ───

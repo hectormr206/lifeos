@@ -33,6 +33,7 @@ import os
 import re
 import traceback as _traceback
 import threading
+import unicodedata
 from collections import OrderedDict
 import socket
 import subprocess
@@ -2075,6 +2076,81 @@ def brain3d_page(request: Request):
 # ────────── /api/graph/full — unified System A + System B graph ──────────
 
 
+def _parse_aliases(raw: Any) -> list[str]:
+    """Parse a node's `data` JSON blob and return its `aliases` list of strings.
+
+    Cheap and crash-proof: bad/None/non-dict data yields []. Shared by
+    /api/graph/full and /api/graph/search so both expose aliases identically.
+    """
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    aliases = parsed.get("aliases") if isinstance(parsed, dict) else None
+    if not isinstance(aliases, list):
+        return []
+    return [str(a) for a in aliases if isinstance(a, str)]
+
+
+# Entity kinds are real "things" (person, place, …) as opposed to fact/text
+# blobs. Mirrors the client's _ENTITY_KINDS so server search ranks entities
+# above facts within a score tier (e.g. "Ani" surfaces the person, not a fact).
+_SEARCH_ENTITY_KINDS = frozenset(
+    {"person", "place", "org", "medication", "condition", "thing"}
+)
+
+
+def _norm_search(s: Any) -> str:
+    """Accent- and case-insensitive normalization (NFD strip diacritics + lower).
+
+    Mirrors the client's normText() so server-side substring/ranking matches
+    what the browser does. FTS already strips diacritics (remove_diacritics 2);
+    this is what makes the LIKE fallback accent-insensitive too.
+    """
+    decomposed = unicodedata.normalize("NFD", str(s or ""))
+    return "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn").lower()
+
+
+def _fts_prefix_query(q: str) -> str:
+    """Build a safe FTS5 MATCH query: each word token becomes a quoted prefix.
+
+    Splitting on \\w+ drops FTS operators/punctuation (no syntax errors), and
+    quoting each token neutralizes reserved words (AND/OR/NEAR). The trailing
+    `*` makes every token a prefix match so "celi" finds "Ana". Empty when the
+    query has no word characters.
+    """
+    tokens = re.findall(r"\w+", q, flags=re.UNICODE)
+    return " ".join(f'"{t}"*' for t in tokens)
+
+
+def _rank_search_row(label: str, aliases: list[str], kind: str, nq: str) -> int:
+    """Score a candidate against a normalized query `nq` (higher = better).
+
+    Mirrors the client tiers: label exact/prefix (5/4) > alias exact/prefix (3)
+    > label substring (2) > alias substring (1). Returns 0 when nothing matches.
+    """
+    nl = _norm_search(label)
+    label_score = 0
+    if nl == nq:
+        label_score = 5
+    elif nl.startswith(nq):
+        label_score = 4
+    elif nq in nl:
+        label_score = 2
+    alias_score = 0
+    for a in aliases:
+        na = _norm_search(a)
+        if not na:
+            continue
+        if na == nq or na.startswith(nq):
+            alias_score = max(alias_score, 3)
+        elif nq in na:
+            alias_score = max(alias_score, 1)
+    return max(label_score, alias_score)
+
+
 def _attach_lifeos_edges(conn) -> list[dict[str, Any]]:
     """Attach lifeos.db and return System-B edges whose endpoints are bridged.
 
@@ -2159,18 +2235,7 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
         (limit,),
     ).fetchall()
 
-    def _aliases(raw: Any) -> list[str]:
-        # Cheap, crash-proof: parse data JSON, return its aliases list of strings, else [].
-        if not raw:
-            return []
-        try:
-            parsed = json.loads(raw)
-        except (ValueError, TypeError):
-            return []
-        aliases = parsed.get("aliases") if isinstance(parsed, dict) else None
-        if not isinstance(aliases, list):
-            return []
-        return [str(a) for a in aliases if isinstance(a, str)]
+    _aliases = _parse_aliases  # shared parser (also used by /api/graph/search)
 
     nodes = [
         {
@@ -2230,6 +2295,110 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
         "edges": all_edges,
         "partial": partial,
     }
+
+
+# ────────── /api/graph/search — server-side search over the FULL node table ──────────
+
+
+@app.get("/api/graph/search")
+def graph_search(q: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    """Search the ENTIRE nodes table (not just the ~500 loaded into the scene).
+
+    /api/graph/full caps at ~500 nodes and the client only matches those, so a
+    node outside the loaded set is unfindable. This endpoint closes that gap:
+    clicking a result flies there via the client's neighborhood-injection path.
+
+    Strategy (two complementary passes, deduped by id, entity-ranked server-side):
+      1. FTS5 (store.search_nodes_fts) — fast, indexed, accent-insensitive
+         (the nodes_fts table is tokenized `remove_diacritics 2`). Each query
+         word is turned into a quoted prefix ("celi"* ), so it matches token
+         PREFIXES on both labels and aliases (aliases live in the indexed
+         data_text). It does NOT match mid-word substrings.
+      2. Normalized LIKE fallback — an in-memory accent/case-normalized substring
+         scan over label + aliases for every non-conversation node. This catches
+         what FTS misses: mid-token substrings ("arcia" → "García") and any
+         accent edge case. SQLite has no built-in unaccent, so normalization is
+         done in Python (NFD + strip diacritics + lower) rather than adding a
+         generated column — keeps this a read-only, migration-free change.
+
+    kind='conversation' nodes are excluded (not user-facing entities), mirroring
+    the graph browser. Returns [{id, label, kind, domain, aliases}] ordered by
+    relevance (label exact/prefix > alias exact/prefix > label substr > alias
+    substr; entity kinds above facts within a tier), capped at `limit`.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(limit, 50))  # hard cap
+
+    nq = _norm_search(q)
+    # id -> {row fields}; first writer wins but we recompute score over all anyway.
+    candidates: dict[int, dict[str, Any]] = {}
+
+    # ── Pass 1: FTS prefix match (indexed, fast) ─────────────────────────────
+    fts_query = _fts_prefix_query(q)
+    if fts_query:
+        try:
+            # Over-fetch: FTS ranks by its own relevance, but we re-rank below and
+            # want enough entity candidates to fill `limit` after dedupe/exclusion.
+            for r in store.search_nodes_fts(fts_query, limit=limit * 3):
+                if r["kind"] == "conversation":
+                    continue
+                candidates[r["id"]] = {
+                    "id": r["id"], "label": r["label"], "kind": r["kind"],
+                    "domain": r["domain"] or "", "data": r["data"],
+                }
+        except Exception as exc:  # noqa: BLE001 — FTS syntax/OperationalError must not 500
+            log.warning("/api/graph/search: FTS pass failed for %r: %s", q, exc)
+
+    # ── Pass 2: normalized substring fallback over label + aliases ───────────
+    # Full read-only scan of non-conversation nodes; personal-scale graph so the
+    # cost is negligible and correctness (accents + mid-word substrings) wins.
+    c = store._connect()  # noqa: SLF001
+    try:
+        rows = c.execute(
+            "SELECT id, kind, label, domain, data FROM nodes WHERE kind != 'conversation'"
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("/api/graph/search: fallback scan failed for %r: %s", q, exc)
+        rows = []
+    for r in rows:
+        if r["id"] in candidates:
+            continue
+        aliases = _parse_aliases(r["data"])
+        label_hit = nq in _norm_search(r["label"])
+        alias_hit = any(nq in _norm_search(a) for a in aliases)
+        if label_hit or alias_hit:
+            candidates[r["id"]] = {
+                "id": r["id"], "label": r["label"], "kind": r["kind"],
+                "domain": r["domain"] or "", "data": r["data"],
+            }
+
+    # ── Rank + shape ─────────────────────────────────────────────────────────
+    scored: list[tuple[int, int, str, dict[str, Any]]] = []
+    for cand in candidates.values():
+        aliases = _parse_aliases(cand["data"])
+        score = _rank_search_row(cand["label"], aliases, cand["kind"], nq)
+        if score == 0:
+            continue  # FTS token-prefix hit that isn't a normalized substring (rare)
+        entity = 1 if cand["kind"] in _SEARCH_ENTITY_KINDS else 0
+        scored.append((
+            score, entity, _norm_search(cand["label"]),
+            {
+                "id": cand["id"],
+                "label": (cand["label"] or "")[:80],
+                "kind": cand["kind"],
+                "domain": cand["domain"],
+                "aliases": aliases,
+            },
+        ))
+    # score desc, entity desc, then shorter label first for stable ordering.
+    scored.sort(key=lambda t: (-t[0], -t[1], len(t[2]), t[2]))
+    return [item[3] for item in scored[:limit]]
 
 
 # ────────── /api/graph/node — knowledge-browser node detail + forget ──────────
