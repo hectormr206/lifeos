@@ -1,6 +1,9 @@
 {% extends "_base.html" %}
 {% block title %}{% if domain == 'health' %}Salud — Axi{% else %}Chat — Axi{% endif %}{% endblock %}
 {% block nav_chat %}active{% endblock %}
+{# Immersive chat: its own input bar owns the bottom edge — no tab bar.
+   Navigation back happens via the header brand link to "/". #}
+{% block tabbar %}{% endblock %}
 
 {% block content %}
 <!-- Anclar el chat al viewport: header sticky arriba, este div ocupa
