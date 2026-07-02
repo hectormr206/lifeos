@@ -258,12 +258,21 @@ def test_resolve_daily_schedule_gate_off_uses_default() -> None:
 # ─── graph-facts section ──────────────────────────────────────────────
 
 
-def test_graph_facts_none_when_axi_unavailable(monkeypatch) -> None:
+def test_graph_facts_none_when_axi_unavailable() -> None:
     from lifeos.insights import digest
 
-    monkeypatch.setitem(sys.modules, "axi", None)        # import → ImportError
-    monkeypatch.setitem(sys.modules, "axi.store", None)
-    assert digest._section_graph_facts() == (None, 0)
+    # Scope the sys.modules stubbing to a nested MonkeyPatch context so the
+    # real ``axi`` package is restored inside this test body — BEFORE any
+    # fixture teardown runs. Using the shared ``monkeypatch`` fixture would
+    # delay the restore until fixture finalization, and the autouse
+    # ``fresh_db`` fixture (axi/tests/conftest.py, active whenever an
+    # axi/tests file is co-collected) finalizes first (LIFO, it depends on
+    # ``monkeypatch``) and does ``from axi import events`` in its teardown —
+    # which raises ModuleNotFoundError while ``axi`` is still stubbed to None.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(sys.modules, "axi", None)        # import → ImportError
+        mp.setitem(sys.modules, "axi.store", None)
+        assert digest._section_graph_facts() == (None, 0)
 
 
 def test_graph_facts_none_when_graph_empty(monkeypatch) -> None:
