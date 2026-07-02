@@ -322,3 +322,127 @@ def test_digest_config_keys_registered() -> None:
         assert key in by_name
         assert by_name[key].type == "boolean"
         assert by_name[key].default is True
+
+
+# ─── daily adaptive-hour reschedule ───────────────────────────────────
+
+
+class _FakeInner:
+    """Stand-in for apscheduler's BackgroundScheduler that records add_job
+    calls and lets tests inspect the resulting daily trigger's hour/minute."""
+
+    def __init__(self) -> None:
+        self.jobs: dict[str, dict] = {}
+        self.add_job_calls = 0
+
+    def add_job(self, *, func, trigger, id, replace_existing=False,  # noqa: A002
+                misfire_grace_time=None, **_kw) -> None:
+        self.add_job_calls += 1
+        self.jobs[id] = {"func": func, "trigger": trigger}
+
+
+class _FakeScheduler:
+    """Mirrors lifeos.scheduler.Scheduler's shape used by cron.py."""
+
+    def __init__(self, running: bool = True) -> None:
+        self.running = running
+        self._scheduler = _FakeInner()
+
+
+def _trigger_hm(trigger) -> tuple[int, int]:
+    """Read (hour, minute) back out of a CronTrigger for assertions."""
+    fields = {f.name: str(f) for f in trigger.fields}
+    return int(fields["hour"]), int(fields["minute"])
+
+
+@pytest.fixture()
+def _fresh_cron(monkeypatch):
+    """Give cron.py a fake scheduler and a known daily baseline (21:00)."""
+    from lifeos.insights import cron
+
+    fake = _FakeScheduler(running=True)
+    monkeypatch.setattr(cron, "get_scheduler", lambda: fake)
+    monkeypatch.setattr(cron, "_adaptive_enabled", True)
+    monkeypatch.setattr(cron, "_current_daily_hour", 21)
+    monkeypatch.setattr(cron, "_current_daily_minute", 0)
+    return cron, fake
+
+
+def test_reschedule_updates_daily_hour_when_it_changes(_fresh_cron, monkeypatch) -> None:
+    cron, fake = _fresh_cron
+    # New adaptive hour differs from the current 21:00 baseline.
+    monkeypatch.setattr(cron, "adaptive_daily_hour", lambda: (22, 30))
+
+    changed = cron.reschedule_daily()
+
+    assert changed is True
+    assert "lifeos.insights.daily" in fake._scheduler.jobs
+    assert _trigger_hm(fake._scheduler.jobs["lifeos.insights.daily"]["trigger"]) == (22, 30)
+    # Module state advanced so the next run is idempotent.
+    assert (cron._current_daily_hour, cron._current_daily_minute) == (22, 30)
+
+
+def test_reschedule_noop_when_adaptive_disabled(_fresh_cron, monkeypatch) -> None:
+    cron, fake = _fresh_cron
+    monkeypatch.setattr(cron, "_adaptive_enabled", False)
+    # Even though a new hour is available, the disabled gate must ignore it.
+    monkeypatch.setattr(cron, "adaptive_daily_hour", lambda: (22, 30))
+
+    changed = cron.reschedule_daily()
+
+    assert changed is False
+    assert fake._scheduler.add_job_calls == 0
+    assert (cron._current_daily_hour, cron._current_daily_minute) == (21, 0)
+
+
+def test_reschedule_noop_when_hour_unchanged(_fresh_cron, monkeypatch) -> None:
+    cron, fake = _fresh_cron
+    # Recompute yields the SAME hour as the baseline → no scheduler churn.
+    monkeypatch.setattr(cron, "adaptive_daily_hour", lambda: (21, 0))
+
+    changed = cron.reschedule_daily()
+
+    assert changed is False
+    assert fake._scheduler.add_job_calls == 0
+    assert (cron._current_daily_hour, cron._current_daily_minute) == (21, 0)
+
+
+def test_reschedule_swallows_recompute_failure(_fresh_cron, monkeypatch) -> None:
+    cron, fake = _fresh_cron
+
+    def boom() -> tuple[int, int]:
+        raise RuntimeError("sleep store exploded")
+
+    monkeypatch.setattr(cron, "adaptive_daily_hour", boom)
+
+    # The recompute blows up (bypassing adaptive_daily_hour's own guard), so
+    # the job's outer try/except must swallow it and leave the schedule intact.
+    cron._safe_reschedule_daily()   # must NOT raise
+
+    assert fake._scheduler.add_job_calls == 0
+    assert (cron._current_daily_hour, cron._current_daily_minute) == (21, 0)
+
+
+def test_reschedule_explicit_flag_overrides_module_state(_fresh_cron, monkeypatch) -> None:
+    """Option-B style call: dashboard passes adaptive_enabled explicitly."""
+    cron, fake = _fresh_cron
+    monkeypatch.setattr(cron, "_adaptive_enabled", False)   # module says off
+    monkeypatch.setattr(cron, "adaptive_daily_hour", lambda: (20, 0))
+
+    changed = cron.reschedule_daily(adaptive_enabled=True)   # caller forces on
+
+    assert changed is True
+    assert _trigger_hm(fake._scheduler.jobs["lifeos.insights.daily"]["trigger"]) == (20, 0)
+
+
+def test_start_jobs_registers_reschedule_job(_fresh_cron) -> None:
+    cron, fake = _fresh_cron
+
+    cron.start_jobs(daily_hour=21, daily_minute=0, adaptive_enabled=True)
+
+    assert "lifeos.insights.reschedule" in fake._scheduler.jobs
+    # The reschedule job's own cadence is FIXED (04:00), independent of the
+    # drifting digest hour, so it never collides with the digest firing.
+    assert _trigger_hm(
+        fake._scheduler.jobs["lifeos.insights.reschedule"]["trigger"]) == (4, 0)
+    assert cron._adaptive_enabled is True

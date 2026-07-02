@@ -387,15 +387,18 @@ async def lifespan(_app: FastAPI):
             insights_cron.set_narrator(None)
 
         # P6.4 smart digest — adaptive daily hour (gated by digest_adaptive_hour).
-        # NOTE: recomputed on every dashboard start; the service restarts often
-        # enough that this acts as the weekly-ish refresh of the median bedtime.
+        # Computed at startup AND refreshed daily: start_jobs registers a
+        # lightweight 04:00 reschedule job that re-derives the hour from the
+        # sleep median, so it tracks the user's drifting bedtime without
+        # relying on a dashboard restart.
+        _digest_adaptive = bool(config.get("digest_adaptive_hour", True))
         _digest_hour, _digest_minute, _digest_source = (
-            insights_cron.resolve_daily_schedule(
-                bool(config.get("digest_adaptive_hour", True))))
+            insights_cron.resolve_daily_schedule(_digest_adaptive))
         log.info("insights daily digest scheduled at %02d:%02d (%s)",
                  _digest_hour, _digest_minute, _digest_source)
         insights_cron.start_jobs(daily_hour=_digest_hour,
-                                 daily_minute=_digest_minute)
+                                 daily_minute=_digest_minute,
+                                 adaptive_enabled=_digest_adaptive)
     except Exception:  # noqa: BLE001
         log.exception("lifeos insights cron failed to start")
     try:

@@ -252,6 +252,56 @@ _SLEEP_HOURS_RE = re.compile(
     r"(?:\s+y\s+media)?\b",
     re.IGNORECASE,
 )
+# ─── Temperature / blood-oxygen / standalone heart-rate (bilingual) ───
+# All three are keyword-anchored (ES + EN alternation in one compiled pattern,
+# NOT switched by config — same union-grammar style as glucose/BP/weight) so
+# they can never shadow the bare-number BP or bare-scale sequences. Each has a
+# physiological plausibility gate so out-of-range numbers fall through to the
+# brain instead of logging a bad vital.
+
+# Temperature: keyword→number ("temperatura 37.5", "fever of 38.5",
+# "my temperature is 37.5", "I have a fever of 38"). Accepts decimal comma or
+# point. Optional trailing °C / C / grados / degrees.
+_TEMP_KEYWORD_ALT = r"temperatura|temperature|fiebre|fever"
+_TEMP_KW_NUM_RE = re.compile(
+    rf"\b(?:{_TEMP_KEYWORD_ALT})\b(?:\s+(?:is|of|de|=|:))?\s*"
+    r"(\d{2}(?:[.,]\d{1,2})?)\s*(?:°?\s*c\b|grados|degrees)?",
+    re.IGNORECASE,
+)
+# Number→keyword ("tengo 38 de temperatura", "tengo 38.5 de fiebre").
+_TEMP_NUM_KW_RE = re.compile(
+    r"\b(\d{2}(?:[.,]\d{1,2})?)\s+de\s+(?:temperatura|fiebre)\b",
+    re.IGNORECASE,
+)
+
+# Blood oxygen / SpO2: "oxígeno 98", "saturación 97", "saturación de oxígeno
+# 96%", "oxígeno en sangre 95", "oxygen 98", "SpO2 97", "blood oxygen 96",
+# "O2 sat 95", "oxygen saturation 98%". Integer, optional trailing %.
+_OXY_KEYWORD_ALT = (
+    r"ox[íi]geno(?:\s+en\s+sangre)?"
+    r"|saturaci[óo]n(?:\s+de\s+ox[íi]geno)?"
+    r"|spo2|blood\s+oxygen|oxygen(?:\s+saturation)?|o2\s+sat(?:uration)?"
+)
+_OXY_RE = re.compile(
+    rf"\b(?:{_OXY_KEYWORD_ALT})\b(?:\s+(?:es|is|de|=|:))?\s*(\d{{2,3}})\s*%?",
+    re.IGNORECASE,
+)
+
+# Standalone heart-rate / pulse: "pulso 55", "mi pulso es 60", "frecuencia
+# cardiaca 58", "ritmo cardiaco 62", "heart rate 55", "my heart rate is 60",
+# "pulse 58", "HR 62", "heart rate of 66 bpm". Integer, optional trailing
+# bpm/lpm/ppm. Only fires standalone — the BP branches run FIRST in _try_vital
+# and return before this branch is reached, so "116 82 55 pulsos" stays BP.
+_HR_KEYWORD_ALT = (
+    r"pulso|frecuencia\s+card[íi]aca|ritmo\s+card[íi]aco"
+    r"|heart\s+rate|pulse|hr"
+)
+_HR_RE = re.compile(
+    rf"\b(?:{_HR_KEYWORD_ALT})\b(?:\s+(?:es|is|of|de|=|:))?\s*"
+    r"(\d{2,3})\s*(?:bpm|lpm|ppm)?",
+    re.IGNORECASE,
+)
+
 # Spanish number words 1-12 for clock hours. "media" handled separately.
 _SP_HOUR_WORDS = {
     "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6,
@@ -984,6 +1034,45 @@ def _try_vital(text: str) -> HealthIntent | None:
                 title=f"presión {sys}/{dia}, pulso {pulse}",
                 data={"type": "blood_pressure", "systolic": sys, "diastolic": dia,
                       "pulse_bpm": pulse, "unit": "mmHg"},
+                confidence=0.80,
+            )
+    # Temperature. Keyword-anchored, so it never steals BP/glucose. Only fires
+    # when a NUMBER in physiological range is present — a bare "tengo fiebre" /
+    # "I have a fever" (no number) falls through to _try_symptom (fever symptom).
+    m = _TEMP_KW_NUM_RE.search(text) or _TEMP_NUM_KW_RE.search(text)
+    if m:
+        v = float(m.group(1).replace(",", "."))
+        # Plausibility: 34.0-43.0 °C. Outside this is almost certainly not a
+        # body-temperature reading (e.g. "temperatura 500").
+        if 34.0 <= v <= 43.0:
+            return HealthIntent(
+                kind="vital",
+                title=f"temperatura {v:g}°C",
+                data={"type": "temperature", "value": v, "unit": "°C"},
+                confidence=0.80,
+            )
+    # Blood oxygen / SpO2. Keyword-anchored, integer, 70-100 %.
+    m = _OXY_RE.search(text)
+    if m:
+        v = int(m.group(1))
+        if 70 <= v <= 100:
+            return HealthIntent(
+                kind="vital",
+                title=f"oxígeno {v}%",
+                data={"type": "oxygen", "value": v, "unit": "%"},
+                confidence=0.80,
+            )
+    # Standalone heart-rate / pulse. Reached ONLY when no BP reading matched
+    # above (the BP branches return first), so a systolic/diastolic pair with a
+    # trailing pulse stays blood_pressure. Keyword-anchored, integer, 30-220 bpm.
+    m = _HR_RE.search(text)
+    if m:
+        v = int(m.group(1))
+        if 30 <= v <= 220:
+            return HealthIntent(
+                kind="vital",
+                title=f"pulso {v} bpm",
+                data={"type": "heart_rate", "value": v, "unit": "bpm"},
                 confidence=0.80,
             )
     m = _WEIGHT_RE.search(text)
