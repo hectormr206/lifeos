@@ -1487,7 +1487,55 @@ def serve() -> int:
                         today=today,
                     ):
                         _self_improve_state["last_date"] = today
-                        goal = str(config.get("dev_self_improve_goal", "") or _DEFAULT_SELF_IMPROVE_GOAL)
+                        repo_path = os.path.expanduser(
+                            config.get("dev_director_repo", "~/LifeOS/lifeos")
+                        )
+
+                        # Prod wrapper: read-only, bounded git against the real
+                        # repo. subprocess is injected as run_git so tests never
+                        # shell out. Never raises out — gather_repo_signals guards.
+                        def _run_git(args, _repo=repo_path):
+                            import subprocess  # noqa: PLC0415
+                            proc = subprocess.run(
+                                ["git", "-C", _repo, *args],
+                                capture_output=True,
+                                text=True,
+                                timeout=30,
+                            )
+                            return proc.stdout or ""
+
+                        # Prod wrapper over the model interface. retry_deadline=0
+                        # + a small timeout means goal-gen fails FAST if VT is
+                        # down (it degrades to the default goal, never blocks the
+                        # nightly run).
+                        def _call_model(system, user):
+                            from axi import dev_director as _dd  # noqa: PLC0415
+                            return _dd._call_vt3b(
+                                system, user, timeout=60, retry_deadline=0
+                            )
+
+                        # Goal self-generation — best-effort. Any failure falls
+                        # back to the configured/default goal; the loop must never
+                        # break because goal-gen misbehaved.
+                        generated = None
+                        try:
+                            generated = _si.generate_self_improve_goal(
+                                repo_path=repo_path,
+                                run_git=_run_git,
+                                call_model=_call_model,
+                            )
+                        except Exception:  # noqa: BLE001
+                            log.warning(
+                                "self-improve goal generation failed", exc_info=True
+                            )
+                            generated = None
+
+                        goal, goal_source = _si.select_self_improve_goal(
+                            generated=generated,
+                            config_goal=str(config.get("dev_self_improve_goal", "") or ""),
+                            default_goal=_DEFAULT_SELF_IMPROVE_GOAL,
+                        )
+                        log.info("self-improve: goal_source=%s", goal_source)
                         from axi import dev_run as _dev_run  # noqa: PLC0415
                         run_id = _dev_run.start_dev_run(goal, origin="self_improve")
                         log.info("self-improve: started daily dev run %s", run_id)
@@ -1503,6 +1551,7 @@ def serve() -> int:
                                     started_at=now.isoformat(),
                                     goal=goal,
                                     status="started",
+                                    goal_source=goal_source,
                                 ),
                             )
                         except Exception:  # noqa: BLE001
