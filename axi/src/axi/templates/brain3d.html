@@ -31,7 +31,13 @@
           <button type="button" @click="selectSearchResult(r)"
                   class="w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 hover:opacity-80"
                   style="background: transparent; border: 0; color: inherit; cursor: pointer;">
-            <span x-text="r.label" class="truncate"></span>
+            <span class="flex items-center gap-1 min-w-0">
+              <span x-text="r.label" class="truncate"></span>
+              <!-- matched via an alias (not the label): show it muted, e.g. "(Ani)" -->
+              <template x-if="r.alias">
+                <span class="text-xs muted flex-shrink-0" x-text="'(' + r.alias + ')'"></span>
+              </template>
+            </span>
             <span class="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0"
                   style="background: var(--panel); opacity: .8;" x-text="tLabel(r.kind)"></span>
           </button>
@@ -677,6 +683,13 @@ function normText(s) {
     .toLowerCase();
 }
 
+// Entity kinds are real "things" in the graph (person, place, …) as opposed to
+// the fact/conversation TEXT BLOBS. Search ranks entities ABOVE blobs within a
+// score tier so e.g. searching "Ani" surfaces the person "Ana Ríos"
+// instead of a fact sentence that merely mentions her.
+const _ENTITY_KINDS = new Set(['person', 'place', 'org', 'medication', 'condition', 'thing']);
+function isEntityKind(kind) { return _ENTITY_KINDS.has(kind); }
+
 function brain3dPage() {
   return {
     loading: true,
@@ -769,6 +782,7 @@ function brain3dPage() {
           kind: n.kind,
           domain: n.domain,
           has_embedding: n.has_embedding,
+          aliases: n.aliases || [],            // alt names for search (e.g. ["Ani"])
           created_at: n.created_at ?? null,    // ingest epoch — drives date filters
           occurred_at: n.occurred_at ?? null,  // real event epoch or null
           color,
@@ -836,18 +850,46 @@ function brain3dPage() {
       }
     },
 
-    // ─── search (case/accent-insensitive over loaded node labels) ───
+    // ─── search (case/accent-insensitive over labels AND aliases) ───
+    // Matches the query against each node's label and its aliases, then RANKS so
+    // the richest, most-relevant node wins. Score tiers (best → worst):
+    //   4  label exact / startsWith        3  alias exact / startsWith
+    //   2  label substring                 1  alias substring
+    // Tie-breaker within a tier: entity kinds (_ENTITY_KINDS) rank ABOVE the
+    // fact/conversation text blobs — this is what makes "Ani" surface the
+    // person "Ana Ríos" above a fact sentence mentioning her.
     searchInput() {
       const q = normText(this.searchQuery.trim());
       if (!q) { this.searchResults = []; return; }
-      const out = [];
+      const scored = [];
       for (const n of this._gfNodes) {
-        if (normText(n.label).includes(q)) {
-          out.push({ id: n.id, label: n.label, kind: n.kind });
-          if (out.length >= 12) break;
+        const nl = normText(n.label);
+        let labelScore = 0;
+        if (nl === q || nl.startsWith(q)) labelScore = 4;
+        else if (nl.includes(q)) labelScore = 2;
+        // Keep the strongest alias hit (and which alias produced it).
+        let aliasScore = 0;
+        let matchedAlias = null;
+        for (const a of (n.aliases || [])) {
+          const na = normText(a);
+          if (!na) continue;
+          let s = 0;
+          if (na === q || na.startsWith(q)) s = 3;
+          else if (na.includes(q)) s = 1;
+          if (s > aliasScore) { aliasScore = s; matchedAlias = a; }
         }
+        const score = Math.max(labelScore, aliasScore);
+        if (score === 0) continue;  // no match on label or any alias
+        scored.push({
+          id: n.id, label: n.label, kind: n.kind, score,
+          entity: isEntityKind(n.kind),
+          // Surface the alias only when it (not the label) is why this matched.
+          alias: aliasScore > labelScore ? matchedAlias : null,
+        });
       }
-      this.searchResults = out;
+      // score desc, then entity kinds above fact/conversation within the tier.
+      scored.sort((a, b) => (b.score - a.score) || (Number(b.entity) - Number(a.entity)));
+      this.searchResults = scored.slice(0, 12);
     },
 
     selectSearchResult(r) {
@@ -1088,6 +1130,7 @@ function brain3dPage() {
         const gn = {
           id: n.id, label: n.label, kind: n.kind, domain: n.domain,
           has_embedding: n.has_embedding,
+          aliases: n.aliases || [],            // alt names for search (e.g. ["Ani"])
           created_at: n.created_at ?? null,
           occurred_at: n.occurred_at ?? null,
           color,
