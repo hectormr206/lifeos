@@ -490,3 +490,52 @@ def test_brain3d_stage2_i18n_both_locales(client):
     for en in ["Merge with…", "This week", "Will be kept:",
                "You can only merge nodes of the same kind."]:
         assert en in html, f"missing en string: {en}"
+
+
+# ── /api/graph/full aliases + brain3d alias-aware search ─────────────────────
+def test_graph_full_exposes_node_aliases(client):
+    """A node whose data carries aliases surfaces them in /api/graph/full; a node
+    with no aliases yields []."""
+    from axi import store
+
+    with_aliases = store.add_node(
+        "person", "Celia García Mateo",
+        data={"aliases": ["Cely", "Celia Garcia"]}, domain="relationships",
+    )
+    without = store.add_node("person", "Rodrigo", domain="relationships")
+
+    resp = client.get("/api/graph/full")
+    assert resp.status_code == 200
+    by_id = {n["id"]: n for n in resp.json()["nodes"]}
+
+    assert by_id[with_aliases]["aliases"] == ["Cely", "Celia Garcia"]
+    # No aliases key in data → empty list, never missing/None.
+    assert by_id[without]["aliases"] == []
+
+
+def test_graph_full_aliases_malformed_data_is_safe(client):
+    """A node whose data column is not valid JSON must not crash the endpoint and
+    must fall back to an empty aliases list."""
+    from axi import store
+
+    node_id = store.add_node("person", "Broken", domain="relationships")
+    conn = store._connect()  # noqa: SLF001
+    conn.execute("UPDATE nodes SET data = ? WHERE id = ?", ("{not json", node_id))
+    conn.commit()
+
+    resp = client.get("/api/graph/full")
+    assert resp.status_code == 200
+    by_id = {n["id"]: n for n in resp.json()["nodes"]}
+    assert by_id[node_id]["aliases"] == []
+
+
+def test_brain3d_alias_aware_search_markers(client):
+    """The client search now matches aliases and ranks entity kinds above blobs."""
+    html = client.get("/brain3d").text
+    # Node objects carry aliases from the payload into the in-memory graph.
+    assert "aliases: n.aliases" in html
+    # Entity-vs-blob ranking marker (the named constant the ranking relies on).
+    assert "_ENTITY_KINDS" in html
+    # searchInput scores/ranks rather than doing a bare label substring match.
+    assert "aliasScore" in html
+    assert "isEntityKind" in html

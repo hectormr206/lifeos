@@ -2133,7 +2133,7 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
 
     Response shape:
         {
-          nodes: [{id, label, kind, domain, has_embedding}],
+          nodes: [{id, label, kind, domain, has_embedding, aliases}],
           edges: [{source, target, kind, system}],
           partial: bool  -- True when System B was unavailable
         }
@@ -2146,11 +2146,26 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
     c = store._connect()  # noqa: SLF001
 
     # ── System A: nodes ──────────────────────────────────────────────────────
+    # `data` carries per-node JSON; we only surface its `aliases` array so client
+    # search can match a person by "Cely" etc. Everything else in data stays server-side.
     node_rows = c.execute(
-        "SELECT id, kind, label, domain, embedding, created_at, occurred_at FROM nodes "
+        "SELECT id, kind, label, domain, embedding, created_at, occurred_at, data FROM nodes "
         "ORDER BY created_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
+
+    def _aliases(raw: Any) -> list[str]:
+        # Cheap, crash-proof: parse data JSON, return its aliases list of strings, else [].
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+        aliases = parsed.get("aliases") if isinstance(parsed, dict) else None
+        if not isinstance(aliases, list):
+            return []
+        return [str(a) for a in aliases if isinstance(a, str)]
 
     nodes = [
         {
@@ -2161,6 +2176,7 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
             "has_embedding": r["embedding"] is not None,
             "created_at": r["created_at"],  # ingest epoch (float) — drives date filters
             "occurred_at": r["occurred_at"],  # real event epoch (float) or null
+            "aliases": _aliases(r["data"]),  # alt names for search (e.g. ["Cely"]); [] default
         }
         for r in node_rows
     ]
