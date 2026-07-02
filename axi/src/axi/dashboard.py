@@ -1132,6 +1132,16 @@ def home(request: Request):
     )
 
 
+@app.get("/favicon.ico")
+def serve_favicon() -> FileResponse:
+    """Serve /favicon.ico directly — browsers, bookmarks, and some clients
+    request this path unconditionally, ignoring the <link rel=icon> tags."""
+    return FileResponse(
+        Path(__file__).parent / "static" / "favicon.ico",
+        media_type="image/x-icon",
+    )
+
+
 @app.get("/axi-rootCA.crt")
 def serve_root_ca() -> FileResponse:
     """Serve the mkcert root CA so trusted devices (e.g. the user's phone
