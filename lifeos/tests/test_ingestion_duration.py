@@ -66,3 +66,11 @@ def test_duration_implausible_returns_none():
 def test_duration_parametrized(text, expected):
     from lifeos.health.ingestion import _parse_duration_es
     assert _parse_duration_es(text) == expected
+
+
+def test_duration_en_sleep_vocab_guard() -> None:
+    """EN sleep vocabulary must trip the sleep guard the same way ES does —
+    a sleep phrase must never produce a bogus exercise duration."""
+    from lifeos.health.ingestion import _parse_duration_es
+    assert _parse_duration_es("slept 45 minutos") is None
+    assert _parse_duration_es("went to bed after 30 minutos de tele") is None
