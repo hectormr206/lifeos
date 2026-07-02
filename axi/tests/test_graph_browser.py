@@ -236,3 +236,144 @@ def test_brain3d_undo_window_markers(client):
     assert 'id="undo-bar"' in html
     assert "Deshacer" in html
     assert "Recuperado." in html
+
+
+# ── POST /api/graph/merge ────────────────────────────────────────────────────
+
+def test_merge_folds_duplicate_into_canonical(client):
+    """Happy path: a duplicate person is folded into the canonical survivor —
+    its edge moves onto the survivor, the duplicate disappears, the alias is
+    recorded, and the response shape is exact."""
+    import json
+    from axi import store
+
+    canonical = store.add_node("person", "Ana García", domain="relationships")
+    dup = store.add_node("person", "Ani", domain="relationships")
+    other = store.add_node("person", "Rodrigo", domain="relationships")
+    # The edge lives on the DUPLICATE; after merge it must hang off the survivor.
+    store.add_edge(dup, other, "amiga")
+
+    r = client.post(
+        "/api/graph/merge",
+        json={"canonical_id": canonical, "duplicate_id": dup},
+    )
+    assert r.status_code == 200
+    assert r.json() == {
+        "merged": True,
+        "survivor_id": canonical,
+        "absorbed_id": dup,
+    }
+
+    conn = store._connect()  # noqa: SLF001
+    # Duplicate gone, survivor kept.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE id = ?", (dup,)
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE id = ?", (canonical,)
+    ).fetchone()[0] == 1
+    # The edge was repointed onto the survivor.
+    edge = conn.execute(
+        "SELECT from_id, to_id FROM edges WHERE kind = 'amiga'"
+    ).fetchone()
+    assert edge["from_id"] == canonical
+    assert edge["to_id"] == other
+    # The absorbed label is recorded as an alias on the survivor.
+    data = json.loads(
+        conn.execute("SELECT data FROM nodes WHERE id = ?", (canonical,)).fetchone()["data"] or "{}"
+    )
+    assert "Ani" in data.get("aliases", [])
+
+
+def test_merge_refuses_kind_mismatch(client):
+    from axi import store
+    a = store.add_node("person", "Alpha")
+    b = store.add_node("place", "Beta")
+    r = client.post("/api/graph/merge", json={"canonical_id": a, "duplicate_id": b})
+    assert r.status_code == 400
+    assert r.json() == {"merged": False, "reason": "kind_mismatch"}
+
+
+def test_merge_refuses_hub(client):
+    from axi import store
+    hub = store.add_node("person", "Héctor", data={"role": "user"})
+    other = store.add_node("person", "Rodrigo")
+    r = client.post("/api/graph/merge", json={"canonical_id": other, "duplicate_id": hub})
+    assert r.status_code == 400
+    assert r.json() == {"merged": False, "reason": "hub"}
+
+
+def test_merge_refuses_conversation(client):
+    from axi import store
+    a = store.add_node("person", "Alpha")
+    conv = store.add_node("conversation", "charla")
+    r = client.post("/api/graph/merge", json={"canonical_id": a, "duplicate_id": conv})
+    assert r.status_code == 400
+    assert r.json() == {"merged": False, "reason": "conversation"}
+
+
+def test_merge_refuses_same_id(client):
+    from axi import store
+    a = store.add_node("person", "Alpha")
+    r = client.post("/api/graph/merge", json={"canonical_id": a, "duplicate_id": a})
+    assert r.status_code == 400
+    assert r.json() == {"merged": False, "reason": "same_id"}
+
+
+def test_merge_unknown_404(client):
+    from axi import store
+    a = store.add_node("person", "Alpha")
+    r = client.post("/api/graph/merge", json={"canonical_id": a, "duplicate_id": 999999})
+    assert r.status_code == 404
+
+
+# ── /api/graph/full: created_at for date filters ─────────────────────────────
+
+def test_graph_full_includes_created_at(client):
+    """Date filters need created_at on every node — the endpoint must expose it."""
+    from axi import store
+    store.add_node("fact", "hecho con fecha", domain="health")
+    r = client.get("/api/graph/full")
+    assert r.status_code == 200
+    nodes = r.json()["nodes"]
+    assert len(nodes) >= 1
+    assert "created_at" in nodes[0]
+    assert nodes[0]["created_at"] is not None
+
+
+# ── legacy 2D endpoint retired ───────────────────────────────────────────────
+
+def test_legacy_graph_endpoint_gone(client):
+    """The legacy /api/graph (2D cytoscape) endpoint was removed in Stage 2."""
+    assert client.get("/api/graph").status_code == 404
+
+
+# ── brain3d.html Stage-2 markers (merge, filters, novedades, i18n) ───────────
+
+def test_brain3d_stage2_markers(client):
+    html = client.get("/brain3d").text
+    # Merge affordance + confirm control.
+    assert "Fusionar" in html
+    assert 'id="merge-node-btn"' in html
+    assert 'id="confirm-merge-btn"' in html
+    # Novedades de la semana quick view.
+    assert "Novedades de la semana" in html
+    assert 'id="new-week-btn"' in html
+    assert 'id="new-week-panel"' in html
+    # Interactive domain legend.
+    assert "toggleDomain" in html
+    # Date filter presets (Spanish).
+    assert "Esta semana" in html
+
+
+def test_brain3d_stage2_i18n_both_locales(client):
+    """The new keys exist in BOTH es and en maps; es values are Spanish."""
+    html = client.get("/brain3d").text
+    # Spanish (es — the live default).
+    for es in ["Fusionar con…", "Novedades de la semana", "Esta semana",
+               "Se conservará:", "Solo se pueden fusionar nodos del mismo tipo."]:
+        assert es in html, f"missing es string: {es}"
+    # English counterparts — proves the same keys exist in the en map too.
+    for en in ["Merge with…", "This week", "Will be kept:",
+               "You can only merge nodes of the same kind."]:
+        assert en in html, f"missing en string: {en}"
