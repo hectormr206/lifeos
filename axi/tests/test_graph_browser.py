@@ -348,6 +348,119 @@ def test_legacy_graph_endpoint_gone(client):
     assert client.get("/api/graph").status_code == 404
 
 
+# ── Stage 3: relations payload carries edge_id ───────────────────────────────
+
+def test_node_detail_relations_include_edge_id(client):
+    """Each typed relation now carries its edge_id so the UI can forget it."""
+    from axi import store
+    a = store.add_node("person", "Ana", domain="relationships")
+    b = store.add_node("person", "Beto", domain="relationships")
+    edge_id = store.add_edge(a, b, "amigo")
+
+    body = client.get(f"/api/graph/node/{a}").json()
+    assert len(body["relations"]) == 1
+    rel = body["relations"][0]
+    assert rel["kind"] == "amigo"
+    assert rel["edge_id"] == edge_id
+
+
+# ── Stage 3: DELETE /api/graph/edge/{id} (forget a relationship) ──────────────
+
+def test_delete_edge_removes_only_edge(client):
+    """Forgetting an edge removes the edge but keeps BOTH endpoint nodes."""
+    from axi import store
+    a = store.add_node("person", "Uno", domain="relationships")
+    b = store.add_node("person", "Dos", domain="relationships")
+    edge_id = store.add_edge(a, b, "conoce")
+
+    r = client.delete(f"/api/graph/edge/{edge_id}")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": True}
+
+    conn = store._connect()  # noqa: SLF001
+    assert conn.execute("SELECT COUNT(*) FROM edges WHERE id = ?", (edge_id,)).fetchone()[0] == 0
+    # Both endpoint nodes survive.
+    assert conn.execute("SELECT COUNT(*) FROM nodes WHERE id = ?", (a,)).fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM nodes WHERE id = ?", (b,)).fetchone()[0] == 1
+
+
+def test_delete_edge_unknown_404(client):
+    assert client.delete("/api/graph/edge/999999").status_code == 404
+
+
+# ── Stage 3: GET /api/graph/node/{id}/neighborhood (navigate outside load) ────
+
+def test_neighborhood_returns_node_and_neighbors(client):
+    from axi import store
+    center = store.add_node("person", "Centro", domain="relationships")
+    n1 = store.add_node("person", "Vecino1", domain="relationships")
+    n2 = store.add_node("fact", "un hecho", domain="relationships")
+    e1 = store.add_edge(center, n1, "amigo")
+    e2 = store.add_edge(n2, center, "mentions")
+
+    body = client.get(f"/api/graph/node/{center}/neighborhood").json()
+    ids = {n["id"] for n in body["nodes"]}
+    assert ids == {center, n1, n2}
+    assert body["truncated"] is False
+    edge_ids = {e["id"] for e in body["edges"]}
+    assert edge_ids == {e1, e2}
+    # Node shape carries what the client injector needs.
+    node = next(n for n in body["nodes"] if n["id"] == center)
+    for key in ("id", "label", "kind", "domain", "created_at", "occurred_at", "has_embedding"):
+        assert key in node
+
+
+def test_neighborhood_truncates_over_cap(client, monkeypatch):
+    from axi import dashboard, store
+    monkeypatch.setattr(dashboard, "_NEIGHBORHOOD_CAP", 2)
+    center = store.add_node("person", "Hub", domain="relationships")
+    for i in range(3):
+        nb = store.add_node("person", f"N{i}", domain="relationships")
+        store.add_edge(center, nb, "conoce")
+
+    body = client.get(f"/api/graph/node/{center}/neighborhood").json()
+    assert body["truncated"] is True
+    # center + at most cap neighbors.
+    assert len(body["nodes"]) == 3
+    # Only edges whose both endpoints are in the returned set are included.
+    in_set = {n["id"] for n in body["nodes"]}
+    for e in body["edges"]:
+        assert e["source"] in in_set and e["target"] in in_set
+
+
+def test_neighborhood_unknown_404(client):
+    assert client.get("/api/graph/node/999999/neighborhood").status_code == 404
+
+
+# ── Stage 3: brain3d.html markers (edge forget, merge undo, navigate, i18n) ───
+
+def test_brain3d_stage3_markers(client):
+    html = client.get("/brain3d").text
+    # Edge-forget affordance (Spanish title) + handler.
+    assert "Olvidar esta relación" in html
+    assert "forgetRelation" in html
+    assert "/api/graph/edge/" in html
+    # Generic undo machinery + bar still present.
+    assert "_startPending" in html
+    assert 'id="undo-bar"' in html
+    # Merge-undo message marker (deferred merge rides the undo window).
+    assert "Fusionado '" in html
+    assert "Fusión deshecha." in html
+    # Navigate-outside-load: neighborhood injection.
+    assert "_injectNeighborhood" in html
+    assert "/neighborhood" in html
+
+
+def test_brain3d_stage3_i18n_both_locales(client):
+    html = client.get("/brain3d").text
+    for es in ["Olvidar esta relación", "Relación olvidada.", "Fusión deshecha.",
+               "Mostrando parte de su vecindario."]:
+        assert es in html, f"missing es string: {es}"
+    for en in ["Forget this relationship", "Relationship forgotten.", "Merge undone.",
+               "Showing part of its neighborhood."]:
+        assert en in html, f"missing en string: {en}"
+
+
 # ── brain3d.html Stage-2 markers (merge, filters, novedades, i18n) ───────────
 
 def test_brain3d_stage2_markers(client):
