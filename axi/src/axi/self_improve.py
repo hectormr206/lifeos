@@ -168,6 +168,199 @@ def changed_paths_from_patch(patch_text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Signal gathering: a small, bounded, read-only snapshot of the repo
+# ---------------------------------------------------------------------------
+#
+# All git access is INJECTED via ``run_git`` so this is pure/testable and can
+# never touch a real repo from a test. ``run_git(args)`` runs
+# ``git -C <repo> <args...>`` and returns stdout as text; in prod it wraps
+# subprocess.run, in tests it is a fake. Nothing here ever raises: any git
+# failure degrades to empty lists so the caller can fall back cleanly.
+
+_SIGNAL_COMMITS_MAX = 20
+_SIGNAL_FILES_MAX = 40
+
+
+def gather_repo_signals(repo_path, *, run_git) -> dict:
+    """Return a bounded snapshot of recent repo activity. Never raises.
+
+    Args:
+        repo_path: repo root (only used by ``run_git``; not read here).
+        run_git: injected callable ``(args: list[str]) -> str`` returning the
+            stdout of ``git -C <repo_path> <args...>``.
+
+    Returns:
+        ``{"commits": [...], "changed_files": [...]}`` — recent commit subjects
+        (``log --oneline -20``) and the unique recently-changed files
+        (``log --name-only`` over the last 30 commits, capped at ~40). On any
+        git failure the affected list is empty.
+    """
+    commits: list[str] = []
+    changed_files: list[str] = []
+
+    try:
+        out = run_git(["log", "--oneline", "-20"])
+        for line in (out or "").splitlines():
+            line = line.strip()
+            if line:
+                commits.append(line)
+        commits = commits[:_SIGNAL_COMMITS_MAX]
+    except Exception:  # noqa: BLE001
+        log.debug("gather_repo_signals: commit log failed", exc_info=True)
+        commits = []
+
+    try:
+        out = run_git(["log", "--name-only", "--pretty=format:", "-30"])
+        seen: set[str] = set()
+        for line in (out or "").splitlines():
+            line = line.strip()
+            if not line or line in seen:
+                continue
+            seen.add(line)
+            changed_files.append(line)
+            if len(changed_files) >= _SIGNAL_FILES_MAX:
+                break
+    except Exception:  # noqa: BLE001
+        log.debug("gather_repo_signals: name-only log failed", exc_info=True)
+        changed_files = []
+
+    return {"commits": commits, "changed_files": changed_files}
+
+
+# ---------------------------------------------------------------------------
+# Goal generation: propose ONE concrete, low-risk improvement via the model
+# ---------------------------------------------------------------------------
+
+_GOAL_MIN_LEN = 15
+_GOAL_MAX_LEN = 600
+
+# Lowercased fragments that mark a refusal or a non-goal. If any appears, the
+# generated text is not a usable goal.
+_REFUSAL_MARKERS: tuple[str, ...] = (
+    "no puedo",
+    "lo siento",
+    "as an ai",
+    "no encuentro",
+    "i cannot",
+    "i'm sorry",
+    "no se puede",
+)
+
+
+def _build_goal_prompt(commits, changed_files, protected) -> tuple[str, str]:
+    """Compose the Spanish system+user prompt for goal generation. Pure."""
+    protected_names = ", ".join(sorted({p.rsplit("/", 1)[-1] for p in protected}))
+    system = (
+        "Sos un asistente de ingeniería que propone UNA sola mejora concreta y de "
+        "BAJO RIESGO para un repositorio de software. Respondés SIEMPRE en español. "
+        "La mejora debe ser un test faltante, un bug chico, una limpieza o un "
+        "comentario que aclare algo, apuntando a un archivo o área REAL del repo. "
+        "TENÉS PROHIBIDO proponer cambios al motor de auto-desarrollo (estos "
+        f"módulos: {protected_names}). Devolvé ÚNICAMENTE la meta: una o dos "
+        "oraciones, en imperativo, sin preámbulo, sin explicaciones y sin markdown."
+    )
+    commit_block = "\n".join(f"- {c}" for c in commits) or "(sin commits recientes)"
+    files_block = (
+        "\n".join(f"- {f}" for f in changed_files) or "(sin archivos recientes)"
+    )
+    user = (
+        "Commits recientes:\n"
+        + commit_block
+        + "\n\nArchivos tocados recientemente (áreas calientes):\n"
+        + files_block
+        + "\n\nProponé UNA sola mejora concreta y de bajo riesgo siguiendo las "
+        "reglas. Devolvé solo la meta, una o dos oraciones en imperativo."
+    )
+    return system, user
+
+
+def validate_generated_goal(
+    text,
+    *,
+    protected: tuple[str, ...] = PROTECTED_DEV_ENGINE_PATHS,
+) -> str | None:
+    """Clean and validate a model-proposed goal. Pure — returns None if unusable.
+
+    Rejects: empty, too short (<15 chars), too long (>600 chars), obvious
+    refusals/non-goals, and — defense-in-depth on top of the land guard — any
+    goal that names a protected dev-engine module (path or basename, e.g.
+    "add a test for dev_director.py").
+    """
+    if not text:
+        return None
+    # Strip surrounding whitespace and any wrapping quotes/backticks the model
+    # may add, in any nesting order (e.g. "`goal`").
+    cleaned = str(text).strip(" \t\r\n\"'`")
+    if len(cleaned) < _GOAL_MIN_LEN:
+        return None
+    if len(cleaned) > _GOAL_MAX_LEN:
+        return None
+    low = cleaned.lower()
+    for marker in _REFUSAL_MARKERS:
+        if marker in low:
+            return None
+    for prot in protected:
+        prot_low = prot.lower()
+        base = prot_low.rsplit("/", 1)[-1]
+        if prot_low in low or base in low:
+            return None
+    return cleaned
+
+
+def generate_self_improve_goal(
+    *,
+    repo_path,
+    run_git,
+    call_model,
+    protected: tuple[str, ...] = PROTECTED_DEV_ENGINE_PATHS,
+) -> str | None:
+    """Propose ONE concrete, low-risk improvement goal, or None to fall back.
+
+    Gathers bounded repo signals via :func:`gather_repo_signals`, asks the model
+    (injected ``call_model(system, user) -> str``) for a single goal, then
+    validates it via :func:`validate_generated_goal`. Never raises: any model
+    failure, empty output, or missing signals yields None so the loop falls back
+    to the configured/default goal.
+
+    Args:
+        repo_path: repo root (passed through to ``run_git``).
+        run_git: injected git runner (see :func:`gather_repo_signals`).
+        call_model: injected model callable; in prod a thin wrapper over
+            ``dev_director._call_vt3b``. May return "" or raise on model-down.
+        protected: protected dev-engine paths used both in the prompt (forbid
+            list) and in output validation.
+    """
+    signals = gather_repo_signals(repo_path, run_git=run_git)
+    commits = signals.get("commits") or []
+    changed_files = signals.get("changed_files") or []
+    if not commits and not changed_files:
+        return None
+
+    system, user = _build_goal_prompt(commits, changed_files, protected)
+    try:
+        raw = call_model(system, user)
+    except Exception:  # noqa: BLE001
+        log.warning("self-improve goal generation: model call failed", exc_info=True)
+        return None
+
+    return validate_generated_goal(raw, protected=protected)
+
+
+def select_self_improve_goal(*, generated, config_goal, default_goal):
+    """Pick the goal and record its provenance. Pure.
+
+    Precedence: a validated self-generated goal wins; else a configured goal;
+    else the built-in default. Returns ``(goal, goal_source)`` where
+    ``goal_source`` is ``"self_generated" | "config" | "default"``.
+    """
+    if generated:
+        return generated, "self_generated"
+    if config_goal:
+        return config_goal, "config"
+    return default_goal, "default"
+
+
+# ---------------------------------------------------------------------------
 # Observability: nightly outcome log (JSONL, best-effort)
 # ---------------------------------------------------------------------------
 
@@ -183,8 +376,13 @@ def build_outcome_record(
     status: str,
     changed_paths=None,
     guard_blocked: bool = False,
+    goal_source: str | None = None,
 ) -> dict:
-    """Build a structured outcome record for the nightly log. Pure."""
+    """Build a structured outcome record for the nightly log. Pure.
+
+    ``goal_source`` records how the goal was chosen — ``"self_generated"``,
+    ``"config"``, or ``"default"`` — or None when the caller does not track it.
+    """
     return {
         "run_id": run_id,
         "started_at": started_at,
@@ -192,6 +390,7 @@ def build_outcome_record(
         "status": status,
         "changed_paths": list(changed_paths or []),
         "guard_blocked": bool(guard_blocked),
+        "goal_source": goal_source,
     }
 
 

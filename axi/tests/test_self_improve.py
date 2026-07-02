@@ -360,3 +360,309 @@ def test_start_dev_run_self_improve_origin_recorded(tmp_path):
 
     state = json.loads((tmp_path / "runs" / run_id / "state.json").read_text())
     assert state["origin"] == "self_improve"
+
+
+# ---------------------------------------------------------------------------
+# gather_repo_signals — injected git runner, never touches a real repo
+# ---------------------------------------------------------------------------
+
+
+def _fake_git(responses: dict):
+    """Return a run_git fake keyed by the git subcommand (args[0])."""
+    def run_git(args):
+        return responses.get(args[0], "")
+    return run_git
+
+
+def test_gather_repo_signals_parses_commits_and_unique_files():
+    log_oneline = "abc123 fix parser\n" "def456 add test\n" "  \n" "ghi789 cleanup\n"
+    name_only = (
+        "\n"  # pretty:format leading blank
+        "axi/src/axi/foo.py\n"
+        "axi/tests/test_foo.py\n"
+        "axi/src/axi/foo.py\n"  # duplicate collapses
+        "README.md\n"
+    )
+    run_git = _fake_git({"log": log_oneline})
+
+    # Two different `log` calls → route by full args.
+    calls = []
+
+    def routed(args):
+        calls.append(args)
+        if args[:2] == ["log", "--oneline"]:
+            return log_oneline
+        if args[:2] == ["log", "--name-only"]:
+            return name_only
+        return ""
+
+    signals = si.gather_repo_signals("/repo", run_git=routed)
+    assert signals["commits"] == ["abc123 fix parser", "def456 add test", "ghi789 cleanup"]
+    assert signals["changed_files"] == [
+        "axi/src/axi/foo.py",
+        "axi/tests/test_foo.py",
+        "README.md",
+    ]
+
+
+def test_gather_repo_signals_caps_files():
+    many = "\n".join(f"file_{i}.py" for i in range(100))
+
+    def routed(args):
+        if args[:2] == ["log", "--name-only"]:
+            return many
+        return "x deadbeef commit"
+
+    signals = si.gather_repo_signals("/repo", run_git=routed)
+    assert len(signals["changed_files"]) == 40  # _SIGNAL_FILES_MAX
+
+
+def test_gather_repo_signals_caps_commits():
+    many = "\n".join(f"sha{i} commit {i}" for i in range(50))
+
+    def routed(args):
+        if args[:2] == ["log", "--oneline"]:
+            return many
+        return ""
+
+    signals = si.gather_repo_signals("/repo", run_git=routed)
+    assert len(signals["commits"]) == 20  # _SIGNAL_COMMITS_MAX
+
+
+def test_gather_repo_signals_git_failure_returns_empty():
+    def raising(args):
+        raise RuntimeError("git exploded")
+
+    signals = si.gather_repo_signals("/repo", run_git=raising)
+    assert signals == {"commits": [], "changed_files": []}
+
+
+def test_gather_repo_signals_empty_output_returns_empty():
+    signals = si.gather_repo_signals("/repo", run_git=lambda args: "")
+    assert signals == {"commits": [], "changed_files": []}
+
+
+# ---------------------------------------------------------------------------
+# validate_generated_goal
+# ---------------------------------------------------------------------------
+
+
+def test_validate_accepts_concrete_goal():
+    goal = "Agregá un test para el parser de fechas en lifeos/health/ingestion.py."
+    assert si.validate_generated_goal(goal) == goal
+
+
+def test_validate_strips_wrapping_quotes_and_backticks():
+    assert (
+        si.validate_generated_goal('  "`Agregá un test faltante al parser.`"  ')
+        == "Agregá un test faltante al parser."
+    )
+
+
+def test_validate_rejects_empty_and_none():
+    assert si.validate_generated_goal("") is None
+    assert si.validate_generated_goal(None) is None
+    assert si.validate_generated_goal("   ") is None
+
+
+def test_validate_rejects_too_short():
+    assert si.validate_generated_goal("arreglá X") is None  # <15 chars
+
+
+def test_validate_rejects_too_long():
+    assert si.validate_generated_goal("a" * 601) is None
+
+
+def test_validate_rejects_refusals():
+    for bad in [
+        "No puedo proponer una mejora sin más contexto.",
+        "Lo siento, no tengo suficiente información aquí.",
+        "As an AI language model I cannot do that reliably.",
+        "No encuentro nada que mejorar en este momento ahora.",
+    ]:
+        assert si.validate_generated_goal(bad) is None, bad
+
+
+def test_validate_rejects_protected_path_by_basename():
+    assert (
+        si.validate_generated_goal("Agregá un test para dev_director.py que cubra el loop.")
+        is None
+    )
+
+
+def test_validate_rejects_protected_full_path():
+    assert (
+        si.validate_generated_goal(
+            "Refactorizá axi/src/axi/dev_land.py para simplificar el gate de push."
+        )
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# generate_self_improve_goal
+# ---------------------------------------------------------------------------
+
+
+def _signals_git():
+    def routed(args):
+        if args[:2] == ["log", "--oneline"]:
+            return "abc fix parser\n"
+        if args[:2] == ["log", "--name-only"]:
+            return "\nlifeos/src/lifeos/health/ingestion.py\n"
+        return ""
+    return routed
+
+
+def test_generate_returns_validated_goal():
+    good = "Agregá un test para el parser de fechas en ingestion.py que cubra el caso vacío."
+    captured = {}
+
+    def call_model(system, user):
+        captured["system"] = system
+        captured["user"] = user
+        return good
+
+    result = si.generate_self_improve_goal(
+        repo_path="/repo", run_git=_signals_git(), call_model=call_model,
+    )
+    assert result == good
+    # Prompt is Spanish, names the protected modules, and includes signals.
+    assert "PROHIBIDO" in captured["system"]
+    assert "dev_director.py" in captured["system"]
+    assert "abc fix parser" in captured["user"]
+    assert "ingestion.py" in captured["user"]
+
+
+def test_generate_returns_none_on_refusal():
+    result = si.generate_self_improve_goal(
+        repo_path="/repo",
+        run_git=_signals_git(),
+        call_model=lambda s, u: "No puedo, lo siento.",
+    )
+    assert result is None
+
+
+def test_generate_returns_none_when_model_raises():
+    def boom(s, u):
+        raise RuntimeError("VT down")
+
+    result = si.generate_self_improve_goal(
+        repo_path="/repo", run_git=_signals_git(), call_model=boom,
+    )
+    assert result is None
+
+
+def test_generate_returns_none_and_skips_model_when_no_signals():
+    called = {"n": 0}
+
+    def call_model(s, u):
+        called["n"] += 1
+        return "whatever"
+
+    result = si.generate_self_improve_goal(
+        repo_path="/repo",
+        run_git=lambda args: "",  # empty signals
+        call_model=call_model,
+    )
+    assert result is None
+    assert called["n"] == 0  # model never invoked without signals
+
+
+# ---------------------------------------------------------------------------
+# select_self_improve_goal — precedence + goal_source
+# ---------------------------------------------------------------------------
+
+
+def test_select_prefers_generated():
+    goal, source = si.select_self_improve_goal(
+        generated="gen goal", config_goal="cfg goal", default_goal="def goal",
+    )
+    assert (goal, source) == ("gen goal", "self_generated")
+
+
+def test_select_falls_back_to_config():
+    goal, source = si.select_self_improve_goal(
+        generated=None, config_goal="cfg goal", default_goal="def goal",
+    )
+    assert (goal, source) == ("cfg goal", "config")
+
+
+def test_select_falls_back_to_default():
+    goal, source = si.select_self_improve_goal(
+        generated=None, config_goal="", default_goal="def goal",
+    )
+    assert (goal, source) == ("def goal", "default")
+
+
+# ---------------------------------------------------------------------------
+# Loop integration (mocked) — simulate the daemon loop body: generate → select
+# → start_dev_run → outcome log. No real model/subprocess is ever touched.
+# ---------------------------------------------------------------------------
+
+
+def _simulate_loop_body(tmp_path, *, run_git, call_model, config_goal="", default_goal="DEFAULT"):
+    """Mirror the daemon loop's goal-selection + logging with injected deps."""
+    generated = si.generate_self_improve_goal(
+        repo_path="/repo", run_git=run_git, call_model=call_model,
+    )
+    goal, goal_source = si.select_self_improve_goal(
+        generated=generated, config_goal=config_goal, default_goal=default_goal,
+    )
+    started = []
+
+    def fake_start_dev_run(g, origin="user"):
+        started.append((g, origin))
+        return "20260702-030000-run"
+
+    run_id = fake_start_dev_run(goal, origin="self_improve")
+    si.append_outcome_log(tmp_path, si.build_outcome_record(
+        run_id=run_id, started_at="2026-07-02T03:00:00", goal=goal,
+        status="started", goal_source=goal_source,
+    ))
+    return goal, goal_source, started
+
+
+def test_loop_uses_self_generated_goal(tmp_path):
+    good = "Agregá un test para el parser de fechas en ingestion.py que cubra el vacío."
+    goal, source, started = _simulate_loop_body(
+        tmp_path, run_git=_signals_git(), call_model=lambda s, u: good,
+    )
+    assert goal == good
+    assert source == "self_generated"
+    assert started == [(good, "self_improve")]
+    rec = json.loads((tmp_path / "self_improve_log.jsonl").read_text().splitlines()[-1])
+    assert rec["goal_source"] == "self_generated"
+
+
+def test_loop_falls_back_to_default_when_generation_fails(tmp_path):
+    goal, source, started = _simulate_loop_body(
+        tmp_path,
+        run_git=_signals_git(),
+        call_model=lambda s, u: "No puedo hacerlo, lo siento.",  # rejected → None
+        default_goal="DEFAULT",
+    )
+    assert goal == "DEFAULT"
+    assert source == "default"
+    assert started == [("DEFAULT", "self_improve")]
+    rec = json.loads((tmp_path / "self_improve_log.jsonl").read_text().splitlines()[-1])
+    assert rec["goal_source"] == "default"
+
+
+def test_loop_never_calls_real_model_via_prod_wrapper(tmp_path, monkeypatch):
+    """The prod call_model wraps _call_vt3b; ensure it is patchable and used."""
+    from axi import dev_director
+
+    monkeypatch.setattr(
+        dev_director, "_call_vt3b",
+        lambda system, user, **kw: "Agregá un test faltante al módulo de salud.",
+    )
+
+    def prod_call_model(system, user):
+        return dev_director._call_vt3b(system, user, timeout=60, retry_deadline=0)
+
+    goal, source, started = _simulate_loop_body(
+        tmp_path, run_git=_signals_git(), call_model=prod_call_model,
+    )
+    assert goal == "Agregá un test faltante al módulo de salud."
+    assert source == "self_generated"
