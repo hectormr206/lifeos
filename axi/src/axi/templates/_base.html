@@ -18,7 +18,11 @@
   <link rel="icon" type="image/png" sizes="512x512" href="/static/axi-512.png">
   <link rel="shortcut icon" href="/static/favicon.ico">
   <!-- Vendored locally (local-first): no internet/CDN dependency for the UI. -->
-  <script src="/static/vendor/tailwind.js"></script>
+  <!-- Pre-compiled + purged Tailwind stylesheet (built from build/tailwind/*).
+       Replaces the Play CDN JIT bundle: no production warning, no runtime
+       class scanning, ~21 KB vs ~451 KB. Rebuild instructions live in
+       build/tailwind/README.md. -->
+  <link rel="stylesheet" href="/static/vendor/tailwind.css">
   <script src="/static/vendor/marked.min.js"></script>
   <script src="/static/vendor/purify.min.js"></script>
   <script defer src="/static/vendor/alpine.min.js"></script>

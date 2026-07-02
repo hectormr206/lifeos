@@ -226,6 +226,56 @@ def test_brain3d_has_empty_state():
     assert "nodos" in brain3d_html.lower() or "vacío" in brain3d_html or "sin datos" in brain3d_html.lower()
 
 
+# ── Tailwind: compiled/purged CSS replaces the Play CDN JS bundle ────────────
+
+def test_tailwind_css_vendored():
+    """The compiled Tailwind stylesheet is vendored locally."""
+    css = VENDOR_DIR / "tailwind.css"
+    assert css.exists(), "compiled tailwind.css must be vendored"
+    body = css.read_text()
+    # Sanity: it is a real Tailwind build with the expected version + Preflight.
+    assert "tailwindcss v3" in body, "expected a Tailwind v3 build banner"
+    assert "box-sizing:border-box" in body, "Preflight (base) must be included"
+    # Self-contained: no remote @import / external font fetches.
+    assert "@import" not in body, "compiled CSS must not @import remote URLs"
+
+
+def test_tailwind_cdn_js_removed():
+    """The 451 KB Tailwind Play CDN bundle is gone (no production JIT warning)."""
+    assert not (VENDOR_DIR / "tailwind.js").exists(), (
+        "vendor/tailwind.js (Play CDN) must be removed in favor of tailwind.css"
+    )
+
+
+def test_base_links_tailwind_css_not_cdn_script():
+    """_base.html loads the compiled stylesheet, not the CDN <script>."""
+    base = (TEMPLATES_DIR / "_base.html").read_text()
+    assert '<link rel="stylesheet" href="/static/vendor/tailwind.css">' in base
+    assert 'src="/static/vendor/tailwind.js"' not in base, (
+        "the Tailwind Play CDN <script> must be replaced by the compiled <link>"
+    )
+
+
+def test_sw_precaches_tailwind_css_not_js():
+    """The service worker precaches the compiled CSS (offline), not the CDN JS."""
+    sw_content = (STATIC_DIR / "sw.js").read_text()
+    assert "/static/vendor/tailwind.css" in sw_content
+    assert "/static/vendor/tailwind.js" not in sw_content
+
+
+def test_sw_cache_version_bumped_past_v22():
+    """CACHE_VERSION was bumped so clients re-precache the new stylesheet.
+
+    v22 was the value before the Tailwind CSS migration; anything strictly
+    greater proves the bump without hardcoding a single future-brittle number.
+    """
+    import re
+    sw_content = (STATIC_DIR / "sw.js").read_text()
+    m = re.search(r"CACHE_VERSION\s*=\s*['\"]axi-shell-v(\d+)['\"]", sw_content)
+    assert m, "sw.js must declare a numbered CACHE_VERSION"
+    assert int(m.group(1)) > 22, "CACHE_VERSION must be bumped past v22"
+
+
 def test_dompurify_vendored_and_wired():
     """renderMarkdown output is injected via x-html — it MUST be sanitized.
     Assert DOMPurify is vendored, script-included, and used in renderMarkdown."""
