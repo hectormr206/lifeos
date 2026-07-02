@@ -2895,6 +2895,23 @@ def do_healthy_backup(db_path: Path = DB_PATH) -> None:
         log.warning("do_healthy_backup: failed (non-fatal): %s", exc)
 
 
+def refresh_healthy_backups(reason: str = "manual refresh") -> None:
+    """Re-snapshot ALL healthy backup slots from the current DB state.
+
+    Run this right AFTER deleting test/trial data from the real DB: the rotating
+    30-min snapshots may have captured the test rows, and a corruption recovery
+    inside the rotation window would otherwise RESTORE them — resurrecting data
+    that was deliberately deleted (this actually happened once with a stray
+    test fact riding a restored backup). Three consecutive snapshots flush every
+    slot (1 → 2 → 3), so all recovery candidates reflect the cleaned state.
+    """
+    log.info("refresh_healthy_backups: flushing all slots (%s)", reason)
+    for _ in range(3):
+        # Pass DB_PATH explicitly: do_healthy_backup's default was bound at
+        # import time, so a swapped DB_PATH (tests) would silently be ignored.
+        do_healthy_backup(DB_PATH)
+
+
 # ─────────────────── self-healing recovery (mid-operation) ───────────────────
 
 

@@ -393,3 +393,26 @@ class TestHealthyBackupDataLossGuard:
         _truncate(db, key, keep_max_id=90)         # 100 → 90 (within tolerance)
         store.do_healthy_backup(db)
         assert _conv_count(tmp_path / "memory.db.healthy-1.bak", key) == 90
+
+
+def test_refresh_healthy_backups_flushes_all_slots(tmp_path, monkeypatch):
+    """After deleting test data, refresh_healthy_backups() must leave every
+    healthy slot reflecting the CLEANED state (no resurrection via recovery)."""
+    db = tmp_path / "memory.db"
+    key = "a" * 64
+    _make_db_with_conversations(db, key, 50)
+    monkeypatch.setattr(store, "DB_PATH", db)
+    monkeypatch.setattr(store, "load_key", lambda: key)
+
+    # Simulate polluted rotation: three snapshots taken WITH the test rows.
+    for _ in range(3):
+        store.do_healthy_backup(db)
+    _truncate(db, key, keep_max_id=40)   # "delete the test rows" (50 → 40)
+    store.refresh_healthy_backups("post-test cleanup")
+
+    for slot in (1, 2, 3):
+        bak = tmp_path / f"memory.db.healthy-{slot}.bak"
+        assert bak.exists()
+        assert _conv_count(bak, key) == 40, (
+            f"slot {slot} still holds the pre-cleanup state"
+        )
