@@ -1465,12 +1465,12 @@ def serve() -> int:
         def _self_improve_loop() -> None:
             from datetime import datetime  # noqa: PLC0415
             from zoneinfo import ZoneInfo  # noqa: PLC0415
+            from axi import self_improve as _si  # noqa: PLC0415
             while not _self_improve_stop.wait(timeout=1800):  # check every 30 min
                 try:
-                    if not bool(config.get("dev_self_improve_enabled", False)):
-                        continue
-                    if power.on_battery():
-                        continue  # never fire a heavy self-improve dev-run on battery
+                    # I/O lives here; the decision itself is a pure function.
+                    enabled = bool(config.get("dev_self_improve_enabled", False))
+                    on_battery = power.on_battery()
                     tz_name = str(config.get("timezone", "America/Mexico_City"))
                     try:
                         now = datetime.now(ZoneInfo(tz_name))
@@ -1478,12 +1478,35 @@ def serve() -> int:
                         now = datetime.now(ZoneInfo("America/Mexico_City"))
                     target_hour = int(config.get("dev_self_improve_hour", 3))
                     today = now.strftime("%Y-%m-%d")
-                    if now.hour == target_hour and _self_improve_state["last_date"] != today:
+                    if _si.should_fire_self_improve(
+                        now=now,
+                        enabled=enabled,
+                        on_battery=on_battery,
+                        target_hour=target_hour,
+                        last_fired_date=_self_improve_state["last_date"],
+                        today=today,
+                    ):
                         _self_improve_state["last_date"] = today
                         goal = str(config.get("dev_self_improve_goal", "") or _DEFAULT_SELF_IMPROVE_GOAL)
                         from axi import dev_run as _dev_run  # noqa: PLC0415
-                        run_id = _dev_run.start_dev_run(goal)
+                        run_id = _dev_run.start_dev_run(goal, origin="self_improve")
                         log.info("self-improve: started daily dev run %s", run_id)
+                        # Best-effort observability: record the run start.
+                        try:
+                            state_dir = os.path.expanduser(
+                                config.get("dev_run_state_dir", "~/LifeOS/dev-runs")
+                            )
+                            _si.append_outcome_log(
+                                state_dir,
+                                _si.build_outcome_record(
+                                    run_id=run_id,
+                                    started_at=now.isoformat(),
+                                    goal=goal,
+                                    status="started",
+                                ),
+                            )
+                        except Exception:  # noqa: BLE001
+                            log.debug("self-improve start log failed", exc_info=True)
                 except Exception:  # noqa: BLE001
                     log.warning("self-improve loop failed", exc_info=True)
 
