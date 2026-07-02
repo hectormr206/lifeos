@@ -639,33 +639,19 @@ FIELDS: tuple[ConfigField, ...] = (
         "recall gate retry at the wider graph_recall_tool_max_distance gate, gated by a "
         "personal-data heuristic.",
     ),
-    # ─────── dev agent ───────
-    ConfigField(
-        "dev_agent_max_budget_usd", "number", 0.50,
-        "Hard cost cap (USD) for a single dev-agent coding run.",
-        minimum=0.0,
-        maximum=20.0,
-    ),
-    ConfigField(
-        "dev_agent_max_turns", "integer", 8,
-        "Maximum agentic turns for a single dev-agent coding run.",
-        minimum=1,
-        maximum=50,
-    ),
-    ConfigField(
-        "dev_agent_model", "string", "",
-        "Claude model override for the dev agent. Empty string uses the SDK default.",
-    ),
+    # ─────── dev coder sandbox (used by the dev-director loop) ───────
+    # Key names kept as dev_agent_* for config backward-compatibility; they now
+    # gate the LIVE coder (dev_director._run_claude), not the retired SDK agent.
     ConfigField(
         "dev_agent_sandbox", "boolean", True,
-        "If true (default), the dev agent runs inside a rootless podman container: "
-        "FS isolation (worktree-only mounts), env scrubbing (only ANTHROPIC_API_KEY "
-        "forwarded), --userns=keep-id. Disable only for debugging — the agent REFUSES "
-        "to run uncontained when false.",
+        "If true (default), the dev coder (claude CLI) runs inside a rootless podman "
+        "container: FS isolation (worktree-only mount, host /home invisible), env "
+        "scrubbing (only ANTHROPIC_API_KEY forwarded), --userns=keep-id. Disable only "
+        "for debugging — the coder REFUSES to run uncontained when false.",
     ),
     ConfigField(
         "dev_agent_image", "string", "localhost/axi-coder:latest",
-        "Podman image used for the dev agent sandbox container. Must be available "
+        "Podman image used for the dev coder sandbox container. Must be available "
         "locally (podman pull or built from the axi Containerfile).",
     ),
     # ─────── dev-director loop ───────
