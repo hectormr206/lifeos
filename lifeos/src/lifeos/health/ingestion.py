@@ -46,7 +46,7 @@ def _strip_accents(s: str) -> str:
     )
 
 
-# ─── Symptom: "me duele X" ─────────────────────────────────────────────
+# ─── Symptom: "me duele X" / "my X hurts" ──────────────────────────────
 
 _SYMPTOM_RE = re.compile(
     r"\b(?:me\s+duele|tengo\s+dolor\s+de|me\s+est[áa]\s+doliendo)\s+"
@@ -56,19 +56,100 @@ _SYMPTOM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# EN pain-location expressions. These mirror the ES {location} extraction so
+# an English "my back hurts" stores exactly the same shape as its Spanish
+# counterpart "me duele la espalda" — same kind="symptom", same
+# data["location"], and the same "dolor de {location}" title (titles are kept
+# in the app's single ES form so the health log stays uniform across
+# languages; we do NOT introduce a second English title format for pain).
+_SYMPTOM_EN_HURTS_RE = re.compile(
+    # "my back hurts", "my lower back is hurting", "my stomach aches",
+    # "my head is aching". Location captured lazily, bounded to 38 chars.
+    r"\bmy\s+([a-z][a-z\s]{0,38}?)\s+(?:hurts?|is\s+hurting|aches?|is\s+aching)\b",
+    re.IGNORECASE,
+)
+_SYMPTOM_EN_PAIN_IN_RE = re.compile(
+    # "I have (a) pain in my left knee", "pain in the back", "pain in my chest".
+    r"\bpain\s+in\s+(?:my\s+|the\s+)?([a-z][a-z\s]{0,38}?)"
+    r"(?:\s+(?:since|because|when|for|that|and|but)\b|[,.;]|$)",
+    re.IGNORECASE,
+)
+_SYMPTOM_EN_ACHE_RE = re.compile(
+    # "I have a headache", "got a stomachache", "bad toothache", "an earache".
+    # The body part is the prefix before "ache" → data["location"].
+    r"\b(head|stomach|back|tooth|ear)ache\b",
+    re.IGNORECASE,
+)
+
+# Named (non-pain) symptoms. The ES parser has NO non-pain symptom category,
+# so this is an English-only extension: data uses a "symptom" key (distinct
+# from the pain path's "location") and the title is the English symptom name
+# (there is no ES title to mirror). Anchored to a feeling/having verb to keep
+# precision high (the module's stated ethos: better to miss than mis-classify).
+# "tired"/"sick" are deliberately excluded — the idioms "tired of ..." /
+# "sick of ..." would produce false positives.
+_SYMPTOM_EN_NAMED_RE = re.compile(
+    r"\b(?:i\s+feel(?:ing)?|i'?m(?:\s+feeling)?|i\s+am(?:\s+feeling)?|feeling"
+    r"|i\s+have(?:\s+(?:a|an))?|i've\s+got(?:\s+(?:a|an))?"
+    r"|i\s+got(?:\s+(?:a|an))?|having(?:\s+(?:a|an))?)\s+"
+    r"(?:so\s+|really\s+|very\s+|a\s+bit\s+|kind\s+of\s+|kinda\s+|super\s+)?"
+    r"(dizzy|dizziness|light[-\s]?headed|lightheaded|nauseous|nauseated|nausea"
+    r"|queasy|feverish|fever|diarrh?o?ea|coughing|cough|sore\s+throat)\b",
+    re.IGNORECASE,
+)
+
+
+def _canonical_named_symptom(raw: str) -> tuple[str, str]:
+    """Map a matched EN symptom phrase to (title, data_key)."""
+    r = re.sub(r"[-\s]+", " ", raw.lower().strip())
+    if r.startswith("dizz") or "headed" in r:
+        return ("dizziness", "dizziness")
+    if r.startswith("naus") or r == "queasy":
+        return ("nausea", "nausea")
+    if r.startswith("fever"):
+        return ("fever", "fever")
+    if r.startswith("diarr"):
+        return ("diarrhea", "diarrhea")
+    if r.startswith("cough"):
+        return ("cough", "cough")
+    if "throat" in r:
+        return ("sore throat", "sore_throat")
+    return (r, r.replace(" ", "_"))
+
 
 def _try_symptom(text: str) -> HealthIntent | None:
+    # ── ES pain-location + EN pain-location (mirror ES {location} shape) ──
+    location: str | None = None
     m = _SYMPTOM_RE.search(text)
-    if not m:
-        return None
-    location = m.group(1).strip().rstrip(" ,.;")
-    if not location or len(location) > 40:
-        return None
-    return HealthIntent(
-        kind="symptom",
-        title=f"dolor de {location}",
-        data={"location": location},
-    )
+    if m:
+        location = m.group(1).strip().rstrip(" ,.;")
+    if location is None:
+        m = _SYMPTOM_EN_HURTS_RE.search(text) or _SYMPTOM_EN_PAIN_IN_RE.search(text)
+        if m:
+            location = m.group(1).strip().rstrip(" ,.;")
+    if location is None:
+        m = _SYMPTOM_EN_ACHE_RE.search(text)
+        if m:
+            location = m.group(1).strip().lower()
+    if location is not None:
+        if not location or len(location) > 40:
+            return None
+        return HealthIntent(
+            kind="symptom",
+            title=f"dolor de {location}",
+            data={"location": location},
+        )
+
+    # ── EN named (non-pain) symptoms — English-only extension ────────────
+    m = _SYMPTOM_EN_NAMED_RE.search(text)
+    if m:
+        title, key = _canonical_named_symptom(m.group(1))
+        return HealthIntent(
+            kind="symptom",
+            title=title,
+            data={"symptom": key},
+        )
+    return None
 
 
 # ─── Vital: "glucosa N", "presión X/Y", "peso N", "dormí N horas" ──────

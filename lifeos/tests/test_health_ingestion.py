@@ -1044,3 +1044,109 @@ def test_visceral_typo_glued_in_multi_field_message() -> None:
     assert h.data["type"] == "body_composition"
     assert h.data["visceral_fat"] == 8
     assert h.data["weight_kg"] == 60
+
+
+# ─── EN symptoms (English parity with the ES pain-location parser) ─────
+# The ES side extracts only pain-location (data["location"], title
+# "dolor de {location}"). The EN pain patterns mirror that exact shape; the
+# named non-pain symptoms (fever, cough, ...) are an English-only extension
+# using data["symptom"] since ES has no non-pain symptom category.
+
+def test_symptom_en_headache() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I have a headache")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert h.data["location"] == "head"
+    assert h.title == "dolor de head"
+
+
+def test_symptom_en_my_stomach_hurts() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("my stomach hurts")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert "stomach" in h.data["location"].lower()
+
+
+def test_symptom_en_my_back_hurts() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("my lower back is hurting since this morning")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert "back" in h.data["location"].lower()
+
+
+def test_symptom_en_pain_in_my() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I have pain in my knee")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert "knee" in h.data["location"].lower()
+
+
+def test_symptom_en_toothache() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("got a bad toothache")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert h.data["location"] == "tooth"
+
+
+def test_symptom_en_named_dizzy() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I feel dizzy")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert h.data["symptom"] == "dizziness"
+
+
+def test_symptom_en_named_nauseous() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I'm nauseous")
+    assert h is not None
+    assert h.data["symptom"] == "nausea"
+
+
+def test_symptom_en_named_fever() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I have a fever")
+    assert h is not None
+    assert h.data["symptom"] == "fever"
+
+
+def test_symptom_en_named_sore_throat() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I have a sore throat")
+    assert h is not None
+    assert h.data["symptom"] == "sore_throat"
+
+
+def test_symptom_en_named_diarrhea() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I have diarrhea")
+    assert h is not None
+    assert h.data["symptom"] == "diarrhea"
+
+
+def test_symptom_en_named_cough() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I have a cough")
+    assert h is not None
+    assert h.data["symptom"] == "cough"
+
+
+def test_symptom_en_negative_tired_idiom() -> None:
+    """'tired of' is an idiom, not fatigue — must not register a symptom."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I'm tired of waiting")
+    assert h is None or h.kind != "symptom"
+
+
+def test_symptom_en_vital_wins_over_symptom() -> None:
+    """A vital in the same text still wins (parser priority unchanged)."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I have a headache and my glucose is 95")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "glucose"
