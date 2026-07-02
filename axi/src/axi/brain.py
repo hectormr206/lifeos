@@ -559,6 +559,8 @@ def _base_payload(
     max_tokens: int,
     think: bool,
     engine: str = "4b",
+    temperature: float | None = None,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     """Build the request payload with engine-appropriate sampling parameters.
 
@@ -566,19 +568,24 @@ def _base_payload(
     vt3b (VibeThinker-3B) params: temp=1.0, top_p=0.95, top_k=-1 (disabled).
     Source: benchmark #559 — low temperature degrades VibeThinker badly.
     top_k=-1 means disabled in llama.cpp.
+
+    ``temperature``/``seed`` are optional caller overrides for deterministic
+    decoding (e.g. the fact extractor uses temperature=0.0, seed=0). When None
+    the engine defaults apply and ``seed`` is omitted from the payload, so all
+    existing callers are unchanged.
     """
     if engine == "vt3b":
-        temperature = 1.0
+        default_temperature = 1.0
         top_p = 0.95
         top_k = -1  # disabled — VT-3B quality degrades with top_k limiting
     else:
         # 4B default — temp 0.7 confirmed by benchmark #555
-        temperature = 0.7
+        default_temperature = 0.7
         top_p = 0.8
         top_k = 20
-    return {
+    payload: dict[str, Any] = {
         "messages": messages,
-        "temperature": temperature,
+        "temperature": default_temperature if temperature is None else temperature,
         "top_p": top_p,
         "top_k": top_k,
         "max_tokens": max_tokens,
@@ -586,6 +593,9 @@ def _base_payload(
         # Qwen3-specific: passed through llama-server's --jinja templating.
         "chat_template_kwargs": {"enable_thinking": think},
     }
+    if seed is not None:
+        payload["seed"] = seed
+    return payload
 
 
 def _ask_impl(
@@ -597,6 +607,8 @@ def _ask_impl(
     image_b64: str | None = None,
     history: list[dict] | None = None,
     lang: str | None = None,
+    temperature: float | None = None,
+    seed: int | None = None,
     _retry_budget: int | None = None,
     _skip_recall: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
@@ -666,7 +678,10 @@ def _ask_impl(
     effective_max_tokens = _retry_budget if _retry_budget is not None else max_tokens
     try:
         data = _post_chat_completion(
-            _base_payload(messages, max_tokens=effective_max_tokens, think=think, engine=engine),
+            _base_payload(
+                messages, max_tokens=effective_max_tokens, think=think, engine=engine,
+                temperature=temperature, seed=seed,
+            ),
             timeout=timeout,
             endpoint=endpoint,
         )
@@ -702,7 +717,8 @@ def _ask_impl(
                     return _ask_impl(
                         prompt, system=system, max_tokens=max_tokens, timeout=timeout,
                         think=think, image_b64=image_b64, history=history,
-                        lang=lang, _retry_budget=retry_budget, _skip_recall=True,
+                        lang=lang, temperature=temperature, seed=seed,
+                        _retry_budget=retry_budget, _skip_recall=True,
                     )
         return content, data
     except urllib.error.URLError as e:
@@ -959,12 +975,18 @@ def ask(
     image_b64: str | None = None,
     history: list[dict] | None = None,
     lang: str | None = None,
+    temperature: float | None = None,
+    seed: int | None = None,
 ) -> str:
     """Public chat completion call.
 
     `lang` is the user's configured language tag (e.g. 'en', 'es-MX'). When
     provided, it controls which temporal context is injected into the system
     prompt. Callers that omit it get Spanish temporal context (backward compat).
+
+    `temperature`/`seed` are optional deterministic-decoding overrides passed
+    through to the request payload only when not None (existing callers keep
+    the engine's default sampling).
 
     Wraps `_ask_impl` to record a brain metric (latency, model, token usage,
     ok flag) on a background thread. The metric write NEVER fails the brain
@@ -985,6 +1007,8 @@ def ask(
             image_b64=image_b64,
             history=history,
             lang=lang,
+            temperature=temperature,
+            seed=seed,
         )
         return text
     except BaseException as e:  # noqa: BLE001

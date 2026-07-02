@@ -115,6 +115,13 @@ El label de cada uno de estos hechos DEBE MENCIONAR el/los nombres de las entida
 relevantes (hipertensión / losartán / Dra. Tere) para que queden conectados en el grafo.
 Sé conciso y factual; no inundes el grafo: capturá solo los matices con valor.
 
+RELATOS DE VIDA: cuando Héctor narra eventos de vida que involucran a SU gente
+(familia, amigos, colegas) o planes/eventos (aperturas, invitaciones, viajes,
+mudanzas), esos SÍ son hechos DURADEROS sobre la vida de Héctor — guardalos
+como facts, no solo como relaciones. Si Héctor dijo una fecha EXACTA ("el 15 de
+agosto"), mantenela EXACTA en el label completándola con el año usando HOY
+(ej: 15/08/2026); ≈ es solo para tiempos relativos.
+
 NO extraigas:
 - Mediciones numéricas sueltas de vitales ("presión 120/80", "glucosa 95",
   "peso 64", "dormí 7h"): esas las registra otro canal; acá NO las repitas. Pero
@@ -140,7 +147,15 @@ product, food, activity, document, event, brand, tool, thing.
 
 Predicados típicos: padece, tiene, diagnosticada_por, tratada_con, recetado_por,
 toma, comió, hizo, vive_en, trabaja_en, esposa, esposo, hijo, hija, madre, padre,
-hermano, amigo, jefe, mascota, usa, compró…
+hermano, primo, prima, tío, tía, cuñado, vecino, colega, amigo, jefe, mascota,
+dueño_de, usa, compró…
+
+REGLAS ESTRICTAS para relations:
+- SOLO relaciones dichas EXPLÍCITAMENTE. Si un lugar aparece asociado a OTRA
+  persona o negocio, NO crees relaciones de Héctor con ese lugar (nada de
+  Héctor--vive_en-->lugar si Héctor no dijo que vive ahí).
+- Si Héctor nombra el vínculo (primo, tía, jefe, vecino), usá EXACTAMENTE esa
+  palabra como relation — nunca la degrades a 'conoce' o 'amigo'.
 
 Responde SOLO con JSON válido, sin texto antes ni después, exactamente este formato:
 {"facts": [
@@ -191,7 +206,22 @@ las mañanas, estable sin medicamento" -> responder:
   {"subject":"hipertensión","subject_kind":"condition","relation":"tratada_con","object":"losartán","object_kind":"medication","aliases":[]}
  ]}
 Notá: NINGÚN hecho repite el vital numérico, pero el diagnóstico (con su
-temporalidad ≈2024), la prescripción suspendida y el estado SÍ se guardan."""
+temporalidad ≈2024), la prescripción suspendida y el estado SÍ se guardan.
+
+EJEMPLO RELATO DE VIDA. Si HOY fuera 2026-06-30 y Héctor dijera: "mi primo
+Rodrigo Zetina abrió una taquería en Querétaro y me invitó a la inauguración
+el 15 de agosto" -> responder:
+{"facts": [
+  {"kind":"biographical","label":"Primo Rodrigo Zetina abrió una taquería en Querétaro (≈2026)","data":{},"domain":"personal"},
+  {"kind":"plan","label":"Invitado a la inauguración de la taquería de Rodrigo Zetina el 15/08/2026","data":{},"domain":"personal"}
+ ],
+ "relations": [
+  {"subject":"Héctor","subject_kind":"person","relation":"primo","object":"Rodrigo Zetina","object_kind":"person","aliases":[]},
+  {"subject":"Rodrigo Zetina","subject_kind":"person","relation":"dueño_de","object":"taquería en Querétaro","object_kind":"place","aliases":[]}
+ ]}
+Notá: NO hay Héctor--vive_en-->Querétaro (nadie dijo que Héctor viva ahí); el
+vínculo es "primo" (la palabra EXACTA que usó Héctor, no "conoce"); la fecha
+15/08/2026 queda EXACTA porque Héctor dijo "el 15 de agosto" y HOY da el año."""
 
 
 def _build_extractor_system(today_str: str) -> str:
@@ -252,14 +282,20 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
 
     exchange = f"Héctor dijo: {user_text}\n\nAxi respondió: {axi_text}"
     system = _build_extractor_system(_today_str())
+    # Deterministic decoding (temperature=0.0, seed=0): the extractor must be
+    # reproducible — sampling variance made identical messages extract different
+    # (or zero) facts across runs. Mirrors the nano eval change (3f3e3ac4).
+    # max_tokens=800: long multi-topic life-story messages overflow 512.
     raw = brain_ask(
         prompt=exchange,
         system=system,
-        max_tokens=512,
+        max_tokens=800,
         timeout=60.0,
         think=False,
         image_b64=None,
         history=None,
+        temperature=0.0,
+        seed=0,
     )
     parsed = _parse_json_strict(raw)
     if not parsed:
