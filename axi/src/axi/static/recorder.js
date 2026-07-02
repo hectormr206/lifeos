@@ -71,14 +71,50 @@ window.createSegmentedRecorder = function (opts) {
     }
   }
 
+  // A WebM blob smaller than this is a header-only shell with no audio in it
+  // (a fresh MediaRecorder emits ~200-400 bytes of EBML even with zero media —
+  // e.g. when the mic track died or was muted mid-dictation). Sending it to
+  // ffmpeg just yields "EBML/End of file" errors, so skip it silently like an
+  // empty-silence segment.
+  const MIN_AUDIO_BYTES = 1024;
+
+  function streamIsLive() {
+    if (!stream) return false;
+    const tracks = stream.getAudioTracks();
+    return tracks.length > 0 && tracks[0].readyState === 'live';
+  }
+
   function flushSegment(chunks) {
     const stillRecording = recording;
     // Restart capture immediately (stream stays hot) so the gap between
     // segments is just the MediaRecorder spin-up; then transcribe in background.
-    if (stillRecording) startSegment(); else releaseStream();
+    // If the mic track DIED mid-dictation (device grabbed by another app,
+    // permission revoked), re-acquire it instead of recording header-only
+    // shells forever.
+    if (stillRecording) {
+      if (streamIsLive()) {
+        startSegment();
+      } else {
+        releaseStream();
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+          if (!recording) { try { s.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} return; }
+          stream = s;
+          startSegment();
+        }).catch(function (e) {
+          recording = false;
+          emit();
+          onError('El micrófono se desconectó y no pude recuperarlo: ' + e.message);
+        });
+      }
+    } else {
+      releaseStream();
+    }
     if (chunks && chunks.length) {
       const blob = new Blob(chunks, { type: mime });
-      segChain = segChain.then(function () { return transcribeBlob(blob); });
+      if (blob.size >= MIN_AUDIO_BYTES) {
+        segChain = segChain.then(function () { return transcribeBlob(blob); });
+      }
+      // Header-only shell (dead/muted track) — skipped silently.
     }
     if (!stillRecording) segChain.finally(function () { setTranscribing(false); });
   }

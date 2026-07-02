@@ -206,7 +206,7 @@ def test_transcribe_round_trip_via_mocked_daemon(client, monkeypatch):
 
     monkeypatch.setattr(dashboard, "_daemon_cmd", fake_cmd)
 
-    audio_b64 = base64.b64encode(b"fake-webm-bytes").decode("ascii")
+    audio_b64 = base64.b64encode(b"fake-webm-bytes" * 200).decode("ascii")  # >2 KB: past the header-shell guard
     r = client.post("/api/chat/transcribe", json={"audio_b64": audio_b64})
     assert r.status_code == 200
     assert r.json()["text"] == "hola mundo"
@@ -217,7 +217,7 @@ def test_transcribe_round_trip_via_mocked_daemon(client, monkeypatch):
 def test_transcribe_daemon_error_returns_503(client, monkeypatch):
     from axi import dashboard
     monkeypatch.setattr(dashboard, "_daemon_cmd", lambda cmd, timeout=2.0: "error:ffmpeg not installed")
-    audio_b64 = base64.b64encode(b"x").decode("ascii")
+    audio_b64 = base64.b64encode(b"x" * 4096).decode("ascii")  # >2 KB: past the header-shell guard
     r = client.post("/api/chat/transcribe", json={"audio_b64": audio_b64})
     assert r.status_code == 503
     assert "ffmpeg" in r.json()["detail"]
@@ -359,3 +359,20 @@ def test_daemon_transcribe_path_missing_file(tmp_path, monkeypatch):
     resp, _ = _handle_cmd(d, f"transcribe_path:{ghost}")
     assert resp.startswith("error:")
     assert "not found" in resp
+
+
+def test_transcribe_header_only_shell_returns_empty_text(client, monkeypatch):
+    """A tiny header-only WebM (dead/muted mic track) must be treated as
+    silence — {"text": ""} — never staged for ffmpeg (which would 503 with
+    an EBML/End-of-file error)."""
+    from axi import dashboard
+
+    def _must_not_be_called(cmd, timeout=2.0):
+        raise AssertionError("daemon must not be called for a header-only shell")
+
+    monkeypatch.setattr(dashboard, "_daemon_cmd", _must_not_be_called)
+
+    shell = base64.b64encode(b"\x1a\x45\xdf\xa3" + b"\x00" * 60).decode("ascii")
+    r = client.post("/api/chat/transcribe", json={"audio_b64": shell})
+    assert r.status_code == 200
+    assert r.json()["text"] == ""

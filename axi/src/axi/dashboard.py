@@ -4921,6 +4921,12 @@ async def api_chat_transcribe(request: Request):
         raise HTTPException(400, "audio_b64 is not valid base64")
     if not raw:
         raise HTTPException(400, "audio_b64 decoded to empty bytes")
+    if len(raw) < 2048:
+        # A WebM this small is a header-only shell with no audio frames (the
+        # browser's mic track died/muted mid-dictation). ffmpeg would fail with
+        # "EBML ... End of file" and bubble a scary 503 for what is effectively
+        # silence — treat it like an empty segment instead.
+        return {"text": ""}
     if len(raw) > 20 * 1024 * 1024:  # 20 MB hard cap — ~3-4 min of opus
         raise HTTPException(413, "audio too large (max 20 MB)")
 
