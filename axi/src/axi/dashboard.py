@@ -4949,7 +4949,13 @@ async def api_chat_transcribe(request: Request):
     if not resp:
         raise HTTPException(503, "daemon not responding")
     if resp.startswith("error:"):
-        raise HTTPException(503, resp[len("error:"):])
+        detail = resp[len("error:"):]
+        # "audio too short" = a quick tap on the push-to-talk button or a
+        # near-silent segment — that's silence, not a failure. Returning it as
+        # a 503 painted a scary red toast for a non-event.
+        if "too short" in detail.lower():
+            return {"text": ""}
+        raise HTTPException(503, detail)
     if resp.startswith("text:"):
         return {"text": resp[len("text:"):]}
     return {"text": resp}
