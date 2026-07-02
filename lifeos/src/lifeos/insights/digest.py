@@ -14,6 +14,7 @@ Structure:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -30,6 +31,7 @@ class Digest:
     sections_count: int
     patterns_count: int
     correlations_count: int = 0
+    graph_facts_count: int = 0
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -221,6 +223,57 @@ def _section_correlations() -> tuple[str | None, int]:
     return section, len(lines)
 
 
+# Max number of graph facts surfaced in the digest — a FEW actionable
+# durable facts, not a dump of the whole graph.
+_GRAPH_FACTS_CAP = 5
+
+# Vital-style labels produced by the axi health bridge ("presión 120/86",
+# "dormí 7.5h", …). These duplicate the health section counts, so the
+# graph-facts section skips them.
+_VITAL_LABEL_RE = re.compile(
+    r"^\s*(presión|presion|pulso|glucosa|peso|dormí|dormi)\b",
+    re.IGNORECASE,
+)
+
+
+def _section_graph_facts() -> tuple[str | None, int]:
+    """Return (rendered section text or None, count of facts rendered).
+
+    Pulls a few actionable durable facts (nodes kind='fact' with a domain,
+    created/occurred in the last 7 days) from the axi graph, excluding
+    logged vitals whose labels duplicate the health section.
+
+    Mirrors _section_correlations' decoupling mechanism: the graph import
+    happens lazily inside the try block, so when axi is not importable or
+    the graph is unavailable the section silently disappears (None).
+    """
+    try:
+        from axi import store as axi_store  # noqa: PLC0415
+        rows = axi_store.recent_facts(days=7, limit=50)
+    except Exception:  # noqa: BLE001
+        return None, 0
+
+    lines: list[str] = []
+    try:
+        for r in rows:
+            label = str(r.get("label") or "").strip()
+            domain = r.get("domain")
+            if not label or not domain:
+                continue
+            if domain == "health" and _VITAL_LABEL_RE.match(label):
+                continue  # already counted in the health section
+            lines.append(f"  • [{domain}] {label}")
+            if len(lines) >= _GRAPH_FACTS_CAP:
+                break
+    except Exception:  # noqa: BLE001
+        return None, 0
+
+    if not lines:
+        return None, 0
+    section = "🧠 Hechos recientes del grafo:\n" + "\n".join(lines)
+    return section, len(lines)
+
+
 def compose(*, cadence: str = "daily") -> Digest:
     """Compose a digest. cadence='daily' = last 24h. cadence='weekly' = last 7d."""
     days = 1 if cadence == "daily" else 7
@@ -247,8 +300,9 @@ def compose(*, cadence: str = "daily") -> Digest:
     pattern_lines = [f"  • {p.message}" for p in detected]
 
     corr_section, correlations_count = _section_correlations()
+    facts_section, graph_facts_count = _section_graph_facts()
 
-    if not sections and not pattern_lines and not corr_section:
+    if not sections and not pattern_lines and not corr_section and not facts_section:
         body = (
             f"{header}\n\nNo hubo actividad registrada. "
             f"Una semana sin notas es válida — descansar también cuenta."
@@ -256,9 +310,12 @@ def compose(*, cadence: str = "daily") -> Digest:
             else f"{header}\n\nNo registraste nada hoy. Mañana es otro día."
         )
         return Digest(cadence=cadence, body=body, sections_count=0,
-                      patterns_count=0, correlations_count=0)
+                      patterns_count=0, correlations_count=0,
+                      graph_facts_count=0)
 
     body = header + "\n\n" + "\n".join(sections)
+    if facts_section:
+        body += "\n\n" + facts_section
     if corr_section:
         body += "\n\n" + corr_section
     if pattern_lines:
@@ -268,4 +325,5 @@ def compose(*, cadence: str = "daily") -> Digest:
         sections_count=len(sections),
         patterns_count=len(detected),
         correlations_count=correlations_count,
+        graph_facts_count=graph_facts_count,
     )

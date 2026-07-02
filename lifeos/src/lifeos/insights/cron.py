@@ -15,7 +15,7 @@ lifeos.scheduler.get_scheduler().start() has been called.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
 
@@ -40,8 +40,14 @@ _LOCAL_TZ = "America/Mexico_City"
 # this module stays free of axi imports.
 PushFn = Callable[[str, str], None]   # (title, body) -> None
 
+# Callable signature for the digest narrator — injected by the dashboard so
+# this module stays free of axi imports. Takes the composed digest text
+# (the FACTS) and returns a brain-narrated body.
+NarratorFn = Callable[[str], str]     # (digest_text) -> narrated_body
+
 
 _push_fn: PushFn | None = None
+_narrator_fn: NarratorFn | None = None
 
 
 def set_push(fn: PushFn) -> None:
@@ -54,6 +60,17 @@ def set_push(fn: PushFn) -> None:
     _push_fn = fn
 
 
+def set_narrator(fn: NarratorFn | None) -> None:
+    """Inject the function used to narrate the daily digest body.
+
+    The dashboard binds this to a closure over axi.brain.ask (gated by the
+    digest_narrate_enabled config key). Pass None to unbind — the daily
+    push then uses the deterministic template body.
+    """
+    global _narrator_fn
+    _narrator_fn = fn
+
+
 def _dispatch(title: str, body: str) -> None:
     if _push_fn is None:
         log.info("insight composed (no push registered): %s", title)
@@ -64,14 +81,38 @@ def _dispatch(title: str, body: str) -> None:
         log.exception("insight push failed for %r", title)
 
 
+def _narrate_or_template(template_body: str) -> tuple[str, bool]:
+    """Return (push body, narrated?) for the daily digest.
+
+    If a narrator is bound, its output becomes the body. On ANY exception
+    or empty result, gracefully degrade to the deterministic template body
+    (the job must never crash or go silent because the brain hiccuped).
+    """
+    if _narrator_fn is None:
+        return template_body, False
+    try:
+        narrated = (_narrator_fn(template_body) or "").strip()
+    except Exception:  # noqa: BLE001
+        log.warning("digest narrator failed — falling back to template body",
+                    exc_info=True)
+        return template_body, False
+    if not narrated:
+        log.warning("digest narrator returned empty — falling back to template body")
+        return template_body, False
+    return narrated, True
+
+
 def run_daily_now() -> str:
     """Compose + dispatch the daily digest. Returns the digest body for
     the dashboard's manual-trigger button."""
     d = digest.compose(cadence="daily")
-    log.info("daily digest composed: sections=%d patterns=%d correlations=%d",
-             d.sections_count, d.patterns_count, d.correlations_count)
-    _dispatch("📊 Resumen del día", d.body)
-    return d.body
+    log.info("daily digest composed: sections=%d patterns=%d correlations=%d graph_facts=%d",
+             d.sections_count, d.patterns_count, d.correlations_count,
+             d.graph_facts_count)
+    body, narrated = _narrate_or_template(d.body)
+    title = "📊 Tu día, según Axi" if narrated else "📊 Resumen del día"
+    _dispatch(title, body)
+    return body
 
 
 def run_weekly_now() -> str:
@@ -80,6 +121,83 @@ def run_weekly_now() -> str:
              d.sections_count, d.patterns_count, d.correlations_count)
     _dispatch("📊 Resumen semanal", d.body)
     return d.body
+
+
+# Adaptive-hour window: a digest fired at 3am from weird sleep data would
+# be wrong, so the computed hour is clamped (not rejected) to this range.
+_ADAPTIVE_MIN_MINUTES = 19 * 60    # 19:00
+_ADAPTIVE_MAX_MINUTES = 23 * 60    # 23:00
+_ADAPTIVE_LEAD_MINUTES = 90        # digest fires 90 min before median bedtime
+_ADAPTIVE_MIN_SAMPLES = 5
+_ADAPTIVE_MAX_SAMPLES = 14
+
+
+def adaptive_daily_hour(default_hour: int = _DEFAULT_DAILY_HOUR,
+                        default_minute: int = _DEFAULT_DAILY_MINUTE) -> tuple[int, int]:
+    """Compute the daily-digest hour from the user's median bedtime.
+
+    Bedtime estimate = sleep entry ts (logged on waking) − sleep_hours.
+    Uses the last 14 sleep vitals; fewer than 5 → the default. The result
+    (median bedtime − 90 min) is clamped to [19:00, 23:00]. Any error →
+    the default (defensive: scheduling must never crash startup).
+    """
+    try:
+        from lifeos.health import entries as health_entries  # noqa: PLC0415
+
+        tz = ZoneInfo(_LOCAL_TZ)
+        bedtime_offsets: list[int] = []   # minutes since NOON, so bedtimes
+        # around midnight sort contiguously instead of splitting at 00:00.
+        for e in health_entries.list_recent(days=60, kind="vital", limit=300):
+            data = e.data or {}
+            if data.get("type") != "sleep_hours":
+                continue
+            try:
+                hours = float(data.get("value"))
+            except (TypeError, ValueError):
+                continue
+            if not 0.5 <= hours <= 16:
+                continue
+            ts = e.ts if e.ts.tzinfo else e.ts.replace(tzinfo=timezone.utc)
+            bedtime = (ts - timedelta(hours=hours)).astimezone(tz)
+            bedtime_offsets.append(
+                (bedtime.hour * 60 + bedtime.minute - 12 * 60) % (24 * 60))
+            if len(bedtime_offsets) >= _ADAPTIVE_MAX_SAMPLES:
+                break
+
+        if len(bedtime_offsets) < _ADAPTIVE_MIN_SAMPLES:
+            return default_hour, default_minute
+
+        bedtime_offsets.sort()
+        n = len(bedtime_offsets)
+        if n % 2:
+            median = bedtime_offsets[n // 2]
+        else:
+            median = (bedtime_offsets[n // 2 - 1] + bedtime_offsets[n // 2]) // 2
+
+        target = median - _ADAPTIVE_LEAD_MINUTES        # still noon-based
+        target = max(_ADAPTIVE_MIN_MINUTES - 12 * 60,
+                     min(target, _ADAPTIVE_MAX_MINUTES - 12 * 60))
+        minutes_of_day = (target + 12 * 60) % (24 * 60)
+        return divmod(minutes_of_day, 60)
+    except Exception:  # noqa: BLE001
+        log.warning("adaptive_daily_hour failed — using default %02d:%02d",
+                    default_hour, default_minute, exc_info=True)
+        return default_hour, default_minute
+
+
+def resolve_daily_schedule(adaptive_enabled: bool) -> tuple[int, int, str]:
+    """Return (hour, minute, source) for the daily digest job.
+
+    source is 'adaptive from sleep median' or 'default' — for the startup
+    log line. Recomputed on every dashboard start; the service restarts
+    often enough that this acts as the weekly-ish refresh in practice.
+    """
+    if adaptive_enabled:
+        hour, minute = adaptive_daily_hour()
+        if (hour, minute) != (_DEFAULT_DAILY_HOUR, _DEFAULT_DAILY_MINUTE):
+            return hour, minute, "adaptive from sleep median"
+        return hour, minute, "default"
+    return _DEFAULT_DAILY_HOUR, _DEFAULT_DAILY_MINUTE, "default"
 
 
 def start_jobs(*, daily_hour: int = _DEFAULT_DAILY_HOUR,

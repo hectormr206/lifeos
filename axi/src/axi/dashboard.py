@@ -297,6 +297,23 @@ def _apply_nano_endpoint(endpoint: str) -> None:
         pass
 
 
+# System prompt for the daily-digest narrator (P6.4 smart digest). Same
+# anti-invention discipline as domain_chat._build_query_system: the input is
+# a list of FACTS already computed — the brain only connects the dots.
+_DIGEST_NARRATOR_SYSTEM = (
+    "Eres Axi. Vas a narrar el resumen del día del usuario. La entrada es una "
+    "lista de HECHOS ya calculados (secciones con conteos, números y valores "
+    "exactos). Escribe de 4 a 6 frases cálidas y concisas en español que "
+    "conecten los puntos del día.\n"
+    "REGLAS ABSOLUTAS:\n"
+    "- Copia cada número, monto, fecha y valor EXACTAMENTE como aparece en los hechos.\n"
+    "- NUNCA agregues datos, fechas, correlaciones ni conclusiones que no estén en los hechos.\n"
+    "- No inventes causas: si dos hechos no aparecen conectados, no los conectes.\n"
+    "- Si una sección no aparece o está vacía, NO la menciones.\n"
+    "- Sin listas ni encabezados: solo texto corrido de 4 a 6 frases."
+)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """LifeOS startup/shutdown wired through FastAPI's lifespan protocol.
@@ -346,7 +363,30 @@ async def lifespan(_app: FastAPI):
             lifeos_push.send_to_all(title=title, body=body, url="/insights",
                                     tag="lifeos-insight")
         insights_cron.set_push(_insights_push)
-        insights_cron.start_jobs()
+
+        # P6.4 smart digest — brain narrator (gated by digest_narrate_enabled).
+        if bool(config.get("digest_narrate_enabled", True)):
+            from axi import brain as _axi_brain_digest  # noqa: PLC0415
+
+            def _digest_narrator(facts_text: str) -> str:
+                return _axi_brain_digest.ask(
+                    facts_text, system=_DIGEST_NARRATOR_SYSTEM,
+                    think=False, max_tokens=350,
+                )
+            insights_cron.set_narrator(_digest_narrator)
+        else:
+            insights_cron.set_narrator(None)
+
+        # P6.4 smart digest — adaptive daily hour (gated by digest_adaptive_hour).
+        # NOTE: recomputed on every dashboard start; the service restarts often
+        # enough that this acts as the weekly-ish refresh of the median bedtime.
+        _digest_hour, _digest_minute, _digest_source = (
+            insights_cron.resolve_daily_schedule(
+                bool(config.get("digest_adaptive_hour", True))))
+        log.info("insights daily digest scheduled at %02d:%02d (%s)",
+                 _digest_hour, _digest_minute, _digest_source)
+        insights_cron.start_jobs(daily_hour=_digest_hour,
+                                 daily_minute=_digest_minute)
     except Exception:  # noqa: BLE001
         log.exception("lifeos insights cron failed to start")
     try:
