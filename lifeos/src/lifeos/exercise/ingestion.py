@@ -33,16 +33,17 @@ class ExerciseIntent:
     confidence: float = 0.85
 
 
-_MIN = r"min(?:utos?)?|mins?"
+_MIN = r"min(?:ut[oe]s?)?|mins?"
 
 # ─── Walk ────────────────────────────────────────────────────────────
 
 _WALK_MIN_RE = re.compile(
-    rf"\bcamin[éeè](?:\s+(?:al\s+sol|por\s+el\s+parque))?\s+(\d{{1,3}})\s*(?:{_MIN})\b",
+    rf"\b(?:camin[éeè](?:\s+(?:al\s+sol|por\s+el\s+parque))?|walked(?:\s+for)?)"
+    rf"\s+(\d{{1,3}})\s*(?:{_MIN})\b",
     re.IGNORECASE,
 )
 _WALK_KM_RE = re.compile(
-    r"\bcamin[éeè]\s+(\d{1,3}(?:[.,]\d{1,2})?)\s*km\b",
+    r"\b(?:camin[éeè]|walked(?:\s+for)?)\s+(\d{1,3}(?:[.,]\d{1,2})?)\s*km\b",
     re.IGNORECASE,
 )
 
@@ -75,11 +76,13 @@ def _try_walk(text: str) -> ExerciseIntent | None:
 # ─── Run ─────────────────────────────────────────────────────────────
 
 _RUN_MIN_RE = re.compile(
-    rf"\b(?:corr[íi]|sal[íi]\s+a\s+correr)\s+(\d{{1,3}})\s*(?:{_MIN})\b",
+    rf"\b(?:corr[íi]|sal[íi]\s+a\s+correr|ran(?:\s+for)?|went\s+for\s+a\s+run(?:\s+of)?)"
+    rf"\s+(\d{{1,3}})\s*(?:{_MIN})\b",
     re.IGNORECASE,
 )
 _RUN_KM_RE = re.compile(
-    r"\b(?:corr[íi]|sal[íi]\s+a\s+correr)\s+(\d{1,3}(?:[.,]\d{1,2})?)\s*km\b",
+    r"\b(?:corr[íi]|sal[íi]\s+a\s+correr|ran(?:\s+for)?|went\s+for\s+a\s+run(?:\s+of)?)"
+    r"\s+(\d{1,3}(?:[.,]\d{1,2})?)\s*km\b",
     re.IGNORECASE,
 )
 
@@ -110,7 +113,8 @@ def _try_run(text: str) -> ExerciseIntent | None:
 # ─── Yoga ────────────────────────────────────────────────────────────
 
 _YOGA_RE = re.compile(
-    rf"\b(?:hice\s+)?(?:yoga|pilates|estiramient[oó]s?)\s+(?:de\s+|por\s+)?(\d{{1,3}})\s*(?:{_MIN})\b",
+    rf"\b(?:hice\s+|did\s+)?(?:yoga|pilates|estiramient[oó]s?)\s+"
+    rf"(?:de\s+|por\s+|for\s+)?(\d{{1,3}})\s*(?:{_MIN})\b",
     re.IGNORECASE,
 )
 
@@ -130,11 +134,11 @@ def _try_yoga(text: str) -> ExerciseIntent | None:
 # ─── Cardio ──────────────────────────────────────────────────────────
 
 _CARDIO_RE = re.compile(
-    rf"\b(?:hice\s+)?(\d{{1,3}})\s*(?:{_MIN})\s+de\s+cardio\b",
+    rf"\b(?:hice\s+|did\s+)?(\d{{1,3}})\s*(?:{_MIN})\s+(?:de|of)\s+cardio\b",
     re.IGNORECASE,
 )
 _CARDIO_VERB_RE = re.compile(
-    rf"\bcardio\s+(?:de\s+|por\s+)?(\d{{1,3}})\s*(?:{_MIN})\b",
+    rf"\bcardio\s+(?:de\s+|por\s+|for\s+)?(\d{{1,3}})\s*(?:{_MIN})\b",
     re.IGNORECASE,
 )
 
@@ -152,7 +156,9 @@ def _try_cardio(text: str) -> ExerciseIntent | None:
 # ─── Strength / gym ──────────────────────────────────────────────────
 
 _STRENGTH_RE = re.compile(
-    rf"\b(?:entren[éeè]|hice\s+pesas|fui\s+al\s+gym)\s+(?:de\s+|por\s+)?(\d{{1,3}})\s*(?:{_MIN})\b",
+    rf"\b(?:entren[éeè]|hice\s+pesas|fui\s+al\s+gym|"
+    rf"worked\s+out|lifted(?:\s+weights)?|went\s+to\s+the\s+gym)\s+"
+    rf"(?:de\s+|por\s+|for\s+)?(\d{{1,3}})\s*(?:{_MIN})\b",
     re.IGNORECASE,
 )
 _STRENGTH_KIND_RE = re.compile(
@@ -177,11 +183,12 @@ def _try_strength(text: str) -> ExerciseIntent | None:
 # ─── Sports ──────────────────────────────────────────────────────────
 
 _SPORT_TERMS = ("fútbol", "futbol", "tenis", "pádel", "padel", "básquet",
-                "basquet", "vóley", "voley", "ping pong", "natación", "natacion")
+                "basquet", "vóley", "voley", "ping pong", "natación", "natacion",
+                "tennis", "soccer", "football", "basketball", "volleyball")
 _SPORTS_RE = re.compile(
-    rf"\bjug[uú][éeè]\s+(?:al\s+)?(?P<sport>"
+    rf"\b(?:jug[uú][éeè]|played)\s+(?:al\s+)?(?P<sport>"
     rf"{'|'.join(re.escape(s) for s in _SPORT_TERMS)})\s+"
-    rf"(\d{{1,3}})\s*(?:{_MIN})\b",
+    rf"(?:for\s+)?(\d{{1,3}})\s*(?:{_MIN})\b",
     re.IGNORECASE,
 )
 

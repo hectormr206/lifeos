@@ -46,6 +46,27 @@ _STOP_AFTER_NAME = frozenset({
     "hoy", "ayer", "anoche", "mañana", "esta", "este", "esa", "ese",
     "porque", "para", "sobre", "de", "del", "en", "el", "la", "los",
     "las", "al", "a", "y", "pero", "que",
+    # EN
+    "on", "is", "the", "this", "next", "today", "tomorrow", "and",
+    "of", "in", "at",
+})
+
+# EN kinship terms accepted as the celebrated person in possessive
+# birthday phrases ("mom's birthday …"). Lowercase in text, stored
+# title-cased. Kept small on purpose — precision over recall.
+_EN_KINSHIP = frozenset({
+    "mom", "dad", "mother", "father", "brother", "sister",
+    "grandma", "grandpa", "wife", "husband", "son", "daughter",
+})
+
+
+# Capitalized month names must never be peeled off as person names
+# ("anniversary February 14" → date, not a person called February).
+_MONTH_WORDS = frozenset({
+    "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+    "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+    "january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december",
 })
 
 
@@ -87,14 +108,17 @@ def _parse_when(text: str, tz_name: str = "America/Mexico_City") -> datetime | N
     if not text or not text.strip():
         return None
     cleaned = text.strip()
-    cleaned = re.sub(r"^(?:el|la|un|una|los|las)\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^(?:el|la|un|una|los|las|on|the)\s+", "", cleaned, flags=re.IGNORECASE)
     parsed = dateparser.parse(
         cleaned,
-        languages=["es"],
+        languages=["es", "en"],
         settings={
             "TIMEZONE": tz_name,
             "RETURN_AS_TIMEZONE_AWARE": True,
             "PREFER_DATES_FROM": "future",
+            # Keep DMY for ambiguous slash dates ("8/12" = Dec 8) now that
+            # "en" is in the language list (English defaults to MDY).
+            "DATE_ORDER": "DMY",
         },
     )
     if parsed is None:
@@ -105,17 +129,36 @@ def _parse_when(text: str, tz_name: str = "America/Mexico_City") -> datetime | N
 # ─── Birthday ─────────────────────────────────────────────────────────
 
 _BIRTHDAY_RE = re.compile(
-    rf"\bcumple(?:años)?\s+(?:de\s+)?{_NAME_LOOSE}\s+"
-    rf"(?:el\s+|en\s+)?(?P<when>.+?)\s*$",
+    rf"\b(?:cumple(?:años)?\s+(?:de\s+)?|birthday\s+of\s+){_NAME_LOOSE}\s+"
+    rf"(?:el\s+|en\s+|is\s+on\s+|on\s+)?(?P<when>.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# EN possessive shape: "mom's birthday on June 8" / "María's birthday June 8".
+# The name comes BEFORE the trigger word, so it needs its own pattern.
+_BIRTHDAY_POSS_EN_RE = re.compile(
+    rf"\b(?:my\s+)?(?P<name>[\wÁÉÍÓÚÑáéíóúñü\s]+?)['’]s\s+birthday\s+"
+    rf"(?:is\s+)?(?:on\s+)?(?P<when>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
 
+def _birthday_name(raw: str) -> str | None:
+    """Resolve the celebrated person: proper name, or a bare EN kinship
+    term ("mom's birthday") optionally preceded by "my"."""
+    toks = (raw or "").strip(" ,.;:!?").split()
+    if toks and toks[-1].lower() in _EN_KINSHIP and all(
+        t.lower() == "my" for t in toks[:-1]
+    ):
+        return toks[-1].capitalize()
+    return _clean_name(raw)
+
+
 def _try_birthday(text: str) -> EventIntent | None:
-    m = _BIRTHDAY_RE.search(text)
+    m = _BIRTHDAY_RE.search(text) or _BIRTHDAY_POSS_EN_RE.search(text)
     if not m:
         return None
-    name = _clean_name(m.group("name"))
+    name = _birthday_name(m.group("name"))
     if not name:
         return None
     when = _parse_when(m.group("when"))
@@ -132,7 +175,7 @@ def _try_birthday(text: str) -> EventIntent | None:
 # ─── Anniversary ──────────────────────────────────────────────────────
 
 _ANNIVERSARY_RE = re.compile(
-    r"\baniversario\s+(?:de\s+)?(?P<rest>.+?)\s*$",
+    r"\b(?:aniversario|anniversary)\s+(?:de\s+|of\s+)?(?:on\s+)?(?P<rest>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -148,7 +191,11 @@ def _try_anniversary(text: str) -> EventIntent | None:
     name_parts: list[str] = []
     date_start_idx = 0
     for i, t in enumerate(tokens):
-        if _is_proper_name_token(t) and len(name_parts) < 3:
+        if (
+            _is_proper_name_token(t)
+            and t.lower() not in _MONTH_WORDS
+            and len(name_parts) < 3
+        ):
             name_parts.append(t)
             date_start_idx = i + 1
         else:

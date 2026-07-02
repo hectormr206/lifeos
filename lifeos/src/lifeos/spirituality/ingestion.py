@@ -42,8 +42,9 @@ class SpiritualityIntent:
 # regex would over-segment a comma-separated list.
 _GRATITUDE_RE = re.compile(
     r"^\s*(?:axi[,:\s]+)?"
-    r"(?:hoy\s+)?"
-    r"(?:agradezco|estoy\s+agradecid[oa]\s+por)\s+"
+    r"(?:hoy\s+|today\s+)?"
+    r"(?:agradezco|estoy\s+agradecid[oa]\s+por|"
+    r"(?:i'?m\s+|i\s+am\s+)?(?:grateful|thankful)\s+for)\s+"
     r"(?P<what>.+?)"
     r"\s*\.?\s*$",
     re.IGNORECASE | re.DOTALL,
@@ -60,7 +61,7 @@ def _try_gratitude(text: str) -> SpiritualityIntent | None:
     # Split commas/y → list items, in case the user did "agradezco A, B y C"
     items = [
         s.strip()
-        for s in re.split(r"\s*,\s*|\s+y\s+", what)
+        for s in re.split(r"\s*,\s*|\s+y\s+|\s+and\s+", what)
         if s.strip()
     ]
     title = "Agradezco hoy" if len(items) > 1 else f"Agradezco: {what}"
@@ -75,7 +76,7 @@ def _try_gratitude(text: str) -> SpiritualityIntent | None:
 # ─── Meditation ───────────────────────────────────────────────────────
 
 _MEDITATION_RE = re.compile(
-    r"\b(?:medit[éeè])\s+(\d{1,3})\s*(?:minutos?|mins?|m)\b",
+    r"\b(?:medit[éeè]|meditated(?:\s+for)?)\s+(\d{1,3})\s*(?:minut[oe]s?|mins?|m)\b",
     re.IGNORECASE,
 )
 
@@ -97,7 +98,7 @@ def _try_meditation(text: str) -> SpiritualityIntent | None:
 # ─── Explicit reflection prefix ───────────────────────────────────────
 
 _REFLECTION_RE = re.compile(
-    r"^\s*(?:axi[,:\s]+)?reflexi[oó]n\s*:\s*(?P<what>.+?)\s*$",
+    r"^\s*(?:axi[,:\s]+)?(?:reflexi[oó]n|reflection)\s*:\s*(?P<what>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 

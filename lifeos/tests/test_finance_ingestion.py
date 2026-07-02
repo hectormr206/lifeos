@@ -197,3 +197,74 @@ def test_sali_first_person_is_none() -> None:
     """'salí' (first person singular) must NOT trigger the outflow pattern."""
     from lifeos.finance.ingestion import parse_finance
     assert parse_finance("salí temprano del trabajo") is None
+
+
+# English support
+
+def test_spent_on_groceries_en() -> None:
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("spent 250 on groceries")
+    assert fi is not None
+    assert fi.kind == "expense"
+    assert fi.amount == 250
+    assert "groceries" in fi.title.lower()
+    assert fi.category == "food"
+
+
+def test_paid_for_rent_en() -> None:
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("paid 1200 for rent")
+    assert fi is not None
+    assert fi.kind == "expense"
+    assert fi.amount == 1200
+    assert fi.category == "housing"
+
+
+def test_bought_for_amount_en() -> None:
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("bought a monitor for 3000")
+    assert fi is not None
+    assert fi.kind == "big_purchase"  # >= 2000 MXN threshold
+    assert fi.amount == 3000
+    assert "monitor" in fi.title.lower()
+    assert fi.category == "electronics"
+
+
+def test_got_paid_income_en() -> None:
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("got paid 20000")
+    assert fi is not None
+    assert fi.kind == "income"
+    assert fi.amount == 20000
+
+
+def test_received_income_en() -> None:
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("received 5000")
+    assert fi is not None
+    assert fi.kind == "income"
+    assert fi.amount == 5000
+
+
+def test_saved_en() -> None:
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("saved 500")
+    assert fi is not None
+    assert fi.kind == "savings"
+    assert fi.amount == 500
+
+
+def test_transferred_to_savings_en() -> None:
+    from lifeos.finance.ingestion import parse_finance
+    fi = parse_finance("transferred 800 to my savings")
+    assert fi is not None
+    assert fi.kind == "savings"
+    assert fi.amount == 800
+
+
+def test_plain_english_sentence_is_none() -> None:
+    """Precision guard: EN sentences without an adjacent amount never parse."""
+    from lifeos.finance.ingestion import parse_finance
+    assert parse_finance("I paid attention to the details") is None
+    assert parse_finance("we spent time together at the park") is None
+    assert parse_finance("she bought into the idea completely") is None

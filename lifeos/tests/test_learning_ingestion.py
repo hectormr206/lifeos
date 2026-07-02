@@ -108,3 +108,64 @@ def test_priority_book_done_over_active() -> None:
     e = parse_learning("leí 'Sapiens' la semana pasada")
     assert e is not None
     assert e.status == "done"
+
+
+# English support
+
+def test_started_reading_en() -> None:
+    from lifeos.learning.ingestion import parse_learning
+    e = parse_learning("started reading 'Dune'")
+    assert e is not None
+    assert e.kind == "book"
+    assert e.title == "Dune"
+    assert e.status == "active"
+
+
+def test_im_reading_en() -> None:
+    from lifeos.learning.ingestion import parse_learning
+    e = parse_learning("I'm reading 'Atomic Habits'")
+    assert e is not None
+    assert e.kind == "book"
+    assert e.status == "active"
+
+
+def test_finished_book_en() -> None:
+    from lifeos.learning.ingestion import parse_learning
+    e = parse_learning("finished 'Sapiens'")
+    assert e is not None
+    assert e.kind == "book"
+    assert e.title == "Sapiens"
+    assert e.status == "done"
+
+
+def test_read_past_tense_with_quotes_en() -> None:
+    from lifeos.learning.ingestion import parse_learning
+    e = parse_learning("read 'Meditations' last week")
+    assert e is not None
+    assert e.kind == "book"
+    assert e.status == "done"
+
+
+def test_im_studying_course_en() -> None:
+    from lifeos.learning.ingestion import parse_learning
+    e = parse_learning("I'm studying 'Rust'")
+    assert e is not None
+    assert e.kind == "course"
+    assert e.title == "Rust"
+    assert e.status == "active"
+
+
+def test_research_prefix_en() -> None:
+    from lifeos.learning.ingestion import parse_learning
+    e = parse_learning("research: how do LLMs work")
+    assert e is not None
+    assert e.kind == "research_question"
+    assert "llms" in e.title.lower()
+
+
+def test_plain_english_sentence_is_none_en() -> None:
+    """Precision guard: 'read' without a quoted title never parses."""
+    from lifeos.learning.ingestion import parse_learning
+    assert parse_learning("I read the news this morning") is None
+    assert parse_learning("started the day with a coffee") is None
+    assert parse_learning("research shows this is healthy") is None

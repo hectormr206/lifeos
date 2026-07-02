@@ -73,6 +73,41 @@ def test_query_parser_rejects_unrelated() -> None:
     assert parse_query("dime hola") is None
 
 
+def test_query_parser_should_i_buy_en() -> None:
+    from lifeos.decide.query_parser import parse_query, PurchaseConsultIntent
+    qi = parse_query("should I buy a new laptop?")
+    assert isinstance(qi, PurchaseConsultIntent)
+    assert "laptop" in qi.item.lower()
+
+
+def test_query_parser_can_i_afford_en() -> None:
+    from lifeos.decide.query_parser import parse_query
+    qi = parse_query("can I afford an iPhone?")
+    assert qi is not None
+    assert "iphone" in qi.item.lower()
+
+
+def test_query_parser_is_it_worth_buying_en() -> None:
+    from lifeos.decide.query_parser import parse_query
+    qi = parse_query("is it worth buying a monitor?")
+    assert qi is not None
+    assert "monitor" in qi.item.lower()
+
+
+def test_query_parser_do_i_need_to_buy_en() -> None:
+    from lifeos.decide.query_parser import parse_query
+    qi = parse_query("do I need to buy new running shoes")
+    assert qi is not None
+    assert "shoes" in qi.item.lower()
+
+
+def test_query_parser_rejects_english_log_en() -> None:
+    """'bought X for N' is a log, not a purchase consult."""
+    from lifeos.decide.query_parser import parse_query
+    assert parse_query("bought a laptop for 18000") is None
+    assert parse_query("I love my new laptop") is None
+
+
 # ─── Purchase consult ─────────────────────────────────────────────────
 
 def test_purchase_consult_with_empty_data() -> None:

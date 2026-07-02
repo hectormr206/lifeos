@@ -103,3 +103,69 @@ def test_no_match_when_no_capitalized_name() -> None:
     """We don't match 'hablé con la chica' — there's no proper name."""
     from lifeos.relationships.ingestion import parse_interaction
     assert parse_interaction("hablé con la chica de la tienda") is None
+
+
+# English support
+
+def test_talked_to_en() -> None:
+    from lifeos.relationships.ingestion import parse_interaction
+    ri = parse_interaction("talked to Maria")
+    assert ri is not None
+    assert ri.kind == "conversation"
+    assert ri.person_name == "Maria"
+
+
+def test_spoke_with_en() -> None:
+    from lifeos.relationships.ingestion import parse_interaction
+    ri = parse_interaction("spoke with Ana about the trip")
+    assert ri is not None
+    assert ri.kind == "conversation"
+    assert ri.person_name == "Ana"
+
+
+def test_called_en() -> None:
+    from lifeos.relationships.ingestion import parse_interaction
+    ri = parse_interaction("called John")
+    assert ri is not None
+    assert ri.kind == "call"
+    assert ri.person_name == "John"
+
+
+def test_got_a_call_from_en() -> None:
+    from lifeos.relationships.ingestion import parse_interaction
+    ri = parse_interaction("got a call from Carlos today")
+    assert ri is not None
+    assert ri.kind == "call"
+    assert ri.person_name == "Carlos"
+
+
+def test_had_lunch_with_en() -> None:
+    from lifeos.relationships.ingestion import parse_interaction
+    ri = parse_interaction("had lunch with Ana")
+    assert ri is not None
+    assert ri.kind == "quality_time"
+    assert ri.person_name == "Ana"
+
+
+def test_argued_with_kinship_en() -> None:
+    from lifeos.relationships.ingestion import parse_interaction
+    ri = parse_interaction("argued with my brother")
+    assert ri is not None
+    assert ri.kind == "conflict"
+    assert ri.person_name == "Brother"
+
+
+def test_texted_en() -> None:
+    from lifeos.relationships.ingestion import parse_interaction
+    ri = parse_interaction("texted David")
+    assert ri is not None
+    assert ri.kind == "text"
+    assert ri.person_name == "David"
+
+
+def test_plain_english_sentence_is_none_en() -> None:
+    """Precision guard: lowercase non-kinship objects never create people."""
+    from lifeos.relationships.ingestion import parse_interaction
+    assert parse_interaction("talked to the neighbor about the fence") is None
+    assert parse_interaction("the movie is called Titanic") is None
+    assert parse_interaction("called about the reservation") is None

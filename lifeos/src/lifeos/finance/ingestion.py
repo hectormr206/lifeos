@@ -58,6 +58,7 @@ _CURRENCY_HINTS = {
     "usd": "USD", "dólares": "USD", "dolares": "USD", "dolar": "USD",
     "eur": "EUR", "euros": "EUR", "euro": "EUR",
     "mxn": "MXN", "pesos": "MXN", "peso": "MXN", "varos": "MXN",
+    "dollars": "USD", "dollar": "USD",
 }
 
 
@@ -100,11 +101,15 @@ def _detect_currency(text: str) -> str:
 _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
     ("food", ["restaurante", "comida", "café", "cafe", "bar", "soriana", "walmart",
               "chedraui", "oxxo", "súper", "super", "mercado", "vips",
-              "starbucks", "domino", "pizza", "hamburguesa", "sushi", "tacos"]),
+              "starbucks", "domino", "pizza", "hamburguesa", "sushi", "tacos",
+              "groceries", "restaurant", "coffee", "lunch", "dinner",
+              "burger", "takeout"]),
     ("transport", ["uber", "didi", "taxi", "gasolina", "gas", "metro", "camión",
-                   "camion", "autobús", "autobus", "estacionamiento"]),
+                   "camion", "autobús", "autobus", "estacionamiento",
+                   "gasoline", "parking", "bus fare", "train"]),
     ("housing", ["renta", "alquiler", "luz", "agua", "gas natural", "internet",
-                 "telmex", "cfe", "predial"]),
+                 "telmex", "cfe", "predial", "rent", "electricity",
+                 "water bill", "utilities"]),
     ("entertainment", ["cine", "netflix", "spotify", "disney", "amazon prime",
                        "paramount", "youtube premium", "hbo", "max", "concierto"]),
     ("electronics", ["celular", "laptop", "monitor", "audífonos", "audifonos",
@@ -124,7 +129,9 @@ def _guess_category(text: str) -> str | None:
     lower = _strip_accents(text).lower()
     for cat, keywords in _CATEGORY_KEYWORDS:
         for kw in keywords:
-            if kw in lower:
+            # Word-boundary match so short keywords ("rent", "gas") never
+            # fire inside unrelated words ("parents", "gastos").
+            if re.search(rf"\b{re.escape(kw)}\b", lower):
                 return cat
     return None
 
@@ -136,34 +143,38 @@ def _guess_category(text: str) -> str | None:
 # exclude "," from the boundary so the thousands separator in "1,500" is
 # never confused with end-of-amount.
 _NUM = r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+"
-_UNIT = r"pesos|peso|mxn|usd|dólares|dolares|eur|euros"
+_UNIT = r"pesos|peso|mxn|usd|dólares|dolares|eur|euros|dollars|dollar"
 
 # "gasté N (en X)" / "pagué N (en X)" / "salió N (X)"
+# EN: "spent N (on X)" / "paid N (for X)"
 # The connector before `what` is optional so "Salió 3400 la cena..." matches
 # even without an explicit "en/de/a" immediately after the amount.
 _OUTFLOW_RE = re.compile(
-    rf"\b(?:me\s+)?(?:gast[éeè]|pagu[éeè]|sali[óoò])\s+"
+    rf"\b(?:me\s+)?(?:gast[éeè]|pagu[éeè]|sali[óoò]|spent|(?<!got\s)(?<!was\s)paid)\s+"
     rf"\$?\s*(?P<amount>{_NUM})(?=\s|[.;,]|$)\s*"
     rf"(?P<unit>{_UNIT})?\s*"
-    rf"(?:(?:(?:en|de|de\s+la|del|a|a\s+la)\s+)?(?P<what>[^.;]*?))?"
+    rf"(?:(?:(?:en|de|de\s+la|del|a|a\s+la|on|for)\s+)?(?P<what>[^.;]*?))?"
     rf"(?:[.;]|$)",
     re.IGNORECASE,
 )
 
 # "compré X por N" / "compré X a N pesos" / "compré X en N"
+# EN: "bought X for N"
 _PURCHASE_RE = re.compile(
-    rf"\b(?:me\s+)?compr[éeè]\s+"
+    rf"\b(?:(?:me\s+)?compr[éeè]|bought)\s+"
     rf"(?P<what>.+?)\s+"
-    rf"(?:por|a|en)\s+"
+    rf"(?:por|a|en|for)\s+"
     rf"\$?\s*(?P<amount>{_NUM})(?=\s|[.;,]|$)\s*"
     rf"(?P<unit>{_UNIT})?",
     re.IGNORECASE,
 )
 
 # "cobré N" / "me llegó N" / "me depositaron N" / "recibí N"
+# EN: "got paid N" / "was paid N" / "received N" / "they deposited N"
 _INCOME_RE = re.compile(
-    rf"\b(?:cobr[éeè]|me\s+lleg(?:[óo]|aron)|me\s+depositaron|recib[íi])\s+"
-    rf"(?:(?:el|un|la|una|mi)\s+)?"
+    rf"\b(?:cobr[éeè]|me\s+lleg(?:[óo]|aron)|me\s+depositaron|recib[íi]|"
+    rf"got\s+paid|was\s+paid|received|(?:they\s+)?deposited)\s+"
+    rf"(?:(?:el|un|la|una|mi|my|the)\s+)?"
     rf"(?P<what>.{{0,30}}?)?"
     rf"\s*\$?\s*(?P<amount>{_NUM})(?=\s|[.;]|$)\s*"
     rf"(?P<unit>{_UNIT})?",
@@ -171,11 +182,22 @@ _INCOME_RE = re.compile(
 )
 
 # "ahorré N" / "transferí N a ahorros" / "metí N al ahorro"
+# EN: "saved N" (the "transferred N to savings" shape has the amount BEFORE
+# the destination, so it gets its own pattern below).
 _SAVINGS_RE = re.compile(
-    rf"\b(?:ahorr[éeè]|(?:me\s+)?transfer[íi].*?(?:a|al)\s+ahorr[oa]s?|"
+    rf"\b(?:ahorr[éeè]|saved|(?:me\s+)?transfer[íi].*?(?:a|al)\s+ahorr[oa]s?|"
     rf"met[íi].*?(?:a|al)\s+ahorr[oa]s?)\s+"
     rf"\$?\s*(?P<amount>{_NUM})(?=\s|[.;]|$)\s*"
     rf"(?P<unit>{_UNIT})?",
+    re.IGNORECASE,
+)
+
+# EN: "transferred N to (my) savings" / "moved N to savings" / "put N into savings"
+_SAVINGS_TRANSFER_EN_RE = re.compile(
+    rf"\b(?:transferred|moved|put)\s+"
+    rf"\$?\s*(?P<amount>{_NUM})(?=\s|[.;]|$)\s*"
+    rf"(?P<unit>{_UNIT})?\s*"
+    rf"(?:in)?to\s+(?:my\s+|the\s+)?savings\b",
     re.IGNORECASE,
 )
 
@@ -235,7 +257,7 @@ def _try_income(text: str) -> FinanceIntent | None:
 
 
 def _try_savings(text: str) -> FinanceIntent | None:
-    m = _SAVINGS_RE.search(text)
+    m = _SAVINGS_RE.search(text) or _SAVINGS_TRANSFER_EN_RE.search(text)
     if not m:
         return None
     amount = _parse_amount(m.group("amount"))

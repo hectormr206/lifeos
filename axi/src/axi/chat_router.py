@@ -33,7 +33,10 @@ log = logging.getLogger("axi.chat_router")
 _QUESTION_RE = re.compile(
     r"^\s*¿?\s*(?:qu[eé]|qui[eé]n(?:es)?|c[oó]mo|cu[aá]ndo|d[oó]nde|cu[aá]nto?s?|"
     r"cu[aá]l(?:es)?|por\s+qu[eé]|para\s+qu[eé]|hace\s+cu[aá]nto|sab[eé]s|"
-    r"me\s+puedes?|recuerdas?|qu[eé]\s+sab[eé]s)\b",
+    r"me\s+puedes?|recuerdas?|qu[eé]\s+sab[eé]s|"
+    r"what|who(?:se|m)?|when|where|how|why|which|"
+    r"do\s+you\s+know|can\s+you|could\s+you|tell\s+me|remember|"
+    r"what\s+do\s+you\s+know)\b",
     re.IGNORECASE,
 )
 

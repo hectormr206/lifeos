@@ -89,3 +89,52 @@ def test_birthday_in_future_prefer_future() -> None:
     # When the user says a future date, dateparser with PREFER_DATES_FROM=
     # future picks the upcoming Jan 5 — that's >= today.
     assert e.when >= datetime.now(timezone.utc).replace(microsecond=0)
+
+
+# English support
+
+def test_birthday_possessive_kinship_en() -> None:
+    from lifeos.events.ingestion import parse_event
+    e = parse_event("mom's birthday on June 8")
+    assert e is not None
+    assert e.kind == "birthday"
+    assert "Mom" in e.people
+    assert e.when.month == 6
+    assert e.when.day == 8
+
+
+def test_birthday_possessive_proper_name_en() -> None:
+    from lifeos.events.ingestion import parse_event
+    e = parse_event("Maria's birthday is on June 8")
+    assert e is not None
+    assert e.kind == "birthday"
+    assert "Maria" in e.people
+    assert e.when.month == 6
+    assert e.when.day == 8
+
+
+def test_birthday_of_name_en() -> None:
+    from lifeos.events.ingestion import parse_event
+    e = parse_event("birthday of Diego on July 20")
+    assert e is not None
+    assert e.kind == "birthday"
+    assert "Diego" in e.people
+    assert e.when.month == 7
+    assert e.when.day == 20
+
+
+def test_anniversary_en() -> None:
+    from lifeos.events.ingestion import parse_event
+    e = parse_event("anniversary February 14")
+    assert e is not None
+    assert e.kind == "anniversary"
+    assert e.when.month == 2
+    assert e.when.day == 14
+
+
+def test_plain_english_sentence_is_none_en() -> None:
+    """Precision guard: EN prose without the birthday/anniversary shape
+    never parses."""
+    from lifeos.events.ingestion import parse_event
+    assert parse_event("I went to a birthday party yesterday") is None
+    assert parse_event("my birthday is coming up") is None
