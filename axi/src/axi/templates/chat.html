@@ -404,7 +404,11 @@
         @touchstart.prevent="micPress()"
         @touchend.prevent="micRelease()"
         @touchcancel="micLeave()"
-        :disabled="pending || (transcribing && !recording) || !online"
+        {# `pending` (Axi generating) does NOT block the mic: Whisper and the
+           brain are independent services, and dictation only fills the draft
+           for the NEXT message — you can speak your follow-up while Axi
+           thinks. Only an in-flight transcription or being offline blocks. #}
+        :disabled="(transcribing && !recording) || !online"
         class="btn btn-primary"
         :style="recording
           ? 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem; background: rgba(238,51,51,0.9); border-color: var(--red);'
