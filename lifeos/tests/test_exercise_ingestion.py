@@ -134,3 +134,72 @@ def test_no_match_without_quantity() -> None:
     """'fui al gym' without time should NOT match (too vague)."""
     from lifeos.exercise.ingestion import parse_exercise
     assert parse_exercise("fui al gym hoy") is None
+
+
+# English support
+
+def test_ran_km_en() -> None:
+    from lifeos.exercise.ingestion import parse_exercise
+    e = parse_exercise("ran 5km in 30 minutes")
+    assert e is not None
+    assert e.kind == "run"
+    assert e.data["distance_km"] == 5.0
+    assert 25 <= e.duration_minutes <= 35
+
+
+def test_walked_minutes_en() -> None:
+    from lifeos.exercise.ingestion import parse_exercise
+    e = parse_exercise("walked 20 minutes")
+    assert e is not None
+    assert e.kind == "walk"
+    assert e.duration_minutes == 20
+
+
+def test_did_yoga_for_min_en() -> None:
+    from lifeos.exercise.ingestion import parse_exercise
+    e = parse_exercise("did yoga for 40 min")
+    assert e is not None
+    assert e.kind == "yoga"
+    assert e.duration_minutes == 40
+
+
+def test_went_to_the_gym_minutes_en() -> None:
+    from lifeos.exercise.ingestion import parse_exercise
+    e = parse_exercise("went to the gym for 60 minutes")
+    assert e is not None
+    assert e.kind == "strength"
+    assert e.duration_minutes == 60
+
+
+def test_worked_out_en() -> None:
+    from lifeos.exercise.ingestion import parse_exercise
+    e = parse_exercise("worked out 45 min")
+    assert e is not None
+    assert e.kind == "strength"
+    assert e.duration_minutes == 45
+
+
+def test_played_tennis_en() -> None:
+    from lifeos.exercise.ingestion import parse_exercise
+    e = parse_exercise("played tennis 45 minutes")
+    assert e is not None
+    assert e.kind == "sports"
+    assert e.title == "tennis"
+    assert e.duration_minutes == 45
+
+
+def test_cardio_of_minutes_en() -> None:
+    from lifeos.exercise.ingestion import parse_exercise
+    e = parse_exercise("did 30 min of cardio")
+    assert e is not None
+    assert e.kind == "cardio"
+    assert e.duration_minutes == 30
+
+
+def test_plain_english_sentence_is_none_en() -> None:
+    """Precision guard: EN phrasing without a digit quantity never parses.
+    Note: 'an hour' / 'half an hour' are NOT supported (digit minutes only)."""
+    from lifeos.exercise.ingestion import parse_exercise
+    assert parse_exercise("I ran late to the meeting") is None
+    assert parse_exercise("went to the gym for an hour") is None
+    assert parse_exercise("walked around the office all day") is None

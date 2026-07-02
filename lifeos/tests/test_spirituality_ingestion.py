@@ -95,3 +95,51 @@ def test_priority_meditation_over_gratitude() -> None:
     s = parse_spirituality("medité 10 minutos y agradezco la paz")
     assert s is not None
     assert s.kind == "meditation"
+
+
+# English support
+
+def test_grateful_for_en() -> None:
+    from lifeos.spirituality.ingestion import parse_spirituality
+    s = parse_spirituality("grateful for my family")
+    assert s is not None
+    assert s.kind == "gratitude"
+    assert "family" in s.body.lower()
+
+
+def test_thankful_for_en() -> None:
+    from lifeos.spirituality.ingestion import parse_spirituality
+    s = parse_spirituality("I'm thankful for this day")
+    assert s is not None
+    assert s.kind == "gratitude"
+
+
+def test_meditated_minutes_en() -> None:
+    from lifeos.spirituality.ingestion import parse_spirituality
+    s = parse_spirituality("meditated 20 minutes")
+    assert s is not None
+    assert s.kind == "meditation"
+    assert s.data["duration_minutes"] == 20
+
+
+def test_meditated_for_minutes_en() -> None:
+    from lifeos.spirituality.ingestion import parse_spirituality
+    s = parse_spirituality("meditated for 10 min before bed")
+    assert s is not None
+    assert s.kind == "meditation"
+    assert s.data["duration_minutes"] == 10
+
+
+def test_reflection_prefix_en() -> None:
+    from lifeos.spirituality.ingestion import parse_spirituality
+    s = parse_spirituality("reflection: I felt calm today")
+    assert s is not None
+    assert s.kind == "reflection"
+    assert "calm" in s.body
+
+
+def test_plain_english_sentence_is_none_en() -> None:
+    """Precision guard: EN prose without an explicit trigger never parses."""
+    from lifeos.spirituality.ingestion import parse_spirituality
+    assert parse_spirituality("I'm feeling great today") is None
+    assert parse_spirituality("meditated for a while") is None

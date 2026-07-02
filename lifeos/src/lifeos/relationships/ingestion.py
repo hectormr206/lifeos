@@ -50,6 +50,19 @@ _STOP_AFTER_NAME = frozenset({
     "porque", "para", "sobre", "de", "del", "en", "el", "la", "los",
     "las", "al", "a", "y", "pero", "que", "antes", "después", "despues",
     "muy", "mucho", "muchos", "sin", "con", "por",
+    # EN
+    "today", "yesterday", "tonight", "tomorrow", "this", "that",
+    "because", "about", "and", "but", "the", "at", "on", "in", "for",
+    "with", "after", "before", "last", "again",
+})
+
+# EN kinship terms accepted as the interaction person in "my X" phrases
+# ("argued with my brother"). Lowercase in text, stored title-cased.
+# Kept small on purpose — precision over recall.
+_EN_KINSHIP = frozenset({
+    "mom", "dad", "mother", "father", "brother", "sister",
+    "grandma", "grandpa", "wife", "husband", "son", "daughter",
+    "boyfriend", "girlfriend",
 })
 
 
@@ -71,6 +84,15 @@ def _clean_name(raw: str) -> str | None:
     if not raw:
         return None
     tokens = raw.split()
+    # EN kinship: "my brother" → "Brother". Only the exact two-token
+    # "my <kinship>" shape — anything else falls through to the strict
+    # proper-name path.
+    if (
+        len(tokens) >= 2
+        and tokens[0].lower() == "my"
+        and tokens[1].lower().rstrip(".,;:!?") in _EN_KINSHIP
+    ):
+        return tokens[1].rstrip(".,;:!?").capitalize()
     out: list[str] = []
     for t in tokens:
         tlow = t.lower().rstrip(".,;:!?")
@@ -89,7 +111,8 @@ def _clean_name(raw: str) -> str | None:
 # ─── Conversation ─────────────────────────────────────────────────────
 
 _CONVERSATION_RE = re.compile(
-    rf"\b(?:habl[éeè]|platiqu[éeè]|charl(?:é|amos|am[oóò]))\s+con\s+{_NAME}",
+    rf"\b(?:(?:habl[éeè]|platiqu[éeè]|charl(?:é|amos|am[oóò]))\s+con|"
+    rf"(?:talked|spoke|chatted)\s+(?:to|with))\s+{_NAME}",
     re.IGNORECASE,
 )
 
@@ -110,7 +133,8 @@ def _try_conversation(text: str) -> InteractionIntent | None:
 # ─── Conflict ─────────────────────────────────────────────────────────
 
 _CONFLICT_RE = re.compile(
-    rf"\b(?:(?:me\s+)?pele[éeè]|discut[íi](?:mos)?|tuv[eo]\s+(?:una\s+)?(?:pelea|discusi[oó]n))\s+con\s+{_NAME}",
+    rf"\b(?:(?:(?:me\s+)?pele[éeè]|discut[íi](?:mos)?|tuv[eo]\s+(?:una\s+)?(?:pelea|discusi[oó]n))\s+con|"
+    rf"(?:argued|had\s+a\s+fight|fought|had\s+an\s+argument)\s+with)\s+{_NAME}",
     re.IGNORECASE,
 )
 # Looser: "pelea con X" without a verb prefix
@@ -136,11 +160,11 @@ def _try_conflict(text: str) -> InteractionIntent | None:
 # ─── Call ─────────────────────────────────────────────────────────────
 
 _CALL_RE = re.compile(
-    rf"\b(?:llam[éeè]|le\s+llam[éeè])\s+a\s+{_NAME}",
+    rf"\b(?:(?:llam[éeè]|le\s+llam[éeè])\s+a|(?<!is\s)(?<!was\s)called)\s+{_NAME}",
     re.IGNORECASE,
 )
 _CALL_INCOMING_RE = re.compile(
-    rf"\bme\s+llam[óo]\s+{_NAME}",
+    rf"\b(?:me\s+llam[óo]|got\s+a\s+call\s+from)\s+{_NAME}",
     re.IGNORECASE,
 )
 
@@ -161,7 +185,9 @@ def _try_call(text: str) -> InteractionIntent | None:
 # ─── Quality time ─────────────────────────────────────────────────────
 
 _QUALITY_RE = re.compile(
-    rf"\b(?:sal[íi](?:mos)?|fu[ií](?:mos)?|com[íi](?:mos)?|cen[éeè](?:mos)?)\s+con\s+{_NAME}",
+    rf"\b(?:(?:sal[íi](?:mos)?|fu[ií](?:mos)?|com[íi](?:mos)?|cen[éeè](?:mos)?)\s+con|"
+    rf"had\s+(?:lunch|dinner|breakfast|coffee)\s+with|"
+    rf"went\s+out\s+with|hung\s+out\s+with)\s+{_NAME}",
     re.IGNORECASE,
 )
 
@@ -182,7 +208,8 @@ def _try_quality_time(text: str) -> InteractionIntent | None:
 # ─── Text / message ───────────────────────────────────────────────────
 
 _TEXT_RE = re.compile(
-    rf"\b(?:le\s+(?:escrib[íi]|text(?:[éeè]|eé))|text(?:[éeè]|eé))\s+a\s+{_NAME}",
+    rf"\b(?:(?:le\s+(?:escrib[íi]|text(?:[éeè]|eé))|text(?:[éeè]|eé))\s+a|"
+    rf"texted|messaged)\s+{_NAME}",
     re.IGNORECASE,
 )
 

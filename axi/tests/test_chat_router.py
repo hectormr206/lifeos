@@ -87,3 +87,35 @@ def test_route_yields_when_domain_says_off_topic():
         brain_ask=_brain(router_returns="finance", extract=extract),
     )
     assert res is None
+
+
+# English question guard
+
+def test_question_guard_english_interrogatives_en():
+    """EN questions without a trailing '?' must still read as questions."""
+    assert chat_router._looks_like_question("what did I spend last week")
+    assert chat_router._looks_like_question("who called me yesterday")
+    assert chat_router._looks_like_question("when is mom's birthday")
+    assert chat_router._looks_like_question("where did I put the keys")
+    assert chat_router._looks_like_question("how much did I spend on food")
+    assert chat_router._looks_like_question("why am I always tired")
+    assert chat_router._looks_like_question("which meds am I taking")
+    assert chat_router._looks_like_question("do you know my mom's birthday")
+    assert chat_router._looks_like_question("can you show my expenses")
+    assert chat_router._looks_like_question("could you check my meds")
+    assert chat_router._looks_like_question("tell me what I spent")
+    assert chat_router._looks_like_question("remember what I told you about Ana")
+
+
+def test_question_guard_spanish_still_works():
+    assert chat_router._looks_like_question("¿qué me recetaron?")
+    assert chat_router._looks_like_question("cuánto gasté este mes")
+    assert chat_router._looks_like_question("recuerdas el nombre del doctor")
+
+
+def test_question_guard_english_data_is_not_question_en():
+    """Plain EN data statements must NOT be treated as questions."""
+    assert not chat_router._looks_like_question("spent 250 on groceries")
+    assert not chat_router._looks_like_question("talked to Maria")
+    assert not chat_router._looks_like_question("meditated 20 minutes")
+    assert not chat_router._looks_like_question("got paid 20000")

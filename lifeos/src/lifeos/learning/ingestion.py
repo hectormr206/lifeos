@@ -40,14 +40,17 @@ _QUOTED_TITLE = r"""['"«“‘](?P<title>[^'"»”’]{1,200})['"»”’]"""
 # ─── Books ────────────────────────────────────────────────────────────
 
 _BOOK_START_RE = re.compile(
-    rf"\b(?:empec[éeè]|estoy\s+leyendo|comenc[éeè])\s+"
-    rf"(?:el\s+|un\s+)?(?:libro\s+)?"
+    rf"\b(?:empec[éeè]|estoy\s+leyendo|comenc[éeè]|"
+    rf"started\s+reading|i'?m\s+reading|started)\s+"
+    rf"(?:el\s+|un\s+|the\s+|a\s+)?(?:libro\s+|book\s+)?"
     rf"{_QUOTED_TITLE}",
     re.IGNORECASE,
 )
+# EN "read" (past tense) is only accepted because a QUOTED title must
+# follow immediately — a bare "I read a lot" can never match.
 _BOOK_DONE_RE = re.compile(
-    rf"\b(?:termin[éeè]|le[íi]|acab[éeè])\s+"
-    rf"(?:el\s+|un\s+)?(?:libro\s+)?"
+    rf"\b(?:termin[éeè]|le[íi]|acab[éeè]|finished|read)\s+(?:reading\s+)?"
+    rf"(?:el\s+|un\s+|the\s+|a\s+)?(?:libro\s+|book\s+)?"
     rf"{_QUOTED_TITLE}",
     re.IGNORECASE,
 )
@@ -77,7 +80,9 @@ def _try_book_active(text: str) -> LearningIntent | None:
 
 _COURSE_RE = re.compile(
     rf"\b(?:empec[éeè]\s+el\s+curso\s+de|estoy\s+estudiando|"
-    rf"empec[éeè]\s+a\s+estudiar)\s+"
+    rf"empec[éeè]\s+a\s+estudiar|"
+    rf"started\s+the\s+course\s+(?:on\s+|of\s+)?|i'?m\s+studying|"
+    rf"started\s+studying)\s*"
     rf"{_QUOTED_TITLE}",
     re.IGNORECASE,
 )
@@ -119,7 +124,7 @@ def _try_idea(text: str) -> LearningIntent | None:
 
 _RESEARCH_RE = re.compile(
     r"^\s*(?:axi[,:\s]+)?"
-    r"(?:investigar|investigar\s*:)\s+(?P<what>.+?)\s*$",
+    r"(?:investigar\s*:?|research\s*:)\s+(?P<what>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 _RESEARCH_TODO_RE = re.compile(
