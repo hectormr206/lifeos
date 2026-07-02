@@ -117,7 +117,66 @@ def _canonical_named_symptom(raw: str) -> tuple[str, str]:
     return (r, r.replace(" ", "_"))
 
 
+# Spanish named (non-pain) symptoms — the ES mirror of _SYMPTOM_EN_NAMED_RE.
+# ES previously had ONLY the pain-location category, so a bare "tengo fiebre"
+# (no number) parsed to nothing. Anchored to a Spanish having/feeling verb
+# (tengo / ando con / estoy / (me) siento / traigo) so precision stays high —
+# same ethos as the EN branch. Canonical data["symptom"] values MATCH the
+# English ones (fever/cough/nausea/dizziness/diarrhea/sore_throat) so downstream
+# code treats ES and EN identically; only the title is rendered Spanish-form.
+# Idioms like "estoy cansado de ..." / "harto de ..." can't match because their
+# words are not in the symptom group (mirrors the EN 'tired'/'sick' exclusion).
+# "dolor de garganta" / "garganta irritada" live here as the sore-throat NAMED
+# symptom; "me duele la garganta" is deliberately NOT matched (no having/feeling
+# verb) so it still falls through to the pain-location branch (location="garganta").
+_SYMPTOM_ES_NAMED_RE = re.compile(
+    r"\b(?:tengo|ando\s+con|traigo|estoy|siento|me\s+siento)\s+"
+    r"(?:muy\s+|un\s+poco\s+(?:de\s+)?|algo\s+de\s+|bastante\s+|mucho\s+"
+    r"|mucha\s+|la\s+|el\s+|una?\s+)?"
+    r"(fiebre|calentura|tos|n[áa]useas?|ganas\s+de\s+vomitar"
+    r"|maread[oa]s?|mareo|diarrea|dolor\s+de\s+garganta"
+    r"|garganta\s+(?:irritada|inflamada))\b",
+    re.IGNORECASE,
+)
+
+
+def _canonical_named_symptom_es(raw: str) -> tuple[str, str]:
+    """Map a matched ES symptom phrase to (Spanish title, EN data_key).
+
+    The data_key mirrors _canonical_named_symptom so ES and EN share one
+    canonical symptom vocabulary; only the title is Spanish-form.
+    """
+    r = re.sub(r"[-\s]+", " ", raw.lower().strip())
+    if "garganta" in r:
+        return ("dolor de garganta", "sore_throat")
+    if r.startswith("fiebre") or r.startswith("calentura"):
+        return ("fiebre", "fever")
+    if r == "tos":
+        return ("tos", "cough")
+    if r.startswith("náus") or r.startswith("naus") or "vomitar" in r:
+        return ("náuseas", "nausea")
+    if r.startswith("mare"):
+        return ("mareo", "dizziness")
+    if r.startswith("diarrea"):
+        return ("diarrea", "diarrhea")
+    return (r, r.replace(" ", "_"))
+
+
 def _try_symptom(text: str) -> HealthIntent | None:
+    # ── ES named (non-pain) symptoms — mirror of the EN named category ────
+    # Runs BEFORE pain-location so "tengo dolor de garganta" registers as the
+    # sore-throat NAMED symptom (more actionable than location="garganta").
+    # "me duele la garganta" is not matched here, so it still falls through to
+    # the pain-location branch below (existing location behaviour unchanged).
+    m = _SYMPTOM_ES_NAMED_RE.search(text)
+    if m:
+        title, key = _canonical_named_symptom_es(m.group(1))
+        return HealthIntent(
+            kind="symptom",
+            title=title,
+            data={"symptom": key},
+        )
+
     # ── ES pain-location + EN pain-location (mirror ES {location} shape) ──
     location: str | None = None
     m = _SYMPTOM_RE.search(text)

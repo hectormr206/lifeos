@@ -1143,6 +1143,111 @@ def test_symptom_en_negative_tired_idiom() -> None:
     assert h is None or h.kind != "symptom"
 
 
+# ─── ES named (non-pain) symptoms — mirror of the EN named category ────
+# Bare "tengo fiebre" (no number) must register as a fever symptom with the
+# SAME canonical data["symptom"] values as the EN side; only the title is
+# Spanish-form.
+
+def test_symptom_es_named_fever() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("tengo fiebre")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert h.data["symptom"] == "fever"
+    assert h.title == "fiebre"
+
+
+def test_symptom_es_named_fever_variants() -> None:
+    from lifeos.health.ingestion import parse_health
+    for text in ("tengo calentura", "ando con fiebre"):
+        h = parse_health(text)
+        assert h is not None, text
+        assert h.data["symptom"] == "fever", text
+
+
+def test_symptom_es_named_cough() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("tengo tos")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert h.data["symptom"] == "cough"
+
+
+def test_symptom_es_named_dizziness() -> None:
+    from lifeos.health.ingestion import parse_health
+    for text in ("estoy mareado", "me siento mareada", "tengo mareo"):
+        h = parse_health(text)
+        assert h is not None, text
+        assert h.data["symptom"] == "dizziness", text
+
+
+def test_symptom_es_named_nausea() -> None:
+    from lifeos.health.ingestion import parse_health
+    for text in ("tengo náuseas", "siento náuseas", "tengo ganas de vomitar"):
+        h = parse_health(text)
+        assert h is not None, text
+        assert h.data["symptom"] == "nausea", text
+
+
+def test_symptom_es_named_diarrhea() -> None:
+    from lifeos.health.ingestion import parse_health
+    for text in ("tengo diarrea", "ando con diarrea"):
+        h = parse_health(text)
+        assert h is not None, text
+        assert h.data["symptom"] == "diarrhea", text
+
+
+def test_symptom_es_named_sore_throat() -> None:
+    """'tengo dolor de garganta' is the sore-throat NAMED symptom (wins over
+    location='garganta' because the ES-named branch runs first)."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("tengo dolor de garganta")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert h.data["symptom"] == "sore_throat"
+    assert h.title == "dolor de garganta"
+
+
+def test_symptom_es_named_sore_throat_irritada() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("tengo la garganta irritada")
+    assert h is not None
+    assert h.data["symptom"] == "sore_throat"
+
+
+def test_symptom_es_me_duele_garganta_stays_location() -> None:
+    """Overlap guard: 'me duele la garganta' has no having/feeling verb the
+    ES-named regex accepts, so it still parses to pain-location (unchanged)."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("me duele la garganta")
+    assert h is not None
+    assert h.kind == "symptom"
+    assert "garganta" in h.data["location"].lower()
+    assert "symptom" not in h.data
+
+
+def test_symptom_es_named_negative_cansado_idiom() -> None:
+    """'estoy cansado de ...' / 'harto de ...' are idioms, not symptoms."""
+    from lifeos.health.ingestion import parse_health
+    assert parse_health("estoy cansado de esto") is None
+    assert parse_health("estoy harto de esperar") is None
+
+
+def test_symptom_es_fever_with_number_stays_temperature() -> None:
+    """A number keeps it a TEMPERATURE vital (_try_vital runs before
+    _try_symptom); only the bare form becomes the fever symptom."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("fiebre de 38.5")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "temperature"
+    assert h.data["value"] == 38.5
+    bare = parse_health("tengo fiebre")
+    assert bare is not None
+    assert bare.kind == "symptom"
+    assert bare.data["symptom"] == "fever"
+
+
 def test_symptom_en_vital_wins_over_symptom() -> None:
     """A vital in the same text still wins (parser priority unchanged)."""
     from lifeos.health.ingestion import parse_health
