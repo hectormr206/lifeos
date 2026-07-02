@@ -649,3 +649,242 @@ def test_sleep_same_day_no_wrap() -> None:
     assert h is not None
     assert h.data["type"] == "sleep_hours"
     assert h.data["value"] == 2.0
+
+
+# ── English support (Wave 2) ─────────────────────────────────────────────────
+# Inline EN alternations in the existing regexes; digits only for EN v1
+# (the ES word→digit normalizer stays ES-only). Same plausibility gates as ES.
+
+
+# Glucose
+
+def test_glucose_en_bare() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("glucose 110")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "glucose"
+    assert h.data["value"] == 110
+
+
+def test_glucose_en_blood_sugar() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("blood sugar 95 this morning")
+    assert h is not None
+    assert h.data["type"] == "glucose"
+    assert h.data["value"] == 95
+
+
+def test_glucose_en_negative_no_number() -> None:
+    from lifeos.health.ingestion import parse_health
+    assert parse_health("my glucose meter is broken") is None
+
+
+def test_glucose_en_negative_plain_sugar() -> None:
+    """Bare 'sugar' (without 'blood') is NOT a glucose keyword."""
+    from lifeos.health.ingestion import parse_health
+    assert parse_health("sugar is bad for you, avoid 100 grams") is None
+
+
+# Blood pressure
+
+def test_bp_en_over_with_pulse() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("blood pressure 120 over 80, pulse 72")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 120
+    assert h.data["diastolic"] == 80
+    assert h.data["pulse_bpm"] == 72
+
+
+def test_bp_en_bp_keyword_slash() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("bp 118/76")
+    assert h is not None
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 118
+    assert h.data["diastolic"] == 76
+
+
+def test_bp_en_bare_with_a_pulse_of() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("120/80 with a pulse of 65")
+    assert h is not None
+    assert h.data["type"] == "blood_pressure"
+    assert h.data["systolic"] == 120
+    assert h.data["diastolic"] == 80
+    assert h.data["pulse_bpm"] == 65
+
+
+def test_bp_en_bare_rejects_implausible() -> None:
+    """Same physiological gates as ES on the bare EN forms."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("20 over 10 with a pulse of 300")
+    assert h is None or h.data.get("type") != "blood_pressure"
+
+
+def test_bp_en_negative_plain_sentence() -> None:
+    """'over' between numbers without any BP/pulse keyword must not parse."""
+    from lifeos.health.ingestion import parse_health
+    assert parse_health("I read 120 pages over 80 minutes") is None
+
+
+# Sleep hours (explicit)
+
+def test_sleep_hours_en() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("slept 7 hours")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 7.0
+
+
+def test_sleep_hours_en_and_a_half() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("slept 7 and a half hours")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 7.5
+
+
+def test_sleep_hours_en_i_slept_decimal() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I slept 6.5 hours, feeling tired")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 6.5
+
+
+def test_sleep_en_negative_like_a_baby() -> None:
+    from lifeos.health.ingestion import parse_health
+    assert parse_health("slept like a baby") is None
+
+
+def test_sleep_en_negative_slept_over() -> None:
+    from lifeos.health.ingestion import parse_health
+    assert parse_health("we slept over at a friend's place") is None
+
+
+# Natural sleep clock
+
+def test_natural_sleep_en_went_to_bed_woke_up() -> None:
+    """'went to bed at 11 and woke up at 6' — onset heuristic 11 → 23h."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("went to bed at 11 and woke up at 6")
+    assert h is not None
+    assert h.kind == "vital"
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["start_hour_24"] == 23
+    assert h.data["end_hour_24"] == 6
+    assert h.data["value"] == 7.0
+
+
+def test_natural_sleep_en_fell_asleep_ampm_minutes() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("fell asleep at 11 pm and got up at 6:30 am")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 7.5
+    assert h.data["end_minute"] == 30
+
+
+def test_natural_sleep_en_periods_night_morning() -> None:
+    """EN periods 'at night' / 'in the morning' map onto the ES period logic."""
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("went to bed at 11 at night and woke up at 7 in the morning")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["start_hour_24"] == 23
+    assert h.data["end_hour_24"] == 7
+    assert h.data["value"] == 8.0
+
+
+def test_natural_sleep_en_slept_from_to() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("slept from 1am to 9am")
+    assert h is not None
+    assert h.data["type"] == "sleep_hours"
+    assert h.data["value"] == 8.0
+
+
+def test_natural_sleep_en_negative_no_hours() -> None:
+    from lifeos.health.ingestion import parse_health
+    assert parse_health("went to bed early and woke up tired") is None
+
+
+def test_natural_sleep_en_negative_plain_chat() -> None:
+    from lifeos.health.ingestion import parse_health
+    assert parse_health("I need to go to bed earlier these days") is None
+
+
+# Medication
+
+def test_medication_en_ibuprofen() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I took ibuprofen")
+    assert h is not None
+    assert h.kind == "medication"
+    assert "ibuprofen" in h.data["name"].lower()
+
+
+def test_medication_en_dose_mg() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("took 500mg of paracetamol")
+    assert h is not None
+    assert h.kind == "medication"
+    assert "paracetamol" in h.data["name"].lower()
+
+
+def test_medication_en_negative_shower() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("took a shower")
+    assert h is None or h.kind != "medication"
+
+
+def test_medication_en_negative_break() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I took a break")
+    assert h is None or h.kind != "medication"
+
+
+def test_medication_en_negative_nap() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("took a nap this afternoon")
+    assert h is None or h.kind != "medication"
+
+
+def test_medication_en_negative_bus() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("took the bus to work")
+    assert h is None or h.kind != "medication"
+
+
+# Weight sentence forms
+
+def test_weight_en_i_weigh() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I weigh 64")
+    assert h is not None
+    assert h.data["type"] == "weight"
+    assert h.data["value"] == 64.0
+
+
+def test_weight_en_my_weight_is() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("my weight is 64.5")
+    assert h is not None
+    assert h.data["type"] == "weight"
+    assert h.data["value"] == 64.5
+
+
+def test_weight_en_negative_no_number() -> None:
+    from lifeos.health.ingestion import parse_health
+    assert parse_health("I weigh my options carefully") is None
+
+
+def test_weight_en_negative_implausible() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("weight 500")
+    assert h is None or h.data.get("type") != "weight"

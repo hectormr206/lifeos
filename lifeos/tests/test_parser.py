@@ -201,3 +201,123 @@ def test_brain_fallback_must_return_timezone_aware() -> None:
         brain_fallback=_fallback,
     )
     assert ri is None
+
+
+# ── English support (Wave 2) ─────────────────────────────────────────────────
+
+
+def test_reminder_en_tomorrow_at_3pm() -> None:
+    """EN word order puts the time FIRST — leading-when split must handle it."""
+    from zoneinfo import ZoneInfo
+
+    from lifeos.parser import parse_reminder
+
+    ri = parse_reminder("remind me tomorrow at 3pm to call the dentist")
+    assert ri is not None
+    assert "dentist" in ri.message.lower()
+    assert ri.recurrence is None
+    assert ri.when > datetime.now(timezone.utc)
+    local = ri.when.astimezone(ZoneInfo("America/Mexico_City"))
+    assert local.hour == 15
+
+
+def test_reminder_en_every_day_9am() -> None:
+    from lifeos.parser import parse_reminder
+
+    ri = parse_reminder("remind me every day at 9am to take my meds")
+    assert ri is not None
+    assert ri.recurrence == "0 9 * * *"
+    assert "meds" in ri.message.lower()
+
+
+def test_reminder_en_dont_forget_on_friday() -> None:
+    from zoneinfo import ZoneInfo
+
+    from lifeos.parser import parse_reminder
+
+    ri = parse_reminder("don't forget the meeting on friday at 10am")
+    assert ri is not None
+    assert "meeting" in ri.message.lower()
+    local = ri.when.astimezone(ZoneInfo("America/Mexico_City"))
+    assert local.hour == 10
+    assert local.weekday() == 4  # Friday
+
+
+def test_reminder_en_in_minutes() -> None:
+    from lifeos.parser import parse_reminder
+
+    ri = parse_reminder("remind me to stretch in 5 minutes")
+    assert ri is not None
+    assert "stretch" in ri.message.lower()
+    delta = ri.when - datetime.now(timezone.utc)
+    assert timedelta(minutes=4) < delta < timedelta(minutes=6)
+
+
+def test_reminder_en_every_weekday() -> None:
+    from lifeos.parser import parse_reminder
+
+    ri = parse_reminder("remind me every monday at 9 to stretch")
+    assert ri is not None
+    assert ri.recurrence == "0 9 * * 1"
+    assert "stretch" in ri.message.lower()
+
+
+def test_reminder_en_half_past_idiom() -> None:
+    from zoneinfo import ZoneInfo
+
+    from lifeos.parser import parse_reminder
+
+    ri = parse_reminder("remind me to check the oven tomorrow at half past 8")
+    assert ri is not None
+    assert "oven" in ri.message.lower()
+    local = ri.when.astimezone(ZoneInfo("America/Mexico_City"))
+    assert (local.hour, local.minute) == (8, 30)
+
+
+def test_reminder_en_quarter_to_idiom() -> None:
+    from zoneinfo import ZoneInfo
+
+    from lifeos.parser import parse_reminder
+
+    ri = parse_reminder("remind me to leave tomorrow at quarter to 9")
+    assert ri is not None
+    local = ri.when.astimezone(ZoneInfo("America/Mexico_City"))
+    assert (local.hour, local.minute) == (8, 45)
+
+
+def test_reminder_en_negative_no_time_marker() -> None:
+    from lifeos.parser import parse_reminder
+
+    assert parse_reminder("remind me that I have to call the dentist") is None
+
+
+def test_reminder_en_negative_casual_tell_me() -> None:
+    from lifeos.parser import parse_reminder
+
+    assert parse_reminder("tell me about your day") is None
+
+
+def test_reminder_en_negative_not_a_trigger() -> None:
+    """The trigger is anchored at the start — mid-sentence phrasing must not fire."""
+    from lifeos.parser import parse_reminder
+
+    assert parse_reminder("I told you not to forget things") is None
+
+
+# looks_schedulish — EN markers must feed the LLM-fallback gate consistently.
+
+
+def test_looks_schedulish_en_true() -> None:
+    from lifeos.parser import looks_schedulish
+
+    assert looks_schedulish("remind me tomorrow") is True
+    assert looks_schedulish("every day at 9am") is True
+    assert looks_schedulish("bring me the news daily") is True
+    assert looks_schedulish("the report at 8:30") is True
+
+
+def test_looks_schedulish_en_false() -> None:
+    from lifeos.parser import looks_schedulish
+
+    assert looks_schedulish("what a day") is False
+    assert looks_schedulish("nothing much, thanks") is False

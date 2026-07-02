@@ -76,9 +76,13 @@ _REMINDER_TRIGGER = re.compile(
     r"ll[áa]mame|"
     r"m[áa]ndame|"
     r"alertame|"
-    r"no\s+(?:te\s+)?olvides"   # "no olvides X mañana", "no te olvides de X..."
+    r"no\s+(?:te\s+)?olvides|"  # "no olvides X mañana", "no te olvides de X..."
+    # EN triggers ("remind me to X tomorrow", "don't forget the meeting...")
+    r"remind\s+me|reminder|"
+    r"don['’]?t\s+forget|do\s+not\s+forget|"
+    r"let\s+me\s+know|alert\s+me|tell\s+me"
     r")\s+"
-    r"(?:de\s+|que\s+)?"
+    r"(?:de\s+|que\s+|to\s+|about\s+|that\s+)?"
     r"(.+)$",
     re.IGNORECASE | re.DOTALL,
 )
@@ -106,6 +110,16 @@ _WHEN_MARKERS = (
     "después de", "despues de",  # "después de comer", "después del almuerzo"
     "cuando ",                    # "cuando termine la reunión"
     "tras ",                      # "tras la cena"
+    # EN markers. All markers are matched word-boundary-aware via
+    # _WHEN_MARKER_RE, so "at " never fires inside "that " etc.
+    "tomorrow", "today", "tonight",
+    "at ",       # "at 3pm", "at 9"
+    "in ",       # "in 30 minutes"
+    "next ",     # "next friday"
+    "on ",       # "on friday"
+    "after ",    # "after lunch" (brain fallback territory)
+    "when ",     # "when the meeting ends"
+    "every ",    # "every day at 9" (recurrence)
 )
 
 
@@ -132,8 +146,23 @@ _IDIOM_REWRITES: list[tuple[re.Pattern[str], str]] = [
     # or punctuation — never when there's already a ":NN" or "am/pm".
     (re.compile(r"\ba\s+las\s+(\d{1,2})(?!\s*[:apmAPM\d])\b", re.IGNORECASE),
      lambda m: f"a las {int(m.group(1)):02d}:00"),
+    # EN clock idioms — same treatment as the Spanish ones above.
+    (re.compile(r"\bhalf\s+past\s+(\d{1,2})\b", re.IGNORECASE),
+     lambda m: f"{int(m.group(1)):02d}:30"),
+    (re.compile(r"\bquarter\s+past\s+(\d{1,2})\b", re.IGNORECASE),
+     lambda m: f"{int(m.group(1)):02d}:15"),
+    # "quarter to 9" → "08:45". For "quarter to 1" this yields 00:45 (the hour
+    # is am/pm-ambiguous anyway; dateparser resolves with PREFER_DATES_FROM).
+    (re.compile(r"\bquarter\s+to\s+(\d{1,2})\b", re.IGNORECASE),
+     lambda m: f"{(int(m.group(1)) - 1) % 24:02d}:45"),
+    # "at 9" → "at 09:00" — same bare-hour fix as the Spanish "a las 9" above.
+    # Never applies when ":NN", "am/pm", or more digits follow.
+    (re.compile(r"\bat\s+(\d{1,2})(?!\s*[:apmAPM\d])\b", re.IGNORECASE),
+     lambda m: f"at {int(m.group(1)):02d}:00"),
     # "el sábado a las X" — dateparser handles "sábado X" better than "el sábado a las X".
     (re.compile(r"\bel\s+", re.IGNORECASE), ""),
+    # "on friday at 10am" — dateparser handles "friday at 10am" better.
+    (re.compile(r"\bon\s+", re.IGNORECASE), ""),
 ]
 
 
@@ -174,7 +203,8 @@ class ReminderIntent:
 # content/URL signal below guards against casual misfires.
 _AGENTIC_ENCLITIC = re.compile(
     r"\b(?:tr[aá]eme|m[aá]ndame|b[uú]scame|cons[ií]gueme|conseguime|"
-    r"res[uú]meme|prep[aá]rame|[aá]rmame|dame)\b",
+    r"res[uú]meme|prep[aá]rame|[aá]rmame|dame|"
+    r"bring\s+me|send\s+me|get\s+me|fetch\s+me)\b",
     re.IGNORECASE,
 )
 
@@ -200,8 +230,9 @@ _AGENTIC_INFINITIVE = re.compile(
 # and the delivery verb itself — keeping the actual content (and any URL).
 _AGENTIC_FRAMING = re.compile(
     r"^\s*(?:axi[,:\s]+)?"
-    r"(?:(?:quiero|necesito|quisiera|me\s+gustar[ií]a)\s+que\s+)?"
-    r"(?:podr[ií]as|pod[eé]s)?\s*"
+    r"(?:(?:quiero|necesito|quisiera|me\s+gustar[ií]a)\s+que\s+"
+    r"|i\s+(?:want|need)\s+you\s+to\s+)?"
+    r"(?:podr[ií]as|pod[eé]s|could\s+you|can\s+you|please)?\s*"
     r"(?:me\s+)?"
     r"(?:tr[aá]eme|m[aá]ndame|b[uú]scame|cons[ií]gueme|conseguime|"
     r"res[uú]meme|prep[aá]rame|[aá]rmame|dame|"
@@ -209,8 +240,9 @@ _AGENTIC_FRAMING = re.compile(
     r"des|das|busqu[eé]s|busc[aá]s|consig[ao]s|conse?gu[ií]s|"
     r"resum[ao]s|resum[ií]s|prepar[aeé]s?|arm[aeé]s?|"
     r"mandarme|enviarme|traerme|darme|buscarme|conseguirme|"
-    r"resumirme|prepararme|armarme)"
-    r"\s+(?:de\s+|que\s+)?",
+    r"resumirme|prepararme|armarme|"
+    r"bring\s+me|send\s+me|get\s+me|fetch\s+me)"
+    r"\s+(?:de\s+|que\s+|to\s+)?",
     re.IGNORECASE,
 )
 
@@ -225,20 +257,38 @@ _WHEN_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Leading when-expression at the START of the remainder, with the message
+# after it — the common ENGLISH word order ("remind me tomorrow at 3pm to
+# call the dentist", "remind me every day at 9am to take my meds"). The ES
+# order (message first, time last) is handled by the marker-cut path in
+# parse_reminder; this regex only rescues the marker-at-position-0 case that
+# previously always returned None.
+_LEADING_WHEN_RE = re.compile(
+    r"^\s*(?P<when>"
+    r"(?:(?:tomorrow|today|tonight|ma[ñn]ana|hoy|pasado\s+ma[ñn]ana)\s*)?"
+    r"(?:(?:a\s+las|at)\s+\d{1,2}(?::\d{2})?\s*(?:a\.?\s?m\.?|p\.?\s?m\.?)?)?"
+    r")\s*[,;]?\s*(?:(?:to|que|de)\s+)?(?P<msg>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
 # Content signal — required alongside an agentic trigger so casual phrasing
 # ("dame un abrazo") never misfires into an agentic task.
 _AGENTIC_CONTENT = re.compile(
     r"\b(?:noticias|titulares|res[uú]men(?:es)?|clima|pron[oó]stico|"
-    r"novedades|reporte|briefing|actualizaci[oó]n|tendencias)\b",
+    r"novedades|reporte|briefing|actualizaci[oó]n|tendencias|"
+    r"news|headlines|weather)\b",
     re.IGNORECASE,
 )
 
 
-# Spanish weekday name → cron weekday number (Monday=1, Sunday=0).
-# We accept both forms because Whisper/users transcribe inconsistently.
+# Weekday name (ES + EN) → cron weekday number (Monday=1, Sunday=0).
+# We accept both accented/unaccented ES forms because Whisper/users
+# transcribe inconsistently.
 _WEEKDAYS = {
     "lunes": 1, "martes": 2, "miércoles": 3, "miercoles": 3,
     "jueves": 4, "viernes": 5, "sábado": 6, "sabado": 6, "domingo": 0,
+    "monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4,
+    "friday": 5, "saturday": 6, "sunday": 0,
 }
 
 # Explicit clock time ANYWHERE in the text (am/pm aware). "a las 9", "a las
@@ -246,8 +296,9 @@ _WEEKDAYS = {
 # daily recurrence can pick up an hour even when it is NOT adjacent to the
 # recurrence phrase (e.g. "todos los días me mandes X a las 9 am").
 _HOUR_AT = re.compile(
-    r"\ba\s+las\s+(\d{1,2})(?::(\d{2}))?\s*"
-    r"(a\.?\s?m\.?|p\.?\s?m\.?|de\s+la\s+(?:ma(?:ñ|n)ana|tarde|noche))?",
+    r"\b(?:a\s+las|at)\s+(\d{1,2})(?::(\d{2}))?\s*"
+    r"(a\.?\s?m\.?|p\.?\s?m\.?|de\s+la\s+(?:ma(?:ñ|n)ana|tarde|noche)"
+    r"|in\s+the\s+(?:morning|afternoon|evening)|at\s+night)?",
     re.IGNORECASE,
 )
 _HOUR_BARE = re.compile(
@@ -264,8 +315,12 @@ def _extract_hour(s: str) -> tuple[int, int] | None:
     mm = int(m.group(2) or 0)
     mod = (m.group(3) or "").replace(".", "").replace(" ", "").lower()
     if mod:
-        pm = mod.startswith("pm") or "tarde" in mod or "noche" in mod
-        am = mod.startswith("am") or "mañana" in mod or "manana" in mod
+        pm = mod.startswith("pm") or any(
+            k in mod for k in ("tarde", "noche", "afternoon", "evening", "night")
+        )
+        am = mod.startswith("am") or any(
+            k in mod for k in ("mañana", "manana", "morning")
+        )
         if pm and h < 12:
             h += 12
         elif am and h == 12:
@@ -285,43 +340,55 @@ def _detect_recurrence(text: str) -> tuple[str | None, str]:
     """
     s = text.lower()
 
-    # "cada [weekday] a las HH(:MM)"
+    # "cada [weekday] a las HH(:MM)" / "every [weekday] at HH(:MM)( am/pm)"
     weekdays_alt = "|".join(_WEEKDAYS.keys())
-    m = re.search(rf"\bcada\s+({weekdays_alt})\s+a\s+las\s+(\d{{1,2}})(?::(\d{{2}}))?\b", s)
+    m = re.search(
+        rf"\b(?:cada|every)\s+({weekdays_alt})\s+(?:a\s+las|at)\s+"
+        rf"(\d{{1,2}})(?::(\d{{2}}))?\s*(a\.?\s?m\.?|p\.?\s?m\.?)?\b",
+        s,
+    )
     if m:
         wd = _WEEKDAYS[m.group(1)]
         h = int(m.group(2)); mm = int(m.group(3) or 0)
-        residual = re.sub(rf"\bcada\s+({weekdays_alt})\s+", "", text, count=1, flags=re.IGNORECASE)
+        mod = (m.group(4) or "").replace(".", "").replace(" ", "")
+        if mod.startswith("pm") and h < 12:
+            h += 12
+        elif mod.startswith("am") and h == 12:
+            h = 0
+        residual = re.sub(rf"\b(?:cada|every)\s+({weekdays_alt})\s+", "", text, count=1, flags=re.IGNORECASE)
         return f"{mm} {h} * * {wd}", residual
 
-    # "cada X horas" / "cada X minutos"
-    m = re.search(r"\bcada\s+(\d{1,3})\s+horas?\b", s)
+    # "cada X horas" / "cada X minutos" / "every X hours" / "every X minutes"
+    m = re.search(r"\b(?:cada|every)\s+(\d{1,3})\s+(?:horas?|hours?)\b", s)
     if m:
         n = int(m.group(1))
-        residual = re.sub(r"\bcada\s+\d{1,3}\s+horas?\b", "", text, count=1, flags=re.IGNORECASE)
+        residual = re.sub(r"\b(?:cada|every)\s+\d{1,3}\s+(?:horas?|hours?)\b", "", text, count=1, flags=re.IGNORECASE)
         return f"0 */{n} * * *", residual
-    m = re.search(r"\bcada\s+(\d{1,3})\s+minutos?\b", s)
+    m = re.search(r"\b(?:cada|every)\s+(\d{1,3})\s+(?:minutos?|minutes?)\b", s)
     if m:
         n = int(m.group(1))
-        residual = re.sub(r"\bcada\s+\d{1,3}\s+minutos?\b", "", text, count=1, flags=re.IGNORECASE)
+        residual = re.sub(r"\b(?:cada|every)\s+\d{1,3}\s+(?:minutos?|minutes?)\b", "", text, count=1, flags=re.IGNORECASE)
         return f"*/{n} * * * *", residual
 
-    # "cada hora" / "cada minuto"  (singular shorthand for "cada 1")
-    if re.search(r"\bcada\s+hora\b", s):
-        residual = re.sub(r"\bcada\s+hora\b", "", text, count=1, flags=re.IGNORECASE)
+    # "cada hora" / "cada minuto" / "every hour" / "every minute"
+    # (singular shorthand for "cada/every 1")
+    if re.search(r"\b(?:cada\s+hora|every\s+hour)\b", s):
+        residual = re.sub(r"\b(?:cada\s+hora|every\s+hour)\b", "", text, count=1, flags=re.IGNORECASE)
         return "0 * * * *", residual
-    if re.search(r"\bcada\s+minuto\b", s):
-        residual = re.sub(r"\bcada\s+minuto\b", "", text, count=1, flags=re.IGNORECASE)
+    if re.search(r"\b(?:cada\s+minuto|every\s+minute)\b", s):
+        residual = re.sub(r"\b(?:cada\s+minuto|every\s+minute)\b", "", text, count=1, flags=re.IGNORECASE)
         return "* * * * *", residual
 
     # Daily/recurring. Covers "todos los días", "diariamente", "a diario",
-    # "cada día"/"cada dia", "todas las mañanas". The hour is detected over the
-    # WHOLE text (am/pm aware) — NOT required to be adjacent to the recurrence
-    # phrase — so "todos los días me mandes X a las 9 am" → 09:00, and a daily
-    # request with no hour at all defaults to 08:00 (morning briefing).
+    # "cada día"/"cada dia", "todas las mañanas", EN "every day", "daily",
+    # "every morning". The hour is detected over the WHOLE text (am/pm aware)
+    # — NOT required to be adjacent to the recurrence phrase — so "todos los
+    # días me mandes X a las 9 am" → 09:00, and a daily request with no hour
+    # at all defaults to 08:00 (morning briefing).
     daily_pat = (
         r"\b(?:todos\s+los\s+d[ií]as|diariamente|a\s+diario|"
-        r"cada\s+d[ií]a|todas\s+las\s+ma(?:ñ|n)anas)\b"
+        r"cada\s+d[ií]a|todas\s+las\s+ma(?:ñ|n)anas|"
+        r"every\s+day|daily|every\s+morning)\b"
     )
     if re.search(daily_pat, s):
         residual = re.sub(daily_pat, "", text, count=1, flags=re.IGNORECASE)
@@ -367,18 +434,34 @@ def parse_reminder(
     if not rest:
         return None
 
-    # Find the earliest occurrence of any time marker. The chunk BEFORE it
-    # is the message; the chunk FROM it on is the when-expression.
-    lower = rest.lower()
-    cut_idx = -1
-    for marker in _WHEN_MARKERS:
-        i = lower.find(marker)
-        if i != -1 and (cut_idx == -1 or i < cut_idx):
-            cut_idx = i
+    # Find the earliest occurrence of any time marker (word-boundary aware —
+    # "at " must not fire inside "that "). The chunk BEFORE it is the message;
+    # the chunk FROM it on is the when-expression.
+    mm = _WHEN_MARKER_RE.search(rest)
+    cut_idx = mm.start() if mm else -1
 
+    message = ""
+    when_text = ""
     if cut_idx == 0:
-        # marker at position 0 = no message text
-        return None
+        # Marker at position 0. English word order commonly puts the time
+        # FIRST ("tomorrow at 3pm to call the dentist", "at 9am to take my
+        # meds" after a recurrence strip). Try to split a leading
+        # when-expression from the trailing message; otherwise it's a
+        # time-only utterance with no message → punt.
+        lm = _LEADING_WHEN_RE.match(rest)
+        if not lm:
+            return None
+        message = lm.group("msg").strip(" ,;:.-")
+        when_text = lm.group("when").strip(" ,;:.-")
+        if not message or not when_text:
+            return None
+        if recurrence:
+            # The schedule is already encoded in the cron string; first run
+            # is the next cron match.
+            when_utc = _next_cron_match(recurrence, tz)
+            if when_utc is None:
+                return None
+            return ReminderIntent(message=message, when=when_utc, recurrence=recurrence)
 
     if cut_idx < 0:
         # No explicit time. Acceptable only for recurring reminders — the
@@ -414,23 +497,33 @@ def parse_reminder(
             return None
         return ReminderIntent(message=message, when=when_utc, recurrence=recurrence)
 
-    message = rest[:cut_idx].strip(" ,;:.-")
-    when_text = rest[cut_idx:].strip(" ,;:.-")
+    if cut_idx > 0:
+        message = rest[:cut_idx].strip(" ,;:.-")
+        when_text = rest[cut_idx:].strip(" ,;:.-")
     if not message or not when_text:
         return None
 
     when_text_norm = _normalize_when(when_text)
     parsed = dateparser.parse(
         when_text_norm,
-        languages=["es"],
+        languages=["es", "en"],
         settings={
             "TIMEZONE": tz,
             "RETURN_AS_TIMEZONE_AWARE": True,
             "PREFER_DATES_FROM": "future",
+            # Keep DMY for ambiguous slash dates ("8/12") — adding "en" to
+            # languages would otherwise flip them to MDY.
+            "DATE_ORDER": "DMY",
         },
     )
     if parsed is None:
         log.info("dateparser could not interpret %r", when_text)
+        if recurrence:
+            # The cron string already carries the schedule — an unparseable
+            # residual when-text must not sink a valid recurring reminder.
+            when_utc = _next_cron_match(recurrence, tz)
+            if when_utc is not None:
+                return ReminderIntent(message=message, when=when_utc, recurrence=recurrence)
         if brain_fallback is not None:
             try:
                 fallback_dt = brain_fallback(when_text, tz)
@@ -528,11 +621,14 @@ def parse_agentic_reminder(
     if when_text and not recurrence:
         parsed = dateparser.parse(
             _normalize_when(when_text),
-            languages=["es"],
+            languages=["es", "en"],
             settings={
                 "TIMEZONE": tz,
                 "RETURN_AS_TIMEZONE_AWARE": True,
                 "PREFER_DATES_FROM": "future",
+                # Keep DMY for ambiguous slash dates ("8/12") — adding "en"
+                # to languages would otherwise flip them to MDY.
+                "DATE_ORDER": "DMY",
             },
         )
         if parsed is None:
@@ -558,7 +654,8 @@ def parse_agentic_reminder(
 # is worth trying AFTER the regex parsers have already failed.
 _RECURRENCE_WORDS = re.compile(
     r"\b(?:todos\s+los\s+d[ií]as|diariamente|a\s+diario|cada\s+d[ií]a|"
-    r"cada\s+semana|semanal(?:mente)?|todas\s+las\s+ma(?:ñ|n)anas|cada)\b",
+    r"cada\s+semana|semanal(?:mente)?|todas\s+las\s+ma(?:ñ|n)anas|cada|"
+    r"every\s+day|daily|weekly|every)\b",
     re.IGNORECASE,
 )
 

@@ -76,7 +76,8 @@ def _try_symptom(text: str) -> HealthIntent | None:
 _GLUCOSE_RE = re.compile(
     # Allow short bridge words ("salió", "en ayunas", "está en") between
     # "glucosa" and the number — up to ~25 chars but no sentence breaks.
-    r"\bglucos[ao]\b[^.\n,;:]{0,25}?\s(\d{2,3})(?:\s*mg/?d?l)?\b",
+    # EN: "glucose 110", "blood sugar 95 this morning".
+    r"\b(?:glucos[aoe]|blood\s+sugar)\b[^.\n,;:]{0,25}?\s(\d{2,3})(?:\s*mg/?d?l)?\b",
     re.IGNORECASE,
 )
 # Two BP shapes:
@@ -84,33 +85,41 @@ _GLUCOSE_RE = re.compile(
 #   (2) "120/80" or "116, 84" with optional "y pulso N" appended — bare numbers
 #       only triggers when the numbers fall in physiological ranges to avoid
 #       false positives on accounting/dimensions/codes.
+# Shared keyword alternations (ES + EN) so all BP variants stay in sync.
+_BP_KEYWORD_ALT = r"presi[oó]n(?:\s+arterial)?|p\.?a\.?|blood\s+pressure|bp"
+_PULSE_KEYWORD_ALT = r"pulsos?|pulse|fc|frecuencia\s+card[íi]aca|hr|heart\s+rate"
+# Separator between systolic and diastolic: "/", "over" (EN), or plain space
+# (output of the normalize_numbers_es word→digit pass).
+_BP_SEP = r"(?:/\s*|\s+over\s+|\s+)"
+
 _BP_RE_WITH_PULSE = re.compile(
     # "presión 120/80 pulso 72" / "presión 122 81, 53 pulsos" — keyword + sys/dia
-    # + optional pulse. Separator between sys and dia: "/" or space. Pulse follows
-    # after optional separator and pulse keyword OR as bare number with "pulsos?".
-    r"\b(?:presi[oó]n(?:\s+arterial)?|p\.?a\.?)\s*(?:de|:)?\s*"
-    r"(?P<bpws>\d{2,3})\s*(?:/\s*|\s+)(?P<bpwd>\d{2,3})"
-    r"(?:[,;]?\s*(?:y\s+)?(?:(?:pulsos?|fc|frecuencia\s+card[íi]aca)\s*[:=]?\s*(?P<bpwp1>\d{2,3})"
+    # + optional pulse. Separator between sys and dia: "/", "over", or space.
+    # Pulse follows after optional separator and pulse keyword OR as bare number
+    # with "pulsos?". EN: "blood pressure 120 over 80, pulse 72".
+    rf"\b(?:{_BP_KEYWORD_ALT})\s*(?:de|:)?\s*"
+    rf"(?P<bpws>\d{{2,3}})\s*{_BP_SEP}(?P<bpwd>\d{{2,3}})"
+    rf"(?:[,;]?\s*(?:y\s+|and\s+)?(?:(?:{_PULSE_KEYWORD_ALT})\s*(?:of\s+)?[:=]?\s*(?P<bpwp1>\d{{2,3}})"
     r"|(?P<bpwp2>\d{2,3})\s*pulsos?))?",
     re.IGNORECASE,
 )
 _BP_RE = re.compile(
-    # Explicit keyword + digits. Separator between sys and dia can be "/" (typed)
-    # or a plain space (output of normalize_numbers_es word→digit pass).
-    r"\b(?:presi[oó]n(?:\s+arterial)?|p\.?a\.?)\s*(?:de|:)?\s*"
-    r"(\d{2,3})\s*(?:/\s*|\s+)(\d{2,3})\b",
+    # Explicit keyword + digits. Separator between sys and dia can be "/" (typed),
+    # "over" (EN), or a plain space (output of normalize_numbers_es).
+    rf"\b(?:{_BP_KEYWORD_ALT})\s*(?:de|:)?\s*"
+    rf"(\d{{2,3}})\s*{_BP_SEP}(\d{{2,3}})\b",
     re.IGNORECASE,
 )
 _BP_PULSE_BARE_RE = re.compile(
     # "116, 84 y pulso 72"  /  "116/84 pulso 72"  /  "116, 84 pulso 72"
-    # /  "132/83, pulsos 58" (plural). Both sides have to be plausible
-    # (sys >= 80; dia >= 40) to avoid eating "150, 200" type non-medical
-    # numbers — checked in Python.
-    # Separator between sys and dia: comma, slash, or plain space (the last
-    # covers normalize_numbers_es output from word-form BP phrases).
-    r"^\s*(\d{2,3})\s*[,/ ]\s*(\d{2,3})"
-    r"(?:\s+y\s+|\s*,?\s+|\s*[.;]\s+)?"
-    r"(?:pulsos?|fc|frecuencia\s+card[íi]aca|hr)\s*[:=]?\s*(\d{2,3})\b",
+    # /  "132/83, pulsos 58" (plural) / "120/80 with a pulse of 65" (EN).
+    # Both sides have to be plausible (sys >= 80; dia >= 40) to avoid eating
+    # "150, 200" type non-medical numbers — checked in Python.
+    # Separator between sys and dia: comma, slash, "over", or plain space (the
+    # last covers normalize_numbers_es output from word-form BP phrases).
+    r"^\s*(\d{2,3})(?:\s*[,/]\s*|\s+over\s+|\s+)(\d{2,3})"
+    r"(?:\s+y\s+|\s+and\s+|\s+with\s+a\s+|\s*,?\s+|\s*[.;]\s+)?"
+    rf"(?:{_PULSE_KEYWORD_ALT})\s*(?:of\s+)?[:=]?\s*(\d{{2,3}})\b",
     re.IGNORECASE,
 )
 _BP_PULSE_TRAILING_RE = re.compile(
@@ -143,16 +152,22 @@ _BP_PULSE_DE_PULSO_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 _WEIGHT_RE = re.compile(
-    # "peso 75", "peso de 70.5kg", "me pesé/pese 65", "pesé 65", "weight 64".
+    # "peso 75", "peso de 70.5kg", "me pesé/pese 65", "pesé 65", "weight 64",
+    # "my weight is 64", "I weigh 64".
     # `pes[éeo]` allows past tense with/without accent and present "me peso".
     # Also matches standalone "pesé N" without "me" (e.g. voice dictation).
-    r"\b(?:peso(?:\s+actual)?|(?:me\s+)?pes[éeo]|weight)\s*(?:de|:|=)?\s*"
+    r"\b(?:peso(?:\s+actual)?|(?:me\s+)?pes[éeo]|(?:my\s+)?weight(?:\s+is)?"
+    r"|(?:i\s+)?weigh(?:ed)?)\s*(?:de|:|=)?\s*"
     r"(\d{2,3}(?:\.\d{1,2})?)\s*(kg|kilos?)?\b",
     re.IGNORECASE,
 )
 _SLEEP_HOURS_RE = re.compile(
-    # "dormí 6 horas", "dormí 6.5 horas", "dormí 6 horas y media"
-    r"\bdorm[íi]\s*(?:unas?\s+)?(\d{1,2}(?:\.\d{1,2})?)\s*(?:horas?|hrs?|h)"
+    # "dormí 6 horas", "dormí 6.5 horas", "dormí 6 horas y media",
+    # "slept 7 hours", "slept 7 and a half hours" ("and a half" → +0.5,
+    # handled in _try_vital the same way as "y media").
+    r"\b(?:dorm[íi]|(?:i\s+)?slept)\s*(?:unas?\s+|about\s+|around\s+)?"
+    r"(\d{1,2}(?:\.\d{1,2})?)\s*"
+    r"(?:and\s+a\s+half\s+)?(?:horas?|hrs?|hours?|h)"
     r"(?:\s+y\s+media)?\b",
     re.IGNORECASE,
 )
@@ -182,49 +197,60 @@ _HOUR_MIN_FRAG = (
     r")?"
 )
 
+# Spoken day-period vocabulary (ES + EN). EN words are normalized to their ES
+# equivalents inside _resolve_hour_24 so the clock-resolution machinery is
+# shared. Prefixes: "de la" (ES), "at"/"in the" (EN: "at night", "in the
+# morning").
+_PERIOD_WORD_ALT = r"noche|ma[ñn]ana|tarde|madrugada|night|morning|afternoon|evening"
+_PERIOD_PREFIX = r"(?:de\s+la\s+|at\s+|in\s+the\s+)"
+
 _SLEEP_FROM_TO_RE = re.compile(
-    # Onset verb: "me dormí", "me acosté", "me fui a dormir|cama"
-    r"\b(?:me\s+(?:dorm[íi]|acost[eé])|me\s+fui\s+a\s+(?:dormir|la\s+cama))\s*"
-    r"(?:como\s+)?(?:a\s+)?(?:la\s+|las\s+)?"
+    # Onset verb: "me dormí", "me acosté", "me fui a dormir|cama",
+    # EN: "went to bed", "went to sleep", "fell asleep"
+    r"\b(?:me\s+(?:dorm[íi]|acost[eé])|me\s+fui\s+a\s+(?:dormir|la\s+cama)"
+    r"|went\s+to\s+(?:bed|sleep)|fell\s+asleep)\s*"
+    r"(?:como\s+)?(?:a\s+|at\s+)?(?:la\s+|las\s+)?"
     rf"(?P<start_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
     r"(?:"
     r"  :(?P<start_min>\d{2})"
     r"  | \s+y\s+(?P<start_min_word>media|cuarto|\d{1,2})"
     r")?\s*"
-    r"(?:de\s+la\s+(?P<period>noche|ma[ñn]ana|tarde|madrugada)|(?P<ampm>am|pm))?"
+    rf"(?:{_PERIOD_PREFIX}(?P<period>{_PERIOD_WORD_ALT})|(?P<ampm>am|pm))?"
     r".{1,120}?"
-    # Wake verb: desperté, me levanté, acabo de despertar(me)|levantarme
-    r"(?:desp[eé]rt[éo]|me\s+levant[éo]|acabo\s+de\s+(?:despertar(?:me)?|levantarme))"
+    # Wake verb: desperté, me levanté, acabo de despertar(me)|levantarme,
+    # EN: woke up, got up
+    r"(?:desp[eé]rt[éo]|me\s+levant[éo]|acabo\s+de\s+(?:despertar(?:me)?|levantarme)"
+    r"|woke\s+up|got\s+up)"
     r"(?:.{0,40}?"
     r"(?:"
-    r"  (?P<now>ahorita|ya|reci[eé]n)"
-    r"  | a\s+(?:la\s+|las\s+)?"
+    r"  (?P<now>ahorita|ya|reci[eé]n|just\s+now)"
+    r"  | (?:a|at)\s+(?:la\s+|las\s+)?"
     rf"   (?P<end_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
     r"  (?:"
     r"    :(?P<end_min>\d{2})"
     r"    | \s+y\s+(?P<end_min_word>media|cuarto|\d{1,2})"
     r"  )?"
-    r"  (?:\s*(?:de\s+la\s+(?P<end_period>noche|ma[ñn]ana|tarde|madrugada)|(?P<end_ampm>am|pm)))?"
+    rf"  (?:\s*(?:{_PERIOD_PREFIX}(?P<end_period>{_PERIOD_WORD_ALT})|(?P<end_ampm>am|pm)))?"
     r"))?",
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
 )
 
-# "dormí de X a Y" / "dormí de X hasta Y"
+# "dormí de X a Y" / "dormí de X hasta Y" / EN "slept from X to|until Y"
 _SLEEP_DE_X_A_Y_RE = re.compile(
-    r"\bdorm[íi]\s+de\s+(?:la\s+|las\s+)?"
+    r"\b(?:dorm[íi]\s+de|slept\s+from)\s+(?:la\s+|las\s+)?"
     rf"(?P<start_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
     r"(?:"
     r"  :(?P<start_min>\d{2})"
     r"  | \s+y\s+(?P<start_min_word>media|cuarto|\d{1,2})"
     r")?\s*"
-    r"(?:de\s+la\s+(?P<period>noche|ma[ñn]ana|tarde|madrugada)|(?P<ampm>am|pm))?"
-    r"\s+(?:a|hasta)\s+(?:la\s+|las\s+)?"
+    rf"(?:{_PERIOD_PREFIX}(?P<period>{_PERIOD_WORD_ALT})|(?P<ampm>am|pm))?"
+    r"\s+(?:a|hasta|to|until|till)\s+(?:la\s+|las\s+)?"
     rf"(?P<end_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
     r"(?:"
     r"  :(?P<end_min>\d{2})"
     r"  | \s+y\s+(?P<end_min_word>media|cuarto|\d{1,2})"
     r")?"
-    r"(?:\s*(?:de\s+la\s+(?P<end_period>noche|ma[ñn]ana|tarde|madrugada)|(?P<end_ampm>am|pm)))?",
+    rf"(?:\s*(?:{_PERIOD_PREFIX}(?P<end_period>{_PERIOD_WORD_ALT})|(?P<end_ampm>am|pm)))?",
     re.IGNORECASE | re.VERBOSE,
 )
 
@@ -237,7 +263,8 @@ _SLEEP_DE_X_A_Y_RE = re.compile(
 # since the vocabulary is domain-specific and won't produce false positives in
 # exercise contexts.
 _DURATION_SLEEP_VOCAB_RE = re.compile(
-    r"(?:dorm[íi]|durm[íi]|acost[eé]|despert[oé]|sue[ñn]|noche)",
+    r"(?:dorm[íi]|durm[íi]|acost[eé]|despert[oé]|sue[ñn]|noche"
+    r"|slept|asleep|woke\s+up|went\s+to\s+bed)",
     re.IGNORECASE,
 )
 _DURATION_MINUTES_RE = re.compile(r"\b(\d{1,3})\s+min(?:utos?)?\b", re.IGNORECASE)
@@ -399,11 +426,20 @@ def _try_body_composition(text: str) -> HealthIntent | None:
 def _resolve_hour_24(h: int, period: str, ampm: str, wake: bool = False) -> int:
     """Convert a 12-hour token + spoken period or am/pm marker to 24h.
 
-    period: 'noche'|'madrugada'|'tarde'|'mañana'|''
+    period: 'noche'|'madrugada'|'tarde'|'mañana'|'' (EN 'night'|'morning'|
+            'afternoon'|'evening' are normalized to their ES equivalents)
     ampm:   'am'|'pm'|''
     wake:   True when resolving the wake-up end time (heuristic differs from onset)
     """
     p = period.lower().strip()
+    # Normalize EN period words to the ES vocabulary so the resolution rules
+    # below stay single-sourced.
+    p = {
+        "night": "noche",
+        "morning": "mañana",
+        "afternoon": "tarde",
+        "evening": "tarde",
+    }.get(p, p)
     a = ampm.lower().strip()
     if a == "pm":
         return h + 12 if h < 12 else h
@@ -741,9 +777,10 @@ def _try_vital(text: str) -> HealthIntent | None:
     m = _SLEEP_HOURS_RE.search(text)
     if m:
         v = float(m.group(1))
-        # "dormí 6 horas y media" → add 0.5; the regex matched the optional
-        # " y media" tail so check if it's present in the matched text.
-        if "y media" in m.group(0).lower():
+        # "dormí 6 horas y media" / "slept 7 and a half hours" → add 0.5; the
+        # regex matched the optional half-hour tail so check the matched text.
+        matched = m.group(0).lower()
+        if "y media" in matched or "and a half" in matched:
             v += 0.5
         # Plausibility: explicit sleep hours must be in a physiological range.
         # Values below 0.5h or above 16h are almost certainly mis-parses or
@@ -803,18 +840,34 @@ def _try_vital(text: str) -> HealthIntent | None:
 # ─── Medication: "tomé X", "me tomé X", "tomé Y de X" ──────────────────
 
 _MED_RE = re.compile(
-    r"\b(?:me\s+)?tom[éeè]\s+"
-    r"(?:una\s+|un\s+|la\s+|el\s+|mi\s+)?"
-    r"(?:dosis\s+de\s+|pastilla\s+de\s+)?"
+    r"\b(?:(?:me\s+)?tom[éeè]|(?:i\s+)?took)\s+"
+    r"(?:una\s+|un\s+|la\s+|el\s+|mi\s+|a\s+|an\s+|the\s+|my\s+|some\s+)?"
+    r"(?:dosis\s+de\s+|pastilla\s+de\s+|dose\s+of\s+|pill\s+of\s+"
+    # "500mg of paracetamol" / "500 mg de paracetamol" — absorb the dose so
+    # the captured name is the actual medication.
+    r"|\d+\s*(?:mg|mcg|g|ml|ui)\s+(?:of|de)\s+)?"
     r"([a-záéíóúñü0-9\s\-]+?)"
-    r"(?:\s+(?:de|para|porque|por|hace|antes|despu[ée]s|esta|hoy|ayer)|[,.;]|$)",
+    # Terminators are whole words (\b) so "para" never cuts inside
+    # "paracetamol" and "for" never cuts inside "formula".
+    r"(?:\s+(?:de|para|porque|por|hace|antes|despu[ée]s|esta|hoy|ayer"
+    r"|for|because|before|after|this|today|yesterday|tonight|at|in|to|and|with"
+    r"|an\s+hour)\b|[,.;]|$)",
     re.IGNORECASE,
 )
-# Common Spanish verbs that LOOK like "tomé" but aren't medicine.
+# Common Spanish/English objects that follow "tomé"/"took" but aren't medicine.
 _TOMÉ_FALSE_POSITIVES = {
     "agua", "café", "cafe", "té", "te", "leche", "jugo", "vino",
     "cerveza", "refresco", "el sol", "una foto", "el bus", "el tren",
     "una decisión", "una decision", "tiempo", "nota",
+    # EN — determiners are stripped by _MED_RE, so bare nouns; the article'd
+    # variants are kept too as a defensive net.
+    "shower", "a shower", "break", "a break", "nap", "a nap",
+    "bus", "the bus", "train", "the train", "taxi", "a taxi",
+    "photo", "a photo", "picture", "a picture", "walk", "a walk",
+    "seat", "a seat", "look", "a look", "call", "a call",
+    "note", "a note", "chance", "a chance",
+    "breath", "a breath", "deep breath", "a deep breath",
+    "decision", "a decision", "day off", "the day off",
 }
 
 

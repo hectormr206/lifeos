@@ -137,3 +137,51 @@ def test_daily_hour_am_pm_and_minutes():
 def test_daily_without_any_hour_defaults_to_8():
     from lifeos.parser import parse_agentic_reminder
     assert parse_agentic_reminder("todos los días tráeme el clima").recurrence == "0 8 * * *"
+
+
+# ── English support (Wave 2) ─────────────────────────────────────────────────
+
+
+def test_agentic_en_bring_tech_news_every_morning() -> None:
+    from lifeos.parser import parse_agentic_reminder
+
+    r = parse_agentic_reminder("bring me the tech news every morning at 9")
+    assert r is not None
+    assert r.action_kind == "agentic"
+    assert r.recurrence == "0 9 * * *"
+    assert "news" in r.action_prompt.lower()
+
+
+def test_agentic_en_send_weather_daily() -> None:
+    from lifeos.parser import parse_agentic_reminder
+
+    r = parse_agentic_reminder("send me the weather every day at 7am")
+    assert r is not None
+    assert r.action_kind == "agentic"
+    assert r.recurrence == "0 7 * * *"
+    assert "weather" in r.action_prompt.lower()
+
+
+def test_agentic_en_get_headlines_one_shot() -> None:
+    from lifeos.parser import parse_agentic_reminder
+
+    r = parse_agentic_reminder("get me the headlines tomorrow at 8")
+    assert r is not None
+    assert r.action_kind == "agentic"
+    assert r.recurrence is None
+    assert "headlines" in r.action_prompt.lower()
+    assert r.when.tzinfo is not None
+
+
+def test_agentic_en_negative_no_content_signal() -> None:
+    """A delivery verb without a content noun must not become a task."""
+    from lifeos.parser import parse_agentic_reminder
+
+    assert parse_agentic_reminder("bring me a coffee tomorrow") is None
+
+
+def test_agentic_en_negative_no_schedule() -> None:
+    """Content without any recurrence or time marker is just chatter."""
+    from lifeos.parser import parse_agentic_reminder
+
+    assert parse_agentic_reminder("send me the news") is None
