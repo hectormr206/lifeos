@@ -341,6 +341,37 @@ FIELDS: tuple[ConfigField, ...] = (
         "surface the one thing that most deserves your attention, and sends at "
         "most one proactive notification per day. Read-only, opt-in. Live (no restart).",
     ),
+    ConfigField(
+        "autonomous_cadence_minutes", "integer", 45,
+        "How often (minutes) Axi's autonomous tick runs while inside the active "
+        "window. Lower = more responsive but more brain calls. Takes effect on the "
+        "next dashboard restart (the scheduler is built at startup).",
+        minimum=5, maximum=240,
+    ),
+    ConfigField(
+        "autonomous_start_hour", "integer", 8,
+        "Earliest hour (0-23, local time) Axi may send a proactive thought — quiet "
+        "hours before this. Live (no restart).",
+        minimum=0, maximum=23,
+    ),
+    ConfigField(
+        "autonomous_end_hour", "integer", 22,
+        "Latest hour (0-23, local time) Axi may send a proactive thought — quiet "
+        "hours from this hour on. Live (no restart).",
+        minimum=1, maximum=24,
+    ),
+    ConfigField(
+        "autonomous_ask_timeout", "number", 20.0,
+        "Seconds Axi waits for the brain when deciding whether to speak. On timeout "
+        "the tick stays silent. Live (no restart).",
+        minimum=2.0, maximum=120.0,
+    ),
+    ConfigField(
+        "autonomous_max_chars", "integer", 120,
+        "Maximum length of a proactive notification. Keeps Axi's unprompted messages "
+        "short and glanceable. Live (no restart).",
+        minimum=40, maximum=500,
+    ),
     # ─────── lifeos posture (P6.2) ───────
     ConfigField(
         "posture_enabled", "boolean", False,

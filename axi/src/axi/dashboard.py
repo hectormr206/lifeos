@@ -451,11 +451,13 @@ async def lifespan(_app: FastAPI):
             return insights_digest.compose(cadence="daily").body
 
         def _auto_correlate() -> str:
-            # build_bundle() is a planned API; until it ships, return empty
-            # (the run_tick empty-digest guard only skips when BOTH digest AND
-            # correlate are empty, so a non-empty digest still proceeds).
+            # Feed the autonomous tick the correlation bundle (active patterns +
+            # relevant cross-domain graph edges) so Axi's proactive prompt sees
+            # what CONNECTS across domains, not just today's flat digest.
+            # build_bundle has internal error handling and returns an empty
+            # summary on any failure, so the tick degrades to digest-only.
             try:
-                return insights_correlate.render_summary([], [])
+                return insights_correlate.build_bundle(now=datetime.now(tz_auto)).edge_summary
             except Exception:  # noqa: BLE001
                 return ""
 
