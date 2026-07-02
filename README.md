@@ -4,7 +4,7 @@
 
 ![status](https://img.shields.io/badge/status-alpha-ffaa33)
 ![python](https://img.shields.io/badge/python-3.12-3776ab)
-![tests](https://img.shields.io/badge/tests-945-22cc55)
+![tests](https://img.shields.io/badge/tests-3548-22cc55)
 ![license](https://img.shields.io/badge/license-MIT-22cc55)
 
 Think of it as a platform and its agent:
@@ -36,11 +36,12 @@ This is the through-line of the project and it has never changed (see [The pivot
 
 | Capability | How it works |
 |---|---|
-| 🎤 **Voice** | Push-to-talk dictation to clipboard/auto-type; ask-about-my-screen and ask-about-my-camera; voice commands |
+| 🎤 **Voice** | Push-to-talk dictation to clipboard/auto-type; hands-free wake word ("Axi, …") — no hotkey needed; ask-about-my-screen and ask-about-my-camera; voice commands |
 | 🧠 **Brain** | Qwen3.6-35B-A3B (MoE) on GPU via llama.cpp, with `--cpu-moe` offload so it fits a 12 GB card; in-app selector for multiple 2026 multimodal models with per-model parameter tuning |
 | 🌐 **Live interpreter** | Real-time EN→ES speech interpreting (Whisper → LLM → Piper), sub-3s latency |
 | 🎙️ **Meetings** | Dual capture (mic + system audio), incremental transcription, speaker diarization, LLM summaries |
-| 🧩 **Memory & recall** | Short-term working context plus long-term recall over your conversations, facts, and meeting notes — Axi keeps the thread and always has context. The durable, encrypted store underneath belongs to LifeOS. |
+| 🧩 **Memory & recall** | A universal knowledge graph: everything you tell Axi — people, meds, conditions, doctors, dates, preferences — becomes typed nodes and edges. Chat answers cross-reference it ("who diagnosed my hypertension and what was prescribed?"), and a natural-language "forget" deletes with confirmation (including a subset by number). The durable, encrypted store underneath belongs to LifeOS. |
+| 🌍 **Web & briefings** | The brain searches the web on its own when a question needs it. Scheduled agentic briefings ("tráeme las noticias cada mañana a las 9") search on schedule, curate with real cited links, and push to your phone with deep links into a briefings panel |
 | 🎮 **Game Guard** | Releases ~12 GB of VRAM on click and restores it when you're done |
 
 ### LifeOS — the life platform (what it keeps)
@@ -53,10 +54,14 @@ This is the through-line of the project and it has never changed (see [The pivot
 | 🏃 **Exercise** | Sessions and summaries |
 | 👥 **Relationships** | People and interactions you want to stay on top of |
 | 🧘 **Spirituality / Posture / Learning** | Lightweight tracking for the rest of life |
-| 🔗 **Insights** | Cross-domain **correlations** with drill-down evidence (e.g. *poor sleep → impulsive purchases*), surfaced in a daily/weekly digest |
-| 📊 **Dashboard** | The local web app (FastAPI + Alpine.js, installable as a PWA) where your whole life lives — your domains plus Axi's chat, memory, and tools — reachable from your phone over your own VPN |
+| 🔗 **Insights** | Cross-domain **correlations** with drill-down evidence (e.g. *poor sleep → impulsive purchases*) |
+| 🌙 **Nightly digest** | A daily push summary narrated by the local LLM from deterministically computed facts (code computes the numbers, the model only writes — no hallucinated stats), including knowledge-graph observations, delivered at an adaptive hour learned from your median bedtime |
+| 📊 **Dashboard** | The local web app (FastAPI + Alpine.js, installable as a PWA) where your whole life lives — mobile bottom tab bar, desktop sidebar, and a living Axi mascot that shows thinking/offline state in the dashboard and as the tray icon — reachable from your phone over your own VPN |
+| 🛡️ **Reliability** | Single-writer architecture for the encrypted store (no multi-process write corruption), data-loss-guarded rotating backups, and web push with correct deep links over your own VPN |
 
-> Tested: **945 tests** (375 for Axi, 570 for LifeOS).
+> All domains parse both **English and Spanish** utterances on a fast deterministic path — "blood pressure 120 over 80", "spent 250 on groceries", "remind me tomorrow at 3pm…" all land as structured records without touching the LLM.
+
+> Tested: **3,548 tests** (2,409 for Axi, 1,139 for LifeOS).
 
 ---
 
@@ -74,7 +79,7 @@ This is the through-line of the project and it has never changed (see [The pivot
   ┌─────────────────────────────────────────────────────────────┐
   │  axi-dashboard (FastAPI, 127.0.0.1:8081, PWA)                 │
   │   /chat /health /finance /reminders /exercise /relationships  │
-  │   /insights /meetings /memory /graph /models /config …        │
+  │   /insights /briefings /meetings /memory /graph /models …     │
   │        │                                                      │
   │   lifeos core: one encrypted SQLite store + scheduler         │
   │   → daily digest, cross-domain correlations, web push         │
