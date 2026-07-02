@@ -2112,6 +2112,7 @@ def _attach_lifeos_edges(conn) -> list[dict[str, Any]]:
 
             if from_node_id is not None and to_node_id is not None:
                 b_edges.append({
+                    "id": None,  # cross-domain edges live in lifeos.db, not the edges table
                     "source": from_node_id,
                     "target": to_node_id,
                     "kind": str(er["rel"]),
@@ -2168,11 +2169,12 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
 
     # ── System A: edges (including similar-to) ────────────────────────────────
     edge_rows = c.execute(
-        "SELECT from_id, to_id, kind FROM edges"
+        "SELECT id, from_id, to_id, kind FROM edges"
     ).fetchall()
 
     a_edges = [
         {
+            "id": r["id"],
             "source": r["from_id"],
             "target": r["to_id"],
             "kind": r["kind"],
@@ -2220,7 +2222,7 @@ def graph_node_detail(node_id: int) -> dict[str, Any]:
         {
           node: {id, kind, label, domain, created_at, occurred_at, data},
           facts: [{id, label, created_at}],
-          relations: [{other_id, other_label, other_kind, kind, direction}],
+          relations: [{edge_id, other_id, other_label, other_kind, kind, direction}],
           conversations: [{id, ts, user_text_snippet}],
         }
 
@@ -2256,7 +2258,7 @@ def graph_node_detail(node_id: int) -> dict[str, Any]:
 
     # All edges touching this node, joined with the neighbor node.
     edge_rows = c.execute(
-        "SELECT e.kind AS ekind, e.from_id, e.to_id, "
+        "SELECT e.id AS eid, e.kind AS ekind, e.from_id, e.to_id, "
         "       n.id AS oid, n.kind AS okind, n.label AS olabel, n.created_at AS ocreated "
         "FROM edges e "
         "JOIN nodes n ON n.id = CASE WHEN e.from_id = ? THEN e.to_id ELSE e.from_id END "
@@ -2283,6 +2285,7 @@ def graph_node_detail(node_id: int) -> dict[str, Any]:
             conv_node_ids.append(er["oid"])
         if ekind and ekind not in _STRUCTURAL_EDGE_KINDS:
             relations.append({
+                "edge_id": er["eid"],
                 "other_id": er["oid"],
                 "other_label": er["olabel"],
                 "other_kind": er["okind"],
@@ -2440,6 +2443,102 @@ async def graph_merge(request: Request):
             "absorbed_id": duplicate_id,
         }
     return JSONResponse({"merged": False, "reason": "merge_failed"}, status_code=400)
+
+
+# Cap on how many 1-hop neighbors the neighborhood endpoint returns. Keeps the
+# injected subgraph small enough to fly to without flooding the loaded universe.
+_NEIGHBORHOOD_CAP = 60
+
+
+@app.get("/api/graph/node/{node_id}/neighborhood")
+def graph_node_neighborhood(node_id: int) -> dict[str, Any]:
+    """Return one node plus its 1-hop neighbors for on-demand navigation.
+
+    Lets the browser fly to (and focus) a node that wasn't in the initial
+    /api/graph/full load (which is capped at 500). Read-only.
+
+    Response shape:
+        {
+          nodes: [{id, label, kind, domain, created_at, occurred_at, has_embedding}],
+          edges: [{id, source, target, kind}],
+          truncated: bool,  -- True when neighbors exceeded the cap
+        }
+
+    Neighbors are capped at _NEIGHBORHOOD_CAP; when capped, only the edges whose
+    both endpoints made it into the returned node set are included, and
+    `truncated` is True. Unknown node id → 404.
+    """
+    c = store._connect()  # noqa: SLF001  (read-only — reads don't route)
+    center = c.execute(
+        "SELECT id, kind, label, domain, embedding, created_at, occurred_at "
+        "FROM nodes WHERE id = ?",
+        (node_id,),
+    ).fetchone()
+    if center is None:
+        raise HTTPException(404, detail="node not found")
+
+    def _node_dict(r) -> dict[str, Any]:
+        return {
+            "id": r["id"],
+            "label": r["label"][:80] if r["label"] else "",
+            "kind": r["kind"],
+            "domain": r["domain"] or "",
+            "has_embedding": r["embedding"] is not None,
+            "created_at": r["created_at"],
+            "occurred_at": r["occurred_at"],
+        }
+
+    # Distinct 1-hop neighbor ids (either edge direction), excluding self.
+    neigh_rows = c.execute(
+        "SELECT DISTINCT CASE WHEN from_id = ? THEN to_id ELSE from_id END AS nid "
+        "FROM edges WHERE from_id = ? OR to_id = ?",
+        (node_id, node_id, node_id),
+    ).fetchall()
+    neighbor_ids = [r["nid"] for r in neigh_rows if r["nid"] != node_id]
+
+    truncated = len(neighbor_ids) > _NEIGHBORHOOD_CAP
+    kept_ids = neighbor_ids[:_NEIGHBORHOOD_CAP]
+
+    nodes: list[dict[str, Any]] = [_node_dict(center)]
+    if kept_ids:
+        ph = ",".join("?" for _ in kept_ids)
+        rows = c.execute(
+            f"SELECT id, kind, label, domain, embedding, created_at, occurred_at "
+            f"FROM nodes WHERE id IN ({ph})",
+            kept_ids,
+        ).fetchall()
+        nodes.extend(_node_dict(r) for r in rows)
+
+    # Only edges whose BOTH endpoints are in the returned node set (so the client
+    # never injects a dangling edge when the neighbor list was truncated).
+    in_set = {n["id"] for n in nodes}
+    edge_rows = c.execute(
+        "SELECT id, from_id, to_id, kind FROM edges WHERE from_id = ? OR to_id = ?",
+        (node_id, node_id),
+    ).fetchall()
+    edges = [
+        {"id": er["id"], "source": er["from_id"], "target": er["to_id"], "kind": er["kind"]}
+        for er in edge_rows
+        if er["from_id"] in in_set and er["to_id"] in in_set
+    ]
+
+    return {"nodes": nodes, "edges": edges, "truncated": truncated}
+
+
+@app.delete("/api/graph/edge/{edge_id}")
+def graph_edge_delete(edge_id: int):
+    """Forget a single relationship (edge) without touching its endpoint nodes.
+
+    Delegates to store.delete_edge, which is single-writer-aware. Low-stakes:
+    the UI defers this behind an undo window and never removes either node.
+    Unknown edge id → 404.
+    """
+    c = store._connect()  # noqa: SLF001  (existence pre-check is read-only)
+    row = c.execute("SELECT id FROM edges WHERE id = ?", (edge_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, detail="edge not found")
+    deleted = store.delete_edge(edge_id)
+    return {"deleted": bool(deleted)}
 
 
 # ────────────────────────── model selector ────────────────────────────

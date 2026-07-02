@@ -189,7 +189,7 @@
                     </div>
                     <div class="space-y-1.5 max-h-48 overflow-y-auto">
                       <template x-for="(rel, i) in detail.relations" :key="i">
-                        <div class="panel2 p-2 text-xs rounded">
+                        <div class="relation-row panel2 p-2 text-xs rounded flex items-start justify-between gap-2">
                           <!-- human-readable direction: "Héctor —primo→ Rodrigo" -->
                           <template x-if="rel.direction === 'out'">
                             <span>
@@ -208,6 +208,14 @@
                               <span class="muted" x-text="' —' + tEdge(rel.kind).replace(/_/g, ' ') + '→ '"></span>
                               <span x-text="selectedNode.label"></span>
                             </span>
+                          </template>
+                          <!-- forget this relationship (edge): low-stakes, rides the undo window (no confirm) -->
+                          <template x-if="rel.edge_id != null">
+                            <button type="button" class="forget-relation-btn flex-shrink-0"
+                                    @click="forgetRelation(rel)"
+                                    :title="tUi('forgetRelation')" :aria-label="tUi('forgetRelation')"
+                                    style="background:transparent; border:0; color:var(--muted,#888); cursor:pointer; line-height:1; padding:0 2px; opacity:.7;"
+                                    aria-hidden="false">✕</button>
                           </template>
                         </div>
                       </template>
@@ -380,7 +388,7 @@
     <div id="undo-bar"
          class="fixed left-1/2 bottom-6 panel2 px-4 py-2 rounded-lg flex items-center gap-3 text-sm"
          style="transform: translateX(-50%); z-index: 100; box-shadow: 0 8px 24px rgba(0,0,0,.5); border: 1px solid var(--border, #2a3040);">
-      <span x-text="tUi('undoDone').replace('{label}', pendingUndo.label)"></span>
+      <span x-text="pendingUndo.message"></span>
       <button type="button" id="undo-delete-btn" @click="undoDelete()"
               class="px-2 py-1 rounded font-medium"
               style="background: var(--teal, #00D4AA); color: #06251f; border: 0; cursor: pointer;">
@@ -523,6 +531,15 @@ const LABELS = {
       mergeConversation: 'Las conversaciones no se pueden fusionar.',
       mergeSameId:  'No puedes fusionar un nodo consigo mismo.',
       mergeFailed:  'No se pudo fusionar.',
+      // ── Stage 3: edge forget + merge undo + navigate ──
+      forgetRelation: 'Olvidar esta relación',
+      undoEdge:     'Relación olvidada.',
+      edgeRestored: 'Relación restaurada.',
+      edgeForgetFailed: 'No se pudo olvidar la relación.',
+      undoMerge:    "Fusionado '{dup}' → '{canonical}'.",
+      mergeUndone:  'Fusión deshecha.',
+      actionFailed: 'No se pudo completar la acción.',
+      navTruncated: 'Mostrando parte de su vecindario.',
     },
   },
   en: {
@@ -609,6 +626,15 @@ const LABELS = {
       mergeConversation: 'Conversations cannot be merged.',
       mergeSameId:  'You cannot merge a node with itself.',
       mergeFailed:  'Could not merge.',
+      // ── Stage 3: edge forget + merge undo + navigate ──
+      forgetRelation: 'Forget this relationship',
+      undoEdge:     'Relationship forgotten.',
+      edgeRestored: 'Relationship restored.',
+      edgeForgetFailed: 'Could not forget the relationship.',
+      undoMerge:    "Merged '{dup}' → '{canonical}'.",
+      mergeUndone:  'Merge undone.',
+      actionFailed: 'Could not complete the action.',
+      navTruncated: 'Showing part of its neighborhood.',
     },
   },
 };
@@ -685,9 +711,9 @@ function brain3dPage() {
     mergeSwap: false,             // when true, the survivor is the partner (not the panel node)
     mergeSearchQuery: '',
     mergeSearchResults: [],
-    // Deferred-delete / undo grace window state
-    pendingUndo: null,            // reactive: { label, secondsLeft } (drives undo bar)
-    _pending: null,               // machinery: { snap, timerId, tickId }
+    // Generic deferred-action / undo grace window state (node / edge / merge)
+    pendingUndo: null,            // reactive: { type, message, secondsLeft } (drives undo bar)
+    _pending: null,               // machinery: { type, restore, commit, timerId, tickId }
     // Detail panel state (from /api/graph/node/{id})
     detail: null,
     detailLoading: false,
@@ -743,6 +769,7 @@ function brain3dPage() {
           kind: n.kind,
           domain: n.domain,
           has_embedding: n.has_embedding,
+          created_at: n.created_at ?? null,    // ingest epoch — drives date filters
           occurred_at: n.occurred_at ?? null,  // real event epoch or null
           color,
         };
@@ -750,6 +777,7 @@ function brain3dPage() {
         return gn;
       });
       const gfLinks = data.edges.map(e => ({
+        id: e.id ?? null,                       // System A edge id (null for System B)
         source: e.source,
         target: e.target,
         kind: e.kind,
@@ -1020,13 +1048,72 @@ function brain3dPage() {
     },
 
     // Navigate from a related-node link in the panel: re-center focus on it.
-    navigateTo(nodeId) {
+    // If the node is outside the initially-loaded universe (the 500-node cutoff),
+    // fetch its 1-hop neighborhood, inject it into the scene, then focus — so the
+    // camera flies and the focus-subgraph shows it (Deliverable B).
+    async navigateTo(nodeId) {
+      if (this._nodeById[nodeId]) {
+        this.focusOn(nodeId);
+        return;
+      }
+      await this._injectNeighborhood(nodeId);
       if (this._nodeById[nodeId]) {
         this.focusOn(nodeId);
       } else {
-        // Node outside the loaded universe (limit cutoff) — show detail only.
+        // Injection failed (e.g. server error) — fall back to detail-only.
         this._selectNode({ id: nodeId, label: '…', kind: '', domain: '', occurred_at: null });
       }
+    },
+
+    // ─── Deliverable B: inject a node's 1-hop neighborhood into the scene ───
+    // Fetches /api/graph/node/{id}/neighborhood and merges the returned nodes +
+    // edges into master data (_gfNodes/_gfLinks), _nodeById, _adj, and the live
+    // 3d-force-graph data. Existing nodes/edges are REUSED (matched by id) so we
+    // never double-inject and object refs (positions) are preserved. Injected
+    // nodes persist for the session.
+    async _injectNeighborhood(centerId) {
+      let data;
+      try {
+        const resp = await fetch('/api/graph/node/' + encodeURIComponent(centerId) + '/neighborhood');
+        if (!resp.ok) return;
+        data = await resp.json();
+      } catch (e) {
+        console.error('[brain3d] neighborhood fetch failed:', e);
+        return;
+      }
+      let added = false;
+      for (const n of (data.nodes || [])) {
+        if (this._nodeById[n.id]) continue;   // already loaded — reuse, don't duplicate
+        const color = DOMAIN_COLOR[n.domain] || DOMAIN_COLOR[n.kind] || DOMAIN_COLOR['default'];
+        const gn = {
+          id: n.id, label: n.label, kind: n.kind, domain: n.domain,
+          has_embedding: n.has_embedding,
+          created_at: n.created_at ?? null,
+          occurred_at: n.occurred_at ?? null,
+          color,
+        };
+        this._nodeById[n.id] = gn;
+        this._gfNodes.push(gn);
+        added = true;
+      }
+      for (const e of (data.edges || [])) {
+        if (e.id != null && this._gfLinks.some(l => l.id === e.id)) continue;  // reuse existing link
+        const gl = {
+          id: e.id ?? null, source: e.source, target: e.target, kind: e.kind, system: 'A',
+          color: e.kind === 'similar-to' ? '#3a5a6a' : '#5a7a4a',
+        };
+        this._gfLinks.push(gl);
+        (this._adj[e.source] = this._adj[e.source] || new Set()).add(e.target);
+        (this._adj[e.target] = this._adj[e.target] || new Set()).add(e.source);
+        added = true;
+      }
+      this.nodeCount = this._gfNodes.length;
+      this.edgeCount = this._gfLinks.length;
+      if (added && this._graph) {
+        // Swap in the enlarged master data; focusOn() re-renders the focus subgraph.
+        this._graph.graphData({ nodes: this._gfNodes, links: this._gfLinks });
+      }
+      if (data.truncated) this._toast(tUi('navTruncated'));
     },
 
     // ─── selection + detail panel (on-demand /api/graph/node/{id}) ───
@@ -1063,10 +1150,85 @@ function brain3dPage() {
       }
     },
 
-    // ─── forget (delete) the selected node — DEFERRED delete + undo window ───
+    // ─── Deliverable 0: generic deferred-action + undo grace window ───
+    // ONE state machine drives node-delete, edge-delete AND merge. Each action
+    // is applied optimistically to the view, then its real API call is deferred
+    // behind an 8s window ("undo send"). Starting any new deferred action commits
+    // the previous pending one first, so there is only ever ONE undo bar and no
+    // divergent per-action timer code.
+    //
+    //   _startPending(type, { optimisticApply, restore, commit, message })
+    //     optimisticApply() — in-view change (runs now, feels instant)
+    //     restore()         — reverse the in-view change (on undo OR commit failure)
+    //     commit()          — async; the real API call; resolves { ok, message? }
+    //     message           — pre-rendered Spanish text for the undo bar
+    //   pendingUndo = { type, message, secondsLeft }  (drives the undo bar)
+    //   _pending    = { type, restore, commit, timerId, tickId }
+    _startPending(type, opts) {
+      // Only ONE pending action at a time: commit the previous one first
+      // (fires its API now, then opens the new window).
+      if (this._pending) this._commitPending();
+
+      opts.optimisticApply();
+
+      const SECS = 8;
+      this.pendingUndo = { type, message: opts.message, secondsLeft: SECS };
+      const p = { type, restore: opts.restore, commit: opts.commit, timerId: null, tickId: null };
+      p.tickId = setInterval(() => {
+        if (!this.pendingUndo) return;
+        this.pendingUndo.secondsLeft = Math.max(0, this.pendingUndo.secondsLeft - 1);
+      }, 1000);
+      p.timerId = setTimeout(() => this._commitPending(), SECS * 1000);
+      this._pending = p;
+    },
+
+    // User clicked "Deshacer" within the window: restore, never call the API.
+    undoDelete() {
+      const p = this._pending;
+      if (!p) return;
+      if (p.timerId) clearTimeout(p.timerId);
+      if (p.tickId) clearInterval(p.tickId);
+      this._pending = null;
+      this.pendingUndo = null;
+      p.restore();
+      this._toast(this._undoneToast(p.type));
+    },
+
+    // Type-specific "undone" toast shown after the user hits Deshacer.
+    _undoneToast(type) {
+      if (type === 'edge') return tUi('edgeRestored');
+      if (type === 'merge') return tUi('mergeUndone');
+      return tUi('recovered');
+    },
+
+    // Window elapsed (or a new action arrived): NOW run the real API call.
+    // Detaches the pending state synchronously first so a leftover timer can
+    // never double-fire the API. On refusal/failure the in-view change is
+    // restored and the mapped Spanish error is shown (never leave the user
+    // thinking it succeeded when the server refused/failed).
+    async _commitPending() {
+      const p = this._pending;
+      if (!p) return;
+      if (p.timerId) clearTimeout(p.timerId);
+      if (p.tickId) clearInterval(p.tickId);
+      this._pending = null;
+      this.pendingUndo = null;
+      let res;
+      try {
+        res = await p.commit();
+      } catch (e) {
+        console.error('[brain3d] pending commit failed:', e);
+        res = { ok: false };
+      }
+      if (!res || !res.ok) {
+        p.restore();
+        this._toast((res && res.message) || tUi('actionFailed'), 'error');
+      }
+    },
+
+    // ─── forget (delete) the selected node — rides the generic undo window ───
     // Removes the node from the view instantly but delays the DELETE API call
-    // behind an 8s grace window ("undo send" pattern). Sacred data: never a
-    // silent hard delete.
+    // behind the 8s grace window. Sacred data: never a silent hard delete.
     async forgetNode() {
       const node = this.selectedNode;
       if (!node) return;
@@ -1088,67 +1250,122 @@ function brain3dPage() {
       }
       if (!ok) return;
 
-      // Only ONE pending delete at a time: commit the previous one first so we
-      // never lose track (fire its DELETE now, then open the new window).
-      if (this._pending) this._commitPending();
-
-      // Optimistic in-memory + scene removal (feels instant). DELETE deferred.
-      const snap = this._snapshotAndRemove(node);
-      this.selectedNode = null;
-      this.detail = null;
-
-      // Open the undo grace window.
-      const SECS = 8;
-      this.pendingUndo = { label: snap.label, secondsLeft: SECS };
-      const p = { snap, timerId: null, tickId: null };
-      p.tickId = setInterval(() => {
-        if (!this.pendingUndo) return;
-        this.pendingUndo.secondsLeft = Math.max(0, this.pendingUndo.secondsLeft - 1);
-      }, 1000);
-      p.timerId = setTimeout(() => this._commitPending(), SECS * 1000);
-      this._pending = p;
+      const self = this;
+      let snap = null;
+      this._startPending('node', {
+        message: tUi('undoDone').replace('{label}', node.label),
+        optimisticApply() {
+          snap = self._snapshotAndRemove(node);
+          self.selectedNode = null;
+          self.detail = null;
+        },
+        restore() { self._restoreSnapshot(snap); },
+        async commit() {
+          const resp = await fetch('/api/graph/node/' + encodeURIComponent(snap.nodeId), { method: 'DELETE' });
+          let body = null;
+          try { body = await resp.json(); } catch (e) { body = null; }
+          if (resp.ok && body && body.deleted) return { ok: true };
+          const reason = body && body.reason;
+          let m = tUi('deleteFailed');
+          if (reason === 'hub') m = tUi('deleteHub');
+          else if (reason === 'conversation') m = tUi('deleteConversation');
+          return { ok: false, message: m };
+        },
+      });
     },
 
-    // User clicked "Deshacer" within the window: restore, never call the API.
-    undoDelete() {
-      const p = this._pending;
-      if (!p) return;
-      if (p.timerId) clearTimeout(p.timerId);
-      if (p.tickId) clearInterval(p.tickId);
-      this._pending = null;
-      this.pendingUndo = null;
-      this._restoreSnapshot(p.snap);
-      this._toast(tUi('recovered'));
+    // ─── Deliverable C: forget a single relationship (edge) ───
+    // Low-stakes (an edge, not a node) and it HAS the undo window → no separate
+    // confirm dialog. Optimistically removes the link from the scene + the panel
+    // row, defers DELETE /api/graph/edge/{id}. Removing an edge never removes
+    // either endpoint node.
+    forgetRelation(rel) {
+      if (!rel || rel.edge_id == null) return;
+      const self = this;
+      const node = this.selectedNode;
+      const detail = this.detail;
+      const aId = node ? node.id : null;
+      const bId = rel.other_id;
+      let linkSnap = null;   // { links:[refs], aId, bId }
+      let relSnap = null;    // { rel, index }
+      this._startPending('edge', {
+        message: tUi('undoEdge'),
+        optimisticApply() {
+          linkSnap = self._removeEdgeFromScene(rel.edge_id, aId, bId);
+          if (detail && Array.isArray(detail.relations)) {
+            const idx = detail.relations.indexOf(rel);
+            if (idx !== -1) { relSnap = { rel, index: idx }; detail.relations.splice(idx, 1); }
+          }
+        },
+        restore() {
+          self._restoreEdgeToScene(linkSnap);
+          if (relSnap && detail && Array.isArray(detail.relations)) {
+            detail.relations.splice(Math.min(relSnap.index, detail.relations.length), 0, relSnap.rel);
+          }
+        },
+        async commit() {
+          const resp = await fetch('/api/graph/edge/' + encodeURIComponent(rel.edge_id), { method: 'DELETE' });
+          let body = null;
+          try { body = await resp.json(); } catch (e) { body = null; }
+          if (resp.ok && body && body.deleted) return { ok: true };
+          return { ok: false, message: tUi('edgeForgetFailed') };
+        },
+      });
     },
 
-    // Window elapsed (or a second delete arrived): NOW fire the DELETE.
-    // Detaches the pending state synchronously first so a leftover timer can
-    // never double-fire the API. On server refusal/failure the node is restored.
-    async _commitPending() {
-      const p = this._pending;
-      if (!p) return;
-      if (p.timerId) clearTimeout(p.timerId);
-      if (p.tickId) clearInterval(p.tickId);
-      this._pending = null;
-      this.pendingUndo = null;
-      const snap = p.snap;
-      let body = null;
-      try {
-        const resp = await fetch('/api/graph/node/' + encodeURIComponent(snap.nodeId), { method: 'DELETE' });
-        try { body = await resp.json(); } catch (e) { body = null; }
-        if (resp.ok && body && body.deleted) return;  // already gone from view
-        // Server kept the node (refusal that slipped through, or failure):
-        // restore so the user never thinks it's gone when it isn't.
-        this._restoreSnapshot(snap);
-        const reason = body && body.reason;
-        if (reason === 'hub') this._toast(tUi('deleteHub'), 'error');
-        else if (reason === 'conversation') this._toast(tUi('deleteConversation'), 'error');
-        else this._toast(tUi('deleteFailed'), 'error');
-      } catch (e) {
-        console.error('[brain3d] delete failed:', e);
-        this._restoreSnapshot(snap);
-        this._toast(tUi('deleteFailed'), 'error');
+    // Remove one edge (by id) from master data + the live scene. Snapshots the
+    // removed link ref(s) so restore re-adds the SAME objects. Endpoint nodes are
+    // never touched; adjacency between them is dropped only if no other edge
+    // still connects them.
+    _removeEdgeFromScene(edgeId, aId, bId) {
+      const removed = this._gfLinks.filter(l => l.id === edgeId);
+      if (removed.length > 0) {
+        this._gfLinks = this._gfLinks.filter(l => l.id !== edgeId);
+        this.edgeCount = this._gfLinks.length;
+        this._dropAdjacencyIfLast(aId, bId);
+        if (this._graph) this._renderGraphData();
       }
+      return { links: removed, aId, bId };
+    },
+
+    // Re-insert a snapshotted edge into master data + scene (same ref → position
+    // preserved) and restore adjacency between its endpoints.
+    _restoreEdgeToScene(snap) {
+      if (!snap) return;
+      for (const l of (snap.links || [])) {
+        if (!this._gfLinks.some(x => x === l || (l.id != null && x.id === l.id))) this._gfLinks.push(l);
+      }
+      this.edgeCount = this._gfLinks.length;
+      if (snap.aId != null && snap.bId != null) {
+        (this._adj[snap.aId] = this._adj[snap.aId] || new Set()).add(snap.bId);
+        (this._adj[snap.bId] = this._adj[snap.bId] || new Set()).add(snap.aId);
+      }
+      if (this._graph) this._renderGraphData();
+    },
+
+    // Drop the a↔b adjacency entry only when NO remaining link connects them.
+    _dropAdjacencyIfLast(aId, bId) {
+      if (aId == null || bId == null) return;
+      const stillLinked = this._gfLinks.some(l => {
+        const [s, t] = this._linkEnds(l);
+        return (s === aId && t === bId) || (s === bId && t === aId);
+      });
+      if (!stillLinked) {
+        if (this._adj[aId]) this._adj[aId].delete(bId);
+        if (this._adj[bId]) this._adj[bId].delete(aId);
+      }
+    },
+
+    // Recompute the whole adjacency map from the current links (used after a
+    // structural restore such as merge-undo, where incremental patching is fragile).
+    _rebuildAdjacency() {
+      const adj = {};
+      for (const l of this._gfLinks) {
+        const [s, t] = this._linkEnds(l);
+        (adj[s] = adj[s] || new Set()).add(t);
+        (adj[t] = adj[t] || new Set()).add(s);
+      }
+      this._adj = adj;
     },
 
     // Snapshot a node + its edges, then remove them from master data AND the
@@ -1267,6 +1484,13 @@ function brain3dPage() {
         default:              return tUi('mergeFailed');
       }
     },
+    // ─── Deliverable A: merge is now DEFERRED (rides the generic undo window) ───
+    // The confirm dialog stays. On confirm we optimistically fold the duplicate
+    // into the survivor in-view (repoint links + remove the dup node) and open the
+    // undo bar — WITHOUT POSTing. Undo restores the dup exactly; elapse fires the
+    // real POST /api/graph/merge. Client-side guards run in _pickMergePartner
+    // BEFORE this point so we don't optimistically merge something the server
+    // would refuse; the server is still the final safety net (restore on refusal).
     async confirmMerge() {
       if (!this.selectedNode || !this.mergePartner) return;
       const survivor = this.mergeSwap ? this.mergePartner : this.selectedNode;
@@ -1278,27 +1502,85 @@ function brain3dPage() {
       if (window.axiConfirm) ok = await window.axiConfirm({ message: msg, danger: true });
       else ok = window.confirm(msg);
       if (!ok) return;
-      try {
-        const resp = await fetch('/api/graph/merge', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ canonical_id: survivor.id, duplicate_id: dup.id }),
-        });
-        let body = null;
-        try { body = await resp.json(); } catch (e) { body = null; }
-        if (resp.ok && body && body.merged) {
-          // Reflect the DB in the loaded graph WITHOUT a full reload.
-          this._absorbNode(dup.id, survivor.id);
-          this._resetMerge();
-          this._toast(tUi('merged'));
-          const sv = this._nodeById[survivor.id];
-          if (sv) this._selectNode(sv);   // survivor stays selected
-          return;
+
+      const self = this;
+      const survivorId = survivor.id, dupId = dup.id;
+      const survivorLabel = survivor.label, dupLabel = dup.label;
+      let snap = null;
+      this._resetMerge();
+      this._startPending('merge', {
+        message: tUi('undoMerge').replace('{dup}', dupLabel).replace('{canonical}', survivorLabel),
+        optimisticApply() {
+          snap = self._absorbNodeSnapshot(dupId, survivorId);
+          const sv = self._nodeById[survivorId];
+          if (sv) self._selectNode(sv);   // survivor stays selected
+        },
+        restore() { self._restoreMergeSnapshot(snap); },
+        async commit() {
+          const resp = await fetch('/api/graph/merge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ canonical_id: survivorId, duplicate_id: dupId }),
+          });
+          let body = null;
+          try { body = await resp.json(); } catch (e) { body = null; }
+          if (resp.ok && body && body.merged) return { ok: true };
+          return { ok: false, message: self._mergeReasonMsg(body && body.reason) };
+        },
+      });
+    },
+
+    // Optimistic merge for the undo window: snapshot enough to restore EXACTLY,
+    // then fold the dup into the survivor via the existing _absorbNode.
+    _absorbNodeSnapshot(dupId, survivorId) {
+      // Capture original endpoints of every link touching the dup BEFORE repoint,
+      // and a shallow copy of the links array (so self-loops dropped by _absorbNode
+      // can be re-added on restore).
+      const touched = [];
+      for (const l of this._gfLinks) {
+        const [s, t] = this._linkEnds(l);
+        if (s === dupId || t === dupId) {
+          touched.push({ link: l, source: l.source, target: l.target });
         }
-        this._toast(this._mergeReasonMsg(body && body.reason), 'error');
-      } catch (e) {
-        console.error('[brain3d] merge failed:', e);
-        this._toast(tUi('mergeFailed'), 'error');
+      }
+      const snap = {
+        dupId, survivorId,
+        dupNode: this._nodeById[dupId],
+        touched,
+        origLinks: this._gfLinks.slice(),
+        focusId: this.focusId,
+        focusLabel: this.focusLabel,
+        focusKeep: this._focusKeep ? new Set(this._focusKeep) : null,
+        focusNeighbors: new Set(this._focusNeighbors),
+      };
+      this._absorbNode(dupId, survivorId);   // repoint + drop dup (existing logic)
+      return snap;
+    },
+
+    // Reverse an optimistic merge: reset repointed links to their original
+    // endpoints, re-add the dup node + dropped self-loops, rebuild adjacency,
+    // and restore focus state — using the same object refs throughout.
+    _restoreMergeSnapshot(snap) {
+      if (!snap) return;
+      for (const t of snap.touched) {
+        t.link.source = t.source;
+        t.link.target = t.target;
+      }
+      this._gfLinks = snap.origLinks;
+      if (!this._nodeById[snap.dupId]) {
+        this._nodeById[snap.dupId] = snap.dupNode;
+        this._gfNodes.push(snap.dupNode);
+      }
+      this._rebuildAdjacency();
+      this.nodeCount = this._gfNodes.length;
+      this.edgeCount = this._gfLinks.length;
+      this.focusId = snap.focusId;
+      this.focusLabel = snap.focusLabel;
+      this._focusKeep = snap.focusKeep;
+      this._focusNeighbors = snap.focusNeighbors;
+      if (this._graph) {
+        this._graph.graphData({ nodes: this._gfNodes, links: this._gfLinks });
+        this._renderGraphData();
       }
     },
     // Fold the absorbed node into the survivor in the loaded graph: repoint its
