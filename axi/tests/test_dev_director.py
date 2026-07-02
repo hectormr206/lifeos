@@ -80,6 +80,26 @@ def _fake_urlopen_response(content: str):
 _LOOP_KWARGS = dict(test_command="tests/ -q", venv_python="/fake/python")
 
 
+def _host_mode_config_get(key, default=None):
+    """config.get stub that forces the legacy uncontained host path.
+
+    Used by tests that assert on the direct `claude` argv rather than the
+    podman-wrapped argv. dev_agent_sandbox=False selects the host branch.
+    """
+    if key == "dev_agent_sandbox":
+        return False
+    return default
+
+
+def _sandbox_config_get(key, default=None):
+    """config.get stub that forces the podman sandbox path with a known image."""
+    if key == "dev_agent_sandbox":
+        return True
+    if key == "dev_agent_image":
+        return "localhost/axi-coder:latest"
+    return default
+
+
 # ---------------------------------------------------------------------------
 # _call_vt3b tests
 # ---------------------------------------------------------------------------
@@ -150,6 +170,7 @@ def test_run_director_round_happy_path(tmp_path):
 
     with patch.object(dev_director, "_call_vt3b", side_effect=fake_vt3b), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"), \
+         patch("axi.config.get", side_effect=_host_mode_config_get), \
          patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run):
         result = run_director_round(
             goal="Add hello function",
@@ -207,6 +228,7 @@ def test_review_not_done_parsing(tmp_path):
 
     with patch.object(dev_director, "_call_vt3b", side_effect=fake_vt3b), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"), \
+         patch("axi.config.get", side_effect=_host_mode_config_get), \
          patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run):
         result = run_director_round(
             goal="Test goal",
@@ -276,6 +298,7 @@ def test_claude_is_error_returns_ok_false(tmp_path):
 
     with patch.object(dev_director, "_call_vt3b", side_effect=fake_vt3b), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"), \
+         patch("axi.config.get", side_effect=_host_mode_config_get), \
          patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run):
         result = run_director_round(
             goal="Any goal",
@@ -317,6 +340,7 @@ def test_run_director_round_excludes_build_artifacts(tmp_path):
 
     with patch.object(dev_director, "_call_vt3b", side_effect=fake_vt3b), \
          patch("axi.dev_director.shutil.which", return_value="/usr/bin/claude"), \
+         patch("axi.config.get", side_effect=_host_mode_config_get), \
          patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run):
         result = run_director_round(
             goal="Add greet", repo_path=str(repo), _branch_id="testjunk",
@@ -695,7 +719,8 @@ def test_dev_director_session_id_captured():
         return CompletedProcess(args=list(args), returncode=0, stdout=stdout, stderr="")
 
     with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
-         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})):
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
+         patch("axi.config.get", side_effect=_host_mode_config_get):
         summary, cost, turns, is_error, session_id = _run_claude("/tmp", "instr", 60.0, {})
 
     assert session_id == "sess-abc123"
@@ -740,9 +765,231 @@ def test_dev_director_resume_adds_flag():
         return CompletedProcess(args=list(args), returncode=0, stdout=stdout, stderr="")
 
     with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
-         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})):
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
+         patch("axi.config.get", side_effect=_host_mode_config_get):
         _run_claude("/tmp", "instr", 60.0, {}, resume_session_id="old-sess-id")
 
     assert "--resume" in captured_args
     idx = captured_args.index("--resume")
     assert captured_args[idx + 1] == "old-sess-id"
+
+
+# ---------------------------------------------------------------------------
+# Sandbox: build_claude_podman_argv (pure unit tests, no subprocess)
+# ---------------------------------------------------------------------------
+
+
+def test_build_claude_podman_argv_containment():
+    """The CLI podman argv mounts only the worktree, scrubs env, keeps network on."""
+    from axi.dev_director import build_claude_podman_argv, _CLAUDE_CONFIG_DIR_CONTAINER
+
+    argv = build_claude_podman_argv(
+        worktree_path="/work/tree",
+        instruction="/goal do the thing",
+        image="localhost/axi-coder:latest",
+        resilience_argv=["--max-turns", "60", "--max-budget-usd", "5.0"],
+        resilience_env={
+            "CLAUDE_CODE_RETRY_WATCHDOG": "1",
+            "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0",
+        },
+    )
+
+    # Basic podman isolation shape.
+    assert argv[0] == "podman"
+    assert "run" in argv
+    assert "--rm" in argv
+    assert "--userns=keep-id" in argv
+
+    # Network must NOT be disabled (coder needs api.anthropic.com).
+    assert "--network=none" not in argv
+    assert "none" not in argv
+
+    # Exactly one -v mount: the worktree at /work. /home is NOT mounted.
+    v_indices = [i for i, a in enumerate(argv) if a == "-v"]
+    assert len(v_indices) == 1, f"expected exactly one mount, got {len(v_indices)}"
+    assert argv[v_indices[0] + 1] == "/work/tree:/work:Z"
+    assert not any("/home" in a for a in argv), "host /home must never be mounted"
+
+    # Working dir is the mounted worktree.
+    w_idx = argv.index("-w")
+    assert argv[w_idx + 1] == "/work"
+
+    # Only ANTHROPIC_API_KEY is forwarded FROM the host (bare `-e NAME` form).
+    e_pairs = [(argv[i + 1]) for i, a in enumerate(argv) if a == "-e"]
+    assert "ANTHROPIC_API_KEY" in e_pairs, e_pairs
+    inherited = [v for v in e_pairs if "=" not in v]
+    assert inherited == ["ANTHROPIC_API_KEY"], (
+        f"only ANTHROPIC_API_KEY may be inherited from the host, got {inherited}"
+    )
+
+    # CLAUDE_CONFIG_DIR + resilience env cross explicitly as NAME=VALUE.
+    assert f"CLAUDE_CONFIG_DIR={_CLAUDE_CONFIG_DIR_CONTAINER}" in e_pairs
+    assert "CLAUDE_CODE_RETRY_WATCHDOG=1" in e_pairs
+    assert "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0" in e_pairs
+
+    # Image present, then the in-container claude command.
+    assert "localhost/axi-coder:latest" in argv
+    img_idx = argv.index("localhost/axi-coder:latest")
+    tail = argv[img_idx + 1:]
+    assert tail[:6] == [
+        "claude", "-p", "/goal do the thing",
+        "--output-format", "json", "--permission-mode",
+    ]
+    assert tail[6] == "bypassPermissions"
+    # Resilience argv is appended to the claude command.
+    assert "--max-turns" in tail and "--max-budget-usd" in tail
+
+
+def test_build_claude_podman_argv_resume_and_config_dir_under_worktree():
+    """--resume is passed and the config dir lives under the mounted worktree /work."""
+    from axi.dev_director import build_claude_podman_argv, _CLAUDE_CONFIG_DIR_CONTAINER
+
+    argv = build_claude_podman_argv(
+        worktree_path="/wt",
+        instruction="instr",
+        image="img:1",
+        resilience_argv=[],
+        resilience_env={},
+        resume_session_id="sess-42",
+    )
+
+    assert "--resume" in argv
+    assert argv[argv.index("--resume") + 1] == "sess-42"
+
+    # Session continuity: the config dir MUST be under /work (the mounted
+    # worktree), never the host ~/.claude — otherwise `--rm` rounds can't resume.
+    assert _CLAUDE_CONFIG_DIR_CONTAINER.startswith("/work/")
+    cfg = f"CLAUDE_CONFIG_DIR={_CLAUDE_CONFIG_DIR_CONTAINER}"
+    assert cfg in argv
+    assert ".claude" not in _CLAUDE_CONFIG_DIR_CONTAINER or _CLAUDE_CONFIG_DIR_CONTAINER.startswith("/work/")
+
+
+# ---------------------------------------------------------------------------
+# Sandbox gating in _run_claude
+# ---------------------------------------------------------------------------
+
+
+def test_run_claude_sandbox_builds_podman_command():
+    """dev_agent_sandbox=True + podman + image present → claude runs via podman."""
+    from axi.dev_director import _run_claude
+
+    captured: dict = {}
+
+    def fake_subprocess_run(args, **kwargs):
+        if list(args[:3]) == ["/usr/bin/podman", "image", "exists"]:
+            return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        # The actual coder run.
+        captured["argv"] = list(args)
+        captured["cwd"] = kwargs.get("cwd")
+        stdout = json.dumps({
+            "result": "ok", "session_id": "s1",
+            "total_cost_usd": 0.02, "num_turns": 4, "is_error": False,
+        })
+        return CompletedProcess(args=list(args), returncode=0, stdout=stdout, stderr="")
+
+    def fake_which(name):
+        return "/usr/bin/podman" if name == "podman" else None
+
+    with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
+         patch("axi.dev_director.shutil.which", side_effect=fake_which), \
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
+         patch("axi.config.get", side_effect=_sandbox_config_get):
+        summary, cost, turns, is_error, session_id = _run_claude(
+            "/some/worktree", "instr", 60.0, {"ANTHROPIC_API_KEY": "k"}
+        )
+
+    assert is_error is False
+    assert summary == "ok"
+    assert session_id == "s1"
+    # The coder was launched via podman, NOT a bare host `claude`.
+    assert captured["argv"][0] == "/usr/bin/podman"
+    assert "claude" in captured["argv"]
+    assert "--permission-mode" in captured["argv"]
+    assert "bypassPermissions" in captured["argv"]
+    # cwd for the podman process is the worktree.
+    assert captured["cwd"] == "/some/worktree"
+
+
+def test_run_claude_fail_closed_when_podman_missing():
+    """Sandbox on but podman absent → FAIL CLOSED, no host claude run."""
+    from axi.dev_director import _run_claude
+
+    ran_claude = {"host": False}
+
+    def fake_subprocess_run(args, **kwargs):
+        if args and args[0] == "claude":
+            ran_claude["host"] = True
+        return CompletedProcess(args=list(args), returncode=0, stdout="{}", stderr="")
+
+    with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
+         patch("axi.dev_director.shutil.which", return_value=None), \
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
+         patch("axi.config.get", side_effect=_sandbox_config_get):
+        summary, cost, turns, is_error, session_id = _run_claude(
+            "/wt", "instr", 60.0, {}
+        )
+
+    assert is_error is True, "must fail closed when podman is unavailable"
+    assert session_id is None
+    assert "uncontained" in summary.lower()
+    assert ran_claude["host"] is False, "must NOT run claude on the host"
+
+
+def test_run_claude_fail_closed_when_image_missing():
+    """Sandbox on, podman present, image absent → FAIL CLOSED."""
+    from axi.dev_director import _run_claude
+
+    ran_coder = {"count": 0}
+
+    def fake_subprocess_run(args, **kwargs):
+        if list(args[:3]) == ["/usr/bin/podman", "image", "exists"]:
+            return CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")
+        ran_coder["count"] += 1
+        return CompletedProcess(args=list(args), returncode=0, stdout="{}", stderr="")
+
+    def fake_which(name):
+        return "/usr/bin/podman" if name == "podman" else None
+
+    with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
+         patch("axi.dev_director.shutil.which", side_effect=fake_which), \
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
+         patch("axi.config.get", side_effect=_sandbox_config_get):
+        summary, cost, turns, is_error, session_id = _run_claude(
+            "/wt", "instr", 60.0, {}
+        )
+
+    assert is_error is True
+    assert ran_coder["count"] == 0, "no coder run when the image is missing"
+    assert "uncontained" in summary.lower()
+
+
+def test_run_claude_host_path_when_sandbox_disabled():
+    """dev_agent_sandbox=False → legacy uncontained host claude run (preserved)."""
+    from axi.dev_director import _run_claude
+
+    captured: dict = {}
+
+    def fake_subprocess_run(args, **kwargs):
+        captured["argv"] = list(args)
+        captured["env"] = dict(kwargs.get("env", {}))
+        stdout = json.dumps({
+            "result": "host ok", "session_id": "hs",
+            "total_cost_usd": 0.0, "num_turns": 1, "is_error": False,
+        })
+        return CompletedProcess(args=list(args), returncode=0, stdout=stdout, stderr="")
+
+    with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
+         patch("axi.dev_director._claude_resilience_flags",
+               return_value=([], {"CLAUDE_CODE_RETRY_WATCHDOG": "1"})), \
+         patch("axi.config.get", side_effect=_host_mode_config_get):
+        summary, cost, turns, is_error, session_id = _run_claude(
+            "/wt", "instr", 60.0, {"PATH": "/usr/bin"}
+        )
+
+    assert summary == "host ok"
+    # Runs claude directly on the host — no podman wrapper.
+    assert captured["argv"][0] == "claude"
+    assert "podman" not in captured["argv"]
+    assert "bypassPermissions" in captured["argv"]
+    # Resilience env is merged into the host process env in this legacy path.
+    assert captured["env"].get("CLAUDE_CODE_RETRY_WATCHDOG") == "1"
