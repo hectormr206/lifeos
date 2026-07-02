@@ -4574,19 +4574,10 @@ async def api_chat_ask(request: Request):
                     _now_local = datetime.now(ZoneInfo("America/Mexico_City"))
                 _route_start = time.monotonic()
                 routed = chat_router.route_and_handle(text, _now_local)
-                if routed is not None and routed.get("mode") == "clarify":
-                    # Ambiguous data — ask the user where to save. Do NOT persist:
-                    # the user picks a domain and the frontend re-POSTs to
-                    # /api/chat/domain/{key}, which persists + stores there.
-                    stage_holder[0] = "autoroute:clarify"
-                    _record_metric()
-                    return {
-                        "answer": routed.get("answer", ""),
-                        "mode": "clarify",
-                        "options": routed.get("options", []),
-                        "original_text": routed.get("original_text", text),
-                        "latency_ms": round((time.monotonic() - _route_start) * 1000),
-                    }
+                # NOTE: the router no longer emits mode="clarify" — ambiguous
+                # personal data falls through (routed=None) to the general brain,
+                # which persists the turn and lets the background fact extractor
+                # place every fact in the knowledge graph by itself.
                 if routed is not None:
                     _answer = routed.get("answer", "")
                     _domain = routed["domain"]

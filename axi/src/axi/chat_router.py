@@ -26,29 +26,6 @@ from axi import domain_chat
 
 log = logging.getLogger("axi.chat_router")
 
-# Interrogatives — a message that opens with one (or ends with '?') is a
-# QUESTION, never data to save. The 4B classifier is unreliable here (it labels
-# "¿qué me recetaron?" as 'uncertain'), so this deterministic guard keeps
-# questions out of the "where do I save this?" clarify path.
-_QUESTION_RE = re.compile(
-    r"^\s*¿?\s*(?:qu[eé]|qui[eé]n(?:es)?|c[oó]mo|cu[aá]ndo|d[oó]nde|cu[aá]nto?s?|"
-    r"cu[aá]l(?:es)?|por\s+qu[eé]|para\s+qu[eé]|hace\s+cu[aá]nto|sab[eé]s|"
-    r"me\s+puedes?|recuerdas?|qu[eé]\s+sab[eé]s|"
-    r"what|who(?:se|m)?|when|where|how|why|which|"
-    r"do\s+you\s+know|can\s+you|could\s+you|tell\s+me|remember|"
-    r"what\s+do\s+you\s+know)\b",
-    re.IGNORECASE,
-)
-
-
-def _looks_like_question(text: str) -> bool:
-    """True when the message reads as a question (not data to register)."""
-    if not text:
-        return False
-    t = text.strip()
-    return t.endswith("?") or bool(_QUESTION_RE.match(t))
-
-
 def _build_router_system() -> str:
     """Build the classifier prompt from the live domain registry."""
     from axi.domain_registry import DOMAINS
@@ -105,22 +82,15 @@ def route_and_handle(
     if key == "general":
         return None
 
-    # Uncertain: it looks like data the user wants to keep, but the domain is
-    # ambiguous. Ask instead of guessing — the user picks and we re-process
-    # (the frontend re-POSTs to /api/chat/domain/{key}). Never silently lost.
-    # BUT a QUESTION is never "data to save": "¿qué me recetaron?" / "¿quién me
-    # detectó?" must fall through to the general brain (which answers from graph
-    # recall), not get a "where do I save this?" prompt.
+    # Uncertain: it looks like personal data but the domain is ambiguous — which
+    # is exactly what long, multi-topic life messages look like. Never ask
+    # "where do I save this?": that clarify dead-end DISCARDED the whole turn
+    # (no conversation record, no extraction). Fall through to the general brain
+    # instead — it converses, persists the turn, and its background fact
+    # extractor assigns per-fact domains and writes entities/relations to the
+    # knowledge graph on its own.
     if key == "uncertain":
-        if _looks_like_question(text):
-            return None
-        from axi.domain_registry import DOMAINS
-        return {
-            "mode": "clarify",
-            "answer": "No estoy seguro de dónde guardar esto. ¿Querés registrarlo en alguno?",
-            "options": [{"key": s.key, "name": s.name} for s in DOMAINS.values()],
-            "original_text": text,
-        }
+        return None
 
     from axi.domain_registry import get_spec
     spec = get_spec(key)

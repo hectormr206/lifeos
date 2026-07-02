@@ -59,16 +59,28 @@ def test_classify_returns_uncertain():
     assert chat_router.classify_domain("dato ambiguo", _brain(router_returns="uncertain")) == "uncertain"
 
 
-def test_route_returns_clarify_when_uncertain():
+def test_route_falls_through_when_uncertain():
+    """Ambiguous personal data must NEVER dead-end in a 'where do I save this?'
+    prompt — it falls through (None) to the general brain, which persists the
+    turn and lets the background fact extractor place facts in the graph."""
     res = chat_router.route_and_handle(
         "me pasó algo importante hoy", NOW, brain_ask=_brain(router_returns="uncertain"),
     )
-    assert res is not None
-    assert res["mode"] == "clarify"
-    assert res["original_text"] == "me pasó algo importante hoy"
-    assert res["options"]                                  # has domain options
-    assert any(o["key"] == "health" for o in res["options"])
-    assert all("key" in o and "name" in o for o in res["options"])
+    assert res is None
+
+
+def test_route_falls_through_when_uncertain_long_multi_topic():
+    """The exact shape that used to hit the clarify dead-end: a long, rich,
+    multi-domain life message."""
+    long_msg = (
+        "Te cuento: hoy fue un día intenso, empecé un proyecto nuevo en el "
+        "trabajo, mi hermana me llamó para contarme que se muda, gasté de más "
+        "en la comida familiar y quiero retomar el ejercicio la próxima semana."
+    )
+    res = chat_router.route_and_handle(
+        long_msg, NOW, brain_ask=_brain(router_returns="uncertain"),
+    )
+    assert res is None
 
 
 def test_route_yields_to_general_when_classified_general():
@@ -89,33 +101,7 @@ def test_route_yields_when_domain_says_off_topic():
     assert res is None
 
 
-# English question guard
-
-def test_question_guard_english_interrogatives_en():
-    """EN questions without a trailing '?' must still read as questions."""
-    assert chat_router._looks_like_question("what did I spend last week")
-    assert chat_router._looks_like_question("who called me yesterday")
-    assert chat_router._looks_like_question("when is mom's birthday")
-    assert chat_router._looks_like_question("where did I put the keys")
-    assert chat_router._looks_like_question("how much did I spend on food")
-    assert chat_router._looks_like_question("why am I always tired")
-    assert chat_router._looks_like_question("which meds am I taking")
-    assert chat_router._looks_like_question("do you know my mom's birthday")
-    assert chat_router._looks_like_question("can you show my expenses")
-    assert chat_router._looks_like_question("could you check my meds")
-    assert chat_router._looks_like_question("tell me what I spent")
-    assert chat_router._looks_like_question("remember what I told you about Ana")
-
-
-def test_question_guard_spanish_still_works():
-    assert chat_router._looks_like_question("¿qué me recetaron?")
-    assert chat_router._looks_like_question("cuánto gasté este mes")
-    assert chat_router._looks_like_question("recuerdas el nombre del doctor")
-
-
-def test_question_guard_english_data_is_not_question_en():
-    """Plain EN data statements must NOT be treated as questions."""
-    assert not chat_router._looks_like_question("spent 250 on groceries")
-    assert not chat_router._looks_like_question("talked to Maria")
-    assert not chat_router._looks_like_question("meditated 20 minutes")
-    assert not chat_router._looks_like_question("got paid 20000")
+# NOTE: the question guard (_looks_like_question) was removed along with the
+# clarify dead-end — ALL 'uncertain' messages (questions and data alike) now
+# fall through to the general brain, so no question/data distinction is needed
+# at the router level.
