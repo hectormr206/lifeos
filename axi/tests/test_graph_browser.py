@@ -206,7 +206,33 @@ def test_brain3d_renders_browser_features(client):
     # Forget flow (Spanish confirm + button)
     assert 'id="forget-node-btn"' in html
     assert "Olvidar este nodo" in html
-    assert "Esta acción no se puede deshacer" in html
     # Data still flows from the single full-graph load + on-demand detail API.
     assert "/api/graph/full" in html
     assert "/api/graph/node/" in html
+
+
+def test_brain3d_focus_highlight_markers(client):
+    """Focus mode recolors by relevance: teal focused node + dim-gray context,
+    plus a Spanish legend hint."""
+    html = client.get("/brain3d").text
+    # Relevance-recolor overlay constants override the domain palette in focus.
+    assert "FOCUS_TEAL" in html
+    assert "FOCUS_DIM" in html
+    assert "#3a4048" in html          # dim gray for 2nd-hop context
+    # Spanish focus legend hint (teal = enfocado, gris = contexto).
+    assert "teal = enfocado, gris = contexto" in html
+
+
+def test_brain3d_undo_window_markers(client):
+    """Deferred-delete + undo grace window replaces the immediate hard delete."""
+    html = client.get("/brain3d").text
+    # New safety-reflecting confirm message.
+    assert "Podrás deshacerlo" in html
+    # The old "cannot be undone" copy is gone — it is no longer true.
+    assert "no se puede deshacer" not in html
+    assert "Esta acción no se puede deshacer" not in html
+    # Undo control + persistent bar.
+    assert 'id="undo-delete-btn"' in html
+    assert 'id="undo-bar"' in html
+    assert "Deshacer" in html
+    assert "Recuperado." in html
