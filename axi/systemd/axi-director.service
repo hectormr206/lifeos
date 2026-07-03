@@ -1,0 +1,31 @@
+# Axi self-improve DIRECTOR — Qwen3.6-35B-A3B (MoE) on the CPU-only llama.cpp.
+#
+# Runs the nightly self-improvement goal-generator on CPU/RAM ONLY (no GPU
+# touch), so the whole 12GB VRAM stays free for the game / production models.
+# This is the model that WON the director benchmark (2026-07-02): best goal
+# quality, MoE = only 3B active so ~17s/goal on the i9-13900HX, frees the GPU.
+#
+# ON-DEMAND by design: NOT enabled / not auto-started. The self-improve loop
+# starts it (`systemctl --user start axi-director`), generates ONE goal, then
+# stops it — so the ~21GB RAM footprint only exists for the ~1 minute per night
+# it is actually needed, never competing with game-mode RAM the rest of the day.
+#
+# Uses the CPU-only llama.cpp we built (llama.cpp-cuda has no CPU kernel for the
+# Qwen3.5/3.6 Gated Delta Net op, so the stock binary can NOT run this on CPU).
+
+[Unit]
+Description=Axi self-improve director — Qwen3.6-35B-A3B on CPU (on-demand)
+After=graphical-session.target
+
+[Service]
+Type=simple
+# CPU-only: -ngl 0 belt-and-suspenders (the binary has no GPU backend anyway).
+# --threads 20: P+E cores; the nightly run is at 3am when the box is idle.
+# --ctx-size 4096: goal-gen prompt is ~1k tokens; keeps the RAM/KV cache small.
+ExecStart=/home/hectormr/LifeOS/llama-cpu-src/build/bin/llama-server \
+  -m /home/hectormr/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
+  --port 8093 --host 127.0.0.1 --threads 20 --ctx-size 4096 --no-webui -ngl 0
+Restart=no
+TimeoutStartSec=180
+
+# NO [Install] section — on-demand only, never enabled/auto-started.

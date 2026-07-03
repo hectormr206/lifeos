@@ -666,3 +666,127 @@ def test_loop_never_calls_real_model_via_prod_wrapper(tmp_path, monkeypatch):
     )
     assert goal == "Agregá un test faltante al módulo de salud."
     assert source == "self_generated"
+
+
+# ───────────────────── on-demand director lifecycle ─────────────────────
+
+def test_director_ensure_up_starts_and_polls_health():
+    from axi import self_improve as si
+    calls = []
+    health = iter([False, False, True])  # healthy on 3rd poll
+    up = si.director_ensure_up(
+        systemctl_run=lambda a: calls.append(a),
+        http_get=lambda url: next(health),
+        port=8093, timeout_s=30, poll_s=0,
+    )
+    assert up is True
+    assert calls == [["start", "axi-director"]]
+
+
+def test_director_ensure_up_false_when_never_healthy():
+    from axi import self_improve as si
+    up = si.director_ensure_up(
+        systemctl_run=lambda a: None,
+        http_get=lambda url: False,
+        port=8093, timeout_s=0.05, poll_s=0,
+    )
+    assert up is False
+
+
+def test_director_generate_disables_thinking_and_reads_content():
+    from axi import self_improve as si
+    seen = {}
+
+    def fake_post(url, body):
+        seen["body"] = body
+        return {"choices": [{"message": {"content": "  Agregá un test.  "}}]}
+
+    goal = si.director_generate("sys", "usr", http_post=fake_post, port=8093)
+    assert goal == "Agregá un test."
+    assert seen["body"]["chat_template_kwargs"]["enable_thinking"] is False
+
+
+def test_director_generate_falls_back_to_reasoning_content():
+    from axi import self_improve as si
+
+    def fake_post(url, body):
+        return {"choices": [{"message": {"content": "", "reasoning_content": "goal X"}}]}
+
+    assert si.director_generate("s", "u", http_post=fake_post, port=8093) == "goal X"
+
+
+def test_director_generate_none_on_http_error():
+    from axi import self_improve as si
+
+    def boom(url, body):
+        raise RuntimeError("connection refused")
+
+    assert si.director_generate("s", "u", http_post=boom, port=8093) is None
+
+
+def test_call_director_model_always_stops_even_when_unavailable():
+    from axi import self_improve as si
+    stops = []
+    out = si.call_director_model(
+        "s", "u",
+        systemctl_run=lambda a: stops.append(a),
+        http_get=lambda url: False,   # never healthy → ensure_up False
+        http_post=lambda url, b: {},
+        port=8093,
+    )
+    assert out == ""
+    assert ["stop", "axi-director"] in stops  # stopped in finally
+
+
+def test_call_director_model_stops_even_when_generate_raises():
+    from axi import self_improve as si
+    stops = []
+
+    def boom(url, body):
+        raise RuntimeError("kaboom")
+
+    out = si.call_director_model(
+        "s", "u",
+        systemctl_run=lambda a: stops.append(a),
+        http_get=lambda url: True,    # healthy
+        http_post=boom,
+        port=8093,
+    )
+    assert out == ""  # generate returned None → ""
+    assert ["stop", "axi-director"] in stops
+
+
+def test_call_director_model_happy_path_returns_goal():
+    from axi import self_improve as si
+    stops = []
+    out = si.call_director_model(
+        "s", "u",
+        systemctl_run=lambda a: stops.append(a),
+        http_get=lambda url: True,
+        http_post=lambda url, b: {"choices": [{"message": {"content": "Agregá test Y."}}]},
+        port=8093,
+    )
+    assert out == "Agregá test Y."
+    assert ["stop", "axi-director"] in stops
+
+
+def test_generate_goal_via_director_unavailable_returns_none():
+    """director unavailable → call_model '' → generate_self_improve_goal None."""
+    from axi import self_improve as si
+    cm = lambda s, u: si.call_director_model(
+        s, u, systemctl_run=lambda a: None, http_get=lambda url: False,
+        http_post=lambda url, b: {}, port=8093, timeout_s=0.05,
+    )
+    goal = si.generate_self_improve_goal(
+        repo_path="/x",
+        run_git=lambda a: "abc123 feat: thing\n" if "log" in a else "lifeos/health/ingestion.py\n",
+        call_model=cm,
+    )
+    assert goal is None
+
+
+def test_director_config_keys_registered():
+    from axi import config_schema as cs
+    src = __import__("inspect").getsource(cs)
+    assert "self_improve_director_enabled" in src
+    assert "self_improve_director_port" in src

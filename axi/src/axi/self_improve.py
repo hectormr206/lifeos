@@ -407,3 +407,87 @@ def append_outcome_log(state_dir, record: dict) -> None:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001
         log.debug("self_improve outcome log append failed", exc_info=True)
+
+
+# ─────────────────── on-demand director server (Qwen3.6-35B-A3B) ───────────────
+#
+# The nightly goal-generator runs on a dedicated CPU-only llama.cpp server
+# (systemd user unit `axi-director`, port 8093) that is started ON DEMAND, used
+# for ONE goal, then stopped — so its ~21GB RAM footprint exists only for the
+# ~1 minute per night it is needed, and the GPU stays entirely free. All
+# side effects (systemctl, HTTP) are injected so this is unit-testable.
+
+DIRECTOR_SERVICE = "axi-director"
+
+
+def director_ensure_up(*, systemctl_run, http_get, port, timeout_s=180, poll_s=3):
+    """Start the director unit and poll /health until ready. Never raises."""
+    try:
+        systemctl_run(["start", DIRECTOR_SERVICE])
+    except Exception:  # noqa: BLE001
+        log.warning("director: systemctl start failed", exc_info=True)
+        return False
+    import time  # noqa: PLC0415
+    deadline = time.monotonic() + timeout_s
+    url = f"http://127.0.0.1:{port}/health"
+    while time.monotonic() < deadline:
+        try:
+            if http_get(url):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(poll_s)
+    log.warning("director: never became healthy within %ss", timeout_s)
+    return False
+
+
+def director_generate(system, user, *, http_post, port, max_tokens=200):
+    """POST the goal-gen prompt (thinking OFF) and return the answer, or None."""
+    body = {
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0.3,
+        "max_tokens": max_tokens,
+        # These models default to chain-of-thought; the director only needs the
+        # final goal, so disabling thinking keeps the whole budget for the answer.
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    try:
+        data = http_post(f"http://127.0.0.1:{port}/v1/chat/completions", body)
+        msg = (data.get("choices") or [{}])[0].get("message", {})
+        content = (msg.get("content") or "").strip()
+        if not content:
+            content = (msg.get("reasoning_content") or "").strip()
+        return content or None
+    except Exception:  # noqa: BLE001
+        log.warning("director: generate failed", exc_info=True)
+        return None
+
+
+def director_stop(*, systemctl_run):
+    """Stop the director unit to free its RAM. Best-effort, never raises."""
+    try:
+        systemctl_run(["stop", DIRECTOR_SERVICE])
+    except Exception:  # noqa: BLE001
+        log.debug("director: systemctl stop failed", exc_info=True)
+
+
+def call_director_model(
+    system, user, *, systemctl_run, http_get, http_post, port, timeout_s=180
+):
+    """Full on-demand lifecycle: start → generate → ALWAYS stop.
+
+    Returns the goal text, or "" when the director is unavailable (which
+    :func:`generate_self_improve_goal` treats as a fallback). The director is
+    ALWAYS stopped in the ``finally`` so its RAM is freed even on failure.
+    """
+    try:
+        if not director_ensure_up(
+            systemctl_run=systemctl_run, http_get=http_get, port=port, timeout_s=timeout_s
+        ):
+            return ""
+        return director_generate(system, user, http_post=http_post, port=port) or ""
+    finally:
+        director_stop(systemctl_run=systemctl_run)
