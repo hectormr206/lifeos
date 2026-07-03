@@ -831,6 +831,19 @@ FIELDS: tuple[ConfigField, ...] = (
         "low-risk default (review recent work, implement one small improvement).",
     ),
     ConfigField(
+        "self_improve_director_enabled", "boolean", True,
+        "If true (default), the nightly goal-generator runs on the on-demand CPU "
+        "director (Qwen3.6-35B-A3B, axi-director unit, port 8093) — started, used "
+        "for ONE goal, then stopped to free its RAM, keeping the GPU free. If "
+        "false, goal-gen uses the always-on VT-3B instead. Either way, failure "
+        "degrades to the default meta-goal; the nightly run never blocks.",
+    ),
+    ConfigField(
+        "self_improve_director_port", "integer", 8093,
+        "Port of the on-demand self-improve director server (axi-director).",
+        minimum=1024, maximum=65535,
+    ),
+    ConfigField(
         "scale_sequence", "string", "weight,fat,visceral,muscle,bmr,bmi",
         "Order in which the smart scale cycles its readings, as comma-separated "
         "field names (weight, fat, visceral, muscle, bmr, bmi). Used by the "

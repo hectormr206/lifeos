@@ -1504,11 +1504,51 @@ def serve() -> int:
                             )
                             return proc.stdout or ""
 
-                        # Prod wrapper over the model interface. retry_deadline=0
-                        # + a small timeout means goal-gen fails FAST if VT is
-                        # down (it degrades to the default goal, never blocks the
-                        # nightly run).
+                        # Prod wrapper over the model interface. Two paths:
+                        #  - director (default): the on-demand Qwen3.6-35B-A3B CPU
+                        #    server (won the director benchmark) — started, used
+                        #    for ONE goal, then stopped to free its ~21GB RAM.
+                        #  - VT-3B fallback: when self_improve_director_enabled is
+                        #    off. Either way, retry_deadline=0 / short timeouts mean
+                        #    goal-gen fails FAST and degrades to the default goal,
+                        #    never blocking the nightly run.
+                        _director_on = bool(
+                            config.get("self_improve_director_enabled", True)
+                        )
+                        _director_port = int(
+                            config.get("self_improve_director_port", 8093)
+                        )
+
+                        def _systemctl_run(args):
+                            import subprocess  # noqa: PLC0415
+                            subprocess.run(
+                                ["systemctl", "--user", *args], timeout=200,
+                                capture_output=True,
+                            )
+
+                        def _http_get(url):
+                            import urllib.request  # noqa: PLC0415
+                            with urllib.request.urlopen(url, timeout=4) as r:
+                                return 200 <= getattr(r, "status", 200) < 300
+
+                        def _http_post(url, body):
+                            import json as _json, urllib.request  # noqa: PLC0415
+                            req = urllib.request.Request(
+                                url, data=_json.dumps(body).encode(),
+                                headers={"Content-Type": "application/json"},
+                            )
+                            with urllib.request.urlopen(req, timeout=200) as r:
+                                return _json.loads(r.read())
+
                         def _call_model(system, user):
+                            if _director_on:
+                                return _si.call_director_model(
+                                    system, user,
+                                    systemctl_run=_systemctl_run,
+                                    http_get=_http_get,
+                                    http_post=_http_post,
+                                    port=_director_port,
+                                )
                             from axi import dev_director as _dd  # noqa: PLC0415
                             return _dd._call_vt3b(
                                 system, user, timeout=60, retry_deadline=0
