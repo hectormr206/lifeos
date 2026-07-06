@@ -27,6 +27,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -7420,6 +7421,39 @@ async def api_reject_dev_run(run_id: str):
     if r is None:
         raise HTTPException(404, "run not found")
     result = dev_land.reject_run(run_id)
+    return JSONResponse(result)
+
+
+@app.post("/api/dev-runs/{run_id}/merge")
+async def api_merge_dev_run(run_id: str):
+    """HUMAN action: merge a landed run's review branch into main. Gated to
+    state 'landed'; never called by any autonomous path."""
+    from axi import dev_run as _dr  # noqa: PLC0415
+    from axi import dev_land  # noqa: PLC0415
+    r = _dr.get_run(run_id)
+    if r is None:
+        raise HTTPException(404, "run not found")
+    # Run the blocking git work off the event loop so a slow/hung git call
+    # never freezes the whole dashboard.
+    result = await asyncio.to_thread(dev_land.merge_run, run_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "merge failed"))
+    return JSONResponse(result)
+
+
+@app.post("/api/dev-runs/{run_id}/deploy")
+async def api_deploy_dev_run(run_id: str):
+    """HUMAN action: trigger the local install (pull + restart) for a merged
+    run. Gated to state 'merged'; never called by any autonomous path."""
+    from axi import dev_run as _dr  # noqa: PLC0415
+    from axi import dev_land  # noqa: PLC0415
+    r = _dr.get_run(run_id)
+    if r is None:
+        raise HTTPException(404, "run not found")
+    # Off-loop: local install trigger may shell out; keep the loop responsive.
+    result = await asyncio.to_thread(dev_land.deploy_run, run_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "deploy failed"))
     return JSONResponse(result)
 
 

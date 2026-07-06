@@ -25,6 +25,23 @@ import axi._dev_run_entry as entry_mod
 # ---------------------------------------------------------------------------
 
 
+def test_write_state_file_atomic(tmp_path):
+    """_write_state_file writes atomically (temp + os.replace), no leftover temp."""
+    target = tmp_path / "runs" / "abc" / "state.json"
+    dev_run_mod._write_state_file(target, {"run_id": "abc", "status": "landed"})
+
+    assert json.loads(target.read_text())["status"] == "landed"
+    # No stray temp files left behind in the target dir.
+    leftovers = [p.name for p in target.parent.iterdir() if p.name != "state.json"]
+    assert leftovers == [], leftovers
+
+    # Overwrite is atomic and reflects new content.
+    dev_run_mod._write_state_file(target, {"run_id": "abc", "status": "merged"})
+    assert json.loads(target.read_text())["status"] == "merged"
+    leftovers = [p.name for p in target.parent.iterdir() if p.name != "state.json"]
+    assert leftovers == [], leftovers
+
+
 def _fake_config(state_dir: Path, **overrides):
     defaults = {
         "dev_run_state_dir": str(state_dir),

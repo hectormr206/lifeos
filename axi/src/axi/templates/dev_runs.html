@@ -86,12 +86,69 @@
         <template x-if="r.status === 'landed'">
           <div class="text-sm mb-3 px-3 py-2 rounded"
                style="background: rgba(0,180,160,0.1); border: 1px solid var(--teal); color: var(--teal)">
-            Rama subida a GitHub — revisá/mergeá el PR y luego instalá.<br>
+            Rama subida a GitHub — revisá el diff y mergeá a main cuando estés listo.<br>
             <span class="font-mono text-xs" x-text="r.landed_branch || ''"></span>
             <template x-if="r.push_ok === false">
               <span class="ml-2 text-xs opacity-70">(push falló — rama local creada pero no subida)</span>
             </template>
           </div>
+        </template>
+
+        <!-- Merge action (only from state 'landed', explicit human click) -->
+        <template x-if="r.status === 'landed' && !actionResult[r.run_id]">
+          <div class="flex flex-wrap gap-2 mb-3">
+            <button type="button"
+                    @click="mergeRun(r.run_id, r.landed_branch)"
+                    :disabled="actionPending[r.run_id]"
+                    class="btn"
+                    style="background: var(--teal); color: #fff; border-color: var(--teal); padding: 0.4rem 1rem; font-size: 0.85rem;">
+              <span x-show="!actionPending[r.run_id]">Mergear a main</span>
+              <span x-show="actionPending[r.run_id]">Mergeando…</span>
+            </button>
+          </div>
+        </template>
+
+        <!-- merged info + Deploy action (only from state 'merged') -->
+        <template x-if="r.status === 'merged'">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(0,180,160,0.1); border: 1px solid var(--teal); color: var(--teal)">
+            Mergeado a <span class="font-mono text-xs" x-text="r.merged_into || 'main'"></span> —
+            desplegá para instalarlo en la laptop (pull + restart de servicios).
+          </div>
+        </template>
+        <!-- Last failed deploy attempt (stays 'merged' so it is retryable) -->
+        <template x-if="r.status === 'merged' && r.deploy_error">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(238,51,51,0.1); border: 1px solid var(--red); color: var(--red)">
+            <span class="font-semibold">El último deploy falló: </span><span x-text="r.deploy_error"></span>
+          </div>
+        </template>
+        <template x-if="r.status === 'merged' && !actionResult[r.run_id]">
+          <div class="flex flex-wrap gap-2 mb-3">
+            <button type="button"
+                    @click="deployRun(r.run_id)"
+                    :disabled="actionPending[r.run_id]"
+                    class="btn"
+                    style="background: var(--teal); color: #fff; border-color: var(--teal); padding: 0.4rem 1rem; font-size: 0.85rem;">
+              <span x-show="!actionPending[r.run_id]">Deploy (pull + restart)</span>
+              <span x-show="actionPending[r.run_id]">Desplegando…</span>
+            </button>
+          </div>
+        </template>
+
+        <!-- deployed info -->
+        <template x-if="r.status === 'deployed'">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(72,187,120,0.1); border: 1px solid var(--green); color: var(--green)">
+            Deploy disparado — la instalación local corre en segundo plano (pull --ff-only + restart).
+          </div>
+        </template>
+
+        <!-- merge/deploy action result -->
+        <template x-if="actionResult[r.run_id] && !actionResult[r.run_id].ok">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(238,51,51,0.1); border: 1px solid var(--red); color: var(--red)"
+               x-text="actionResult[r.run_id].error"></div>
         </template>
 
         <!-- Approve result (after action) -->
@@ -172,6 +229,7 @@ function devRuns() {
     diffText: null,
     diffLoading: false,
     approveResult: {},   // run_id -> {ok, branch?, error?}
+    actionResult: {},    // run_id -> {ok, error?} for merge/deploy
     actionPending: {},   // run_id -> bool
     preview: null,       // {ok, goal, source, signals} | {ok:false, error}
     previewLoading: false,
@@ -264,6 +322,48 @@ function devRuns() {
       }
     },
 
+    async mergeRun(run_id, landed_branch) {
+      if (this.actionPending[run_id]) return;
+      if (!confirm('¿Mergear ' + (landed_branch || 'la rama') + ' a main y hacer push a origin/main?')) return;
+      this.actionPending = { ...this.actionPending, [run_id]: true };
+      try {
+        const r = await fetch('/api/dev-runs/' + encodeURIComponent(run_id) + '/merge', {
+          method: 'POST',
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          this.actionResult = { ...this.actionResult, [run_id]: { ok: false, error: 'Error al mergear: ' + (d.detail || ('HTTP ' + r.status)) } };
+        } else {
+          await this.load();
+        }
+      } catch (e) {
+        this.actionResult = { ...this.actionResult, [run_id]: { ok: false, error: 'Error al mergear: ' + (e.message || String(e)) } };
+      } finally {
+        this.actionPending = { ...this.actionPending, [run_id]: false };
+      }
+    },
+
+    async deployRun(run_id) {
+      if (this.actionPending[run_id]) return;
+      if (!confirm('¿Desplegar ahora? Esto hará git pull --ff-only y reiniciará los servicios axi-dashboard y axi-voice en la laptop.')) return;
+      this.actionPending = { ...this.actionPending, [run_id]: true };
+      try {
+        const r = await fetch('/api/dev-runs/' + encodeURIComponent(run_id) + '/deploy', {
+          method: 'POST',
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          this.actionResult = { ...this.actionResult, [run_id]: { ok: false, error: 'Error al desplegar: ' + (d.detail || ('HTTP ' + r.status)) } };
+        } else {
+          await this.load();
+        }
+      } catch (e) {
+        this.actionResult = { ...this.actionResult, [run_id]: { ok: false, error: 'Error al desplegar: ' + (e.message || String(e)) } };
+      } finally {
+        this.actionPending = { ...this.actionPending, [run_id]: false };
+      }
+    },
+
     statusLabel(s) {
       const map = {
         running: 'En progreso',
@@ -272,6 +372,8 @@ function devRuns() {
         error: 'Error',
         waiting_quota: 'Esperando cuota',
         landed: 'Aterrizó',
+        merged: 'Mergeado',
+        deployed: 'Desplegado',
         rejected: 'Rechazado',
         interrupted: 'Interrumpido',
       };
@@ -286,6 +388,8 @@ function devRuns() {
         error:         'background: rgba(238,51,51,0.18); color: var(--red); border: 1px solid var(--red)',
         waiting_quota: 'background: rgba(128,128,128,0.18); color: var(--muted); border: 1px solid var(--muted)',
         landed:        'background: rgba(0,150,136,0.22); color: var(--teal); border: 1px solid var(--teal)',
+        merged:        'background: rgba(0,150,136,0.30); color: var(--teal); border: 1px solid var(--teal)',
+        deployed:      'background: rgba(72,187,120,0.18); color: var(--green); border: 1px solid var(--green)',
         rejected:      'background: rgba(128,128,128,0.18); color: var(--muted); border: 1px solid var(--muted)',
         interrupted:   'background: rgba(245,158,11,0.12); color: var(--amber); border: 1px solid var(--amber)',
       };
