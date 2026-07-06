@@ -596,6 +596,96 @@ def test_select_falls_back_to_default():
 
 
 # ---------------------------------------------------------------------------
+# build_call_model — the SINGLE model-path selector shared by the nightly loop
+# and the on-demand preview. Side effects are injected, so it is unit-testable.
+# ---------------------------------------------------------------------------
+
+
+def test_build_call_model_routes_to_director_when_enabled():
+    calls = []
+    cm = si.build_call_model(
+        director_enabled=True,
+        director_port=8093,
+        systemctl_run=lambda a: calls.append(a),
+        http_get=lambda u: True,
+        http_post=lambda u, b: {"choices": [{"message": {"content": "goal from director"}}]},
+        call_vt3b=lambda s, u: pytest.fail("VT-3B must not run when director is on"),
+    )
+    assert cm("sys", "usr") == "goal from director"
+    # Director lifecycle ran: started AND always stopped.
+    assert ["start", "axi-director"] in calls
+    assert ["stop", "axi-director"] in calls
+
+
+def test_build_call_model_routes_to_vt3b_when_director_disabled():
+    cm = si.build_call_model(
+        director_enabled=False,
+        director_port=8093,
+        systemctl_run=lambda a: pytest.fail("no systemctl when director off"),
+        http_get=lambda u: pytest.fail("no http when director off"),
+        http_post=lambda u, b: pytest.fail("no http when director off"),
+        call_vt3b=lambda s, u: "goal from vt3b",
+    )
+    assert cm("sys", "usr") == "goal from vt3b"
+
+
+# ---------------------------------------------------------------------------
+# preview_self_improve_goal — on-demand goal preview. Runs the SAME generate →
+# validate → select path as the nightly loop, but NEVER starts a dev run.
+# ---------------------------------------------------------------------------
+
+
+def test_preview_returns_generated_goal_without_starting_run(monkeypatch):
+    good = "Agregá un test para el parser de fechas en ingestion.py que cubra el vacío."
+    # Hard guard: a preview must NEVER start a dev run.
+    from axi import dev_run as dev_run_mod
+    monkeypatch.setattr(
+        dev_run_mod, "start_dev_run",
+        lambda *a, **k: pytest.fail("preview must not start a dev run"),
+    )
+    result = si.preview_self_improve_goal(
+        repo_path="/repo", run_git=_signals_git(), call_model=lambda s, u: good,
+        config_goal="cfg", default_goal="def",
+    )
+    assert result["goal"] == good
+    assert result["source"] == "self_generated"
+    assert result["signals"]["commits"] >= 1
+    assert result["signals"]["changed_files"] >= 1
+
+
+def test_preview_falls_back_to_config_source():
+    result = si.preview_self_improve_goal(
+        repo_path="/repo", run_git=_signals_git(),
+        call_model=lambda s, u: "No puedo, lo siento.",  # rejected → None
+        config_goal="objetivo configurado", default_goal="def",
+    )
+    assert result["goal"] == "objetivo configurado"
+    assert result["source"] == "config"
+
+
+def test_preview_falls_back_to_default_source():
+    result = si.preview_self_improve_goal(
+        repo_path="/repo", run_git=_signals_git(),
+        call_model=lambda s, u: None,
+        config_goal="", default_goal="objetivo por defecto",
+    )
+    assert result["goal"] == "objetivo por defecto"
+    assert result["source"] == "default"
+
+
+def test_preview_model_failure_yields_source_none_and_no_crash():
+    def boom(s, u):
+        raise RuntimeError("director down")
+
+    result = si.preview_self_improve_goal(
+        repo_path="/repo", run_git=_signals_git(),
+        call_model=boom, config_goal="", default_goal="",
+    )
+    assert result["goal"] is None
+    assert result["source"] == "none"
+
+
+# ---------------------------------------------------------------------------
 # Loop integration (mocked) — simulate the daemon loop body: generate → select
 # → start_dev_run → outcome log. No real model/subprocess is ever touched.
 # ---------------------------------------------------------------------------

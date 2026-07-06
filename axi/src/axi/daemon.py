@@ -1453,14 +1453,8 @@ def serve() -> int:
         # auto-applied or auto-deployed.
         _self_improve_stop = threading.Event()
         _self_improve_state = {"last_date": None}
-        _DEFAULT_SELF_IMPROVE_GOAL = (
-            "Revisá los commits y tests recientes de este proyecto. Identificá UNA "
-            "sola mejora concreta y de BAJO RIESGO (un test faltante, un bug chico, "
-            "una limpieza, o un comentario que aclare algo) e implementala con su "
-            "test correspondiente. NO modifiques el motor de auto-desarrollo "
-            "(dev_run, dev_director, dev_land, _dev_run_entry). Mantené el cambio "
-            "pequeño, enfocado, y con sus tests en verde."
-        )
+        from axi import self_improve as _si  # noqa: PLC0415
+        _DEFAULT_SELF_IMPROVE_GOAL = _si.DEFAULT_SELF_IMPROVE_GOAL
 
         def _self_improve_loop() -> None:
             from datetime import datetime  # noqa: PLC0415
@@ -1491,20 +1485,12 @@ def serve() -> int:
                             config.get("dev_director_repo", "~/LifeOS/lifeos")
                         )
 
-                        # Prod wrapper: read-only, bounded git against the real
-                        # repo. subprocess is injected as run_git so tests never
-                        # shell out. Never raises out — gather_repo_signals guards.
-                        def _run_git(args, _repo=repo_path):
-                            import subprocess  # noqa: PLC0415
-                            proc = subprocess.run(
-                                ["git", "-C", _repo, *args],
-                                capture_output=True,
-                                text=True,
-                                timeout=30,
-                            )
-                            return proc.stdout or ""
+                        # Read-only, bounded git against the real repo. Shared
+                        # with the preview endpoint so both read signals the same
+                        # way. Never raises out — gather_repo_signals guards.
+                        _run_git = _si.build_prod_run_git(repo_path)
 
-                        # Prod wrapper over the model interface. Two paths:
+                        # Model path — the SAME selector the preview endpoint uses.
                         #  - director (default): the on-demand Qwen3.6-35B-A3B CPU
                         #    server (won the director benchmark) — started, used
                         #    for ONE goal, then stopped to free its ~21GB RAM.
@@ -1512,47 +1498,7 @@ def serve() -> int:
                         #    off. Either way, retry_deadline=0 / short timeouts mean
                         #    goal-gen fails FAST and degrades to the default goal,
                         #    never blocking the nightly run.
-                        _director_on = bool(
-                            config.get("self_improve_director_enabled", True)
-                        )
-                        _director_port = int(
-                            config.get("self_improve_director_port", 8093)
-                        )
-
-                        def _systemctl_run(args):
-                            import subprocess  # noqa: PLC0415
-                            subprocess.run(
-                                ["systemctl", "--user", *args], timeout=200,
-                                capture_output=True,
-                            )
-
-                        def _http_get(url):
-                            import urllib.request  # noqa: PLC0415
-                            with urllib.request.urlopen(url, timeout=4) as r:
-                                return 200 <= getattr(r, "status", 200) < 300
-
-                        def _http_post(url, body):
-                            import json as _json, urllib.request  # noqa: PLC0415
-                            req = urllib.request.Request(
-                                url, data=_json.dumps(body).encode(),
-                                headers={"Content-Type": "application/json"},
-                            )
-                            with urllib.request.urlopen(req, timeout=200) as r:
-                                return _json.loads(r.read())
-
-                        def _call_model(system, user):
-                            if _director_on:
-                                return _si.call_director_model(
-                                    system, user,
-                                    systemctl_run=_systemctl_run,
-                                    http_get=_http_get,
-                                    http_post=_http_post,
-                                    port=_director_port,
-                                )
-                            from axi import dev_director as _dd  # noqa: PLC0415
-                            return _dd._call_vt3b(
-                                system, user, timeout=60, retry_deadline=0
-                            )
+                        _call_model = _si.build_prod_call_model(config)
 
                         # Goal self-generation — best-effort. Any failure falls
                         # back to the configured/default goal; the loop must never

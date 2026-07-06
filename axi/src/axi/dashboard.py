@@ -7386,6 +7386,32 @@ async def api_approve_dev_run(run_id: str):
     return JSONResponse(result)
 
 
+@app.post("/api/dev-runs/preview-goal")
+async def api_preview_self_improve_goal():
+    """Generate ONE self-improve goal on demand and return it — WITHOUT running.
+
+    Observability before the nightly loop is ever turned on: it uses the SAME
+    director/VT-3B model path the loop uses (via self_improve.build_prod_call_model)
+    but STOPS BEFORE start_dev_run. Model wiring failures return {ok: False}.
+    """
+    from axi import self_improve as _si  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    repo_path = os.path.expanduser(config.get("dev_director_repo", "~/LifeOS/lifeos"))
+    try:
+        call_model = _si.build_prod_call_model(config)
+        run_git = _si.build_prod_run_git(repo_path)
+        result = _si.preview_self_improve_goal(
+            repo_path=repo_path,
+            run_git=run_git,
+            call_model=call_model,
+            config_goal=str(config.get("dev_self_improve_goal", "") or ""),
+            default_goal=_si.DEFAULT_SELF_IMPROVE_GOAL,
+        )
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)})
+    return JSONResponse({"ok": True, **result})
+
+
 @app.post("/api/dev-runs/{run_id}/reject")
 async def api_reject_dev_run(run_id: str):
     from axi import dev_run as _dr  # noqa: PLC0415

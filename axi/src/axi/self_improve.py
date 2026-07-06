@@ -491,3 +491,153 @@ def call_director_model(
         return director_generate(system, user, http_post=http_post, port=port) or ""
     finally:
         director_stop(systemctl_run=systemctl_run)
+
+
+# ─────────────────── shared model-path selector + on-demand preview ─────────
+#
+# The nightly self-improve loop and the human "preview goal" button MUST use the
+# same model path, so the selector below lives in ONE place. Both callers build
+# it — the loop before it starts a run, the dashboard endpoint for observability
+# only. Side effects are injected so the selector stays unit-testable.
+
+# The nightly meta-goal, shared so the loop and the preview report the SAME
+# fallback goal when generation yields nothing usable.
+DEFAULT_SELF_IMPROVE_GOAL = (
+    "Revisá los commits y tests recientes de este proyecto. Identificá UNA "
+    "sola mejora concreta y de BAJO RIESGO (un test faltante, un bug chico, "
+    "una limpieza, o un comentario que aclare algo) e implementala con su "
+    "test correspondiente. NO modifiques el motor de auto-desarrollo "
+    "(dev_run, dev_director, dev_land, _dev_run_entry). Mantené el cambio "
+    "pequeño, enfocado, y con sus tests en verde."
+)
+
+
+def build_call_model(
+    *,
+    director_enabled,
+    director_port,
+    systemctl_run,
+    http_get,
+    http_post,
+    call_vt3b,
+):
+    """Return the ``call_model(system, user) -> str`` used by the model path.
+
+    This is the SINGLE selector shared by the nightly loop and the on-demand
+    preview, so they always exercise the same path:
+      - director (default): the on-demand Qwen3.6-35B-A3B CPU server, started for
+        ONE goal then stopped (see :func:`call_director_model`);
+      - VT-3B fallback: when ``director_enabled`` is off.
+    All side effects are injected so the selector is unit-testable.
+    """
+    def _call_model(system, user):
+        if director_enabled:
+            return call_director_model(
+                system, user,
+                systemctl_run=systemctl_run,
+                http_get=http_get,
+                http_post=http_post,
+                port=director_port,
+            )
+        return call_vt3b(system, user)
+
+    return _call_model
+
+
+def build_prod_call_model(config):
+    """Wire the real systemd/HTTP/VT-3B side effects into :func:`build_call_model`.
+
+    Used by BOTH the nightly loop and the ``/api/dev-runs/preview-goal`` endpoint
+    so the human preview exercises the exact model path production uses. The
+    director is started, used for one goal, and ALWAYS stopped to free its RAM.
+    """
+    import json as _json  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    def _systemctl_run(args):
+        subprocess.run(
+            ["systemctl", "--user", *args], timeout=200, capture_output=True,
+        )
+
+    def _http_get(url):
+        with urllib.request.urlopen(url, timeout=4) as r:
+            return 200 <= getattr(r, "status", 200) < 300
+
+    def _http_post(url, body):
+        req = urllib.request.Request(
+            url, data=_json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=200) as r:
+            return _json.loads(r.read())
+
+    def _call_vt3b(system, user):
+        from axi import dev_director as _dd  # noqa: PLC0415
+        return _dd._call_vt3b(system, user, timeout=60, retry_deadline=0)
+
+    return build_call_model(
+        director_enabled=bool(config.get("self_improve_director_enabled", True)),
+        director_port=int(config.get("self_improve_director_port", 8093)),
+        systemctl_run=_systemctl_run,
+        http_get=_http_get,
+        http_post=_http_post,
+        call_vt3b=_call_vt3b,
+    )
+
+
+def build_prod_run_git(repo_path):
+    """Read-only, bounded git runner against the real repo. Injected as run_git."""
+    def _run_git(args, _repo=repo_path):
+        import subprocess  # noqa: PLC0415
+        proc = subprocess.run(
+            ["git", "-C", _repo, *args],
+            capture_output=True, text=True, timeout=30,
+        )
+        return proc.stdout or ""
+
+    return _run_git
+
+
+def preview_self_improve_goal(
+    *,
+    repo_path,
+    run_git,
+    call_model,
+    config_goal,
+    default_goal,
+    protected: tuple[str, ...] = PROTECTED_DEV_ENGINE_PATHS,
+) -> dict:
+    """Generate ONE self-improve goal on demand and return it for inspection.
+
+    Runs the SAME generate → validate → select path the nightly loop uses, but
+    STOPS BEFORE any dev run: pure observability. It never calls
+    :func:`~axi.dev_run.start_dev_run` and writes no outcome log. Never raises —
+    goal generation swallows model failures and falls back.
+
+    Returns a structured dict::
+
+        {"goal": str | None,
+         "source": "self_generated" | "config" | "default" | "none",
+         "signals": {"commits": int, "changed_files": int}}
+
+    ``source`` is ``"none"`` only when nothing at all could be produced (no
+    generated goal and no config/default fallback).
+    """
+    signals = gather_repo_signals(repo_path, run_git=run_git)
+    generated = generate_self_improve_goal(
+        repo_path=repo_path, run_git=run_git, call_model=call_model, protected=protected,
+    )
+    goal, source = select_self_improve_goal(
+        generated=generated, config_goal=config_goal, default_goal=default_goal,
+    )
+    if not goal:
+        source = "none"
+    return {
+        "goal": goal or None,
+        "source": source,
+        "signals": {
+            "commits": len(signals.get("commits") or []),
+            "changed_files": len(signals.get("changed_files") or []),
+        },
+    }
