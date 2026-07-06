@@ -253,8 +253,11 @@ def _build_goal_prompt(commits, changed_files, protected) -> tuple[str, str]:
     system = (
         "Sos un asistente de ingeniería que propone UNA sola mejora concreta y de "
         "BAJO RIESGO para un repositorio de software. Respondés SIEMPRE en español. "
-        "La mejora debe ser un test faltante, un bug chico, una limpieza o un "
-        "comentario que aclare algo, apuntando a un archivo o área REAL del repo. "
+        "La mejora puede ser un bug chico y acotado, una limpieza de código, un "
+        "comentario que aclare algo no obvio, o un test faltante — elegí la "
+        "categoría que MÁS le sirva al área caliente que ves abajo. NO propongas "
+        "siempre agregar un test: variá según lo que el repositorio realmente "
+        "necesita. Apuntá a un archivo o área REAL del repo. "
         "TENÉS PROHIBIDO proponer cambios al motor de auto-desarrollo (estos "
         f"módulos: {protected_names}). Devolvé ÚNICAMENTE la meta: una o dos "
         "oraciones, en imperativo, sin preámbulo, sin explicaciones y sin markdown."
@@ -268,8 +271,10 @@ def _build_goal_prompt(commits, changed_files, protected) -> tuple[str, str]:
         + commit_block
         + "\n\nArchivos tocados recientemente (áreas calientes):\n"
         + files_block
-        + "\n\nProponé UNA sola mejora concreta y de bajo riesgo siguiendo las "
-        "reglas. Devolvé solo la meta, una o dos oraciones en imperativo."
+        + "\n\nProponé UNA sola mejora concreta y de bajo riesgo para alguna de "
+        "esas áreas calientes, eligiendo la categoría (bug, limpieza, comentario "
+        "o test) más útil — no defaultees a agregar un test. Devolvé solo la "
+        "meta, una o dos oraciones en imperativo."
     )
     return system, user
 
