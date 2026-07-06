@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 log = logging.getLogger("axi.self_improve")
@@ -306,8 +307,16 @@ def validate_generated_goal(
             return None
     for prot in protected:
         prot_low = prot.lower()
+        if prot_low in low:
+            return None
+        # Match the bare basename only on word boundaries, so a TEST of the
+        # engine ("test_dev_run.py", "axi/tests/test_dev_run.py") is not mistaken
+        # for the engine module "dev_run.py". Adding a test is not editing the
+        # engine — the land guard (path-precise) allows it, so this early filter
+        # must not over-reject it. A real engine-source edit still says the bare
+        # module name ("modificá dev_land.py"), which this still catches.
         base = prot_low.rsplit("/", 1)[-1]
-        if prot_low in low or base in low:
+        if re.search(r"(?<!\w)" + re.escape(base) + r"(?!\w)", low):
             return None
     return cleaned
 

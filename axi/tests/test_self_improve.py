@@ -499,6 +499,30 @@ def test_validate_rejects_protected_full_path():
     )
 
 
+def test_validate_allows_engine_test_file():
+    # Adding a TEST for an engine module is not modifying the engine — the land
+    # guard (path-precise) allows test_dev_run.py, so the text filter must too.
+    # "dev_run.py" is a substring of "test_dev_run.py" but must not trip here.
+    goal = "Agregá un test en test_dev_run.py que verifique la serialización del campo preview."
+    assert si.validate_generated_goal(goal) == goal
+
+
+def test_validate_allows_engine_test_file_with_tests_dir():
+    goal = "Cubrí axi/tests/test_dev_land.py con un caso de conflicto de merge."
+    assert si.validate_generated_goal(goal) == goal
+
+
+def test_validate_still_rejects_engine_module_next_to_its_test():
+    # A goal that proposes editing the engine SOURCE must still be rejected even
+    # if it also mentions the test file.
+    assert (
+        si.validate_generated_goal(
+            "Modificá dev_land.py y actualizá test_dev_land.py en consecuencia."
+        )
+        is None
+    )
+
+
 # ---------------------------------------------------------------------------
 # generate_self_improve_goal
 # ---------------------------------------------------------------------------
