@@ -6,9 +6,35 @@
 
   <div class="flex items-center justify-between mb-4 gap-2">
     <h1 class="text-xl font-semibold">Dev Runs</h1>
-    <button type="button" @click="load()" class="btn" style="padding: 0.35rem 0.8rem; font-size: 0.85rem;"
-            :disabled="loading">↺ Actualizar</button>
+    <div class="flex items-center gap-2">
+      <button type="button" @click="previewGoal()" class="btn"
+              style="padding: 0.35rem 0.8rem; font-size: 0.85rem;"
+              :disabled="previewLoading">
+        <span x-show="!previewLoading">Vista previa de objetivo</span>
+        <span x-show="previewLoading">Generando…</span>
+      </button>
+      <button type="button" @click="load()" class="btn" style="padding: 0.35rem 0.8rem; font-size: 0.85rem;"
+              :disabled="loading">↺ Actualizar</button>
+    </div>
   </div>
+
+  <!-- Preview goal result (repo-wide; does NOT start a run) -->
+  <template x-if="preview && preview.ok">
+    <div class="text-sm mb-4 px-3 py-2 rounded"
+         style="background: rgba(0,180,160,0.1); border: 1px solid var(--teal)">
+      <div class="muted text-xs mb-1">
+        Objetivo propuesto (<span x-text="preview.source"></span>) — no se inició ningún run.
+      </div>
+      <div class="break-words" x-text="preview.goal || '(no se pudo generar un objetivo)'"></div>
+      <div class="muted text-xs mt-1" x-show="preview.signals"
+           x-text="'Señales: ' + (preview.signals ? preview.signals.commits : 0) + ' commits, ' + (preview.signals ? preview.signals.changed_files : 0) + ' archivos'"></div>
+    </div>
+  </template>
+  <template x-if="preview && !preview.ok">
+    <div class="text-sm mb-4 px-3 py-2 rounded"
+         style="background: rgba(238,51,51,0.1); border: 1px solid var(--red); color: var(--red)"
+         x-text="'No pude generar el objetivo: ' + (preview.error || 'error desconocido')"></div>
+  </template>
 
   <template x-if="error">
     <div class="text-sm px-3 py-2 rounded-lg mb-3"
@@ -147,6 +173,8 @@ function devRuns() {
     diffLoading: false,
     approveResult: {},   // run_id -> {ok, branch?, error?}
     actionPending: {},   // run_id -> bool
+    preview: null,       // {ok, goal, source, signals} | {ok:false, error}
+    previewLoading: false,
 
     async load() {
       this.loading = true;
@@ -180,6 +208,21 @@ function devRuns() {
         this.diffText = '';
       } finally {
         this.diffLoading = false;
+      }
+    },
+
+    async previewGoal() {
+      if (this.previewLoading) return;
+      this.previewLoading = true;
+      this.preview = null;
+      try {
+        const r = await fetch('/api/dev-runs/preview-goal', { method: 'POST' });
+        const d = await r.json();
+        this.preview = d;
+      } catch (e) {
+        this.preview = { ok: false, error: e.message || String(e) };
+      } finally {
+        this.previewLoading = false;
       }
     },
 
