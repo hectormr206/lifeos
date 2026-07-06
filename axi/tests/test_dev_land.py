@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import types
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -212,6 +213,502 @@ def test_land_run_patch_apply_failure(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert "patch did not apply" in result["error"]
     assert len(cleanup_calls) == 1, "cleanup_worktree must be called even on failure"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — dev_land.merge_run (Feature B — human merge to main)
+# ---------------------------------------------------------------------------
+
+
+def _patch_merge_env(monkeypatch, tmp_path, *, status, landed_branch="axi/land/run-1",
+                     written_states=None, target_branch="main"):
+    """Wire dev_land for a merge_run test: state store + config + worktree stubs.
+
+    Returns (create_calls, cleanup_calls). Subprocess is patched separately by
+    each test so merge/conflict behavior can differ.
+    """
+    from axi import dev_land
+
+    if written_states is None:
+        written_states = []
+
+    run_state = {"run_id": "run-1", "goal": "Fix foo", "status": status}
+    if landed_branch is not None:
+        run_state["landed_branch"] = landed_branch
+
+    monkeypatch.setattr("axi.dev_land._dr", types.SimpleNamespace(
+        get_run=lambda rid: dict(run_state),
+        _state_path=lambda rid: tmp_path / "state.json",
+        _write_state_file=lambda p, s: written_states.append(dict(s)),
+    ))
+    monkeypatch.setattr("axi.dev_land.config", _fake_config({
+        "dev_director_repo": str(tmp_path / "repo"),
+        "dev_env_deploy_target_branch": target_branch,
+    }))
+
+    create_calls: list = []
+    cleanup_calls: list = []
+    monkeypatch.setattr("axi.dev_land._create_worktree",
+                        lambda repo, wt, br: create_calls.append((repo, wt, br)) or (True, ""))
+    monkeypatch.setattr("axi.dev_land._cleanup_worktree",
+                        lambda *a: cleanup_calls.append(a))
+    return create_calls, cleanup_calls, written_states
+
+
+def test_merge_run_rejects_when_not_landed(tmp_path, monkeypatch):
+    """merge_run refuses any status != 'landed' with NO git side effect."""
+    from axi import dev_land
+
+    _c, _cl, written = _patch_merge_env(monkeypatch, tmp_path, status="done")
+
+    subprocess_calls: list = []
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: subprocess_calls.append(list(cmd)) or _make_proc(0))
+
+    result = dev_land.merge_run("run-1")
+
+    assert result["ok"] is False
+    assert "landed" in result["error"]
+    # No git calls at all, no state write.
+    assert subprocess_calls == []
+    assert written == []
+
+
+def test_merge_run_missing_landed_branch(tmp_path, monkeypatch):
+    """merge_run errors when the run has no recorded landed_branch."""
+    from axi import dev_land
+
+    _c, _cl, written = _patch_merge_env(monkeypatch, tmp_path, status="landed",
+                                        landed_branch=None)
+
+    subprocess_calls: list = []
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: subprocess_calls.append(list(cmd)) or _make_proc(0))
+
+    result = dev_land.merge_run("run-1")
+    assert result["ok"] is False
+    assert subprocess_calls == []
+
+
+def test_merge_run_happy_path(tmp_path, monkeypatch):
+    """From 'landed': merges landed_branch, pushes target, state → 'merged'."""
+    from axi import dev_land
+
+    create_calls, cleanup_calls, written = _patch_merge_env(
+        monkeypatch, tmp_path, status="landed",
+        landed_branch="axi/land/run-1", target_branch="main")
+
+    subprocess_calls: list = []
+
+    def fake_run(cmd, **kwargs):
+        subprocess_calls.append(list(cmd))
+        return _make_proc(returncode=0)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run", fake_run)
+
+    result = dev_land.merge_run("run-1")
+
+    assert result["ok"] is True, result
+    all_cmds = [" ".join(c) for c in subprocess_calls]
+
+    # Merged the recorded landed branch (fetched from origin).
+    assert any("merge" in c and "origin/axi/land/run-1" in c for c in all_cmds), all_cmds
+    # NEVER a force merge / force push.
+    for c in all_cmds:
+        assert "--force" not in c and "-f " not in (c + " "), c
+    # Pushed to the configured target branch.
+    push_cmds = [c for c in all_cmds if "push" in c]
+    assert push_cmds, all_cmds
+    assert any("HEAD:main" in c for c in push_cmds), push_cmds
+    # Cleanup always runs.
+    assert len(cleanup_calls) == 1
+
+    # State recorded.
+    s = written[-1]
+    assert s["status"] == "merged"
+    assert s["merged_into"] == "main"
+    assert "merged_at" in s
+    assert s["merge_push_ok"] is True
+
+
+def test_merge_run_conflict_aborts_and_stays_landed(tmp_path, monkeypatch):
+    """Merge conflict → abort, state STAYS 'landed', no push to target."""
+    from axi import dev_land
+
+    _c, cleanup_calls, written = _patch_merge_env(
+        monkeypatch, tmp_path, status="landed", landed_branch="axi/land/run-1")
+
+    subprocess_calls: list = []
+
+    def fake_run(cmd, **kwargs):
+        subprocess_calls.append(list(cmd))
+        # The actual merge fails; abort and everything else succeed.
+        if cmd[:2] == ["git", "merge"] and "--abort" not in cmd:
+            return _make_proc(returncode=1, stderr="CONFLICT (content)")
+        return _make_proc(returncode=0)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run", fake_run)
+
+    result = dev_land.merge_run("run-1")
+
+    assert result["ok"] is False
+    assert "conflict" in result["error"].lower()
+    # FIX 6: conflicting-path diagnostics from stderr are surfaced.
+    assert "CONFLICT (content)" in result["error"]
+    all_cmds = [" ".join(c) for c in subprocess_calls]
+    # merge --abort was issued.
+    assert any("merge --abort" in c for c in all_cmds), all_cmds
+    # NO push to the target branch happened.
+    assert not any("push" in c for c in all_cmds), all_cmds
+    # State never advanced to 'merged'.
+    assert all(s.get("status") != "merged" for s in written)
+    assert len(cleanup_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — dev_land.deploy_run (Feature B — human deploy / local install)
+# ---------------------------------------------------------------------------
+
+
+def test_deploy_run_rejects_when_not_merged(tmp_path, monkeypatch):
+    """deploy_run refuses status != 'merged'; _trigger_local_install NOT called."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written: list = []
+    monkeypatch.setattr("axi.dev_land._dr", types.SimpleNamespace(
+        get_run=lambda rid: {"run_id": rid, "goal": "G", "status": "landed"},
+        _state_path=lambda rid: tmp_path / "state.json",
+        _write_state_file=lambda p, s: written.append(dict(s)),
+    ))
+
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda repo: install_calls.append(repo) or True)
+
+    result = dev_land.deploy_run("run-1")
+    assert result["ok"] is False
+    assert "merged" in result["error"]
+    assert install_calls == []
+    assert written == []
+
+
+def test_deploy_run_happy_path(tmp_path, monkeypatch):
+    """From 'merged': triggers local install ONCE with the configured repo."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written: list = []
+    monkeypatch.setattr("axi.dev_land._dr", types.SimpleNamespace(
+        get_run=lambda rid: {"run_id": rid, "goal": "G", "status": "merged"},
+        _state_path=lambda rid: tmp_path / "state.json",
+        _write_state_file=lambda p, s: written.append(dict(s)),
+    ))
+    repo = str(tmp_path / "live-repo")
+    monkeypatch.setattr("axi.dev_land.config", _fake_config({
+        "dev_director_repo": repo,
+    }))
+
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or True)
+
+    result = dev_land.deploy_run("run-1")
+
+    assert result["ok"] is True, result
+    assert install_calls == [repo]
+    s = written[-1]
+    assert s["status"] == "deployed"
+    assert "deployed_at" in s
+    assert s["deploy_triggered_ok"] is True
+
+
+def test_cannot_deploy_directly_from_landed(tmp_path, monkeypatch):
+    """State-machine gate: 'landed' cannot deploy — must merge first."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    monkeypatch.setattr("axi.dev_land._dr", types.SimpleNamespace(
+        get_run=lambda rid: {"run_id": rid, "goal": "G", "status": "landed",
+                             "landed_branch": "axi/land/run-1"},
+        _state_path=lambda rid: tmp_path / "state.json",
+        _write_state_file=lambda p, s: None,
+    ))
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda repo: install_calls.append(repo) or True)
+
+    result = dev_land.deploy_run("run-1")
+    assert result["ok"] is False
+    assert install_calls == []
+
+
+# ---------------------------------------------------------------------------
+# FIX 1 — resilience: git subprocess timeouts must not strand a run
+# ---------------------------------------------------------------------------
+
+
+def test_merge_run_push_timeout_stays_landed(tmp_path, monkeypatch):
+    """A TimeoutExpired on push → failure, best-effort abort, state STAYS 'landed'."""
+    from axi import dev_land
+
+    _c, cleanup_calls, written = _patch_merge_env(
+        monkeypatch, tmp_path, status="landed", landed_branch="axi/land/run-1")
+
+    subprocess_calls: list = []
+
+    def fake_run(cmd, **kwargs):
+        subprocess_calls.append(list(cmd))
+        if cmd[:2] == ["git", "push"]:
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 30))
+        return _make_proc(returncode=0)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run", fake_run)
+
+    result = dev_land.merge_run("run-1")
+
+    assert result["ok"] is False
+    assert "timeout" in result["error"].lower()
+    assert "push" in result["error"]
+    all_cmds = [" ".join(c) for c in subprocess_calls]
+    # Best-effort abort on timeout.
+    assert any("merge --abort" in c for c in all_cmds), all_cmds
+    # State never advanced to 'merged'.
+    assert all(s.get("status") != "merged" for s in written)
+    # Cleanup always runs.
+    assert len(cleanup_calls) == 1
+
+
+def test_merge_run_git_calls_have_timeouts(tmp_path, monkeypatch):
+    """Every git subprocess.run in _merge_run passes a timeout= bound."""
+    from axi import dev_land
+
+    _patch_merge_env(monkeypatch, tmp_path, status="landed",
+                     landed_branch="axi/land/run-1")
+
+    seen_timeouts: list = []
+
+    def fake_run(cmd, **kwargs):
+        seen_timeouts.append(kwargs.get("timeout"))
+        return _make_proc(returncode=0)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run", fake_run)
+    dev_land.merge_run("run-1")
+
+    assert seen_timeouts, "no git calls made"
+    assert all(t is not None for t in seen_timeouts), seen_timeouts
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 — reliability: deploy must not advance to 'deployed' on trigger failure
+# ---------------------------------------------------------------------------
+
+
+def _patch_deploy_env(monkeypatch, tmp_path, *, status="merged"):
+    from axi import dev_land
+    written: list = []
+    monkeypatch.setattr("axi.dev_land._dr", types.SimpleNamespace(
+        get_run=lambda rid: {"run_id": rid, "goal": "G", "status": status},
+        _state_path=lambda rid: tmp_path / "state.json",
+        _write_state_file=lambda p, s: written.append(dict(s)),
+    ))
+    monkeypatch.setattr("axi.dev_land.config", _fake_config({
+        "dev_director_repo": str(tmp_path / "live-repo"),
+    }))
+    return written
+
+
+def test_deploy_trigger_false_stays_merged(tmp_path, monkeypatch):
+    """Trigger returns False → status stays 'merged', ok False, install was called."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written = _patch_deploy_env(monkeypatch, tmp_path)
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or False)
+
+    result = dev_land.deploy_run("run-1")
+
+    assert result["ok"] is False
+    assert install_calls, "install must have been attempted"
+    assert all(s.get("status") != "deployed" for s in written)
+    s = written[-1]
+    assert s["status"] == "merged"
+    assert s["deploy_triggered_ok"] is False
+    assert s.get("deploy_error")
+
+
+def test_deploy_trigger_raises_stays_merged(tmp_path, monkeypatch):
+    """Trigger raises → status stays 'merged', ok False."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written = _patch_deploy_env(monkeypatch, tmp_path)
+    install_calls: list = []
+
+    def boom(r):
+        install_calls.append(r)
+        raise RuntimeError("systemd-run exploded")
+
+    monkeypatch.setattr(_real_de, "_trigger_local_install", boom)
+
+    result = dev_land.deploy_run("run-1")
+
+    assert result["ok"] is False
+    assert install_calls, "install must have been attempted"
+    assert all(s.get("status") != "deployed" for s in written)
+    s = written[-1]
+    assert s["status"] == "merged"
+    assert s["deploy_triggered_ok"] is False
+    assert s.get("deploy_error")
+
+
+# ---------------------------------------------------------------------------
+# FIX 3 — risk/reliability: double-submit / lost-update race
+# ---------------------------------------------------------------------------
+
+
+def test_merge_run_double_submit_rejected(tmp_path, monkeypatch):
+    """Two sequential merges: first advances → second cleanly rejected by gate."""
+    from axi import dev_land
+
+    live_state = {"run_id": "run-1", "goal": "G", "status": "landed",
+                  "landed_branch": "axi/land/run-1"}
+
+    monkeypatch.setattr("axi.dev_land._dr", types.SimpleNamespace(
+        get_run=lambda rid: dict(live_state),
+        _state_path=lambda rid: tmp_path / "state.json",
+        _write_state_file=lambda p, s: live_state.update(s),
+    ))
+    monkeypatch.setattr("axi.dev_land.config", _fake_config({
+        "dev_director_repo": str(tmp_path / "repo"),
+        "dev_env_deploy_target_branch": "main",
+    }))
+    monkeypatch.setattr("axi.dev_land._create_worktree", lambda *a: (True, ""))
+    monkeypatch.setattr("axi.dev_land._cleanup_worktree", lambda *a: None)
+
+    push_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "push"]:
+            push_count["n"] += 1
+        return _make_proc(returncode=0)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run", fake_run)
+
+    first = dev_land.merge_run("run-1")
+    second = dev_land.merge_run("run-1")
+
+    assert first["ok"] is True
+    assert second["ok"] is False
+    assert "landed" in second["error"]
+    # Only ONE push to target — no double merge.
+    assert push_count["n"] == 1
+    assert live_state["status"] == "merged"
+
+
+# ---------------------------------------------------------------------------
+# FIX 5 — resilience: merge/deploy logged to the outcome trail
+# ---------------------------------------------------------------------------
+
+
+def test_merge_run_logs_outcome(tmp_path, monkeypatch):
+    """_merge_run calls _log_outcome on success."""
+    from axi import dev_land
+
+    _patch_merge_env(monkeypatch, tmp_path, status="landed",
+                     landed_branch="axi/land/run-1")
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: _make_proc(returncode=0))
+
+    log_calls: list = []
+    monkeypatch.setattr("axi.dev_land._log_outcome",
+                        lambda state, **kw: log_calls.append(kw.get("status")))
+
+    dev_land.merge_run("run-1")
+    assert "merged" in log_calls, log_calls
+
+
+def test_deploy_run_logs_outcome(tmp_path, monkeypatch):
+    """_deploy_run calls _log_outcome on success."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    _patch_deploy_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(_real_de, "_trigger_local_install", lambda r: True)
+
+    log_calls: list = []
+    monkeypatch.setattr("axi.dev_land._log_outcome",
+                        lambda state, **kw: log_calls.append(kw.get("status")))
+
+    dev_land.deploy_run("run-1")
+    assert "deployed" in log_calls, log_calls
+
+
+# ---------------------------------------------------------------------------
+# API tests — merge / deploy endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_api_merge_calls_merge_run(client, monkeypatch):
+    """POST /api/dev-runs/{id}/merge calls dev_land.merge_run, returns result."""
+    import axi.dev_run as _real_dr
+    import axi.dev_land as _real_dl
+
+    run_id = "merge-endpoint-run"
+    monkeypatch.setattr(_real_dr, "get_run",
+                        lambda rid: {"run_id": rid, "status": "landed", "goal": "G"})
+    monkeypatch.setattr(_real_dl, "merge_run",
+                        lambda rid: {"ok": True, "merged_into": "main"})
+
+    r = client.post(f"/api/dev-runs/{run_id}/merge")
+    assert r.status_code == 200
+    assert r.json()["merged_into"] == "main"
+
+
+def test_api_merge_wrong_state_400(client, monkeypatch):
+    """POST merge on a non-landed run → 400."""
+    import axi.dev_run as _real_dr
+    import axi.dev_land as _real_dl
+
+    monkeypatch.setattr(_real_dr, "get_run",
+                        lambda rid: {"run_id": rid, "status": "done", "goal": "G"})
+    monkeypatch.setattr(_real_dl, "merge_run",
+                        lambda rid: {"ok": False, "error": "run not in 'landed' state"})
+
+    r = client.post("/api/dev-runs/x/merge")
+    assert r.status_code == 400
+
+
+def test_api_deploy_calls_deploy_run(client, monkeypatch):
+    """POST /api/dev-runs/{id}/deploy calls dev_land.deploy_run, returns result."""
+    import axi.dev_run as _real_dr
+    import axi.dev_land as _real_dl
+
+    run_id = "deploy-endpoint-run"
+    monkeypatch.setattr(_real_dr, "get_run",
+                        lambda rid: {"run_id": rid, "status": "merged", "goal": "G"})
+    monkeypatch.setattr(_real_dl, "deploy_run",
+                        lambda rid: {"ok": True, "deploy_triggered_ok": True})
+
+    r = client.post(f"/api/dev-runs/{run_id}/deploy")
+    assert r.status_code == 200
+    assert r.json()["deploy_triggered_ok"] is True
+
+
+def test_api_deploy_wrong_state_400(client, monkeypatch):
+    """POST deploy on a non-merged run → 400."""
+    import axi.dev_run as _real_dr
+    import axi.dev_land as _real_dl
+
+    monkeypatch.setattr(_real_dr, "get_run",
+                        lambda rid: {"run_id": rid, "status": "landed", "goal": "G"})
+    monkeypatch.setattr(_real_dl, "deploy_run",
+                        lambda rid: {"ok": False, "error": "run not in 'merged' state"})
+
+    r = client.post("/api/dev-runs/x/deploy")
+    assert r.status_code == 400
 
 
 # ---------------------------------------------------------------------------

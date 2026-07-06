@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -74,8 +75,23 @@ def _read_state(run_id: str) -> dict | None:
 
 
 def _write_state_file(path: Path, state: dict) -> None:
+    # Atomic write: a crash mid-write must never leave a truncated state.json
+    # (merged/deployed now gate irreversible git/deploy actions). Write to a
+    # temp file in the same dir, then os.replace onto the target (atomic on the
+    # same filesystem).
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2))
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp",
+                               dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(state, indent=2))
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _notify(title: str, body: str) -> None:
