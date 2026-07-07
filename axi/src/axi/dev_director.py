@@ -282,11 +282,51 @@ def _claude_resilience_flags() -> tuple[list[str], dict[str, str]]:
     return argv, extra_env
 
 
-# Container-side path for Claude Code's config/session state. It sits INSIDE the
-# mounted worktree (/work) so session state written on one `--rm` round survives
-# into the next round's fresh container — that is what makes `--resume` work
-# across rounds without mounting the host ~/.claude (which stays invisible).
-_CLAUDE_CONFIG_DIR_CONTAINER = "/work/.axi-claude"
+# Container-side path for Claude Code's config/session state. It is a STABLE
+# mount point OUTSIDE the ephemeral worktree, backed by a persistent host dir
+# (see dev_director_claude_config_dir). Because it survives across `--rm` rounds,
+# a one-time `claude setup-token` OAuth login stored there is reused on every run
+# — and `--resume` keeps working. The host ~/.claude still stays invisible.
+_CLAUDE_CONFIG_DIR_CONTAINER = "/claude-config"
+
+
+# The coder config dir is config-controlled (dev_director_claude_config_dir) and
+# is interpolated VERBATIM into a `-v {host}:/claude-config:Z` podman mount. An
+# unvalidated value (`/`, `~`, `/home/…`, a `:`-containing string, or a symlink
+# whose real target escapes) would mount the whole home/FS read-write and defeat
+# the sandbox. So it is constrained, fail-closed, to this fixed safe root.
+_CODER_CONFIG_SAFE_ROOT = "~/.local/share/axi"
+
+
+def _resolve_coder_config_dir(
+    raw: str, *, safe_root: str = _CODER_CONFIG_SAFE_ROOT
+) -> str:
+    """Resolve + validate the coder's Claude config dir. Raise ValueError if unsafe.
+
+    Pure: no filesystem writes (only realpath/expanduser reads). Defense-in-depth
+    for the podman `-v {host}:/claude-config:Z` mount:
+
+    - Reject any raw value containing ':' — it would break podman's
+      host:container:opts mount parsing (and could inject extra mount options).
+    - Resolve BOTH the configured value and the safe root through
+      os.path.realpath(os.path.expanduser(...)); realpath follows symlinks, so a
+      symlinked leaf whose real target escapes the root is caught.
+    - Require the resolved path to be the safe root itself OR strictly inside it
+      (startswith(root + os.sep)). Anything else is rejected.
+
+    Returns the resolved (canonical, symlink-free) path on success.
+    """
+    if ":" in raw:
+        raise ValueError(
+            f"coder config dir may not contain ':' (breaks podman mount parsing): {raw!r}"
+        )
+    root = os.path.realpath(os.path.expanduser(safe_root))
+    resolved = os.path.realpath(os.path.expanduser(raw))
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise ValueError(
+            f"coder config dir {resolved!r} escapes the safe root {root!r}"
+        )
+    return resolved
 
 
 def build_claude_podman_argv(
@@ -296,6 +336,7 @@ def build_claude_podman_argv(
     image: str,
     resilience_argv: list[str],
     resilience_env: dict[str, str],
+    host_config_dir: str,
     resume_session_id: str | None = None,
     podman_path: str = "podman",
     api_key_env: str = "ANTHROPIC_API_KEY",
@@ -305,20 +346,29 @@ def build_claude_podman_argv(
 
     Pure function: no I/O, no side effects. The caller invokes the result.
 
-    Containment:
-    - Exactly one mount: the worktree at /work (writable, :Z). /home is NOT
-      mounted, so host ~/.ssh, the encrypted memory.db, .env files, etc. are
-      invisible to the coder.
+    Containment — exactly TWO mounts, nothing else:
+    - The worktree at /work (writable, :Z).
+    - The dedicated coder config dir (host_config_dir) at /claude-config
+      (writable, :Z) — a persistent, coder-only dir holding the OAuth token /
+      Claude Code config. It is mounted read-write because Claude Code refreshes
+      the OAuth token and writes session state.
+    /home is STILL not mounted, so host ~/.ssh, the encrypted memory.db, .env
+    files, etc. remain invisible; the host ~/.claude STILL stays invisible. The
+    ONLY added exposure over the single-mount design is this dedicated
+    coder-only config/token dir.
+
     - Host env is scrubbed: only ANTHROPIC_API_KEY is forwarded FROM the host
-      (via the `-e NAME` inherit form). Everything else the coder needs is set
-      explicitly to a known value (CLAUDE_CONFIG_DIR + resilience env), never
-      inherited from the host.
+      (via the `-e NAME` inherit form) — so an API key still works if ever set.
+      Everything else the coder needs is set explicitly to a known value
+      (CLAUDE_CONFIG_DIR + resilience env), never inherited from the host. The
+      OAuth token from the mounted config dir is the primary/fallback auth.
     - --userns=keep-id: files the coder writes are owned by the host UID.
     - --rm: the container is removed after each round.
     - Network is intentionally left ON (the coder must reach api.anthropic.com).
       There is deliberately NO --network=none here.
-    - CLAUDE_CONFIG_DIR points inside /work so Claude Code session state persists
-      across successive `--rm` rounds and `--resume` keeps working.
+    - CLAUDE_CONFIG_DIR points at /claude-config (the persistent mount, OUTSIDE
+      /work) so the login and Claude Code session state persist across
+      successive `--rm` rounds and `--resume` keeps working.
 
     The in-container command is:
         claude -p <instruction> --output-format json
@@ -338,6 +388,7 @@ def build_claude_podman_argv(
     return [
         podman_path, "run", "--rm", "--userns=keep-id",
         "-v", f"{worktree_path}:/work:Z",
+        "-v", f"{host_config_dir}:{config_dir_container}:Z",
         "-w", "/work",
         *env_flags,
         image,
@@ -395,12 +446,38 @@ def _run_claude(
             )
             return reason, 0.0, 0, True, None
 
+        # Persistent, dedicated host dir holding the coder's Claude Code OAuth
+        # token/config. Mounted read-write into the container so a one-time
+        # `claude setup-token` login is reused across `--rm` rounds. This is NOT
+        # the host ~/.claude and NOT /home — a dedicated coder-only dir. The
+        # value is config-controlled and flows verbatim into a podman mount, so
+        # it is validated fail-closed against a fixed safe root; on rejection we
+        # refuse to run rather than silently fall back to the default (which
+        # would hide the misconfig). Created + chmod'd 0700 since it holds a token.
+        raw_config_dir = str(config.get(
+            "dev_director_claude_config_dir", "~/.local/share/axi/coder-claude"
+        ))
+        try:
+            host_config_dir = _resolve_coder_config_dir(raw_config_dir)
+        except ValueError as exc:
+            reason = (
+                "refusing to run the coder: rejected dev_director_claude_config_dir "
+                f"({exc})"
+            )
+            log.error("dev_director: %s", reason)
+            return reason, 0.0, 0, True, None
+        os.makedirs(host_config_dir, mode=0o700, exist_ok=True)
+        # Enforce 0700 even if the dir pre-existed with looser perms (makedirs
+        # only applies mode on creation).
+        os.chmod(host_config_dir, 0o700)
+
         argv = build_claude_podman_argv(
             worktree_path=worktree_path,
             instruction=instruction,
             image=image,
             resilience_argv=extra_argv,
             resilience_env=extra_env,
+            host_config_dir=host_config_dir,
             resume_session_id=resume_session_id,
             podman_path=podman_bin,
         )
