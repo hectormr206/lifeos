@@ -107,3 +107,42 @@ def test_guard_exits_1_when_id_missing_from_json(tmp_path):
 
     code = _run(env=_env_with_path(model_file))
     assert code == 1, f"Expected exit 1 when 'id' key absent, got {code}"
+
+
+# ---------------------------------------------------------------------------
+# CPU mode (game-cpu.conf sets CUDA_VISIBLE_DEVICES=) → no VRAM, always allow
+# ---------------------------------------------------------------------------
+
+def test_guard_exits_0_in_cpu_mode_even_with_35b(tmp_path):
+    """CUDA_VISIBLE_DEVICES='' (CPU mode) → exit 0 regardless of the brain.
+
+    In CPU mode VT uses no GPU VRAM, so it coexists with any primary brain and
+    the OOM guard does not apply.
+    """
+    model_file = tmp_path / "active_model.json"
+    model_file.write_text(json.dumps({"id": "qwen36-35b-a3b", "name": "Qwen 35B"}))
+    env = _env_with_path(model_file)
+    env["CUDA_VISIBLE_DEVICES"] = ""
+
+    code = _run(env=env)
+    assert code == 0, f"Expected exit 0 in CPU mode with 35B active, got {code}"
+
+
+def test_guard_exits_0_in_cpu_mode_even_with_missing_file(tmp_path):
+    """CPU mode short-circuits before the model check → exit 0 even if file missing."""
+    env = _env_with_path(tmp_path / "does_not_exist.json")
+    env["CUDA_VISIBLE_DEVICES"] = ""
+
+    code = _run(env=env)
+    assert code == 0, f"Expected exit 0 in CPU mode with missing file, got {code}"
+
+
+def test_guard_exits_1_in_gpu_mode_with_35b(tmp_path):
+    """CUDA_VISIBLE_DEVICES set to a real GPU (not empty) + 35B → still exit 1."""
+    model_file = tmp_path / "active_model.json"
+    model_file.write_text(json.dumps({"id": "qwen36-35b-a3b", "name": "Qwen 35B"}))
+    env = _env_with_path(model_file)
+    env["CUDA_VISIBLE_DEVICES"] = "0"
+
+    code = _run(env=env)
+    assert code == 1, f"Expected exit 1 in GPU mode with 35B active, got {code}"

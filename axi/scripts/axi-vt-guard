@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Boot-time OOM guard for llama-vt.service.
 
-Exits 0 (allow start) iff the active primary brain is qwen35-4b.
+Exits 0 (allow start) iff EITHER:
+  - VT runs on CPU (CUDA_VISIBLE_DEVICES set to empty by game-cpu.conf) — it
+    then uses no GPU VRAM and coexists with any primary brain, so the OOM
+    concern does not apply; OR
+  - the active primary brain is qwen35-4b (the GPU triad, which leaves VRAM
+    room for a GPU-resident VT).
 Exits 1 (clean skip — not a failure) in all other cases:
-  - active primary is NOT qwen35-4b (e.g. 35B → OOM risk)
-  - active_model.json is missing
-  - active_model.json is malformed/corrupt JSON
-  - any other I/O error
+  - GPU mode AND active primary is NOT qwen35-4b (e.g. 35B → OOM risk)
+  - active_model.json is missing / malformed / any I/O error (GPU mode)
 
-Used as ExecCondition in llama-vt.service so llama-vt only auto-starts
-at boot when the triad is active. When the 35B (qwen36-35b-a3b) is the
-primary, loading llama-server (22 GB) + llama-vt (3.3 GB) simultaneously
-would exhaust the 12 GB GPU VRAM.
+Used as ExecCondition in llama-vt.service. When the 35B (qwen36-35b-a3b) is the
+primary on GPU, loading llama-server (22 GB) + a GPU-resident llama-vt (3.3 GB)
+would exhaust the 12 GB GPU VRAM — but a CPU-pinned VT has no such conflict.
 
 Env override for testing:
   AXI_ACTIVE_MODEL_PATH — absolute path to the active_model.json to read.
@@ -25,6 +27,15 @@ import sys
 from pathlib import Path
 
 _TRIAD_PRIMARY_ID = "qwen35-4b"
+
+
+def _is_cpu_mode() -> bool:
+    """True when VT is pinned to CPU (game-cpu.conf sets CUDA_VISIBLE_DEVICES=).
+
+    A CPU-pinned VT uses no GPU VRAM, so it can start alongside any primary
+    brain — the OOM guard that gates GPU-VT does not apply.
+    """
+    return os.environ.get("CUDA_VISIBLE_DEVICES") == ""
 
 
 def _active_model_path() -> Path:
@@ -55,4 +66,5 @@ def _is_triad_primary() -> bool:
 
 
 if __name__ == "__main__":
-    sys.exit(0 if _is_triad_primary() else 1)
+    # CPU mode short-circuits: no VRAM used, so allow regardless of the brain.
+    sys.exit(0 if (_is_cpu_mode() or _is_triad_primary()) else 1)
