@@ -97,6 +97,9 @@ def _sandbox_config_get(key, default=None):
         return True
     if key == "dev_agent_image":
         return "localhost/axi-coder:latest"
+    if key == "dev_director_claude_config_dir":
+        # Under the safe root (~/.local/share/axi) so validation accepts it.
+        return "~/.local/share/axi/coder-claude"
     return default
 
 
@@ -792,6 +795,7 @@ def test_build_claude_podman_argv_containment():
             "CLAUDE_CODE_RETRY_WATCHDOG": "1",
             "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0",
         },
+        host_config_dir="/var/lib/coder-claude",
     )
 
     # Basic podman isolation shape.
@@ -804,10 +808,16 @@ def test_build_claude_podman_argv_containment():
     assert "--network=none" not in argv
     assert "none" not in argv
 
-    # Exactly one -v mount: the worktree at /work. /home is NOT mounted.
+    # Exactly TWO -v mounts: the worktree at /work AND the dedicated coder
+    # config dir at /claude-config. /home is NOT mounted; host ~/.claude stays
+    # invisible — the only added exposure is the dedicated coder-only config dir.
     v_indices = [i for i, a in enumerate(argv) if a == "-v"]
-    assert len(v_indices) == 1, f"expected exactly one mount, got {len(v_indices)}"
-    assert argv[v_indices[0] + 1] == "/work/tree:/work:Z"
+    assert len(v_indices) == 2, f"expected exactly two mounts, got {len(v_indices)}"
+    mounts = {argv[i + 1] for i in v_indices}
+    assert mounts == {
+        "/work/tree:/work:Z",
+        "/var/lib/coder-claude:/claude-config:Z",
+    }, mounts
     assert not any("/home" in a for a in argv), "host /home must never be mounted"
 
     # Working dir is the mounted worktree.
@@ -823,6 +833,11 @@ def test_build_claude_podman_argv_containment():
     )
 
     # CLAUDE_CONFIG_DIR + resilience env cross explicitly as NAME=VALUE.
+    # The config dir points at the dedicated /claude-config mount, NOT /work.
+    assert _CLAUDE_CONFIG_DIR_CONTAINER == "/claude-config"
+    assert not _CLAUDE_CONFIG_DIR_CONTAINER.startswith("/work"), (
+        "coder config must live OUTSIDE the ephemeral worktree so a login survives"
+    )
     assert f"CLAUDE_CONFIG_DIR={_CLAUDE_CONFIG_DIR_CONTAINER}" in e_pairs
     assert "CLAUDE_CODE_RETRY_WATCHDOG=1" in e_pairs
     assert "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0" in e_pairs
@@ -840,8 +855,8 @@ def test_build_claude_podman_argv_containment():
     assert "--max-turns" in tail and "--max-budget-usd" in tail
 
 
-def test_build_claude_podman_argv_resume_and_config_dir_under_worktree():
-    """--resume is passed and the config dir lives under the mounted worktree /work."""
+def test_build_claude_podman_argv_resume_and_persistent_config_dir():
+    """--resume is passed and the config dir is a persistent host mount OUTSIDE /work."""
     from axi.dev_director import build_claude_podman_argv, _CLAUDE_CONFIG_DIR_CONTAINER
 
     argv = build_claude_podman_argv(
@@ -851,17 +866,157 @@ def test_build_claude_podman_argv_resume_and_config_dir_under_worktree():
         resilience_argv=[],
         resilience_env={},
         resume_session_id="sess-42",
+        host_config_dir="/data/coder-claude",
     )
 
     assert "--resume" in argv
     assert argv[argv.index("--resume") + 1] == "sess-42"
 
-    # Session continuity: the config dir MUST be under /work (the mounted
-    # worktree), never the host ~/.claude — otherwise `--rm` rounds can't resume.
-    assert _CLAUDE_CONFIG_DIR_CONTAINER.startswith("/work/")
+    # Login persistence: the config dir is a dedicated host mount that survives
+    # across `--rm` rounds, mounted read-write so Claude Code refreshes the OAuth
+    # token and writes session state. It must live OUTSIDE the ephemeral /work.
+    assert _CLAUDE_CONFIG_DIR_CONTAINER == "/claude-config"
+    assert not _CLAUDE_CONFIG_DIR_CONTAINER.startswith("/work")
     cfg = f"CLAUDE_CONFIG_DIR={_CLAUDE_CONFIG_DIR_CONTAINER}"
     assert cfg in argv
-    assert ".claude" not in _CLAUDE_CONFIG_DIR_CONTAINER or _CLAUDE_CONFIG_DIR_CONTAINER.startswith("/work/")
+
+    # The host config dir is mounted read-write at the container config path.
+    v_indices = [i for i, a in enumerate(argv) if a == "-v"]
+    mounts = {argv[i + 1] for i in v_indices}
+    assert "/data/coder-claude:/claude-config:Z" in mounts
+    # The worktree mount is still present.
+    assert "/wt:/work:Z" in mounts
+
+
+# ---------------------------------------------------------------------------
+# Coder config-dir validation (defense-in-depth: the value flows verbatim into
+# a podman -v mount, so it MUST be constrained to a safe root, fail-closed)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_coder_config_dir_accepts_default():
+    """The default value resolves under the safe root and is accepted."""
+    from axi.dev_director import _resolve_coder_config_dir
+
+    resolved = _resolve_coder_config_dir("~/.local/share/axi/coder-claude")
+    expected = os.path.realpath(os.path.expanduser("~/.local/share/axi/coder-claude"))
+    assert resolved == expected
+
+
+def test_resolve_coder_config_dir_accepts_subdir(tmp_path):
+    """A subdir under an injected safe root is accepted (returns realpath)."""
+    from axi.dev_director import _resolve_coder_config_dir
+
+    root = tmp_path / "axi"
+    sub = root / "coder-claude"
+    resolved = _resolve_coder_config_dir(str(sub), safe_root=str(root))
+    assert resolved == os.path.realpath(str(sub))
+
+
+def test_resolve_coder_config_dir_rejects_colon():
+    """A ':' in the value would break podman host:container:opts parsing → reject."""
+    from axi.dev_director import _resolve_coder_config_dir
+
+    with pytest.raises(ValueError):
+        _resolve_coder_config_dir("/tmp/evil:/etc")
+
+
+@pytest.mark.parametrize("bad", ["/", "~", "/home/hectormr", "/tmp/evil"])
+def test_resolve_coder_config_dir_rejects_outside_root(bad):
+    """Any path resolving outside the safe root is rejected (would over-mount)."""
+    from axi.dev_director import _resolve_coder_config_dir
+
+    with pytest.raises(ValueError):
+        _resolve_coder_config_dir(bad)
+
+
+def test_resolve_coder_config_dir_rejects_symlink_escape(tmp_path):
+    """A symlink leaf whose realpath escapes the safe root is rejected."""
+    from axi.dev_director import _resolve_coder_config_dir
+
+    root = tmp_path / "axi"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escape = root / "coder-claude"
+    os.symlink(str(outside), str(escape))  # realpath(escape) -> outside, escapes root
+
+    with pytest.raises(ValueError):
+        _resolve_coder_config_dir(str(escape), safe_root=str(root))
+
+
+def test_run_claude_rejects_config_dir_with_colon():
+    """Sandbox on, config dir contains ':' → FAIL CLOSED, no podman coder run."""
+    from axi.dev_director import _run_claude
+
+    ran_coder = {"count": 0}
+
+    def fake_subprocess_run(args, **kwargs):
+        if list(args[:3]) == ["/usr/bin/podman", "image", "exists"]:
+            return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        ran_coder["count"] += 1
+        return CompletedProcess(args=list(args), returncode=0, stdout="{}", stderr="")
+
+    def fake_which(name):
+        return "/usr/bin/podman" if name == "podman" else None
+
+    def cfg(key, default=None):
+        if key == "dev_agent_sandbox":
+            return True
+        if key == "dev_agent_image":
+            return "localhost/axi-coder:latest"
+        if key == "dev_director_claude_config_dir":
+            return "/tmp/evil:/etc"
+        return default
+
+    with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
+         patch("axi.dev_director.shutil.which", side_effect=fake_which), \
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
+         patch("axi.config.get", side_effect=cfg):
+        summary, cost, turns, is_error, session_id = _run_claude(
+            "/wt", "instr", 60.0, {}
+        )
+
+    assert is_error is True, "must fail closed on an unsafe config dir"
+    assert session_id is None
+    assert ran_coder["count"] == 0, "must NOT run the coder with a bad config dir"
+
+
+def test_run_claude_rejects_config_dir_outside_safe_root():
+    """Sandbox on, config dir escapes the safe root → FAIL CLOSED."""
+    from axi.dev_director import _run_claude
+
+    ran_coder = {"count": 0}
+
+    def fake_subprocess_run(args, **kwargs):
+        if list(args[:3]) == ["/usr/bin/podman", "image", "exists"]:
+            return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        ran_coder["count"] += 1
+        return CompletedProcess(args=list(args), returncode=0, stdout="{}", stderr="")
+
+    def fake_which(name):
+        return "/usr/bin/podman" if name == "podman" else None
+
+    def cfg(key, default=None):
+        if key == "dev_agent_sandbox":
+            return True
+        if key == "dev_agent_image":
+            return "localhost/axi-coder:latest"
+        if key == "dev_director_claude_config_dir":
+            return "/home/hectormr"  # whole home — would mount everything RW
+        return default
+
+    with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
+         patch("axi.dev_director.shutil.which", side_effect=fake_which), \
+         patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
+         patch("axi.config.get", side_effect=cfg):
+        summary, cost, turns, is_error, session_id = _run_claude(
+            "/wt", "instr", 60.0, {}
+        )
+
+    assert is_error is True, "must fail closed when config dir escapes the safe root"
+    assert session_id is None
+    assert ran_coder["count"] == 0, "must NOT run the coder with an over-broad mount"
 
 
 # ---------------------------------------------------------------------------
@@ -890,8 +1045,21 @@ def test_run_claude_sandbox_builds_podman_command():
     def fake_which(name):
         return "/usr/bin/podman" if name == "podman" else None
 
+    made_dirs: dict = {}
+    chmods: dict = {}
+
+    def fake_makedirs(path, *a, **kw):
+        made_dirs["path"] = path
+        made_dirs["mode"] = kw.get("mode")
+
+    def fake_chmod(path, mode):
+        chmods["path"] = path
+        chmods["mode"] = mode
+
     with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \
          patch("axi.dev_director.shutil.which", side_effect=fake_which), \
+         patch("axi.dev_director.os.makedirs", side_effect=fake_makedirs), \
+         patch("axi.dev_director.os.chmod", side_effect=fake_chmod), \
          patch("axi.dev_director._claude_resilience_flags", return_value=([], {})), \
          patch("axi.config.get", side_effect=_sandbox_config_get):
         summary, cost, turns, is_error, session_id = _run_claude(
@@ -908,6 +1076,16 @@ def test_run_claude_sandbox_builds_podman_command():
     assert "bypassPermissions" in captured["argv"]
     # cwd for the podman process is the worktree.
     assert captured["cwd"] == "/some/worktree"
+    # The persistent host config dir is validated+resolved (realpath) under the
+    # safe root, created 0700, chmod'd 0700, and mounted read-write at the
+    # container config path.
+    expected = os.path.realpath(os.path.expanduser("~/.local/share/axi/coder-claude"))
+    assert made_dirs["path"] == expected
+    assert made_dirs["mode"] == 0o700
+    assert chmods["path"] == expected
+    assert chmods["mode"] == 0o700
+    assert "-v" in captured["argv"]
+    assert f"{expected}:/claude-config:Z" in captured["argv"]
 
 
 def test_run_claude_fail_closed_when_podman_missing():

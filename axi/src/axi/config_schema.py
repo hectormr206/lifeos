@@ -702,6 +702,13 @@ FIELDS: tuple[ConfigField, ...] = (
         "Git branch-name prefix for worktree branches created by the dev-director.",
     ),
     ConfigField(
+        "dev_director_claude_config_dir", "string", "~/.local/share/axi/coder-claude",
+        "Persistent host dir holding the coder's Claude Code OAuth token/config, mounted "
+        "read-write into the axi-coder container (at /claude-config) so a one-time "
+        "`claude setup-token` login is reused across runs. This is a dedicated coder-only "
+        "dir — NOT the host ~/.claude and NOT /home. Tilde is expanded at runtime.",
+    ),
+    ConfigField(
         "dev_director_test_timeout", "integer", 300,
         "Seconds before the test subprocess is killed.",
         minimum=30,
