@@ -7457,6 +7457,45 @@ async def api_deploy_dev_run(run_id: str):
     return JSONResponse(result)
 
 
+# ── Coder / Claude auth — drive `claude auth login --claudeai` from the UI ──
+
+
+@app.get("/api/coder-auth/status")
+async def api_coder_auth_status():
+    """Report whether the coder container is logged into Claude."""
+    from axi import coder_auth  # noqa: PLC0415
+    result = await asyncio.to_thread(coder_auth.auth_status, config)
+    return JSONResponse(result)
+
+
+@app.post("/api/coder-auth/start")
+async def api_coder_auth_start():
+    """Start the OAuth login and return the URL + session id to the UI."""
+    from axi import coder_auth  # noqa: PLC0415
+    result = await asyncio.to_thread(coder_auth.start_login, config)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "no se pudo iniciar el login"))
+    return JSONResponse(result)
+
+
+@app.post("/api/coder-auth/submit")
+async def api_coder_auth_submit(request: Request):
+    """Submit the pasted OAuth code for the active login session.
+
+    The code is never echoed back in the response."""
+    from axi import coder_auth  # noqa: PLC0415
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "cuerpo JSON inválido")
+    session_id = str(body.get("session_id", ""))
+    code = str(body.get("code", ""))
+    result = await asyncio.to_thread(coder_auth.submit_code, session_id, code)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "código inválido"))
+    return JSONResponse(result)
+
+
 # ── Dev Environments — the controlled "Desarrollo" workspace ────────────────
 
 def _env_worktree_diff(worktree_path: str | None) -> str:

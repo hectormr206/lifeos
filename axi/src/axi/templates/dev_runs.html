@@ -2,7 +2,7 @@
 {% block title %}Dev Runs · Axi{% endblock %}
 
 {% block content %}
-<div x-data="devRuns()" x-init="load()" class="max-w-3xl mx-auto">
+<div x-data="devRuns()" x-init="load(); loadCoderAuth()" class="max-w-3xl mx-auto">
 
   <div class="flex items-center justify-between mb-4 gap-2">
     <h1 class="text-xl font-semibold">Dev Runs</h1>
@@ -16,6 +16,60 @@
       <button type="button" @click="load()" class="btn" style="padding: 0.35rem 0.8rem; font-size: 0.85rem;"
               :disabled="loading">↺ Actualizar</button>
     </div>
+  </div>
+
+  <!-- Coder / Claude auth — drive `claude auth login --claudeai` from the UI -->
+  <div class="panel p-4 mb-4">
+    <div class="flex items-center justify-between gap-2 mb-2">
+      <h2 class="font-semibold text-sm md:text-base">Coder / Claude auth</h2>
+      <template x-if="coderAuth">
+        <span class="shrink-0 px-2 py-0.5 rounded text-xs font-mono"
+              :style="coderAuth.loggedIn ? 'background: rgba(0,180,160,0.15); color: var(--teal)' : 'background: rgba(238,51,51,0.1); color: var(--red)'"
+              x-text="coderAuth.loggedIn ? ('Conectado ✓ (' + (coderAuth.authMethod || coderAuth.email || 'ok') + ')') : 'No conectado'"></span>
+      </template>
+    </div>
+
+    <template x-if="coderAuth && coderAuth.ok === false">
+      <div class="text-xs muted mb-2"
+           x-text="'No pude verificar el estado del coder: ' + (coderAuth.error || 'error desconocido')"></div>
+    </template>
+
+    <!-- Not connected and no login in progress → offer to connect -->
+    <template x-if="coderAuth && !coderAuth.loggedIn && !coderLogin">
+      <button type="button" @click="startCoderLogin()" class="btn"
+              style="padding: 0.35rem 0.8rem; font-size: 0.85rem;"
+              :disabled="coderAuthPending">
+        <span x-show="!coderAuthPending">Conectar coder</span>
+        <span x-show="coderAuthPending">Iniciando…</span>
+      </button>
+    </template>
+
+    <!-- Login in progress: authorize link + code input -->
+    <template x-if="coderLogin && coderLogin.url">
+      <div class="text-sm mt-2 space-y-2">
+        <div class="muted text-xs">Autorizá en el navegador y pegá el código acá:</div>
+        <a :href="coderLogin.url" target="_blank" rel="noopener"
+           class="break-all underline block" style="color: var(--teal)"
+           x-text="coderLogin.url"></a>
+        <div class="flex items-center gap-2">
+          <input type="text" x-model="coderCode" placeholder="Pegá el código"
+                 autocomplete="off"
+                 class="flex-1 px-2 py-1 rounded text-sm"
+                 style="background: rgba(255,255,255,0.05); border: 1px solid var(--border)"
+                 @keydown.enter="submitCoderCode()">
+          <button type="button" @click="submitCoderCode()" class="btn"
+                  style="padding: 0.35rem 0.8rem; font-size: 0.85rem;"
+                  :disabled="coderSubmitPending || !coderCode.trim()">
+            <span x-show="!coderSubmitPending">Enviar código</span>
+            <span x-show="coderSubmitPending">Enviando…</span>
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="coderAuthError">
+      <div class="text-xs mt-2" style="color: var(--red)" x-text="coderAuthError"></div>
+    </template>
   </div>
 
   <!-- Preview goal result (repo-wide; does NOT start a run) -->
@@ -234,6 +288,14 @@ function devRuns() {
     preview: null,       // {ok, goal, source, signals} | {ok:false, error}
     previewLoading: false,
 
+    // Coder / Claude auth flow
+    coderAuth: null,        // {ok, loggedIn, authMethod?} | {ok:false, error}
+    coderAuthPending: false,
+    coderLogin: null,       // {session_id, url} while a login is in progress
+    coderCode: '',          // the pasted OAuth code (cleared right after submit)
+    coderSubmitPending: false,
+    coderAuthError: null,
+
     async load() {
       this.loading = true;
       this.error = null;
@@ -266,6 +328,68 @@ function devRuns() {
         this.diffText = '';
       } finally {
         this.diffLoading = false;
+      }
+    },
+
+    async loadCoderAuth() {
+      try {
+        const r = await fetch('/api/coder-auth/status');
+        this.coderAuth = await r.json();
+      } catch (e) {
+        this.coderAuth = { ok: false, loggedIn: false, error: e.message || String(e) };
+      }
+    },
+
+    async startCoderLogin() {
+      if (this.coderAuthPending) return;
+      this.coderAuthPending = true;
+      this.coderAuthError = null;
+      this.coderLogin = null;
+      try {
+        const r = await fetch('/api/coder-auth/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          this.coderAuthError = 'No pude iniciar el login: ' + (d.detail || ('HTTP ' + r.status));
+        } else {
+          this.coderLogin = d;   // { session_id, url }
+          this.coderCode = '';
+        }
+      } catch (e) {
+        this.coderAuthError = 'No pude iniciar el login: ' + (e.message || String(e));
+      } finally {
+        this.coderAuthPending = false;
+      }
+    },
+
+    async submitCoderCode() {
+      if (this.coderSubmitPending) return;
+      if (!this.coderLogin || !this.coderCode.trim()) return;
+      this.coderSubmitPending = true;
+      this.coderAuthError = null;
+      const sid = this.coderLogin.session_id;
+      const code = this.coderCode;
+      try {
+        const r = await fetch('/api/coder-auth/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sid, code: code }),
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) {
+          this.coderAuthError = 'Código inválido o el login falló. Probá de nuevo.';
+        } else {
+          this.coderLogin = null;      // done with the login flow
+          await this.loadCoderAuth();  // refresh badge → Conectado ✓
+        }
+      } catch (e) {
+        this.coderAuthError = 'Error al enviar el código: ' + (e.message || String(e));
+      } finally {
+        this.coderCode = '';           // never keep the code around after submit
+        this.coderSubmitPending = false;
       }
     },
 

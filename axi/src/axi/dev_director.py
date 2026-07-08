@@ -401,6 +401,47 @@ def build_claude_podman_argv(
     ]
 
 
+def build_claude_auth_podman_argv(
+    host_config_dir: str,
+    *,
+    image: str,
+    podman_path: str = "podman",
+    action: str = "login",
+    config_dir_container: str = _CLAUDE_CONFIG_DIR_CONTAINER,
+) -> list[str]:
+    """Build the podman argv that drives `claude auth {login,status}` in the coder image.
+
+    Pure function: no I/O, no side effects, no validation — the CALLER must
+    resolve+validate *host_config_dir* first (via _resolve_coder_config_dir) so
+    this stays a pure helper over an already-safe host path.
+
+    Containment — exactly ONE mount, nothing else:
+    - The dedicated coder config dir (host_config_dir) at /claude-config (:Z),
+      writable so `claude auth login` can persist the OAuth token. There is NO
+      worktree/-work mount and NO -p port publish — this is the auth flow, not a
+      coder run.
+    - `-i` (interactive stdin) is present so the OAuth code can be piped to the
+      process over plain STDIN; `-t` (TTY) is intentionally ABSENT.
+    - --rm, --userns=keep-id, and CLAUDE_CONFIG_DIR set explicitly.
+
+    action="login"  → `claude auth login --claudeai`
+    action="status" → `claude auth status --json`
+    """
+    if action == "login":
+        sub = ["claude", "auth", "login", "--claudeai"]
+    elif action == "status":
+        sub = ["claude", "auth", "status", "--json"]
+    else:
+        raise ValueError(f"unknown auth action: {action!r}")
+    return [
+        podman_path, "run", "--rm", "-i", "--userns=keep-id",
+        "-v", f"{host_config_dir}:{config_dir_container}:Z",
+        "-e", f"CLAUDE_CONFIG_DIR={config_dir_container}",
+        image,
+        *sub,
+    ]
+
+
 def _run_claude(
     worktree_path: str,
     instruction: str,
