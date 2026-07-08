@@ -154,7 +154,7 @@ _LAST_ENTRIES_MAX_SESSIONS = 100
 _NUDGE_CONFIDENCE_THRESHOLD = 0.85
 
 # Neutral-Spanish nudge text appended to low-confidence answers.
-_NUDGE_TEXT = " ¿Es correcto? Si no, decime 'corregir' o 'deshacer'."
+_NUDGE_TEXT = " ¿Es correcto? Si no, dime 'corregir' o 'deshacer'."
 
 # Regex for detecting undo commands.
 # ONLY matches deliberate undo intents — bare command or with explicit object.
@@ -707,10 +707,10 @@ _RECALL_MEMORY_TOOL = {
             "Busca en la memoria personal del usuario (su gráfico de vida) para recuperar "
             "hechos datados que él mismo registró: salud, sueño, presión arterial, glucosa, "
             "peso, gastos, eventos, actividad física, u otros datos de vida. "
-            "Úsala cuando el usuario pregunta sobre SUS PROPIOS registros pasados y necesitás "
+            "Úsala cuando el usuario pregunta sobre SUS PROPIOS registros pasados y necesitas "
             "hechos con fechas exactas para responder con precisión. "
-            "Reformulá la pregunta del usuario en términos de búsqueda concisos: por ejemplo, "
-            "si pregunta '¿qué presión tenía cuando dormí mal?' llamá a recall_memory con "
+            "Reformula la pregunta del usuario en términos de búsqueda concisos: por ejemplo, "
+            "si pregunta '¿qué presión tenía cuando dormí mal?' llama a recall_memory con "
             "query='presión dormí pocas horas'. "
             "Devuelve hechos datados de la memoria personal del usuario."
         ),
@@ -3949,7 +3949,7 @@ def _create_and_confirm_reminder(ri, lang: str):
         if ri.recurrence and is_daily:
             answer = (
                 f"Listo, lo programé todos los días a las {hhmm}; "
-                f"lo vas a ver en Boletines. Si querés otro horario, decime."
+                f"lo vas a ver en Boletines. Si quieres otro horario, dime."
             )
         elif ri.recurrence:
             answer = (
@@ -4189,7 +4189,7 @@ async def api_chat_ask(request: Request):
         if not _web_query:
             # Empty query — return a friendly prompt instead of crashing.
             _empty_answer = (
-                "Decime qué querés que busque. "
+                "Dime qué quieres que busque. "
                 "Ejemplo: /busca python async o /investiga historia del café."
             )
             latency_ms = round((time.monotonic() - start) * 1000)
@@ -4855,7 +4855,7 @@ async def api_chat_ask(request: Request):
                 if agi.recurrence and is_daily:
                     answer = (
                         f"Listo, lo programé todos los días a las {hhmm}; "
-                        f"lo vas a ver en Boletines. Si querés otro horario, decime."
+                        f"lo vas a ver en Boletines. Si quieres otro horario, dime."
                     )
                 elif agi.recurrence:
                     answer = (
@@ -5125,9 +5125,9 @@ async def api_chat_ask(request: Request):
                         + f"El usuario compartió SU UBICACIÓN ACTUAL desde el dispositivo "
                         + f"vía GPS del navegador: lat={_lat:.5f}, lng={_lng:.5f}{acc_str}.\n"
                         + f"Esta información VIENE DIRECTAMENTE del GPS de su dispositivo "
-                        + f"en este momento. NO digas que no tenés acceso — SÍ lo tenés. "
-                        + f"Si te pregunta dónde está, mencioná las coordenadas o decile "
-                        + f"que no podés convertirlas a un nombre de lugar todavía."
+                        + f"en este momento. NO digas que no tienes acceso — SÍ lo tienes. "
+                        + f"Si te pregunta dónde está, menciona las coordenadas o dile "
+                        + f"que no puedes convertirlas a un nombre de lugar todavía."
                     )
                     log.info("brain: injecting location context (lat=%.5f, lng=%.5f)", _lat, _lng)
                 except (TypeError, ValueError):

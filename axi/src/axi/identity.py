@@ -140,7 +140,7 @@ def onboarding_capture(text: str) -> str | None:
     return (
         f"¡Un gusto, {name}! 🪻 Soy Axi, tu segundo cerebro en LifeOS. "
         f"Desde ahora, todo lo que me cuentes lo recuerdo y lo relaciono. "
-        f"Contame algo de vos para arrancar: quién sos, qué te importa, lo que quieras."
+        f"Cuéntame algo de ti para arrancar: quién eres, qué te importa, lo que quieras."
     )
 
 

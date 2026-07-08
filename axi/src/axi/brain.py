@@ -1032,5 +1032,5 @@ if __name__ == "__main__":
     if not is_alive():
         print("brain no está corriendo en", ENDPOINT)
         sys.exit(1)
-    prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Hola, ¿quién sos?"
+    prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Hola, ¿quién eres?"
     print(ask(prompt))

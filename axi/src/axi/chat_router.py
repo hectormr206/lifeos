@@ -38,7 +38,7 @@ def _build_router_system() -> str:
         "- general: charla, saludos, opiniones, preguntas abiertas — cualquier cosa "
         "que NO sea un dato personal para registrar.\n"
         "- uncertain: SOLO cuando el mensaje claramente reporta un DATO PERSONAL o "
-        "un hecho que el usuario probablemente quiere registrar, pero NO podés "
+        "un hecho que el usuario probablemente quiere registrar, pero NO puedes "
         "determinar con confianza a qué dominio pertenece. NO uses 'uncertain' para "
         "charla ni preguntas.\n\n"
         "Reglas: charla/pregunta → general. Dato claro de un dominio → su clave. "
