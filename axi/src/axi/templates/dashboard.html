@@ -383,7 +383,7 @@
         <!-- 3) Editor en vivo -->
         <div class="flex-1" style="min-width:280px;display:flex;flex-direction:column;gap:6px">
           <textarea x-model="code" @input="render()" spellcheck="false"
-                    placeholder="Pegá o escribí el SVG acá — se renderiza en vivo →"
+                    placeholder="Pega o escribe el SVG aquí — se renderiza en vivo →"
                     style="flex:1;min-height:320px;background:#0b0e13;color:#cfe;border:1px solid #243;border-radius:8px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.45;padding:10px;resize:vertical"></textarea>
           <div class="text-xs" style="color:var(--amber)" x-text="err"></div>
         </div>
@@ -737,7 +737,7 @@
 <template x-if="!$store.snap">
   <div class="text-center py-24 muted">
     <div class="text-2xl mb-2">Conectando con el daemon…</div>
-    <div class="text-sm">Si esto persiste, revisá <code>systemctl --user status axi-voice</code></div>
+    <div class="text-sm">Si esto persiste, revisa <code>systemctl --user status axi-voice</code></div>
   </div>
 </template>
 

@@ -54,15 +54,15 @@
     <template x-if="!loading && messages.length === 0">
       <div class="muted text-sm text-center py-8">
         {% if domain == 'health' %}
-        Este es tu chat de Salud. Contame tus datos —presión, glucosa, peso,
-        sueño, síntomas— y los guardo en tu registro. También podés preguntarme
+        Este es tu chat de Salud. Cuéntame tus datos —presión, glucosa, peso,
+        sueño, síntomas— y los guardo en tu registro. También puedes preguntarme
         cosas como «¿cuál fue mi presión más alta?» o «promedio de glucosa estos
         3 meses».
         {% elif domain %}
-        Este es tu chat especializado. Contame lo que quieras registrar y lo
-        guardo acá; también podés preguntarme sobre tus datos.
+        Este es tu chat especializado. Cuéntame lo que quieras registrar y lo
+        guardo aquí; también puedes preguntarme sobre tus datos.
         {% else %}
-        Hablale a Axi. Comparte el mismo recuerdo que la voz, así que puedes
+        Háblale a Axi. Comparte el mismo recuerdo que la voz, así que puedes
         seguir conversaciones empezadas con Meta+Shift+Espacio.
         {% endif %}
       </div>
@@ -321,7 +321,7 @@
           : 'min-height: 2.5rem; min-width: 2.75rem;'"
         :title="loggingMode
           ? '💾 Modo registro activo — Sin internet · nano-agentes guardan tus datos estructurados. Clic para volver a modo charla (💬).'
-          : '💬 Modo charla — hablás con Axi con internet. Clic para activar 💾 Modo registro.'"
+          : '💬 Modo charla — hablas con Axi con internet. Clic para activar 💾 Modo registro.'"
       >
         <span x-text="loggingMode ? '💾' : '💬'"></span>
       </button>
@@ -337,7 +337,7 @@
     </div>
     <div x-show="!loggingMode" x-cloak
          class="text-xs muted mb-1 px-1">
-      💬 Modo charla — hablás con Axi con internet. Para cargar datos estructurados, activá 💾.
+      💬 Modo charla — hablas con Axi con internet. Para cargar datos estructurados, activa 💾.
     </div>
     {% endif %}
 
@@ -413,7 +413,7 @@
         :style="recording
           ? 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem; background: rgba(238,51,51,0.9); border-color: var(--red);'
           : (!online ? 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem; opacity: 0.4;' : 'border-radius: 9999px; min-height: 3rem; min-width: 3rem; padding: 0; font-size: 1.1rem;')"
-        :title="!online ? 'Micrófono — sin conexión a Whisper' : (recording ? 'Tocá de nuevo (o soltá) para transcribir' : 'Tocá para dictar (o mantené presionado)')"
+        :title="!online ? 'Micrófono — sin conexión a Whisper' : (recording ? 'Toca de nuevo (o suelta) para transcribir' : 'Toca para dictar (o mantén presionado)')"
       >
         <span x-show="!recording && !transcribing">🎤</span>
         <span x-show="recording" x-cloak>●</span>

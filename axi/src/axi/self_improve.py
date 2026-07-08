@@ -252,15 +252,15 @@ def _build_goal_prompt(commits, changed_files, protected) -> tuple[str, str]:
     """Compose the Spanish system+user prompt for goal generation. Pure."""
     protected_names = ", ".join(sorted({p.rsplit("/", 1)[-1] for p in protected}))
     system = (
-        "Sos un asistente de ingeniería que propone UNA sola mejora concreta y de "
-        "BAJO RIESGO para un repositorio de software. Respondés SIEMPRE en español. "
+        "Eres un asistente de ingeniería que propone UNA sola mejora concreta y de "
+        "BAJO RIESGO para un repositorio de software. Respondes SIEMPRE en español. "
         "La mejora puede ser un bug chico y acotado, una limpieza de código, un "
-        "comentario que aclare algo no obvio, o un test faltante — elegí la "
+        "comentario que aclare algo no obvio, o un test faltante — elige la "
         "categoría que MÁS le sirva al área caliente que ves abajo. NO propongas "
-        "siempre agregar un test: variá según lo que el repositorio realmente "
-        "necesita. Apuntá a un archivo o área REAL del repo. "
-        "TENÉS PROHIBIDO proponer cambios al motor de auto-desarrollo (estos "
-        f"módulos: {protected_names}). Devolvé ÚNICAMENTE la meta: una o dos "
+        "siempre agregar un test: varía según lo que el repositorio realmente "
+        "necesita. Apunta a un archivo o área REAL del repo. "
+        "TIENES PROHIBIDO proponer cambios al motor de auto-desarrollo (estos "
+        f"módulos: {protected_names}). Devuelve ÚNICAMENTE la meta: una o dos "
         "oraciones, en imperativo, sin preámbulo, sin explicaciones y sin markdown."
     )
     commit_block = "\n".join(f"- {c}" for c in commits) or "(sin commits recientes)"
@@ -272,9 +272,9 @@ def _build_goal_prompt(commits, changed_files, protected) -> tuple[str, str]:
         + commit_block
         + "\n\nArchivos tocados recientemente (áreas calientes):\n"
         + files_block
-        + "\n\nProponé UNA sola mejora concreta y de bajo riesgo para alguna de "
+        + "\n\nPropón UNA sola mejora concreta y de bajo riesgo para alguna de "
         "esas áreas calientes, eligiendo la categoría (bug, limpieza, comentario "
-        "o test) más útil — no defaultees a agregar un test. Devolvé solo la "
+        "o test) más útil — no elijas por defecto agregar un test. Devuelve solo la "
         "meta, una o dos oraciones en imperativo."
     )
     return system, user

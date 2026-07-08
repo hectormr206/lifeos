@@ -7,7 +7,7 @@
   <div class="flex items-center justify-between mb-4 gap-2">
     <div>
       <h1 class="text-xl font-semibold">🛠️ Desarrollo</h1>
-      <p class="muted text-xs mt-0.5">Ambientes donde Axi construye, probás aislado, y recién después desplegás.
+      <p class="muted text-xs mt-0.5">Ambientes donde Axi construye, pruebas de forma aislada, y solo después despliegas.
         <span style="opacity:0.5;">· modal build 2</span></p>
     </div>
     <div class="flex gap-2">
@@ -36,7 +36,7 @@
 
   <template x-if="!loading && envs.length === 0">
     <div class="muted text-sm text-center py-10">
-      No hay ambientes todavía. Tocá <span class="font-semibold">+ Nuevo</span> y contale a Axi qué construir.
+      No hay ambientes todavía. Toca <span class="font-semibold">+ Nuevo</span> y cuéntale a Axi qué construir.
     </div>
   </template>
 
@@ -163,14 +163,14 @@
         <p class="muted text-xs mb-2"
            x-text="modal.mode === 'iterate'
              ? 'Decile a Axi qué ajustar o agregar. Sigue sobre lo que ya construyó, en el mismo worktree.'
-             : 'Contale a Axi qué querés construir. Podés escribir o mantener presionado el micrófono para dictarlo.'"></p>
+             : 'Cuéntale a Axi qué quieres construir. Puedes escribir o mantener presionado el micrófono para dictarlo.'"></p>
         <div class="flex items-end gap-2">
           <textarea x-model="modal.text" rows="4"
                     class="flex-1 rounded-lg p-2 text-sm"
                     style="background: var(--panel2); border: 1px solid var(--border); resize: vertical;"
                     :placeholder="modal.mode === 'iterate'
                       ? 'Ej: el botón quedó muy chico, agrandalo y movelo arriba a la derecha…'
-                      : 'Ej: agregá un tablero kanban a la vista de Salud con columnas por estado…'"></textarea>
+                      : 'Ej: agrega un tablero kanban a la vista de Salud con columnas por estado…'"></textarea>
           <button type="button"
                   @mousedown.prevent="startRec()" @mouseup.prevent="stopRec()" @mouseleave="stopRec()"
                   @touchstart.prevent="startRec()" @touchend.prevent="stopRec()" @touchcancel="stopRec()"

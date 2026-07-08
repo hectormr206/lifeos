@@ -460,7 +460,7 @@ function remindersPage() {
         for (const r of regs) {
           await r.unregister();
         }
-        this.pushStatus = 'SW desregistrado. Cerrá la PWA, reabrila, y volvé a tocar "Habilitar push".';
+        this.pushStatus = 'SW desregistrado. Cierra la PWA, reábrela, y vuelve a tocar "Habilitar push".';
         this.pushOn = false;
       } catch (e) {
         this.pushStatus = 'Error al resetear: ' + (e.message || e);
