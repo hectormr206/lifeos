@@ -214,6 +214,75 @@ def _copy_tls_certs(state_home: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _launch_instance(
+    instance_id: str,
+    worktree_path: str,
+    *,
+    unit_prefix: str,
+    instance_root: Path,
+    allow_seed: bool = True,
+) -> dict:
+    """Core instance launcher shared by the env and worktree entry points.
+
+    Allocates a free port, writes the isolated config, copies TLS certs, seeds
+    throwaway DBs (opt-in), and starts a transient systemd unit named
+    ``<unit_prefix>-<instance_id>`` running the worktree's dashboard.
+
+    ``allow_seed`` gates whether the (opt-in) real-DB seeding may run at all.
+    The env path passes True (honors the global ``dev_env_instance_seed_from_real``
+    flag); the preview path passes False so UNREVIEWED autonomous code can never
+    receive copies of the real databases/keys, regardless of the global flag.
+
+    Returns ``{"ok": True, "instance": {...}}`` or ``{"ok": False, "error"}``.
+    Does NOT persist state — the caller owns any persistence. Never raises.
+    """
+    port = _find_free_port(*_port_range())
+    if port is None:
+        return {"ok": False, "error": "no free port in the configured range"}
+
+    root = instance_root
+    state_home = root / "state"
+    cfg_home = root / "config"
+    lifeos_state = root / "lifeos"
+    for d in (state_home, lifeos_state):
+        d.mkdir(parents=True, exist_ok=True)
+
+    try:
+        _build_isolated_config(cfg_home, port)
+        _copy_tls_certs(state_home)
+        if allow_seed and _seed_from_real():
+            _seed_isolated_dbs(state_home, lifeos_state)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"could not prepare isolated dirs: {exc}"}
+
+    pythonpath = f"{worktree_path}/axi/src:{worktree_path}/lifeos/src"
+    unit = f"{unit_prefix}-{instance_id}"
+    cmd = [
+        "systemd-run", "--user", "--collect", f"--unit={unit}",
+        f"--setenv=XDG_STATE_HOME={state_home}",
+        f"--setenv=XDG_CONFIG_HOME={cfg_home}",
+        f"--setenv=LIFEOS_STATE_DIR={lifeos_state}",
+        f"--setenv=PYTHONPATH={pythonpath}",
+        f"--working-directory={worktree_path}",
+        _venv_python(), "-m", "axi.dashboard",
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        log.error("instance launch failed for id=%s: %s", instance_id, exc)
+        return {"ok": False, "error": f"launch failed: {exc}"}
+
+    instance = {
+        "status": "running",
+        "port": port,
+        "unit": unit,
+        "url": f"https://127.0.0.1:{port}",  # HTTPS via copied mkcert certs
+        "dir": str(root),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return {"ok": True, "instance": instance}
+
+
 def start_instance(env_id: str) -> dict:
     """Launch (or re-attach to) the environment's isolated test dashboard.
 
@@ -231,52 +300,66 @@ def start_instance(env_id: str) -> dict:
     if existing.get("status") == "running" and _unit_active(existing.get("unit", "")):
         return {"ok": True, "instance": existing, "already": True}
 
-    port = _find_free_port(*_port_range())
-    if port is None:
-        return {"ok": False, "error": "no free port in the configured range"}
-
-    root = _instance_root(env_id)
-    state_home = root / "state"
-    cfg_home = root / "config"
-    lifeos_state = root / "lifeos"
-    for d in (state_home, lifeos_state):
-        d.mkdir(parents=True, exist_ok=True)
-
-    try:
-        _build_isolated_config(cfg_home, port)
-        _copy_tls_certs(state_home)
-        if _seed_from_real():
-            _seed_isolated_dbs(state_home, lifeos_state)
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"could not prepare isolated dirs: {exc}"}
-
-    pythonpath = f"{worktree}/axi/src:{worktree}/lifeos/src"
-    unit = _unit_name(env_id)
-    cmd = [
-        "systemd-run", "--user", "--collect", f"--unit={unit}",
-        f"--setenv=XDG_STATE_HOME={state_home}",
-        f"--setenv=XDG_CONFIG_HOME={cfg_home}",
-        f"--setenv=LIFEOS_STATE_DIR={lifeos_state}",
-        f"--setenv=PYTHONPATH={pythonpath}",
-        f"--working-directory={worktree}",
-        _venv_python(), "-m", "axi.dashboard",
-    ]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=30)
-    except Exception as exc:  # noqa: BLE001
-        log.error("instance launch failed for env_id=%s: %s", env_id, exc)
-        return {"ok": False, "error": f"launch failed: {exc}"}
-
-    instance = {
-        "status": "running",
-        "port": port,
-        "unit": unit,
-        "url": f"https://127.0.0.1:{port}",  # HTTPS via copied mkcert certs
-        "dir": str(root),
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }
+    res = _launch_instance(
+        env_id, worktree, unit_prefix="axi-env-inst", instance_root=_instance_root(env_id)
+    )
+    if not res["ok"]:
+        return res
+    instance = res["instance"]
     _save_instance(env_id, instance)
     return {"ok": True, "instance": instance, "already": False}
+
+
+def start_instance_for_worktree(
+    instance_id: str,
+    worktree_path: str,
+    *,
+    unit_prefix: str = "axi-preview-inst",
+) -> dict:
+    """Launch an isolated dashboard from a worktree path directly.
+
+    Unlike :func:`start_instance`, this takes the worktree path and does NOT
+    resolve a dev environment (no ``dev_env.get_env``), so it can drive an
+    ephemeral preview worktree that has no persisted env record. Reuses the
+    same launch core, differing only in the systemd unit prefix and the
+    isolated-state location (a sibling of the worktree).
+
+    Returns ``{"ok": True, "instance": {...}}`` or ``{"ok": False, "error"}``.
+    Never raises.
+    """
+    if not worktree_path or not os.path.isdir(worktree_path):
+        return {"ok": False, "error": "worktree path does not exist"}
+    root = Path(worktree_path).parent / f"instance-{instance_id}"
+    # allow_seed=False: a preview runs UNREVIEWED autonomous code and must never
+    # receive copies of the real DBs/keys, even if the global seed flag is on.
+    return _launch_instance(
+        instance_id, worktree_path, unit_prefix=unit_prefix,
+        instance_root=root, allow_seed=False,
+    )
+
+
+def stop_unit(unit_name: str) -> dict:
+    """Stop a transient systemd unit by its EXACT name. Idempotent; never raises.
+
+    Used by teardown paths that already know the unit that was launched, so the
+    name is never recomputed from a prefix (which could drift)."""
+    if not unit_name:
+        return {"ok": True}
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "stop", unit_name],
+            capture_output=True, timeout=15,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.info("stop_unit: systemctl stop failed for %s (%s)", unit_name, exc)
+    return {"ok": True}
+
+
+def stop_instance_for_worktree(
+    instance_id: str, *, unit_prefix: str = "axi-preview-inst"
+) -> dict:
+    """Stop a worktree-launched instance by id. Idempotent; never raises."""
+    return stop_unit(f"{unit_prefix}-{instance_id}")
 
 
 def stop_instance(env_id: str) -> dict:

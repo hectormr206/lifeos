@@ -188,6 +188,96 @@ def test_instance_status_none_when_never_launched(inst_env, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# start_instance_for_worktree / stop_instance_for_worktree (preview path)
+# ---------------------------------------------------------------------------
+
+
+def test_start_instance_for_worktree_uses_preview_prefix(inst_env, tmp_path, monkeypatch):
+    """The worktree variant launches an isolated instance WITHOUT touching
+    dev_env: no get_env call, preview unit prefix, own port, url returned."""
+    worktree = str(tmp_path / "preview-wt")
+    Path(worktree, "axi", "src").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(dev_env_instance, "_find_free_port", lambda b, c: 9010)
+    # Fail loudly if the worktree path ever tries to resolve an env.
+    import axi.dev_env as _de
+    monkeypatch.setattr(_de, "get_env", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("start_instance_for_worktree must not call get_env")))
+
+    launched: dict = {}
+
+    def fake_run(cmd, **kw):
+        launched["cmd"] = cmd
+        return _OkProc()
+
+    inst_id = "20260627-200000-prev01"
+    with patch("axi.dev_env_instance.subprocess.run", side_effect=fake_run):
+        res = dev_env_instance.start_instance_for_worktree(inst_id, worktree)
+
+    assert res["ok"], res
+    inst = res["instance"]
+    assert inst["unit"] == f"axi-preview-inst-{inst_id}"
+    assert inst["port"] == 9010
+    assert inst["url"] == "https://127.0.0.1:9010"
+    assert inst["status"] == "running"
+
+    cmd = launched["cmd"]
+    assert f"--unit=axi-preview-inst-{inst_id}" in cmd
+    pp = [c for c in cmd if c.startswith("--setenv=PYTHONPATH=")][0]
+    assert f"{worktree}/axi/src" in pp and f"{worktree}/lifeos/src" in pp
+
+
+def test_start_instance_for_worktree_never_seeds_real_dbs(inst_env, tmp_path, monkeypatch):
+    """A preview runs UNREVIEWED autonomous code — it must NEVER get seeded
+    copies of the real DBs/keys, even if the global seed flag is ON."""
+    worktree = str(tmp_path / "preview-wt-seed")
+    Path(worktree, "axi", "src").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(dev_env_instance, "_find_free_port", lambda b, c: 9020)
+    # Global flag ON — the preview path must still refuse to seed.
+    monkeypatch.setattr(dev_env_instance, "_seed_from_real", lambda: True)
+
+    seeded: dict = {"called": False}
+    monkeypatch.setattr(
+        dev_env_instance, "_seed_isolated_dbs",
+        lambda *a, **k: seeded.__setitem__("called", True),
+    )
+
+    with patch("axi.dev_env_instance.subprocess.run", side_effect=lambda cmd, **kw: _OkProc()):
+        res = dev_env_instance.start_instance_for_worktree("seed-guard", worktree)
+
+    assert res["ok"], res
+    assert seeded["called"] is False  # seeding was skipped for the preview path
+
+
+def test_start_instance_for_worktree_missing_path(inst_env, tmp_path):
+    res = dev_env_instance.start_instance_for_worktree("x", str(tmp_path / "nope"))
+    assert res["ok"] is False
+
+
+def test_start_instance_for_worktree_no_free_port(inst_env, tmp_path, monkeypatch):
+    worktree = str(tmp_path / "preview-wt2")
+    Path(worktree, "axi", "src").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(dev_env_instance, "_find_free_port", lambda b, c: None)
+    res = dev_env_instance.start_instance_for_worktree("y", worktree)
+    assert res["ok"] is False and "free port" in res["error"]
+
+
+def test_stop_instance_for_worktree_stops_preview_unit(inst_env):
+    inst_id = "20260627-200001-prev02"
+    calls: dict = {}
+
+    def fake_run(cmd, **kw):
+        calls["cmd"] = cmd
+        return _OkProc()
+
+    with patch("axi.dev_env_instance.subprocess.run", side_effect=fake_run):
+        res = dev_env_instance.stop_instance_for_worktree(inst_id)
+
+    assert res["ok"]
+    assert "stop" in calls["cmd"]
+    assert f"axi-preview-inst-{inst_id}" in calls["cmd"]
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
