@@ -7350,6 +7350,10 @@ async def api_list_dev_runs():
             "escalation_reason": r.get("result", "") if r.get("status") == "needs_human" else "",
             "error": r.get("error") if r.get("status") == "error" else None,
             "has_patch": has_patch,
+            # NOTE: preview_kind is intentionally NOT computed here. Classifying
+            # would require reading each run's patch file, adding a per-run I/O
+            # hit to this list endpoint. Preview is exposed only in the detail
+            # endpoint (GET /api/dev-runs/{run_id}), which already reads the patch.
         })
     return JSONResponse(out)
 
@@ -7371,7 +7375,19 @@ async def api_get_dev_run(run_id: str):
             diff_text = p.read_text(errors="replace")[:200_000]
         except Exception:  # noqa: BLE001
             diff_text = ""
-    return JSONResponse({**r, "diff": diff_text})
+    preview_kind = None
+    preview_reason = None
+    if diff_text:
+        from axi.dev_preview import classify_patch  # noqa: PLC0415
+        _preview = classify_patch(diff_text)
+        preview_kind = _preview["kind"]
+        preview_reason = _preview["reason"]
+    return JSONResponse({
+        **r,
+        "diff": diff_text,
+        "preview_kind": preview_kind,
+        "preview_reason": preview_reason,
+    })
 
 
 @app.post("/api/dev-runs/{run_id}/approve")
