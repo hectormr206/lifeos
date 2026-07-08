@@ -74,7 +74,7 @@
     <h2 class="text-sm font-semibold muted uppercase tracking-wider">Escaneo manual</h2>
     <p class="text-xs muted">
       Forzá un escaneo ahora. Útil para probar antes de prender el modo automático,
-      o para checkear tu postura cuando vos quieras (no espera la cadencia).
+      o para revisar tu postura cuando quieras (no espera la cadencia).
     </p>
     <div class="flex gap-2 items-center flex-wrap">
       <button class="btn btn-primary" @click="scanNow()" :disabled="scanning">
@@ -122,7 +122,7 @@
 
   <template x-if="scans.length === 0">
     <div class="panel p-12 text-center muted">
-      Sin escaneos todavía. Tocá <strong>"Escanear ahora"</strong> para probar — necesitás
+      Sin escaneos todavía. Toca <strong>"Escanear ahora"</strong> para probar — necesitas
       cámara web disponible y que el brain (Qwen multimodal) esté arriba.
     </div>
   </template>

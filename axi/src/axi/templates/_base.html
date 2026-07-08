@@ -469,6 +469,7 @@
       <div class="sidebar-section">Sistema</div>
       {{ navlink('/models', '🧠 Modelos', request.url.path) }}
       {{ navlink('/desarrollo', '🛠️ Desarrollo', request.url.path) }}
+      {{ navlink('/dev', '🤖 Autodesarrollo', request.url.path) }}
       {{ navlink('/setup', '🩹 Setup & Salud', request.url.path) }}
       {{ navlink('/events', '🔔 Eventos', request.url.path) }}
       {{ navlink('/config', '⚙️ Config', request.url.path) }}
@@ -773,6 +774,7 @@
       <div class="grid grid-cols-4 gap-2">
         {{ navtile('/models', '🧠', 'Modelos', request.url.path) }}
         {{ navtile('/desarrollo', '🛠️', 'Desarrollo', request.url.path) }}
+        {{ navtile('/dev', '🤖', 'Autodesarrollo', request.url.path) }}
         {{ navtile('/setup', '🩹', 'Setup', request.url.path) }}
         {{ navtile('/events', '🔔', 'Eventos', request.url.path) }}
         {{ navtile('/config', '⚙️', 'Config', request.url.path) }}
@@ -833,12 +835,12 @@
           </div>
           <p class="muted text-xs mb-2">
             Axi sabe que estás en <span class="font-mono" x-text="path"></span> y va a trabajar sobre esa parte.
-            Escribí o mantené el micrófono para dictar qué querés agregar o cambiar.
+            Escribe o mantén el micrófono para dictar qué quieres agregar o cambiar.
           </p>
           <div class="flex items-end gap-2">
             <textarea x-model="text" rows="4" class="flex-1 rounded-lg p-2 text-sm"
                       style="background: var(--panel2); border: 1px solid var(--border); resize: vertical;"
-                      placeholder="Ej: agregá una gráfica de mi presión de los últimos 30 días"></textarea>
+                      placeholder="Ej: agrega una gráfica de mi presión de los últimos 30 días"></textarea>
             <button type="button"
                     @mousedown.prevent="startRec()" @mouseup.prevent="stopRec()" @mouseleave="stopRec()"
                     @touchstart.prevent="startRec()" @touchend.prevent="stopRec()" @touchcancel="stopRec()"
@@ -1201,7 +1203,7 @@
           // Give Axi the route so it can find the handler + template, plus the ask.
           return 'Mejorá la sección «' + this.label + '» del dashboard de LifeOS (ruta '
             + this.path + '). Encontrá su handler (@app.get("' + this.path + '")) y su '
-            + 'template, y aplicá este cambio manteniendo el estilo y los componentes '
+            + 'template, y aplica este cambio manteniendo el estilo y los componentes '
             + 'existentes: ' + this.text.trim();
         },
 

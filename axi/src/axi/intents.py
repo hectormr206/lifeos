@@ -333,7 +333,7 @@ def _h_dev_develop(daemon, params: dict | None = None) -> str:
     if not goal:
         try:
             from axi.output import notify  # noqa: PLC0415
-            notify("Axi", "No entendí qué querés que desarrolle.", timeout_ms=3000)
+            notify("Axi", "No entendí qué quieres que desarrolle.", timeout_ms=3000)
         except Exception:  # noqa: BLE001
             pass
         return "dev_develop:no-goal"

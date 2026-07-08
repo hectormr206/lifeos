@@ -95,9 +95,9 @@
           </template>
         </div>
         <div class="text-xs muted">
-          <strong>Backup recomendado</strong>: copiá <code>~/.local/state/lifeos/*.key</code>
+          <strong>Backup recomendado</strong>: copia <code>~/.local/state/lifeos/*.key</code>
           a un lugar separado del backup de las <code>.db</code>. Sin las keys, los
-          DBs son ilegibles incluso para vos.
+          DBs son ilegibles incluso para ti.
         </div>
       </div>
     </template>
@@ -115,7 +115,7 @@
           <span x-text="iconFor(status.huggingface.token_present ? 'ok' : 'fail')"></span>
           <span x-text="status.huggingface.token_present
             ? 'Token HF presente — fuente: ' + (status.huggingface.token_source || 'desconocida')
-            : 'Falta token HF — necesario solo si querés diarización V1'"></span>
+            : 'Falta token HF — necesario solo si quieres diarización V1'"></span>
         </div>
         <template x-if="!status.huggingface.token_present">
           <div class="text-xs muted">
@@ -200,9 +200,9 @@
           </div>
         </template>
         <div class="text-xs muted">
-          Para suscribir un device nuevo: abrí
+          Para suscribir un device nuevo: abre
           <a class="underline" href="/reminders">/reminders</a> en ese device
-          y tocá <strong>📱 Habilitar push</strong>.
+          y toca <strong>📱 Habilitar push</strong>.
         </div>
       </div>
     </template>
@@ -325,7 +325,7 @@ function setupPage() {
       try {
         const standalone = window.matchMedia('(display-mode: standalone)').matches
           || window.navigator.standalone === true;
-        this.browserPerms.pwa_installed = standalone ? 'sí' : 'no — abrí desde browser, "Add to home screen"';
+        this.browserPerms.pwa_installed = standalone ? 'sí' : 'no — abre desde browser, "Add to home screen"';
       } catch (e) {}
       // Service Worker?
       this.browserPerms.service_worker = ('serviceWorker' in navigator) ? 'soportado' : 'no soportado';

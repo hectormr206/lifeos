@@ -47,7 +47,7 @@
     <!-- Login in progress: authorize link + code input -->
     <template x-if="coderLogin && coderLogin.url">
       <div class="text-sm mt-2 space-y-2">
-        <div class="muted text-xs">Autorizá en el navegador y pegá el código acá:</div>
+        <div class="muted text-xs">Autoriza en el navegador y pega el código aquí:</div>
         <a :href="coderLogin.url" target="_blank" rel="noopener"
            class="break-all underline block" style="color: var(--teal)"
            x-text="coderLogin.url"></a>
@@ -140,7 +140,7 @@
         <template x-if="r.status === 'landed'">
           <div class="text-sm mb-3 px-3 py-2 rounded"
                style="background: rgba(0,180,160,0.1); border: 1px solid var(--teal); color: var(--teal)">
-            Rama subida a GitHub — revisá el diff y mergeá a main cuando estés listo.<br>
+            Rama subida a GitHub — revisa el diff y haz merge a main cuando estés listo.<br>
             <span class="font-mono text-xs" x-text="r.landed_branch || ''"></span>
             <template x-if="r.push_ok === false">
               <span class="ml-2 text-xs opacity-70">(push falló — rama local creada pero no subida)</span>
@@ -209,7 +209,7 @@
         <template x-if="approveResult[r.run_id] && approveResult[r.run_id].ok">
           <div class="text-sm mb-3 px-3 py-2 rounded"
                style="background: rgba(0,180,160,0.1); border: 1px solid var(--teal); color: var(--teal)">
-            Rama subida a GitHub — revisá/mergeá el PR y luego instalá.<br>
+            Rama subida a GitHub — revisa/haz merge del PR y luego instala.<br>
             <span class="font-mono text-xs" x-text="approveResult[r.run_id].branch"></span>
           </div>
         </template>
