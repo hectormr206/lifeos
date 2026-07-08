@@ -63,6 +63,18 @@ def _screen_interval_s() -> int:
     return int(config.get("meeting_screen_interval_s", DEFAULT_SCREEN_INTERVAL_S))
 
 
+def _screen_capture_argv(output_path) -> list[str]:
+    """Argv for one background screenshot of the active window.
+
+    ``-i/--new-instance`` is REQUIRED. The recorder grabs every few seconds via
+    Spectacle, which is single-instance on KDE; without a private instance these
+    background grabs hijack the user's own interactive Spectacle (Print /
+    clip-region), so they cannot take screenshots while a meeting records. A
+    separate instance lets the recorder and the user capture independently.
+    """
+    return ["spectacle", "-b", "-n", "-a", "-i", "-o", str(output_path)]
+
+
 def _build_display_env() -> dict:
     """Return a dict suitable for `subprocess.run(env=...)` that always
     includes WAYLAND_DISPLAY + DISPLAY, even when the systemd user manager
@@ -473,7 +485,7 @@ class MeetingSession:
         while not self._screen_stop.is_set():
             try:
                 subprocess.run(
-                    ["spectacle", "-b", "-n", "-a", "-o", str(tmp)],
+                    _screen_capture_argv(tmp),
                     check=False, timeout=10, capture_output=True,
                     env=spectacle_env,
                 )
