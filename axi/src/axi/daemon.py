@@ -47,7 +47,7 @@ _GAME_COPILOT_SYSTEM_PROMPT = (
     "Si la pregunta es sobre lo que se ve en pantalla, describe solo lo relevante. "
     "No uses saludos ni cierres. "
     "Responde de forma concisa: 1-3 oraciones con lo esencial, ofrece ampliar si el usuario lo pide. "
-    "Tenés disponible la herramienta web_search para consultas actuales o verificables — decidí vos cuándo usarla."
+    "Tienes disponible la herramienta web_search para consultas actuales o verificables — decide tú cuándo usarla."
 )
 
 # Game-aware system prompt — English product voice (for EN locale users).

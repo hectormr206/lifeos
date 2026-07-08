@@ -60,12 +60,12 @@ Reglas de kind (solo para register): travel=viaje; birthday=cumpleaños;
 anniversary=aniversario; party=fiesta/celebración; meeting=reunión/cita;
 milestone=hito de vida; deadline=plazo/entrega; other=otro. Si dudas: "other".
 
-Regla de date — RESOLVÉ contra HOY ({today}) y escribí SIEMPRE YYYY-MM-DD:
+Regla de date — RESUELVE contra HOY ({today}) y escribe SIEMPRE YYYY-MM-DD:
 - "hoy" → {today}; "mañana" → HOY+1 día; "pasado mañana" → HOY+2.
 - "el viernes" / "el próximo viernes" → el próximo viernes EN O DESPUÉS de HOY
   (igual para cualquier día de la semana).
 - "la próxima semana" → mismo día de la semana, 7 días después de HOY.
-- "10 de julio" / "el 10/7" → ese día; si el año no se dice, usá el más próximo
+- "10 de julio" / "el 10/7" → ese día; si el año no se dice, usa el más próximo
   que sea HOY o futuro.
 - Si de verdad NO hay ninguna fecha mencionada ni inferible, usa null.
 

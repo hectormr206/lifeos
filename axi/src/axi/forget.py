@@ -351,8 +351,8 @@ def handle_chat_forget(text: str, session_id: str, *, conn=None) -> dict | None:
         # Ambiguous — keep pending and re-ask, showing exactly what will go.
         return {
             "answer": (
-                "¿Confirmás que borro: " + _format_list(candidates)
-                + "? (sí = todos / no = cancelar / o decime cuál, ej. 'solo el 2')"
+                "¿Confirmas que borro: " + _format_list(candidates)
+                + "? (sí = todos / no = cancelar / o dime cuál, ej. 'solo el 2')"
             ),
             "mode": "forget_confirm",
         }
@@ -370,9 +370,9 @@ def handle_chat_forget(text: str, session_id: str, *, conn=None) -> dict | None:
 
     _PENDING[session_id] = {"candidates": candidates, "ts": time.monotonic()}
     tail = (
-        " ¿Confirmás? (sí = todos / no = cancelar / o decime cuál, ej. 'solo el 2')"
+        " ¿Confirmas? (sí = todos / no = cancelar / o dime cuál, ej. 'solo el 2')"
         if len(candidates) > 1
-        else " ¿Confirmás? (sí/no)"
+        else " ¿Confirmas? (sí/no)"
     )
     return {
         "answer": "Voy a borrar: " + _format_list(candidates) + tail,

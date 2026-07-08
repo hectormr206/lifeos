@@ -80,7 +80,7 @@ def _is_logged_vital(label: str, kind: str | None = None, domain: str | None = N
     return any(p.search(text) for p in _VITAL_PATTERNS)
 
 _EXTRACTOR_SYSTEM_TEMPLATE = """Eres un extractor de hechos para la memoria de largo plazo de Axi.
-HOY es {HOY}. Usá esta fecha para convertir tiempos RELATIVOS en una referencia
+HOY es {HOY}. Usa esta fecha para convertir tiempos RELATIVOS en una referencia
 absoluta APROXIMADA (ver más abajo). NUNCA inventes una fecha exacta.
 Te paso un intercambio entre Héctor (usuario) y Axi (asistente).
 Tu trabajo: identificar de 0 a 4 hechos DURADEROS sobre Héctor que valga la pena recordar
@@ -99,33 +99,33 @@ fechas EXACTAS y cantidades. Ejemplo CORRECTO: "Esposa: Celia García Mateo (civ
 Héctor". NUNCA resumas quitando nombres, fechas o números — son lo más valioso de
 recordar. Si no caben en el label, ponlos COMPLETOS en data.detail.
 
-CAPTURÁ explícitamente, como HECHOS, los matices TEMPORALES, de ESTADO y de
+CAPTURA explícitamente, como HECHOS, los matices TEMPORALES, de ESTADO y de
 PRESCRIPCIÓN cuando aparezcan en temas de salud/finanzas — NO los descartes:
 - TEMPORAL: "hace ~2 años", duraciones, "desde ~2024", "todas las mañanas". Si
-  Héctor da un tiempo RELATIVO ("hace más de 2 años") y conocés HOY, el label
+  Héctor da un tiempo RELATIVO ("hace más de 2 años") y conoces HOY, el label
   debe registrar AMBOS: la frase relativa Y un absoluto APROXIMADO y EXPLÍCITAMENTE
   difuso. Ej: "Hipertensión diagnosticada hace ~2 años (≈2024)". NUNCA pongas una
   fecha exacta inventada (nada de "15/03/2024"): siempre "≈AAAA" o "hace ~N años".
 - ESTADO: "medicación suspendida", "dejó el losartán", "estable sin medicamento",
   "automonitoreo matutino". Es un hecho duradero por sí mismo.
 - PRESCRIPCIÓN como HISTORIA, distinta del uso actual: si le recetaron algo aunque
-  lo haya suspendido, guardá un hecho tipo "Le recetaron media pastilla de losartán
+  lo haya suspendido, guarda un hecho tipo "Le recetaron media pastilla de losartán
   50 mg (suspendido)" para que "¿qué me recetó?" sea respondible aunque ya no lo tome.
 El label de cada uno de estos hechos DEBE MENCIONAR el/los nombres de las entidades
 relevantes (hipertensión / losartán / Dra. Tere) para que queden conectados en el grafo.
-Sé conciso y factual; no inundes el grafo: capturá solo los matices con valor.
+Sé conciso y factual; no inundes el grafo: captura solo los matices con valor.
 
 RELATOS DE VIDA: cuando Héctor narra eventos de vida que involucran a SU gente
 (familia, amigos, colegas) o planes/eventos (aperturas, invitaciones, viajes,
-mudanzas), esos SÍ son hechos DURADEROS sobre la vida de Héctor — guardalos
+mudanzas), esos SÍ son hechos DURADEROS sobre la vida de Héctor — guárdalos
 como facts, no solo como relaciones. Si Héctor dijo una fecha EXACTA ("el 15 de
-agosto"), mantenela EXACTA en el label completándola con el año usando HOY
+agosto"), mantenla EXACTA en el label completándola con el año usando HOY
 (ej: 15/08/2026); ≈ es solo para tiempos relativos.
 
 NO extraigas:
 - Mediciones numéricas sueltas de vitales ("presión 120/80", "glucosa 95",
-  "peso 64", "dormí 7h"): esas las registra otro canal; acá NO las repitas. Pero
-  SÍ guardá el diagnóstico, la condición, la medicación y su estado/temporalidad.
+  "peso 64", "dormí 7h"): esas las registra otro canal; aquí NO las repitas. Pero
+  SÍ guarda el diagnóstico, la condición, la medicación y su estado/temporalidad.
 - Datos efímeros ("hoy hace frío")
 - Especulaciones ("quizás Héctor está cansado")
 - Hechos sobre el mundo en general
@@ -138,8 +138,8 @@ comidas, actividades, lugares, organizaciones, documentos, eventos, marcas y
 herramientas — siempre que sean algo NOMBRADO y concreto.
 
 Cada relación es un TRIPLE sujeto-predicado-objeto con el TIPO de cada extremo:
-- El sujeto puede ser Héctor (usá "Héctor" o "yo") O otra entidad.
-- Capturá relaciones ENTIDAD-A-ENTIDAD, no solo Héctor->entidad. Ej: una condición
+- El sujeto puede ser Héctor (usa "Héctor" o "yo") O otra entidad.
+- Captura relaciones ENTIDAD-A-ENTIDAD, no solo Héctor->entidad. Ej: una condición
   "diagnosticada_por" un doctor, o "tratada_con" un medicamento.
 
 Tipos de entidad válidos (kind): person, place, org, medication, condition,
@@ -154,7 +154,7 @@ REGLAS ESTRICTAS para relations:
 - SOLO relaciones dichas EXPLÍCITAMENTE. Si un lugar aparece asociado a OTRA
   persona o negocio, NO crees relaciones de Héctor con ese lugar (nada de
   Héctor--vive_en-->lugar si Héctor no dijo que vive ahí).
-- Si Héctor nombra el vínculo (primo, tía, jefe, vecino), usá EXACTAMENTE esa
+- Si Héctor nombra el vínculo (primo, tía, jefe, vecino), usa EXACTAMENTE esa
   palabra como relation — nunca la degrades a 'conoce' o 'amigo'.
 
 Responde SOLO con JSON válido, sin texto antes ni después, exactamente este formato:
