@@ -17,9 +17,17 @@ import pytest
 from axi import health_chat
 from lifeos.health import entries as health_entries
 
-# A fixed "now" so date resolution is deterministic. System date is 2026-06-26.
+# A fixed "now" so date resolution is deterministic (used by the query tests
+# that assert the prompt anchors relative months against a known "today").
 TZ = ZoneInfo("America/Mexico_City")
 NOW = datetime(2026, 6, 26, 12, 0, tzinfo=TZ)
+
+# The register tests persist an entry stamped at `now` and then read it back via
+# health_entries.list_recent(days=7), which filters on the REAL wall clock
+# (datetime('now', '-7 days')). A hardcoded absolute NOW silently ages out of
+# that 7-day window once the system date advances past it, so those tests must
+# stamp entries relative to the actual current time.
+NOW_RECENT = datetime.now(TZ)
 
 
 def _extract(**fields) -> str:
@@ -67,7 +75,7 @@ def test_register_blood_pressure_and_glucose_creates_vitals():
     )
     res = health_chat.handle_health_message(
         "mi presión está en 120/80 y la glucosa en 90",
-        now=NOW, brain_ask=_fake_brain(extract),
+        now=NOW_RECENT, brain_ask=_fake_brain(extract),
     )
     assert res["mode"] == "register"
     assert len(res["entry_ids"]) == 2
@@ -87,7 +95,7 @@ def test_register_blood_pressure_and_glucose_creates_vitals():
 def test_register_sleep_creates_sleep_vital():
     extract = _extract(intent="register", kind="vital", sleep_hours=7.5, title="dormí")
     res = health_chat.handle_health_message(
-        "dormí 7.5 horas", now=NOW, brain_ask=_fake_brain(extract),
+        "dormí 7.5 horas", now=NOW_RECENT, brain_ask=_fake_brain(extract),
     )
     assert res["mode"] == "register"
     recent = health_entries.list_recent(days=7)
@@ -100,7 +108,7 @@ def test_register_sleep_creates_sleep_vital():
 def test_register_falls_back_to_note_when_no_vitals():
     extract = _extract(intent="register", kind="note", title="me duele la cabeza")
     res = health_chat.handle_health_message(
-        "me duele la cabeza desde la mañana", now=NOW, brain_ask=_fake_brain(extract),
+        "me duele la cabeza desde la mañana", now=NOW_RECENT, brain_ask=_fake_brain(extract),
     )
     assert res["mode"] == "register"
     assert res["entry_ids"]

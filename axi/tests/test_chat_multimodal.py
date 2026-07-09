@@ -155,6 +155,9 @@ def test_chat_ask_speak_killswitch_blocks_tts(client, monkeypatch):
     """chat_tts_enabled=false → speak NOT called even if request asks for it."""
     from axi import brain, config, speak as speak_mod
     monkeypatch.setattr(brain, "ask", lambda prompt, **kw: "no debería sonar")
+    # Conversation mode routes /api/chat/ask through ask_with_tools — mock it so
+    # the test exercises the TTS killswitch instead of reaching the live model.
+    monkeypatch.setattr(brain, "ask_with_tools", lambda *a, **kw: "no debería sonar")
 
     def fake_get(key, default=None):
         if key == "chat_tts_enabled":
