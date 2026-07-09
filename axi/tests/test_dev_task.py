@@ -172,6 +172,18 @@ def test_make_slug_truncates():
     assert len(slug) <= 40
 
 
+@pytest.mark.parametrize("goal", ["", "   ", "!!!", "///", "  @#$  ", "---"])
+def test_make_slug_empty_falls_back(goal):
+    """Goals that reduce to an empty slug must yield the 'dev-task' fallback.
+
+    Covers the `or "dev-task"` branch: whitespace-only, punctuation-only, and
+    the subtle all-hyphen case ("---") where rstrip("-") empties the slug —
+    otherwise run_dev_task would build a patch filename that starts with "-".
+    """
+    slug = dev_task._make_slug(goal)  # noqa: SLF001
+    assert slug == "dev-task"
+
+
 # ── test: ensure_git_repo creates repo with initial commit ───────────────────
 
 def test_ensure_git_repo_creates_if_missing(tmp_path):
