@@ -53,27 +53,24 @@
           <p class="text-sm" x-text="c.result.summary"></p>
         </template>
 
-        <template x-if="c.result && c.result.items && c.result.items.length > 0">
+        <template x-if="visibleItems(c).length > 0">
           <ul class="space-y-2">
-            <template x-for="(it, idx) in c.result.items" :key="idx">
+            <template x-for="(it, idx) in visibleItems(c)" :key="idx">
               <li class="text-sm border-l-2 pl-3" style="border-color: var(--border)">
-                <!-- url is server-validated to http(s) or '' (see briefing._safe_url);
-                     only render a clickable link when one survived, else plain text. -->
-                <template x-if="it.url">
-                  <a :href="it.url" target="_blank" rel="noopener noreferrer"
-                     class="font-medium hover:underline" style="color: var(--teal)"
-                     x-text="it.title || it.url"></a>
-                </template>
-                <template x-if="!it.url">
-                  <span class="font-medium" x-text="it.title"></span>
-                </template>
+                <!-- Items whose link is broken (url === '' after server-side
+                     validation in briefing._safe_url) are dropped in
+                     visibleItems(); every rendered entry has a real, clickable
+                     http(s) source. -->
+                <a :href="it.url" target="_blank" rel="noopener noreferrer"
+                   class="font-medium hover:underline" style="color: var(--teal)"
+                   x-text="it.title || it.url"></a>
                 <div class="muted text-xs mt-0.5" x-text="it.summary"></div>
               </li>
             </template>
           </ul>
         </template>
 
-        <template x-if="c.last_result_at && (!c.result || !c.result.items || c.result.items.length === 0)">
+        <template x-if="c.last_result_at && visibleItems(c).length === 0">
           <p class="text-sm muted" x-text="(c.result && c.result.markdown) ? c.result.markdown : 'Sin resultados estructurados.'"></p>
         </template>
       </div>
@@ -87,14 +84,33 @@ function briefingsPage() {
     cards: [],
     loading: true,
     _pollHandle: null,
+    _didHashScroll: false,
+    // Drop items whose source link is broken: the server validates each url to
+    // http(s) or '' (briefing._safe_url), so an empty url means "no working
+    // link". We omit those entries and keep up to 10 real ones — matching the
+    // 10-item cap the briefing engine already enforces.
+    visibleItems(c) {
+      const items = (c && c.result && c.result.items) || [];
+      return items.filter(it => it && it.url).slice(0, 10);
+    },
     async load() {
       try {
         const r = await fetch('/api/briefings');
         if (r.ok) {
           const data = await r.json();
-          this.cards = data.briefings || [];
-          // If the URL carries a card anchor, scroll to it.
-          if (location.hash) {
+          const next = data.briefings || [];
+          // Only swap the array when the content actually changed. The list
+          // polls every 15s; re-assigning identical data would tear down and
+          // rebuild the DOM, yanking the reader's scroll back to the top of the
+          // list on mobile mid-read. No change → no re-render → scroll stays put.
+          if (JSON.stringify(next) !== JSON.stringify(this.cards)) {
+            this.cards = next;
+          }
+          // If the URL carries a card anchor, scroll to it — but only ONCE, on
+          // the first load. Doing it on every poll would repeatedly jump the
+          // scroll back to that card while the user is reading.
+          if (location.hash && !this._didHashScroll) {
+            this._didHashScroll = true;
             this.$nextTick(() => {
               const el = document.getElementById(location.hash.slice(1));
               if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
