@@ -263,6 +263,10 @@ def _launch_instance(
         f"--setenv=XDG_CONFIG_HOME={cfg_home}",
         f"--setenv=LIFEOS_STATE_DIR={lifeos_state}",
         f"--setenv=PYTHONPATH={pythonpath}",
+        # Mark this as an isolated instance so the dashboard it runs skips
+        # main-only startup work — critically the preview orphan-sweep, which
+        # would otherwise stop this very unit (it matches axi-preview-inst-*).
+        "--setenv=AXI_ISOLATED_INSTANCE=1",
         f"--working-directory={worktree_path}",
         _venv_python(), "-m", "axi.dashboard",
     ]

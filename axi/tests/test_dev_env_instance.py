@@ -313,3 +313,27 @@ def test_seed_copies_real_dbs(tmp_path, monkeypatch):
     assert (state_home / "axi" / "memory.key").read_text() == "deadbeef"
     assert (lifeos_state / "lifeos.db").read_bytes() == b"enc-lifeos"
     assert (lifeos_state / "lifeos.key").read_text() == "cafe"
+
+
+def test_launch_instance_marks_isolated_instance(monkeypatch, tmp_path):
+    """Every isolated instance carries AXI_ISOLATED_INSTANCE so the dashboard it
+    runs skips the preview orphan-sweep (which would otherwise stop its own unit)."""
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    import axi.dev_env_instance as di
+    monkeypatch.setattr(di.subprocess, "run", fake_run)
+    monkeypatch.setattr(di, "_find_free_port", lambda *a, **k: 8092)
+    monkeypatch.setattr(di, "_build_isolated_config", lambda *a, **k: None)
+    monkeypatch.setattr(di, "_copy_tls_certs", lambda *a, **k: None)
+    monkeypatch.setattr(di, "_prepare_isolated_dirs", lambda *a, **k: (str(tmp_path), str(tmp_path), str(tmp_path)), raising=False)
+    wt = tmp_path / "wt"; wt.mkdir()
+    di.start_instance_for_worktree("20260101-000000-abcdef", str(wt))
+    assert any("AXI_ISOLATED_INSTANCE=1" in str(a) for a in captured.get("cmd", [])), captured.get("cmd")

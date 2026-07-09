@@ -577,12 +577,15 @@ async def lifespan(_app: FastAPI):
     # A crash/restart leaves the in-memory preview registry empty but any
     # systemd unit + throwaway worktree from a prior process still around.
     # Best-effort, never fatal — a failed sweep must never block startup.
-    try:
-        from axi import dev_preview  # noqa: PLC0415
+    # ONLY the main dashboard sweeps: an isolated instance IS itself an
+    # axi-preview-inst-* unit, so running the sweep there would stop itself.
+    if not os.environ.get("AXI_ISOLATED_INSTANCE"):
+        try:
+            from axi import dev_preview  # noqa: PLC0415
 
-        dev_preview.cleanup_orphans()
-    except Exception:  # noqa: BLE001
-        log.exception("dev preview orphan cleanup failed at startup")
+            dev_preview.cleanup_orphans()
+        except Exception:  # noqa: BLE001
+            log.exception("dev preview orphan cleanup failed at startup")
 
     yield
 
