@@ -689,6 +689,13 @@ FIELDS: tuple[ConfigField, ...] = (
         "model is overloaded. Empty disables the flag.",
     ),
     ConfigField(
+        "dev_director_coder_model", "string", "sonnet",
+        "Primary model for the autonomous coder (Claude Code --model). The "
+        "nightly self-improve goals are small and low-risk, so a cheaper model "
+        "(sonnet) cuts cost and time vs the opus default. Set to opus for higher "
+        "quality or haiku for max savings; empty = Claude Code's own default.",
+    ),
+    ConfigField(
         "dev_director_test_command", "string", "tests/test_dev_director.py -q",
         "Pytest arguments (after `-m pytest`) to run in the worktree after each Claude round. "
         "PYTHONPATH is set to <worktree>/axi/src so the worktree's code is tested, not the live install.",

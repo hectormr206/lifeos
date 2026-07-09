@@ -279,10 +279,15 @@ def _claude_resilience_flags() -> tuple[list[str], dict[str, str]]:
     max_turns = int(config.get("dev_director_max_turns", 60))
     max_budget = float(config.get("dev_director_max_budget_usd", 5.0))
     fallbacks = str(config.get("dev_director_fallback_models", "sonnet,haiku"))
+    coder_model = str(config.get("dev_director_coder_model", "sonnet"))
     argv = [
         "--max-turns", str(max_turns),
         "--max-budget-usd", str(max_budget),
     ]
+    # Primary model: cheaper/faster than the opus default for the small, low-risk
+    # self-improve goals. Empty falls back to Claude Code's own default.
+    if coder_model.strip():
+        argv += ["--model", coder_model.strip()]
     if fallbacks.strip():
         argv += ["--fallback-model", fallbacks.strip()]
     extra_env = {

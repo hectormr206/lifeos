@@ -1207,3 +1207,28 @@ def test_create_worktree_timeout_returns_error(monkeypatch, tmp_path):
     ok, err = dd._create_worktree(str(tmp_path / "repo"), str(tmp_path / "wt"), "b")
     assert ok is False
     assert "tim" in err.lower()
+
+
+def test_resilience_flags_include_configured_coder_model(monkeypatch):
+    """--model is passed with the configured coder model so we don't pay opus."""
+    import axi.config as cfg
+    defaults = {"dev_director_max_turns": 60, "dev_director_max_budget_usd": 5.0,
+                "dev_director_fallback_models": "sonnet,haiku",
+                "dev_director_coder_model": "sonnet"}
+    monkeypatch.setattr(cfg, "get", lambda k, d=None: defaults.get(k, d))
+    import axi.dev_director as dd
+    argv, _env = dd._claude_resilience_flags()
+    assert "--model" in argv
+    assert argv[argv.index("--model") + 1] == "sonnet"
+
+
+def test_resilience_flags_omit_model_when_empty(monkeypatch):
+    """Empty coder_model → no --model flag (Claude Code uses its own default)."""
+    import axi.config as cfg
+    defaults = {"dev_director_max_turns": 60, "dev_director_max_budget_usd": 5.0,
+                "dev_director_fallback_models": "sonnet,haiku",
+                "dev_director_coder_model": ""}
+    monkeypatch.setattr(cfg, "get", lambda k, d=None: defaults.get(k, d))
+    import axi.dev_director as dd
+    argv, _env = dd._claude_resilience_flags()
+    assert "--model" not in argv
