@@ -95,12 +95,18 @@ def main(run_id: str) -> None:
 
         resume_session_id: str | None = state.get("session_id") or None
 
+        # Which llama-server the semantic reviewer hits: 8080 = the big brain
+        # (GPU, fast) by default; 8082 = VibeThinker-3B (CPU, slower). The review
+        # is a soft gate — the human still reviews before deploying — so the fast
+        # brain is a good default and keeps nightly runs short.
+        review_port = int(config.get("dev_director_review_port", 8080))
         loop_kwargs: dict = dict(
             max_rounds=max_rounds,
             test_command=test_command,
             venv_python=venv_python,
             claude_timeout=claude_timeout,
             resume_session_id=resume_session_id,
+            director_port=review_port,
         )
         if is_env:
             # Durable, env-scoped worktree directory + a stable branch id so a

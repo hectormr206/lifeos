@@ -689,6 +689,13 @@ FIELDS: tuple[ConfigField, ...] = (
         "model is overloaded. Empty disables the flag.",
     ),
     ConfigField(
+        "dev_director_review_port", "integer", 8080,
+        "llama-server port for the coder's semantic reviewer. 8080 = the big "
+        "brain (GPU, fast) — a good default since the review is a soft gate and "
+        "the human still reviews before deploying. 8082 = VibeThinker-3B (CPU, "
+        "slower but reasoning-specialized).",
+    ),
+    ConfigField(
         "dev_director_coder_model", "string", "sonnet",
         "Primary model for the autonomous coder (Claude Code --model). The "
         "nightly self-improve goals are small and low-risk, so a cheaper model "
