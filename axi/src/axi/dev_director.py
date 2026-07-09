@@ -226,6 +226,12 @@ def _compose_goal_instruction(goal: str, test_command: str, feedback: str | None
     return base
 
 
+# Local git worktree ops (add/list/remove/branch/prune) are non-network, so a
+# generous bound is only there to stop a wedged git from hanging a deploy request
+# — the land/merge/deploy paths all go through these helpers.
+_GIT_WORKTREE_TIMEOUT = 30
+
+
 def _create_worktree(repo_path: str, worktree_path: str, branch_name: str) -> tuple[bool, str]:
     """Create a git worktree on a new branch. Returns (ok, error_message).
 
@@ -234,19 +240,23 @@ def _create_worktree(repo_path: str, worktree_path: str, branch_name: str) -> tu
     is reused as-is rather than re-created, since `git worktree add` would fail on
     an existing path/branch. Prior uncommitted edits in the worktree survive.
     """
-    if os.path.isdir(worktree_path):
-        listing = subprocess.run(
-            ["git", "-C", repo_path, "worktree", "list", "--porcelain"],
-            capture_output=True, text=True,
+    try:
+        if os.path.isdir(worktree_path):
+            listing = subprocess.run(
+                ["git", "-C", repo_path, "worktree", "list", "--porcelain"],
+                capture_output=True, text=True, timeout=_GIT_WORKTREE_TIMEOUT,
+            )
+            if listing.returncode == 0 and worktree_path in listing.stdout:
+                return True, ""  # already a live worktree — reuse it
+        result = subprocess.run(
+            ["git", "worktree", "add", worktree_path, "-b", branch_name],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_WORKTREE_TIMEOUT,
         )
-        if listing.returncode == 0 and worktree_path in listing.stdout:
-            return True, ""  # already a live worktree — reuse it
-    result = subprocess.run(
-        ["git", "worktree", "add", worktree_path, "-b", branch_name],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
+    except subprocess.TimeoutExpired:
+        return False, "git worktree add timed out"
     if result.returncode != 0:
         return False, f"git worktree add failed: {result.stderr.strip()}"
     return True, ""
@@ -663,6 +673,7 @@ def _cleanup_worktree(
             ["git", "worktree", "remove", "--force", worktree_path],
             cwd=repo_path,
             capture_output=True,
+            timeout=_GIT_WORKTREE_TIMEOUT,
         )
     except Exception:
         pass
@@ -670,6 +681,7 @@ def _cleanup_worktree(
         subprocess.run(
             ["git", "-C", repo_path, "branch", "-D", branch_name],
             capture_output=True,
+            timeout=_GIT_WORKTREE_TIMEOUT,
         )
     except Exception:
         pass
@@ -677,6 +689,7 @@ def _cleanup_worktree(
         subprocess.run(
             ["git", "-C", repo_path, "worktree", "prune"],
             capture_output=True,
+            timeout=_GIT_WORKTREE_TIMEOUT,
         )
     except Exception:
         pass

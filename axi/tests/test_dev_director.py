@@ -1171,3 +1171,39 @@ def test_run_claude_host_path_when_sandbox_disabled():
     assert "bypassPermissions" in captured["argv"]
     # Resilience env is merged into the host process env in this legacy path.
     assert captured["env"].get("CLAUDE_CODE_RETRY_WATCHDOG") == "1"
+
+
+def test_create_worktree_git_calls_have_timeout(monkeypatch, tmp_path):
+    """_create_worktree's git calls must carry a timeout so a wedged git can't
+    hang a deploy request (land_run/merge_run/ship_run go through this helper)."""
+    import axi.dev_director as dd
+    calls = []
+
+    class R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        calls.append(kw.get("timeout"))
+        return R()
+
+    monkeypatch.setattr(dd.subprocess, "run", fake_run)
+    ok, err = dd._create_worktree(str(tmp_path / "repo"), str(tmp_path / "wt"), "b")
+    assert ok, err
+    assert calls, "no subprocess.run call recorded"
+    assert all(t is not None for t in calls), f"a git call lacked timeout: {calls}"
+
+
+def test_create_worktree_timeout_returns_error(monkeypatch, tmp_path):
+    """A git-worktree timeout degrades to a clean (False, msg), never hangs/raises."""
+    import subprocess as _sp
+    import axi.dev_director as dd
+
+    def boom(cmd, **kw):
+        raise _sp.TimeoutExpired(cmd, kw.get("timeout", 30))
+
+    monkeypatch.setattr(dd.subprocess, "run", boom)
+    ok, err = dd._create_worktree(str(tmp_path / "repo"), str(tmp_path / "wt"), "b")
+    assert ok is False
+    assert "tim" in err.lower()
