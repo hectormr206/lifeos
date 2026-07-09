@@ -13,10 +13,15 @@ from axi import events, store
 @pytest.fixture(autouse=True)
 def fresh_events(monkeypatch):
     """Reset the ring buffer and event-writer state between tests."""
-    events._reset_for_tests()
-    # Re-enable by default (some tests will flip it off).
+    # Re-enable by default (some tests will flip it off). Drop the config cache
+    # and force the reload NOW so any "unknown key (kept as-is)" warnings from
+    # legacy keys in the copied config fire into the ring BEFORE we clear it.
+    # Otherwise the first config.get() inside the test body reloads the config
+    # and pollutes recent_events() with those warning events.
     from axi import config
     monkeypatch.setattr(config, "_cache", None)
+    config.get("events_enabled")  # trigger lenient_load → drains legacy warnings
+    events._reset_for_tests()
     yield
     events._reset_for_tests()
 

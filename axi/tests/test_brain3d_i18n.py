@@ -205,10 +205,15 @@ def test_node_domain_uses_tlabel():
 
 
 def test_edge_kind_uses_tedge():
-    """Edge kind display must call tEdge(edge.kind) not raw binding."""
+    """Edge kind display must route through tEdge(), not a raw binding.
+
+    The relations panel iterates `detail.relations` as `rel`, so the edge kind
+    is rendered via tEdge(rel.kind) (see brain3d.html). The i18n wiring is what
+    matters here, not the loop variable name.
+    """
     src = _template_source()
-    assert "tEdge(edge.kind)" in src, (
-        "Edge kind display must use tEdge(edge.kind) instead of raw x-text='edge.kind'."
+    assert "tEdge(rel.kind)" in src, (
+        "Edge kind display must use tEdge(rel.kind) instead of a raw x-text='rel.kind'."
     )
 
 
