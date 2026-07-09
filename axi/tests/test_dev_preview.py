@@ -7,7 +7,45 @@ decide which preview to offer before landing an autonomous change.
 import pytest
 
 from axi import dev_preview
-from axi.dev_preview import classify_patch, preview_run, stop_preview
+from axi.dev_preview import classify_patch, is_valid_run_id, preview_run, stop_preview
+
+
+# ===========================================================================
+# Phase 3: run_id validator (security — reject anything not matching the
+# server-generated shape before it flows into a branch / worktree / unit name).
+# Server run_ids are strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6].
+# ===========================================================================
+
+
+def test_valid_run_id_accepts_server_shape():
+    assert is_valid_run_id("20260627-143000-a1b2c3") is True
+    assert is_valid_run_id("20260101-000000-abcdef") is True
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "../x",
+        "a b",
+        "x;rm",
+        "not-an-id",
+        "20260627-143000-XYZ12",       # non-hex + too short
+        "20260627-143000-A1B2C3",      # uppercase hex not produced by hex[:6]
+        "20260627-143000-a1b2c",       # 5 hex chars
+        "20260627-143000-a1b2c3d",     # 7 hex chars
+        "20260627-1430-a1b2c3",        # short time
+        "20260627-143000-a1b2c3/../x", # path traversal suffix
+        "20260627-143000-a1b2c3;rm -rf /",
+    ],
+)
+def test_invalid_run_id_rejected(bad):
+    assert is_valid_run_id(bad) is False
+
+
+def test_non_string_run_id_rejected():
+    assert is_valid_run_id(None) is False
+    assert is_valid_run_id(12345) is False
 
 
 def _patch(path: str, body_lines: list[str] | None = None) -> str:

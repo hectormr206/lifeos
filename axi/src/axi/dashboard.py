@@ -7335,25 +7335,43 @@ async def api_list_dev_runs():
     from pathlib import Path  # noqa: PLC0415
     results_dir = Path(os.path.expanduser(config.get("dev_director_results_dir", "~/LifeOS/dev-results")))
     runs = list(reversed(_dr.list_runs()))  # newest first
+    # Statuses that show review actions (approve/merge/…) and can therefore be
+    # previewed. We classify a patch ONLY for these few candidates so the list
+    # endpoint reads at most a handful of patch files — a run mid-flight
+    # ('running', 'error', etc.) never has its patch read here.
+    _PREVIEW_CANDIDATE_STATUSES = {"done", "needs_human"}
     out = []
     for r in runs:
         rid = r.get("run_id", "")
+        status = r.get("status", "")
         patches = sorted(results_dir.glob(f"{rid}-*.patch")) if results_dir.exists() else []
         has_patch = bool(patches and patches[-1].stat().st_size > 0)
+        # preview_kind is computed only for reviewable candidates. For every
+        # other status it stays None so this list endpoint stays bounded (no
+        # per-run patch read for runs that can't be previewed anyway).
+        preview_kind = None
+        preview_reason = None
+        if status in _PREVIEW_CANDIDATE_STATUSES and has_patch:
+            from axi.dev_preview import classify_patch  # noqa: PLC0415
+            try:
+                _pv = classify_patch(patches[-1].read_text(errors="replace")[:200_000])
+                preview_kind = _pv["kind"]
+                preview_reason = _pv["reason"]
+            except Exception:  # noqa: BLE001 — classification never blocks the list
+                preview_kind = None
+                preview_reason = None
         out.append({
             "run_id": rid,
             "goal": r.get("goal", ""),
-            "status": r.get("status", ""),
+            "status": status,
             "started_at": r.get("started_at", ""),
             "rounds_done": r.get("rounds_done", 0),
-            "needs_human": r.get("status") == "needs_human",
-            "escalation_reason": r.get("result", "") if r.get("status") == "needs_human" else "",
-            "error": r.get("error") if r.get("status") == "error" else None,
+            "needs_human": status == "needs_human",
+            "escalation_reason": r.get("result", "") if status == "needs_human" else "",
+            "error": r.get("error") if status == "error" else None,
             "has_patch": has_patch,
-            # NOTE: preview_kind is intentionally NOT computed here. Classifying
-            # would require reading each run's patch file, adding a per-run I/O
-            # hit to this list endpoint. Preview is exposed only in the detail
-            # endpoint (GET /api/dev-runs/{run_id}), which already reads the patch.
+            "preview_kind": preview_kind,
+            "preview_reason": preview_reason,
         })
     return JSONResponse(out)
 
@@ -7470,6 +7488,33 @@ async def api_deploy_dev_run(run_id: str):
     result = await asyncio.to_thread(dev_land.deploy_run, run_id)
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "deploy failed"))
+    return JSONResponse(result)
+
+
+@app.post("/api/dev-runs/{run_id}/preview/start")
+async def api_preview_start(run_id: str):
+    """HUMAN action: spin up an ephemeral, isolated instance of a run's patch and
+    return its URL. The client-supplied run_id is validated against the exact
+    server shape FIRST — it flows into a git branch / worktree path / systemd unit
+    name, so anything else is rejected with 400 before touching the orchestrator."""
+    from axi import dev_preview as _dp  # noqa: PLC0415
+    if not _dp.is_valid_run_id(run_id):
+        raise HTTPException(400, "invalid run id")
+    # Off-loop: preview_run does subprocess/systemd work (worktree + instance).
+    result = await asyncio.to_thread(_dp.preview_run, run_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "preview failed"))
+    return JSONResponse(result)
+
+
+@app.post("/api/dev-runs/{run_id}/preview/stop")
+async def api_preview_stop(run_id: str):
+    """HUMAN action: tear down a run's ephemeral preview (instance + worktree).
+    Idempotent on the orchestrator side; still validates the run_id shape."""
+    from axi import dev_preview as _dp  # noqa: PLC0415
+    if not _dp.is_valid_run_id(run_id):
+        raise HTTPException(400, "invalid run id")
+    result = await asyncio.to_thread(_dp.stop_preview, run_id)
     return JSONResponse(result)
 
 

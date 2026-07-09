@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -21,9 +22,24 @@ from pathlib import Path
 
 from axi.self_improve import changed_paths_from_patch
 
-__all__ = ["classify_patch", "preview_run", "stop_preview"]
+__all__ = ["classify_patch", "is_valid_run_id", "preview_run", "stop_preview"]
 
 log = logging.getLogger("axi.dev_preview")
+
+# Server-generated run_ids are strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6]
+# (see dev_run._run_id). Anything else must be rejected BEFORE a client-supplied
+# run_id flows into a git branch name, a worktree path, or a systemd unit name —
+# no path traversal (../), no shell/git metacharacters, no wrong shape.
+_RUN_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
+
+
+def is_valid_run_id(run_id) -> bool:
+    """True only if ``run_id`` matches the exact server-generated shape.
+
+    Security gate: endpoints MUST reject a non-matching id with HTTP 400 before
+    it reaches ``preview_run`` / ``stop_preview`` (branch / worktree / unit name).
+    """
+    return isinstance(run_id, str) and _RUN_ID_RE.match(run_id) is not None
 
 # Path segments that mark a frontend / rendered surface. Matched robustly so a
 # path counts whether or not the diff reports the ``axi/src/axi/`` prefix

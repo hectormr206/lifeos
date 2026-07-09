@@ -240,6 +240,29 @@
           </div>
         </template>
 
+        <!-- ▶ Preview: only for candidates whose change touches a rendered
+             surface. 'internal' keeps just "Ver diff"; 'ambiguous' offers BOTH
+             the code view and the rendered preview. -->
+        <template x-if="r.has_patch && (r.preview_kind === 'external' || r.preview_kind === 'ambiguous')">
+          <div class="mb-2 flex flex-wrap items-center gap-2">
+            <button type="button"
+                    @click="startPreview(r)"
+                    :disabled="previewPending[r.run_id]"
+                    class="btn"
+                    style="font-size: 0.78rem; padding: 0.2rem 0.6rem; border-color: var(--amber); color: var(--amber);">
+              <span x-show="!previewPending[r.run_id]">▶ Vista previa</span>
+              <span x-show="previewPending[r.run_id]">Levantando vista previa…</span>
+            </button>
+            <template x-if="r.preview_kind === 'ambiguous' && r.preview_reason">
+              <span class="muted text-xs" x-text="r.preview_reason"></span>
+            </template>
+          </div>
+        </template>
+        <!-- Internal candidates: nudge toward the code view (no rendered surface). -->
+        <template x-if="r.has_patch && r.preview_kind === 'internal'">
+          <div class="muted text-xs mb-2">Este cambio es interno — revísalo con Ver diff.</div>
+        </template>
+
         <!-- Diff expand for done runs -->
         <template x-if="(r.status === 'done' || r.status === 'landed') && r.has_patch">
           <div>
@@ -271,6 +294,45 @@
     </template>
   </div>
 
+  <!-- Change preview modal: the isolated instance UI, near-fullscreen, wrapped
+       in an amber "sandbox" aura so it's unmistakable you're inside a throwaway
+       preview of an autonomous change. Ported from dev_envs.html. -->
+  <template x-if="previewModal.open">
+    <div class="fixed inset-0" style="z-index: 70; background: rgba(0,0,0,0.92);"
+         @keydown.escape.window="closePreview()">
+      <div class="flex flex-col" style="position: absolute; inset: 0.6rem; border-radius: 0.9rem;
+           border: 2px solid var(--amber); background: var(--panel); padding: 0.6rem;
+           box-shadow: 0 0 0 2px rgba(245,158,11,0.35), 0 0 30px 7px rgba(245,158,11,0.5);">
+        <div class="flex items-center justify-between gap-2 mb-2 px-1">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="shrink-0 px-2 py-0.5 rounded text-xs font-semibold"
+                  style="background: rgba(245,158,11,0.18); color: var(--amber); border: 1px solid var(--amber);">
+              🧪 Vista previa aislada
+            </span>
+            <span class="font-semibold text-sm truncate" x-text="previewModal.title || 'Vista previa'"></span>
+          </div>
+          <div class="flex gap-2 shrink-0">
+            <a :href="previewModal.url" target="_blank" rel="noopener" x-show="previewModal.url"
+               class="btn" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;">↗ Pestaña</a>
+            <button type="button" @click="closePreview()" class="btn btn-primary"
+                    style="padding: 0.3rem 0.9rem; font-size: 0.85rem;">✕ Cerrar</button>
+          </div>
+        </div>
+        <div class="flex-1 rounded-lg overflow-hidden" style="background: var(--panel2);">
+          <template x-if="previewModal.loading">
+            <div class="muted text-sm flex items-center justify-center" style="height: 100%;">
+              Levantando vista previa… unos segundos.
+            </div>
+          </template>
+          <template x-if="previewModal.url">
+            <iframe :src="previewModal.url" class="w-full" style="height: 100%; border: 0;"
+                    title="Vista previa del cambio"></iframe>
+          </template>
+        </div>
+      </div>
+    </div>
+  </template>
+
 </div>
 
 <script>
@@ -287,6 +349,10 @@ function devRuns() {
     actionPending: {},   // run_id -> bool
     preview: null,       // {ok, goal, source, signals} | {ok:false, error}
     previewLoading: false,
+
+    // Ephemeral change preview (isolated instance in an iframe modal).
+    previewModal: { open: false, run_id: null, url: '', title: '', loading: false },
+    previewPending: {},  // run_id -> bool (guards double-clicks on ▶ Vista previa)
 
     // Coder / Claude auth flow
     coderAuth: null,        // {ok, loggedIn, authMethod?} | {ok:false, error}
@@ -406,6 +472,51 @@ function devRuns() {
       } finally {
         this.previewLoading = false;
       }
+    },
+
+    // Build the instance URL from the returned port using the host the user is
+    // browsing from (window.location.hostname) instead of the literal 127.0.0.1
+    // baked into the server-side url, so the iframe works over the LAN too.
+    instUrlFromPort(port) {
+      if (!port) return '';
+      return window.location.protocol + '//' + window.location.hostname + ':' + port;
+    },
+
+    async startPreview(r) {
+      const run_id = r.run_id;
+      if (this.previewPending[run_id]) return;
+      this.previewPending = { ...this.previewPending, [run_id]: true };
+      this.previewModal = { open: true, run_id, url: '', title: r.goal || 'Vista previa', loading: true };
+      this.error = null;
+      try {
+        const resp = await fetch('/api/dev-runs/' + encodeURIComponent(run_id) + '/preview/start', { method: 'POST' });
+        const d = await resp.json().catch(() => ({}));
+        if (!resp.ok || !d.ok) throw new Error(d.detail || d.error || ('HTTP ' + resp.status));
+        const url = this.instUrlFromPort(d.port) || d.url || '';
+        if (!url) throw new Error('No obtuve la URL de la vista previa.');
+        // Give the isolated instance a few seconds to bind before pointing the iframe.
+        setTimeout(() => {
+          if (this.previewModal.open && this.previewModal.run_id === run_id) {
+            this.previewModal = { ...this.previewModal, url, loading: false };
+          }
+        }, 3500);
+      } catch (e) {
+        // Tear down whatever may have started; never leave an orphaned preview.
+        this.closePreview();
+        this.error = 'No pude levantar la vista previa: ' + (e.message || String(e));
+      } finally {
+        this.previewPending = { ...this.previewPending, [run_id]: false };
+      }
+    },
+
+    async closePreview() {
+      const run_id = this.previewModal.run_id;
+      this.previewModal = { open: false, run_id: null, url: '', title: '', loading: false };
+      if (!run_id) return;
+      // Best-effort teardown of the isolated instance + worktree.
+      try {
+        await fetch('/api/dev-runs/' + encodeURIComponent(run_id) + '/preview/stop', { method: 'POST' });
+      } catch (e) { /* swallow — server-side teardown is idempotent */ }
     },
 
     async approve(run_id) {
