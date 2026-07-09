@@ -573,6 +573,17 @@ async def lifespan(_app: FastAPI):
     # is read-mostly and must not run the embed drain.  The daemon already
     # handles embedding via trigger_embed_for_node / axi-embed-worker.
 
+    # ── Autonomous-change preview: sweep orphans from a previous process ─────
+    # A crash/restart leaves the in-memory preview registry empty but any
+    # systemd unit + throwaway worktree from a prior process still around.
+    # Best-effort, never fatal — a failed sweep must never block startup.
+    try:
+        from axi import dev_preview  # noqa: PLC0415
+
+        dev_preview.cleanup_orphans()
+    except Exception:  # noqa: BLE001
+        log.exception("dev preview orphan cleanup failed at startup")
+
     yield
 
     try:

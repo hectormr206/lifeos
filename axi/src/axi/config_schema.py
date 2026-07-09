@@ -733,6 +733,16 @@ FIELDS: tuple[ConfigField, ...] = (
         minimum=600,
         maximum=86400,
     ),
+    # ─────── autonomous-change preview (ephemeral throwaway instance) ───────
+    ConfigField(
+        "dev_preview_ttl_s", "integer", 1800,
+        "Maximum lifetime (seconds) of an ephemeral preview instance before it "
+        "is auto-stopped by the background reaper. Protects against a forgotten "
+        "or crashed preview leaking a worktree + running systemd unit. "
+        "Default 1800 (30 min).",
+        minimum=60,
+        maximum=86400,
+    ),
     # ─────── battery mode (power-aware behavior on battery) ───────
     # Axi follows the external power-mode service's state file as the single
     # source of truth (axi.power). VT-3B and the brains stay resident on battery
