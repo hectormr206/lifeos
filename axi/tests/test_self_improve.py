@@ -904,3 +904,46 @@ def test_director_config_keys_registered():
     src = __import__("inspect").getsource(cs)
     assert "self_improve_director_enabled" in src
     assert "self_improve_director_port" in src
+
+
+def test_build_prod_call_model_wires_config_keys(monkeypatch):
+    """build_prod_call_model must read the director config keys and pass them to
+    build_call_model — previously only covered by live verification."""
+    captured = {}
+
+    def fake_build_call_model(**kw):
+        captured.update(kw)
+        return "sentinel-call-model"
+
+    monkeypatch.setattr(si, "build_call_model", fake_build_call_model)
+
+    class FakeConfig:
+        _vals = {"self_improve_director_enabled": False,
+                 "self_improve_director_port": 9999}
+        @classmethod
+        def get(cls, key, default=None):
+            return cls._vals.get(key, default)
+
+    result = si.build_prod_call_model(FakeConfig)
+    assert result == "sentinel-call-model"
+    # config keys flow through with the right types
+    assert captured["director_enabled"] is False
+    assert captured["director_port"] == 9999
+    # side-effect callables are wired (not None)
+    for k in ("systemctl_run", "http_get", "http_post", "call_vt3b"):
+        assert callable(captured[k]), k
+
+
+def test_build_prod_call_model_defaults_director_on(monkeypatch):
+    """Missing config → director enabled by default on port 8093."""
+    captured = {}
+    monkeypatch.setattr(si, "build_call_model", lambda **kw: captured.update(kw))
+
+    class EmptyConfig:
+        @staticmethod
+        def get(key, default=None):
+            return default
+
+    si.build_prod_call_model(EmptyConfig)
+    assert captured["director_enabled"] is True
+    assert captured["director_port"] == 8093

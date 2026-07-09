@@ -1101,8 +1101,11 @@ def test_no_autonomous_caller_of_ship_run():
     from pathlib import Path as _P
 
     src = _P(__file__).resolve().parents[1] / "src" / "axi"
+    # Match actual references (call/def syntax `ship_run(`), NOT prose mentions
+    # in comments/docstrings — otherwise a passing mention of the name in an
+    # engine-file comment would spuriously fail this safety check.
     proc = _sp.run(
-        ["rg", "-n", r"ship_run", str(src)],
+        ["rg", "-n", r"ship_run\s*\(", str(src)],
         capture_output=True, text=True,
     )
     hits = [ln for ln in proc.stdout.splitlines() if ln.strip()]
