@@ -153,7 +153,7 @@
           <div class="flex flex-wrap gap-2 mb-3">
             <button type="button"
                     @click="mergeRun(r.run_id, r.landed_branch)"
-                    :disabled="actionPending[r.run_id]"
+                    :disabled="!!actionPending[r.run_id]"
                     class="btn"
                     style="background: var(--teal); color: #fff; border-color: var(--teal); padding: 0.4rem 1rem; font-size: 0.85rem;">
               <span x-show="!actionPending[r.run_id]">Mergear a main</span>
@@ -181,7 +181,7 @@
           <div class="flex flex-wrap gap-2 mb-3">
             <button type="button"
                     @click="deployRun(r.run_id)"
-                    :disabled="actionPending[r.run_id]"
+                    :disabled="!!actionPending[r.run_id]"
                     class="btn"
                     style="background: var(--teal); color: #fff; border-color: var(--teal); padding: 0.4rem 1rem; font-size: 0.85rem;">
               <span x-show="!actionPending[r.run_id]">Deploy (pull + restart)</span>
@@ -226,7 +226,7 @@
           <div class="flex flex-wrap gap-2 mb-3">
             <button type="button"
                     @click="approve(r.run_id)"
-                    :disabled="actionPending[r.run_id]"
+                    :disabled="!!actionPending[r.run_id]"
                     class="btn"
                     style="background: var(--teal); color: #fff; border-color: var(--teal); padding: 0.4rem 1rem; font-size: 0.85rem;">
               <span x-show="!actionPending[r.run_id]">Aprobar y subir</span>
@@ -234,7 +234,7 @@
             </button>
             <button type="button"
                     @click="reject(r.run_id)"
-                    :disabled="actionPending[r.run_id]"
+                    :disabled="!!actionPending[r.run_id]"
                     class="btn"
                     style="padding: 0.4rem 1rem; font-size: 0.85rem;">
               Rechazar
@@ -249,7 +249,7 @@
           <div class="mb-2 flex flex-wrap items-center gap-2">
             <button type="button"
                     @click="startPreview(r)"
-                    :disabled="previewPending[r.run_id]"
+                    :disabled="!!previewPending[r.run_id]"
                     class="btn"
                     style="font-size: 0.78rem; padding: 0.2rem 0.6rem; border-color: var(--amber); color: var(--amber);">
               <span x-show="!previewPending[r.run_id]">▶ Vista previa</span>
