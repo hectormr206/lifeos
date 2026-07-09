@@ -21,6 +21,17 @@ branch into the target branch in an ISOLATED worktree and pushes it; it never
 touches the live working tree and never restarts services. deploy_run (human,
 state 'merged' -> 'deployed') triggers the detached, self-guarding local install
 (git pull --ff-only + restart) on the live repo.
+
+ship_run (human, state 'done' -> 'deployed') is a SEPARATE, EXPLICITLY
+HUMAN-TRIGGERED one-click action that collapses approve + merge-to-main + deploy
+into a single button for a 'done' dev run. It applies the run's patch onto a
+fresh checkout of origin/<target> in an ISOLATED throwaway worktree (never the
+live tree), pushes directly to <target> (NO review branch), and only then
+triggers the same detached local install. It is subject to the SAME dev-engine
+guard as land_run: a self-improve-origin patch that touches the autonomous dev
+engine is blocked and never pushed. The autonomous engine still NEVER calls
+ship_run — ONLY the /dev dashboard endpoint does; the sacred invariant (the
+engine never merges to main or restarts services on its own) is unchanged.
 """
 from __future__ import annotations
 
@@ -125,6 +136,25 @@ def deploy_run(run_id: str) -> dict:
     """
     try:
         return _deploy_run(run_id)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def ship_run(run_id: str) -> dict:
+    """One-click approve + merge to main + deploy for a 'done' dev run (HUMAN).
+
+    Collapses land_run + merge_run + deploy_run into a single explicit human
+    action: apply the run's patch onto a fresh checkout of origin/<target>, push
+    straight to <target> (no review branch), then trigger the detached local
+    install. Only valid from state ``done``. On full success the run advances to
+    ``deployed``. Subject to the dev-engine guard for self-improve-origin runs.
+
+    Returns a dict with ``ok`` (bool) plus ``deployed_to``/``deploy_triggered_ok``
+    on success, or ``error`` on failure. Never raises. The autonomous engine
+    NEVER calls this — only the dashboard endpoint does.
+    """
+    try:
+        return _ship_run(run_id)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
 
@@ -454,3 +484,202 @@ def _deploy_run_locked(run_id: str) -> dict:
     _log_outcome(fresh, status="deployed")
 
     return {"ok": True, "deploy_triggered_ok": True}
+
+
+def _ship_run(run_id: str) -> dict:
+    # Serialize the whole read→act→write for this run so a double-click cannot
+    # double-push (the endpoint runs this in a worker thread via to_thread).
+    with _lock_for(run_id):
+        return _ship_run_locked(run_id)
+
+
+def _ship_run_locked(run_id: str) -> dict:
+    # a. Load state; REQUIRE 'done'. A one-click ship starts from a fresh
+    # candidate only — mid-flow states (landed/merged) keep the granular buttons.
+    state = _dr.get_run(run_id)
+    if state is None:
+        return {"ok": False, "error": "run not found"}
+    status = state.get("status", "")
+    if status != "done":
+        return {"ok": False, "error": "run not in 'done' state"}
+
+    # b. Locate the run's newest patch.
+    results_dir = Path(os.path.expanduser(
+        config.get("dev_director_results_dir", "~/LifeOS/dev-results")
+    ))
+    patches = sorted(results_dir.glob(f"{run_id}-*.patch")) if results_dir.exists() else []
+    if not patches or patches[-1].stat().st_size == 0:
+        return {"ok": False, "error": "no patch for run"}
+    patch_path = patches[-1]
+
+    # b2. ENFORCED dev-engine guard — same as land_run. A self-improve-origin run
+    # must NEVER push changes to the autonomous dev engine to main. A
+    # user-initiated run editing the engine is still allowed.
+    origin = state.get("origin", "user")
+    changed_paths = _si.changed_paths_from_patch(patch_path.read_text())
+    if origin == "self_improve":
+        offenders = _si.violates_dev_engine_guard(changed_paths)
+        if offenders:
+            state["status"] = "needs_human"
+            state["guard_blocked"] = True
+            state["guard_offenders"] = offenders
+            _dr._write_state_file(_dr._state_path(run_id), state)
+            _log_outcome(state, status="blocked", changed_paths=changed_paths,
+                         guard_blocked=True)
+            return {
+                "ok": False,
+                "error": "toca el motor de auto-desarrollo: " + ", ".join(offenders),
+                "guard_blocked": True,
+                "offenders": offenders,
+            }
+
+    target_branch = str(config.get("dev_env_deploy_target_branch", "main"))
+    dev_director_repo = os.path.expanduser(
+        config.get("dev_director_repo", "~/LifeOS/lifeos")
+    )
+
+    # c. Isolated worktree on a throwaway branch. We reset it to the freshly
+    # fetched origin/<target> and apply the run's patch on top — we NEVER
+    # `git checkout <target>` on the live worktree (that branch is already checked
+    # out there) and we push HEAD:<target> without ever touching the live tree.
+    tmp_parent = tempfile.mkdtemp(prefix="axi-ship-wt-")
+    worktree_path = os.path.join(tmp_parent, f"axi-ship-{run_id[:12]}")
+    ship_branch = f"axi/ship/{run_id}"
+
+    ok, err = _create_worktree(dev_director_repo, worktree_path, ship_branch)
+    if not ok:
+        try:
+            import shutil
+            shutil.rmtree(tmp_parent, ignore_errors=True)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": False, "error": f"could not create worktree: {err}"}
+
+    # Timeouts bound EVERY git call so a hung network/lock never freezes the
+    # dashboard. Network ops (fetch/push) get a longer bound than local ops.
+    _NET_TIMEOUT = 30
+    _LOCAL_TIMEOUT = 15
+    push_ok = False
+    try:
+        try:
+            # c1. Fetch origin so <target> is up to date.
+            subprocess.run(
+                ["git", "fetch", "origin"],
+                cwd=worktree_path, capture_output=True, text=True, check=True,
+                timeout=_NET_TIMEOUT,
+            )
+            # c2. Base the ship on the latest origin/<target>. --hard only moves
+            # the throwaway ship branch; the live worktree is untouched.
+            subprocess.run(
+                ["git", "reset", "--hard", f"origin/{target_branch}"],
+                cwd=worktree_path, capture_output=True, text=True, check=True,
+                timeout=_LOCAL_TIMEOUT,
+            )
+            # c3. Apply the run's patch (index), falling back to a 3-way merge.
+            applied = subprocess.run(
+                ["git", "apply", "--index", str(patch_path)],
+                cwd=worktree_path, capture_output=True, text=True,
+                timeout=_LOCAL_TIMEOUT,
+            )
+            if applied.returncode != 0:
+                applied = subprocess.run(
+                    ["git", "apply", "--3way", str(patch_path)],
+                    cwd=worktree_path, capture_output=True, text=True,
+                    timeout=_LOCAL_TIMEOUT,
+                )
+                if applied.returncode != 0:
+                    _log_outcome(state, status="ship_failed",
+                                 changed_paths=changed_paths)
+                    return {"ok": False, "error": "el patch no aplica limpio a main"}
+            # c4. Commit.
+            goal = state.get("goal", "") or ""
+            first = goal.splitlines()[0][:72] if goal.strip() else ""
+            commit_msg = f"axi: {first}\n\nApplied from dev run {run_id}."
+            subprocess.run(
+                ["git", "commit", "-m", commit_msg],
+                cwd=worktree_path, capture_output=True, text=True, check=True,
+                timeout=_LOCAL_TIMEOUT,
+            )
+            # c5. Push straight to <target> — no review branch. NEVER force.
+            push = subprocess.run(
+                ["git", "push", "origin", f"HEAD:{target_branch}"],
+                cwd=worktree_path, capture_output=True, text=True,
+                timeout=_NET_TIMEOUT,
+            )
+            push_ok = push.returncode == 0
+            if not push_ok:
+                _log_outcome(state, status="ship_failed", changed_paths=changed_paths)
+                return {"ok": False,
+                        "error": f"push to {target_branch} failed: {push.stderr.strip()}"}
+        except subprocess.TimeoutExpired as exc:
+            # A git call hung. Treat as failure; state stays 'done' so the human
+            # can retry. No push claimed, no install triggered.
+            step = "git"
+            try:
+                cmd = exc.cmd
+                if isinstance(cmd, (list, tuple)) and len(cmd) > 1:
+                    step = str(cmd[1])
+                elif isinstance(cmd, str):
+                    step = cmd
+            except Exception:  # noqa: BLE001
+                pass
+            _log_outcome(state, status="ship_failed", changed_paths=changed_paths)
+            return {"ok": False, "error": f"git timeout: {step}"}
+    finally:
+        # Always cleanup the throwaway worktree + branch (never orphan).
+        _cleanup_worktree(dev_director_repo, worktree_path, ship_branch, tmp_parent)
+
+    # d. Push succeeded — the change is on <target>. Now trigger the detached,
+    # self-guarding local install (git pull --ff-only + restart). Fire-and-forget:
+    # a True result means the install job was TRIGGERED, not that it finished.
+    triggered = False
+    deploy_error = None
+    try:
+        triggered = bool(dev_env._trigger_local_install(dev_director_repo))
+        if not triggered:
+            deploy_error = "local install trigger returned False"
+    except Exception as exc:  # noqa: BLE001
+        deploy_error = f"local install trigger raised: {exc}"
+
+    # Re-read fresh state and patch only the new fields (lost-update guard).
+    fresh = _dr.get_run(run_id) or state
+    now = datetime.now(timezone.utc).isoformat()
+
+    if not triggered:
+        # The push to <target> ALREADY happened — be honest. Do NOT claim
+        # 'deployed'. Advance to 'merged' so the human can retry JUST the install
+        # via the existing Deploy button (deploy_run re-triggers, no re-push).
+        fresh["status"] = "merged"
+        fresh["merged_into"] = target_branch
+        fresh["merge_push_ok"] = True
+        fresh["merged_at"] = now
+        fresh["deploy_triggered_ok"] = False
+        fresh["deploy_error"] = deploy_error
+        _dr._write_state_file(_dr._state_path(run_id), fresh)
+        _log_outcome(fresh, status="deploy_failed", changed_paths=changed_paths)
+        return {
+            "ok": False,
+            "error": deploy_error or "deploy trigger failed",
+            "pushed": True,
+            "merged_into": target_branch,
+            "deploy_triggered_ok": False,
+        }
+
+    # e. Full success → advance to 'deployed'.
+    fresh["status"] = "deployed"
+    fresh["merged_into"] = target_branch
+    fresh["merge_push_ok"] = True
+    fresh["deployed_at"] = now
+    fresh["deployed_to"] = target_branch
+    fresh["deploy_triggered_ok"] = True
+    fresh.pop("deploy_error", None)
+    _dr._write_state_file(_dr._state_path(run_id), fresh)
+    _log_outcome(fresh, status="deployed", changed_paths=changed_paths)
+
+    return {
+        "ok": True,
+        "pushed": True,
+        "merged_into": target_branch,
+        "deployed_to": target_branch,
+        "deploy_triggered_ok": True,
+    }

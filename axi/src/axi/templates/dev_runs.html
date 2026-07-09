@@ -219,10 +219,49 @@
                x-text="'Error al aterrizar: ' + approveResult[r.run_id].error"></div>
         </template>
 
-        <!-- Actions for done AND needs_human runs: both carry a patch and are
-             human-gated, so both can be approved+pushed or rejected. The nightly
-             autonomous runs that escalate to needs_human land here. -->
-        <template x-if="(r.status === 'done' || r.status === 'needs_human') && r.has_patch && !approveResult[r.run_id]">
+        <!-- One-click ship for a fresh 'done' candidate: a single primary button
+             collapses approve + merge-to-main + deploy. "Ver diff" and "▶ Vista
+             previa" stay available (below) so the human still reviews first, and
+             "Rechazar" stays here. Mid-flow states (landed/merged) keep the
+             granular buttons above for backward compatibility. -->
+        <template x-if="r.status === 'done' && r.has_patch && !shipResult[r.run_id]">
+          <div class="flex flex-wrap gap-2 mb-3">
+            <button type="button"
+                    @click="ship(r.run_id)"
+                    :disabled="!!actionPending[r.run_id]"
+                    class="btn"
+                    style="background: var(--teal); color: #fff; border-color: var(--teal); padding: 0.4rem 1rem; font-size: 0.85rem;">
+              <span x-show="!actionPending[r.run_id]">🚀 Aprobar y desplegar</span>
+              <span x-show="!!actionPending[r.run_id]">Desplegando…</span>
+            </button>
+            <button type="button"
+                    @click="reject(r.run_id)"
+                    :disabled="!!actionPending[r.run_id]"
+                    class="btn"
+                    style="padding: 0.4rem 1rem; font-size: 0.85rem;">
+              Rechazar
+            </button>
+          </div>
+        </template>
+
+        <!-- Ship result: success (deployed straight to main) / error. -->
+        <template x-if="shipResult[r.run_id] && shipResult[r.run_id].ok">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(72,187,120,0.1); border: 1px solid var(--green); color: var(--green)">
+            Desplegado a <span class="font-mono text-xs" x-text="shipResult[r.run_id].target || 'main'"></span> ✓
+            — la instalación local corre en segundo plano (pull --ff-only + restart).
+          </div>
+        </template>
+        <template x-if="shipResult[r.run_id] && !shipResult[r.run_id].ok">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(238,51,51,0.1); border: 1px solid var(--red); color: var(--red)"
+               x-text="shipResult[r.run_id].error"></div>
+        </template>
+
+        <!-- Actions for needs_human runs: the nightly autonomous runs escalate to
+             needs_human and still land via the review branch (approve → land →
+             merge → deploy), so they keep the granular approve + reject. -->
+        <template x-if="r.status === 'needs_human' && r.has_patch && !approveResult[r.run_id]">
           <div class="flex flex-wrap gap-2 mb-3">
             <button type="button"
                     @click="approve(r.run_id)"
@@ -230,7 +269,7 @@
                     class="btn"
                     style="background: var(--teal); color: #fff; border-color: var(--teal); padding: 0.4rem 1rem; font-size: 0.85rem;">
               <span x-show="!actionPending[r.run_id]">Aprobar y subir</span>
-              <span x-show="actionPending[r.run_id]">Subiendo…</span>
+              <span x-show="!!actionPending[r.run_id]">Subiendo…</span>
             </button>
             <button type="button"
                     @click="reject(r.run_id)"
@@ -348,6 +387,7 @@ function devRuns() {
     diffLoading: false,
     approveResult: {},   // run_id -> {ok, branch?, error?}
     actionResult: {},    // run_id -> {ok, error?} for merge/deploy
+    shipResult: {},      // run_id -> {ok, target?, error?} for one-click ship
     actionPending: {},   // run_id -> bool
     preview: null,       // {ok, goal, source, signals} | {ok:false, error}
     previewLoading: false,
@@ -537,6 +577,29 @@ function devRuns() {
         }
       } catch (e) {
         this.approveResult = { ...this.approveResult, [run_id]: { ok: false, error: e.message || String(e) } };
+      } finally {
+        this.actionPending = { ...this.actionPending, [run_id]: false };
+      }
+    },
+
+    async ship(run_id) {
+      // One-click: approve + merge to main + deploy. Re-entrancy guarded.
+      if (this.actionPending[run_id]) return;
+      if (!confirm('¿Aprobar y desplegar? Esto mergea el cambio a main (push a origin/main) y reinicia los servicios axi-dashboard y axi-voice en la laptop.')) return;
+      this.actionPending = { ...this.actionPending, [run_id]: true };
+      try {
+        const r = await fetch('/api/dev-runs/' + encodeURIComponent(run_id) + '/ship', {
+          method: 'POST',
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          this.shipResult = { ...this.shipResult, [run_id]: { ok: false, error: 'Error al desplegar: ' + (d.detail || ('HTTP ' + r.status)) } };
+        } else {
+          this.shipResult = { ...this.shipResult, [run_id]: { ok: true, target: d.deployed_to || 'main' } };
+          await this.load();
+        }
+      } catch (e) {
+        this.shipResult = { ...this.shipResult, [run_id]: { ok: false, error: 'Error al desplegar: ' + (e.message || String(e)) } };
       } finally {
         this.actionPending = { ...this.actionPending, [run_id]: false };
       }

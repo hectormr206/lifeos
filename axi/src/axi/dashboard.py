@@ -7505,6 +7505,27 @@ async def api_deploy_dev_run(run_id: str):
     return JSONResponse(result)
 
 
+@app.post("/api/dev-runs/{run_id}/ship")
+async def api_ship_dev_run(run_id: str):
+    """HUMAN action: one-click approve + merge to main + deploy for a 'done' run.
+
+    Collapses land + merge + deploy into a single button. The client-supplied
+    run_id flows into a git branch / worktree path, so it is validated against the
+    exact server shape FIRST — anything else is rejected with 400 before touching
+    the orchestrator. Gated to state 'done'; never called by any autonomous path.
+    """
+    from axi import dev_preview as _dp  # noqa: PLC0415
+    from axi import dev_land  # noqa: PLC0415
+    if not _dp.is_valid_run_id(run_id):
+        raise HTTPException(400, "invalid run id")
+    # Off-loop: ship_run does subprocess/git + local install work; keep the loop
+    # responsive and never let a hung git call freeze the dashboard.
+    result = await asyncio.to_thread(dev_land.ship_run, run_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "ship failed"))
+    return JSONResponse(result)
+
+
 @app.post("/api/dev-runs/{run_id}/preview/start")
 async def api_preview_start(run_id: str):
     """HUMAN action: spin up an ephemeral, isolated instance of a run's patch and

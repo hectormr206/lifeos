@@ -749,6 +749,422 @@ def test_api_deploy_wrong_state_400(client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Unit tests — dev_land.ship_run (one-click approve + merge to main + deploy)
+# ---------------------------------------------------------------------------
+
+
+def _patch_ship_env(monkeypatch, tmp_path, *, status="done", goal="Ship it now",
+                    origin="user", patch_body="--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-old\n+new\n",
+                    write_patch=True, target_branch="main"):
+    """Wire dev_land for a ship_run test: state store + config + worktree stubs.
+
+    Returns (written_states, cleanup_calls, run_id). Subprocess and
+    _trigger_local_install are patched separately by each test.
+    """
+    from axi import dev_land
+
+    run_id = "20260709-120000-shiprun"
+
+    results_dir = tmp_path / "dev-results"
+    results_dir.mkdir(exist_ok=True)
+    if write_patch:
+        (results_dir / f"{run_id}-20260709120000.patch").write_text(patch_body)
+
+    written_states: list[dict] = []
+    run_state = {"run_id": run_id, "goal": goal, "status": status, "origin": origin}
+
+    monkeypatch.setattr("axi.dev_land._dr", types.SimpleNamespace(
+        get_run=lambda rid: dict(run_state),
+        _state_path=lambda rid: tmp_path / "state.json",
+        _write_state_file=lambda p, s: written_states.append(dict(s)),
+    ))
+    monkeypatch.setattr("axi.dev_land.config", _fake_config({
+        "dev_director_repo": str(tmp_path / "repo"),
+        "dev_director_results_dir": str(results_dir),
+        "dev_env_deploy_target_branch": target_branch,
+    }))
+
+    cleanup_calls: list = []
+    monkeypatch.setattr("axi.dev_land._create_worktree",
+                        lambda repo, wt, br: (True, ""))
+    monkeypatch.setattr("axi.dev_land._cleanup_worktree",
+                        lambda *a: cleanup_calls.append(a))
+    return written_states, cleanup_calls, run_id
+
+
+def test_ship_run_happy_path(tmp_path, monkeypatch):
+    """done + clean patch → applies, pushes HEAD:main (no review branch),
+    triggers local install, status → 'deployed'."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written, cleanup_calls, run_id = _patch_ship_env(monkeypatch, tmp_path)
+
+    subprocess_calls: list = []
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: subprocess_calls.append(list(cmd)) or _make_proc(0))
+
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or True)
+
+    result = dev_land.ship_run(run_id)
+
+    assert result["ok"] is True, result
+    all_cmds = [" ".join(c) for c in subprocess_calls]
+
+    # Applied the patch, committed, and pushed straight to the target branch.
+    assert any("git apply" in c for c in all_cmds), all_cmds
+    assert any("git commit" in c for c in all_cmds), all_cmds
+    push_cmds = [c for c in all_cmds if "push" in c]
+    assert push_cmds, all_cmds
+    assert any("HEAD:main" in c for c in push_cmds), push_cmds
+    # No review branch pushed (unlike land_run) and never a force.
+    assert not any("axi/land/" in c for c in all_cmds), all_cmds
+    assert not any("axi/ship/" in c for c in push_cmds), push_cmds
+    for c in all_cmds:
+        assert "--force" not in c, c
+
+    # Local install triggered exactly once with the configured repo.
+    assert install_calls == [str(tmp_path / "repo")]
+
+    # Cleanup always runs.
+    assert len(cleanup_calls) == 1
+
+    # State recorded honestly.
+    s = written[-1]
+    assert s["status"] == "deployed"
+    assert s["deployed_to"] == "main"
+    assert "deployed_at" in s
+    assert s["deploy_triggered_ok"] is True
+
+
+def test_ship_run_git_calls_have_timeouts(tmp_path, monkeypatch):
+    """Every git subprocess.run in ship_run passes a timeout= bound."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    _w, _c, run_id = _patch_ship_env(monkeypatch, tmp_path)
+
+    seen_timeouts: list = []
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: seen_timeouts.append(kw.get("timeout")) or _make_proc(0))
+    monkeypatch.setattr(_real_de, "_trigger_local_install", lambda r: True)
+
+    dev_land.ship_run(run_id)
+    assert seen_timeouts, "no git calls made"
+    assert all(t is not None for t in seen_timeouts), seen_timeouts
+
+
+def test_ship_run_rejects_when_not_done(tmp_path, monkeypatch):
+    """ship_run refuses any status != 'done' with no git side effect and no install."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    _w, _c, run_id = _patch_ship_env(monkeypatch, tmp_path, status="running")
+
+    subprocess_calls: list = []
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: subprocess_calls.append(list(cmd)) or _make_proc(0))
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or True)
+
+    result = dev_land.ship_run(run_id)
+    assert result["ok"] is False
+    assert "done" in result["error"]
+    assert subprocess_calls == []
+    assert install_calls == []
+
+
+def test_ship_run_no_patch(tmp_path, monkeypatch):
+    """ship_run errors when no .patch file exists — no install triggered."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    _w, _c, run_id = _patch_ship_env(monkeypatch, tmp_path, write_patch=False)
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or True)
+
+    result = dev_land.ship_run(run_id)
+    assert result["ok"] is False
+    assert "no patch" in result["error"]
+    assert install_calls == []
+
+
+def test_ship_run_patch_conflict_cleans_up_and_stays_done(tmp_path, monkeypatch):
+    """Both --index and --3way fail → cleanup, error, state stays 'done', no install."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written, cleanup_calls, run_id = _patch_ship_env(monkeypatch, tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        # fetch / reset succeed; apply fails both ways.
+        if cmd[:2] == ["git", "apply"]:
+            return _make_proc(returncode=1, stderr="patch does not apply")
+        return _make_proc(returncode=0)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run", fake_run)
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or True)
+
+    result = dev_land.ship_run(run_id)
+
+    assert result["ok"] is False
+    assert "no aplica" in result["error"]
+    assert len(cleanup_calls) == 1
+    assert install_calls == []
+    # State never advanced to deployed.
+    assert all(s.get("status") != "deployed" for s in written)
+
+
+def test_ship_run_push_failure_cleans_up_no_install(tmp_path, monkeypatch):
+    """Push to main fails → cleanup, error, install NOT triggered, not deployed."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written, cleanup_calls, run_id = _patch_ship_env(monkeypatch, tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "push"]:
+            return _make_proc(returncode=1, stderr="rejected: non-fast-forward")
+        return _make_proc(returncode=0)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run", fake_run)
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or True)
+
+    result = dev_land.ship_run(run_id)
+
+    assert result["ok"] is False
+    assert "push" in result["error"].lower()
+    assert install_calls == [], "install must NOT run when push failed"
+    assert len(cleanup_calls) == 1
+    assert all(s.get("status") != "deployed" for s in written)
+
+
+def test_ship_run_push_timeout_cleans_up(tmp_path, monkeypatch):
+    """A TimeoutExpired on a git call → failure, cleanup, no deploy claim."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written, cleanup_calls, run_id = _patch_ship_env(monkeypatch, tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "push"]:
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 30))
+        return _make_proc(returncode=0)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run", fake_run)
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or True)
+
+    result = dev_land.ship_run(run_id)
+
+    assert result["ok"] is False
+    assert "timeout" in result["error"].lower()
+    assert install_calls == []
+    assert len(cleanup_calls) == 1
+    assert all(s.get("status") != "deployed" for s in written)
+
+
+def test_ship_run_dev_engine_guard_blocks_self_improve(tmp_path, monkeypatch):
+    """A self_improve-origin patch touching the dev engine is BLOCKED: no worktree,
+    no push, no install; run marked needs_human + guard_blocked."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    engine_patch = (
+        "diff --git a/axi/src/axi/dev_land.py b/axi/src/axi/dev_land.py\n"
+        "--- a/axi/src/axi/dev_land.py\n"
+        "+++ b/axi/src/axi/dev_land.py\n"
+        "@@ -1 +1 @@\n-old\n+new\n"
+    )
+    written, cleanup_calls, run_id = _patch_ship_env(
+        monkeypatch, tmp_path, origin="self_improve", patch_body=engine_patch)
+
+    subprocess_calls: list = []
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: subprocess_calls.append(list(cmd)) or _make_proc(0))
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or True)
+
+    result = dev_land.ship_run(run_id)
+
+    assert result["ok"] is False
+    assert result.get("guard_blocked") is True
+    # No git work and no install for a guard-blocked run.
+    assert subprocess_calls == []
+    assert install_calls == []
+    # State escalated to needs_human, flagged.
+    s = written[-1]
+    assert s["status"] == "needs_human"
+    assert s["guard_blocked"] is True
+
+
+def test_ship_run_user_origin_engine_patch_allowed(tmp_path, monkeypatch):
+    """A USER-initiated patch touching the engine is NOT guard-blocked (guard is
+    only for self_improve origin)."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    engine_patch = (
+        "diff --git a/axi/src/axi/dev_land.py b/axi/src/axi/dev_land.py\n"
+        "--- a/axi/src/axi/dev_land.py\n"
+        "+++ b/axi/src/axi/dev_land.py\n"
+        "@@ -1 +1 @@\n-old\n+new\n"
+    )
+    written, _c, run_id = _patch_ship_env(
+        monkeypatch, tmp_path, origin="user", patch_body=engine_patch)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: _make_proc(0))
+    monkeypatch.setattr(_real_de, "_trigger_local_install", lambda r: True)
+
+    result = dev_land.ship_run(run_id)
+    assert result["ok"] is True, result
+    assert written[-1]["status"] == "deployed"
+
+
+def test_ship_run_install_false_not_claimed_deployed(tmp_path, monkeypatch):
+    """Push succeeded but install trigger returns False → NOT claimed deployed;
+    deploy_triggered_ok False; run becomes retryable ('merged'), cleanup ran."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written, cleanup_calls, run_id = _patch_ship_env(monkeypatch, tmp_path)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: _make_proc(0))
+    install_calls: list = []
+    monkeypatch.setattr(_real_de, "_trigger_local_install",
+                        lambda r: install_calls.append(r) or False)
+
+    result = dev_land.ship_run(run_id)
+
+    assert result["ok"] is False
+    assert install_calls, "install must have been attempted after a good push"
+    s = written[-1]
+    assert s["status"] != "deployed"
+    assert s["deploy_triggered_ok"] is False
+    assert s.get("deploy_error")
+    # Push already happened — surfaced honestly.
+    assert result.get("pushed") is True
+    assert len(cleanup_calls) == 1
+
+
+def test_ship_run_install_raises_not_claimed_deployed(tmp_path, monkeypatch):
+    """Install trigger raises after a good push → honest failure, not deployed."""
+    from axi import dev_land
+    import axi.dev_env as _real_de
+
+    written, _c, run_id = _patch_ship_env(monkeypatch, tmp_path)
+
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: _make_proc(0))
+
+    def boom(r):
+        raise RuntimeError("systemd-run exploded")
+
+    monkeypatch.setattr(_real_de, "_trigger_local_install", boom)
+
+    result = dev_land.ship_run(run_id)
+    assert result["ok"] is False
+    s = written[-1]
+    assert s["status"] != "deployed"
+    assert s["deploy_triggered_ok"] is False
+
+
+def test_ship_run_no_run(tmp_path, monkeypatch):
+    """ship_run returns ok=False when run not found."""
+    from axi import dev_land
+    monkeypatch.setattr("axi.dev_land._dr", types.SimpleNamespace(
+        get_run=lambda rid: None,
+        _state_path=lambda rid: tmp_path / "state.json",
+        _write_state_file=lambda p, s: None,
+    ))
+    result = dev_land.ship_run("ghost")
+    assert result["ok"] is False
+    assert "not found" in result["error"]
+
+
+def test_no_autonomous_caller_of_ship_run():
+    """SAFETY: no autonomous/daemon path calls ship_run — only the dashboard
+    endpoint may. Grep the whole package for ship_run references."""
+    import subprocess as _sp
+    from pathlib import Path as _P
+
+    src = _P(__file__).resolve().parents[1] / "src" / "axi"
+    proc = _sp.run(
+        ["rg", "-n", r"ship_run", str(src)],
+        capture_output=True, text=True,
+    )
+    hits = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    # Only dev_land.py (the definition) and dashboard.py (the human endpoint)
+    # may reference ship_run. The autonomous engine files must NOT.
+    forbidden = ("self_improve.py", "daemon.py", "dev_director.py",
+                 "dev_run.py", "_dev_run_entry.py")
+    offenders = [h for h in hits if any(f"/{f}:" in h for f in forbidden)]
+    assert offenders == [], f"autonomous path references ship_run: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# API tests — ship endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_api_ship_calls_ship_run(client, monkeypatch):
+    """POST /api/dev-runs/{id}/ship validates id then calls dev_land.ship_run."""
+    import axi.dev_land as _real_dl
+    import axi.dev_preview as _real_dp
+
+    run_id = "20260709-120000-shipapi"
+    monkeypatch.setattr(_real_dp, "is_valid_run_id", lambda rid: True)
+    ship_calls: list = []
+    monkeypatch.setattr(_real_dl, "ship_run",
+                        lambda rid: ship_calls.append(rid) or {"ok": True, "deployed_to": "main"})
+
+    r = client.post(f"/api/dev-runs/{run_id}/ship")
+    assert r.status_code == 200
+    assert r.json()["deployed_to"] == "main"
+    assert ship_calls == [run_id]
+
+
+def test_api_ship_invalid_run_id_400_no_call(client, monkeypatch):
+    """Invalid run_id → 400 without ever calling ship_run."""
+    import axi.dev_land as _real_dl
+    import axi.dev_preview as _real_dp
+
+    monkeypatch.setattr(_real_dp, "is_valid_run_id", lambda rid: False)
+    ship_calls: list = []
+    monkeypatch.setattr(_real_dl, "ship_run",
+                        lambda rid: ship_calls.append(rid) or {"ok": True})
+
+    r = client.post("/api/dev-runs/not-a-valid-id/ship")
+    assert r.status_code == 400
+    assert ship_calls == []
+
+
+def test_api_ship_error_400(client, monkeypatch):
+    """ship_run returns ok=False → endpoint responds 400."""
+    import axi.dev_land as _real_dl
+    import axi.dev_preview as _real_dp
+
+    monkeypatch.setattr(_real_dp, "is_valid_run_id", lambda rid: True)
+    monkeypatch.setattr(_real_dl, "ship_run",
+                        lambda rid: {"ok": False, "error": "el patch no aplica limpio a main"})
+
+    r = client.post("/api/dev-runs/20260709-120000-shipapi/ship")
+    assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
 # Unit tests — dev_land.reject_run
 # ---------------------------------------------------------------------------
 
