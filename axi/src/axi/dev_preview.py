@@ -18,11 +18,19 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from axi.self_improve import changed_paths_from_patch
 
-__all__ = ["classify_patch", "is_valid_run_id", "preview_run", "stop_preview"]
+__all__ = [
+    "classify_patch",
+    "cleanup_orphans",
+    "is_valid_run_id",
+    "preview_run",
+    "reap_expired",
+    "stop_preview",
+]
 
 log = logging.getLogger("axi.dev_preview")
 
@@ -285,10 +293,15 @@ def preview_run(
             "unit": inst.get("unit"),
             "port": inst.get("port"),
             "url": inst.get("url"),
+            # Wall-clock birth time — the TTL reaper ages the preview from here.
+            "started_at": time.time(),
         }
         with _LOCK:
             _PREVIEWS[run_id] = entry
-        return {"ok": True, "url": inst.get("url"), "port": inst.get("port"), "run_id": run_id}
+    # Lazily arm the background TTL reaper on the first successful preview —
+    # outside _OP_LOCK so a slow start never blocks the operation.
+    _start_reaper()
+    return {"ok": True, "url": inst.get("url"), "port": inst.get("port"), "run_id": run_id}
 
 
 def stop_preview(run_id: str, *, stop_fn=None, cleanup_fn=None) -> dict:
@@ -307,3 +320,280 @@ def stop_preview(run_id: str, *, stop_fn=None, cleanup_fn=None) -> dict:
             return {"ok": True}
         _teardown_entry(entry, stop_fn=stop_fn, cleanup_fn=cleanup_fn)
         return {"ok": True}
+
+
+# ===========================================================================
+# Phase 4: hardening
+#
+# (1) TTL auto-teardown — a forgotten or crashed preview can't leak a worktree
+#     + running systemd unit forever. A background daemon reaper ages each
+#     preview from its ``started_at`` and tears down anything past the TTL.
+# (2) Startup orphan cleanup — a crash/restart of THIS process leaves the
+#     registry empty but the systemd unit + worktree still around. On dashboard
+#     startup we sweep any ``axi-preview-inst-*`` unit and ``axi/preview/*``
+#     worktree/branch left behind by a previous process.
+# ===========================================================================
+
+# Default max lifetime of a preview instance before it is auto-stopped. Mirrors
+# the config default in config_schema.py (``dev_preview_ttl_s`` = 1800).
+_DEFAULT_TTL_S = 1800
+
+# Systemd unit prefix and git branch prefix that mark an ephemeral preview.
+# Kept in sync with start_instance_for_worktree(unit_prefix="axi-preview-inst")
+# and the branch name computed in preview_run ("axi/preview/<run_id>").
+_UNIT_PREFIX = "axi-preview-inst"
+_BRANCH_PREFIX = "axi/preview/"
+# The throwaway worktree lives inside a tempfile dir named "axi-preview-wt-*"
+# (tempfile.mkdtemp(prefix="axi-preview-wt-")); the worktree dir itself is
+# "axi-preview-<run_id[:12]>".
+_WT_PARENT_PREFIX = "axi-preview-wt-"
+_WT_DIR_PREFIX = "axi-preview-"
+
+# Reaper wiring. The thread is lazy (armed on first preview_run), idempotent to
+# start, and a daemon so it never blocks interpreter shutdown. Tests set
+# _REAPER_ENABLED = False and exercise reap_expired() directly.
+_REAPER_ENABLED = True
+_reaper_thread: threading.Thread | None = None
+_reaper_lock = threading.Lock()
+_reaper_stop = threading.Event()
+
+
+def _current_ttl() -> int:
+    """Configured preview TTL in seconds, degrading to the default on any error."""
+    try:
+        from axi import config as _config  # noqa: PLC0415
+
+        return int(_config.get("dev_preview_ttl_s", _DEFAULT_TTL_S))
+    except Exception:  # noqa: BLE001
+        return _DEFAULT_TTL_S
+
+
+def reap_expired(*, now=None, ttl=None, stop_fn=None, cleanup_fn=None) -> list[str]:
+    """Tear down and drop every preview older than the TTL; return reaped run_ids.
+
+    Ages each entry from its ``started_at`` against ``ttl`` (both injectable for
+    tests; defaults read ``time.time()`` and the ``dev_preview_ttl_s`` config).
+    Runs under ``_OP_LOCK`` so it never interleaves with preview_run/stop_preview.
+    Best-effort — teardown of one entry never blocks reaping the rest.
+    """
+    from axi import dev_director, dev_env_instance  # noqa: PLC0415
+
+    stop_fn = stop_fn or dev_env_instance.stop_unit
+    cleanup_fn = cleanup_fn or dev_director._cleanup_worktree  # noqa: SLF001
+    if now is None:
+        now = time.time()
+    if ttl is None:
+        ttl = _current_ttl()
+
+    reaped: list[str] = []
+    with _OP_LOCK:
+        with _LOCK:
+            expired = [
+                (rid, entry)
+                for rid, entry in _PREVIEWS.items()
+                if now - float(entry.get("started_at", now)) > ttl
+            ]
+            for rid, _entry in expired:
+                _PREVIEWS.pop(rid, None)
+        for rid, entry in expired:
+            _teardown_entry(entry, stop_fn=stop_fn, cleanup_fn=cleanup_fn)
+            reaped.append(rid)
+    if reaped:
+        log.info("preview reaper: tore down expired previews %s (ttl=%ss)", reaped, ttl)
+    return reaped
+
+
+def _reaper_loop() -> None:
+    """Wake periodically and reap expired previews. Never raises out."""
+    while not _reaper_stop.is_set():
+        interval = max(1, min(60, _current_ttl()))
+        if _reaper_stop.wait(interval):
+            break
+        try:
+            reap_expired()
+        except Exception as exc:  # noqa: BLE001 — the reaper must never die
+            log.info("preview reaper: reap_expired failed (%s)", exc)
+
+
+def _start_reaper() -> None:
+    """Start the background TTL reaper once. Idempotent; never raises out."""
+    global _reaper_thread
+    if not _REAPER_ENABLED:
+        return
+    try:
+        with _reaper_lock:
+            if _reaper_thread is not None and _reaper_thread.is_alive():
+                return
+            _reaper_stop.clear()
+            _reaper_thread = threading.Thread(
+                target=_reaper_loop, name="axi-preview-reaper", daemon=True
+            )
+            _reaper_thread.start()
+    except Exception as exc:  # noqa: BLE001
+        log.info("preview reaper: failed to start (%s)", exc)
+
+
+# --- startup orphan cleanup -------------------------------------------------
+
+
+def _default_list_preview_units() -> list[str]:
+    """Return systemd --user unit names matching the preview prefix. Best-effort."""
+    names: set[str] = set()
+    for args in (
+        ["systemctl", "--user", "list-units", "--all", "--no-legend", "--plain",
+         f"{_UNIT_PREFIX}-*"],
+        ["systemctl", "--user", "list-unit-files", "--no-legend", "--plain",
+         f"{_UNIT_PREFIX}-*"],
+    ):
+        try:
+            res = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        except Exception:  # noqa: BLE001
+            continue
+        for line in (res.stdout or "").splitlines():
+            parts = line.split()
+            if parts and parts[0].startswith(_UNIT_PREFIX):
+                names.add(parts[0])
+    return sorted(names)
+
+
+def _default_list_preview_worktrees(repo: str) -> list[dict]:
+    """Parse ``git worktree list --porcelain`` into [{path, branch}]. Best-effort."""
+    out: list[dict] = []
+    try:
+        res = subprocess.run(
+            ["git", "-C", repo, "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except Exception:  # noqa: BLE001
+        return out
+    cur: dict | None = None
+    for line in (res.stdout or "").splitlines():
+        if line.startswith("worktree "):
+            if cur is not None:
+                out.append(cur)
+            cur = {"path": line[len("worktree "):].strip(), "branch": ""}
+        elif line.startswith("branch ") and cur is not None:
+            ref = line[len("branch "):].strip()
+            cur["branch"] = ref.replace("refs/heads/", "")
+    if cur is not None:
+        out.append(cur)
+    return out
+
+
+def _default_remove_worktree(repo: str, path: str) -> None:
+    subprocess.run(
+        ["git", "-C", repo, "worktree", "remove", "--force", path],
+        capture_output=True, timeout=15,
+    )
+
+
+def _default_delete_branch(repo: str, branch: str) -> None:
+    subprocess.run(
+        ["git", "-C", repo, "branch", "-D", branch],
+        capture_output=True, timeout=15,
+    )
+
+
+def _is_preview_worktree(path: str, branch: str) -> bool:
+    if branch.startswith(_BRANCH_PREFIX):
+        return True
+    base = os.path.basename(path.rstrip("/"))
+    return base.startswith(_WT_DIR_PREFIX)
+
+
+def cleanup_orphans(
+    *,
+    list_units_fn=None,
+    stop_fn=None,
+    list_worktrees_fn=None,
+    remove_worktree_fn=None,
+    delete_branch_fn=None,
+    rmtree_fn=None,
+    repo=None,
+    config_mod=None,
+) -> dict:
+    """Tear down preview artifacts left behind by a previous process.
+
+    Stops every ``axi-preview-inst-*`` systemd user unit and removes every
+    ``axi/preview/*`` worktree + branch (plus the ``axi-preview-wt-*`` temp
+    parents). Every I/O dependency is injectable for unit tests. Best-effort:
+    never raises, returns ``{units_stopped, worktrees_removed, branches_deleted}``.
+    """
+    from axi import dev_env_instance  # noqa: PLC0415
+
+    list_units_fn = list_units_fn or _default_list_preview_units
+    stop_fn = stop_fn or dev_env_instance.stop_unit
+    list_worktrees_fn = list_worktrees_fn or _default_list_preview_worktrees
+    remove_worktree_fn = remove_worktree_fn or _default_remove_worktree
+    delete_branch_fn = delete_branch_fn or _default_delete_branch
+    rmtree_fn = rmtree_fn or (lambda p: shutil.rmtree(p, ignore_errors=True))
+    if repo is None:
+        try:
+            from axi import config as _config  # noqa: PLC0415
+
+            cfg = config_mod or _config
+            repo = os.path.expanduser(cfg.get("dev_director_repo", "~/LifeOS/lifeos"))
+        except Exception:  # noqa: BLE001
+            repo = os.path.expanduser("~/LifeOS/lifeos")
+
+    units_stopped = 0
+    worktrees_removed = 0
+    branches_deleted = 0
+
+    # (a) systemd units
+    try:
+        units = list_units_fn() or []
+    except Exception:  # noqa: BLE001
+        units = []
+    for unit in units:
+        if not isinstance(unit, str) or not unit.startswith(_UNIT_PREFIX):
+            continue
+        try:
+            stop_fn(unit)
+            units_stopped += 1
+        except Exception as exc:  # noqa: BLE001
+            log.info("cleanup_orphans: stop failed for %s (%s)", unit, exc)
+
+    # (b) worktrees / branches / temp parents
+    try:
+        worktrees = list_worktrees_fn(repo) or []
+    except Exception:  # noqa: BLE001
+        worktrees = []
+    tmp_parents: set[str] = set()
+    for wt in worktrees:
+        try:
+            path = str(wt.get("path") or "")
+            branch = str(wt.get("branch") or "")
+        except Exception:  # noqa: BLE001
+            continue
+        if not path or not _is_preview_worktree(path, branch):
+            continue
+        try:
+            remove_worktree_fn(repo, path)
+            worktrees_removed += 1
+        except Exception as exc:  # noqa: BLE001
+            log.info("cleanup_orphans: worktree remove failed for %s (%s)", path, exc)
+        if branch.startswith(_BRANCH_PREFIX):
+            try:
+                delete_branch_fn(repo, branch)
+                branches_deleted += 1
+            except Exception as exc:  # noqa: BLE001
+                log.info("cleanup_orphans: branch delete failed for %s (%s)", branch, exc)
+        parent = os.path.dirname(path.rstrip("/"))
+        if os.path.basename(parent).startswith(_WT_PARENT_PREFIX):
+            tmp_parents.add(parent)
+
+    for parent in tmp_parents:
+        try:
+            rmtree_fn(parent)
+        except Exception as exc:  # noqa: BLE001
+            log.info("cleanup_orphans: rmtree failed for %s (%s)", parent, exc)
+
+    summary = {
+        "units_stopped": units_stopped,
+        "worktrees_removed": worktrees_removed,
+        "branches_deleted": branches_deleted,
+    }
+    if any(summary.values()):
+        log.info("cleanup_orphans swept previous-process preview artifacts: %s", summary)
+    return summary

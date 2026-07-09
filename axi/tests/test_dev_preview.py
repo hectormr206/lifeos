@@ -4,6 +4,8 @@ Phase 1: classify a git patch as internal / external / ambiguous so the UI can
 decide which preview to offer before landing an autonomous change.
 """
 
+import threading
+
 import pytest
 
 from axi import dev_preview
@@ -252,6 +254,9 @@ def preview_env(tmp_path, monkeypatch):
         "dev_director_repo": str(repo),
     })
     monkeypatch.setattr(dev_preview, "tempfile", _FakeTempfile(str(wt_root)))
+    # Never spawn the background reaper thread from unit tests — reap_expired is
+    # unit-tested directly; the thread is a thin wrapper.
+    monkeypatch.setattr(dev_preview, "_REAPER_ENABLED", False)
     yield {"results": results, "repo": repo, "cfg": cfg, "wt_root": wt_root}
     dev_preview._PREVIEWS.clear()
 
@@ -479,3 +484,191 @@ def test_teardown_stops_exact_stored_unit(preview_env):
 
     assert ("stop", custom_unit) in deps.calls
     assert run_id not in dev_preview._PREVIEWS
+
+
+# ===========================================================================
+# Phase 4: hardening — TTL auto-teardown + startup orphan cleanup
+# ===========================================================================
+
+
+# --- reap_expired (TTL auto-teardown) ---------------------------------------
+
+
+def _entry(run_id: str, started_at: float) -> dict:
+    return {
+        "worktree": f"/tmp/wt-{run_id}",
+        "branch": f"axi/preview/{run_id}",
+        "tmp_parent": f"/tmp/parent-{run_id}",
+        "repo": "/repo",
+        "instance_id": run_id,
+        "unit": f"axi-preview-inst-{run_id}",
+        "port": 9100,
+        "url": "https://127.0.0.1:9100",
+        "started_at": started_at,
+    }
+
+
+def test_reap_expired_tears_down_only_expired():
+    dev_preview._PREVIEWS.clear()
+    calls: list = []
+    now = 10_000.0
+    ttl = 1800
+    dev_preview._PREVIEWS["old"] = _entry("old", now - (ttl + 500))   # expired
+    dev_preview._PREVIEWS["fresh"] = _entry("fresh", now - 10)         # fresh
+
+    reaped = dev_preview.reap_expired(
+        now=now, ttl=ttl,
+        stop_fn=lambda unit: calls.append(("stop", unit)),
+        cleanup_fn=lambda repo, wt, branch, tmp: calls.append(("cleanup", wt)),
+    )
+
+    assert reaped == ["old"]
+    assert "old" not in dev_preview._PREVIEWS
+    assert "fresh" in dev_preview._PREVIEWS
+    # Only the expired entry was torn down.
+    assert ("stop", "axi-preview-inst-old") in calls
+    assert ("cleanup", "/tmp/wt-old") in calls
+    assert all("fresh" not in str(c) for c in calls)
+    dev_preview._PREVIEWS.clear()
+
+
+def test_reap_expired_nothing_expired_returns_empty():
+    dev_preview._PREVIEWS.clear()
+    calls: list = []
+    dev_preview._PREVIEWS["fresh"] = _entry("fresh", 1000.0)
+
+    reaped = dev_preview.reap_expired(
+        now=1005.0, ttl=1800,
+        stop_fn=lambda unit: calls.append(unit),
+        cleanup_fn=lambda *a: calls.append(a),
+    )
+
+    assert reaped == []
+    assert calls == []
+    assert "fresh" in dev_preview._PREVIEWS
+    dev_preview._PREVIEWS.clear()
+
+
+def test_preview_run_records_started_at(preview_env, monkeypatch):
+    run_id = "20260627-300012-startedat"
+    _write_patch(preview_env["results"], run_id)
+    deps = _Deps(preview_env["wt_root"])
+    monkeypatch.setattr(dev_preview.time, "time", lambda: 12345.0)
+
+    _run(run_id, preview_env["cfg"], deps)
+
+    assert dev_preview._PREVIEWS[run_id]["started_at"] == 12345.0
+
+
+# --- cleanup_orphans (startup orphan cleanup) -------------------------------
+
+
+def test_cleanup_orphans_stops_only_preview_units_and_worktrees():
+    stopped: list = []
+    removed: list = []
+    deleted: list = []
+    rmtreed: list = []
+
+    units = [
+        "axi-preview-inst-run1.service",
+        "axi-preview-inst-run2.service",
+        "axi-env-inst-other.service",   # unrelated — must be left alone
+    ]
+    worktrees = [
+        {"path": "/tmp/axi-preview-wt-1/axi-preview-run1", "branch": "axi/preview/run1"},
+        {"path": "/tmp/axi-preview-wt-2/axi-preview-run2", "branch": "axi/preview/run2"},
+        {"path": "/home/x/LifeOS/dev-envs/env-a", "branch": "axi/env/env-a"},  # unrelated
+        {"path": "/home/x/LifeOS/lifeos", "branch": "main"},                    # main repo
+    ]
+
+    summary = dev_preview.cleanup_orphans(
+        list_units_fn=lambda: units,
+        stop_fn=lambda unit: stopped.append(unit),
+        list_worktrees_fn=lambda repo: worktrees,
+        remove_worktree_fn=lambda repo, path: removed.append(path),
+        delete_branch_fn=lambda repo, branch: deleted.append(branch),
+        rmtree_fn=lambda path: rmtreed.append(path),
+        repo="/repo",
+    )
+
+    assert stopped == [
+        "axi-preview-inst-run1.service",
+        "axi-preview-inst-run2.service",
+    ]
+    assert removed == [
+        "/tmp/axi-preview-wt-1/axi-preview-run1",
+        "/tmp/axi-preview-wt-2/axi-preview-run2",
+    ]
+    assert deleted == ["axi/preview/run1", "axi/preview/run2"]
+    assert summary == {
+        "units_stopped": 2,
+        "worktrees_removed": 2,
+        "branches_deleted": 2,
+    }
+    # Leftover tmp parents (axi-preview-wt-*) are rmtree'd.
+    assert "/tmp/axi-preview-wt-1" in rmtreed
+    assert "/tmp/axi-preview-wt-2" in rmtreed
+
+
+def test_cleanup_orphans_never_raises_on_stop_failure():
+    def boom(unit):
+        raise RuntimeError("systemctl exploded")
+
+    summary = dev_preview.cleanup_orphans(
+        list_units_fn=lambda: ["axi-preview-inst-x.service"],
+        stop_fn=boom,
+        list_worktrees_fn=lambda repo: [],
+        remove_worktree_fn=lambda repo, path: None,
+        delete_branch_fn=lambda repo, branch: None,
+        rmtree_fn=lambda path: None,
+        repo="/repo",
+    )
+
+    # No raise; a failed stop is simply not counted.
+    assert summary["units_stopped"] == 0
+    assert summary["worktrees_removed"] == 0
+
+
+def test_cleanup_orphans_never_raises_when_listers_explode():
+    def boom():
+        raise RuntimeError("nope")
+
+    summary = dev_preview.cleanup_orphans(
+        list_units_fn=boom,
+        stop_fn=lambda unit: None,
+        list_worktrees_fn=lambda repo: (_ for _ in ()).throw(RuntimeError("nope")),
+        remove_worktree_fn=lambda repo, path: None,
+        delete_branch_fn=lambda repo, branch: None,
+        rmtree_fn=lambda path: None,
+        repo="/repo",
+    )
+    assert summary == {
+        "units_stopped": 0,
+        "worktrees_removed": 0,
+        "branches_deleted": 0,
+    }
+
+
+# --- reaper start guard ------------------------------------------------------
+
+
+def test_start_reaper_starts_at_most_one_thread(monkeypatch):
+    release = threading.Event()
+    monkeypatch.setattr(dev_preview, "_REAPER_ENABLED", True)
+    monkeypatch.setattr(dev_preview, "_reaper_loop", lambda: release.wait(2))
+    with dev_preview._reaper_lock:
+        dev_preview._reaper_thread = None
+    try:
+        dev_preview._start_reaper()
+        t1 = dev_preview._reaper_thread
+        dev_preview._start_reaper()
+        t2 = dev_preview._reaper_thread
+
+        assert t1 is t2
+        assert t1.is_alive()
+    finally:
+        release.set()
+        if dev_preview._reaper_thread is not None:
+            dev_preview._reaper_thread.join(timeout=2)
+        with dev_preview._reaper_lock:
+            dev_preview._reaper_thread = None
