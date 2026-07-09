@@ -10,6 +10,7 @@ result or an error message.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from subprocess import CompletedProcess
 from unittest.mock import patch
@@ -235,6 +236,64 @@ def test_second_start_terminates_the_first():
     # Only the second session remains registered.
     assert r1["session_id"] not in coder_auth._SESSIONS
     assert coder_auth._SESSIONS[r2["session_id"]] is proc2
+
+
+def test_start_login_creates_persistent_config_dir_and_mounts_it(monkeypatch):
+    """The OAuth config dir is created persistently and mounted into the sandbox.
+
+    Persistence invariant: the coder's Claude config dir is created on the HOST
+    (0700, idempotent) and bind-mounted into the ephemeral ``--rm`` container at
+    ``/claude-config`` — a path OUTSIDE the throwaway container/worktree — so the
+    OAuth credentials written on login survive the container's teardown and every
+    later ``--rm`` round. This test proves both halves: the host dir is created,
+    and the SAME dir is the mount backing the container config path.
+    """
+    made: dict = {}
+    chmodded: dict = {}
+
+    def rec_makedirs(path, *a, **kw):
+        made.update(path=path, mode=kw.get("mode"), exist_ok=kw.get("exist_ok"))
+
+    def rec_chmod(path, mode):
+        chmodded.update(path=path, mode=mode)
+
+    # Override the autouse _no_real_fs no-ops so we can observe the real calls
+    # without ever touching the filesystem.
+    monkeypatch.setattr(coder_auth.os, "makedirs", rec_makedirs)
+    monkeypatch.setattr(coder_auth.os, "chmod", rec_chmod)
+
+    proc = FakeProc(stdout_lines=_LOGIN_LINES)
+    spawned: dict = {}
+
+    def spawn(argv):
+        spawned["argv"] = argv
+        return proc
+
+    with patch("axi.coder_auth.shutil.which", side_effect=_which_podman), \
+         patch("axi.coder_auth.subprocess.run", side_effect=_podman_present_run):
+        result = coder_auth.start_login(FakeConfig, spawn=spawn)
+
+    assert result["ok"] is True
+
+    # The host config dir is created persistently: 0700 and idempotent
+    # (exist_ok=True → it is reused across logins, not recreated fresh).
+    expected = os.path.realpath(os.path.expanduser("~/.local/share/axi/coder-claude"))
+    assert made["path"] == expected
+    assert made["mode"] == 0o700
+    assert made["exist_ok"] is True
+    assert chmodded == {"path": expected, "mode": 0o700}
+
+    # The SAME host dir is bind-mounted into the sandboxed container at
+    # /claude-config, so the OAuth login persists across the `--rm` teardown.
+    argv = spawned["argv"]
+    v_indices = [i for i, a in enumerate(argv) if a == "-v"]
+    mounts = {argv[i + 1] for i in v_indices}
+    container_cfg = dev_director._CLAUDE_CONFIG_DIR_CONTAINER
+    assert f"{expected}:{container_cfg}:Z" in mounts
+    # Persistence invariant: the config lives OUTSIDE the ephemeral /work tree,
+    # and CLAUDE_CONFIG_DIR points the coder at that persistent mount.
+    assert not container_cfg.startswith("/work")
+    assert f"CLAUDE_CONFIG_DIR={container_cfg}" in argv
 
 
 # ---------------------------------------------------------------------------
