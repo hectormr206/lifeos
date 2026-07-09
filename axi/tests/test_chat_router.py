@@ -38,6 +38,33 @@ def test_classify_returns_registered_key():
     assert chat_router.classify_domain("glucosa 90", _brain(router_returns="health")) == "health"
 
 
+def test_classify_never_raises_on_brain_error():
+    """The docstring promises classify_domain 'Never raises'. If the brain call
+    blows up, the router must degrade to 'general' (general conversation), never
+    propagate the exception into the chat request path."""
+    def _boom(*a, **k):
+        raise RuntimeError("brain down")
+    assert chat_router.classify_domain("hola", _boom) == "general"
+
+
+def test_classify_degrades_to_general_on_non_string_reply():
+    """A malformed brain reply (None / non-str / empty) is not a domain key —
+    it must fall back to 'general', not crash on .strip()/.split()."""
+    assert chat_router.classify_domain("hola", lambda *a, **k: None) == "general"
+    assert chat_router.classify_domain("hola", lambda *a, **k: 42) == "general"
+    assert chat_router.classify_domain("hola", lambda *a, **k: "   ") == "general"
+
+
+def test_classify_tolerates_llm_formatting_noise():
+    """The key comes from a free-form 4B reply, so it may arrive with casing,
+    surrounding punctuation/whitespace, or trailing words. The router strips all
+    of that down to the bare key before matching the registry."""
+    assert chat_router.classify_domain("x", _brain(router_returns="FINANCE.")) == "finance"
+    assert chat_router.classify_domain("x", _brain(router_returns="  health  ")) == "health"
+    assert chat_router.classify_domain("x", _brain(router_returns="finance\n")) == "finance"
+    assert chat_router.classify_domain("x", _brain(router_returns="finance porque gastaste")) == "finance"
+
+
 def test_route_dispatches_to_finance(monkeypatch):
     created: list = []
     monkeypatch.setattr(finance_chat.finance_entries, "create",
