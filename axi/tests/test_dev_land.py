@@ -179,6 +179,43 @@ def test_land_run_happy_path(tmp_path, monkeypatch):
     assert s["push_ok"] is True
 
 
+def test_land_run_approves_needs_human(tmp_path, monkeypatch):
+    """A 'needs_human' run with a patch is approvable — the nightly autonomous
+    runs escalate to needs_human and must still be landable from /dev."""
+    from axi import dev_land
+
+    run_id = "20260709-030000-nightly"
+
+    results_dir = tmp_path / "dev-results"
+    results_dir.mkdir()
+    patch_file = results_dir / f"{run_id}-20260709030000.patch"
+    patch_file.write_text("--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-old\n+new\n")
+
+    written_states: list[dict] = []
+    monkeypatch.setattr("axi.dev_land._dr", types.SimpleNamespace(
+        get_run=lambda rid: {"run_id": rid, "goal": "Nightly improvement",
+                             "status": "needs_human"},
+        _state_path=lambda rid: tmp_path / "state.json",
+        _write_state_file=lambda p, s: written_states.append(dict(s)),
+    ))
+    monkeypatch.setattr("axi.dev_land.config", _fake_config({
+        "dev_director_repo": str(tmp_path / "repo"),
+        "dev_director_results_dir": str(results_dir),
+    }))
+    monkeypatch.setattr("axi.dev_land.subprocess.run",
+                        lambda cmd, **kw: _make_proc(returncode=0))
+    monkeypatch.setattr("axi.dev_land._create_worktree",
+                        lambda repo, wt, br: (True, ""))
+    monkeypatch.setattr("axi.dev_land._cleanup_worktree",
+                        lambda repo, wt, br, parent: None)
+
+    result = dev_land.land_run(run_id)
+
+    assert result["ok"] is True, result
+    assert result["branch"] == f"axi/land/{run_id}"
+    assert written_states[-1]["status"] == "landed"
+
+
 def test_land_run_patch_apply_failure(tmp_path, monkeypatch):
     """Both --index and --3way fail → cleanup called, ok=False."""
     from axi import dev_land

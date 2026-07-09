@@ -219,8 +219,10 @@
                x-text="'Error al aterrizar: ' + approveResult[r.run_id].error"></div>
         </template>
 
-        <!-- Actions for done runs -->
-        <template x-if="r.status === 'done' && r.has_patch && !approveResult[r.run_id]">
+        <!-- Actions for done AND needs_human runs: both carry a patch and are
+             human-gated, so both can be approved+pushed or rejected. The nightly
+             autonomous runs that escalate to needs_human land here. -->
+        <template x-if="(r.status === 'done' || r.status === 'needs_human') && r.has_patch && !approveResult[r.run_id]">
           <div class="flex flex-wrap gap-2 mb-3">
             <button type="button"
                     @click="approve(r.run_id)"
@@ -263,8 +265,8 @@
           <div class="muted text-xs mb-2">Este cambio es interno — revísalo con Ver diff.</div>
         </template>
 
-        <!-- Diff expand for done runs -->
-        <template x-if="(r.status === 'done' || r.status === 'landed') && r.has_patch">
+        <!-- Diff expand for done / needs_human / landed runs -->
+        <template x-if="(r.status === 'done' || r.status === 'needs_human' || r.status === 'landed') && r.has_patch">
           <div>
             <button type="button"
                     @click="toggleDiff(r.run_id)"
