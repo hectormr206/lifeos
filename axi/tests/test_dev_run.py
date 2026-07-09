@@ -200,16 +200,24 @@ def test_dev_run_entry_success(tmp_path):
 
 
 def test_dev_run_entry_needs_human(tmp_path):
-    """loop.needs_human=True → status='needs_human', notify called."""
+    """loop.needs_human=True → status='needs_human', patch saved, notify called.
+
+    The nightly autonomous runs escalate to needs_human but still produce a
+    valid patch. It must be persisted so has_patch is true on /dev and land_run
+    can approve+push it — otherwise the "Aprobar y subir" button never shows.
+    """
     state_dir = tmp_path / "runs"
     run_id = "run-nh"
+    results_dir = tmp_path / "results"
     _write_state(state_dir, run_id, _base_state(run_id))
 
     loop_result = FakeLoopResult(ok=True, done=False, needs_human=True,
                                   escalation_reason="tests never passed", session_id=None)
     notified: list = []
 
-    with patch("axi.config.get", side_effect=_fake_config(state_dir)), \
+    cfg = _fake_config(state_dir, **{"dev_director_results_dir": str(results_dir)})
+
+    with patch("axi.config.get", side_effect=cfg), \
          patch("axi.dev_director.run_director_loop", return_value=loop_result), \
          patch("axi._dev_run_entry._notify", side_effect=lambda t, b, **_: notified.append(t)):
         entry_mod.main(run_id)
@@ -217,6 +225,11 @@ def test_dev_run_entry_needs_human(tmp_path):
     state = _read_state(state_dir, run_id)
     assert state["status"] == "needs_human"
     assert len(notified) == 1
+
+    # Escalated ephemeral run persists its patch so it can be approved from /dev.
+    patches = list(results_dir.glob("*.patch"))
+    assert len(patches) == 1
+    assert patches[0].read_text() == loop_result.final_diff
 
 
 def test_dev_run_entry_quota_error(tmp_path):

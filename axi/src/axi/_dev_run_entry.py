@@ -153,6 +153,16 @@ def main(run_id: str) -> None:
             return
 
         if loop.needs_human:
+            # Ephemeral runs that escalate still produced a patch — save it so the
+            # human can approve+push it from /dev. land_run() reads this .patch and
+            # the dashboard's "Aprobar y subir" button only shows when has_patch is
+            # true; without the saved patch the overnight autonomous runs would be
+            # un-approvable. Env runs keep their worktree as the artifact instead.
+            if not is_env and loop.final_diff:
+                results_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+                patch_path = results_dir / f"{run_id}-{ts}.patch"
+                patch_path.write_text(loop.final_diff)
             state["status"] = "needs_human"
             state["result"] = loop.escalation_reason
             _write_state(state_path, state)

@@ -139,8 +139,14 @@ def _land_run(run_id: str) -> dict:
     state = _dr.get_run(run_id)
     if state is None:
         return {"ok": False, "error": "run not found"}
+    # A run is approvable when it finished cleanly ('done') OR when it escalated
+    # to 'needs_human' — the nightly autonomous runs that Axi builds overnight
+    # land here: they produced a valid patch but stopped for a human to approve
+    # and push. Both carry a .patch and both are human-gated, so both can be
+    # approved from the /dev dashboard. The self-improve dev-engine guard below
+    # still runs, so a guard-blocked run stays blocked.
     status = state.get("status", "")
-    if status != "done":
+    if status not in ("done", "needs_human"):
         return {"ok": False, "error": f"run not approvable (status={status})"}
 
     # b. Locate patch
