@@ -390,6 +390,20 @@ def test_system_prompt_en_no_busca():
     assert "/busca" not in brain.SYSTEM_PROMPT_EN
 
 
+def test_system_prompt_en_no_false_unavailable_claim():
+    """SYSTEM_PROMPT_EN must NOT claim English reminders/commands are unavailable.
+
+    English reminder creation works (bilingual parser) and English voice
+    commands work (bilingual intent palette). The stale limitation note that
+    said scheduling/commands were "not available yet" is a false claim that
+    would make Axi refuse things it can actually do.
+    """
+    import axi.brain as brain
+    p = brain.SYSTEM_PROMPT_EN.lower()
+    assert "not available yet" not in p
+    assert "not yet available" not in p
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 8. localize — silence_dictation key (regression: keeps '(silencio)' suffix)
 # ════════════════════════════════════════════════════════════════════════════

@@ -65,6 +65,14 @@ _IMPERATIVES = (
     "codeá", "codea", "codear",
     "creá", "crea", "crear",
     "hacé", "hace", "hacer",
+    # English imperatives (bilingual union grammar). Mirrors the Spanish set so
+    # an English utterance ("axi, open the dashboard") clears the imperative gate.
+    "open", "start", "begin",
+    "stop", "end", "finish",
+    "close", "activate", "enable",
+    "deactivate", "disable", "turn",
+    "clear", "forget", "reset",
+    "exit", "quit", "leave",
 )
 
 # Trigger word at the start. We accept several Whisper-misheard variants
@@ -94,6 +102,11 @@ _SHORT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^dashboard\b", re.IGNORECASE), "open_dashboard"),
     (re.compile(r"^tablero\b", re.IGNORECASE), "open_dashboard"),
     (re.compile(r"^reuni[oó]n\b", re.IGNORECASE), "meeting_start"),
+    # English verb-less short forms. "game mode off" must be tried before
+    # "game mode on" so the "off" suffix is not swallowed by the "on" form.
+    (re.compile(r"^game\s+mode\s+off\b", re.IGNORECASE), "game_off"),
+    (re.compile(r"^game\s+mode\s+on\b", re.IGNORECASE), "game_on"),
+    (re.compile(r"^interpreter\s+mode\b", re.IGNORECASE), "translate_on"),
 )
 
 # Regex → intent mapping. Each entry says: when the post-prefix text matches
@@ -101,20 +114,20 @@ _SHORT_FORMS: tuple[tuple[re.Pattern[str], str], ...] = (
 # We anchor every pattern so a "sal del modo juego" doesn't accidentally
 # match a future broader "sal" rule.
 _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    # meeting
-    (re.compile(r"^(empieza|empezar|empezá|inicia|iniciar|iniciá|comienza|comenzar|comenzá)\s+(la\s+)?reuni[oó]n\b", re.IGNORECASE), "meeting_start"),
-    (re.compile(r"^(termina|terminar|terminá|para|parar|pará|detén|detener|deten)\s+(la\s+)?reuni[oó]n\b", re.IGNORECASE), "meeting_stop"),
-    # dashboard
-    (re.compile(r"^(abre|abrir|abrí)\s+(el\s+)?(dashboard|tablero|panel)\b", re.IGNORECASE), "open_dashboard"),
-    # translate / interpreter
-    (re.compile(r"^(activa|activar|activá)\s+(el\s+)?(modo\s+)?int[eé]rprete\b", re.IGNORECASE), "translate_on"),
-    (re.compile(r"^(desactiva|desactivar|desactivá)\s+(el\s+)?(modo\s+)?int[eé]rprete\b", re.IGNORECASE), "translate_off"),
-    # game mode
-    (re.compile(r"^(activa|activar|activá)\s+(el\s+)?(modo\s+)?juego\b", re.IGNORECASE), "game_on"),
-    (re.compile(r"^(desactiva|desactivar|desactivá)\s+(el\s+)?(modo\s+)?juego\b", re.IGNORECASE), "game_off"),
-    (re.compile(r"^(sal|salir|salí)\s+(del\s+)?(modo\s+)?juego\b", re.IGNORECASE), "game_off"),
-    # conversation clear
-    (re.compile(r"^(limpia|limpiar|limpiá|borra|borrar|borrá|olvida|olvidar|olvidá)\s+(la\s+)?(conversaci[oó]n|historial|memoria(\s+corta)?)\b", re.IGNORECASE), "clear_conversation"),
+    # meeting (ES verbs + EN start|begin, ES "reunión" + EN "meeting")
+    (re.compile(r"^(empieza|empezar|empezá|inicia|iniciar|iniciá|comienza|comenzar|comenzá|start|begin)\s+(la\s+|the\s+)?(reuni[oó]n|meeting)\b", re.IGNORECASE), "meeting_start"),
+    (re.compile(r"^(termina|terminar|terminá|para|parar|pará|detén|detener|deten|stop|end|finish)\s+(la\s+|the\s+)?(reuni[oó]n|meeting)\b", re.IGNORECASE), "meeting_stop"),
+    # dashboard (object is already EN-neutral; add EN "open"/"close")
+    (re.compile(r"^(abre|abrir|abrí|open|close)\s+(el\s+|the\s+)?(dashboard|tablero|panel)\b", re.IGNORECASE), "open_dashboard"),
+    # translate / interpreter (ES + EN "turn on/activate/enable", EN "interpreter")
+    (re.compile(r"^(activa|activar|activá|activate|enable|turn\s+on)\s+(el\s+|the\s+)?(modo\s+)?(int[eé]rprete|interpreter|translation|translate)(\s+mode)?\b", re.IGNORECASE), "translate_on"),
+    (re.compile(r"^(desactiva|desactivar|desactivá|deactivate|disable|turn\s+off)\s+(el\s+|the\s+)?(modo\s+)?(int[eé]rprete|interpreter|translation|translate)(\s+mode)?\b", re.IGNORECASE), "translate_off"),
+    # game mode (ES + EN "turn on/activate", EN "game"/"game mode")
+    (re.compile(r"^(activa|activar|activá|activate|enable|turn\s+on)\s+(el\s+|the\s+)?(modo\s+)?(juego|game)(\s+mode)?\b", re.IGNORECASE), "game_on"),
+    (re.compile(r"^(desactiva|desactivar|desactivá|deactivate|disable|turn\s+off)\s+(el\s+|the\s+)?(modo\s+)?(juego|game)(\s+mode)?\b", re.IGNORECASE), "game_off"),
+    (re.compile(r"^(sal|salir|salí|exit|quit|leave)\s+(del\s+|the\s+)?(modo\s+)?(juego|game)(\s+mode)?\b", re.IGNORECASE), "game_off"),
+    # conversation clear (ES + EN "clear/forget/reset", EN objects)
+    (re.compile(r"^(limpia|limpiar|limpiá|borra|borrar|borrá|olvida|olvidar|olvidá|clear|forget|reset)\s+(la\s+|the\s+)?(conversaci[oó]n|historial|memoria(\s+corta)?|conversation|history|memory)\b", re.IGNORECASE), "clear_conversation"),
     # dev-director: autonomous development
     # Matches: desarrollá/programá/implementá/codeá <goal>
     #          creá/hacé un programa/función/script/módulo/clase que/para <goal>
