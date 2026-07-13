@@ -63,6 +63,13 @@ def test_schema_covers_historical_keys():
         # P-vpn dashboard bind config (host + port).
         "dashboard_host",
         "dashboard_port",
+        # Axi autonomous agent (proactive thought) — master toggle + 5 tuning knobs.
+        "autonomous_enabled",
+        "autonomous_cadence_minutes",
+        "autonomous_start_hour",
+        "autonomous_end_hour",
+        "autonomous_ask_timeout",
+        "autonomous_max_chars",
     }
     missing = historical_keys - names
     assert not missing, f"config schema dropped historical keys: {sorted(missing)}"
