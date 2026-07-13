@@ -510,6 +510,19 @@ async def lifespan(_app: FastAPI):
                 webcam_ok=webcam_ok,
             )
 
+        def _auto_coverage() -> list[str]:
+            """Compute the stale/empty life-domain gap list for the elicitation
+            path. Best-effort: any failure yields no gaps (silent, no elicitation)."""
+            try:
+                from lifeos.autonomous import coverage  # noqa: PLC0415
+                return coverage.coverage_gaps(
+                    stale_days=int(config.get("autonomous_elicit_stale_days", 14)),
+                    now=datetime.now(tz_auto),
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("autonomous: coverage_gaps failed — no elicitation this tick")
+                return []
+
         def _autonomous_enabled() -> bool:
             # Master opt-in toggle.
             if not bool(config.get("autonomous_enabled", False)):
@@ -536,6 +549,10 @@ async def lifespan(_app: FastAPI):
             spoke_write_fn=autonomous_cron.write_last_pushed,
             log_fn=_axi_events.log_info,
             perceive_fn=_auto_perceive,
+            coverage_fn=_auto_coverage,
+            elicit_enabled=bool(config.get("autonomous_elicit_enabled", True)),
+            last_elicited_read_fn=autonomous_cron.read_last_elicited,
+            last_elicited_write_fn=autonomous_cron.write_last_elicited,
             ask_timeout=float(config.get("autonomous_ask_timeout", 20.0)),
             max_message_chars=int(config.get("autonomous_max_chars", 120)),
             language=str(config.get("language", "es-MX")),

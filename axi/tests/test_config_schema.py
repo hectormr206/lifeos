@@ -70,6 +70,9 @@ def test_schema_covers_historical_keys():
         "autonomous_end_hour",
         "autonomous_ask_timeout",
         "autonomous_max_chars",
+        # proactive domain-coverage elicitation (empty-path).
+        "autonomous_elicit_enabled",
+        "autonomous_elicit_stale_days",
     }
     missing = historical_keys - names
     assert not missing, f"config schema dropped historical keys: {sorted(missing)}"

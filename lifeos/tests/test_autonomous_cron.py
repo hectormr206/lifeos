@@ -1310,3 +1310,175 @@ def test_privacy_jsonl_never_contains_life_data(tmp_path: Path) -> None:
         rec = json.loads(line)
         assert set(rec.keys()) == ALLOWED, f"Unexpected keys: {set(rec.keys()) - ALLOWED}"
         assert not BANNED.intersection(rec.keys()), f"Banned keys found: {BANNED.intersection(rec.keys())}"
+
+
+# ---------------------------------------------------------------------------
+# proactive-elicitation: empty path → ONE gentle eliciting question
+# ---------------------------------------------------------------------------
+
+def _empty_digest() -> dict:
+    """Setup fragment: force the empty-digest path."""
+    return {"digest_fn": lambda: "", "correlate_fn": lambda: ""}
+
+
+def test_empty_path_with_gaps_elicits() -> None:
+    """Empty digest + gaps + elicit_enabled → brain asks a question, it's pushed,
+    slot burned, last-elicited recorded, outcome elicited-<domain>."""
+    from lifeos.autonomous import cron
+    push_spy = MagicMock(return_value={"sent": 1})
+    spoke_write_spy = MagicMock()
+    last_write_spy = MagicMock()
+    _default_configure(
+        **_empty_digest(),
+        brain_ask=lambda *a, **kw: "¿Saliste a correr esta semana?",
+        push_fn=push_spy,
+        spoke_write_fn=spoke_write_spy,
+        coverage_fn=lambda: ["exercise"],
+        elicit_enabled=True,
+        last_elicited_read_fn=lambda: None,
+        last_elicited_write_fn=last_write_spy,
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "elicited-exercise"
+    push_spy.assert_called_once()
+    spoke_write_spy.assert_called_once_with(_today())
+    last_write_spy.assert_called_once_with("exercise")
+
+
+def test_empty_path_no_gaps_stays_skipped_empty() -> None:
+    """Empty digest + NO gaps → skipped-empty; brain NOT called."""
+    from lifeos.autonomous import cron
+    brain_spy = MagicMock()
+    _default_configure(
+        **_empty_digest(),
+        brain_ask=brain_spy,
+        coverage_fn=lambda: [],
+        elicit_enabled=True,
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "skipped-empty"
+    brain_spy.assert_not_called()
+
+
+def test_empty_path_elicit_disabled_stays_skipped_empty() -> None:
+    """Empty digest + gaps present but elicit_enabled=False → skipped-empty; no brain."""
+    from lifeos.autonomous import cron
+    brain_spy = MagicMock()
+    _default_configure(
+        **_empty_digest(),
+        brain_ask=brain_spy,
+        coverage_fn=lambda: ["health"],
+        elicit_enabled=False,
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "skipped-empty"
+    brain_spy.assert_not_called()
+
+
+def test_elicitation_respects_already_spoke_cap() -> None:
+    """Already spoke today → skipped-already-spoke; no elicitation, no coverage query."""
+    from lifeos.autonomous import cron
+    coverage_spy = MagicMock(return_value=["health"])
+    brain_spy = MagicMock()
+    _default_configure(
+        **_empty_digest(),
+        brain_ask=brain_spy,
+        spoke_read_fn=lambda: _today(),
+        coverage_fn=coverage_spy,
+        elicit_enabled=True,
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "skipped-already-spoke"
+    brain_spy.assert_not_called()
+    coverage_spy.assert_not_called()
+
+
+def test_elicitation_respects_window_guard() -> None:
+    """Outside window → skipped-outside-window; no elicitation."""
+    from lifeos.autonomous import cron
+    coverage_spy = MagicMock(return_value=["health"])
+    _default_configure(
+        **_empty_digest(),
+        now_fn=lambda: _now(hour=6),
+        coverage_fn=coverage_spy,
+        elicit_enabled=True,
+    )
+    result = cron.run_tick(_now(hour=6))
+    assert result.outcome == "skipped-outside-window"
+    coverage_spy.assert_not_called()
+
+
+def test_elicitation_rotation_excludes_last_domain() -> None:
+    """When last-elicited is in the gap list and another gap exists, pick the other."""
+    from lifeos.autonomous import cron
+    _default_configure(
+        **_empty_digest(),
+        brain_ask=lambda *a, **kw: "¿Cómo van tus finanzas?",
+        coverage_fn=lambda: ["health", "finance"],
+        elicit_enabled=True,
+        last_elicited_read_fn=lambda: "health",
+        last_elicited_write_fn=MagicMock(),
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "elicited-finance"
+
+
+def test_elicitation_brain_declines_falls_back_to_skipped_empty() -> None:
+    """Brain returns NADA on the elicitation prompt → skipped-empty; slot NOT burned."""
+    from lifeos.autonomous import cron
+    push_spy = MagicMock()
+    spoke_write_spy = MagicMock()
+    _default_configure(
+        **_empty_digest(),
+        brain_ask=lambda *a, **kw: "NADA",
+        push_fn=push_spy,
+        spoke_write_fn=spoke_write_spy,
+        coverage_fn=lambda: ["health"],
+        elicit_enabled=True,
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "skipped-empty"
+    push_spy.assert_not_called()
+    spoke_write_spy.assert_not_called()
+
+
+def test_normal_surface_not_replaced_by_elicitation() -> None:
+    """Non-empty digest → normal pushed surface; coverage_fn is never consulted."""
+    from lifeos.autonomous import cron
+    push_spy = MagicMock(return_value={"sent": 1})
+    coverage_spy = MagicMock(return_value=["health"])
+    _default_configure(
+        brain_ask=lambda *a, **kw: "Tienes cita médica mañana a las 10.",
+        push_fn=push_spy,
+        coverage_fn=coverage_spy,
+        elicit_enabled=True,
+    )
+    result = cron.run_tick(_now())
+    assert result.outcome == "pushed"
+    push_spy.assert_called_once()
+    coverage_spy.assert_not_called()
+
+
+def test_elicitation_prompt_grounded_and_offers_sentinels() -> None:
+    """The elicitation prompt names the stale domain and offers ESPERAR/NADA."""
+    from lifeos.autonomous import cron
+    captured: list[str] = []
+
+    def _spy_brain(prompt: str, **kw: Any) -> str:
+        captured.append(prompt)
+        return "ESPERAR"
+
+    _default_configure(
+        **_empty_digest(),
+        brain_ask=_spy_brain,
+        coverage_fn=lambda: ["exercise"],
+        elicit_enabled=True,
+    )
+    cron.run_tick(_now())
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert "ESPERAR" in prompt
+    assert "NADA" in prompt
+    # Grounded strictly in "no recent records" — must not fabricate facts
+    assert "ejercicio" in prompt.lower()
+    assert any(k in prompt.lower() for k in ("no ha registrado", "no hay registros", "no tienes"))

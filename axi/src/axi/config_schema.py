@@ -372,6 +372,19 @@ FIELDS: tuple[ConfigField, ...] = (
         "short and glanceable. Live (no restart).",
         minimum=40, maximum=500,
     ),
+    ConfigField(
+        "autonomous_elicit_enabled", "boolean", True,
+        "When Axi's autonomous tick finds nothing to surface, allow it to ask ONE "
+        "gentle question about a life domain you haven't logged recently (e.g. "
+        "'¿Saliste a correr esta semana?') so you can volunteer data. Still respects "
+        "the once-per-day cap and waking window. Live (no restart).",
+    ),
+    ConfigField(
+        "autonomous_elicit_stale_days", "integer", 14,
+        "A life domain counts as 'stale' (eligible for a gentle eliciting question) "
+        "when it has no entry within this many days. Live (no restart).",
+        minimum=1, maximum=90,
+    ),
     # ─────── lifeos posture (P6.2) ───────
     ConfigField(
         "posture_enabled", "boolean", False,

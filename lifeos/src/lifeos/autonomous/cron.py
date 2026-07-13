@@ -47,6 +47,9 @@ LogFn        = Callable[..., None]              # events.log_info-compatible
 SpokeReadFn  = Callable[[], str | None]         # -> ISO date of last push, or None
 SpokeWriteFn = Callable[[str], None]            # mark spoke-today (ISO date)
 AliveFn      = Callable[[], bool]               # brain.is_alive
+CoverageFn   = Callable[[], list[str]]          # -> stale/empty domain keys
+LastElicitedReadFn  = Callable[[], str | None]  # -> last elicited domain key, or None
+LastElicitedWriteFn = Callable[[str], None]     # record last elicited domain key
 
 # ---------------------------------------------------------------------------
 # Perception types (TASK-P0)
@@ -83,6 +86,9 @@ Outcome = Literal[
     "skipped-brain-down",
     "skipped-outside-window",
 ]
+# NOTE: the proactive-elicitation path returns a dynamic "elicited-<domain>"
+# outcome string (e.g. "elicited-exercise"). It is intentionally NOT enumerated
+# here because the suffix is a domain key; treat it as an extra terminal outcome.
 
 SENTINEL_WAIT = "ESPERAR"
 SENTINEL_NONE = "NADA"
@@ -114,6 +120,10 @@ _spoke_read_fn: SpokeReadFn | None = None
 _spoke_write_fn: SpokeWriteFn | None = None
 _log_fn: LogFn | None = None
 _perceive_fn: PerceiveFn | None = None
+_coverage_fn: CoverageFn | None = None
+_elicit_enabled: bool = True
+_last_elicited_read_fn: LastElicitedReadFn | None = None
+_last_elicited_write_fn: LastElicitedWriteFn | None = None
 _ask_timeout: float = 20.0
 _max_message_chars: int = 120
 _language: str = "es-MX"
@@ -145,6 +155,10 @@ def configure(
     spoke_write_fn: SpokeWriteFn,
     log_fn: LogFn,
     perceive_fn: PerceiveFn | None = None,
+    coverage_fn: CoverageFn | None = None,
+    elicit_enabled: bool = True,
+    last_elicited_read_fn: LastElicitedReadFn | None = None,
+    last_elicited_write_fn: LastElicitedWriteFn | None = None,
     ask_timeout: float = 20.0,
     max_message_chars: int = 120,
     language: str = "es-MX",
@@ -156,6 +170,8 @@ def configure(
     global _brain_ask, _digest_fn, _correlate_fn, _push_fn, _now_fn
     global _is_enabled_fn, _alive_fn, _spoke_read_fn, _spoke_write_fn, _log_fn
     global _perceive_fn
+    global _coverage_fn, _elicit_enabled
+    global _last_elicited_read_fn, _last_elicited_write_fn
     global _ask_timeout, _max_message_chars, _language
     global _window_start_hour, _window_end_hour
     global _routine_path
@@ -171,6 +187,10 @@ def configure(
     _spoke_write_fn = spoke_write_fn
     _log_fn = log_fn
     _perceive_fn = perceive_fn
+    _coverage_fn = coverage_fn
+    _elicit_enabled = bool(elicit_enabled)
+    _last_elicited_read_fn = last_elicited_read_fn
+    _last_elicited_write_fn = last_elicited_write_fn
     _ask_timeout = float(ask_timeout)
     _max_message_chars = int(max_message_chars)
     _language = language
@@ -285,10 +305,12 @@ def run_tick(now: datetime) -> TickResult:
     digest_body = (_digest_fn() if _digest_fn is not None else "")
     edge_summary = (_correlate_fn() if _correlate_fn is not None else "")
 
-    # Guard: empty digest (anti-confabulation)
+    # Guard: empty digest (anti-confabulation).
+    # Nothing to surface → maybe ask ONE gentle eliciting question about a
+    # stale/empty life domain instead of going fully silent. Elicitation obeys
+    # the SAME window + 1/day + brain-down guards already passed above.
     if not (digest_body or "").strip() and not (edge_summary or "").strip():
-        _log("skipped-empty")
-        return TickResult("skipped-empty")
+        return _maybe_elicit(now, today_iso, _log)
 
     # Perceive: call perceive_fn, degrade gracefully on any error.
     # perceive_fn contract: MUST NOT raise; but we guard defensively here.
@@ -424,6 +446,120 @@ def _build_prompt(
 
 
 # ---------------------------------------------------------------------------
+# Proactive domain-coverage elicitation (empty-digest path)
+# ---------------------------------------------------------------------------
+
+# Neutral Mexican-Spanish descriptors for each domain, used ONLY to ground the
+# eliciting question. They never assert a fact — just name the topic that has
+# no recent records.
+_DOMAIN_LABELS_ES: dict[str, str] = {
+    "health": "su salud (síntomas, sueño, ánimo, alimentación)",
+    "finance": "sus finanzas (gastos, ingresos, ahorros)",
+    "exercise": "su ejercicio o actividad física",
+    "relationships": "sus relaciones (contacto con familia o amigos)",
+    "learning": "su aprendizaje (lectura, estudio, cursos)",
+    "spirituality": "su vida espiritual (meditación, reflexión)",
+    "events": "sus eventos o planes",
+}
+
+
+def _pick_elicit_domain(gaps: list[str]) -> str:
+    """Pick ONE domain to elicit. Rotation: if the last elicited domain is in
+    the gap list and another gap exists, prefer a different one. Otherwise the
+    first gap (deterministic — coverage_fn returns a stable order)."""
+    last: str | None = None
+    if _last_elicited_read_fn is not None:
+        try:
+            last = _last_elicited_read_fn()
+        except Exception:  # noqa: BLE001
+            last = None
+    if last is not None and len(gaps) > 1:
+        for g in gaps:
+            if g != last:
+                return g
+    return gaps[0]
+
+
+def _build_elicitation_prompt(domain: str, now: datetime, max_chars: int) -> str:
+    """Prompt asking the brain for ONE short, gentle question about a domain
+    with no recent records — grounded strictly in that absence, never inventing
+    facts. Offers the same ESPERAR/NADA sentinels as the reflection prompt."""
+    label = _DOMAIN_LABELS_ES.get(domain, domain)
+    return (
+        f"Es {now.strftime('%H:%M')} ({now.strftime('%A')}). "
+        f"Héctor no ha registrado nada sobre {label} desde hace un buen rato, "
+        "y ahora mismo no tienes ningún dato nuevo suyo.\n\n"
+        "Tu tarea: hacerle UNA sola pregunta breve, amable y natural, en español "
+        "de México neutro, que lo invite a contarte algo de ese tema. La pregunta "
+        f"debe basarse ÚNICAMENTE en que no hay registros recientes de {label}; "
+        "NO inventes hechos, cifras ni sucesos.\n"
+        f"- Si tiene sentido preguntar ahora: responde SOLO con esa pregunta, máx "
+        f"{max_chars} caracteres, sin preámbulos.\n"
+        f"- Si es mejor esperar a otro momento hoy: responde exactamente {SENTINEL_WAIT}.\n"
+        f"- Si no conviene preguntar nada: responde exactamente {SENTINEL_NONE}."
+    )
+
+
+def _maybe_elicit(now: datetime, today_iso: str, _log: Callable[..., None]) -> TickResult:
+    """Empty-digest fork: try ONE eliciting question, else skipped-empty.
+
+    Reuses the sentinel parser. On a real question: push, burn the 1/day slot,
+    record the elicited domain (rotation), return "elicited-<domain>". If the
+    brain declines (ESPERAR/NADA/empty) the day is NOT burned — behaves exactly
+    like the original skipped-empty so a later tick can retry."""
+    if not _elicit_enabled or _coverage_fn is None:
+        _log("skipped-empty")
+        return TickResult("skipped-empty")
+
+    try:
+        gaps = list(_coverage_fn() or [])
+    except Exception:  # noqa: BLE001
+        log.warning("autonomous: coverage_fn raised; skipping elicitation", exc_info=True)
+        gaps = []
+
+    if not gaps:
+        _log("skipped-empty")
+        return TickResult("skipped-empty")
+
+    domain = _pick_elicit_domain(gaps)
+    prompt = _build_elicitation_prompt(domain, now, _max_message_chars)
+
+    try:
+        reply = _brain_ask(prompt, max_tokens=150, think=False, timeout=_ask_timeout, image_b64=None)
+    except Exception:  # noqa: BLE001
+        log.exception("autonomous: brain_ask raised during elicitation")
+        _log("skipped-brain-down")
+        return TickResult("skipped-brain-down")
+
+    verdict, message = parse_reply(reply, _max_message_chars)
+    if verdict == "msg" and message:
+        outcome = f"elicited-{domain}"
+        push_ok = True
+        try:
+            if _push_fn is not None:
+                _push_fn("Axi", message)
+        except Exception:  # noqa: BLE001
+            push_ok = False
+            log.exception("autonomous: elicitation push_fn raised — slot NOT burned")
+        if push_ok:
+            if _spoke_write_fn is not None:
+                _spoke_write_fn(today_iso)
+            if _last_elicited_write_fn is not None:
+                try:
+                    _last_elicited_write_fn(domain)
+                except Exception:  # noqa: BLE001
+                    log.warning("autonomous: could not persist last-elicited domain")
+            _log(outcome, message_len=len(message))
+            return TickResult(outcome, message=message)  # type: ignore[arg-type]
+        _log("push-failed", message_len=len(message))
+        return TickResult("push-failed", message=message)
+
+    # Brain declined to elicit — treat exactly like an empty tick (no burn).
+    _log("skipped-empty")
+    return TickResult("skipped-empty")
+
+
+# ---------------------------------------------------------------------------
 # Scheduler wiring
 # ---------------------------------------------------------------------------
 
@@ -504,17 +640,41 @@ def _state_path() -> Path:
     return base / "autonomous_last.json"
 
 
+def _read_state() -> dict:
+    """Read the whole autonomous state dict (empty dict on missing/corrupt file)."""
+    try:
+        data = json.loads(_state_path().read_text())
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_state(data: dict) -> None:
+    try:
+        _state_path().write_text(json.dumps(data))
+    except OSError:
+        log.warning("autonomous: could not persist state")
+
+
 def read_last_pushed() -> str | None:
     """Read the ISO date of the last proactive push (or None on missing/corrupt file)."""
-    try:
-        return json.loads(_state_path().read_text()).get("last_pushed_date")
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
+    return _read_state().get("last_pushed_date")
 
 
 def write_last_pushed(iso_date: str) -> None:
     """Persist the ISO date of a proactive push (or NADA outcome) to the state file."""
-    try:
-        _state_path().write_text(json.dumps({"last_pushed_date": iso_date}))
-    except OSError:
-        log.warning("autonomous: could not persist spoke-today state")
+    data = _read_state()
+    data["last_pushed_date"] = iso_date
+    _write_state(data)
+
+
+def read_last_elicited() -> str | None:
+    """Read the last domain Axi asked an eliciting question about (or None)."""
+    return _read_state().get("last_elicited_domain")
+
+
+def write_last_elicited(domain: str) -> None:
+    """Persist the last-elicited domain key (for round-robin rotation)."""
+    data = _read_state()
+    data["last_elicited_domain"] = domain
+    _write_state(data)
