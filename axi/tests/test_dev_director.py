@@ -137,6 +137,43 @@ def test_call_vt3b_strips_unclosed_think():
     assert result.startswith("DONE")
 
 
+def test_call_vt3b_retry_deadline_zero_fails_fast():
+    """retry_deadline=0 raises the first transport error without retrying.
+
+    Callers that must not block (e.g. generating a title) pass retry_deadline=0
+    to get an immediate failure instead of waiting up to 90 s.
+    """
+    calls: list[int] = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(1)
+        raise ConnectionRefusedError("VT not available")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with pytest.raises(ConnectionRefusedError):
+            _call_vt3b("sys", "user", retry_deadline=0)
+
+    assert len(calls) == 1, "must not retry when retry_deadline=0"
+
+
+def test_call_vt3b_retries_on_transient_transport_error():
+    """A single transient OSError is retried; the eventual response is returned."""
+    calls: list[str] = []
+
+    def fake_urlopen(req, timeout=None):
+        if not calls:
+            calls.append("fail")
+            raise ConnectionRefusedError("VT temporarily down")
+        return _fake_urlopen_response("DONE: recovered")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+         patch("axi.dev_director.time.sleep"):  # avoid real delay in the backoff
+        result = _call_vt3b("sys", "user", retry_deadline=30.0)
+
+    assert result == "DONE: recovered"
+    assert calls == ["fail"], "expected exactly one failure before the successful retry"
+
+
 # ---------------------------------------------------------------------------
 # run_director_round tests
 # ---------------------------------------------------------------------------
@@ -1232,3 +1269,72 @@ def test_resilience_flags_omit_model_when_empty(monkeypatch):
     import axi.dev_director as dd
     argv, _env = dd._claude_resilience_flags()
     assert "--model" not in argv
+
+
+# ---------------------------------------------------------------------------
+# build_claude_auth_podman_argv (pure unit tests, no subprocess)
+# ---------------------------------------------------------------------------
+
+
+def test_build_claude_auth_podman_argv_login():
+    """login action produces `claude auth login --claudeai` inside the container."""
+    from axi.dev_director import build_claude_auth_podman_argv, _CLAUDE_CONFIG_DIR_CONTAINER
+
+    argv = build_claude_auth_podman_argv(
+        "/data/coder-claude",
+        image="localhost/axi-coder:latest",
+    )
+
+    assert argv[0] == "podman"
+    assert "run" in argv
+    assert "--rm" in argv
+    assert "-i" in argv
+    # TTY must NOT be present (OAuth code is piped over stdin, not a real TTY).
+    assert "-t" not in argv
+
+    # Exactly one -v mount: the coder config dir only.
+    v_indices = [i for i, a in enumerate(argv) if a == "-v"]
+    assert len(v_indices) == 1
+    assert argv[v_indices[0] + 1] == f"/data/coder-claude:{_CLAUDE_CONFIG_DIR_CONTAINER}:Z"
+
+    # No /work mount — this is an auth flow, not a coder run.
+    assert not any("/work" in a for a in argv)
+
+    # CLAUDE_CONFIG_DIR set explicitly.
+    e_pairs = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+    assert f"CLAUDE_CONFIG_DIR={_CLAUDE_CONFIG_DIR_CONTAINER}" in e_pairs
+
+    # Tail is the auth login sub-command.
+    img_idx = argv.index("localhost/axi-coder:latest")
+    assert argv[img_idx + 1:] == ["claude", "auth", "login", "--claudeai"]
+
+
+def test_build_claude_auth_podman_argv_status():
+    """status action produces `claude auth status --json` inside the container."""
+    from axi.dev_director import build_claude_auth_podman_argv, _CLAUDE_CONFIG_DIR_CONTAINER
+
+    argv = build_claude_auth_podman_argv(
+        "/data/coder-claude",
+        image="localhost/axi-coder:latest",
+        action="status",
+    )
+
+    img_idx = argv.index("localhost/axi-coder:latest")
+    assert argv[img_idx + 1:] == ["claude", "auth", "status", "--json"]
+
+    # Config dir mount is still present.
+    v_indices = [i for i, a in enumerate(argv) if a == "-v"]
+    assert len(v_indices) == 1
+    assert argv[v_indices[0] + 1] == f"/data/coder-claude:{_CLAUDE_CONFIG_DIR_CONTAINER}:Z"
+
+
+def test_build_claude_auth_podman_argv_unknown_action_raises():
+    """An unknown action raises ValueError immediately (no subprocess, no I/O)."""
+    from axi.dev_director import build_claude_auth_podman_argv
+
+    with pytest.raises(ValueError, match="unknown auth action"):
+        build_claude_auth_podman_argv(
+            "/data/coder-claude",
+            image="localhost/axi-coder:latest",
+            action="reboot",
+        )
