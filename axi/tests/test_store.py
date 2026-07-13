@@ -235,6 +235,59 @@ def test_run_periodic_embed_drain_exists():
     assert callable(run_periodic_embed_drain)
 
 
+def test_drain_ingests_domain_facts(monkeypatch):
+    """The periodic drain must auto-ingest new domain entries into the graph.
+
+    Without this, fact-nodes only ever appear via the manual backfill CLI, so
+    the graph goes stale between manual runs. The drain must call
+    domain_bridge.backfill_all_domains (bounded) so a freshly logged health /
+    finance / relationships entry becomes a graph node on the next tick.
+    """
+    import axi.domain_bridge as domain_bridge
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        domain_bridge, "backfill_all_domains",
+        lambda **kw: calls.append(kw) or {},
+    )
+    # Stub the remaining drain steps so this test isolates ingestion.
+    monkeypatch.setattr(store, "embed_pending_nodes", lambda **kw: None)
+    monkeypatch.setattr(store, "backfill_similar_to_edges", lambda **kw: None)
+
+    with patch.dict("sys.modules", {"axi.linkers": __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()}):
+        import axi.linkers as linkers_mod
+        linkers_mod.run_auto_linkers = lambda *a, **k: None
+        with patch("axi.store._connect", return_value=__import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()):
+            store.run_periodic_embed_drain()
+
+    assert calls, "run_periodic_embed_drain did not call backfill_all_domains"
+    # Must be bounded so a 5-minute tick can't do unbounded work.
+    assert calls[0].get("node_limit") is not None, "domain backfill in the drain must be bounded (node_limit)"
+
+
+def test_drain_domain_backfill_failure_emits_warning(monkeypatch):
+    """If domain ingestion raises, the drain logs an embed.drain warning and keeps going."""
+    import axi.domain_bridge as domain_bridge
+    import axi.events as events_mod
+
+    warnings: list[tuple] = []
+    monkeypatch.setattr(events_mod, "log_warning", lambda source, msg, data=None: warnings.append((source, msg, data)))
+    monkeypatch.setattr(
+        domain_bridge, "backfill_all_domains",
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("domain fetch failed")),
+    )
+    monkeypatch.setattr(store, "embed_pending_nodes", lambda **kw: None)
+    monkeypatch.setattr(store, "backfill_similar_to_edges", lambda **kw: None)
+
+    with patch.dict("sys.modules", {"axi.linkers": __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()}):
+        import axi.linkers as linkers_mod
+        linkers_mod.run_auto_linkers = lambda *a, **k: None
+        with patch("axi.store._connect", return_value=__import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()):
+            store.run_periodic_embed_drain()  # must NOT raise
+
+    assert any(c[0] == "embed.drain" for c in warnings), f"No embed.drain warning emitted; got: {warnings}"
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # FIX 6: thread-local connections — the bug that caused real B-tree corruption
 # ──────────────────────────────────────────────────────────────────────────────

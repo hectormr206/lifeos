@@ -2348,15 +2348,45 @@ def trigger_embed_for_node(node_id: int) -> None:
         pass
 
 
-def run_periodic_embed_drain(*, embed_limit: int = 50, similarity_threshold: float = 0.85) -> None:
-    """Drain pending embeddings, backfill similar-to edges, and run auto-linkers.
+def run_periodic_embed_drain(
+    *,
+    embed_limit: int = 50,
+    similarity_threshold: float = 0.85,
+    backfill_node_limit: int = 50,
+    backfill_days: int = 7,
+) -> None:
+    """Ingest new domain facts, drain pending embeddings, backfill similar-to
+    edges, and run auto-linkers.
 
     Intended to be called periodically (e.g. every 5 minutes) from the dashboard
     lifespan background task.  All operations are idempotent and bounded.
 
+    Domain ingestion runs FIRST so that freshly logged entries (health, finance,
+    relationships, …) become graph fact-nodes and get embedded + linked within
+    the same drain cycle. It is bounded by *backfill_node_limit* (new nodes per
+    tick) and *backfill_days* (look-back window); already-bridged entries are
+    skipped, so the backlog drains over successive ticks. The manual
+    ``backfill.py`` CLI still covers deep historical (older than backfill_days)
+    ingestion.
+
     row_factory is set to sqlcipher3.Row before run_auto_linkers so the linker
     dict-access (row["col"]) works correctly regardless of caller state.
     """
+    try:
+        from axi.domain_bridge import backfill_all_domains
+        backfill_all_domains(days=backfill_days, node_limit=backfill_node_limit)
+    except Exception as _e:  # noqa: BLE001
+        log.warning("run_periodic_embed_drain: backfill_all_domains failed", exc_info=True)
+        try:
+            from axi import events as _events
+            _events.log_warning(
+                "embed.drain",
+                f"backfill_all_domains failed: {_e}",
+                {"step": "backfill_all_domains", "error": str(_e)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
     try:
         embed_pending_nodes(limit=embed_limit)
     except Exception as _e:  # noqa: BLE001
