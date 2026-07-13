@@ -67,6 +67,11 @@ class DomainSpec:
                          a partial update merging with the existing entry; returns
                          True on success. None when multi-field editing is not
                          supported by the domain.
+    bridge_key         — key under which register bridges the entry into the
+                         knowledge graph via domain_bridge.bridge_entry. Defaults
+                         to `key`; set it only when the registry key differs from
+                         the bridge's _DOMAIN_CONFIGS key (e.g. calendar →
+                         "lifeos-events").
     """
     key: str
     name: str
@@ -83,6 +88,7 @@ class DomainSpec:
     list_detail: Callable[[Any], str] | None = None
     edit_fields: "list[dict] | Callable[[Any], list[dict]] | None" = None
     store_update_fields: Callable[[str, dict], bool] | None = None
+    bridge_key: str | None = None
 
 
 # ─── shared helpers (domain-agnostic) ───────────────────────────────────────
@@ -285,6 +291,9 @@ def _register(spec: DomainSpec, extracted: dict[str, Any], raw_text: str, now: d
     specs = spec.build_entries(extracted, raw_text)
     entry_ids: list[str] = []
     fragments: list[str] = []
+    # The registry key usually matches the bridge's _DOMAIN_CONFIGS key; only
+    # calendar differs (→ "lifeos-events"), captured via spec.bridge_key.
+    bridge_key = spec.bridge_key or spec.key
     for s in specs:
         entry = spec.store_create(
             kind=s["kind"],
@@ -297,6 +306,19 @@ def _register(spec: DomainSpec, extracted: dict[str, Any], raw_text: str, now: d
         )
         entry_ids.append(entry.id)
         fragments.append(s["fragment"])
+        # Best-effort: mirror the entry into the knowledge graph. The store write
+        # above is the source of truth; the graph node is a secondary projection,
+        # so a bridge failure must NEVER break the register. add_node routes
+        # through the single-writer daemon (write_router.maybe_forward), so this
+        # is safe to call from the dashboard process.
+        try:
+            from axi import domain_bridge  # lazy import; allows monkeypatching
+            domain_bridge.bridge_entry(bridge_key, entry)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "domain_chat[%s]: graph bridge failed for entry %s: %s",
+                spec.key, getattr(entry, "id", "<no id>"), exc,
+            )
     answer = f"{spec.register_prefix}: " + ", ".join(fragments) + "."
     return {"mode": "register", "answer": answer, "entry_ids": entry_ids}
 

@@ -149,4 +149,7 @@ CALENDAR_SPEC = DomainSpec(
                 "hitos, citas con fecha, deadlines",
     store_delete=lambda eid: events_entries.delete(eid),
     store_update_title=lambda eid, title: events_entries.update_title(eid, title),
+    # KEY MISMATCH: the registry key is "calendar" but the bridge's
+    # _DOMAIN_CONFIGS key for events is "lifeos-events".
+    bridge_key="lifeos-events",
 )
