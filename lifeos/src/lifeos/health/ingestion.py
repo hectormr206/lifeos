@@ -298,7 +298,7 @@ _WEIGHT_RE = re.compile(
     # Also matches standalone "pesé N" without "me" (e.g. voice dictation).
     r"\b(?:peso(?:\s+actual)?|(?:me\s+)?pes[éeo]|(?:my\s+)?weight(?:\s+is)?"
     r"|(?:i\s+)?weigh(?:ed)?)\s*(?:de|:|=)?\s*"
-    r"(\d{2,3}(?:\.\d{1,2})?)\s*(kg|kilos?)?\b",
+    r"(\d{2,3}(?:\.\d{1,2})?)\s*(kg|kilos?|lbs?|pounds?)?\b",
     re.IGNORECASE,
 )
 _SLEEP_HOURS_RE = re.compile(
@@ -1137,6 +1137,12 @@ def _try_vital(text: str) -> HealthIntent | None:
     m = _WEIGHT_RE.search(text)
     if m:
         v = float(m.group(1))
+        # Imperial input: convert pounds→kg so the value stays kg-canonical
+        # BEFORE the plausibility gate (so "150 pounds" ≈ 68 kg passes and an
+        # out-of-range imperial value is judged in kg like everything else).
+        unit = (m.group(2) or "").lower()
+        if unit.startswith("lb") or unit.startswith("pound"):
+            v = round(v * 0.45359237, 1)
         # Plausibility: 25-300 kg. Outside this is almost certainly not a
         # body-weight value (e.g. someone writing 'weight 500' as a typo).
         if 25 <= v <= 300:

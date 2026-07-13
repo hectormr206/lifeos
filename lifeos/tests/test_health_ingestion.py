@@ -890,6 +890,34 @@ def test_weight_en_negative_implausible() -> None:
     assert h is None or h.data.get("type") != "weight"
 
 
+def test_vital_weight_en_pounds() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("I weigh 150 pounds")
+    assert h is not None
+    assert h.data["type"] == "weight"
+    assert h.data["unit"] == "kg"
+    # 150 lb * 0.45359237 = 68.0388555 kg → stored kg-canonical.
+    assert h.data["value"] == 68.0
+
+
+def test_vital_weight_en_lbs() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("weight 150 lbs")
+    assert h is not None
+    assert h.data["type"] == "weight"
+    assert h.data["unit"] == "kg"
+    assert h.data["value"] == 68.0
+
+
+def test_vital_weight_kg_unchanged() -> None:
+    from lifeos.health.ingestion import parse_health
+    h = parse_health("peso 70.5 kg")
+    assert h is not None
+    assert h.data["type"] == "weight"
+    assert h.data["unit"] == "kg"
+    assert h.data["value"] == 70.5
+
+
 # Bare scale sequence
 
 def test_bare_scale_full_six_number_reading() -> None:
