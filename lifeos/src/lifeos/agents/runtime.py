@@ -92,9 +92,9 @@ def call_nano(
         with urllib.request.urlopen(req, timeout=timeout_s) as r:
             payload = json.loads(r.read())
         content = (
-            payload.get("choices", [{}])[0]
-                   .get("message", {})
-                   .get("content", "")
+            (payload.get("choices") or [{}])[0]
+            .get("message", {})
+            .get("content", "")
         ) or ""
         latency_ms = int((time.monotonic() - start) * 1000)
         if not content.strip():
