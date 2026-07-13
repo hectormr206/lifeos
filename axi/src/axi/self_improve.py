@@ -43,6 +43,7 @@ PROTECTED_DEV_ENGINE_PATHS: tuple[str, ...] = (
     "axi/src/axi/dev_env.py",          # persistent-environment runs
     "axi/src/axi/dev_env_instance.py", # env instance machinery
     "axi/src/axi/dev_task.py",         # dev task machinery
+    "axi/src/axi/dev_preview.py",      # ephemeral preview orchestrator
     "axi/src/axi/self_improve.py",     # this module: the scheduler + the guard
     "axi/src/axi/daemon.py",           # hosts the nightly self-improve loop
 )

@@ -118,6 +118,13 @@ def test_guard_flags_protected_paths():
     ]
 
 
+def test_guard_flags_dev_preview():
+    # dev_preview.py is the preview orchestrator — engine machinery a nightly
+    # self-improve run must never modify. It is part of the protected surface.
+    changed = ["axi/src/axi/dev_preview.py"]
+    assert si.violates_dev_engine_guard(changed) == changed
+
+
 def test_guard_empty_for_innocuous_paths():
     changed = [
         "lifeos/src/lifeos/health/ingestion.py",
