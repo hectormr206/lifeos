@@ -8,6 +8,7 @@ Linkers implemented:
   - run_happened_at_linker   : meeting node → fact node when COALESCE(fact.occurred_at, fact.created_at) ∈ [meeting.start_time ± 1h]
   - run_involves_person_linker: fact node → person node when fact.data.person_id is bridged via domain_node_map
   - run_same_day_linker      : fact node ↔ fact node when both share the same LOCAL calendar day (configured tz)
+  - run_mood_at_linker       : mood fact node (data.mood non-null) → event node (meeting or lifeos-events fact) when within ±1h
 
 Each function:
   - Accepts a live sqlcipher3 connection (same connection the caller uses).
@@ -15,8 +16,8 @@ Each function:
   - Logs warnings on per-row failures but never propagates exceptions.
 
 run_auto_linkers(conn, *, window_days=90, tz_name="UTC"):
-  - Runs all three linkers over a recent bounded window.
-  - Returns {happened_at: int, involves_person: int, same_day: int}.
+  - Runs all four linkers over a recent bounded window.
+  - Returns {happened_at: int, involves_person: int, same_day: int, mood_at: int}.
 """
 from __future__ import annotations
 
@@ -306,6 +307,100 @@ def run_same_day_linker(
     return created
 
 
+# ──────────────────────────── mood-at ─────────────────────────────────────────
+
+
+# ±1 hour tolerance for mood-at matching (mirrors happened-at).
+_MOOD_AT_WINDOW_S: float = _HAPPENED_AT_WINDOW_S
+
+
+def run_mood_at_linker(
+    conn,
+    *,
+    window_days: int = _DEFAULT_WINDOW_DAYS,
+    window_s: float = _MOOD_AT_WINDOW_S,
+) -> int:
+    """Link mood fact-nodes to event nodes when they occurred within ±window_s.
+
+    Edge direction: mood_node → event_node (kind='mood-at').
+
+    A MOOD node is any kind='fact' node whose data JSON carries a non-null
+    "mood" field. Its event time is COALESCE(occurred_at, created_at): the real
+    event timestamp when available, falling back to the graph-insertion time.
+
+    EVENT nodes come from TWO sources:
+      (a) meeting nodes — via the meetings table (start_time, node_id), exactly
+          like the happened-at linker.
+      (b) lifeos-events fact-nodes — nodes.domain='lifeos-events', whose event
+          time is COALESCE(occurred_at, created_at).
+
+    Only meetings with a node_id (linked to a System-A node) are considered.
+    Both mood nodes and events are bounded to the recent *window_days* window on
+    their event timestamp.
+
+    Returns the number of new 'mood-at' edges created.
+    """
+    cutoff = time.time() - window_days * 86400
+
+    # Fetch mood fact-nodes: kind='fact' with a non-null data.mood, within window.
+    mood_rows = conn.execute(
+        "SELECT id, data, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
+        "WHERE kind='fact' AND COALESCE(occurred_at, created_at) > ?",
+        (cutoff,),
+    ).fetchall()
+
+    mood_nodes: list[tuple[int, float]] = []
+    for row in mood_rows:
+        try:
+            data = json.loads(row["data"]) if row["data"] else {}
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if data.get("mood") is None:
+            continue
+        mood_nodes.append((int(row["id"]), float(row["event_ts"])))
+
+    if not mood_nodes:
+        return 0
+
+    # Build the event list: (a) meeting nodes + (b) lifeos-events fact-nodes.
+    events: list[tuple[int, float]] = []
+
+    meetings = conn.execute(
+        "SELECT node_id, start_time FROM meetings "
+        "WHERE node_id IS NOT NULL AND start_time > ?",
+        (cutoff,),
+    ).fetchall()
+    for m in meetings:
+        events.append((int(m["node_id"]), float(m["start_time"])))
+
+    event_nodes = conn.execute(
+        "SELECT id, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
+        "WHERE domain='lifeos-events' AND COALESCE(occurred_at, created_at) > ?",
+        (cutoff,),
+    ).fetchall()
+    for e in event_nodes:
+        events.append((int(e["id"]), float(e["event_ts"])))
+
+    if not events:
+        return 0
+
+    created = 0
+    for mood_id, mood_ts in mood_nodes:
+        for event_id, event_ts in events:
+            if mood_id == event_id:
+                continue
+            if abs(mood_ts - event_ts) <= window_s:
+                try:
+                    if _safe_insert_edge(conn, mood_id, event_id, "mood-at"):
+                        created += 1
+                except Exception:  # noqa: BLE001
+                    log.warning(
+                        "mood-at: failed edge (%d → %d)", mood_id, event_id, exc_info=True
+                    )
+
+    return created
+
+
 # ──────────────────────────── run_auto_linkers ────────────────────────────────
 
 
@@ -315,7 +410,7 @@ def run_auto_linkers(
     window_days: int = _DEFAULT_WINDOW_DAYS,
     tz_name: str = "UTC",
 ) -> dict[str, int]:
-    """Run all three cross-domain auto-linkers over the recent *window_days* window.
+    """Run all four cross-domain auto-linkers over the recent *window_days* window.
 
     Each linker is run in isolation; exceptions from one do not prevent the
     others from running.  Returns a summary dict with per-linker edge counts.
@@ -328,18 +423,24 @@ def run_auto_linkers(
             the caller site so 'same day' means the user's local calendar day.
 
     Returns:
-        {"happened_at": int, "involves_person": int, "same_day": int}
+        {"happened_at": int, "involves_person": int, "same_day": int, "mood_at": int}
     """
     result: dict[str, int] = {
         "happened_at": 0,
         "involves_person": 0,
         "same_day": 0,
+        "mood_at": 0,
     }
 
     try:
         result["happened_at"] = run_happened_at_linker(conn, window_days=window_days)
     except Exception:  # noqa: BLE001
         log.warning("run_auto_linkers: happened_at failed", exc_info=True)
+
+    try:
+        result["mood_at"] = run_mood_at_linker(conn, window_days=window_days)
+    except Exception:  # noqa: BLE001
+        log.warning("run_auto_linkers: mood_at failed", exc_info=True)
 
     try:
         result["involves_person"] = run_involves_person_linker(conn, window_days=window_days)

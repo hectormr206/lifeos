@@ -729,3 +729,117 @@ def test_three_domain_same_day_linkage():
         (finance_nid, exercise_nid, exercise_nid, finance_nid),
     ).fetchone()
     assert edge_fe is not None, "Expected same-day edge between finance and exercise nodes"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase MOOD-1 — expose canonical "mood" in node data via extra_data_fn
+# (prerequisite for the mood-at linker). Scope: spirituality, exercise,
+# relationships. Emits a single canonical numeric key "mood".
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _node_data_for_entry(conn, domain: str, entry_id: str) -> dict:
+    """Read back the node's data JSON for a bridged domain entry."""
+    import json as _json
+
+    row = conn.execute(
+        "SELECT n.data AS data FROM nodes n "
+        "JOIN domain_node_map d ON d.node_id = n.id "
+        "WHERE d.domain=? AND d.entry_id=? LIMIT 1",
+        (domain, entry_id),
+    ).fetchone()
+    assert row is not None, f"no bridged node for {domain}/{entry_id}"
+    return _json.loads(row["data"]) if row["data"] else {}
+
+
+def test_spirituality_node_data_contains_mood():
+    """MOOD-1 RED — spirituality entry with mood=7 → node data has "mood": 7."""
+    import axi.store as store
+    from axi.domain_bridge import create_fact_node_for_entry
+
+    @dataclass
+    class SpiritEntryStub:
+        id: str = "sp-mood-1"
+        kind: str = "reflection"
+        raw_utterance: str | None = "hoy me sentí en paz"
+        title: str | None = None
+        mood: int | None = 7
+
+    entry = SpiritEntryStub()
+    with patch("axi.store.trigger_embed_for_node"):
+        nid = create_fact_node_for_entry("spirituality", entry)
+    assert nid is not None
+
+    data = _node_data_for_entry(store._connect(), "spirituality", str(entry.id))
+    assert data.get("mood") == 7
+
+
+def test_spirituality_node_data_skips_mood_when_none():
+    """MOOD-1 RED — spirituality entry with mood=None → no "mood" key."""
+    import axi.store as store
+    from axi.domain_bridge import create_fact_node_for_entry
+
+    @dataclass
+    class SpiritEntryStub:
+        id: str = "sp-mood-none"
+        kind: str = "reflection"
+        raw_utterance: str | None = "una nota sin ánimo"
+        title: str | None = None
+        mood: int | None = None
+
+    entry = SpiritEntryStub()
+    with patch("axi.store.trigger_embed_for_node"):
+        create_fact_node_for_entry("spirituality", entry)
+
+    data = _node_data_for_entry(store._connect(), "spirituality", str(entry.id))
+    assert "mood" not in data
+
+
+def test_exercise_node_data_contains_mood_post():
+    """MOOD-1 RED — exercise session → node data "mood" = mood_post (result state)."""
+    import axi.store as store
+    from axi.domain_bridge import create_fact_node_for_entry
+
+    @dataclass
+    class ExerciseStub:
+        id: str = "ex-mood-1"
+        kind: str = "run"
+        duration_minutes: int = 30
+        raw_utterance: str | None = "corrí 30 min"
+        title: str | None = None
+        mood_pre: int | None = 4
+        mood_post: int | None = 8
+
+    entry = ExerciseStub()
+    with patch("axi.store.trigger_embed_for_node"):
+        create_fact_node_for_entry("exercise", entry)
+
+    data = _node_data_for_entry(store._connect(), "exercise", str(entry.id))
+    assert data.get("mood") == 8
+
+
+def test_relationships_node_data_contains_mood_and_preserves_fields():
+    """MOOD-1 RED — relationships → "mood" = mood_post AND person_id/interaction_id preserved."""
+    import axi.store as store
+    from axi.domain_bridge import create_fact_node_for_entry
+
+    @dataclass
+    class InteractionStub:
+        id: str = "rel-mood-1"
+        kind: str = "call"
+        raw_utterance: str | None = "hablé con Ana"
+        title: str | None = None
+        body: str | None = "buena charla"
+        person_id: int | None = 99
+        mood_pre: int | None = 5
+        mood_post: int | None = 9
+
+    entry = InteractionStub()
+    with patch("axi.store.trigger_embed_for_node"):
+        create_fact_node_for_entry("relationships", entry)
+
+    data = _node_data_for_entry(store._connect(), "relationships", str(entry.id))
+    assert data.get("mood") == 9
+    assert data.get("person_id") == 99
+    assert data.get("interaction_id") == "rel-mood-1"
+    assert data.get("body") == "buena charla"

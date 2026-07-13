@@ -307,6 +307,140 @@ def test_same_day_idempotent():
     assert count_fwd + count_rev == 1
 
 
+# ────────────────────── mood-at linker (MOOD-2 RED) ─────────────────────────
+
+
+def test_mood_at_creates_edge_within_1h():
+    """Mood fact-node within ±1h of a meeting → mood-at edge (mood → event)."""
+    import axi.store as store
+    from axi.linkers import run_mood_at_linker
+
+    conn = store._connect()
+
+    meeting_start = time.time()
+    mid = _insert_meeting(conn, meeting_start)
+    meeting_node_id = _insert_node(conn, kind="event", label="Meeting node", domain="meetings", ts=meeting_start)
+    conn.execute("UPDATE meetings SET node_id=? WHERE id=?", (meeting_node_id, mid))
+    conn.commit()
+
+    # Mood fact-node 30 min after the meeting (within ±1h window).
+    mood_ts = meeting_start + 30 * 60
+    mood_id = _insert_node(
+        conn, kind="fact", label="mood note", domain="spirituality",
+        ts=mood_ts, data={"mood": 7},
+    )
+
+    created = run_mood_at_linker(conn)
+
+    assert created >= 1
+    # Edge direction: mood_node → event_node.
+    assert _edge_exists(conn, mood_id, meeting_node_id, "mood-at")
+
+
+def test_mood_at_no_edge_outside_1h():
+    """Mood fact-node more than 1h away from any event → no mood-at edge."""
+    import axi.store as store
+    from axi.linkers import run_mood_at_linker
+
+    conn = store._connect()
+
+    meeting_start = time.time()
+    mid = _insert_meeting(conn, meeting_start)
+    meeting_node_id = _insert_node(conn, kind="event", label="Meeting node", domain="meetings", ts=meeting_start)
+    conn.execute("UPDATE meetings SET node_id=? WHERE id=?", (meeting_node_id, mid))
+    conn.commit()
+
+    # Mood fact-node 90 min after the meeting (outside ±1h window).
+    mood_ts = meeting_start + 90 * 60
+    mood_id = _insert_node(
+        conn, kind="fact", label="mood note far", domain="spirituality",
+        ts=mood_ts, data={"mood": 3},
+    )
+
+    run_mood_at_linker(conn)
+
+    assert not _edge_exists(conn, mood_id, meeting_node_id, "mood-at")
+
+
+def test_mood_at_idempotent():
+    """Running mood-at linker twice → only one edge per pair."""
+    import axi.store as store
+    from axi.linkers import run_mood_at_linker
+
+    conn = store._connect()
+
+    meeting_start = time.time()
+    mid = _insert_meeting(conn, meeting_start)
+    meeting_node_id = _insert_node(conn, kind="event", label="Meeting node", domain="meetings", ts=meeting_start)
+    conn.execute("UPDATE meetings SET node_id=? WHERE id=?", (meeting_node_id, mid))
+    conn.commit()
+
+    mood_ts = meeting_start + 20 * 60
+    mood_id = _insert_node(
+        conn, kind="fact", label="mood note idem", domain="spirituality",
+        ts=mood_ts, data={"mood": 6},
+    )
+
+    run_mood_at_linker(conn)
+    run_mood_at_linker(conn)
+
+    count = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE from_id=? AND to_id=? AND kind='mood-at'",
+        (mood_id, meeting_node_id),
+    ).fetchone()[0]
+    assert count == 1
+
+
+def test_mood_at_links_to_lifeos_events_node():
+    """Mood fact-node within ±1h of a lifeos-events fact-node → mood-at edge."""
+    import axi.store as store
+    from axi.linkers import run_mood_at_linker
+
+    conn = store._connect()
+
+    event_ts = time.time()
+    # A lifeos-events fact-node (no mood — it's the event, not the mood).
+    event_id = _insert_node(
+        conn, kind="fact", label="cumple de Juan", domain="lifeos-events", ts=event_ts,
+    )
+
+    # Mood fact-node 20 min after the event (within ±1h window).
+    mood_ts = event_ts + 20 * 60
+    mood_id = _insert_node(
+        conn, kind="fact", label="mood note", domain="spirituality",
+        ts=mood_ts, data={"mood": 8},
+    )
+
+    created = run_mood_at_linker(conn)
+
+    assert created >= 1
+    assert _edge_exists(conn, mood_id, event_id, "mood-at")
+
+
+def test_mood_at_ignores_facts_without_mood():
+    """A fact-node with no data.mood is never treated as a mood node."""
+    import axi.store as store
+    from axi.linkers import run_mood_at_linker
+
+    conn = store._connect()
+
+    meeting_start = time.time()
+    mid = _insert_meeting(conn, meeting_start)
+    meeting_node_id = _insert_node(conn, kind="event", label="Meeting node", domain="meetings", ts=meeting_start)
+    conn.execute("UPDATE meetings SET node_id=? WHERE id=?", (meeting_node_id, mid))
+    conn.commit()
+
+    # Fact-node with NO mood in data, right at meeting time.
+    plain_id = _insert_node(
+        conn, kind="fact", label="plain fact", domain="health",
+        ts=meeting_start + 5 * 60, data={"foo": "bar"},
+    )
+
+    run_mood_at_linker(conn)
+
+    assert not _edge_exists(conn, plain_id, meeting_node_id, "mood-at")
+
+
 # ─────────────── run_auto_linkers integration (task 3.9) ─────────────────────
 
 
@@ -340,6 +474,7 @@ def test_run_auto_linkers_runs_all_three():
     assert "happened_at" in result
     assert "involves_person" in result
     assert "same_day" in result
+    assert "mood_at" in result
 
 
 # ──────────────────────────────────────────────────────────────────────────────

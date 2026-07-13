@@ -175,7 +175,12 @@ def _relationships_renderer(entry: Any) -> str:
 
 
 def _relationships_extra_data(entry: Any) -> dict:
-    """Extra data fields for relationships nodes (person_id, interaction_id, body)."""
+    """Extra data fields for relationships nodes (person_id, interaction_id, body).
+
+    Also emits the canonical numeric key ``mood`` (from ``mood_post`` — the
+    resulting emotional state after the interaction) so the mood-at linker has a
+    single field to query. Skipped when mood_post is None.
+    """
     data: dict = {
         "person_id": getattr(entry, "person_id", None),
         "interaction_id": str(entry.id),
@@ -183,6 +188,34 @@ def _relationships_extra_data(entry: Any) -> dict:
     body = getattr(entry, "body", None)
     if body:
         data["body"] = body
+    mood = getattr(entry, "mood_post", None)
+    if mood is not None:
+        data["mood"] = mood
+    return data
+
+
+def _spirituality_extra_data(entry: Any) -> dict:
+    """Extra data for spirituality nodes: canonical numeric ``mood`` (entry.mood).
+
+    Skipped when mood is None.
+    """
+    data: dict = {}
+    mood = getattr(entry, "mood", None)
+    if mood is not None:
+        data["mood"] = mood
+    return data
+
+
+def _exercise_extra_data(entry: Any) -> dict:
+    """Extra data for exercise nodes: canonical numeric ``mood`` (mood_post).
+
+    mood_post is the resulting emotional state after the session. Skipped when
+    mood_post is None.
+    """
+    data: dict = {}
+    mood = getattr(entry, "mood_post", None)
+    if mood is not None:
+        data["mood"] = mood
     return data
 
 
@@ -190,8 +223,14 @@ _DOMAIN_CONFIGS: dict[str, DomainConfig] = {
     "health": DomainConfig(renderer=_health_renderer),
     # Slice 2: fan-out to the 5 remaining structured domains.
     "finance": DomainConfig(renderer=_finance_renderer),
-    "exercise": DomainConfig(renderer=_exercise_renderer),
-    "spirituality": DomainConfig(renderer=_spirituality_renderer),
+    "exercise": DomainConfig(
+        renderer=_exercise_renderer,
+        extra_data_fn=_exercise_extra_data,
+    ),
+    "spirituality": DomainConfig(
+        renderer=_spirituality_renderer,
+        extra_data_fn=_spirituality_extra_data,
+    ),
     "learning": DomainConfig(renderer=_learning_renderer),
     "lifeos-events": DomainConfig(renderer=_events_renderer),
     # relationships is handled through this bridge as well (Slice 1 shim).
