@@ -518,6 +518,12 @@ def cleanup_orphans(
     ``axi/preview/*`` worktree + branch (plus the ``axi-preview-wt-*`` temp
     parents). Every I/O dependency is injectable for unit tests. Best-effort:
     never raises, returns ``{units_stopped, worktrees_removed, branches_deleted}``.
+
+    IMPORTANT — must NOT be called from inside an isolated preview instance.
+    Each isolated instance runs as an ``axi-preview-inst-*`` systemd unit, so
+    invoking this sweep there would match and stop the caller's own unit.
+    The caller (dashboard startup lifespan) already guards this with
+    ``if not os.environ.get("AXI_ISOLATED_INSTANCE")``.
     """
     from axi import dev_env_instance  # noqa: PLC0415
 
@@ -539,6 +545,18 @@ def cleanup_orphans(
     units_stopped = 0
     worktrees_removed = 0
     branches_deleted = 0
+
+    # Why isolated instances are excluded from calling this function:
+    # Each preview instance is launched as an ``axi-preview-inst-*`` systemd
+    # user unit.  This sweep targets ALL units whose name starts with that same
+    # prefix — so if an isolated instance called cleanup_orphans(), the unit
+    # name pattern would match its *own* running unit and stop it mid-request,
+    # taking down the caller.  The caller (dashboard startup lifespan) must
+    # therefore guard the call with:
+    #     if not os.environ.get("AXI_ISOLATED_INSTANCE"):
+    #         cleanup_orphans()
+    # AXI_ISOLATED_INSTANCE is set by start_instance_for_worktree on every
+    # ephemeral preview instance and is absent in the main dashboard process.
 
     # (a) systemd units
     try:
