@@ -408,6 +408,34 @@ def test_avatar_vital_animations_present(client):
     assert 'id="face-tired-eyelids"' in html
 
 
+def test_avatar_game_mode_vitals_bypass(client):
+    """Game mode — while gaming the machine legitimately runs hot/high, so the
+    avatar must not look permanently stressed (alarm fatigue). A gameMode()
+    helper (same snap field #game-glow uses) makes vitalsStressed() ignore the
+    load/thermal family (VRAM ratio, GPU/CPU temps) — disk-low and core-service
+    -down still count — and breathing settles on a focused 2.5s rate."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    # Helper exists and derives from the SAME snap field #game-glow uses.
+    assert "gameMode()" in html
+    assert "GAME_MODE_LABEL = 'Modo juego'" in html
+    assert "s.models.mode === GAME_MODE_LABEL" in html
+    # Named breathing constants: calm 4s / focused 2.5s / stressed 1.4s.
+    assert "BREATH_DUR_S" in html
+    assert "focused: 2.5" in html
+    assert "calm: 4" in html
+    assert "stressed: 1.4" in html
+    # Load/thermal family bypass inside vitalsStressed() during game mode.
+    assert "const gaming = this.gameMode();" in html
+    assert "if (!gaming)" in html
+    # Non-game stress (service down / disk) keeps the stressed breathing rate
+    # even during game mode; otherwise the focused rate applies.
+    assert "this.stressLevel() > 0 ? BREATH_DUR_S.stressed : BREATH_DUR_S.focused" in html
+    # #game-glow reuses the same helper (single source of truth).
+    assert '''gameMode() ? 'game-active' : ''"''' in html
+
+
 def test_say_endpoint_speaks(client, monkeypatch):
     """The mouth's /api/chat/say endpoint triggers Axi's TTS and echoes the text."""
     spoken = {}
