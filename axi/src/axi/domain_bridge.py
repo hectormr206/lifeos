@@ -179,7 +179,7 @@ def _relationships_extra_data(entry: Any) -> dict:
 
     Also emits the canonical numeric key ``mood`` (from ``mood_post`` — the
     resulting emotional state after the interaction) so the mood-at linker has a
-    single field to query. Skipped when mood_post is None.
+    single field to query. Skipped when mood_post is missing or non-numeric.
     """
     data: dict = {
         "person_id": getattr(entry, "person_id", None),
@@ -188,19 +188,31 @@ def _relationships_extra_data(entry: Any) -> dict:
     body = getattr(entry, "body", None)
     if body:
         data["body"] = body
-    mood = getattr(entry, "mood_post", None)
+    mood = _numeric_mood(entry, "mood_post")
     if mood is not None:
         data["mood"] = mood
     return data
 
 
+def _numeric_mood(entry: Any, attr: str) -> int | float | None:
+    """Return entry.<attr> only when it is a genuine number (bool excluded).
+
+    Node ``data`` is JSON-serialized, so anything non-numeric (None, mocks,
+    strings) must never leak into the canonical ``mood`` key.
+    """
+    mood = getattr(entry, attr, None)
+    if isinstance(mood, (int, float)) and not isinstance(mood, bool):
+        return mood
+    return None
+
+
 def _spirituality_extra_data(entry: Any) -> dict:
     """Extra data for spirituality nodes: canonical numeric ``mood`` (entry.mood).
 
-    Skipped when mood is None.
+    Skipped when mood is missing or non-numeric.
     """
     data: dict = {}
-    mood = getattr(entry, "mood", None)
+    mood = _numeric_mood(entry, "mood")
     if mood is not None:
         data["mood"] = mood
     return data
@@ -210,10 +222,10 @@ def _exercise_extra_data(entry: Any) -> dict:
     """Extra data for exercise nodes: canonical numeric ``mood`` (mood_post).
 
     mood_post is the resulting emotional state after the session. Skipped when
-    mood_post is None.
+    mood_post is missing or non-numeric.
     """
     data: dict = {}
-    mood = getattr(entry, "mood_post", None)
+    mood = _numeric_mood(entry, "mood_post")
     if mood is not None:
         data["mood"] = mood
     return data
