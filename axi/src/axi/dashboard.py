@@ -60,7 +60,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
-from axi import api_versioning, config, events, obs, store
+from axi import api_auth, api_v1, api_versioning, config, events, obs, store
 # Body-sensor readers live in the interoception organ (Pulmones); the
 # dashboard re-imports them so snapshot() keeps its exact shape. Tests that
 # monkeypatch `dashboard._vram_snapshot` etc. keep working: snapshot() calls
@@ -657,6 +657,29 @@ obs.install_request_id_middleware(app)
 # precedence and are never shadowed by the alias.
 
 api_versioning.install_v1_alias_middleware(app)
+
+
+# ────────────────────── native /api/v1 router (M0-4) ───────────────────
+#
+# New mobile-facing endpoints (design D4) — today: GET /api/v1/capabilities.
+# Registered on app.router before or after middleware install makes no
+# difference: V1AliasMiddleware holds a live reference to app.router and
+# probes app.router.routes at request time, well after this import-time
+# call.
+
+app.include_router(api_v1.router)
+
+
+# ────────────────────── bearer auth middleware (M0-3) ──────────────────
+#
+# Per-device bearer auth for /api/v1 (design D5). Installed AFTER the v1
+# alias middleware above so it becomes the OUTERMOST user middleware
+# (Starlette's add_middleware makes the most-recently-added middleware
+# outermost) — it must see the RAW pre-rewrite path, per D5. Master switch
+# `api_auth_enabled` defaults to False: zero behaviour change for the live
+# install until the owner explicitly opts in.
+
+api_auth.install_auth_middleware(app)
 
 
 # ────────────────────── Global 500 exception handler ──────────────────

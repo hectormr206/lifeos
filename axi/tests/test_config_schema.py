@@ -87,6 +87,9 @@ def test_schema_covers_historical_keys():
         "body_battery_replug_pct",
         # Feet organ (network awareness) — VPN peer liveness ping.
         "body_vpn_peer",
+        # Mobile app /api/v1 bearer auth (M0-3).
+        "api_auth_enabled",
+        "api_auth_enforce_legacy",
     }
     missing = historical_keys - names
     assert not missing, f"config schema dropped historical keys: {sorted(missing)}"

@@ -963,6 +963,24 @@ FIELDS: tuple[ConfigField, ...] = (
         "against per-field plausibility ranges. Invalid values fall back to "
         "this default.",
     ),
+    # ─────── mobile app: /api/v1 bearer auth (M0-3) ───────
+    ConfigField(
+        "api_auth_enabled", "boolean", False,
+        "Master switch for the /api/v1 bearer-auth middleware (mobile app "
+        "pairing, D5). Default false: the dashboard behaves exactly as it "
+        "does today for the live install — nothing changes until the owner "
+        "explicitly opts in after pairing at least one device. Flipping "
+        "back to false is an instant full rollback (fully open again).",
+    ),
+    ConfigField(
+        "api_auth_enforce_legacy", "boolean", False,
+        "If true (only meaningful once api_auth_enabled=true), legacy "
+        "(non-/api/v1) routes ALSO require a valid device bearer token or a "
+        "loopback client (127.0.0.1/::1). Default false: legacy routes stay "
+        "open exactly as today, so the existing Jinja dashboard/PWA is never "
+        "locked out mid-rollout. /api/v1/* is always strict once auth is "
+        "enabled, regardless of this flag.",
+    ),
 )
 
 

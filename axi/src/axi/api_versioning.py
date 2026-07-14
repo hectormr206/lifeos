@@ -45,6 +45,26 @@ def _v1_suffix(normalized_path: str) -> str | None:
     return None
 
 
+def classify(raw_path: str) -> tuple[str, str | None]:
+    """Normalize *raw_path* and classify it for API auth/aliasing decisions.
+
+    Returns ``(normalized_path, v1_suffix)`` where ``v1_suffix`` is the
+    suffix after ``/api/v1`` (leading slash included) when the normalized
+    path is a genuine ``/api/v1/<something>`` path, else ``None`` (a legacy
+    ``/api/*`` path, the bare v1 prefix with nothing after it, or a
+    look-alike that normalization proved is not really a v1 path, e.g. a
+    dot-segment escape).
+
+    This is the single source of truth for "is this request path v1 or
+    legacy" — shared by :class:`V1AliasMiddleware` (M0-1) and
+    ``axi.api_auth.BearerAuthMiddleware`` (M0-3) so a duplicate-slash or
+    dot-segment bypass can never be classified inconsistently between the
+    aliasing layer and the security-relevant auth layer.
+    """
+    normalized = posixpath.normpath(raw_path)
+    return normalized, _v1_suffix(normalized)
+
+
 class V1AliasMiddleware:
     """Pure-ASGI middleware aliasing ``/api/v1/X`` to legacy ``/api/X``.
 
@@ -105,8 +125,7 @@ class V1AliasMiddleware:
             await self.app(scope, receive, send)
             return
 
-        normalized = posixpath.normpath(raw_path)
-        suffix = _v1_suffix(normalized)
+        normalized, suffix = classify(raw_path)
         if suffix is None:
             # Either genuinely legacy /api/* traffic, or a look-alike that
             # normalization proved is not really a v1 path (e.g.
