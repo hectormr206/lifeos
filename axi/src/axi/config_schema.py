@@ -981,6 +981,14 @@ FIELDS: tuple[ConfigField, ...] = (
         "locked out mid-rollout. /api/v1/* is always strict once auth is "
         "enabled, regardless of this flag.",
     ),
+    # ─────── mobile app: oplog scaffolding (M0-8, design D8/D10) ───────
+    ConfigField(
+        "oplog_enabled", "boolean", False,
+        "Master switch for engine-side oplog emission (mobile sync, D8/D10). "
+        "Default false and, as of M0, a no-op even when set true: the real "
+        "oplog table/HLC/hash-chain logic lands in M3, so flipping this flag "
+        "before then has zero observable effect (see `axi.oplog.emit`).",
+    ),
 )
 
 

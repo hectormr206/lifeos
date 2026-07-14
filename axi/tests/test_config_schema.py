@@ -90,6 +90,8 @@ def test_schema_covers_historical_keys():
         # Mobile app /api/v1 bearer auth (M0-3).
         "api_auth_enabled",
         "api_auth_enforce_legacy",
+        # Mobile app oplog scaffolding (M0-8).
+        "oplog_enabled",
     }
     missing = historical_keys - names
     assert not missing, f"config schema dropped historical keys: {sorted(missing)}"
