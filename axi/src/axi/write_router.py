@@ -267,6 +267,30 @@ def _handle_set_conversation_node_id(args: dict) -> bool:
     return store.set_conversation_node_id(**args)
 
 
+# ── devices ops (M0 — mobile pairing, design D5) ──────────────────────────────
+
+
+def _handle_device_add(args: dict) -> None:
+    """Execute a forwarded device_add (returns None)."""
+    from axi import store
+
+    return store.device_add(**args)
+
+
+def _handle_device_touch_last_seen(args: dict) -> None:
+    """Execute a forwarded device_touch_last_seen (returns None)."""
+    from axi import store
+
+    return store.device_touch_last_seen(**args)
+
+
+def _handle_device_revoke(args: dict) -> bool:
+    """Execute a forwarded device_revoke and return whether a row changed."""
+    from axi import store
+
+    return store.device_revoke(**args)
+
+
 # ── identity ops (Stage 2b) ───────────────────────────────────────────────────
 #
 # These forward WHOLE identity write functions (not leaf helpers) because they
@@ -357,6 +381,9 @@ OP_HANDLERS: dict[str, Callable[[dict], Any]] = {
     "delete_attachment": _handle_delete_attachment,
     "upsert_domain_node_map": _handle_upsert_domain_node_map,
     "set_conversation_node_id": _handle_set_conversation_node_id,
+    "device_add": _handle_device_add,
+    "device_touch_last_seen": _handle_device_touch_last_seen,
+    "device_revoke": _handle_device_revoke,
     "identity.ensure_user_hub": _handle_identity_ensure_user_hub,
     "identity.ensure_entity": _handle_identity_ensure_entity,
     "identity.register_alias": _handle_identity_register_alias,

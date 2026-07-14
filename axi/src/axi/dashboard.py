@@ -60,7 +60,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
-from axi import config, events, obs, store
+from axi import api_versioning, config, events, obs, store
 # Body-sensor readers live in the interoception organ (Pulmones); the
 # dashboard re-imports them so snapshot() keeps its exact shape. Tests that
 # monkeypatch `dashboard._vram_snapshot` etc. keep working: snapshot() calls
@@ -645,6 +645,18 @@ if STATIC_DIR.exists():
 # automatically carries req_id=<value> via ReqIdFilter.
 
 obs.install_request_id_middleware(app)
+
+
+# ────────────────────── /api/v1 alias middleware (M0-1) ────────────────
+#
+# Aliases every existing /api/* route under /api/v1/* too (design D4), so
+# mobile clients can call the versioned namespace uniformly. Pure path
+# rewrite at the ASGI layer — no existing route decorator changes, and it
+# is a complete no-op for any request outside /api/*. Native v1-only
+# endpoints (added in a later M0 task on their own APIRouter) always take
+# precedence and are never shadowed by the alias.
+
+api_versioning.install_v1_alias_middleware(app)
 
 
 # ────────────────────── Global 500 exception handler ──────────────────

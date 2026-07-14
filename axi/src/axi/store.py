@@ -15,6 +15,7 @@ modules / a dashboard.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -1085,6 +1086,8 @@ def init_db() -> None:
             log.warning("init_db: could not create vec_nodes table: %s", _vec_exc)
         # Slice 2: domain_node_map bridge table.
         _create_domain_node_map(c)
+        # M0: devices table (mobile pairing — bearer-token auth, design D5).
+        _create_devices_table(c)
         # Event-date column: stores the real event timestamp (vs. insertion time).
         migrate_nodes_occurred_at()
         # Conversation source ('chat' | 'voice') so the chat view can hide voice.
@@ -2577,6 +2580,148 @@ def get_node_for_domain_entry(domain: str, entry_id: str) -> int | None:
         (domain, entry_id),
     ).fetchone()
     return int(row[0]) if row else None
+
+
+# ──────────────────── devices (mobile pairing, M0 — design D5) ──────────────
+#
+# Paired phones/tablets authenticate with a per-device bearer token, shown
+# once at pairing time. Only the SHA-256 hash of that token is ever
+# persisted here — device_get_by_token_hash is the auth middleware's lookup
+# call site (wired in a later M0 task). Purely additive: this table has no
+# foreign keys into the graph and no existing table/column is touched.
+
+
+def _create_devices_table(conn) -> None:
+    """Create the devices table if it does not exist.
+
+    Called from init_db() so every fresh DB has the table from the start
+    (mirrors the domain_node_map bootstrap-table precedent above).
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS devices (
+            device_id      TEXT PRIMARY KEY,
+            name           TEXT NOT NULL,
+            token_hash     TEXT NOT NULL UNIQUE,
+            device_pubkey  TEXT,
+            created_at     REAL NOT NULL,
+            last_seen_at   REAL,
+            revoked_at     REAL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_devices_token_hash ON devices(token_hash)"
+    )
+
+
+def hash_device_token(token: str) -> str:
+    """SHA-256 hex digest of a raw device bearer token.
+
+    Pure function, no I/O. The raw token is generated once at pairing time
+    and shown to the user; only this hash is ever written to disk (D5) —
+    callers must never persist the raw token anywhere.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+_DEVICE_COLUMNS = (
+    "device_id, name, device_pubkey, created_at, last_seen_at, revoked_at"
+)
+
+
+def device_add(
+    device_id: str,
+    name: str,
+    token: str,
+    device_pubkey: str | None = None,
+) -> None:
+    """Insert a new paired device, storing only the SHA-256 hash of *token*.
+
+    Raises sqlcipher3.dbapi2.IntegrityError if device_id or the token hash
+    already exists — a collision must never silently overwrite another
+    device's identity or bearer token.
+    """
+    from axi import write_router  # lazy, avoid import cycle
+
+    routed, _res = write_router.maybe_forward("device_add", {
+        "device_id": device_id,
+        "name": name,
+        "token": token,
+        "device_pubkey": device_pubkey,
+    })
+    if routed:
+        return _res
+    with _tx() as c:
+        c.execute(
+            "INSERT INTO devices(device_id, name, token_hash, device_pubkey, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (device_id, name, hash_device_token(token), device_pubkey, time.time()),
+        )
+
+
+def device_list(include_revoked: bool = True) -> list[dict[str, Any]]:
+    """Return paired devices for the config-page device list, newest first.
+
+    Never includes token_hash — callers only need id/name/pubkey/timestamps
+    for display and revocation actions.
+    """
+    c = _connect()
+    query = f"SELECT {_DEVICE_COLUMNS} FROM devices"
+    if not include_revoked:
+        query += " WHERE revoked_at IS NULL"
+    query += " ORDER BY created_at DESC"
+    rows = c.execute(query).fetchall()
+    return [dict(r) for r in rows]
+
+
+def device_get_by_token_hash(token_hash: str) -> dict[str, Any] | None:
+    """Look up a device by its token hash (auth middleware call site, M0-3+).
+
+    Pure lookup, no policy: returns the row regardless of revoked_at — the
+    caller decides whether a non-NULL revoked_at means reject the request.
+    """
+    c = _connect()
+    row = c.execute(
+        f"SELECT {_DEVICE_COLUMNS} FROM devices WHERE token_hash = ?",
+        (token_hash,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def device_touch_last_seen(device_id: str) -> None:
+    """Update last_seen_at to now for *device_id*. No-op if unknown."""
+    from axi import write_router  # lazy, avoid import cycle
+
+    routed, _res = write_router.maybe_forward("device_touch_last_seen", {
+        "device_id": device_id,
+    })
+    if routed:
+        return _res
+    with _tx() as c:
+        c.execute(
+            "UPDATE devices SET last_seen_at = ? WHERE device_id = ?",
+            (time.time(), device_id),
+        )
+
+
+def device_revoke(device_id: str) -> bool:
+    """Set revoked_at = now for *device_id*. Returns True iff a row changed.
+
+    Idempotent: a second revoke on an already-revoked device is a no-op
+    (returns False) so the original revocation timestamp is never clobbered.
+    """
+    from axi import write_router  # lazy, avoid import cycle
+
+    routed, _res = write_router.maybe_forward("device_revoke", {"device_id": device_id})
+    if routed:
+        return _res
+    with _tx() as c:
+        cur = c.execute(
+            "UPDATE devices SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
+            (time.time(), device_id),
+        )
+        return cur.rowcount > 0
 
 
 # ─────────────────── fact-node creation (Slice 2) ────────────────────────────
