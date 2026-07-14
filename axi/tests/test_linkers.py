@@ -417,6 +417,71 @@ def test_mood_at_links_to_lifeos_events_node():
     assert _edge_exists(conn, mood_id, event_id, "mood-at")
 
 
+def test_mood_at_links_to_relationships_interaction():
+    """Mood fact-node within ±1h of a relationships interaction → mood-at edge.
+
+    'Mood 3 logged right after a difficult conversation' becomes traversable:
+    relationships fact-nodes are event candidates alongside meetings and
+    lifeos-events.
+    """
+    import axi.store as store
+    from axi.linkers import run_mood_at_linker
+
+    conn = store._connect()
+
+    interaction_ts = time.time()
+    # A relationships interaction fact-node WITHOUT mood (the event side).
+    interaction_id = _insert_node(
+        conn, kind="fact", label="conversación difícil con Ana",
+        domain="relationships", ts=interaction_ts,
+    )
+
+    # Spirituality mood fact-node 25 min later (within ±1h window).
+    mood_ts = interaction_ts + 25 * 60
+    mood_id = _insert_node(
+        conn, kind="fact", label="mood note", domain="spirituality",
+        ts=mood_ts, data={"mood": 3},
+    )
+
+    created = run_mood_at_linker(conn)
+
+    assert created >= 1
+    assert _edge_exists(conn, mood_id, interaction_id, "mood-at")
+
+
+def test_mood_at_relationships_node_with_mood_cross_links():
+    """Two relationships interactions within ±1h cross-link mood→event.
+
+    A relationships node carrying data.mood is BOTH a mood node and an event
+    candidate. Two distinct interactions an hour apart linking to each other
+    ('conflict then quality_time') is intended behavior; self-links stay
+    guarded by the mood_id == event_id check.
+    """
+    import axi.store as store
+    from axi.linkers import run_mood_at_linker
+
+    conn = store._connect()
+
+    t0 = time.time()
+    a_id = _insert_node(
+        conn, kind="fact", label="conflicto con Juan",
+        domain="relationships", ts=t0, data={"mood": 3},
+    )
+    b_id = _insert_node(
+        conn, kind="fact", label="tiempo de calidad con Juan",
+        domain="relationships", ts=t0 + 40 * 60, data={"mood": 8},
+    )
+
+    created = run_mood_at_linker(conn)
+
+    # Cross-links in both directions (each is a mood node seeing the other
+    # as an event), but never a self-link.
+    assert created >= 2
+    assert _edge_exists(conn, a_id, b_id, "mood-at")
+    assert _edge_exists(conn, b_id, a_id, "mood-at")
+    assert not _edge_exists(conn, a_id, a_id, "mood-at")
+
+
 def test_mood_at_ignores_facts_without_mood():
     """A fact-node with no data.mood is never treated as a mood node."""
     import axi.store as store

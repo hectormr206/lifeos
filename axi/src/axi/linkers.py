@@ -8,7 +8,7 @@ Linkers implemented:
   - run_happened_at_linker   : meeting node → fact node when COALESCE(fact.occurred_at, fact.created_at) ∈ [meeting.start_time ± 1h]
   - run_involves_person_linker: fact node → person node when fact.data.person_id is bridged via domain_node_map
   - run_same_day_linker      : fact node ↔ fact node when both share the same LOCAL calendar day (configured tz)
-  - run_mood_at_linker       : mood fact node (data.mood non-null) → event node (meeting or lifeos-events fact) when within ±1h
+  - run_mood_at_linker       : mood fact node (data.mood non-null) → event node (meeting, lifeos-events or relationships fact) when within ±1h
 
 Each function:
   - Accepts a live sqlcipher3 connection (same connection the caller uses).
@@ -333,6 +333,9 @@ def run_mood_at_linker(
           like the happened-at linker.
       (b) lifeos-events fact-nodes — nodes.domain='lifeos-events', whose event
           time is COALESCE(occurred_at, created_at).
+      (c) relationships interaction fact-nodes — nodes.domain='relationships',
+          same event-time expression. A relationships node carrying data.mood
+          is both a mood node and an event candidate; self-links are guarded.
 
     Only meetings with a node_id (linked to a System-A node) are considered.
     Both mood nodes and events are bounded to the recent *window_days* window on
@@ -362,7 +365,9 @@ def run_mood_at_linker(
     if not mood_nodes:
         return 0
 
-    # Build the event list: (a) meeting nodes + (b) lifeos-events fact-nodes.
+    # Build the event list: (a) meeting nodes + (b) lifeos-events fact-nodes
+    # + (c) relationships interaction fact-nodes ("mood 3 right after a
+    # difficult conversation" becomes a traversable mood-at edge).
     events: list[tuple[int, float]] = []
 
     meetings = conn.execute(
@@ -375,7 +380,8 @@ def run_mood_at_linker(
 
     event_nodes = conn.execute(
         "SELECT id, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
-        "WHERE domain='lifeos-events' AND COALESCE(occurred_at, created_at) > ?",
+        "WHERE domain IN ('lifeos-events', 'relationships') "
+        "AND COALESCE(occurred_at, created_at) > ?",
         (cutoff,),
     ).fetchall()
     for e in event_nodes:

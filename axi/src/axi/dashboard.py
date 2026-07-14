@@ -4541,8 +4541,9 @@ async def api_chat_ask(request: Request):
 
         # Health ingestion fast-path: detect "me duele X", "glucosa N",
         # "presión X/Y", "tomé X", etc. Persists silently to the encrypted
-        # store and acknowledges briefly. Per PRD §9.5 default: silent + a
-        # weekly review push (the review is P2.x; for now we just confirm).
+        # store and acknowledges briefly. Per PRD §9.5 default: silent here;
+        # the weekly review ships separately via the scheduled
+        # lifeos.insights.weekly digest (insights/cron.py, Sundays 20:00).
         try:
             hi = health_ingestion.parse_health(parse_text, now=entry_when)
         except Exception:  # noqa: BLE001
@@ -4629,9 +4630,10 @@ async def api_chat_ask(request: Request):
                     raw_utterance=text, source_conv_id=None,
                 )
                 # Auto-create a mentions-person edge from interaction → person.
-                # This is the first auto-edge of the system; future cross-domain
-                # linkers (mood ↔ interaction, conflict ↔ recovery) will follow
-                # this pattern.
+                # mood ↔ interaction now ships via the mood-at auto-linker
+                # (linkers.run_mood_at_linker: relationships fact-nodes are
+                # event candidates). conflict ↔ recovery stays deferred — no
+                # "recovery" data model exists yet.
                 try:
                     lifeos_edges.create(
                         src=("relationships", interaction.id),
