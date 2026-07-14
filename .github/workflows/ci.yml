@@ -63,6 +63,33 @@ jobs:
           tests/test_devices_admin.py tests/test_openapi_contract.py
           tests/test_oplog.py tests/test_config_schema.py
 
+  # REQUIRED gate: the Flutter app — analyze + test on every push. Only needs
+  # the Flutter SDK (no Android build, no JVM generator), so it is fast and
+  # robust. The engine half of the parity backbone is the contract-drift job;
+  # the client half (regenerate mobile/tool/gen-api.sh and diff the committed
+  # client) is a documented FOLLOW-UP — it needs the generator toolchain
+  # (java + npx openapi-generator + jq + sd) provisioned on the runner first,
+  # exactly the kind of "works on my laptop" coupling this CI exists to expose.
+  mobile-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Flutter 3.44.6
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.6
+          channel: stable
+          cache: true
+      - name: pub get
+        working-directory: mobile
+        run: flutter pub get
+      - name: flutter analyze
+        working-directory: mobile
+        run: flutter analyze
+      - name: flutter test
+        working-directory: mobile
+        run: flutter test
+
   # OBSERVABILITY (non-blocking): the full engine suite on a bare runner.
   # First real run: 2878 passed / 56 failed — all failures are tests coupled
   # to the laptop environment (audio stack, local tz, hardware). Tracked
