@@ -146,6 +146,34 @@ def test_gpu_temp_rule_silent_below_max(monkeypatch):
     assert alerts["gpu_temp_high"]["firing"] is False
 
 
+def test_vital_alerts_null_vitals_produce_no_type_error(monkeypatch):
+    """vital_alerts() must not raise TypeError when any vital field is None.
+
+    Sensors return None when unavailable (no GPU, no hwmon, no disk path). A
+    naive comparison like `None >= 85` raises TypeError and would crash the
+    alerter; each rule must guard against None before comparing.
+    """
+    monkeypatch.setattr(intero.config, "get", _fake_config())
+
+    # All nullable vitals absent at once (e.g. a desktop with no GPU/temp sensors).
+    all_null = _snap(vram=None, cpu_temp_c=None, disk_free_gb=None)
+    alerts = intero.vital_alerts(all_null)
+    keys = {a["key"] for a in alerts}
+    assert "disk_low" not in keys, "disk rule must be skipped when disk_free_gb is None"
+    assert "gpu_temp_high" not in keys, "GPU rule must be skipped when vram is None"
+    assert "cpu_temp_high" not in keys, "CPU rule must be skipped when cpu_temp_c is None"
+    assert all(not a["firing"] for a in alerts), "no alert may fire with null vitals"
+
+    # GPU present but its temperature sensor is broken (temp_c=None).
+    gpu_no_temp = _snap(vram={"name": "g", "used_mb": 0, "total_mb": 16000,
+                               "util_pct": 0, "temp_c": None})
+    alerts2 = {a["key"]: a for a in intero.vital_alerts(gpu_no_temp)}
+    assert "gpu_temp_high" not in alerts2, (
+        "gpu_temp_high rule must be absent when temp_c is None, not firing=False"
+    )
+    assert "vram_full" in alerts2, "vram_full rule must still be evaluated when total_mb is valid"
+
+
 # ───────────────────────── hysteresis (Alerter) ──────────────────────────
 
 def test_hysteresis_fires_once_per_episode(monkeypatch, quiet):
