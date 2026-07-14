@@ -14,11 +14,14 @@ quantity we don't match — saying "fui al gym" without time is too vague.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
+
+from lifeos._common.subject import detect_subject
 
 log = logging.getLogger("lifeos.exercise.ingestion")
 
@@ -31,6 +34,7 @@ class ExerciseIntent:
     data: dict[str, Any] = field(default_factory=dict)
     location: str | None = None
     confidence: float = 0.85
+    subject: str | None = None  # None = the user; else canonical relation label
 
 
 _MIN = r"min(?:ut[oe]s?)?|mins?"
@@ -214,6 +218,26 @@ _PARSERS = (_try_run, _try_walk, _try_yoga, _try_cardio, _try_strength, _try_spo
 def parse_exercise(text: str) -> ExerciseIntent | None:
     if not text or not isinstance(text, str):
         return None
+
+    # Family-subject marker (same convention as health ingestion): strip the
+    # marker, parse the remainder with the unchanged grammar, and attribute
+    # the session ("30 min de cardio de mi esposa" → cardio, subject=esposa).
+    # No fallback to the original text on a marker hit — a marked message is
+    # never the user's own session.
+    sm = detect_subject(text)
+    if sm is not None:
+        for candidate in (sm.remainder, sm.remainder_no_verb):
+            if not candidate:
+                continue
+            res = _parse_exercise_core(candidate)
+            if res is not None:
+                return dataclasses.replace(res, subject=sm.subject)
+        return None
+
+    return _parse_exercise_core(text)
+
+
+def _parse_exercise_core(text: str) -> ExerciseIntent | None:
     for parser in _PARSERS:
         try:
             res = parser(text)

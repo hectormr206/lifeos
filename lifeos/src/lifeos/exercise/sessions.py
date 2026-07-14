@@ -50,6 +50,7 @@ class Session:
     deleted_at: datetime | None = None
     raw_utterance: str | None = None
     source_conv_id: int | None = None
+    subject: str | None = None  # NULL = the user; else family relation label
 
     @property
     def mood_delta(self) -> int | None:
@@ -91,7 +92,22 @@ def _row_to_session(row) -> Session:
         deleted_at=_parse_iso(row["deleted_at"]) if row["deleted_at"] else None,
         raw_utterance=row["raw_utterance"] if "raw_utterance" in keys else None,
         source_conv_id=row["source_conv_id"] if "source_conv_id" in keys else None,
+        subject=row["subject"] if "subject" in keys else None,
     )
+
+
+def _subject_clause(subject: str | None) -> tuple[str, list]:
+    """SQL fragment + params for the subject filter.
+
+    "self" (default) → only the user's own rows (subject IS NULL) so summary,
+    streak and digest consumers never mix in family data. "any" → no filter.
+    Any other string → rows for that family member.
+    """
+    if subject == "self" or subject is None:
+        return " AND subject IS NULL", []
+    if subject == "any":
+        return "", []
+    return " AND subject = ?", [subject]
 
 
 def _validate_mood(value: int | None, label: str) -> None:
@@ -112,7 +128,8 @@ def create(*, kind: Kind, title: str, duration_minutes: int, when: datetime,
            source: Source = "manual",
            confidence: float = 1.0,
            raw_utterance: str | None = None,
-           source_conv_id: int | None = None) -> Session:
+           source_conv_id: int | None = None,
+           subject: str | None = None) -> Session:
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
     if when.tzinfo is None:
@@ -129,15 +146,15 @@ def create(*, kind: Kind, title: str, duration_minutes: int, when: datetime,
         conn.execute(
             "INSERT INTO exercise_sessions(id, ts, kind, duration_minutes, "
             "intensity, mood_pre, mood_post, location, title, body, data, "
-            "tags, source, confidence, raw_utterance, source_conv_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "tags, source, confidence, raw_utterance, source_conv_id, subject) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 sid, _to_iso_utc(when), kind, int(duration_minutes),
                 intensity, mood_pre, mood_post, location, title, body,
                 json.dumps(data) if data else None,
                 ",".join(tags) if tags else None,
                 source, float(confidence),
-                raw_utterance, source_conv_id,
+                raw_utterance, source_conv_id, subject,
             ),
         )
     fetched = get(sid)
@@ -155,12 +172,17 @@ def get(sid: str) -> Session | None:
 
 
 def list_recent(*, days: int = 30, kind: Kind | None = None,
-                limit: int = 300) -> list[Session]:
+                limit: int = 300, subject: str = "self") -> list[Session]:
+    """subject: "self" (default) → the user's own sessions only; "any" →
+    everyone; "<name>" → that family member only."""
     q = (
         "SELECT * FROM exercise_sessions WHERE deleted_at IS NULL "
         "AND ts >= datetime('now', ?)"
     )
     params: list = [f"-{int(days)} days"]
+    sub_q, sub_params = _subject_clause(subject)
+    q += sub_q
+    params.extend(sub_params)
     if kind is not None:
         if kind not in _VALID_KINDS:
             raise ValueError(f"invalid kind {kind!r}")
@@ -173,15 +195,20 @@ def list_recent(*, days: int = 30, kind: Kind | None = None,
     return [_row_to_session(r) for r in rows]
 
 
-def summary(*, days: int = 30) -> dict[str, Any]:
-    """Aggregates over `days`: total sessions, total minutes, per-kind breakdown."""
+def summary(*, days: int = 30, subject: str = "self") -> dict[str, Any]:
+    """Aggregates over `days`: total sessions, total minutes, per-kind breakdown.
+
+    Defaults to the user's own sessions (subject IS NULL) so dashboard stats
+    and digests never mix in family sessions."""
+    sub_q, sub_params = _subject_clause(subject)
     with store.connect() as conn:
         rows = conn.execute(
             "SELECT kind, COUNT(*) as c, COALESCE(SUM(duration_minutes), 0) as m "
             "FROM exercise_sessions "
-            "WHERE deleted_at IS NULL AND ts >= datetime('now', ?) "
+            "WHERE deleted_at IS NULL AND ts >= datetime('now', ?)"
+            f"{sub_q} "
             "GROUP BY kind",
-            (f"-{int(days)} days",),
+            (f"-{int(days)} days", *sub_params),
         ).fetchall()
     by_kind: dict[str, dict[str, int]] = {}
     total_c = 0
@@ -198,16 +225,20 @@ def summary(*, days: int = 30) -> dict[str, Any]:
     }
 
 
-def current_streak() -> int:
+def current_streak(*, subject: str = "self") -> int:
     """Consecutive days ending today with at least one session.
 
     Returns 0 if there's no session today. Uses the row's `ts` field
-    (the moment the session happened, not when it was logged).
+    (the moment the session happened, not when it was logged). Defaults to
+    the user's own sessions — a family member's walk must not extend the
+    user's streak.
     """
+    sub_q, sub_params = _subject_clause(subject)
     with store.connect() as conn:
         rows = conn.execute(
             "SELECT DISTINCT date(ts) as d FROM exercise_sessions "
-            "WHERE deleted_at IS NULL ORDER BY d DESC"
+            f"WHERE deleted_at IS NULL{sub_q} ORDER BY d DESC",
+            tuple(sub_params),
         ).fetchall()
     if not rows:
         return 0

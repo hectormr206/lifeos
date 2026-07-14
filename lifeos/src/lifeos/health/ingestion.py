@@ -20,11 +20,14 @@ Caller is expected to set source='chat' when persisting.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
+
+from lifeos._common.subject import detect_subject
 
 log = logging.getLogger("lifeos.health.ingestion")
 
@@ -37,6 +40,7 @@ class HealthIntent:
     body: str | None = None
     confidence: float = 0.85   # default for regex matches
     tags: list[str] = field(default_factory=list)
+    subject: str | None = None  # None = the user; else canonical relation label
 
 
 def _strip_accents(s: str) -> str:
@@ -1305,6 +1309,32 @@ def parse_health(
     """
     if not text or not isinstance(text, str):
         return None
+
+    # ── Family-subject marker (convention: person at START or END) ───────
+    # "Mi esposa tuvo 121, 79, 61 pulsos" / "108, 72, 66 pulsos de mi esposa".
+    # On a marker hit the marker is STRIPPED and the remainder is parsed with
+    # the unchanged grammar below; the intent carries subject="esposa" etc.
+    # NO fallback to the original text on a marker hit: the marker means the
+    # reading is NOT the user's, so a failed remainder parse must fall through
+    # to the brain rather than mis-attribute (the original incident).
+    sm = detect_subject(text)
+    if sm is not None:
+        for candidate in (sm.remainder, sm.remainder_no_verb):
+            if not candidate:
+                continue
+            res = _parse_health_core(candidate, now=now)
+            if res is not None:
+                return dataclasses.replace(res, subject=sm.subject)
+        return None
+
+    return _parse_health_core(text, now=now)
+
+
+def _parse_health_core(
+    text: str,
+    now: "datetime | None" = None,
+) -> "HealthIntent | None":
+    """Run the parser chain on already-subject-stripped text."""
     for parser in _PARSERS:
         try:
             if parser is _try_natural_sleep:

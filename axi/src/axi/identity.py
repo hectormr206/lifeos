@@ -508,6 +508,92 @@ def link_fact_to_entities(fact_id: int, text: str, conn=None) -> None:
         log.debug("link_fact_to_entities failed: %s", e)
 
 
+# Relation-word synonyms (accent-stripped) for resolving a fact's family
+# subject label against the hub's typed relation edges. The subject arriving
+# from lifeos ingestion is the canonical ES label ("esposa"), but the edge the
+# user created may be typed with a synonym ("mujer", "wife") — either side of
+# the pair must resolve. Keys and members are compared through _norm().
+_RELATION_SYNONYMS: dict[str, set[str]] = {
+    "esposa": {"esposa", "mujer", "wife"},
+    "esposo": {"esposo", "marido", "husband"},
+    "mama": {"mama", "madre", "mom", "mother"},
+    "papa": {"papa", "padre", "dad", "father"},
+    "hijo": {"hijo", "son"},
+    "hija": {"hija", "daughter"},
+    "hermano": {"hermano", "brother"},
+    "hermana": {"hermana", "sister"},
+    "abuelo": {"abuelo", "grandpa", "grandfather"},
+    "abuela": {"abuela", "grandma", "grandmother"},
+    "suegro": {"suegro", "father_in_law"},
+    "suegra": {"suegra", "mother_in_law"},
+    "tio": {"tio", "uncle"},
+    "tia": {"tia", "aunt"},
+    "primo": {"primo", "cousin"},
+    "prima": {"prima", "cousin"},
+    "novio": {"novio", "boyfriend"},
+    "novia": {"novia", "girlfriend"},
+}
+
+
+def _relation_terms(relation: str) -> set[str]:
+    """All accent-stripped terms that count as *relation* (incl. itself)."""
+    rn = _norm(relation).replace(" ", "_")
+    for canon, members in _RELATION_SYNONYMS.items():
+        if rn == canon or rn in members:
+            return {canon} | members
+    return {rn}
+
+
+def link_fact_to_involved_person(fact_id: int, relation: str, conn=None) -> None:
+    """Link a family-subject fact to the person it is about, via the hub's
+    typed relation edges: given subject "esposa" and hub --esposa--> Ana,
+    create fact --involves--> Ana.
+
+    Resolution is accent/case-insensitive and synonym-aware ("esposa" also
+    matches an edge typed "mujer" or "wife"). When no typed edge matches, the
+    fact stays data-only (its node data already carries {"subject": …}) and an
+    info line is logged. Best-effort: never raises.
+
+    Reads run locally; the edge insert goes through store.add_edge, which
+    already routes to the single writer — so this is safe from the daemon
+    writer path where bridge_entry runs.
+    """
+    if not fact_id or not relation:
+        return
+    try:
+        hub = ensure_user_hub(conn=conn)
+        if not hub:
+            log.info("involves-link: no user hub — leaving subject %r data-only",
+                     relation)
+            return
+        terms = _relation_terms(relation)
+        c = conn or store._connect()  # noqa: SLF001
+        person_id = None
+        for r in c.execute(
+            "SELECT e.kind AS rel, e.to_id AS to_id FROM edges e "
+            "JOIN nodes n ON n.id = e.to_id "
+            "WHERE e.from_id = ? AND n.kind = 'person'",
+            (hub,),
+        ).fetchall():
+            if _norm(r["rel"] or "").replace(" ", "_") in terms:
+                person_id = r["to_id"]
+                break
+        if person_id is None or person_id == fact_id:
+            log.info(
+                "involves-link: relation %r not found on hub — subject stays "
+                "data-only (queryable via node data)", relation,
+            )
+            return
+        exists = c.execute(
+            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='involves' LIMIT 1",
+            (fact_id, person_id),
+        ).fetchone()
+        if not exists:
+            store.add_edge(fact_id, person_id, "involves")
+    except Exception as e:  # noqa: BLE001
+        log.debug("link_fact_to_involved_person failed: %s", e)
+
+
 def link_fact_to_user(fact_id: int, conn=None) -> None:
     """Connect a fact node to the user hub (edge kind 'about'), so everything
     radiates from the user. Idempotent (skips if the edge already exists).

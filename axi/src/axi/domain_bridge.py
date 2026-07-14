@@ -218,8 +218,29 @@ def _spirituality_extra_data(entry: Any) -> dict:
     return data
 
 
+def _entry_subject(entry: Any) -> str | None:
+    """The entry's family-subject label ("esposa", …) or None (= the user).
+
+    Only non-empty strings count — mocks/garbage never leak into node data.
+    """
+    subject = getattr(entry, "subject", None)
+    if isinstance(subject, str) and subject.strip():
+        return subject.strip()
+    return None
+
+
+def _health_extra_data(entry: Any) -> dict:
+    """Extra data for health nodes: family ``subject`` when present."""
+    data: dict = {}
+    subject = _entry_subject(entry)
+    if subject is not None:
+        data["subject"] = subject
+    return data
+
+
 def _exercise_extra_data(entry: Any) -> dict:
-    """Extra data for exercise nodes: canonical numeric ``mood`` (mood_post).
+    """Extra data for exercise nodes: canonical numeric ``mood`` (mood_post)
+    plus the family ``subject`` when present.
 
     mood_post is the resulting emotional state after the session. Skipped when
     mood_post is missing or non-numeric.
@@ -228,11 +249,17 @@ def _exercise_extra_data(entry: Any) -> dict:
     mood = _numeric_mood(entry, "mood_post")
     if mood is not None:
         data["mood"] = mood
+    subject = _entry_subject(entry)
+    if subject is not None:
+        data["subject"] = subject
     return data
 
 
 _DOMAIN_CONFIGS: dict[str, DomainConfig] = {
-    "health": DomainConfig(renderer=_health_renderer),
+    "health": DomainConfig(
+        renderer=_health_renderer,
+        extra_data_fn=_health_extra_data,
+    ),
     # Slice 2: fan-out to the 5 remaining structured domains.
     "finance": DomainConfig(renderer=_finance_renderer),
     "exercise": DomainConfig(
@@ -400,6 +427,12 @@ def create_fact_node_for_entry(domain: str, entry: Any) -> int | None:
     store.upsert_domain_node_map(domain, entry_id, node_id)
     from axi import identity  # noqa: PLC0415 — lazy, avoids import cycle
     identity.link_fact_to_user(node_id)  # connect every domain fact to the user hub
+    subject = _entry_subject(entry)
+    if subject is not None:
+        # Family-subject fact: best-effort link to the person it is about
+        # (hub --<relation>--> person → fact --involves--> person). Never
+        # raises; unresolvable relations stay data-only.
+        identity.link_fact_to_involved_person(node_id, subject)
     store.trigger_embed_for_node(node_id)
     return node_id
 

@@ -4351,6 +4351,7 @@ async def api_chat_ask(request: Request):
                     data=ei.data or None,
                     source="chat", confidence=ei.confidence,
                     raw_utterance=text, source_conv_id=None,
+                    subject=getattr(ei, "subject", None),
                 )
                 from axi import domain_bridge as _db
                 _db.bridge_entry("exercise", sess)
@@ -4562,6 +4563,7 @@ async def api_chat_ask(request: Request):
                     body=text, data=hi.data or None, tags=hi.tags or None,
                     source="chat", confidence=hi.confidence,
                     raw_utterance=text, source_conv_id=None,
+                    subject=getattr(hi, "subject", None),
                 )
                 try:
                     from axi import domain_bridge as _db

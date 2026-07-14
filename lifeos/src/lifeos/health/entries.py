@@ -47,6 +47,7 @@ class Entry:
     deleted_at: datetime | None = None
     raw_utterance: str | None = None
     source_conv_id: int | None = None
+    subject: str | None = None  # NULL = the user; else family relation label
 
 
 def _to_iso_utc(dt: datetime) -> str:
@@ -77,7 +78,22 @@ def _row_to_entry(row) -> Entry:
         deleted_at=_parse_iso(row["deleted_at"]) if row["deleted_at"] else None,
         raw_utterance=row["raw_utterance"] if "raw_utterance" in keys else None,
         source_conv_id=row["source_conv_id"] if "source_conv_id" in keys else None,
+        subject=row["subject"] if "subject" in keys else None,
     )
+
+
+def _subject_clause(subject: str | None) -> tuple[str, list]:
+    """SQL fragment + params for the subject filter.
+
+    "self" (default) → only the user's own rows (subject IS NULL) so stats,
+    digests and adaptive schedules never mix in family data. "any" → no
+    filter. Any other string → rows for that family member.
+    """
+    if subject == "self" or subject is None:
+        return " AND subject IS NULL", []
+    if subject == "any":
+        return "", []
+    return " AND subject = ?", [subject]
 
 
 def create(*, kind: Kind, title: str, when: datetime,
@@ -87,8 +103,10 @@ def create(*, kind: Kind, title: str, when: datetime,
            source: Source = "manual",
            confidence: float = 1.0,
            raw_utterance: str | None = None,
-           source_conv_id: int | None = None) -> Entry:
-    """Insert a new health entry."""
+           source_conv_id: int | None = None,
+           subject: str | None = None) -> Entry:
+    """Insert a new health entry. subject=None means the user themself;
+    a relation label ("esposa", "hija", …) attributes it to a family member."""
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
     if when.tzinfo is None:
@@ -97,14 +115,14 @@ def create(*, kind: Kind, title: str, when: datetime,
     with store.connect() as conn:
         conn.execute(
             "INSERT INTO health_entries(id, ts, kind, title, body, data, tags, "
-            "source, confidence, raw_utterance, source_conv_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "source, confidence, raw_utterance, source_conv_id, subject) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 eid, _to_iso_utc(when), kind, title, body,
                 json.dumps(data) if data else None,
                 ",".join(tags) if tags else None,
                 source, float(confidence),
-                raw_utterance, source_conv_id,
+                raw_utterance, source_conv_id, subject,
             ),
         )
     fetched = get(eid)
@@ -127,13 +145,21 @@ def get(eid: str, *, include_deleted: bool = False) -> Entry | None:
 
 
 def list_recent(*, days: int = 30, kind: Kind | None = None,
-                limit: int = 200) -> list[Entry]:
-    """Recent entries (newest first), optionally filtered by kind."""
+                limit: int = 200, subject: str = "self") -> list[Entry]:
+    """Recent entries (newest first), optionally filtered by kind.
+
+    subject: "self" (default) → only the user's own entries (family entries
+    are excluded so existing stats/digest consumers stay isolated);
+    "any" → everyone; "<name>" → that family member only.
+    """
     q = (
         "SELECT * FROM health_entries WHERE deleted_at IS NULL "
         "AND ts >= datetime('now', ?)"
     )
     params: list = [f"-{int(days)} days"]
+    sub_q, sub_params = _subject_clause(subject)
+    q += sub_q
+    params.extend(sub_params)
     if kind is not None:
         if kind not in _VALID_KINDS:
             raise ValueError(f"invalid kind {kind!r}")
