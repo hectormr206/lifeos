@@ -382,6 +382,32 @@ def test_avatar_organ_actions_present(client):
     assert "services['axi-heartbeat']" in html
 
 
+def test_avatar_vital_animations_present(client):
+    """Vital animations — breathing/heartbeat speeds and face mood derive
+    client-side from the already-polled snapshot (zero new backend polling):
+    CSS custom properties parametrize the gill/heart keyframes, and the mouth
+    swaps to a tired path when anything is degraded."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    # CSS custom properties with calm fallbacks parametrize the animations.
+    assert "var(--breath-dur, 4s)" in html
+    assert "var(--pulse-dur, 2s)" in html
+    # The SVG root binds both vars from live vitals.
+    assert "'--breath-dur': breathDur()" in html
+    assert "'--pulse-dur': pulseDur()" in html
+    # Client-side stress model + thresholds (no /api/organs polling).
+    assert "vitalsStressed()" in html
+    assert "stressLevel()" in html
+    assert "VITAL_THRESHOLDS" in html
+    # Face mood: smile + tired mouth paths toggled inside the clickable mouth.
+    assert 'id="mouth-smile"' in html
+    assert 'id="mouth-tired"' in html
+    assert "faceTired()" in html
+    # Tired eyelids are decorative only (eyes keep their capture clicks).
+    assert 'id="face-tired-eyelids"' in html
+
+
 def test_say_endpoint_speaks(client, monkeypatch):
     """The mouth's /api/chat/say endpoint triggers Axi's TTS and echoes the text."""
     spoken = {}

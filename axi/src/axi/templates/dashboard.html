@@ -93,8 +93,14 @@
 
     <!-- ─── Axi living avatar — organs react + click actions ─── -->
     <section class="panel p-4 flex justify-center" x-data="avatarWidget()" @click.outside="open = null" @keydown.escape.window="open = null" style="position:relative">
+      <!-- Vital animations: --breath-dur / --pulse-dur are derived client-side
+           from the ALREADY-polled $store.snap (zero extra backend calls).
+           Object-syntax :style sets the custom properties without clobbering
+           the static style attribute; the keyframes below fall back to their
+           original durations if JS is off (var(--…, fallback)). -->
       <svg id="axi-avatar" viewBox="0 0 64 80" width="220" height="275"
            xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Axi — agente vivo"
+           :style="{ '--breath-dur': breathDur() + 's', '--pulse-dur': pulseDur() + 's' }"
            style="overflow:visible">
         <style>
           @keyframes blink { 0%,92%,100%{transform:scaleY(1)} 96%{transform:scaleY(0.1)} }
@@ -102,8 +108,11 @@
           @keyframes heartbeat { 0%,18%,30%,100%{transform:scale(1)} 9%{transform:scale(1.18)} 24%{transform:scale(1.12)} }
           @keyframes tailWag { 0%,100%{transform:rotate(-3deg)} 50%{transform:rotate(7deg)} }
           #axi-avatar .eye   { animation: blink 5.5s ease-in-out infinite; cursor:pointer; }
-          #axi-avatar .ears  { animation: gillFloat 4s ease-in-out infinite; transform-origin: 32px 40px; cursor:pointer; }
-          #axi-avatar .heart { animation: heartbeat 2s ease-in-out infinite; transform-origin: 33.5px 56px; cursor:pointer; }
+          /* Breathing (gills) + heartbeat durations are driven by CSS custom
+             properties set from live vitals; fallbacks keep the original calm
+             rhythm when JS/Alpine is unavailable. */
+          #axi-avatar .ears  { animation: gillFloat var(--breath-dur, 4s) ease-in-out infinite; transform-origin: 32px 40px; cursor:pointer; }
+          #axi-avatar .heart { animation: heartbeat var(--pulse-dur, 2s) ease-in-out infinite; transform-origin: 33.5px 56px; cursor:pointer; }
           #axi-avatar .heart.stopped { animation: none; filter: grayscale(1) opacity(0.55); }
           #axi-avatar .tail  { animation: tailWag 4.5s ease-in-out infinite; transform-origin: 41px 59px; }
           #axi-avatar .clk   { cursor:pointer; }
@@ -242,10 +251,22 @@
           <circle cx="32.9" cy="41" r="0.42" fill="#14131F" opacity="0.55"/>
         </g>
 
-        <!-- Boca (clic = Axi habla en voz alta) -->
+        <!-- Boca (clic = Axi habla en voz alta). Estado de ánimo vital: sonrisa
+             cuando todo está sano; boquita plana/apenas triste cuando algo está
+             degradado (servicio caído o vitales estresados). Ambos paths viven
+             DENTRO de #organ-mouth para conservar el clic-para-hablar. -->
         <g id="organ-mouth" class="clk" @click="speak()">
           <title>Boca (clic: Axi habla)</title>
-          <path d="M26 43 Q32 48 38 43" stroke="#14131F" stroke-width="1" stroke-linecap="round" fill="none"/>
+          <path id="mouth-smile" x-show="!faceTired()" d="M26 43 Q32 48 38 43" stroke="#14131F" stroke-width="1" stroke-linecap="round" fill="none"/>
+          <path id="mouth-tired" x-show="faceTired()" d="M26.5 44.6 Q32 43.4 37.5 44.6" stroke="#14131F" stroke-width="1" stroke-linecap="round" fill="none" style="display:none"/>
+        </g>
+
+        <!-- Párpados cansados — línea sutil sobre cada ojo cuando Axi está
+             agotado. Solo decorativo (pointer-events:none, los ojos siguen
+             capturando el clic). -->
+        <g id="face-tired-eyelids" x-show="faceTired()" style="pointer-events:none; display:none">
+          <path d="M23.4 36.4 Q26 35.4 28.6 36.4" stroke="#241019" stroke-width="0.8" stroke-linecap="round" fill="none" opacity="0.75"/>
+          <path d="M35.4 36.4 Q38 35.4 40.6 36.4" stroke="#241019" stroke-width="0.8" stroke-linecap="round" fill="none" opacity="0.75"/>
         </g>
 
         <!-- Corazón = axi-heartbeat REAL. Late solo si el servicio está vivo; si
@@ -971,12 +992,70 @@ function axiBuilder(){return{
   }
 };}
 
+/* ── Vital-animation thresholds (client-side, read from the snapshot the
+   dashboard ALREADY polls — zero extra backend calls). Axi is "stressed"
+   when VRAM is nearly full, a temperature is near its limit, or disk is
+   almost out; "tired" additionally when a core service is down. ─────── */
+const VITAL_THRESHOLDS = {
+  vramRatio: 0.95,   // used_mb / total_mb ≥ 95% — the 3 resident LLMs keep VRAM at ~92% by design, so 90% would leave Axi permanently stressed (alarm fatigue)
+  gpuTempC: 85,      // vram.temp_c near thermal limit
+  cpuTempC: 85,      // cpu_temp_c near thermal limit
+  diskFreeGb: 5,     // disk_free_gb critically low
+};
+// Core organ services — any of these inactive makes Axi look tired.
+const CORE_SERVICES = ['llama-server', 'axi-heartbeat', 'axi-whisper'];
+
 function avatarWidget() {
   return {
     open: null,
     eyeImg: null,
     eyeLoading: false,
     eyeError: null,
+
+    /* ── Vital animations — everything derives from $store.snap ────────
+       Missing/null fields → calm defaults (never agitated by accident). */
+
+    /* true when body vitals (VRAM, temps, disk) cross a threshold. */
+    vitalsStressed() {
+      const s = this.$store.snap;
+      if (!s) return false;
+      const t = VITAL_THRESHOLDS;
+      const v = s.vram || {};
+      if (v.total_mb > 0 && (v.used_mb / v.total_mb) >= t.vramRatio) return true;
+      if (v.temp_c != null && v.temp_c >= t.gpuTempC) return true;
+      if (s.cpu_temp_c != null && s.cpu_temp_c >= t.cpuTempC) return true;
+      if (s.disk_free_gb != null && s.disk_free_gb < t.diskFreeGb) return true;
+      return false;
+    },
+
+    /* 0 = calm, 1 = stressed (vitals) or degraded (core service down). */
+    stressLevel() {
+      const s = this.$store.snap;
+      if (!s) return 0;
+      if (this.vitalsStressed()) return 1;
+      const svcs = s.services || {};
+      if (CORE_SERVICES.some((n) => n in svcs && svcs[n] !== 'active')) return 1;
+      return 0;
+    },
+
+    /* Gill breathing duration (s): calm 4s, agitated 1.4s when vitals stress. */
+    breathDur() {
+      return this.vitalsStressed() ? 1.4 : 4;
+    },
+
+    /* Heartbeat duration (s): scales with CPU load — idle ≈ 2s, full load
+       ≈ 0.7s (linear). A down axi-heartbeat service still wins: the
+       .heart.stopped rule (animation:none + grayscale) overrides this. */
+    pulseDur() {
+      const s = this.$store.snap;
+      const cpu = (s && typeof s.cpu_pct === 'number') ? Math.min(Math.max(s.cpu_pct, 0), 100) : 0;
+      return +(2 - 1.3 * (cpu / 100)).toFixed(2);
+    },
+
+    /* Face mood: tired/worried when anything is degraded, smile otherwise. */
+    faceTired() {
+      return this.stressLevel() > 0;
+    },
 
     /* ── Generic organ popover — fed by /api/organs at click time ──
        Any organ WITHOUT a dedicated popover routes here: name + state
