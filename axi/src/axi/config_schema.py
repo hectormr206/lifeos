@@ -257,6 +257,31 @@ FIELDS: tuple[ConfigField, ...] = (
         "and reported by axi-check.",
         minimum=1, maximum=100,
     ),
+    # ─────── interoception organ (Pulmones + Olfato) ───────
+    ConfigField(
+        "body_alerts_enabled", "boolean", True,
+        "If true, the daemon runs the interoception loop: senses host vitals "
+        "(disk, GPU/CPU temp, VRAM) and self-state anomalies (service "
+        "flapping, warning spikes) and alerts via desktop notification.",
+    ),
+    ConfigField(
+        "body_gpu_temp_max_c", "integer", 85,
+        "GPU temperature (°C) at or above which the interoception organ "
+        "alerts (once per episode, with hysteresis).",
+        minimum=60, maximum=100,
+    ),
+    ConfigField(
+        "body_cpu_temp_max_c", "integer", 90,
+        "CPU temperature (°C) at or above which the interoception organ "
+        "alerts (once per episode, with hysteresis).",
+        minimum=60, maximum=105,
+    ),
+    ConfigField(
+        "body_check_interval_s", "integer", 120,
+        "Interoception loop interval (seconds) between body checks; "
+        "battery-scaled like the other daemon loops.",
+        minimum=30, maximum=3600,
+    ),
     # ─────── daemon voice gate ───────
     ConfigField(
         "silence_rms_threshold", "number", 0.002,

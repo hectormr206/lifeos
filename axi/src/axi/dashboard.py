@@ -61,6 +61,19 @@ from fastapi.templating import Jinja2Templates
 import uvicorn
 
 from axi import config, events, obs, store
+# Body-sensor readers live in the interoception organ (Pulmones); the
+# dashboard re-imports them so snapshot() keeps its exact shape. Tests that
+# monkeypatch `dashboard._vram_snapshot` etc. keep working: snapshot() calls
+# these through this module's globals.
+from axi.interoception import (  # noqa: F401
+    _cpu_pct,
+    _cpu_temp_c,
+    _hwmon_temp_c,
+    _ram_snapshot,
+    _ram_temp_c,
+    _vram_snapshot,
+    disk_free_gb,
+)
 from axi import models_manager
 from axi import model_params_schema
 
@@ -863,42 +876,6 @@ def _llama_alive() -> bool:
         return False
 
 
-def _vram_snapshot() -> dict[str, Any]:
-    try:
-        out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu,name",
-             "--format=csv,noheader,nounits"],
-            text=True, timeout=3,
-        ).strip()
-        used, total, util, temp, name = [p.strip() for p in out.split(",")]
-        return {
-            "name": name,
-            "used_mb": int(used),
-            "total_mb": int(total),
-            "util_pct": int(util),
-            "temp_c": int(temp),
-        }
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired, ValueError):
-        return {"name": None, "used_mb": 0, "total_mb": 0, "util_pct": 0, "temp_c": None}
-
-
-def _ram_snapshot() -> dict[str, Any]:
-    try:
-        with open("/proc/meminfo") as f:
-            mem = {}
-            for line in f:
-                k, _, rest = line.partition(":")
-                if rest:
-                    mem[k.strip()] = int(rest.strip().split()[0]) * 1024  # to bytes
-        total = mem.get("MemTotal", 0)
-        avail = mem.get("MemAvailable", 0)
-        used = total - avail
-        return {"used": used, "total": total, "pct": round(100 * used / total, 1) if total else 0,
-                "temp_c": _ram_temp_c()}
-    except OSError:
-        return {"used": 0, "total": 0, "pct": 0, "temp_c": None}
-
-
 def _friendly_from_cmdline(cmdline: str) -> str | None:
     """Map a process cmdline to a friendly axi-related model label.
     Returns None for processes we don't care about.
@@ -1023,58 +1000,6 @@ def _models_snapshot() -> dict[str, Any]:
         "gpu": sorted(gpu_procs, key=lambda p: -p["vram_mb"]),
         "ram": sorted(ram_procs, key=lambda p: -p["rss_mb"]),
     }
-
-
-def _cpu_pct() -> float:
-    """Single-call CPU%: sample /proc/stat twice 100ms apart."""
-    def _read():
-        with open("/proc/stat") as f:
-            line = f.readline()
-        parts = [int(x) for x in line.split()[1:]]
-        idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
-        total = sum(parts)
-        return idle, total
-    i1, t1 = _read()
-    time.sleep(0.1)
-    i2, t2 = _read()
-    dt, di = t2 - t1, i2 - i1
-    return round(100 * (1 - di / dt), 1) if dt else 0.0
-
-
-def _hwmon_temp_c(*names: str) -> float | None:
-    """Hottest temp1_input (°C) across hwmon devices whose name matches.
-
-    Used for both the CPU package ('coretemp'/'acpitz') and the DDR5 module
-    sensors ('spd5118'). Returns the max so the reading reflects worst-case
-    thermal state, or None when no matching sensor exists.
-    """
-    wanted = set(names)
-    temps: list[float] = []
-    try:
-        bases = sorted(os.listdir("/sys/class/hwmon"))
-    except OSError:
-        return None
-    for base in bases:
-        hwmon = os.path.join("/sys/class/hwmon", base)
-        try:
-            with open(os.path.join(hwmon, "name"), encoding="utf-8") as f:
-                if f.read().strip() not in wanted:
-                    continue
-            with open(os.path.join(hwmon, "temp1_input"), encoding="utf-8") as f:
-                value = int(f.read().strip()) / 1000.0
-            if value > 0:
-                temps.append(value)
-        except (OSError, ValueError):
-            continue
-    return round(max(temps)) if temps else None
-
-
-def _cpu_temp_c() -> int | None:
-    return _hwmon_temp_c("coretemp", "acpitz")
-
-
-def _ram_temp_c() -> int | None:
-    return _hwmon_temp_c("spd5118")
 
 
 # ────────────────────────── store helpers ──────────────────────────────
@@ -1238,6 +1163,7 @@ def snapshot():
         "ram": _ram_snapshot(),
         "cpu_pct": _cpu_pct(),
         "cpu_temp_c": _cpu_temp_c(),
+        "disk_free_gb": disk_free_gb(),
         "models": _models_snapshot(),
         "eyes": _eye_capabilities(),
         "autonomous": {

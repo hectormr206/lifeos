@@ -1395,6 +1395,21 @@ def serve() -> int:
             target=_embed_drain_loop, name="axi-embed-drain", daemon=True
         ).start()
 
+        # Interoception organ (Pulmones + Olfato) — Axi senses its own body
+        # (VRAM/CPU/RAM/disk/power) and self-state anomalies (service
+        # flapping, warning spikes) and proactively alerts via desktop
+        # notification. Independent of the autonomous tick's daily cap;
+        # silent (but still sensing) during meetings and game mode.
+        _interoception_stop = threading.Event()
+        if bool(config.get("body_alerts_enabled", True)):
+            from axi import interoception as _interoception  # noqa: PLC0415
+            threading.Thread(
+                target=_interoception.run_interoception_loop,
+                args=(_interoception_stop,),
+                name="axi-interoception",
+                daemon=True,
+            ).start()
+
         # Periodic known-good backup — writes a validated SQLCipher snapshot of
         # memory.db every _HEALTHY_BACKUP_INTERVAL_S seconds (default 30 min).
         # The recovery ladder prefers these healthy-*.bak files over forensic
@@ -1554,6 +1569,7 @@ def serve() -> int:
         def _shutdown(*_):
             stop_signal["raised"] = True
             _embed_drain_stop.set()
+            _interoception_stop.set()
             _dev_run_poll_stop.set()
             _self_improve_stop.set()
             try:

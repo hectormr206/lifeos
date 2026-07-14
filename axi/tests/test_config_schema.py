@@ -49,6 +49,11 @@ def test_schema_covers_historical_keys():
         "notify_send_enabled",
         # P2.3 disk guard.
         "disk_min_gb_free",
+        # Interoception organ (Pulmones + Olfato).
+        "body_alerts_enabled",
+        "body_gpu_temp_max_c",
+        "body_cpu_temp_max_c",
+        "body_check_interval_s",
         # P1.5 OCR kill switch.
         "ocr_enabled",
         # P1.2 voice command palette.
