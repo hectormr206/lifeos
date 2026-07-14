@@ -481,7 +481,9 @@ def _fetch_domain_entries(domain: str, *, days: int, limit: int | None = None) -
     try:
         if domain == "health":
             from lifeos.health import entries as _he
-            kwargs: dict[str, Any] = {"days": days}
+            # subject="any": the graph carries family entries too — the default
+            # "self" filter is for the user's OWN stats, not for graph coverage.
+            kwargs: dict[str, Any] = {"days": days, "subject": "any"}
             if limit is not None:
                 kwargs["limit"] = limit
             return _he.list_recent(**kwargs)
@@ -495,7 +497,8 @@ def _fetch_domain_entries(domain: str, *, days: int, limit: int | None = None) -
 
         if domain == "exercise":
             from lifeos.exercise import sessions as _ex
-            kwargs = {"days": days}
+            # subject="any": see the health branch — graph coverage includes family.
+            kwargs = {"days": days, "subject": "any"}
             if limit is not None:
                 kwargs["limit"] = limit
             return _ex.list_recent(**kwargs)

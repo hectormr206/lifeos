@@ -538,3 +538,37 @@ def test_fetch_domain_entries_warns_on_unknown_domain():
     assert "nonexistent-domain-xyz" in str(warning_call), (
         f"Warning must mention the unknown domain. Got: {warning_call}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Family attribution: backfill must include family-subject entries
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_fetch_health_includes_family_entries():
+    """Backfill fetch must pass subject='any' for health, else family entries
+    created while the daemon was down would never reach the graph."""
+    from axi.domain_bridge import _fetch_domain_entries
+
+    with patch("lifeos.health.entries.list_recent") as mock_lr:
+        mock_lr.return_value = []
+        _fetch_domain_entries("health", days=7)
+
+    assert mock_lr.call_args.kwargs.get("subject") == "any", (
+        f"health backfill fetch must use subject='any'; got kwargs "
+        f"{mock_lr.call_args.kwargs}"
+    )
+
+
+def test_fetch_exercise_includes_family_entries():
+    """Same as health: exercise backfill must fetch subject='any'."""
+    from axi.domain_bridge import _fetch_domain_entries
+
+    with patch("lifeos.exercise.sessions.list_recent") as mock_lr:
+        mock_lr.return_value = []
+        _fetch_domain_entries("exercise", days=7)
+
+    assert mock_lr.call_args.kwargs.get("subject") == "any", (
+        f"exercise backfill fetch must use subject='any'; got kwargs "
+        f"{mock_lr.call_args.kwargs}"
+    )
