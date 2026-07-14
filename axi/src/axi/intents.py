@@ -337,16 +337,37 @@ def _h_clear_conversation(daemon, params: dict | None = None) -> str:
     return _send_cmd(daemon, "clear")
 
 
+def _utterance_lang(daemon) -> str:
+    """Language for a handler's user-facing confirmation.
+
+    Prefers the Whisper-detected language of the utterance (stashed on the
+    daemon by the dictation path as `_utterance_lang`); falls back to the
+    configured "language". The isinstance guard keeps fake/mock daemons in
+    tests from leaking non-string attributes into the localizer.
+    """
+    lang = getattr(daemon, "_utterance_lang", None)
+    if isinstance(lang, str) and lang:
+        return lang
+    try:
+        from axi import config  # noqa: PLC0415
+        return str(config.get("language", "es-MX"))
+    except Exception:  # noqa: BLE001
+        return "es-MX"
+
+
 def _h_dev_develop(daemon, params: dict | None = None) -> str:
     """Hands-free "Axi, desarrollá X" now FILES the request into the controlled
     Desarrollo workspace as a persistent environment, instead of running an
     ephemeral build inline. Development (build → test isolated → iterate →
     deploy) lives in /desarrollo; the chat itself stays conversational."""
+    from lifeos.localize import msg as _loc_msg  # noqa: PLC0415
+    lang = _utterance_lang(daemon)
+
     goal = ((params or {}).get("goal") or "").strip()
     if not goal:
         try:
             from axi.output import notify  # noqa: PLC0415
-            notify("Axi", "No entendí qué quieres que desarrolle.", timeout_ms=3000)
+            notify("Axi", _loc_msg("dev_no_goal", lang), timeout_ms=3000)
         except Exception:  # noqa: BLE001
             pass
         return "dev_develop:no-goal"
@@ -357,16 +378,15 @@ def _h_dev_develop(daemon, params: dict | None = None) -> str:
     except Exception as exc:  # noqa: BLE001
         log.exception("dev_develop create_env failed: %s", exc)
 
-    msg = "Listo, lo armé como ambiente en Desarrollo — entrá a /desarrollo para probarlo y desplegarlo."
     try:
         from axi.output import notify  # noqa: PLC0415
-        notify("Axi", msg, transient=True, timeout_ms=3500)
+        notify("Axi", _loc_msg("dev_env_created", lang), transient=True, timeout_ms=3500)
     except Exception:  # noqa: BLE001
         pass
 
     try:
         from axi.speak import speak as _speak  # noqa: PLC0415
-        _speak("Listo, lo armé como ambiente en Desarrollo. Entrá a probarlo cuando quieras.")
+        _speak(_loc_msg("dev_env_created_speak", lang))
     except Exception:  # noqa: BLE001
         pass
 

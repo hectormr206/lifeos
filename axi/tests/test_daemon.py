@@ -548,3 +548,135 @@ def test_watchdog_armed_disarmed_via_set_state(monkeypatch):
         assert mock_arm.called, "_arm_watchdog not called when entering transcribing"
         d._set_state("idle")
         assert mock_disarm.called, "_disarm_watchdog not called when leaving transcribing"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Voice-path confirmation localization
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _lang_config_get(lang):
+    """Fake axi.config.get with a fixed UI language and real-ish defaults."""
+    values = {
+        "language": lang,
+        "timezone": "America/Mexico_City",
+        "reminder_voice_enabled": False,   # keep the fastpath out of intent tests
+        "intents_enabled": True,
+        "intents_brain_fallback_enabled": False,
+    }
+    return lambda key, default=None: values.get(key, default)
+
+
+def _capture_notify(monkeypatch) -> list[tuple]:
+    from axi import daemon as d_mod
+    calls: list[tuple] = []
+    monkeypatch.setattr(d_mod, "notify", lambda *a, **kw: calls.append((a, kw)))
+    return calls
+
+
+def _run_intent_dictation(monkeypatch, whisper_lang: str) -> list[tuple]:
+    """Dictation toggle cycle where the utterance matches an intent."""
+    from axi import daemon as d_mod, intents as i_mod
+
+    monkeypatch.setattr(d_mod.config, "get", _lang_config_get("es-MX"))
+    monkeypatch.setattr(i_mod, "classify", lambda text, **kw: ("open_dashboard", {}))
+    monkeypatch.setitem(i_mod.INTENT_HANDLERS, "open_dashboard", lambda d, p: "ok")
+    calls = _capture_notify(monkeypatch)
+
+    tx = FakeTranscriber(text="axi abre el dashboard", lang=whisper_lang)
+    d = _build(transcriber=tx)
+    _run_toggle_cycle(d)
+    return calls
+
+
+def test_intent_confirmation_english_when_utterance_english(monkeypatch):
+    """Whisper detects English → 'Action executed', not 'Acción ejecutada'."""
+    calls = _run_intent_dictation(monkeypatch, whisper_lang="en")
+    bodies = [str(a) for a, _ in calls]
+    assert any("Action executed: open_dashboard" in b for b in bodies), \
+        f"expected English confirmation, got: {bodies}"
+    assert not any("Acción ejecutada" in b for b in bodies)
+
+
+def test_intent_confirmation_spanish_when_utterance_spanish(monkeypatch):
+    """Whisper detects Spanish → original Spanish confirmation, unchanged."""
+    calls = _run_intent_dictation(monkeypatch, whisper_lang="es")
+    bodies = [str(a) for a, _ in calls]
+    assert any("Acción ejecutada: open_dashboard" in b for b in bodies), \
+        f"expected Spanish confirmation, got: {bodies}"
+
+
+def test_camera_busy_notify_localized(monkeypatch):
+    """_start_look camera-busy notify follows the configured language."""
+    from axi import daemon as d_mod
+
+    monkeypatch.setattr(d_mod.config, "get", _lang_config_get("en-US"))
+    calls = _capture_notify(monkeypatch)
+    d = _build(eyes_capture=lambda: (None, "busy:zoom"))
+    resp = d._start_look()
+    assert resp == "camera-busy"
+    bodies = [str(a) for a, _ in calls]
+    assert any("zoom" in b for b in bodies)
+    assert not any("No puedo ver" in b for b in bodies), \
+        f"expected English camera-busy notify, got: {bodies}"
+
+
+def test_camera_busy_notify_spanish_unchanged(monkeypatch):
+    from axi import daemon as d_mod
+
+    monkeypatch.setattr(d_mod.config, "get", _lang_config_get("es-MX"))
+    calls = _capture_notify(monkeypatch)
+    d = _build(eyes_capture=lambda: (None, "busy:"))  # empty holder → 'otra app'
+    resp = d._start_look()
+    assert resp == "camera-busy"
+    bodies = [str(a) for a, _ in calls]
+    assert any("No puedo ver — la cámara la usa otra app (¿reunión activa?)" in b
+               for b in bodies), f"got: {bodies}"
+
+
+def test_meeting_start_notify_localized(monkeypatch):
+    """meeting_start confirmation follows the configured language."""
+    from axi import daemon as d_mod
+
+    monkeypatch.setattr(d_mod.config, "get", _lang_config_get("en-US"))
+    calls = _capture_notify(monkeypatch)
+    d = _build()
+    monkeypatch.setattr(d, "_pause_wakeword_for_meeting", lambda: None)
+    resp = d.meeting_start()
+    assert resp == "started:42"
+    bodies = [str(a) for a, _ in calls]
+    assert any("Meeting mode active" in b and "#42" in b for b in bodies), \
+        f"expected English meeting notify, got: {bodies}"
+    assert not any("Modo reunión activo" in b for b in bodies)
+
+
+def test_meeting_start_notify_spanish_unchanged(monkeypatch):
+    from axi import daemon as d_mod
+
+    monkeypatch.setattr(d_mod.config, "get", _lang_config_get("es-MX"))
+    calls = _capture_notify(monkeypatch)
+    d = _build()
+    monkeypatch.setattr(d, "_pause_wakeword_for_meeting", lambda: None)
+    resp = d.meeting_start()
+    assert resp == "started:42"
+    bodies = [str(a) for a, _ in calls]
+    assert any("🎙️📷 Modo reunión activo (id #42)" in b for b in bodies), \
+        f"got: {bodies}"
+
+
+def test_dictation_intent_sets_utterance_lang(monkeypatch):
+    """The dictation path exposes whisper's detected lang to intent handlers."""
+    from axi import daemon as d_mod, intents as i_mod
+
+    monkeypatch.setattr(d_mod.config, "get", _lang_config_get("es-MX"))
+    monkeypatch.setattr(i_mod, "classify", lambda text, **kw: ("open_dashboard", {}))
+    seen: list = []
+    monkeypatch.setitem(
+        i_mod.INTENT_HANDLERS, "open_dashboard",
+        lambda d, p: seen.append(getattr(d, "_utterance_lang", None)) or "ok",
+    )
+    _capture_notify(monkeypatch)
+
+    tx = FakeTranscriber(text="axi abre el dashboard", lang="en")
+    d = _build(transcriber=tx)
+    _run_toggle_cycle(d)
+    assert seen == ["en"], f"handler saw _utterance_lang={seen!r}"

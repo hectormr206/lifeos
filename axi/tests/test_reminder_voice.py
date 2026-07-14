@@ -243,3 +243,52 @@ def test_pretty_when_format_local_tz():
     assert "14:00" in all_text or "14:" in all_text, (
         f"Expected local time '14:00' in notification text, got: {all_text!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Confirmation localization — matches the utterance language
+# ---------------------------------------------------------------------------
+
+def _fake_config_get(key, default=None):
+    return {"timezone": "America/Mexico_City", "language": "es-MX"}.get(key, default)
+
+
+def _run_localized(lang):
+    """Run the happy path with a fixed Saturday reminder; return notify body."""
+    from axi.reminder_voice import try_create_reminder
+
+    # Saturday 2026-05-23 20:00 UTC = Saturday 14:00 in America/Mexico_City
+    when_utc = datetime(2026, 5, 23, 20, 0, tzinfo=timezone.utc)
+    intent = _make_reminder_intent(message="cita con el médico", when=when_utc)
+    fake_rem = _make_reminder(rid="REMLOC", message="cita con el médico", when=when_utc)
+
+    with (
+        patch("axi.reminder_voice.config.get", side_effect=_fake_config_get),
+        patch("axi.reminder_voice.parse_reminder", return_value=intent),
+        patch("axi.reminder_voice.reminders.create", return_value=fake_rem),
+        patch("axi.reminder_voice.get_scheduler", return_value=MagicMock()),
+        patch("axi.reminder_voice.notify") as mock_notify,
+    ):
+        result = try_create_reminder("remind me about the doctor", lang=lang)
+
+    assert result == "REMLOC"
+    mock_notify.assert_called_once()
+    return mock_notify.call_args.args[1]
+
+
+def test_confirmation_english_when_utterance_is_english():
+    """Whisper detected English → confirmation in English with English weekday."""
+    body = _run_localized("en")
+    assert body == "Reminder: cita con el médico — Sat 23 14:00"
+
+
+def test_confirmation_spanish_when_utterance_is_spanish():
+    """Spanish utterance → the original Spanish confirmation, byte-for-byte."""
+    body = _run_localized("es")
+    assert body == "Recordatorio: cita con el médico — sáb 23 14:00"
+
+
+def test_confirmation_falls_back_to_config_language_without_lang():
+    """No detected lang → config 'language' (es-MX here) decides."""
+    body = _run_localized(None)
+    assert body == "Recordatorio: cita con el médico — sáb 23 14:00"

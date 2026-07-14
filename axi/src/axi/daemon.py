@@ -305,6 +305,10 @@ class Daemon:
         # Watchdog timer — armed while in "transcribing", disarmed on exit.
         self._watchdog: threading.Timer | None = None
         self._watchdog_lock = threading.Lock()
+        # Language Whisper detected for the last dictated utterance — lets
+        # intent handlers confirm in the language the user actually spoke.
+        # None → handlers fall back to the configured "language".
+        self._utterance_lang: str | None = None
 
     def _arm_watchdog(self) -> None:
         """Cancel any existing watchdog and start a fresh one."""
@@ -373,10 +377,12 @@ class Daemon:
         # the camera is held by Meet/Zoom and Axi cannot see.
         b64, status = self.eyes_capture()
         if status.startswith("busy:"):
-            who = status.split(":", 1)[1] or "otra app"
+            # No utterance yet at this point — use the configured UI language.
+            _cam_lang = str(config.get("language", "es-MX"))
+            who = status.split(":", 1)[1] or _loc_msg("camera_busy_other_app", _cam_lang)
             notify(
                 "Axi",
-                f"📷 No puedo ver — la cámara la usa {who} (¿reunión activa?)",
+                _loc_msg("camera_busy", _cam_lang, who=who),
                 icon="dialog-warning",
                 timeout_ms=4000,
             )
@@ -621,7 +627,7 @@ class Daemon:
             if config.get("reminder_voice_enabled", True):
                 try:
                     from axi.reminder_voice import try_create_reminder  # noqa: PLC0415
-                    _rid = try_create_reminder(text)
+                    _rid = try_create_reminder(text, lang=lang)
                 except Exception as _e:  # noqa: BLE001
                     log.warning("reminder_voice fastpath raised: %s", _e)
                     _rid = None
@@ -652,8 +658,12 @@ class Daemon:
                     except Exception:  # noqa: BLE001
                         pass
                     try:
+                        # Expose the utterance language to intent handlers so
+                        # their confirmations can match what the user spoke.
+                        self._utterance_lang = lang or None
+                        _utt_lang = lang or str(config.get("language", "es-MX"))
                         _intents.INTENT_HANDLERS[intent_name](self, params)
-                        notify("Axi", f"Acción ejecutada: {intent_name}",
+                        notify("Axi", _loc_msg("intent_executed", _utt_lang, intent=intent_name),
                                transient=True, timeout_ms=2500)
                         self._set_state("idle")
                         return f"intent:{intent_name}"
@@ -728,7 +738,7 @@ class Daemon:
             self._pause_wakeword_for_meeting()
             notify(
                 "Axi",
-                f"🎙️📷 Modo reunión activo (id #{mid})",
+                _loc_msg("meeting_active", str(config.get("language", "es-MX")), mid=mid),
                 icon="media-record",
                 timeout_ms=3000,
             )
@@ -1091,6 +1101,10 @@ class Daemon:
                 _iname, _iparams = _intent
                 try:
                     log.info("wakeword intent: %s params=%s", _iname, _iparams)
+                    # Wake-word transcription is forced to the configured
+                    # language — clear any stale dictation lang so handlers
+                    # fall back to config.
+                    self._utterance_lang = None
                     _intents.INTENT_HANDLERS[_iname](self, _iparams)
                     self._set_state("idle")
                     return

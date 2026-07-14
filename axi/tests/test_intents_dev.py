@@ -133,3 +133,80 @@ def test_dev_develop_handler_creates_env() -> None:
 
     assert result == "dev_develop:env-created"
     assert created == ["una función de prueba"]
+
+
+# ── dev_develop handler: confirmation localization ───────────────────────────
+
+def _run_dev_develop(utterance_lang, params):
+    """Run _h_dev_develop with a daemon carrying `_utterance_lang`.
+
+    Returns (result, notify_bodies, speak_texts)."""
+    fake_daemon = MagicMock()
+    fake_daemon._utterance_lang = utterance_lang
+    notify_bodies: list[str] = []
+    speak_texts: list[str] = []
+
+    def fake_notify(title, body, **kwargs):
+        notify_bodies.append(body)
+
+    def fake_speak(text, **kwargs):
+        speak_texts.append(text)
+        return True
+
+    with patch("axi.dev_env.create_env", return_value="20260713-x"), \
+         patch("axi.output.notify", side_effect=fake_notify), \
+         patch("axi.speak.speak", side_effect=fake_speak):
+        result = intents._h_dev_develop(fake_daemon, params=params)  # noqa: SLF001
+    return result, notify_bodies, speak_texts
+
+
+def test_dev_develop_english_confirmation():
+    """English utterance → English notify + speak."""
+    result, bodies, spoken = _run_dev_develop("en", {"goal": "a test function"})
+    assert result == "dev_develop:env-created"
+    assert bodies and "/desarrollo" in bodies[0]
+    assert "Listo" not in bodies[0], f"expected English notify, got {bodies[0]!r}"
+    assert spoken and "Listo" not in spoken[0], f"expected English speech, got {spoken[0]!r}"
+
+
+def test_dev_develop_spanish_confirmation_unchanged():
+    """Spanish utterance → the original Spanish strings, byte-for-byte."""
+    result, bodies, spoken = _run_dev_develop("es", {"goal": "una función"})
+    assert result == "dev_develop:env-created"
+    assert bodies[0] == (
+        "Listo, lo armé como ambiente en Desarrollo — entra a /desarrollo "
+        "para probarlo y desplegarlo."
+    )
+    assert spoken[0] == (
+        "Listo, lo armé como ambiente en Desarrollo. Entra a probarlo cuando quieras."
+    )
+
+
+def test_dev_develop_no_goal_english():
+    """English utterance with empty goal → English 'didn't understand' notify."""
+    result, bodies, _ = _run_dev_develop("en", {})
+    assert "no-goal" in result
+    assert bodies and bodies[0] == msg_en_no_goal()
+
+
+def msg_en_no_goal() -> str:
+    from lifeos.localize import msg
+    return msg("dev_no_goal", "en")
+
+
+def test_dev_develop_no_goal_spanish_unchanged():
+    result, bodies, _ = _run_dev_develop("es", {})
+    assert "no-goal" in result
+    assert bodies[0] == "No entendí qué quieres que desarrolle."
+
+
+def test_dev_develop_mock_daemon_lang_falls_back_safely():
+    """A daemon without a real _utterance_lang string (MagicMock attr) must not
+    crash — it falls back to the configured language."""
+    fake_daemon = MagicMock()  # _utterance_lang is a MagicMock, not a str
+    with patch("axi.dev_env.create_env", return_value="x"), \
+         patch("axi.output.notify", return_value=None), \
+         patch("axi.speak.speak", return_value=True), \
+         patch("axi.config.get", side_effect=lambda k, d=None: {"language": "es-MX"}.get(k, d)):
+        result = intents._h_dev_develop(fake_daemon, params={"goal": "algo"})  # noqa: SLF001
+    assert result == "dev_develop:env-created"

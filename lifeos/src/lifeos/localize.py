@@ -25,6 +25,12 @@ _ENGLISH_MONTHS = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
     7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
 }
+_SPANISH_WEEKDAY_ABBR = {
+    0: "lun", 1: "mar", 2: "mié", 3: "jue", 4: "vie", 5: "sáb", 6: "dom",
+}
+_ENGLISH_WEEKDAY_ABBR = {
+    0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun",
+}
 
 
 def lang_family(lang: str | None) -> str:
@@ -47,6 +53,20 @@ def format_local_when(dt: datetime, lang: str | None = None) -> str:
         wd = _ENGLISH_WEEKDAYS[dt.weekday()]
         mo = _ENGLISH_MONTHS[dt.month]
     return f"{wd} {dt.day} {mo} {dt.strftime('%H:%M')}"
+
+
+def format_short_when(dt: datetime, lang: str | None = None) -> str:
+    """Render `dt` like 'sáb 23 14:00' (es) or 'Sat 23 14:00' (en).
+
+    Locale-independent replacement for strftime('%a %d %H:%M') — the day is
+    zero-padded exactly like %d. `dt` should already be in the user's local TZ.
+    """
+    fam = lang_family(lang)
+    if fam == "es":
+        wd = _SPANISH_WEEKDAY_ABBR[dt.weekday()]
+    else:
+        wd = _ENGLISH_WEEKDAY_ABBR[dt.weekday()]
+    return f"{wd} {dt.strftime('%d %H:%M')}"
 
 
 # Daemon voice-loop notification strings.
@@ -95,6 +115,37 @@ _TEMPLATES: dict[tuple[str, str], str] = {
     # Used by _stop_and_transcribe (dictation silence, distinct from ask-mode silence)
     ("silence_dictation", "es"): "No oí nada (silencio)",
     ("silence_dictation", "en"): "No audio detected",
+    # Voice-path confirmations (utterance-language-aware where possible).
+    # ES strings must stay byte-for-byte identical to the historical hardcoded
+    # Spanish so es behavior does not change.
+    ("reminder_created", "es"): "Recordatorio: {message} — {when}",
+    ("reminder_created", "en"): "Reminder: {message} — {when}",
+    ("intent_executed", "es"): "Acción ejecutada: {intent}",
+    ("intent_executed", "en"): "Action executed: {intent}",
+    ("camera_busy", "es"): "📷 No puedo ver — la cámara la usa {who} (¿reunión activa?)",
+    ("camera_busy", "en"): "📷 Can't see — the camera is in use by {who} (meeting in progress?)",
+    ("camera_busy_other_app", "es"): "otra app",
+    ("camera_busy_other_app", "en"): "another app",
+    ("meeting_active", "es"): "🎙️📷 Modo reunión activo (id #{mid})",
+    ("meeting_active", "en"): "🎙️📷 Meeting mode active (id #{mid})",
+    # Hands-free dev intent (_h_dev_develop)
+    ("dev_no_goal", "es"): "No entendí qué quieres que desarrolle.",
+    ("dev_no_goal", "en"): "I didn't catch what you want me to build.",
+    ("dev_env_created", "es"): (
+        "Listo, lo armé como ambiente en Desarrollo — entra a /desarrollo "
+        "para probarlo y desplegarlo."
+    ),
+    ("dev_env_created", "en"): (
+        "Done — I set it up as an environment in Development. "
+        "Open /desarrollo to test and deploy it."
+    ),
+    ("dev_env_created_speak", "es"): (
+        "Listo, lo armé como ambiente en Desarrollo. Entra a probarlo cuando quieras."
+    ),
+    ("dev_env_created_speak", "en"): (
+        "Done — I set it up as an environment in Development. "
+        "Try it out whenever you want."
+    ),
 }
 
 
