@@ -1,0 +1,158 @@
+{
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PairRequest": {
+        "description": "Body of `POST /api/v1/pair` (design D6).\n\n`device_pubkey` is optional and currently stored verbatim (opaque\nstring) for a later milestone (M3 sync, D9's sealed-box K_sync\ntransport) to consume — this batch does not seal or use it for\nanything yet, per the M0-5 scope (device-token exchange only).",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "device_name": {
+            "default": "Unnamed device",
+            "title": "Device Name",
+            "type": "string"
+          },
+          "device_pubkey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Pubkey"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "PairRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Axi Dashboard",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/capabilities": {
+      "get": {
+        "description": "Capability negotiation payload (design D4).\n\nAuth: this route is a normal `/api/v1/*` endpoint — NOT in\n`axi.api_auth.PUBLIC_V1_PATHS` — so it is subject to the same strict\nbearer-auth rule as every other v1 route once `api_auth_enabled=true`.",
+        "operationId": "capabilities_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Capabilities Api V1 Capabilities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capabilities"
+      }
+    },
+    "/api/v1/pair": {
+      "post": {
+        "description": "Exchange a valid, unexpired, unused pairing code for a device token.\n\nAuth: this route is in `axi.api_auth.PUBLIC_V1_PATHS` — reachable with\nno bearer token even when `api_auth_enabled=true` (it is the mechanism\nthat BOOTSTRAPS a device's first token). The pairing code itself is the\nsecurity boundary: it can only be obtained from `/setup`'s\n`GET /api/setup/pairing_code`, an owner-facing legacy route (spec\n`api-auth-pairing`), is single-use, and expires after 5 minutes\n(`axi.pairing`, design D6).\n\nRaises 410 if the code is missing/unknown/expired/already-used — no\ndevice is created and no token is issued in that case (spec: \"Expired\ncode rejected\").",
+        "operationId": "pair_api_v1_pair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Pair Api V1 Pair Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pair"
+      }
+    }
+  }
+}

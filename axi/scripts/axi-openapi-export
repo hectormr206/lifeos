@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# axi-openapi-export — regenerate the committed /api/v1 OpenAPI contract
+# (contracts/openapi/axi-v1.json) from the live axi.dashboard.app schema.
+#
+# Run this after adding/changing any route on axi.api_v1.router, then commit
+# the resulting diff. tests/test_openapi_contract.py fails the build if the
+# committed file and the live schema ever drift apart.
+#
+# Usage: axi-openapi-export
+set -euo pipefail
+exec "$(dirname "$(dirname "$(readlink -f "$0")")")/.venv/bin/python" -m axi.openapi_export "$@"
