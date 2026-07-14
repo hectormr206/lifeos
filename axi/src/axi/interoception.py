@@ -311,6 +311,56 @@ def vital_alerts(snap: dict[str, Any], game_mode: bool = False) -> list[dict[str
     return alerts
 
 
+# ─────────────────────── reflejo (auto-defensa) ──────────────────────────
+
+def heavy_work_deferral() -> str | None:
+    """Reflex: should heavy BACKGROUND work be deferred right now?
+
+    Returns a short human reason (neutral Spanish) when the body is
+    stressed — GPU/CPU at alert temperature, disk under the minimum, VRAM
+    near-full — or when game mode is active (gaming = the user is using
+    the machine hard). Returns None when calm.
+
+    FAIL-OPEN by design: unknown sensors, snapshot failures, or any other
+    error → None. A broken reflex must never block work. Only governs
+    background work (e.g. nightly self-improve); user-initiated work is
+    never gated by this.
+    """
+    try:
+        if _game_active():
+            return "modo juego activo"
+        snap = body_snapshot()
+
+        vram = snap.get("vram")
+        if vram:
+            temp = vram.get("temp_c")
+            gpu_max = int(config.get("body_gpu_temp_max_c", 85))
+            if temp is not None and temp >= gpu_max:
+                return f"GPU a {temp} °C"
+            total = vram.get("total_mb") or 0
+            if total > 0:
+                ratio = (vram.get("used_mb") or 0) / total
+                if ratio >= 0.95:
+                    return f"VRAM al {100 * ratio:.0f}%"
+
+        cpu_temp = snap.get("cpu_temp_c")
+        if cpu_temp is not None:
+            cpu_max = int(config.get("body_cpu_temp_max_c", 90))
+            if cpu_temp >= cpu_max:
+                return f"CPU a {cpu_temp} °C"
+
+        free = snap.get("disk_free_gb")
+        if free is not None:
+            min_gb = float(config.get("disk_min_gb_free", 2))
+            if free < min_gb:
+                return f"disco con {free:.1f} GB libres"
+
+        return None
+    except Exception:  # noqa: BLE001 — fail-open: never block work
+        log.debug("heavy_work_deferral failed (fail-open)", exc_info=True)
+        return None
+
+
 # ─────────────────────── battery care (Pulmones) ─────────────────────────
 # Advisor, not alarm: this laptop has no firmware charge limit
 # (charge_control_*_threshold absent), so the care cycle is behavioral —
@@ -521,6 +571,39 @@ def warning_spike_alerts(now: float | None = None) -> list[dict[str, Any]]:
     return alerts
 
 
+# ─────────────────────── pies (network) ──────────────────────────────────
+
+def network_alerts(net: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Feet rule: online + VPN interface up, but the VPS peer stays silent.
+
+    This is the case that would have caught the real VPS incident: the
+    tunnel LOOKS up (interface present, machine online) yet the peer does
+    not answer the ping. VPN fully down is NOT alerted here — that is the
+    feet organ's "degraded" state on the body map, not a notification.
+    An empty `body_vpn_peer` disables the ping → `vpn_peer_reachable` is
+    None → the rule never fires.
+
+    Takes the shared `feet.network_snapshot()` reading (ONE per loop
+    cycle — the ping already only runs when the VPN interface is up).
+    """
+    if net is None:
+        from axi import feet  # noqa: PLC0415 — lazy: keep import light
+        net = feet.network_snapshot()
+    firing = bool(
+        net.get("online")
+        and net.get("vpn_up")
+        and net.get("vpn_peer_reachable") is False
+    )
+    recovered = net.get("vpn_peer_reachable") is True
+    return [{
+        "key": "vpn_peer_unreachable",
+        "severity": "normal",
+        "message": "Los pies detectan un problema: la VPN al VPS no responde.",
+        "firing": firing,
+        "recovered": recovered,
+    }]
+
+
 # ─────────────────────── alerter ──────────────────────────────────────────
 
 # Episode state, keyed by alert key. {"notified": bool}. In-memory by design:
@@ -614,6 +697,7 @@ def check_and_alert(now: float | None = None) -> list[dict[str, Any]]:
         groups.append(lambda: battery_alerts(snap, now=now))
     groups.append(lambda: flapping_alerts(now))
     groups.append(lambda: warning_spike_alerts(now))
+    groups.append(lambda: network_alerts())
 
     rules: list[dict[str, Any]] = []
     for group in groups:

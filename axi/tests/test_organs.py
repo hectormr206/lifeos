@@ -29,13 +29,19 @@ def _healthy_body() -> dict:
     }
 
 
+def _healthy_net() -> dict:
+    return {"online": True, "net_name": "Casa 5G", "vpn_up": True,
+            "vpn_peer_reachable": True}
+
+
 @pytest.fixture
 def calm(monkeypatch):
     """Baseline: every service active, healthy vitals, daemon reachable."""
-    from axi import organs
+    from axi import feet, organs
     monkeypatch.setattr(organs, "_service_active", lambda unit: True)
     monkeypatch.setattr(organs, "_daemon_cmd", lambda *a, **k: "active")
     monkeypatch.setattr(organs, "_body_snapshot", lambda: _healthy_body())
+    monkeypatch.setattr(feet, "network_snapshot", lambda: _healthy_net())
     return organs
 
 
@@ -60,9 +66,76 @@ def test_every_entry_has_nonempty_description(calm):
 
 def test_planned_organs_report_planned_state(calm):
     entries = {e["key"]: e for e in calm.all_organs()}
-    for key in ("feet", "immune"):
-        assert entries[key]["state"] == "planned"
-        assert entries[key]["detail"] == "en desarrollo"
+    # feet went LIVE — only immune remains planned.
+    assert entries["immune"]["state"] == "planned"
+    assert entries["immune"]["detail"] == "en desarrollo"
+
+
+# ─────────────────────────── feet (network) ──────────────────────────────
+
+def test_feet_ok_when_online_and_vpn_alive(calm):
+    feet_organ = next(e for e in calm.all_organs() if e["key"] == "feet")
+    assert feet_organ["state"] == "ok"
+    assert feet_organ["detail"] == "en línea — red Casa 5G, VPN viva"
+
+
+def test_feet_down_when_offline(calm, monkeypatch):
+    from axi import feet
+    monkeypatch.setattr(feet, "network_snapshot", lambda: {
+        "online": False, "net_name": None, "vpn_up": False,
+        "vpn_peer_reachable": None,
+    })
+    feet_organ = next(e for e in calm.all_organs() if e["key"] == "feet")
+    assert feet_organ["state"] == "down"
+    assert feet_organ["detail"] == "sin conexión de red"
+
+
+def test_feet_degraded_when_vpn_down(calm, monkeypatch):
+    from axi import feet
+    monkeypatch.setattr(feet, "network_snapshot", lambda: {
+        "online": True, "net_name": "Casa 5G", "vpn_up": False,
+        "vpn_peer_reachable": None,
+    })
+    feet_organ = next(e for e in calm.all_organs() if e["key"] == "feet")
+    assert feet_organ["state"] == "degraded"
+    assert "VPN caída" in feet_organ["detail"]
+
+
+def test_feet_degraded_when_vpn_peer_unreachable(calm, monkeypatch):
+    from axi import feet
+    monkeypatch.setattr(feet, "network_snapshot", lambda: {
+        "online": True, "net_name": "Casa 5G", "vpn_up": True,
+        "vpn_peer_reachable": False,
+    })
+    feet_organ = next(e for e in calm.all_organs() if e["key"] == "feet")
+    assert feet_organ["state"] == "degraded"
+    assert "VPN no responde" in feet_organ["detail"]
+
+
+def test_feet_ok_when_peer_check_disabled(calm, monkeypatch):
+    from axi import feet
+    monkeypatch.setattr(feet, "network_snapshot", lambda: {
+        "online": True, "net_name": "Casa 5G", "vpn_up": True,
+        "vpn_peer_reachable": None,  # empty body_vpn_peer disables the ping
+    })
+    feet_organ = next(e for e in calm.all_organs() if e["key"] == "feet")
+    assert feet_organ["state"] == "ok"
+
+
+def test_feet_unknown_when_snapshot_raises(calm, monkeypatch):
+    from axi import feet
+
+    def boom():
+        raise RuntimeError("network sensors offline")
+
+    monkeypatch.setattr(feet, "network_snapshot", boom)
+    feet_organ = next(e for e in calm.all_organs() if e["key"] == "feet")
+    assert feet_organ["state"] == "unknown"
+
+
+def test_feet_description_is_present_tense(calm):
+    feet_organ = next(e for e in calm.all_organs() if e["key"] == "feet")
+    assert "Darán" not in feet_organ["description"]
 
 
 def test_raising_reader_yields_unknown_and_never_raises(calm, monkeypatch):
@@ -198,9 +271,10 @@ def test_body_summary_ignores_planned_organs(calm):
     """Planned (future) organs never count as issues nor inflate the totals."""
     s = calm.body_summary()
     assert "planned" not in s.lower()
-    assert "pies" not in s.lower() and "inmune" not in s.lower()
-    # Head counts exclude the 2 planned organs: 10/10, not 10/12.
-    assert "10/10" in s
+    assert "inmune" not in s.lower()
+    # Head counts exclude the 1 remaining planned organ (immune): 11/11,
+    # not 11/12 — feet is live now and healthy in the calm fixture.
+    assert "11/11" in s
 
 
 # ──────────────────── chat self-state detection ──────────────────────────

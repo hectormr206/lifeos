@@ -1296,6 +1296,38 @@ def _handle_cmd(daemon: Daemon, cmd: str) -> tuple[str, bool]:
     return f"unknown: {cmd!r}", False
 
 
+def _self_improve_pre_fire(state: dict, today: str) -> bool:
+    """Reflejo (auto-defensa) gate before the nightly self-improve run.
+
+    Checks `interoception.heavy_work_deferral()` FIRST: a stressed body
+    (hot GPU/CPU, low disk, VRAM near-full, game mode) defers the run and
+    returns False WITHOUT burning the once-per-day marker — the next
+    30-min tick simply retries. A calm body burns the marker
+    (state["last_date"] = today) and returns True.
+
+    FAIL-OPEN: any error in the reflex → proceed as before (True). The
+    reflex must never break the pipeline. Only BACKGROUND work is gated —
+    user-initiated dev runs and chat are never touched by this.
+    """
+    reason: str | None = None
+    try:
+        from axi import interoception  # noqa: PLC0415
+        reason = interoception.heavy_work_deferral()
+    except Exception:  # noqa: BLE001 — reflex must never break the pipeline
+        reason = None
+    if reason:
+        msg = f"reflejo: self-improve diferido — {reason}"
+        log.info(msg)
+        try:
+            from axi import events  # noqa: PLC0415
+            events.log_info("daemon", msg, data={"reason": reason})
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+    state["last_date"] = today
+    return True
+
+
 def _configure_web_research() -> None:
     """Wire SearXNG + fetch into lifeos.web for THIS process.
 
@@ -1509,7 +1541,10 @@ def serve() -> int:
                         last_fired_date=_self_improve_state["last_date"],
                         today=today,
                     ):
-                        _self_improve_state["last_date"] = today
+                        # Reflejo: a stressed body defers the run WITHOUT
+                        # burning the day marker (next tick retries).
+                        if not _self_improve_pre_fire(_self_improve_state, today):
+                            continue
                         repo_path = os.path.expanduser(
                             config.get("dev_director_repo", "~/LifeOS/lifeos")
                         )

@@ -680,3 +680,62 @@ def test_dictation_intent_sets_utterance_lang(monkeypatch):
     d = _build(transcriber=tx)
     _run_toggle_cycle(d)
     assert seen == ["en"], f"handler saw _utterance_lang={seen!r}"
+
+
+# ───────────── reflejo: self-improve deferral gate ─────────────
+
+class TestSelfImprovePreFire:
+    """The reflex gate before the nightly self-improve run.
+
+    A stressed body defers the run WITHOUT burning the once-per-day marker
+    (so the next 30-min tick retries); a calm body burns the marker and
+    proceeds; a broken reflex NEVER blocks the pipeline (fail-open).
+    """
+
+    def test_deferral_skips_and_keeps_day_marker(self, monkeypatch):
+        from axi import daemon as d_mod, interoception
+        monkeypatch.setattr(
+            interoception, "heavy_work_deferral", lambda: "GPU a 93 °C"
+        )
+        logged: list[str] = []
+        from axi import events
+        monkeypatch.setattr(
+            events, "log_info",
+            lambda source, message, data=None: logged.append(message),
+        )
+        state = {"last_date": None}
+        assert d_mod._self_improve_pre_fire(state, "2026-07-13") is False
+        assert state["last_date"] is None  # marker NOT burned → retry later
+        assert logged == ["reflejo: self-improve diferido — GPU a 93 °C"]
+
+    def test_calm_body_burns_marker_and_proceeds(self, monkeypatch):
+        from axi import daemon as d_mod, interoception
+        monkeypatch.setattr(interoception, "heavy_work_deferral", lambda: None)
+        state = {"last_date": None}
+        assert d_mod._self_improve_pre_fire(state, "2026-07-13") is True
+        assert state["last_date"] == "2026-07-13"
+
+    def test_reflex_error_fails_open(self, monkeypatch):
+        from axi import daemon as d_mod, interoception
+
+        def boom():
+            raise RuntimeError("sensors exploded")
+
+        monkeypatch.setattr(interoception, "heavy_work_deferral", boom)
+        state = {"last_date": None}
+        assert d_mod._self_improve_pre_fire(state, "2026-07-13") is True
+        assert state["last_date"] == "2026-07-13"
+
+    def test_events_log_failure_still_defers(self, monkeypatch):
+        from axi import daemon as d_mod, events, interoception
+        monkeypatch.setattr(
+            interoception, "heavy_work_deferral", lambda: "modo juego activo"
+        )
+
+        def boom(*a, **k):
+            raise RuntimeError("events db locked")
+
+        monkeypatch.setattr(events, "log_info", boom)
+        state = {"last_date": None}
+        assert d_mod._self_improve_pre_fire(state, "2026-07-13") is False
+        assert state["last_date"] is None

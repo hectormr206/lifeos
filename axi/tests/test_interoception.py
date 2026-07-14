@@ -67,6 +67,7 @@ def quiet(monkeypatch):
     )
     monkeypatch.setattr(intero, "flapping_alerts", lambda now=None: [])
     monkeypatch.setattr(intero, "warning_spike_alerts", lambda now=None: [])
+    monkeypatch.setattr(intero, "network_alerts", lambda net=None: [])
     return sent
 
 
@@ -612,6 +613,186 @@ def test_warning_spike_silent_below_threshold(monkeypatch):
     assert all(not a["firing"] for a in intero.warning_spike_alerts(now=now))
 
 
+# ───────────── reflejo: heavy_work_deferral (auto-defensa) ───────────────
+
+def _deferral_env(monkeypatch, snap, game=False, config_overrides=None):
+    monkeypatch.setattr(intero.config, "get", _fake_config(config_overrides))
+    monkeypatch.setattr(intero, "_game_active", lambda: game)
+    if isinstance(snap, Exception):
+        def _boom():
+            raise snap
+        monkeypatch.setattr(intero, "body_snapshot", _boom)
+    else:
+        monkeypatch.setattr(intero, "body_snapshot", lambda: snap)
+
+
+def test_deferral_none_when_calm(monkeypatch):
+    _deferral_env(monkeypatch, _snap())
+    assert intero.heavy_work_deferral() is None
+
+
+def test_deferral_on_gpu_temp(monkeypatch):
+    snap = _snap(vram={"name": "gpu", "used_mb": 1000, "total_mb": 16000,
+                       "util_pct": 10, "temp_c": 93})
+    _deferral_env(monkeypatch, snap)
+    reason = intero.heavy_work_deferral()
+    assert reason == "GPU a 93 °C"
+
+
+def test_deferral_on_cpu_temp(monkeypatch):
+    _deferral_env(monkeypatch, _snap(cpu_temp_c=90))
+    reason = intero.heavy_work_deferral()
+    assert reason == "CPU a 90 °C"
+
+
+def test_deferral_on_low_disk(monkeypatch):
+    _deferral_env(monkeypatch, _snap(disk_free_gb=1.8))
+    reason = intero.heavy_work_deferral()
+    assert reason == "disco con 1.8 GB libres"
+
+
+def test_deferral_on_vram_near_full(monkeypatch):
+    snap = _snap(vram={"name": "gpu", "used_mb": 15300, "total_mb": 16000,
+                       "util_pct": 90, "temp_c": 60})
+    _deferral_env(monkeypatch, snap)
+    reason = intero.heavy_work_deferral()
+    assert reason is not None and "VRAM" in reason
+
+
+def test_deferral_on_game_mode(monkeypatch):
+    _deferral_env(monkeypatch, _snap(), game=True)
+    assert intero.heavy_work_deferral() == "modo juego activo"
+
+
+def test_deferral_fail_open_when_snapshot_raises(monkeypatch):
+    _deferral_env(monkeypatch, RuntimeError("sensors exploded"))
+    assert intero.heavy_work_deferral() is None
+
+
+def test_deferral_fail_open_when_sensors_unavailable(monkeypatch):
+    # Unknown readings (no GPU, no temps, no disk) must NEVER block work.
+    _deferral_env(monkeypatch, _snap(vram=None, cpu_temp_c=None,
+                                     disk_free_gb=None))
+    assert intero.heavy_work_deferral() is None
+
+
+def test_deferral_fail_open_when_game_probe_raises(monkeypatch):
+    monkeypatch.setattr(intero.config, "get", _fake_config())
+    monkeypatch.setattr(intero, "body_snapshot", lambda: _snap())
+
+    def _boom():
+        raise RuntimeError("heartbeat unreachable")
+    monkeypatch.setattr(intero, "_game_active", _boom)
+    assert intero.heavy_work_deferral() is None  # calm body, broken probe
+
+
+# ───────────── pies: VPN peer rule (network_alerts) ───────────────────────
+
+def _net(**overrides):
+    base = {"online": True, "net_name": "Casa 5G", "vpn_up": True,
+            "vpn_peer_reachable": True}
+    base.update(overrides)
+    return base
+
+
+def test_vpn_rule_fires_when_peer_unreachable():
+    alerts = intero.network_alerts(_net(vpn_peer_reachable=False))
+    rule = next(a for a in alerts if a["key"] == "vpn_peer_unreachable")
+    assert rule["firing"] is True
+    assert rule["severity"] == "normal"
+    assert rule["message"] == (
+        "Los pies detectan un problema: la VPN al VPS no responde."
+    )
+
+
+def test_vpn_rule_silent_when_peer_reachable():
+    alerts = intero.network_alerts(_net())
+    rule = next(a for a in alerts if a["key"] == "vpn_peer_unreachable")
+    assert rule["firing"] is False
+    assert rule["recovered"] is True
+
+
+def test_vpn_rule_silent_when_vpn_down():
+    # VPN fully down is the feet organ's "degraded" state, not a spam alert.
+    alerts = intero.network_alerts(_net(vpn_up=False, vpn_peer_reachable=None))
+    rule = next(a for a in alerts if a["key"] == "vpn_peer_unreachable")
+    assert rule["firing"] is False
+
+
+def test_vpn_rule_silent_when_offline():
+    alerts = intero.network_alerts(
+        _net(online=False, vpn_up=False, vpn_peer_reachable=None))
+    rule = next(a for a in alerts if a["key"] == "vpn_peer_unreachable")
+    assert rule["firing"] is False
+
+
+def test_vpn_rule_disabled_by_empty_peer():
+    # feet reports vpn_peer_reachable=None when body_vpn_peer is empty.
+    alerts = intero.network_alerts(_net(vpn_peer_reachable=None))
+    rule = next(a for a in alerts if a["key"] == "vpn_peer_unreachable")
+    assert rule["firing"] is False
+
+
+@pytest.fixture
+def quiet_net(monkeypatch):
+    """Like `quiet` but keeps the REAL network_alerts wired into the loop,
+    feeding it from a patched feet.network_snapshot (no subprocesses)."""
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(intero.config, "get", _fake_config())
+    monkeypatch.setattr(intero, "_suppression_reason", lambda: None)
+    monkeypatch.setattr(
+        intero, "_notify",
+        lambda message, severity="warning": sent.append((message, severity)),
+    )
+    monkeypatch.setattr(intero, "flapping_alerts", lambda now=None: [])
+    monkeypatch.setattr(intero, "warning_spike_alerts", lambda now=None: [])
+    monkeypatch.setattr(intero, "body_snapshot", lambda: _snap())
+    return sent
+
+
+def test_vpn_rule_notifies_once_per_episode(monkeypatch, quiet_net):
+    import axi.feet
+    monkeypatch.setattr(axi.feet, "network_snapshot",
+                        lambda: _net(vpn_peer_reachable=False))
+    fired = intero.check_and_alert()
+    assert any(a["key"] == "vpn_peer_unreachable" for a in fired)
+    assert quiet_net == [(
+        "Los pies detectan un problema: la VPN al VPS no responde.",
+        "normal",
+    )]
+    assert intero.check_and_alert() == []  # same episode: no repeat
+    assert len(quiet_net) == 1
+
+
+def test_vpn_rule_new_episode_after_recovery(monkeypatch, quiet_net):
+    import axi.feet
+    state = {"reachable": False}
+    monkeypatch.setattr(
+        axi.feet, "network_snapshot",
+        lambda: _net(vpn_peer_reachable=state["reachable"]),
+    )
+    intero.check_and_alert()          # fires
+    state["reachable"] = True
+    intero.check_and_alert()          # recovers, closes episode
+    state["reachable"] = False
+    fired = intero.check_and_alert()  # new episode → fires again
+    assert any(a["key"] == "vpn_peer_unreachable" for a in fired)
+    assert len(quiet_net) == 2
+
+
+def test_check_and_alert_calls_network_snapshot_once(monkeypatch, quiet_net):
+    import axi.feet
+    calls = {"n": 0}
+
+    def _snapshot():
+        calls["n"] += 1
+        return _net()
+
+    monkeypatch.setattr(axi.feet, "network_snapshot", _snapshot)
+    intero.check_and_alert()
+    assert calls["n"] == 1  # one snapshot (thus at most one ping) per cycle
+
+
 # ───────────────────────── loop robustness ───────────────────────────────
 
 def test_loop_iteration_never_raises_when_sensors_throw(monkeypatch):
@@ -621,6 +802,7 @@ def test_loop_iteration_never_raises_when_sensors_throw(monkeypatch):
     monkeypatch.setattr(intero, "body_snapshot", _boom)
     monkeypatch.setattr(intero, "flapping_alerts", _boom)
     monkeypatch.setattr(intero, "warning_spike_alerts", _boom)
+    monkeypatch.setattr(intero, "network_alerts", _boom)
     monkeypatch.setattr(intero, "_suppression_reason", _boom)
     monkeypatch.setattr(intero.config, "get", _boom)
 

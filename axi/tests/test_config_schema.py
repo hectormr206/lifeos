@@ -85,6 +85,8 @@ def test_schema_covers_historical_keys():
         "body_battery_care_enabled",
         "body_battery_full_days",
         "body_battery_replug_pct",
+        # Feet organ (network awareness) — VPN peer liveness ping.
+        "body_vpn_peer",
     }
     missing = historical_keys - names
     assert not missing, f"config schema dropped historical keys: {sorted(missing)}"

@@ -317,6 +317,12 @@ FIELDS: tuple[ConfigField, ...] = (
         "you to reconnect the charger — completing the care cycle.",
         minimum=15, maximum=80,
     ),
+    # ─────── feet organ (network awareness) ───────
+    ConfigField(
+        "body_vpn_peer", "string", "10.66.66.1",
+        "WireGuard peer IP the feet organ pings (one packet, 1 s timeout) to "
+        "confirm the VPS tunnel is alive. Empty disables the check.",
+    ),
     # ─────── daemon voice gate ───────
     ConfigField(
         "silence_rms_threshold", "number", 0.002,

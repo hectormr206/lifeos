@@ -210,6 +210,26 @@ def _read_mind(ctx: dict[str, Any]) -> dict[str, str]:
     return {"state": "off", "detail": "pensamiento autónomo desactivado"}
 
 
+def _read_feet(ctx: dict[str, Any]) -> dict[str, str]:
+    """Network awareness via feet.network_snapshot() (best-effort, cheap)."""
+    from axi import feet  # noqa: PLC0415 — lazy: keep import light
+    net = feet.network_snapshot()
+    if not net.get("online"):
+        return {"state": "down", "detail": "sin conexión de red"}
+    name = net.get("net_name") or "desconocida"
+    if not net.get("vpn_up"):
+        return {"state": "degraded",
+                "detail": f"en línea — red {name}, VPN caída"}
+    reachable = net.get("vpn_peer_reachable")
+    if reachable is False:
+        return {"state": "degraded",
+                "detail": f"en línea — red {name}, VPN no responde"}
+    if reachable is None:  # empty body_vpn_peer → ping disabled
+        return {"state": "ok",
+                "detail": f"en línea — red {name}, VPN activa (ping desactivado)"}
+    return {"state": "ok", "detail": f"en línea — red {name}, VPN viva"}
+
+
 def _read_planned(ctx: dict[str, Any]) -> dict[str, str]:
     """Future organs: declared in the body map, not built yet."""
     return {"state": "planned", "detail": "en desarrollo"}
@@ -262,10 +282,10 @@ _ORGANS: list[dict[str, Any]] = [
                      "reflexiona y actúa por su cuenta sin que se lo "
                      "pidas.")},
     {"key": "feet", "name": "pies", "name_en": "feet",
-     "services": [], "reader": _read_planned,
-     "description": ("Darán a Axi conciencia de red y ubicación: en qué "
-                     "red está, si hay internet y si la VPN al VPS sigue "
-                     "viva.")},
+     "services": [], "reader": _read_feet,
+     "description": ("Dan a Axi conciencia de red: en qué red está, si "
+                     "hay conexión y si la VPN al VPS sigue viva (ping al "
+                     "peer WireGuard).")},
     {"key": "immune", "name": "sistema inmune", "name_en": "immune system",
      "services": [], "reader": _read_planned,
      "description": ("Aprenderá de los patrones del olfato para prevenir "
