@@ -150,8 +150,11 @@ def test_lenient_load_accepts_unknown_key_and_warns():
     events._reset_for_tests()
     out = config_schema.lenient_load({"definitely_not_a_real_key": "hi"})
     assert out["definitely_not_a_real_key"] == "hi"
-    # Defaults still present for known keys
-    assert out["timezone"] == "America/Mexico_City"
+    # Defaults still present for known keys. The timezone default is derived
+    # from the host (tzlocal), so compare against the schema default rather
+    # than a hardcoded zone — otherwise this fails on any non-Mexico machine
+    # (e.g. a UTC CI runner).
+    assert out["timezone"] == config_schema.defaults()["timezone"]
     recent = events.recent_events(limit=10, level="warning")
     assert any("unknown key" in e["message"] for e in recent)
 
@@ -276,5 +279,6 @@ def test_config_load_tolerates_garbage_on_disk(tmp_path, monkeypatch):
     assert loaded["tray_poll_ms"] == 500
     # Unknown key preserved.
     assert loaded["extra_unknown"] == "ok"
-    # Known defaults present.
-    assert loaded["timezone"] == "America/Mexico_City"
+    # Known defaults present. Compare against the host-derived default, not a
+    # hardcoded zone, so this passes on any machine (incl. a UTC CI runner).
+    assert loaded["timezone"] == config_schema.defaults()["timezone"]
