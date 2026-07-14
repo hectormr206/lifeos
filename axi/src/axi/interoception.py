@@ -22,12 +22,23 @@ Architecture:
 * LOOP: `run_interoception_loop(stop_event)` runs in the DAEMON process,
   battery-scaled, never raises.
 
-Suppression: during a meeting or game mode Axi keeps SENSING (episodes are
-tracked) but stays silent; pending un-notified episodes fire once the
-suppression lifts.
+Suppression: a MEETING fully suppresses — Axi keeps SENSING (episodes are
+tracked) but stays silent; pending un-notified episodes are RE-EVALUATED once
+the suppression lifts (only still-failing conditions notify; recovered ones
+close silently — no stale burst). GAME MODE does not blanket-suppress: it
+RECALIBRATES. The load/thermal family switches to game thresholds (VRAM rule
+disabled — games fill VRAM by design; GPU/CPU temp alert only at hard-danger
+levels) and a game-threshold breach notifies IMMEDIATELY (real danger beats
+immersion); everything else (disk, sniffer, battery care) defers like a
+meeting.
+
+Battery care (advisor, not alarm): nudges to unplug after days at 100% and to
+replug at the care threshold. Its `full_since` tracking spans DAYS, so it is
+persisted in a small JSON state file (survives daemon restarts).
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -52,6 +63,8 @@ FLAP_WINDOW_S = 3600        # rolling window for restart counting (1 h)
 FLAP_THRESHOLD = 3          # restarts within window → flapping
 WARN_SPIKE_N = 10           # same-source warnings within window → spike
 WARN_SPIKE_WINDOW_S = 3600  # rolling window for warning counting (1 h)
+BATTERY_FULL_PCT = 98       # % at/above which a plugged battery counts as full
+_DAY_S = 86400.0
 
 # ─────────────────────── sensors (Pulmones) ──────────────────────────────
 # Moved here from axi.dashboard (which re-imports them) so the daemon can
@@ -163,15 +176,56 @@ def disk_free_gb(path: str | os.PathLike | None = None) -> float | None:
         return None
 
 
+# Battery sysfs (BAT0). All reads best-effort: any error → None per field, so
+# desktops / odd firmwares never break the snapshot.
+_BAT_SYSFS_DIR = Path("/sys/class/power_supply/BAT0")
+
+
+def _bat_read(name: str) -> str | None:
+    try:
+        return (_BAT_SYSFS_DIR / name).read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+
+
+def _battery_snapshot() -> dict[str, Any]:
+    """Battery vitals from sysfs: charge %, status, health %, cycle count."""
+    pct = _bat_read("capacity")
+    status = _bat_read("status")
+    cycles = _bat_read("cycle_count")
+    full = _bat_read("charge_full")
+    design = _bat_read("charge_full_design")
+    health: float | None = None
+    try:
+        if full is not None and design is not None and int(design) > 0:
+            health = round(100 * int(full) / int(design), 1)
+    except (ValueError, ZeroDivisionError):
+        health = None
+
+    def _to_int(raw: str | None) -> int | None:
+        try:
+            return int(raw) if raw is not None else None
+        except ValueError:
+            return None
+
+    return {
+        "battery_pct": _to_int(pct),
+        "battery_status": status or None,
+        "battery_health_pct": health,
+        "battery_cycles": _to_int(cycles),
+    }
+
+
 def body_snapshot() -> dict[str, Any]:
-    """One reading of Axi's body: GPU, CPU, RAM, disk, power source.
+    """One reading of Axi's body: GPU, CPU, RAM, disk, power, battery.
 
     `vram` is None on machines without a working nvidia-smi (no GPU).
+    Battery fields are all None on machines without a BAT0 sysfs node.
     """
     vram = _vram_snapshot()
     if vram.get("name") is None and not vram.get("total_mb"):
         vram = None
-    return {
+    snap = {
         "vram": vram,
         "cpu_pct": _cpu_pct(),
         "cpu_temp_c": _cpu_temp_c(),
@@ -179,6 +233,8 @@ def body_snapshot() -> dict[str, Any]:
         "disk_free_gb": disk_free_gb(),
         "on_battery": power.on_battery(),
     }
+    snap.update(_battery_snapshot())
+    return snap
 
 
 # ─────────────────────── vital rules (Pulmones) ──────────────────────────
@@ -187,7 +243,16 @@ def body_snapshot() -> dict[str, Any]:
 # beyond the margin, so a reading hovering at the threshold cannot flap.
 
 
-def vital_alerts(snap: dict[str, Any]) -> list[dict[str, Any]]:
+def vital_alerts(snap: dict[str, Any], game_mode: bool = False) -> list[dict[str, Any]]:
+    """Threshold rules over one body snapshot.
+
+    `game_mode` recalibrates the load/thermal family: games legitimately run
+    hot and fill VRAM, so the VRAM rule is DISABLED and the GPU/CPU temp rules
+    switch to the hard-danger game thresholds. A game-threshold breach is
+    marked `game_immediate` so the alerter notifies right away instead of
+    deferring (real danger beats immersion). Disk keeps normal thresholds —
+    running out of space is never game-related.
+    """
     alerts: list[dict[str, Any]] = []
 
     free = snap.get("disk_free_gb")
@@ -203,7 +268,10 @@ def vital_alerts(snap: dict[str, Any]) -> list[dict[str, Any]]:
 
     vram = snap.get("vram")
     if vram:
-        gpu_max = int(config.get("body_gpu_temp_max_c", 85))
+        if game_mode:
+            gpu_max = int(config.get("body_game_gpu_temp_max_c", 92))
+        else:
+            gpu_max = int(config.get("body_gpu_temp_max_c", 85))
         temp = vram.get("temp_c")
         if temp is not None:
             alerts.append({
@@ -212,9 +280,10 @@ def vital_alerts(snap: dict[str, Any]) -> list[dict[str, Any]]:
                 "message": f"La GPU está a {temp} °C.",
                 "firing": temp >= gpu_max,
                 "recovered": temp <= gpu_max - TEMP_RECOVER_MARGIN_C,
+                "game_immediate": game_mode,
             })
         total = vram.get("total_mb") or 0
-        if total > 0:
+        if total > 0 and not game_mode:  # games fill VRAM by design
             pct = 100 * (vram.get("used_mb") or 0) / total
             alerts.append({
                 "key": "vram_full",
@@ -226,16 +295,140 @@ def vital_alerts(snap: dict[str, Any]) -> list[dict[str, Any]]:
 
     cpu_temp = snap.get("cpu_temp_c")
     if cpu_temp is not None:
-        cpu_max = int(config.get("body_cpu_temp_max_c", 90))
+        if game_mode:
+            cpu_max = int(config.get("body_game_cpu_temp_max_c", 95))
+        else:
+            cpu_max = int(config.get("body_cpu_temp_max_c", 90))
         alerts.append({
             "key": "cpu_temp_high",
             "severity": "critical",
             "message": f"El CPU está a {cpu_temp} °C.",
             "firing": cpu_temp >= cpu_max,
             "recovered": cpu_temp <= cpu_max - TEMP_RECOVER_MARGIN_C,
+            "game_immediate": game_mode,
         })
 
     return alerts
+
+
+# ─────────────────────── battery care (Pulmones) ─────────────────────────
+# Advisor, not alarm: this laptop has no firmware charge limit
+# (charge_control_*_threshold absent), so the care cycle is behavioral —
+# nudge to UNPLUG after days pinned at 100%, nudge to REPLUG at the care
+# threshold. `full_since` spans DAYS → persisted JSON state (survives
+# restarts), unlike the in-memory episode dicts.
+
+
+def _battery_state_path() -> Path:
+    root = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(root) / "axi" / "interoception_battery.json"
+
+
+def _load_battery_state(path: Path | None = None) -> dict[str, Any]:
+    path = path or _battery_state_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return {
+                "full_since": raw.get("full_since"),
+                "discharge_advised_at": raw.get("discharge_advised_at"),
+            }
+    except (OSError, ValueError):
+        pass
+    return {"full_since": None, "discharge_advised_at": None}
+
+
+def _save_battery_state(state: dict[str, Any], path: Path | None = None) -> None:
+    path = path or _battery_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state), encoding="utf-8")
+    except OSError as e:
+        log.warning("interoception battery state save failed: %s", e)
+
+
+def _mark_battery_advised(ts: float) -> None:
+    """Persist the unplug-advice timestamp AT NOTIFICATION TIME.
+
+    Called via the rule's `on_notified` hook so a deferred (suppressed) nudge
+    does not mark itself advised before it was ever delivered.
+    """
+    state = _load_battery_state()
+    state["discharge_advised_at"] = ts
+    _save_battery_state(state)
+
+
+def battery_alerts(snap: dict[str, Any], now: float | None = None) -> list[dict[str, Any]]:
+    """Battery care nudges (severity `normal`, deferred in meeting AND game).
+
+    UNPLUG: plugged + >=98% continuously for body_battery_full_days days →
+    nudge once (repeat only after a completed care cycle or another N days).
+    REPLUG: on battery at <= body_battery_replug_pct % → nudge; reaching this
+    completes the care cycle and resets the tracking.
+    """
+    now = time.time() if now is None else now
+    try:
+        if not bool(config.get("body_battery_care_enabled", True)):
+            return []
+        full_days = int(config.get("body_battery_full_days", 7))
+        replug_pct = int(config.get("body_battery_replug_pct", 40))
+    except Exception:  # noqa: BLE001
+        return []
+    pct = snap.get("battery_pct")
+    on_batt = snap.get("on_battery")
+    if pct is None or on_batt is None:
+        return []  # no battery (desktop) or unknown power state → no rules
+
+    state = _load_battery_state()
+    dirty = False
+    plugged_full = (not on_batt) and pct >= BATTERY_FULL_PCT
+
+    if plugged_full and state["full_since"] is None:
+        state["full_since"] = now
+        dirty = True
+    elif on_batt and state["full_since"] is not None:
+        # Discharge started → the continuous plugged-full run is over.
+        state["full_since"] = None
+        dirty = True
+
+    replug_firing = bool(on_batt) and pct <= replug_pct
+    if replug_firing and state["discharge_advised_at"] is not None:
+        state["discharge_advised_at"] = None  # care cycle complete
+        dirty = True
+    if dirty:
+        _save_battery_state(state)
+
+    days_full = ((now - state["full_since"]) / _DAY_S
+                 if state["full_since"] is not None else 0.0)
+    advised = state["discharge_advised_at"]
+    unplug_firing = (
+        plugged_full
+        and days_full >= full_days
+        and (advised is None or now - advised >= full_days * _DAY_S)
+    )
+    return [
+        {
+            "key": "battery_unplug",
+            "severity": "normal",
+            "message": (
+                f"Llevas {int(days_full)} días con la batería llena y conectada. "
+                "Desconecta el cargador un rato; te aviso cuando toque reconectar."
+            ),
+            "firing": unplug_firing,
+            "recovered": not plugged_full,
+            "on_notified": lambda ts=now: _mark_battery_advised(ts),
+        },
+        {
+            "key": "battery_replug",
+            "severity": "normal",
+            "message": (
+                f"La batería llegó a {pct}%. Reconecta el cargador — "
+                "ciclo de cuidado completo."
+            ),
+            "firing": replug_firing,
+            "recovered": not on_batt,
+        },
+    ]
 
 
 # ─────────────────────── sniffer (Olfato) ────────────────────────────────
@@ -336,23 +529,36 @@ def warning_spike_alerts(now: float | None = None) -> list[dict[str, Any]]:
 _episodes: dict[str, dict[str, Any]] = {}
 
 
-def _suppressed() -> bool:
-    """True when Axi must stay silent: meeting recording or game mode.
-
-    Fail-safe mirrors heartbeat: an uncertain meeting state suppresses
-    (better one missed notification than an interrupted meeting).
-    """
-    try:
-        from axi import heartbeat  # lazy
-        if heartbeat.game_mode_active():
-            return True
-    except Exception:  # noqa: BLE001
-        pass
+def _meeting_active() -> bool | None:
+    """Meeting recording state; None when it cannot be determined."""
     try:
         from axi import store  # lazy
         return bool(store.meeting_in_progress())
     except Exception:  # noqa: BLE001
-        return True
+        return None
+
+
+def _game_active() -> bool:
+    try:
+        from axi import heartbeat  # lazy
+        return bool(heartbeat.game_mode_active())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _suppression_reason() -> str | None:
+    """WHY Axi is suppressed: None (free), 'meeting', or 'game'.
+
+    Meeting wins over game (full suppression). Fail-safe mirrors heartbeat:
+    an UNCERTAIN meeting state suppresses as 'meeting' (better one missed
+    notification than an interrupted meeting).
+    """
+    meeting = _meeting_active()
+    if meeting or meeting is None:
+        return "meeting"
+    if _game_active():
+        return "game"
+    return None
 
 
 def _notify(message: str, severity: str = "warning") -> None:
@@ -380,31 +586,48 @@ def check_and_alert(now: float | None = None) -> list[dict[str, Any]]:
     """Evaluate all rules, apply episode hysteresis, notify. Returns fired alerts.
 
     A "fired" alert is one that actually produced a notification this call.
-    During suppression the episode is still opened (Axi keeps sensing) but the
-    notification is deferred until the suppression lifts.
+    During a MEETING every episode is still opened (Axi keeps sensing) but the
+    notification is deferred. During GAME MODE only `game_immediate` rules
+    (thermal hard-danger at game thresholds) notify right away; the rest defer
+    like a meeting. Deferred episodes are re-evaluated against a FRESH reading
+    on every call — including the one where suppression lifts — so only
+    conditions that STILL hold notify; recovered ones close silently.
     """
     now = time.time() if now is None else now
 
+    try:
+        reason = _suppression_reason()
+    except Exception:  # noqa: BLE001
+        reason = "meeting"  # fail-safe: uncertain state → stay silent
+    game = reason == "game"
+
+    snap: dict[str, Any] | None
+    try:
+        snap = body_snapshot()
+    except Exception:  # noqa: BLE001
+        snap = None
+        log.warning("interoception body snapshot failed", exc_info=True)
+
+    groups: list[Callable[[], list[dict[str, Any]]]] = []
+    if snap is not None:
+        groups.append(lambda: vital_alerts(snap, game_mode=game))
+        groups.append(lambda: battery_alerts(snap, now=now))
+    groups.append(lambda: flapping_alerts(now))
+    groups.append(lambda: warning_spike_alerts(now))
+
     rules: list[dict[str, Any]] = []
-    for group in (
-        lambda: vital_alerts(body_snapshot()),
-        lambda: flapping_alerts(now),
-        lambda: warning_spike_alerts(now),
-    ):
+    for group in groups:
         try:
             rules.extend(group())
         except Exception:  # noqa: BLE001
             log.warning("interoception rule group failed", exc_info=True)
 
-    try:
-        suppressed = _suppressed()
-    except Exception:  # noqa: BLE001
-        suppressed = True  # fail-safe: uncertain state → stay silent
-
     fired: list[dict[str, Any]] = []
     for rule in rules:
         key = rule["key"]
         episode = _episodes.get(key)
+        suppressed = (reason == "meeting"
+                      or (game and not rule.get("game_immediate")))
         if rule["firing"]:
             if episode is None:
                 episode = {"notified": False}
@@ -413,6 +636,13 @@ def check_and_alert(now: float | None = None) -> list[dict[str, Any]]:
                 _notify(rule["message"], rule["severity"])
                 episode["notified"] = True
                 fired.append(rule)
+                callback = rule.get("on_notified")
+                if callback is not None:
+                    try:
+                        callback()
+                    except Exception:  # noqa: BLE001
+                        log.warning("interoception on_notified failed",
+                                    exc_info=True)
                 try:
                     events.log_info("interoception", rule["message"],
                                     data={"key": key, "severity": rule["severity"]})

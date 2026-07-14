@@ -78,6 +78,13 @@ def test_schema_covers_historical_keys():
         # proactive domain-coverage elicitation (empty-path).
         "autonomous_elicit_enabled",
         "autonomous_elicit_stale_days",
+        # Game-mode thermal calibration (interoception).
+        "body_game_gpu_temp_max_c",
+        "body_game_cpu_temp_max_c",
+        # Battery care advisor (interoception).
+        "body_battery_care_enabled",
+        "body_battery_full_days",
+        "body_battery_replug_pct",
     }
     missing = historical_keys - names
     assert not missing, f"config schema dropped historical keys: {sorted(missing)}"

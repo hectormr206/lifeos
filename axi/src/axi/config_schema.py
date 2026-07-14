@@ -282,6 +282,41 @@ FIELDS: tuple[ConfigField, ...] = (
         "battery-scaled like the other daemon loops.",
         minimum=30, maximum=3600,
     ),
+    ConfigField(
+        "body_game_gpu_temp_max_c", "integer", 92,
+        "GPU temperature (°C) at or above which the interoception organ "
+        "alerts DURING GAME MODE. Games legitimately run hot, so this is a "
+        "hard-danger level (higher than body_gpu_temp_max_c) and a breach "
+        "notifies immediately — real danger beats immersion.",
+        minimum=70, maximum=105,
+    ),
+    ConfigField(
+        "body_game_cpu_temp_max_c", "integer", 95,
+        "CPU temperature (°C) at or above which the interoception organ "
+        "alerts DURING GAME MODE. Games legitimately run hot, so this is a "
+        "hard-danger level (higher than body_cpu_temp_max_c) and a breach "
+        "notifies immediately — real danger beats immersion.",
+        minimum=70, maximum=110,
+    ),
+    ConfigField(
+        "body_battery_care_enabled", "boolean", True,
+        "If true, the interoception organ nudges battery care: unplug after "
+        "days pinned at 100% on AC, replug once the care discharge reaches "
+        "the target. Advice (normal severity), deferred during meetings and "
+        "game mode.",
+    ),
+    ConfigField(
+        "body_battery_full_days", "integer", 7,
+        "Days the battery may sit plugged-in at >=98% before Axi nudges you "
+        "to unplug the charger for a care discharge cycle.",
+        minimum=1, maximum=60,
+    ),
+    ConfigField(
+        "body_battery_replug_pct", "integer", 40,
+        "Battery percentage at or below which, while discharging, Axi nudges "
+        "you to reconnect the charger — completing the care cycle.",
+        minimum=15, maximum=80,
+    ),
     # ─────── daemon voice gate ───────
     ConfigField(
         "silence_rms_threshold", "number", 0.002,
