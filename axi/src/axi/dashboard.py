@@ -1134,6 +1134,13 @@ def serve_root_ca() -> FileResponse:
     )
 
 
+@app.get("/api/organs")
+def api_organs():
+    """Declarative organ registry — Axi's full body picture (read-only)."""
+    from axi import organs  # noqa: PLC0415 — lazy: keep dashboard import light
+    return {"organs": organs.all_organs()}
+
+
 @app.get("/api/snapshot")
 def snapshot():
     state = _daemon_cmd("status") or "unknown"
@@ -5091,6 +5098,28 @@ async def api_chat_ask(request: Request):
                     log.info("brain: injecting location context (lat=%.5f, lng=%.5f)", _lat, _lng)
                 except (TypeError, ValueError):
                     pass
+            # ── Self-awareness: ground "¿cómo estás?" in the real body ──────
+            # When the user asks about AXI'S OWN state, inject the organ
+            # registry summary into the system prompt for THIS turn (same
+            # additive pattern as the location context above). The brain
+            # still answers naturally — now grounded instead of confabulating.
+            # Any organs error skips the injection silently: never break chat.
+            try:
+                from axi import organs as _organs_mod  # noqa: PLC0415
+                if text and _organs_mod.is_self_state_question(text):
+                    _body_ctx = _organs_mod.body_summary()
+                    if _body_ctx:
+                        brain_system = (
+                            brain_system
+                            + "\n\n--- ESTADO REAL DE TU CUERPO (contexto en vivo) ---\n"
+                            + _body_ctx
+                            + "\nEl usuario pregunta cómo estás: responde de forma "
+                            + "natural usando este estado real de tus órganos "
+                            + "(servicios y sensores); no inventes datos de tu cuerpo."
+                        )
+                        log.info("brain: injecting body-state context (self-state question)")
+            except Exception:  # noqa: BLE001 — self-awareness must never break chat
+                log.warning("organs body-context injection skipped", exc_info=True)
             if image_b64:
                 answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64, lang=_chat_lang)
             else:
