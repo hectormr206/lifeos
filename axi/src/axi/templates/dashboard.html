@@ -132,14 +132,20 @@
           </g>
         </defs>
 
-        <!-- Orejas / branquias = Oído (axi-whisper) -->
+        <!-- Orejas / branquias superiores = Oído (axi-whisper) -->
         <g id="organ-ears" class="ears" @click="open = open === 'ears' ? null : 'ears'">
           <title>Oídos (escuchar)</title>
           <use href="#axi-gill" transform="translate(23,32) rotate(-56) scale(0.94)"/>
           <use href="#axi-gill" transform="translate(20,37) rotate(-79) scale(0.95)"/>
-          <use href="#axi-gill" transform="translate(22,43) rotate(-95) scale(0.9)"/>
           <use href="#axi-gill" transform="translate(41,32) rotate(56) scale(0.94)"/>
           <use href="#axi-gill" transform="translate(44,37) rotate(79) scale(0.95)"/>
+        </g>
+
+        <!-- 🫁 Branquias inferiores = Pulmones (los ajolotes respiran por las
+             branquias). Clic = signos vitales en vivo (/api/organs). -->
+        <g id="organ-lungs" class="ears" @click="open === 'lungs' ? open = null : openOrgan('lungs')">
+          <title>Pulmones (signos vitales)</title>
+          <use href="#axi-gill" transform="translate(22,43) rotate(-95) scale(0.9)"/>
           <use href="#axi-gill" transform="translate(42,43) rotate(95) scale(0.9)"/>
         </g>
 
@@ -157,9 +163,12 @@
           <ellipse cx="43" cy="53" rx="3" ry="4.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9" transform="rotate(-32 42 53)"/>
         </g>
 
-        <!-- Pies -->
-        <ellipse cx="25.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
-        <ellipse cx="38.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+        <!-- 🦶 Pies = conciencia de red/ubicación (en desarrollo). Clic = ver plan. -->
+        <g id="organ-feet" class="clk" @click="open === 'feet' ? open = null : openOrgan('feet')">
+          <title>Pies (red y ubicación)</title>
+          <ellipse cx="25.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+          <ellipse cx="38.5" cy="67.5" rx="3.8" ry="3.3" fill="#fe8faf" stroke="#241019" stroke-width="0.9"/>
+        </g>
 
         <!-- Amber body glow — game mode active. Rendered BELOW the body so it
              acts as a back-light aura. No permanent fill change — it's additive. -->
@@ -168,6 +177,18 @@
                  fill="#ffaa33" fill-opacity="0" stroke="#ffaa33" stroke-width="2.5"
                  :class="($store.snap.models && $store.snap.models.mode === 'Modo juego') ? 'game-active' : ''">
           <title>Modo juego</title>
+        </ellipse>
+
+        <!-- 🛡 Sistema inmune = contorno tenue alrededor del cuerpo (en
+             desarrollo). fill="none" → solo el trazo captura clics, así no
+             tapa memoria/corazón. El anillo de sonar ya pertenece al oído. -->
+        <ellipse id="organ-immune" class="clk"
+                 cx="32" cy="57" rx="14.5" ry="14"
+                 fill="none" stroke="#00D4AA" stroke-width="1.4"
+                 stroke-dasharray="2.2 2.6" opacity="0.35"
+                 style="pointer-events:stroke"
+                 @click="open === 'immune' ? open = null : openOrgan('immune')">
+          <title>Sistema inmune (prevención)</title>
         </ellipse>
 
         <!-- Cuerpo -->
@@ -210,6 +231,15 @@
           <title>Ojo · cámara (clic: foto)</title>
           <circle cx="38" cy="38" r="2.6" fill="#14131F"/>
           <circle cx="38.9" cy="37.2" r="0.9" fill="#FFFFFF"/>
+        </g>
+
+        <!-- 👃 Naricita = Olfato (detector de anomalías). Dos puntitos sutiles
+             sobre la boca + zona de clic invisible. Clic = estado en vivo. -->
+        <g id="organ-smell" class="clk" @click="open === 'smell' ? open = null : openOrgan('smell')">
+          <title>Olfato (detector de anomalías)</title>
+          <ellipse cx="32" cy="41" rx="2.6" ry="1.6" fill="#000000" fill-opacity="0"/>
+          <circle cx="31.1" cy="41" r="0.42" fill="#14131F" opacity="0.55"/>
+          <circle cx="32.9" cy="41" r="0.42" fill="#14131F" opacity="0.55"/>
         </g>
 
         <!-- Boca (clic = Axi habla en voz alta) -->
@@ -324,6 +354,24 @@
         <button class="btn mt-2" style="padding:3px 12px;font-size:0.75rem"
                 @click="toggleConfig('vision_enabled', $store.snap.capabilities && $store.snap.capabilities.vision_enabled)"
                 x-text="($store.snap.capabilities && $store.snap.capabilities.vision_enabled) ? 'Desactivar visión' : 'Activar visión'"></button>
+      </div>
+      <!-- Popover genérico de órgano — alimentado por /api/organs al hacer
+           clic (pulmones, olfato, pies, sistema inmune y futuros órganos). -->
+      <div id="popover-organ" x-show="organMeta[open]"
+           class="panel2 p-3 text-sm absolute z-50" style="min-width:220px; display:none; top:1rem; right:1rem">
+        <div class="font-semibold mb-1" style="color:var(--teal)"
+             x-text="organMeta[open] ? (organMeta[open].icon + ' ' + organMeta[open].name) : ''"></div>
+        <div x-show="organLoading" class="muted text-xs">Leyendo órgano…</div>
+        <template x-if="organInfo">
+          <div>
+            <span class="text-xs font-semibold"
+                  :style="'color:' + organStateColor(organInfo.state)"
+                  x-text="organStateLabel(organInfo.state)"></span>
+            <div class="muted text-xs" x-show="organInfo.state !== 'planned'" x-text="organInfo.detail"></div>
+            <div class="muted text-xs mt-1" x-text="organInfo.description"></div>
+          </div>
+        </template>
+        <div x-show="!organLoading && !organInfo" class="muted text-xs">No pude leer este órgano ahora.</div>
       </div>
     </section>
 
@@ -929,6 +977,38 @@ function avatarWidget() {
     eyeImg: null,
     eyeLoading: false,
     eyeError: null,
+
+    /* ── Generic organ popover — fed by /api/organs at click time ──
+       Any organ WITHOUT a dedicated popover routes here: name + state
+       badge + detail + description ("qué hace"). Adding a future organ =
+       one SVG group with openOrgan('key') + one organMeta entry. */
+    organInfo: null,
+    organLoading: false,
+    organMeta: {
+      lungs:  { icon: '🫁', name: 'Pulmones' },
+      smell:  { icon: '👃', name: 'Olfato' },
+      feet:   { icon: '🦶', name: 'Pies' },
+      immune: { icon: '🛡', name: 'Sistema inmune' },
+    },
+    async openOrgan(key) {
+      this.open = key;
+      this.organInfo = null;
+      this.organLoading = true;
+      try {
+        const r = await fetch('/api/organs');
+        const d = await r.json();
+        this.organInfo = (d.organs || []).find(o => o.key === key) || null;
+      } catch (e) { this.organInfo = null; /* offline — silent */ }
+      finally { this.organLoading = false; }
+    },
+    organStateLabel(s) {
+      return ({ ok: '● bien', degraded: '● degradado', down: '● caído',
+                off: '⏸ apagado', planned: '🚧 en desarrollo' }[s]) || '● desconocido';
+    },
+    organStateColor(s) {
+      return ({ ok: 'var(--teal)', degraded: 'var(--amber)', down: 'var(--pink)',
+                off: 'var(--muted)', planned: 'var(--amber)' }[s]) || 'var(--muted)';
+    },
 
     /* Returns CSS class string for a service organ based on its is-active state. */
     organClass(s) {

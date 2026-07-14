@@ -16,7 +16,9 @@ Contracts:
 * Read-only: no memory.db writes, no daemon commands beyond the existing
   status socket queries.
 
-States: ok | degraded | down | off | unknown.
+States: ok | degraded | down | off | unknown | planned.
+("planned" marks future organs that exist in the body map but aren't
+built yet — the avatar shows them as "en desarrollo".)
 """
 from __future__ import annotations
 
@@ -33,7 +35,7 @@ from axi import config
 
 log = logging.getLogger("axi.organs")
 
-STATES = frozenset({"ok", "degraded", "down", "off", "unknown"})
+STATES = frozenset({"ok", "degraded", "down", "off", "unknown", "planned"})
 
 # Near-threshold margins for the lungs (vitals) reader. Mirrors
 # interoception's episode thresholds: we go "degraded" slightly BEFORE the
@@ -208,29 +210,67 @@ def _read_mind(ctx: dict[str, Any]) -> dict[str, str]:
     return {"state": "off", "detail": "pensamiento autónomo desactivado"}
 
 
+def _read_planned(ctx: dict[str, Any]) -> dict[str, str]:
+    """Future organs: declared in the body map, not built yet."""
+    return {"state": "planned", "detail": "en desarrollo"}
+
+
 # ─────────────────────────── registry ────────────────────────────────────
 
 _ORGANS: list[dict[str, Any]] = [
     {"key": "heart", "name": "corazón", "name_en": "heart",
-     "services": ["axi-heartbeat.service"], "reader": _read_heart},
+     "services": ["axi-heartbeat.service"], "reader": _read_heart,
+     "description": ("El latido de auto-sanación: vigila los servicios "
+                     "vitales de Axi y los revive cuando se caen.")},
     {"key": "lungs", "name": "pulmones", "name_en": "lungs",
-     "services": [], "reader": _read_lungs},
+     "services": [], "reader": _read_lungs,
+     "description": ("Siente las constantes vitales del cuerpo de Axi "
+                     "(VRAM, temperaturas, disco, batería) y avisa cuando "
+                     "algo se sale de rango.")},
     {"key": "smell", "name": "olfato", "name_en": "smell",
-     "services": ["axi-voice.service"], "reader": _read_smell},
+     "services": ["axi-voice.service"], "reader": _read_smell,
+     "description": ("Olfatea anomalías: servicios que se reinician en "
+                     "bucle o ráfagas de advertencias, antes de que se "
+                     "vuelvan fallas.")},
     {"key": "ears", "name": "oídos", "name_en": "ears",
-     "services": ["axi-whisper.service"], "reader": _read_ears},
+     "services": ["axi-whisper.service"], "reader": _read_ears,
+     "description": ("Escuchan el micrófono con Whisper y despiertan con "
+                     "la palabra clave para atender tus comandos de voz.")},
     {"key": "eyes", "name": "ojos", "name_en": "eyes",
-     "services": [], "reader": _read_eyes},
+     "services": [], "reader": _read_eyes,
+     "description": ("Ven por la cámara web y capturan la pantalla para "
+                     "que Axi entienda lo que tienes enfrente.")},
     {"key": "mouth", "name": "boca", "name_en": "mouth",
-     "services": [], "reader": _read_mouth},
+     "services": [], "reader": _read_mouth,
+     "description": ("La voz de Axi: convierte sus respuestas en audio "
+                     "para hablarte en voz alta.")},
     {"key": "hands", "name": "manos", "name_en": "hands",
-     "services": ["ydotoold.service"], "reader": _read_hands},
+     "services": ["ydotoold.service"], "reader": _read_hands,
+     "description": ("Actúan sobre el escritorio: inyectan teclado con "
+                     "ydotool para que Axi escriba por ti.")},
     {"key": "brain", "name": "cerebro", "name_en": "brain",
-     "services": ["llama-server.service"], "reader": _read_brain},
+     "services": ["llama-server.service"], "reader": _read_brain,
+     "description": ("El modelo de lenguaje (llama-server) que razona y "
+                     "responde; piensa usando la VRAM de la GPU.")},
     {"key": "memory", "name": "memoria", "name_en": "memory",
-     "services": ["llama-embed.service"], "reader": _read_memory},
+     "services": ["llama-embed.service"], "reader": _read_memory,
+     "description": ("Guarda hechos y conversaciones en el grafo de "
+                     "memoria; los embeddings le dan recuerdo semántico.")},
     {"key": "mind", "name": "mente", "name_en": "mind",
-     "services": [], "reader": _read_mind},
+     "services": [], "reader": _read_mind,
+     "description": ("El pensamiento autónomo: cuando está activo, Axi "
+                     "reflexiona y actúa por su cuenta sin que se lo "
+                     "pidas.")},
+    {"key": "feet", "name": "pies", "name_en": "feet",
+     "services": [], "reader": _read_planned,
+     "description": ("Darán a Axi conciencia de red y ubicación: en qué "
+                     "red está, si hay internet y si la VPN al VPS sigue "
+                     "viva.")},
+    {"key": "immune", "name": "sistema inmune", "name_en": "immune system",
+     "services": [], "reader": _read_planned,
+     "description": ("Aprenderá de los patrones del olfato para prevenir "
+                     "fallas antes de que ocurran, no solo revivir "
+                     "servicios.")},
 ]
 
 
@@ -259,7 +299,8 @@ def all_organs() -> list[dict[str, Any]]:
             log.debug("organ reader failed: %s", organ["key"], exc_info=True)
             state, detail = "unknown", "no pude leer este órgano"
         out.append({"key": organ["key"], "name": organ["name"],
-                    "state": state, "detail": detail})
+                    "state": state, "detail": detail,
+                    "description": organ.get("description", "")})
     return out
 
 
@@ -269,7 +310,9 @@ def body_summary(lang: str | None = None) -> str:
     English variant is trivial (labels only); the brain translates nuance
     when answering. Never raises (all_organs never raises).
     """
-    organs = all_organs()
+    # Planned (future) organs exist in the map but aren't built yet — they
+    # never count as issues nor inflate the totals of the spoken summary.
+    organs = [o for o in all_organs() if o["state"] != "planned"]
     en = (lang or "es").split("-")[0].lower() == "en"
 
     ok = [o for o in organs if o["state"] == "ok"]

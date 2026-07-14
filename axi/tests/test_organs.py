@@ -12,8 +12,9 @@ from fastapi.testclient import TestClient
 EXPECTED_KEYS = {
     "heart", "lungs", "smell", "ears", "eyes",
     "mouth", "hands", "brain", "memory", "mind",
+    "feet", "immune",
 }
-ALLOWED_STATES = {"ok", "degraded", "down", "off", "unknown"}
+ALLOWED_STATES = {"ok", "degraded", "down", "off", "unknown", "planned"}
 
 
 def _healthy_body() -> dict:
@@ -50,6 +51,18 @@ def test_every_entry_has_valid_state_and_detail(calm):
         assert e["state"] in ALLOWED_STATES, e
         assert isinstance(e["detail"], str)
         assert isinstance(e["name"], str) and e["name"]
+
+
+def test_every_entry_has_nonempty_description(calm):
+    for e in calm.all_organs():
+        assert isinstance(e.get("description"), str) and e["description"].strip(), e
+
+
+def test_planned_organs_report_planned_state(calm):
+    entries = {e["key"]: e for e in calm.all_organs()}
+    for key in ("feet", "immune"):
+        assert entries[key]["state"] == "planned"
+        assert entries[key]["detail"] == "en desarrollo"
 
 
 def test_raising_reader_yields_unknown_and_never_raises(calm, monkeypatch):
@@ -178,6 +191,16 @@ def test_api_organs_endpoint(client, calm):
     assert {e["key"] for e in data["organs"]} == EXPECTED_KEYS
     for e in data["organs"]:
         assert e["state"] in ALLOWED_STATES
+        assert isinstance(e.get("description"), str) and e["description"].strip()
+
+
+def test_body_summary_ignores_planned_organs(calm):
+    """Planned (future) organs never count as issues nor inflate the totals."""
+    s = calm.body_summary()
+    assert "planned" not in s.lower()
+    assert "pies" not in s.lower() and "inmune" not in s.lower()
+    # Head counts exclude the 2 planned organs: 10/10, not 10/12.
+    assert "10/10" in s
 
 
 # ──────────────────── chat self-state detection ──────────────────────────

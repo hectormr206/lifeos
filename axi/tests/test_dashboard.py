@@ -350,6 +350,21 @@ def test_popover_markup_present(client):
     assert "x-show" in html
 
 
+def test_new_clickable_organs_present(client):
+    """Every-organ-clickable — lungs (gills), smell (nostrils), feet, and the
+    immune outline are clickable groups wired to the generic organ popover."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    for organ_id in ("organ-lungs", "organ-smell", "organ-feet", "organ-immune"):
+        assert organ_id in html, f"Missing organ id: {organ_id}"
+        assert f"openOrgan('{organ_id.split('-')[1]}')" in html
+    # Generic popover fed by /api/organs at click time.
+    assert "popover-organ" in html
+    assert "/api/organs" in html
+    assert "en desarrollo" in html
+
+
 def test_avatar_organ_actions_present(client):
     """Avatar redesign — organ click actions are wired: eyes capture (screen +
     webcam), mouth speaks out loud, and the heart syncs to the REAL
