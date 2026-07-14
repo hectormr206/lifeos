@@ -195,3 +195,55 @@ def test_pairing_code_endpoint_reachable_without_bearer_when_auth_enabled(client
     config.save({"api_auth_enabled": True})
     r = client.get("/api/setup/pairing_code")
     assert r.status_code == 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Advertised URLs: a wildcard bind address is NOT a reachable URL
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_pairing_urls_never_advertise_wildcard_bind(monkeypatch):
+    """dashboard_host=0.0.0.0 is a BIND address — a phone cannot connect to it.
+
+    The pairing payload must advertise real, reachable addresses (e.g. the
+    VPN/LAN interface IPs), never the wildcard.
+    """
+    from fastapi.testclient import TestClient
+    import axi.dashboard as dashboard
+    from axi import config
+
+    real_get = config.get
+
+    def fake_get(key, default=None):
+        if key == "dashboard_host":
+            return "0.0.0.0"
+        return real_get(key, default)
+
+    monkeypatch.setattr(config, "get", fake_get)
+    client = TestClient(dashboard.app)
+    r = client.get("/api/setup/pairing_code")
+    assert r.status_code == 200
+    urls = r.json()["urls"]
+    assert urls, "must advertise at least one URL"
+    assert all("0.0.0.0" not in u for u in urls), f"wildcard leaked: {urls}"
+    assert all(u.startswith("https://") for u in urls)
+
+
+def test_pairing_urls_keep_concrete_host(monkeypatch):
+    """A concrete configured host (e.g. 127.0.0.1) is advertised as-is."""
+    from fastapi.testclient import TestClient
+    import axi.dashboard as dashboard
+    from axi import config
+
+    real_get = config.get
+
+    def fake_get(key, default=None):
+        if key == "dashboard_host":
+            return "127.0.0.1"
+        return real_get(key, default)
+
+    monkeypatch.setattr(config, "get", fake_get)
+    client = TestClient(dashboard.app)
+    r = client.get("/api/setup/pairing_code")
+    assert r.status_code == 200
+    assert any("127.0.0.1" in u for u in r.json()["urls"])

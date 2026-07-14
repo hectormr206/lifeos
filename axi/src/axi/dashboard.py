@@ -7030,9 +7030,40 @@ def api_setup_pairing_code() -> dict:
         "v": 1,
         "code": session["code"],
         "expires_at": session["expires_at"],
-        "urls": [f"https://{host}:{port}"],
+        "urls": _advertised_urls(host, port),
         "ca_fp": _ca_der_sha256(_mkcert_root_ca_path()),
     }
+
+
+def _advertised_urls(host: str, port: int) -> list[str]:
+    """Reachable https URLs for the pairing QR payload.
+
+    A wildcard bind address (0.0.0.0 / ::) is where the server LISTENS, not
+    where a phone can CONNECT — advertising it would hand the client a dead
+    URL. For wildcards, enumerate the machine's real non-loopback IPv4
+    addresses (VPN + LAN interfaces) via `ip -4 -br addr`; a concrete
+    configured host is advertised as-is. Fail-safe: on any enumeration
+    error fall back to localhost so the payload is never empty.
+    """
+    if host not in ("0.0.0.0", "::"):
+        return [f"https://{host}:{port}"]
+    ips: list[str] = []
+    try:
+        out = subprocess.check_output(
+            ["ip", "-4", "-brief", "addr"], text=True, timeout=3
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            # e.g. "wlan0  UP  192.168.1.7/24" — skip loopback, take the IP.
+            if len(parts) >= 3 and parts[0] != "lo":
+                ip = parts[2].split("/")[0]
+                if ip and not ip.startswith("127."):
+                    ips.append(ip)
+    except Exception:  # noqa: BLE001 — enumeration must never break pairing
+        pass
+    if not ips:
+        ips = ["127.0.0.1"]
+    return [f"https://{ip}:{port}" for ip in ips]
 
 
 @app.get("/api/setup/status")
