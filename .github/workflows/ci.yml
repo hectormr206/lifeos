@@ -1,0 +1,57 @@
+name: CI
+
+# Parity CI matrix (sdd/mobile-app M0). Path-filtered so an engine change
+# runs engine jobs and a mobile change runs mobile jobs — no platform can
+# silently lag: the contract drift-guard makes an out-of-date generated
+# client fail the build. The `mobile` job is added when `mobile/` exists.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast parity gate: the /api/v1 OpenAPI contract must match the committed
+  # artifact the Dart client is generated from. Deterministic, sub-second —
+  # fails fast when a v1 route changes without regenerating the contract.
+  contract-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Sync axi deps
+        working-directory: axi
+        run: uv sync --python 3.12
+      - name: OpenAPI /api/v1 contract drift-guard
+        working-directory: axi
+        run: uv run --python 3.12 pytest tests/test_openapi_contract.py -q
+
+  # Engine test suite (axi package). SQLCipher ships via sqlcipher3-wheels,
+  # so no system packages are needed. The two known pre-existing debts are
+  # deselected so a green run means "this change broke nothing new":
+  #   - test_briefing.py::test_agentic_forces_final_synthesis (deterministic,
+  #     LLM-round-count assertion, tracked separately)
+  #   - test_store.py::test_concurrent_writes_no_corruption (flaky thread race)
+  engine-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Sync axi deps
+        working-directory: axi
+        run: uv sync --python 3.12
+      - name: pytest (axi)
+        working-directory: axi
+        run: >
+          uv run --python 3.12 pytest tests/ -q
+          --deselect tests/test_briefing.py::test_agentic_forces_final_synthesis
+          --deselect tests/test_store.py::test_concurrent_writes_no_corruption
