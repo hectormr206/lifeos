@@ -54,17 +54,66 @@
         </template>
 
         <template x-if="visibleItems(c).length > 0">
-          <ul class="space-y-2">
+          <ul class="space-y-3">
             <template x-for="(it, idx) in visibleItems(c)" :key="idx">
-              <li class="text-sm border-l-2 pl-3" style="border-color: var(--border)">
-                <!-- Items whose link is broken (url === '' after server-side
-                     validation in briefing._safe_url) are dropped in
-                     visibleItems(); every rendered entry has a real, clickable
-                     http(s) source. -->
-                <a :href="it.url" target="_blank" rel="noopener noreferrer"
-                   class="font-medium hover:underline" style="color: var(--teal)"
-                   x-text="it.title || it.url"></a>
-                <div class="muted text-xs mt-0.5" x-text="it.summary"></div>
+              <!-- Each item carries its own open/close state for the two expandable sections -->
+              <li class="text-sm border-l-2 pl-3 space-y-1"
+                  style="border-color: var(--border)"
+                  x-data="{ showDetail: false, showHN: false }">
+
+                <!-- Title in Spanish (falls back to original title, then URL) -->
+                <div class="font-medium" style="color: var(--teal)"
+                     x-text="it.title_es || it.title || it.url"></div>
+
+                <!-- Concise summary -->
+                <template x-if="it.summary">
+                  <div class="muted text-xs" x-text="it.summary"></div>
+                </template>
+
+                <!-- Detailed summary toggle -->
+                <template x-if="it.detailed_summary">
+                  <div>
+                    <button @click="showDetail = !showDetail"
+                            class="text-xs hover:underline"
+                            style="color: var(--muted)">
+                      <span x-text="showDetail ? '▲ Ocultar resumen detallado' : '▼ Ver resumen detallado'"></span>
+                    </button>
+                    <div x-show="showDetail" x-transition
+                         class="mt-1 text-xs panel2 rounded p-2 leading-relaxed"
+                         x-text="it.detailed_summary"></div>
+                  </div>
+                </template>
+
+                <!-- Links row: article + HN discussion -->
+                <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs mt-1">
+                  <template x-if="it.url">
+                    <a :href="it.url" target="_blank" rel="noopener noreferrer"
+                       class="hover:underline" style="color: var(--teal)">
+                      Ver noticia completa →
+                    </a>
+                  </template>
+                  <template x-if="it.hn_url">
+                    <a :href="it.hn_url" target="_blank" rel="noopener noreferrer"
+                       class="hover:underline" style="color: var(--amber)">
+                      Discusión en HN →
+                    </a>
+                  </template>
+                </div>
+
+                <!-- HN comments summary toggle -->
+                <template x-if="it.hn_comments_summary">
+                  <div>
+                    <button @click="showHN = !showHN"
+                            class="text-xs hover:underline"
+                            style="color: var(--amber)">
+                      <span x-text="showHN ? '▲ Ocultar opiniones de HN' : '▼ Ver opiniones de HN'"></span>
+                    </button>
+                    <div x-show="showHN" x-transition
+                         class="mt-1 text-xs panel2 rounded p-2 leading-relaxed muted"
+                         x-text="it.hn_comments_summary"></div>
+                  </div>
+                </template>
+
               </li>
             </template>
           </ul>
@@ -85,13 +134,11 @@ function briefingsPage() {
     loading: true,
     _pollHandle: null,
     _didHashScroll: false,
-    // Drop items whose source link is broken: the server validates each url to
-    // http(s) or '' (briefing._safe_url), so an empty url means "no working
-    // link". We omit those entries and keep up to 10 real ones — matching the
-    // 10-item cap the briefing engine already enforces.
+    // Keep items that have at least one real link (article or HN discussion).
+    // Items with no valid URL at all are omitted; items with only an hn_url are shown.
     visibleItems(c) {
       const items = (c && c.result && c.result.items) || [];
-      return items.filter(it => it && it.url).slice(0, 10);
+      return items.filter(it => it && (it.url || it.hn_url)).slice(0, 10);
     },
     async load() {
       try {

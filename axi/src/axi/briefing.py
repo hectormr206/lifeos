@@ -30,9 +30,12 @@ _DEFAULT_TITLE = "Boletín"
 _FINAL_SYNTHESIS_PROMPT = (
     "Ya tienes suficiente información de las búsquedas anteriores. NO busques "
     "más. Devuelve AHORA únicamente el objeto JSON del boletín, con los ítems "
-    "más recientes y relevantes que encontraste (cada uno con su URL real). Si "
-    "no encontraste nada actual, devuelve pocos ítems o una lista vacía y "
-    "explícalo en el resumen. No inventes noticias ni URLs."
+    "más recientes y relevantes que encontraste. Para cada ítem incluye: "
+    "title (original), title_es (traducido al español), summary (1-2 líneas), "
+    "detailed_summary (3-6 líneas), url (real), hn_url (discusión en HN si la "
+    "encontraste), y hn_comments_summary (resumen de las opiniones de HN si las "
+    "buscaste). Si no encontraste nada actual, devuelve pocos ítems o una lista "
+    "vacía y explícalo en el resumen. No inventes noticias ni URLs."
 )
 
 # Caps on model-derived content. The output is web/LLM-derived and untrusted:
@@ -41,7 +44,9 @@ _FINAL_SYNTHESIS_PROMPT = (
 _MAX_ITEMS = 10
 _MAX_TITLE = 120
 _MAX_SUMMARY = 400
+_MAX_DETAILED_SUMMARY = 2000
 _MAX_URL = 1000
+_MAX_HN_COMMENTS = 1500
 
 # Only http(s) links may become a clickable href. Anything else (javascript:,
 # data:, file:, …) is dropped — the card renders untrusted web-derived URLs.
@@ -103,10 +108,27 @@ def build_briefing_system(today: str) -> str:
         "web_fetch). NUNCA inventes, adivines ni construyas una URL. Si para un "
         "ítem no tienes una URL real de las herramientas, deja su 'url' vacío "
         "(\"\") — jamás un enlace inventado.\n\n"
+        "ENRIQUECIMIENTO CON HACKER NEWS: para cada ítem, intenta encontrar su "
+        "discusión en Hacker News usando web_fetch con la API de búsqueda Algolia:\n"
+        "  https://hn.algolia.com/api/v1/search?query=TITULO_CODIFICADO&tags=story&hitsPerPage=3\n"
+        "Si hay un hit relevante, su campo 'objectID' es el ID del ítem en HN; "
+        "construye la URL de discusión: https://news.ycombinator.com/item?id=OBJECTID. "
+        "Para resumir comentarios, usa web_fetch en:\n"
+        "  https://hn.algolia.com/api/v1/items/OBJECTID\n"
+        "Ese endpoint devuelve el hilo completo; lee los 'children' de primer nivel "
+        "(comentarios directos más votados) y resúmelos en español. Si no hay "
+        "discusión en HN para un ítem, deja hn_url y hn_comments_summary vacíos (\"\").\n\n"
         "Responde ÚNICAMENTE con un objeto JSON con esta forma exacta:\n"
         '{"title": "<título del boletín>", "summary": "<resumen general breve>", '
-        '"items": [{"title": "<título del ítem>", "summary": "<resumen 1-2 líneas>", '
-        '"url": "<url de la fuente>"}]}\n'
+        '"items": [{'
+        '"title": "<título original del ítem>", '
+        '"title_es": "<título traducido al español>", '
+        '"summary": "<resumen corto 1-2 líneas en español>", '
+        '"detailed_summary": "<resumen detallado 3-6 líneas en español>", '
+        '"url": "<url de la fuente>", '
+        '"hn_url": "<url de discusión en HN o cadena vacía>", '
+        '"hn_comments_summary": "<resumen de las opiniones más votadas en HN o cadena vacía>"'
+        '}]}\n'
         "No agregues texto fuera del JSON."
     )
 
@@ -195,13 +217,16 @@ def _extract_json(raw: str) -> dict[str, Any] | None:
 def _items_to_markdown(title: str, items: list[dict[str, str]]) -> str:
     lines = [f"## {title}", ""]
     for it in items:
-        t = it.get("title") or ""
+        t = it.get("title_es") or it.get("title") or ""
         s = it.get("summary") or ""
         u = it.get("url") or ""
+        hn = it.get("hn_url") or ""
         if u:
             lines.append(f"- [{t}]({u}) — {s}")
         else:
             lines.append(f"- {t} — {s}")
+        if hn:
+            lines.append(f"  - [Discusión en HN]({hn})")
     return "\n".join(lines).strip()
 
 
@@ -220,8 +245,12 @@ def parse_briefing_result(raw: str) -> dict[str, Any]:
                 continue
             items.append({
                 "title": str(it.get("title") or "").strip()[:_MAX_TITLE],
+                "title_es": str(it.get("title_es") or "").strip()[:_MAX_TITLE],
                 "summary": str(it.get("summary") or "").strip()[:_MAX_SUMMARY],
+                "detailed_summary": str(it.get("detailed_summary") or "").strip()[:_MAX_DETAILED_SUMMARY],
                 "url": _safe_url(it.get("url")),
+                "hn_url": _safe_url(it.get("hn_url")),
+                "hn_comments_summary": str(it.get("hn_comments_summary") or "").strip()[:_MAX_HN_COMMENTS],
             })
         title = (str(obj.get("title") or "").strip() or _DEFAULT_TITLE)[:_MAX_TITLE]
         summary = str(obj.get("summary") or "").strip()[:_MAX_SUMMARY]
@@ -263,7 +292,7 @@ def run_agentic_briefing(
     *,
     ask_with_tools: Callable[..., str] | None = None,
     today: str | None = None,
-    max_tokens: int = 2048,
+    max_tokens: int = 4096,
     timeout: float = 180.0,
 ) -> dict[str, Any]:
     """Run an agentic prompt through the brain + web search and curate a digest.
@@ -302,7 +331,7 @@ def run_agentic_briefing(
             system=system,
             max_tokens=max_tokens,
             timeout=timeout,
-            max_tool_rounds=3,
+            max_tool_rounds=5,
             final_synthesis_prompt=_FINAL_SYNTHESIS_PROMPT,
         )
     except Exception as e:  # noqa: BLE001
