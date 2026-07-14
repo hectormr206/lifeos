@@ -6,14 +6,19 @@ router. `V1AliasMiddleware` (M0-1) probes `app.router` with `Match.FULL`
 before ever aliasing a `/api/v1/X` request to legacy `/api/X`, so any route
 registered here always wins and is never shadowed by the alias.
 
-Today (M0-4): `GET /api/v1/capabilities` only. Later M0 tasks (pairing,
-sync, devices) add more routes to this same router.
+M0-4: `GET /api/v1/capabilities`.
+M0-5: `POST /api/v1/pair` — QR pairing exchange (design D6). Already
+pre-exempted in `axi.api_auth.PUBLIC_V1_PATHS`, so it stays reachable with
+no bearer token even once `api_auth_enabled=true`.
 """
 from __future__ import annotations
 
+import secrets
+import uuid
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from axi import __version__
 
@@ -72,4 +77,58 @@ def capabilities() -> dict[str, Any]:
             "graph": {"v": 1, "features": list(_GRAPH_FEATURES)},
             "reminders": {"v": 1, "features": list(_REMINDER_FEATURES)},
         },
+    }
+
+
+# ────────────────────────────── QR pairing (M0-5) ────────────────────────────
+
+
+class PairRequest(BaseModel):
+    """Body of `POST /api/v1/pair` (design D6).
+
+    `device_pubkey` is optional and currently stored verbatim (opaque
+    string) for a later milestone (M3 sync, D9's sealed-box K_sync
+    transport) to consume — this batch does not seal or use it for
+    anything yet, per the M0-5 scope (device-token exchange only).
+    """
+
+    code: str
+    device_name: str = "Unnamed device"
+    device_pubkey: str | None = None
+
+
+@router.post("/pair")
+def pair(body: PairRequest) -> dict[str, Any]:
+    """Exchange a valid, unexpired, unused pairing code for a device token.
+
+    Auth: this route is in `axi.api_auth.PUBLIC_V1_PATHS` — reachable with
+    no bearer token even when `api_auth_enabled=true` (it is the mechanism
+    that BOOTSTRAPS a device's first token). The pairing code itself is the
+    security boundary: it can only be obtained from `/setup`'s
+    `GET /api/setup/pairing_code`, an owner-facing legacy route (spec
+    `api-auth-pairing`), is single-use, and expires after 5 minutes
+    (`axi.pairing`, design D6).
+
+    Raises 410 if the code is missing/unknown/expired/already-used — no
+    device is created and no token is issued in that case (spec: "Expired
+    code rejected").
+    """
+    from axi import pairing, store  # lazy: keep router import-light
+
+    if not pairing.redeem_code(body.code):
+        raise HTTPException(status_code=410, detail="pairing code invalid or expired")
+
+    device_id = uuid.uuid4().hex
+    token = secrets.token_urlsafe(32)
+    store.device_add(
+        device_id,
+        body.device_name,
+        token,
+        device_pubkey=body.device_pubkey,
+    )
+    return {
+        "device_id": device_id,
+        "token": token,
+        "engine_version": __version__,
+        "capabilities": capabilities()["capabilities"],
     }

@@ -239,6 +239,33 @@
     </template>
   </div>
 
+  <!-- 6.5 Mobile pairing (M0-5) -->
+  <div class="panel p-4 space-y-3" x-data="pairingPanel()" x-init="mint()">
+    <h2 class="text-lg font-semibold">📱 Emparejar teléfono</h2>
+    <p class="text-xs muted">
+      Código de un solo uso, válido 5 minutos. La app móvil lo intercambia
+      por un token de dispositivo en <code>POST /api/v1/pair</code>.
+    </p>
+    <template x-if="session">
+      <div class="space-y-2 text-sm">
+        <div><span class="muted">Código:</span> <code x-text="session.code"></code></div>
+        <div class="text-xs muted" x-text="'Expira: ' + new Date(session.expires_at * 1000).toLocaleTimeString()"></div>
+        <div class="text-xs muted" x-show="!session.ca_fp">
+          ⚠️ mkcert no instalado — ca_fp no disponible (correr `mkcert -install`).
+        </div>
+        <!--
+          Nota: aquí iría un QR real escaneable por la app. No se vendorizó
+          ninguna librería JS de generación de QR en este batch (M0-5) — se
+          muestra el payload equivalente en texto; el render visual se agrega
+          cuando exista un cliente móvil real que lo consuma (M1).
+        -->
+        <pre class="text-xs" style="white-space:pre-wrap;word-break:break-all"
+             x-text="JSON.stringify({v: 1, code: session.code, urls: session.urls, ca_fp: session.ca_fp}, null, 2)"></pre>
+        <button class="btn" @click="mint()">↻ Generar nuevo código</button>
+      </div>
+    </template>
+  </div>
+
   <!-- 6. Config -->
   <div class="panel p-4 space-y-3">
     <h2 class="text-lg font-semibold">⚙️ Config principal</h2>
@@ -355,6 +382,18 @@ function setupPage() {
       if (state === 'prompt' || state === 'warn' || state === 'desconocido'
           || state === 'no soportado' || state === 'no') return '⚠️';
       return '•';
+    },
+  };
+}
+
+function pairingPanel() {
+  return {
+    session: null,
+    async mint() {
+      try {
+        const r = await fetch('/api/setup/pairing_code');
+        this.session = r.ok ? await r.json() : null;
+      } catch (e) { this.session = null; }
     },
   };
 }

@@ -28,6 +28,8 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -1149,17 +1151,47 @@ def serve_favicon() -> FileResponse:
     )
 
 
+def _mkcert_root_ca_path() -> Path:
+    """Path to the mkcert root CA cert (never the `-key.pem` private key).
+
+    Extracted as its own function (M0-5) so both `serve_root_ca` and the
+    pairing-code endpoint (`api_setup_pairing_code`, design D6's `ca_fp`)
+    resolve the CA from one call site — and so tests can monkeypatch it
+    without touching the real `~/.local/share/mkcert/` on this laptop.
+    """
+    return Path.home() / ".local/share/mkcert" / "rootCA.pem"
+
+
+def _ca_der_sha256(pem_path: Path) -> str | None:
+    """SHA-256 hex digest of a PEM cert's DER bytes, or None if unreadable.
+
+    Design D6: the `/setup` QR's `ca_fp` is "sha256(CA DER)" — the phone
+    verifies this against the CA it fetches from `GET /axi-rootCA.crt`
+    as its out-of-band trust anchor (no TOFU). PEM -> DER is just
+    base64-decoding the body between the BEGIN/END CERTIFICATE markers —
+    no crypto library needed for this.
+    """
+    try:
+        if not pem_path.exists():
+            return None
+        lines = [
+            line.strip()
+            for line in pem_path.read_text().splitlines()
+            if line.strip() and not line.startswith("-----")
+        ]
+        der = base64.b64decode("".join(lines))
+        return hashlib.sha256(der).hexdigest()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @app.get("/axi-rootCA.crt")
 def serve_root_ca() -> FileResponse:
     """Serve the mkcert root CA so trusted devices (e.g. the user's phone
     over the VPN) can install it and trust the dashboard's self-signed
     cert. Returns 404 if mkcert isn't installed or the CA isn't found.
     The file is the public CA cert — safe to expose over the VPN."""
-    candidates = [
-        Path.home() / ".local/share/mkcert/rootCA.pem",
-        Path.home() / ".local/share/mkcert/rootCA-key.pem",  # NEVER serve this
-    ]
-    ca_path = Path.home() / ".local/share/mkcert" / "rootCA.pem"
+    ca_path = _mkcert_root_ca_path()
     if not ca_path.exists():
         raise HTTPException(404, detail="rootCA.pem not found — run mkcert -install")
     return FileResponse(
@@ -1668,6 +1700,36 @@ async def write_config(request: Request):
     _maybe_mark_whisper_restart_pending(old, validated)
     _maybe_mark_dashboard_restart_pending(old, validated)
     return {"ok": True, "config": validated}
+
+
+# ────────────── paired devices (M0-6, config page device list/revoke) ───────
+#
+# Legacy (non-/api/v1) admin routes: the config page is operated locally by
+# the OWNER in-browser, not by a paired mobile client, so these follow the
+# same perimeter model as /api/config (gated only by
+# api_auth_enforce_legacy, default-open) rather than the strict-always
+# /api/v1/* bearer rule meant for already-paired devices.
+# store.device_list()/device_revoke() already existed (batch 1, M0-2).
+
+
+@app.get("/api/devices")
+def api_list_devices() -> dict[str, Any]:
+    return {"devices": store.device_list()}
+
+
+@app.post("/api/devices/{device_id}/revoke")
+def api_revoke_device(device_id: str) -> dict[str, Any]:
+    """Revoke a paired device's token. Idempotent: revoking an already-
+    revoked device returns 200 with `already_revoked: true` rather than
+    clobbering the original revocation timestamp (store.device_revoke's
+    own idempotency). 404 only when device_id is genuinely unknown."""
+    changed = store.device_revoke(device_id)
+    match = next(
+        (d for d in store.device_list() if d["device_id"] == device_id), None
+    )
+    if match is None:
+        raise HTTPException(404, detail="device not found")
+    return {"device_id": device_id, "revoked": True, "already_revoked": not changed}
 
 
 def _dashboard_restart_marker_path() -> Path:
@@ -6942,6 +7004,35 @@ async def api_posture_enable(request: Request):
 @app.get("/setup", response_class=HTMLResponse)
 def setup_page(request: Request):
     return templates.TemplateResponse(request, "setup.html", {})
+
+
+@app.get("/api/setup/pairing_code")
+def api_setup_pairing_code() -> dict:
+    """Mint a pairing session for the `/setup` QR (M0-5, design D6).
+
+    Legacy (non-`/api/v1`) route — owner-facing, drives the QR the OWNER
+    renders on their own trusted browser session; gated only by
+    `api_auth_enforce_legacy` like every other `/api/config`-style route
+    (default open), never the strict `/api/v1/*` bearer rule meant for
+    already-paired mobile clients.
+
+    Response shape mirrors D6's QR payload: `{v, code, expires_at, urls,
+    ca_fp}`. `code` is single-use with a 5-minute TTL (`axi.pairing`);
+    `ca_fp` is the SHA-256 of the mkcert root CA's DER bytes (None if
+    mkcert isn't installed) — the phone's out-of-band trust anchor.
+    """
+    from axi import pairing
+
+    session = pairing.create_code()
+    host = str(config.get("dashboard_host", "127.0.0.1") or "127.0.0.1")
+    port = int(config.get("dashboard_port", 8081))
+    return {
+        "v": 1,
+        "code": session["code"],
+        "expires_at": session["expires_at"],
+        "urls": [f"https://{host}:{port}"],
+        "ca_fp": _ca_der_sha256(_mkcert_root_ca_path()),
+    }
 
 
 @app.get("/api/setup/status")

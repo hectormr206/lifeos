@@ -73,6 +73,33 @@
         </button>
       </div>
 
+      <!-- Paired devices (M0-6) -->
+      <div class="panel p-6 space-y-3" x-data="devicesPanel()" x-init="load()">
+        <h2 class="text-lg font-semibold">📱 Dispositivos emparejados</h2>
+        <p class="text-xs muted">
+          Emparejar un dispositivo nuevo desde <a class="underline" href="/setup">/setup</a>.
+        </p>
+        <template x-if="devices.length === 0">
+          <div class="muted text-sm">Ningún dispositivo emparejado todavía.</div>
+        </template>
+        <template x-for="d in devices" :key="d.device_id">
+          <div class="flex items-center justify-between gap-3 text-sm py-2"
+               style="border-top: 1px solid var(--border, #333)">
+            <div>
+              <div x-text="d.name"></div>
+              <div class="text-xs muted">
+                <span x-text="d.revoked_at ? '🚫 revocado' : '✅ activo'"></span>
+                <span x-show="d.last_seen_at"> · visto: </span>
+                <span x-show="d.last_seen_at" x-text="d.last_seen_at"></span>
+              </div>
+            </div>
+            <button class="btn" :disabled="!!d.revoked_at" @click="revoke(d.device_id)">
+              Revocar
+            </button>
+          </div>
+        </template>
+      </div>
+
       <template x-if="message">
         <div class="panel p-3 text-sm"
              :style="messageError ? 'border-color: var(--red); color: var(--red)' : 'border-color: var(--green); color: var(--green)'">
@@ -141,6 +168,24 @@ function configPage() {
         this.messageError = true;
       }
       this.saving = false;
+    },
+  };
+}
+
+function devicesPanel() {
+  return {
+    devices: [],
+    async load() {
+      try {
+        const r = await fetch('/api/devices');
+        this.devices = r.ok ? (await r.json()).devices : [];
+      } catch (e) { this.devices = []; }
+    },
+    async revoke(deviceId) {
+      try {
+        await fetch(`/api/devices/${deviceId}/revoke`, { method: 'POST' });
+      } catch (e) { /* ignore */ }
+      await this.load();
     },
   };
 }
