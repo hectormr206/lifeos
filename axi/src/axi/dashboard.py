@@ -350,6 +350,25 @@ async def lifespan(_app: FastAPI):
     # Propagate nano_endpoint from config before any lifeos runtime call.
     _apply_nano_endpoint(str(config.get("nano_endpoint", "http://127.0.0.1:8090")))
 
+    # Warm the nano extractor's prompt-prefix cache in the background so the
+    # first real extraction after a (re)start isn't a slow cold start. The 2B
+    # extractor's cold call (model load + ~3.5k-token system-prompt prefill)
+    # can exceed 30s; llama.cpp then caches that prefix so warm calls are
+    # ~6-8s. Best-effort daemon thread — extract() does NOT persist anything,
+    # and a missing/unhealthy nano just fails fast (connection refused), so a
+    # slow or failed warmup can never affect startup, tests, or the user.
+    def _warm_nano() -> None:
+        try:
+            from lifeos.agents import extractor as _warm_extractor  # noqa: PLC0415
+            _warm_extractor.extract(
+                "arranque del sistema", timeout_s=90.0, retry_timeout_s=90.0,
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("nano warmup skipped", exc_info=True)
+    threading.Thread(
+        target=_warm_nano, name="axi-nano-warmup", daemon=True,
+    ).start()
+
     try:
         sched = get_scheduler()
         sched.set_dispatcher(_lifeos_push_dispatcher)
