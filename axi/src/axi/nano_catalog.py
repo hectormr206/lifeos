@@ -119,6 +119,46 @@ NANO_CATALOG: tuple[NanoModelEntry, ...] = (
     ),
 
     # ------------------------------------------------------------------ #
+    # Recommended extractor — Qwen3.5-2B (text-only).                     #
+    # Won the 2026-07-14 Spanish extraction bake-off vs 0.8B: 73.9% case  #
+    # pass rate (51/69) vs 60.9% (42/69), no fields below 70% accuracy.   #
+    # ~2x slower on CPU (~6.5s vs ~3.1s/case) but the nano extractor runs #
+    # in the background, so quality wins. Bundled text-only (no mmproj):  #
+    # it was benchmarked text-only and mmproj would inflate RSS toward    #
+    # the service MemoryMax.                                              #
+    # ------------------------------------------------------------------ #
+    NanoModelEntry(
+        id="qwen35-2b",
+        name="Qwen3.5 2B (nano-agent, recommended)",
+        family="Qwen",
+        params="2B",
+        features=("tools",),
+        description=(
+            "Recommended nano-agent extractor. Qwen3.5 2B Q4_K_M ~1.3 GB. "
+            "CPU-only. Text-only (no mmproj) — benchmarked and run purely for "
+            "structured extraction. Won the 2026-07-14 Spanish extraction "
+            "bake-off vs 0.8B (+13pp case pass rate, no weak fields). "
+            "Files live at ~/LifeOS/models/qwen35-2b/."
+        ),
+        files=(
+            NanoModelFile(
+                repo_id="unsloth/Qwen3.5-2B-GGUF",
+                filename="Qwen3.5-2B-Q4_K_M.gguf",
+                kind="gguf",
+            ),
+        ),
+        ctx=8192,
+        ngl=0,
+        port=8090,
+        extra_args=_CPU_ARGS + ("-a", "Qwen3.5-2B-nano"),
+        notes=(
+            "Recommended default extractor as of 2026-07-14. ~1.3 GB gguf; "
+            "needs MemoryMax >= 3G on llama-nano.service to avoid OOM under "
+            "the KV cache. Text-only by design (extraction workload)."
+        ),
+    ),
+
+    # ------------------------------------------------------------------ #
     # Nano-agent / extraction tier — Liquid AI LFM2 1.2B.                #
     # ------------------------------------------------------------------ #
     NanoModelEntry(

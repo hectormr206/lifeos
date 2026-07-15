@@ -3560,7 +3560,7 @@ def _try_nano_extract(
         return None
 
     try:
-        # Use extract()'s CPU-sized default timeout (20s primary / 30s retry).
+        # Use extract()'s CPU-sized default timeout (30s primary / 60s retry).
         # The nano runs CPU-only and a rich multi-field input takes ~10-18s; a
         # hardcoded short timeout here would silently fail every real entry.
         result = nano_extractor.extract(text)

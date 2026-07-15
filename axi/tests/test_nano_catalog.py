@@ -70,6 +70,19 @@ def test_lfm2_entry_has_no_mmproj():
     assert entry.mmproj_file is None
 
 
+def test_qwen35_2b_entry_present_and_text_only():
+    """The recommended 2B extractor must exist, be text-only, and be a
+    proper extraction entry (won the 2026-07-14 bake-off)."""
+    entry = nano_catalog.by_id("qwen35-2b")
+    assert entry is not None
+    assert entry.params == "2B"
+    # Text-only: benchmarked without vision; mmproj would inflate RSS.
+    assert entry.mmproj_file is None
+    assert entry.gguf_file.filename.endswith(".gguf")
+    # Must still expose the alias like every other entry.
+    assert "-a" in entry.extra_args
+
+
 def test_all_entries_have_ctx_and_port():
     """Every nano entry must have a ctx and the nano port defined."""
     for entry in nano_catalog.catalog():

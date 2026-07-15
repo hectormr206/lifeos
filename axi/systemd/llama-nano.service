@@ -21,8 +21,11 @@ ExecStart=%h/LifeOS/lifeos/axi/scripts/axi-nano-launch
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=30
-# 2 GB RAM cap — largest nano model (LFM2 1.2B) + KV cache fits here.
-MemoryMax=2G
+# 3 GB RAM cap — the recommended extractor is now Qwen3.5-2B (~1.3 GB gguf);
+# with the ctx=8192 KV cache + llama-server overhead its RSS approaches 2 GB,
+# so the historical 2 GB cap risked an OOM kill. 3 GB gives headroom while
+# still bounding a runaway. Smaller models (0.8B, LFM2 1.2B) fit comfortably.
+MemoryMax=3G
 
 [Install]
 WantedBy=default.target

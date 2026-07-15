@@ -395,8 +395,8 @@ def _is_ack_filler(text: str) -> bool:
 def extract(
     text: str,
     *,
-    timeout_s: float = 20.0,
-    retry_timeout_s: float = 30.0,
+    timeout_s: float = 30.0,
+    retry_timeout_s: float = 60.0,
     retries: int = 1,
     temperature: float = 0.0,
     seed: int | None = 0,
@@ -420,12 +420,16 @@ def extract(
     answer (parse failure, null domain) is NOT retried — that's a real
     decision and burning the retry budget on it would only add latency.
 
-    Timeout sizing: the nano always runs CPU-only (ngl=0), and a multi-field
-    input over the ~3.5k-token prompt takes ~14-18s on a typical CPU. The
-    defaults (20s primary, 30s retry) are sized to that reality so a normal
-    extraction succeeds on the first attempt instead of always burning a
-    doomed short attempt before the retry. Hardware-specific tuning can lower
-    these via the explicit args."""
+    Timeout sizing: the nano always runs CPU-only (ngl=0). The recommended
+    extractor is now Qwen3.5-2B (2026-07-14 bake-off winner). Warm calls
+    return in ~6-8s on this laptop, but the FIRST call after a nano (re)start
+    is a cold start — model load + prefill of the ~3.5k-token system prompt —
+    which can exceed 30s. The brain fallback does NOT persist, so a swallowed
+    cold-start timeout silently drops the user's data. The defaults (30s
+    primary, 60s retry) are sized so even a cold start succeeds within the
+    retry budget; warm calls still finish on the first attempt well under 30s,
+    so the higher ceilings add no latency in the common case. Hardware-specific
+    tuning can lower these via the explicit args."""
     if not text or not text.strip():
         return None
 
