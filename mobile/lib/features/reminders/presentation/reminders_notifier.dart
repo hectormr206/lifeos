@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_providers.dart';
 import '../../../core/cache/response_cache.dart';
 import '../../../core/connectivity/connectivity_status.dart';
+import '../../../core/outbox/outbox.dart';
 import '../../chat/data/chat_repository.dart';
 import '../../chat/presentation/chat_notifier.dart' show chatRepositoryProvider;
 import '../data/reminders_repository.dart';
@@ -10,11 +11,14 @@ import '../domain/reminder.dart';
 
 /// Real [RemindersRepository] used app-wide; overridden with a fake in
 /// tests. Wired with the offline read cache + connectivity reporter (M3
-/// slice 1).
+/// slice 1) and the offline write outbox + pending-sync reporter (M3
+/// slice 2).
 final remindersRepositoryProvider = Provider<RemindersRepository>((ref) => HttpRemindersRepository(
       ref.watch(dioProvider),
       cache: ref.watch(responseCacheProvider),
       connectivity: ref.watch(connectivityStatusProvider.notifier),
+      outbox: ref.watch(outboxProvider),
+      pendingSync: ref.watch(pendingSyncCountProvider.notifier),
     ));
 
 /// The reminders screen's UI state: the pending list (loading/data/error)

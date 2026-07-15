@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/offline_banner.dart';
+import '../../../core/widgets/pending_sync_banner.dart';
 import '../domain/reminder.dart';
 import 'reminders_notifier.dart';
 
@@ -50,6 +51,7 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
       body: Column(
         children: [
           const OfflineBanner(),
+          const PendingSyncBanner(),
           Expanded(
             child: RefreshIndicator(
               onRefresh: () => ref.read(remindersNotifierProvider.notifier).refresh(),

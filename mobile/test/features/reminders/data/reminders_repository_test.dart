@@ -15,6 +15,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/cache/response_cache.dart';
 import 'package:lifeos/core/connectivity/connectivity_status.dart';
+import 'package:lifeos/core/outbox/outbox.dart';
 import 'package:lifeos/features/reminders/data/reminders_repository.dart';
 
 class _FixedResponseAdapter implements HttpClientAdapter {
@@ -167,6 +168,31 @@ void main() {
       final repo = HttpRemindersRepository(dio);
 
       await expectLater(() => repo.cancel('nope'), throwsA(isA<RemindersException>()));
+    });
+  });
+
+  group('HttpRemindersRepository offline write outbox (M3 slice 2)', () {
+    test('a network failure enqueues the DELETE and returns a synthetic queued success', () async {
+      final outbox = InMemoryOutbox();
+      final repo = HttpRemindersRepository(_unreachableDio(), outbox: outbox);
+
+      // Must not throw — the mutation is queued and treated as an
+      // optimistic success.
+      await repo.cancel('r1');
+
+      final entries = await outbox.list();
+      expect(entries, hasLength(1));
+      expect(entries.first.httpMethod, 'DELETE');
+      expect(entries.first.path, '/api/v1/reminders/r1');
+    });
+
+    test('a definite 4xx response throws RemindersException and never enqueues', () async {
+      final dio = _dioWith(404, jsonEncode({'detail': 'not found'}));
+      final outbox = InMemoryOutbox();
+      final repo = HttpRemindersRepository(dio, outbox: outbox);
+
+      await expectLater(() => repo.cancel('nope'), throwsA(isA<RemindersException>()));
+      expect(await outbox.list(), isEmpty);
     });
   });
 

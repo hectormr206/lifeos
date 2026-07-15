@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/pending_sync_banner.dart';
 import '../domain/chat_message.dart';
 import 'chat_notifier.dart';
 
@@ -67,6 +68,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       appBar: AppBar(title: const Text('Axi')),
       body: Column(
         children: [
+          const PendingSyncBanner(),
           Expanded(
             child: ListView.builder(
               controller: _scrollController,

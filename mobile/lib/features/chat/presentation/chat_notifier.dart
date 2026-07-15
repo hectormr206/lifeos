@@ -1,11 +1,17 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
+import '../../../core/outbox/outbox.dart';
 import '../data/chat_repository.dart';
 import '../domain/chat_message.dart';
 
 /// Real [ChatRepository] used app-wide; overridden with a fake in tests.
-final chatRepositoryProvider = Provider<ChatRepository>((ref) => HttpChatRepository(ref.watch(dioProvider)));
+/// Wired with the offline write outbox + pending-sync reporter (M3 slice 2).
+final chatRepositoryProvider = Provider<ChatRepository>((ref) => HttpChatRepository(
+      ref.watch(dioProvider),
+      outbox: ref.watch(outboxProvider),
+      pendingSync: ref.watch(pendingSyncCountProvider.notifier),
+    ));
 
 /// The chat conversation's UI state (spec mobile-chat).
 class ChatUiState {

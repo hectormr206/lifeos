@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/outbox/outbox.dart';
 import '../domain/chat_message.dart';
 
 /// Raised when `POST /api/v1/chat/ask` fails (non-2xx, network error, or an
@@ -38,25 +39,55 @@ abstract class ChatRepository {
 }
 
 class HttpChatRepository implements ChatRepository {
-  HttpChatRepository(this._dio);
+  HttpChatRepository(this._dio, {Outbox? outbox, PendingSyncReporter? pendingSync})
+      : _outbox = outbox ?? InMemoryOutbox(),
+        _pendingSync = pendingSync ?? const NoopPendingSyncReporter();
 
   final Dio _dio;
+  final Outbox _outbox;
+  final PendingSyncReporter _pendingSync;
 
   @override
   Future<ChatMessage> sendMessage(String text) async {
+    // Exact body shape verified against dashboard.py's api_chat_ask
+    // (axi/src/axi/dashboard.py:4039): {text, image_b64, speak,
+    // logging_mode}. This slice never streams/attaches/speaks/logs.
+    final requestBody = {'text': text, 'image_b64': null, 'speak': false, 'logging_mode': false};
     try {
-      // Exact body shape verified against dashboard.py's api_chat_ask
-      // (axi/src/axi/dashboard.py:4039): {text, image_b64, speak,
-      // logging_mode}. This slice never streams/attaches/speaks/logs.
-      final response = await _dio.post<Map<String, Object?>>(
-        '/api/v1/chat/ask',
-        data: {'text': text, 'image_b64': null, 'speak': false, 'logging_mode': false},
-      );
+      final response = await _dio.post<Map<String, Object?>>('/api/v1/chat/ask', data: requestBody);
       final body = response.data ?? const <String, Object?>{};
       return _parseAskResponse(body);
     } on DioException catch (error) {
+      // M3 slice 2: a network-class failure (the request never reached the
+      // engine) queues this exact call for later replay via SyncService
+      // instead of failing the user's action — a definite 4xx/5xx still
+      // surfaces as a real ChatException below.
+      if (isNetworkFailure(error)) {
+        await _outbox.enqueue(
+          httpMethod: 'POST',
+          path: '/api/v1/chat/ask',
+          jsonBody: requestBody,
+          kind: 'chat_ask',
+        );
+        await _reportPendingCount();
+        return _queuedReply();
+      }
       throw ChatException(_messageFor(error), statusCode: error.response?.statusCode);
     }
+  }
+
+  /// Synthetic optimistic reply returned in place of Axi's actual answer
+  /// when the request was queued offline — lets the UI proceed without
+  /// waiting for (or inventing) a real engine response.
+  ChatMessage _queuedReply() => ChatMessage(
+        id: 'queued-${DateTime.now().microsecondsSinceEpoch}',
+        role: ChatRole.axi,
+        text: 'Sin conexión: tu mensaje quedó en cola y se enviará automáticamente.',
+        timestamp: DateTime.now(),
+      );
+
+  Future<void> _reportPendingCount() async {
+    _pendingSync.reportPendingCount((await _outbox.list()).length);
   }
 
   @override

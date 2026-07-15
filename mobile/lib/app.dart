@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'core/outbox/sync_service.dart';
 import 'features/body/presentation/body_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
 import 'features/connection/domain/connection_status.dart';
@@ -68,6 +69,9 @@ class LifeOSApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(goRouterProvider);
+    // M3 slice 2: arms the offline write outbox's drain triggers (once on
+    // app start, and again on every reconnect) for the app's lifetime.
+    ref.watch(outboxSyncTriggerProvider);
     return MaterialApp.router(
       title: 'LifeOS',
       theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal)),

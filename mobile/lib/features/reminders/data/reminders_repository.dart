@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../../core/cache/response_cache.dart';
 import '../../../core/connectivity/connectivity_status.dart';
+import '../../../core/outbox/outbox.dart';
 import '../domain/reminder.dart';
 
 /// Raised when a reminders call fails (non-2xx, network error). [message]
@@ -34,13 +35,22 @@ abstract class RemindersRepository {
 }
 
 class HttpRemindersRepository implements RemindersRepository {
-  HttpRemindersRepository(this._dio, {ResponseCache? cache, ConnectivityReporter? connectivity})
-      : _cache = cache ?? InMemoryResponseCache(),
-        _connectivity = connectivity ?? const NoopConnectivityReporter();
+  HttpRemindersRepository(
+    this._dio, {
+    ResponseCache? cache,
+    ConnectivityReporter? connectivity,
+    Outbox? outbox,
+    PendingSyncReporter? pendingSync,
+  })  : _cache = cache ?? InMemoryResponseCache(),
+        _connectivity = connectivity ?? const NoopConnectivityReporter(),
+        _outbox = outbox ?? InMemoryOutbox(),
+        _pendingSync = pendingSync ?? const NoopPendingSyncReporter();
 
   final Dio _dio;
   final ResponseCache _cache;
   final ConnectivityReporter _connectivity;
+  final Outbox _outbox;
+  final PendingSyncReporter _pendingSync;
 
   /// Offline read cache key (M3 slice 1) — one per `status`, e.g.
   /// `"reminders:pending"` (the only status the app currently calls with).
@@ -77,8 +87,22 @@ class HttpRemindersRepository implements RemindersRepository {
     try {
       await _dio.delete<Map<String, Object?>>('/api/v1/reminders/$id');
     } on DioException catch (error) {
+      // M3 slice 2: a network-class failure queues this DELETE for later
+      // replay via SyncService and returns a synthetic queued success (no
+      // throw) so "mark done" can proceed optimistically offline. A
+      // definite 4xx/5xx (the engine DID answer, e.g. "not found") still
+      // surfaces as a real RemindersException below.
+      if (isNetworkFailure(error)) {
+        await _outbox.enqueue(httpMethod: 'DELETE', path: '/api/v1/reminders/$id', kind: 'reminder_cancel');
+        await _reportPendingCount();
+        return;
+      }
       throw RemindersException(_messageFor(error), statusCode: error.response?.statusCode);
     }
+  }
+
+  Future<void> _reportPendingCount() async {
+    _pendingSync.reportPendingCount((await _outbox.list()).length);
   }
 
   ReminderModel _parseRow(Map<String, Object?> row) {
