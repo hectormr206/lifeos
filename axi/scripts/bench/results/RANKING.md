@@ -156,3 +156,30 @@ The 35B's deterministic score of 0.771 puts it clearly ahead of all challengers.
 | 12 GB | qwen35-6-35b-a3b | ngl=999, --cpu-moe (prod) | 27.4 | 5028 MiB | 0.771 |
 
 The 35B MoE model dominates all three tiers by quality. The only real tradeoff is at 4GB where speed drops to ~16 tok/s; gemma4-e2b (3342 MiB, 193 tok/s, det=0.657) is the speed-first fallback for interactive use at that constraint.
+
+---
+
+## Post-decision evaluation: Bonsai 27B (2026-07-15) — NOT ADOPTED
+
+New candidate: **Bonsai 27B** (prism-ml) — a Qwen3.6-27B compressed to ternary/1-bit via a **custom GGUF `Q2_0_g128` format that requires the PrismML llama.cpp fork** (`github.com/PrismML-Eng/llama.cpp`, built with CUDA 13.3 at `~/LifeOS/PrismML-llama.cpp`). Two variants benchmarked with the reusable `bench_model.py` harness (raw rows in `results/model_registry.jsonl`).
+
+| Variant | gguf | brain det (think OFF) | brain det (think ON) | extraction (69) | GPU tok/s | GPU VRAM | 
+|---------|------|-----------------------|----------------------|-----------------|-----------|----------|
+| Bonsai-1bit (Q1_0) | 3.8 GB | **0.657** | — | **89.9%** | 52.7 | ~5.9 GB |
+| Bonsai-ternary (Q2_0) | 7.2 GB | **0.657** | 0.486 | 87.0% | 43.9 | ~8.9 GB |
+
+Baselines (this eval): 35B det=0.771 · qwen35-4b det=0.621 · qwen35-2b nano extraction=73.9%.
+
+**Findings:**
+- **Thinking mode HURTS this eval** (ternary det 0.657 → 0.486 with `--reasoning on`): answers stay correct but get more elaborate, failing the concise `must_contain`/`max_words`/format checks. Verified NOT a truncation artifact (probe: finish=stop, clean concise content). So the repo's recommended `--reasoning on` config is worse for a terse Spanish life-assistant.
+- **1-bit ≥ ternary everywhere**: identical brain det (0.657), higher extraction (89.9 vs 87.0), faster (52.7 vs 43.9 tok/s), ~⅔ the VRAM (5.9 vs 8.9 GB). The 1-bit is the only variant worth considering.
+- Bonsai thinks in **English** even on Spanish prompts (final answers still land in Spanish with thinking off).
+
+**Verdict by role — no clean-win niche:**
+- **Quality/dev brain (vs 35B):** loses, 0.657 < 0.771. 35B stays.
+- **Interactive day-brain (vs qwen35-4b):** marginal +0.036 det, but needs ~5.9 GB VRAM + the maintained fork vs the incumbent 4b. Not worth it.
+- **Nano extraction (vs qwen35-2b):** big win — **+16 pp (89.9% vs 73.9%)** — BUT the 2B runs CPU-only (0 VRAM) at :8090, while Bonsai-1bit needs ~5.9 GB VRAM (our scarce resource; 12 GB is already full with 4b+VT-3B+embed) or slow CPU, **plus** the PrismML fork on every install.
+
+**Decision: NOT ADOPTED.** A 27B-class model even at 1-bit is a genuine instruction-following upgrade (esp. extraction), but its custom-fork lock-in has no role where it beats the incumbent at acceptable VRAM cost. Aligns with the community "Me equivoqué con Bonsai 27B" sentiment. **Watch item:** if VRAM frees up or extraction quality becomes critical, Bonsai-1bit is a proven +16 pp extraction upgrade. Models kept on disk at `~/LifeOS/models/bonsai-27b/` for re-eval.
+
+**Reusable harness added (2026-07-15):** `axi/scripts/bench/bench_model.py` — benchmarks ANY gguf on ANY llama.cpp binary (`--server-bin` for forks), roles `speed,brain,extraction`, appends to `results/model_registry.jsonl`, `--list` prints the side-by-side table. Use it to vet future models fast without re-running known ones.
