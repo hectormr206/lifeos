@@ -94,6 +94,12 @@ class _ConnectedView extends ConsumerWidget {
           icon: const Icon(Icons.chat_bubble_outline),
           label: const Text('Hablar con Axi'),
         ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/domains'),
+          icon: const Icon(Icons.dashboard_outlined),
+          label: const Text('Mis datos'),
+        ),
       ],
     );
   }
