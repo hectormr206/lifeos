@@ -6062,6 +6062,7 @@ def _health_entry_to_dict(e: health_entries.Entry) -> dict:
         "tags": e.tags,
         "source": e.source,
         "confidence": e.confidence,
+        "subject": getattr(e, "subject", None),
         "created_at": e.created_at.isoformat() if e.created_at else None,
     }
 
@@ -6506,6 +6507,7 @@ def _session_to_dict(s: ex_sessions.Session) -> dict:
         "location": s.location, "title": s.title, "body": s.body,
         "data": s.data, "tags": s.tags,
         "source": s.source, "confidence": s.confidence,
+        "subject": getattr(s, "subject", None),
         "created_at": s.created_at.isoformat() if s.created_at else None,
     }
 
