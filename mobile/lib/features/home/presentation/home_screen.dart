@@ -29,10 +29,12 @@ class HomeScreen extends ConsumerWidget {
         ],
       ),
       body: Center(
-        child: switch (connection) {
-          ConnectionPaired(engineUrl: final engineUrl) => _ConnectedView(engineUrl: engineUrl),
-          _ => _UnpairedView(onConnect: () => context.push('/settings/connection')),
-        },
+        child: SingleChildScrollView(
+          child: switch (connection) {
+            ConnectionPaired(engineUrl: final engineUrl) => _ConnectedView(engineUrl: engineUrl),
+            _ => _UnpairedView(onConnect: () => context.push('/settings/connection')),
+          },
+        ),
       ),
     );
   }
@@ -129,6 +131,12 @@ class _ConnectedView extends ConsumerWidget {
           onPressed: () => context.push('/digest'),
           icon: const Icon(Icons.today_outlined),
           label: const Text('Resumen de hoy'),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/graph'),
+          icon: const Icon(Icons.hub_outlined),
+          label: const Text('Cerebro'),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(

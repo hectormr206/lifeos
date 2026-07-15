@@ -13,6 +13,8 @@ import 'features/digest/presentation/digest_screen.dart';
 import 'features/domains/domain/domain_descriptor.dart';
 import 'features/domains/presentation/domain_list_screen.dart';
 import 'features/domains/presentation/domains_hub_screen.dart';
+import 'features/graph/presentation/graph_browser_screen.dart';
+import 'features/graph/presentation/graph_node_screen.dart';
 import 'features/home/presentation/home_screen.dart';
 import 'features/insights/presentation/insights_screen.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
@@ -44,6 +46,10 @@ import 'features/settings/presentation/settings_screen.dart';
 /// path from the pre-existing `/settings/connection` (pairing setup) — the
 /// exact-match `loc == '/settings'` check below never matches
 /// `/settings/connection`, so both routes coexist without conflict.
+///
+/// Graph browser slice: `/graph` (search) and `/graph/:id` (node detail —
+/// laptop `/brain3d` parity, minus the 3D) are gated behind pairing the
+/// same way; relation-tap navigation pushes further `/graph/:id` routes.
 final goRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     redirect: (context, state) {
@@ -55,7 +61,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           loc == '/insights' ||
           loc == '/briefings' ||
           loc == '/digest' ||
-          loc == '/settings';
+          loc == '/settings' ||
+          loc.startsWith('/graph');
       if (needsPairing && ref.read(connectionNotifierProvider) is! ConnectionPaired) {
         return '/settings/connection';
       }
@@ -76,6 +83,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/briefings', builder: (context, state) => const BriefingsScreen()),
       GoRoute(path: '/digest', builder: (context, state) => const DigestScreen()),
       GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
+      GoRoute(path: '/graph', builder: (context, state) => const GraphBrowserScreen()),
+      GoRoute(
+        path: '/graph/:id',
+        builder: (context, state) => GraphNodeScreen(nodeId: int.parse(state.pathParameters['id']!)),
+      ),
     ],
   );
 });
