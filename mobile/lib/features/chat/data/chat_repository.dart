@@ -1,0 +1,115 @@
+import 'package:dio/dio.dart';
+
+import '../domain/chat_message.dart';
+
+/// Raised when `POST /api/v1/chat/ask` fails (non-2xx, network error, or an
+/// unparseable success payload). [message] is user-facing (Spanish).
+class ChatException implements Exception {
+  ChatException(this.message, {this.statusCode});
+
+  final String message;
+  final int? statusCode;
+
+  @override
+  String toString() => message;
+}
+
+/// Talks to the engine's chat endpoints. Abstract so tests/the notifier can
+/// depend on a fake without a live engine.
+///
+/// ARCHITECTURE NOTE (parity, see apply-progress M1-slice-2): chat is not yet
+/// in `contracts/openapi/axi-v1.json` (only capabilities+pair are), so it is
+/// not part of the generated `axi_api_client`. This repository calls the
+/// engine via raw [Dio] (through the app's shared `dioProvider`, which
+/// already carries [AuthInterceptor] + the paired base URL) with hand-written
+/// request/response parsing instead. FOLLOW-UP: promote chat to a native
+/// `/api/v1` FastAPI route with declared Pydantic request/response models so
+/// it can join the generated client + CI drift-guard (engine-side work, out
+/// of scope for this mobile slice).
+abstract class ChatRepository {
+  /// Sends [text] to `POST /api/v1/chat/ask` (NON-STREAMING full-reply
+  /// request/response this slice — see apply-progress for the streaming
+  /// follow-up) and returns Axi's reply as a [ChatMessage].
+  Future<ChatMessage> sendMessage(String text);
+
+  /// Loads prior turns from `GET /api/v1/chat/history`, oldest first, each
+  /// turn split into its user + axi [ChatMessage] pair.
+  Future<List<ChatMessage>> loadHistory();
+}
+
+class HttpChatRepository implements ChatRepository {
+  HttpChatRepository(this._dio);
+
+  final Dio _dio;
+
+  @override
+  Future<ChatMessage> sendMessage(String text) async {
+    try {
+      // Exact body shape verified against dashboard.py's api_chat_ask
+      // (axi/src/axi/dashboard.py:4039): {text, image_b64, speak,
+      // logging_mode}. This slice never streams/attaches/speaks/logs.
+      final response = await _dio.post<Map<String, Object?>>(
+        '/api/v1/chat/ask',
+        data: {'text': text, 'image_b64': null, 'speak': false, 'logging_mode': false},
+      );
+      final body = response.data ?? const <String, Object?>{};
+      return _parseAskResponse(body);
+    } on DioException catch (error) {
+      throw ChatException(_messageFor(error), statusCode: error.response?.statusCode);
+    }
+  }
+
+  @override
+  Future<List<ChatMessage>> loadHistory() async {
+    try {
+      final response = await _dio.get<List<Object?>>('/api/v1/chat/history');
+      final rows = response.data ?? const <Object?>[];
+      final messages = <ChatMessage>[];
+      for (final row in rows) {
+        if (row is! Map) continue;
+        messages.addAll(_parseHistoryRow(Map<String, Object?>.from(row)));
+      }
+      return messages;
+    } on DioException catch (error) {
+      throw ChatException(_messageFor(error), statusCode: error.response?.statusCode);
+    }
+  }
+
+  /// [api_chat_ask]'s response shape varies by which fast-path answered (see
+  /// dashboard.py's several `return {"answer": ..., "latency_ms": ...}`
+  /// sites), but `answer` and `latency_ms` are always present; `conv_id` is
+  /// only present on the main brain-fallback path. When absent, a locally
+  /// generated id keeps [ChatMessage.id] unique without inventing a fake
+  /// server id.
+  ChatMessage _parseAskResponse(Map<String, Object?> body) {
+    final answer = body['answer'] as String? ?? '';
+    final convId = body['conv_id'];
+    final id = convId != null ? '$convId-axi' : 'local-${DateTime.now().microsecondsSinceEpoch}';
+    return ChatMessage(id: id, role: ChatRole.axi, text: answer, timestamp: DateTime.now());
+  }
+
+  /// `api_chat_history` (dashboard.py:5549) returns one row per turn:
+  /// `{id, ts, user_text, axi_text, attachments}`. `ts` is `time.time()`
+  /// (unix seconds, float) — see store.py's `add_conversation`. Split into
+  /// the user message followed by Axi's reply, both carrying the turn's ts
+  /// (the engine stores one timestamp per turn, not per side).
+  List<ChatMessage> _parseHistoryRow(Map<String, Object?> row) {
+    final id = row['id'];
+    final tsSeconds = (row['ts'] as num?)?.toDouble() ?? 0;
+    final timestamp = DateTime.fromMillisecondsSinceEpoch((tsSeconds * 1000).round());
+    final userText = row['user_text'] as String? ?? '';
+    final axiText = row['axi_text'] as String? ?? '';
+    return [
+      ChatMessage(id: '$id-user', role: ChatRole.user, text: userText, timestamp: timestamp),
+      ChatMessage(id: '$id-axi', role: ChatRole.axi, text: axiText, timestamp: timestamp),
+    ];
+  }
+
+  String _messageFor(DioException error) {
+    final status = error.response?.statusCode;
+    if (status != null) {
+      return 'Axi no pudo responder (código $status).';
+    }
+    return 'No se pudo conectar con Axi. Revisa tu conexión e inténtalo de nuevo.';
+  }
+}

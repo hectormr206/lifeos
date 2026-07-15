@@ -88,6 +88,12 @@ class _ConnectedView extends ConsumerWidget {
           ),
           error: (_, _) => const Text('Motor no accesible'),
         ),
+        const SizedBox(height: 24),
+        FilledButton.icon(
+          onPressed: () => context.push('/chat'),
+          icon: const Icon(Icons.chat_bubble_outline),
+          label: const Text('Hablar con Axi'),
+        ),
       ],
     );
   }
