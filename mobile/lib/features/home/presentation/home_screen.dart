@@ -144,6 +144,12 @@ class _ConnectedView extends ConsumerWidget {
           icon: const Icon(Icons.tune),
           label: const Text('Ajustes'),
         ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/meetings'),
+          icon: const Icon(Icons.groups_outlined),
+          label: const Text('Reuniones'),
+        ),
       ],
     );
   }

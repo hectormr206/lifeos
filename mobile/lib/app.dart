@@ -17,6 +17,8 @@ import 'features/graph/presentation/graph_browser_screen.dart';
 import 'features/graph/presentation/graph_node_screen.dart';
 import 'features/home/presentation/home_screen.dart';
 import 'features/insights/presentation/insights_screen.dart';
+import 'features/meetings/presentation/meeting_detail_screen.dart';
+import 'features/meetings/presentation/meetings_screen.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
 import 'features/settings/presentation/settings_screen.dart';
 
@@ -50,6 +52,10 @@ import 'features/settings/presentation/settings_screen.dart';
 /// Graph browser slice: `/graph` (search) and `/graph/:id` (node detail —
 /// laptop `/brain3d` parity, minus the 3D) are gated behind pairing the
 /// same way; relation-tap navigation pushes further `/graph/:id` routes.
+///
+/// Meetings viewer slice: `/meetings` (list) and `/meetings/:id` (detail —
+/// laptop `/meetings` parity, read-only: the phone is not the recorder in
+/// v1) are gated behind pairing the same way.
 final goRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     redirect: (context, state) {
@@ -62,7 +68,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           loc == '/briefings' ||
           loc == '/digest' ||
           loc == '/settings' ||
-          loc.startsWith('/graph');
+          loc.startsWith('/graph') ||
+          loc.startsWith('/meetings');
       if (needsPairing && ref.read(connectionNotifierProvider) is! ConnectionPaired) {
         return '/settings/connection';
       }
@@ -87,6 +94,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/graph/:id',
         builder: (context, state) => GraphNodeScreen(nodeId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(path: '/meetings', builder: (context, state) => const MeetingsScreen()),
+      GoRoute(
+        path: '/meetings/:id',
+        builder: (context, state) => MeetingDetailScreen(meetingId: int.parse(state.pathParameters['id']!)),
       ),
     ],
   );
