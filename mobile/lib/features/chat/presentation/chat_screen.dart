@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../domain/chat_message.dart';
@@ -126,6 +127,7 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final isUser = message.role == ChatRole.user;
     final scheme = Theme.of(context).colorScheme;
+    final onBubble = isUser ? scheme.onPrimaryContainer : scheme.onSecondaryContainer;
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -136,12 +138,23 @@ class _MessageBubble extends StatelessWidget {
           color: isUser ? scheme.primaryContainer : scheme.secondaryContainer,
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Text(
-          message.text,
-          style: TextStyle(
-            color: isUser ? scheme.onPrimaryContainer : scheme.onSecondaryContainer,
-          ),
-        ),
+        // Markdown rendering (spec mobile-chat) applies ONLY to Axi's
+        // replies — the user's own input stays a literal plain Text
+        // widget. `MarkdownBody` never executes raw HTML (there is no HTML
+        // builder registered here); an inert HTML tag in the source just
+        // renders as ordinary text inside a Flutter widget tree, so this is
+        // safe by construction, not by an extra sanitization step.
+        child: isUser
+            ? Text(message.text, style: TextStyle(color: onBubble))
+            : MarkdownBody(
+                data: message.text,
+                selectable: true,
+                styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                  p: TextStyle(color: onBubble),
+                  listBullet: TextStyle(color: onBubble),
+                  code: TextStyle(color: onBubble, backgroundColor: scheme.surfaceContainerHighest),
+                ),
+              ),
       ),
     );
   }

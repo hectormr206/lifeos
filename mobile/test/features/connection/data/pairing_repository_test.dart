@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:axi_api_client/axi_api_client.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/tls/tls_trust_decision.dart';
 import 'package:lifeos/features/connection/data/pairing_repository.dart';
 
 class _FixedResponseAdapter implements HttpClientAdapter {
@@ -50,7 +51,7 @@ void main() {
         }),
       );
       final repository = HttpPairingRepository(
-        apiFactory: (engineUrl) => DefaultApi(Dio(BaseOptions(baseUrl: engineUrl))..httpClientAdapter = adapter),
+        apiFactory: (engineUrl, trust) => DefaultApi(Dio(BaseOptions(baseUrl: engineUrl))..httpClientAdapter = adapter),
       );
 
       final result = await repository.pair(engineUrl: 'https://10.66.66.2:8081', code: 'ABC123');
@@ -68,13 +69,32 @@ void main() {
         body: jsonEncode({'detail': 'pairing code expired'}),
       );
       final repository = HttpPairingRepository(
-        apiFactory: (engineUrl) => DefaultApi(Dio(BaseOptions(baseUrl: engineUrl))..httpClientAdapter = adapter),
+        apiFactory: (engineUrl, trust) => DefaultApi(Dio(BaseOptions(baseUrl: engineUrl))..httpClientAdapter = adapter),
       );
 
       await expectLater(
         () => repository.pair(engineUrl: 'https://10.66.66.2:8081', code: 'EXPIRED'),
         throwsA(isA<PairingException>()),
       );
+    });
+
+    test('pair() forwards the TlsTrustDecision to apiFactory (connection-hardening batch)', () async {
+      final adapter = _FixedResponseAdapter(
+        statusCode: 200,
+        body: jsonEncode({'device_id': 'device-123', 'token': 'secret-token'}),
+      );
+      TlsTrustDecision? received;
+      final repository = HttpPairingRepository(
+        apiFactory: (engineUrl, trust) {
+          received = trust;
+          return DefaultApi(Dio(BaseOptions(baseUrl: engineUrl))..httpClientAdapter = adapter);
+        },
+      );
+      const trust = TlsTrustDecision(pinnedCaPem: 'pem', host: '10.66.66.2');
+
+      await repository.pair(engineUrl: 'https://10.66.66.2:8081', code: 'ABC123', trust: trust);
+
+      expect(received, equals(trust));
     });
   });
 }

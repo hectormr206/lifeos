@@ -18,11 +18,14 @@ class ConnectionScreen extends ConsumerStatefulWidget {
 class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
   final _engineUrlController = TextEditingController();
   final _codeController = TextEditingController();
+  final _caFpController = TextEditingController();
+  bool _trustSelfSigned = false;
 
   @override
   void dispose() {
     _engineUrlController.dispose();
     _codeController.dispose();
+    _caFpController.dispose();
     super.dispose();
   }
 
@@ -43,10 +46,15 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
           _ => _PairForm(
               engineUrlController: _engineUrlController,
               codeController: _codeController,
+              caFpController: _caFpController,
+              trustSelfSigned: _trustSelfSigned,
+              onTrustSelfSignedChanged: (value) => setState(() => _trustSelfSigned = value ?? false),
               connection: connection,
               onSubmit: () => ref.read(connectionNotifierProvider.notifier).pair(
                     engineUrl: _engineUrlController.text.trim(),
                     code: _codeController.text.trim(),
+                    caFpOverride: _caFpController.text.trim().isEmpty ? null : _caFpController.text.trim(),
+                    allowSelfSignedFallback: _trustSelfSigned,
                   ),
             ),
         },
@@ -59,12 +67,18 @@ class _PairForm extends StatelessWidget {
   const _PairForm({
     required this.engineUrlController,
     required this.codeController,
+    required this.caFpController,
+    required this.trustSelfSigned,
+    required this.onTrustSelfSignedChanged,
     required this.connection,
     required this.onSubmit,
   });
 
   final TextEditingController engineUrlController;
   final TextEditingController codeController;
+  final TextEditingController caFpController;
+  final bool trustSelfSigned;
+  final ValueChanged<bool?> onTrustSelfSignedChanged;
   final ConnectionStatus connection;
   final VoidCallback onSubmit;
 
@@ -88,7 +102,32 @@ class _PairForm extends StatelessWidget {
           controller: codeController,
           decoration: const InputDecoration(labelText: 'Código de emparejamiento'),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
+        // Connection-hardening batch (design D5/D6): the CA is fetched and
+        // pinned automatically from `/axi-rootCA.crt`; this field is only
+        // an OPTIONAL out-of-band check against a `ca_fp` the user read
+        // elsewhere (e.g. the engine's `/setup` page) — leaving it blank
+        // does not disable pinning, it only skips the extra verification.
+        TextField(
+          controller: caFpController,
+          decoration: const InputDecoration(
+            labelText: 'ca_fp (opcional)',
+            helperText: 'Verifica el certificado del motor contra este valor, si lo tienes.',
+          ),
+        ),
+        CheckboxListTile(
+          value: trustSelfSigned,
+          onChanged: onTrustSelfSignedChanged,
+          controlAffinity: ListTileControlAffinity.leading,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Confiar en este servidor autofirmado sin verificar certificado (solo desarrollo)'),
+          subtitle: const Text(
+            'Úsalo solo si no se pudo obtener el certificado del motor y confías en la red. '
+            'Nunca actives esto fuera de un entorno de desarrollo.',
+            style: TextStyle(color: Colors.red),
+          ),
+        ),
+        const SizedBox(height: 4),
         if (status is ConnectionError)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),

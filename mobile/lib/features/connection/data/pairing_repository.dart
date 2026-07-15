@@ -1,6 +1,9 @@
 import 'package:axi_api_client/axi_api_client.dart';
 import 'package:dio/dio.dart';
 
+import '../../../core/tls/tls_adapter_factory.dart';
+import '../../../core/tls/tls_trust_decision.dart';
+
 /// Result of a successful `POST /api/v1/pair` exchange (design D6): the
 /// engine base URL the caller supplied, the bearer token issued ONCE, and
 /// the device_id the engine assigned. `engine_pubkey`/sealed `K_sync`
@@ -33,6 +36,14 @@ abstract class PairingRepository {
     required String engineUrl,
     required String code,
     String deviceName = 'LifeOS mobile',
+
+    /// The TLS trust decision to use for THIS pairing POST
+    /// (connection-hardening batch, design D5/D6): `ConnectionNotifier`
+    /// resolves this BEFORE calling `pair` — either a just-fetched+pinned
+    /// CA, or the explicit dev self-signed fallback. Defaults to
+    /// [TlsTrustDecision.none] (plain default certificate validation),
+    /// which is only correct against a real (non-self-signed) engine cert.
+    TlsTrustDecision trust = TlsTrustDecision.none,
   });
 }
 
@@ -41,20 +52,28 @@ abstract class PairingRepository {
 /// so this cannot reuse the app-wide `dioProvider`, whose base URL is the
 /// *already*-paired engine).
 class HttpPairingRepository implements PairingRepository {
-  HttpPairingRepository({DefaultApi Function(String engineUrl)? apiFactory})
+  HttpPairingRepository({DefaultApi Function(String engineUrl, TlsTrustDecision trust)? apiFactory})
       : _apiFactory = apiFactory ?? _defaultApiFactory;
 
-  final DefaultApi Function(String engineUrl) _apiFactory;
+  final DefaultApi Function(String engineUrl, TlsTrustDecision trust) _apiFactory;
 
-  static DefaultApi _defaultApiFactory(String engineUrl) => DefaultApi(Dio(BaseOptions(baseUrl: engineUrl)));
+  static DefaultApi _defaultApiFactory(String engineUrl, TlsTrustDecision trust) {
+    final dio = Dio(BaseOptions(baseUrl: engineUrl));
+    final adapter = const PlatformTlsAdapterFactory().build(trust);
+    if (adapter != null) {
+      dio.httpClientAdapter = adapter;
+    }
+    return DefaultApi(dio);
+  }
 
   @override
   Future<PairResult> pair({
     required String engineUrl,
     required String code,
     String deviceName = 'LifeOS mobile',
+    TlsTrustDecision trust = TlsTrustDecision.none,
   }) async {
-    final api = _apiFactory(engineUrl);
+    final api = _apiFactory(engineUrl, trust);
     try {
       final response = await api.pairApiV1PairPost(
         pairRequest: PairRequest(code: code, deviceName: deviceName),

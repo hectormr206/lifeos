@@ -50,6 +50,17 @@ dependencies:
   flutter_secure_storage: ^10.3.1
   go_router: ^17.3.0
 
+  # SHA-256 for TLS cert-pinning fingerprint compare (design D5/D6 hardening,
+  # core/tls/ca_fingerprint.dart). Was already resolved transitively; made
+  # direct because we import it explicitly now.
+  crypto: ^3.0.6
+
+  # Markdown rendering for Axi's chat replies (spec mobile-chat: "MUST
+  # support ... markdown rendering"). `flutter_markdown` (the official
+  # package) is discontinued upstream; `flutter_markdown_plus` is its
+  # actively-maintained drop-in continuation (same API, same widgets).
+  flutter_markdown_plus: ^1.0.12
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

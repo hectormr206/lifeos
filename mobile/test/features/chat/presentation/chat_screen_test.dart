@@ -2,6 +2,7 @@
 // and that tapping send calls the repository and shows the reply. No live
 // engine — chatRepositoryProvider is overridden with a fake.
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
@@ -64,5 +65,39 @@ void main() {
 
     expect(find.text('hola axi'), findsOneWidget);
     expect(find.text('Respuesta de Axi'), findsOneWidget);
+  });
+
+  // Connection-hardening batch — chat markdown rendering (spec mobile-chat:
+  // "MUST support text input, markdown rendering, and history"):
+  // `flutter_markdown` is discontinued upstream, so this uses
+  // `flutter_markdown_plus` (its actively-maintained drop-in continuation).
+  testWidgets('renders markdown for Axi replies but keeps user messages plain', (tester) async {
+    final ts = DateTime.now();
+    const axiMarkdown = '**bold** reply with a list:\n- one\n- two';
+    const userMarkdown = '**not bold** for me';
+    final repo = _FakeChatRepository(
+      history: [
+        ChatMessage(id: '1-user', role: ChatRole.user, text: userMarkdown, timestamp: ts),
+        ChatMessage(id: '1-axi', role: ChatRole.axi, text: axiMarkdown, timestamp: ts),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [chatRepositoryProvider.overrideWithValue(repo)],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    // Axi's bubble is rendered THROUGH MarkdownBody — the raw markdown
+    // source (asterisks/dashes) is never shown as one literal Text widget.
+    expect(find.byType(MarkdownBody), findsOneWidget);
+    expect(find.text(axiMarkdown), findsNothing);
+
+    // The user's message, even though it contains the same markdown syntax,
+    // stays a literal plain Text widget — never parsed/formatted.
+    expect(find.text(userMarkdown), findsOneWidget);
   });
 }
