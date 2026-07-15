@@ -1,0 +1,17 @@
+// Golden set for code-review eval (VT-3B's actual role) — v1
+// Format (buggy case):  {"id", "lang", "snippet", "bug", "clean": false,
+//                        "must_contain": [[alt1, alt2, ...], ...]}
+//   — model must mention the planted bug; every group needs ONE alternative
+//     (case/accent-insensitive substring).
+// Format (clean case):  {"id", "lang", "snippet", "clean": true,
+//                        "must_not_contain": [kw, ...]}
+//   — reporting any planted-bug keyword on clean code counts as a FALSE POSITIVE.
+// Prompting/scoring: axi/scripts/bench/model_audit.py run_codereview_role().
+{"id": "cr01", "lang": "python", "bug": "off-by-one", "clean": false, "snippet": "def last_n_items(items, n):\n    # return the last n items of the list\n    return items[len(items) - n - 1:]\n", "must_contain": [["off-by-one", "off by one", "n + 1", "n+1", "un elemento de mas", "one extra", "indice"]]}
+{"id": "cr02", "lang": "python", "bug": "sql-injection", "clean": false, "snippet": "def find_user(cursor, username):\n    query = \"SELECT * FROM users WHERE name = '\" + username + \"'\"\n    cursor.execute(query)\n    return cursor.fetchall()\n", "must_contain": [["injection", "inyeccion", "parametriz", "placeholder", "prepared"]]}
+{"id": "cr03", "lang": "python", "bug": "resource-leak", "clean": false, "snippet": "def count_lines(path):\n    f = open(path)\n    lines = f.readlines()\n    return len(lines)\n", "must_contain": [["close", "cerrar", "with open", "leak", "fuga", "context manager"]]}
+{"id": "cr04", "lang": "python", "bug": "none-deref", "clean": false, "snippet": "def total_price(cart):\n    discount = cart.get(\"discount\")\n    # discount may be absent from the cart dict\n    return cart[\"subtotal\"] - discount * cart[\"subtotal\"]\n", "must_contain": [["none", "null", "nonetype", "get(", "missing", "falta", "ausente"]]}
+{"id": "cr05", "lang": "python", "bug": "mutable-default", "clean": false, "snippet": "def add_tag(tag, tags=[]):\n    tags.append(tag)\n    return tags\n", "must_contain": [["mutable", "default", "compartid", "shared", "same list", "misma lista"]]}
+{"id": "cr06", "lang": "dart", "bug": "race-condition", "clean": false, "snippet": "class Counter {\n  int value = 0;\n  Future<void> incrementFromServer() async {\n    final current = value;\n    final delta = await fetchDelta(); // other callers may run here\n    value = current + delta;\n  }\n}\n", "must_contain": [["race", "carrera", "concurren", "lost update", "stale", "await"]]}
+{"id": "cr07", "lang": "python", "bug": "zero-division", "clean": false, "snippet": "def average_score(scores):\n    return sum(scores) / len(scores)\n", "must_contain": [["zerodivision", "division by zero", "division entre cero", "empty", "vacia", "len(scores) == 0", "cero"]]}
+{"id": "cr08", "lang": "python", "clean": true, "snippet": "def clamp(value, low, high):\n    \"\"\"Clamp value to the inclusive range [low, high].\"\"\"\n    if low > high:\n        raise ValueError(\"low must be <= high\")\n    return max(low, min(high, value))\n", "must_not_contain": ["injection", "inyeccion", "race", "carrera", "leak", "fuga", "off-by-one", "off by one", "zerodivision", "none-deref", "mutable default"]}

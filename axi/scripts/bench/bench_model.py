@@ -283,17 +283,53 @@ def _percentile(xs: list[float], q: float) -> float:
 # IMPURE ORCHESTRATION (spawns servers, hits the network — NOT unit-tested)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def spawn_server(argv: list[str]) -> subprocess.Popen:
-    """Spawn the candidate llama-server in its own session (own process group)."""
+def http_ok(url: str, timeout: int = 3) -> bool:
+    """True iff `url` answers 200 within `timeout` seconds."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def spawn_server(argv: list[str], hide_gpu: bool = False) -> subprocess.Popen:
+    """Spawn the candidate llama-server in its own session (own process group).
+
+    hide_gpu=True sets CUDA_VISIBLE_DEVICES="" for the child. REQUIRED for
+    CPU-only cells (ngl=0): the llama.cpp-cuda build still initializes a CUDA
+    context even with zero offloaded layers (same gotcha documented in
+    llama-nano.service), and with the prod brains holding ~11/12 GB VRAM that
+    lazy allocation can fail MID-REQUEST → ggml_abort → the bench server dies
+    silently between roles and every later score measures a corpse (the
+    2026-07-15 "7.2% extraction" crater).
+
+    Set BENCH_SERVER_LOG=/path/prefix to capture each spawned server's
+    stdout+stderr to <prefix>.<pid>.log — essential when diagnosing a server
+    that dies mid-audit (default DEVNULL keeps normal runs quiet).
+    """
     env = os.environ.copy()
+    if hide_gpu:
+        env["CUDA_VISIBLE_DEVICES"] = ""
     print(f"  Spawning: {argv[0]} -m {Path(argv[2]).name} ...", flush=True)
-    return subprocess.Popen(
+    log_prefix = os.environ.get("BENCH_SERVER_LOG")
+    if log_prefix:
+        out = open(f"{log_prefix}.next.log", "wb")  # renamed to .<pid>.log below
+    else:
+        out = subprocess.DEVNULL
+    proc = subprocess.Popen(
         argv,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=out,
+        stderr=subprocess.STDOUT if log_prefix else subprocess.DEVNULL,
         start_new_session=True,
         env=env,
     )
+    if log_prefix:
+        out.close()
+        os.replace(f"{log_prefix}.next.log", f"{log_prefix}.{proc.pid}.log")
+        # reopen appending under the final name so the fd survives the rename
+        proc._bench_log = f"{log_prefix}.{proc.pid}.log"  # type: ignore[attr-defined]
+    return proc
 
 
 def kill_server(proc: subprocess.Popen) -> None:
@@ -431,12 +467,21 @@ def run_extraction_role(port: int) -> dict:
         "pulse_bpm", "sleep_hours", "weight_kg", "glucose_mg_dl", "duration_minutes", "title")}
     empty.update({"people": [], "dates_text": [], "items": []})
 
+    none_count = 0
     for i, case in enumerate(cases, 1):
         result = extractor.extract(case.text, temperature=0.0, seed=0,
                                    timeout_s=30.0, retry_timeout_s=60.0)
+        none_count += 1 if result is None else 0
         predictions.append(dict(empty) if result is None else dataclasses.asdict(result))
         if i % 10 == 0:
             print(f"  [extraction {i}/{len(cases)}]", flush=True)
+        # Tripwire: if the first 10 cases are mostly None, something is broken
+        # (wrong server, dying process, template mismatch) — say so LOUDLY so a
+        # cratered score is never mistaken for a bad model.
+        if i == 10 and none_count >= 6:
+            print(f"  [extraction] WARNING: {none_count}/10 leading cases returned "
+                  "None — the endpoint/server is likely broken; treat this score "
+                  "as INVALID and investigate before comparing.", flush=True)
 
     score = scoring.score_extraction(predictions, cases)
     return {
@@ -514,7 +559,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Import brain_bench lazily (only when we need to spawn/poll).
     import brain_bench as bb
 
-    proc = spawn_server(argv_server)
+    proc = spawn_server(argv_server, hide_gpu=(args.ngl == 0))
     print(f"  Polling /health on port {args.port} (<=180s)...", flush=True)
     healthy = bb.poll_health(args.port, timeout_s=180)
     if not healthy:

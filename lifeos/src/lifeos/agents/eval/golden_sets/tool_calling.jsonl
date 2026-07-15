@@ -1,0 +1,20 @@
+// Golden set for tool-calling eval — v1
+// Mirrors Axi's real whitelisted tool-calling (web_search agentic flow).
+// Format: {"id", "messages": [...], "tools": [tool-name list — full OpenAI schemas
+//          live in axi/scripts/bench/model_audit.py TOOL_SCHEMAS and are attached
+//          by name at request time], "expect": {"tool": name|null,
+//          "arg_substrings": {arg: [required substrings, case/accent-insensitive]}}}
+// 9 cases expect a specific call; 3 chit-chat cases expect NO call (false-call trap).
+// Run: axi/scripts/bench/model_audit.py --roles toolcall
+{"id": "tc01", "messages": [{"role": "user", "content": "¿A cuánto está el dólar hoy en México?"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "web_search", "arg_substrings": {"query": ["dolar"]}}}
+{"id": "tc02", "messages": [{"role": "user", "content": "Busca en internet quién ganó el partido del Cruz Azul ayer"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "web_search", "arg_substrings": {"query": ["cruz azul"]}}}
+{"id": "tc03", "messages": [{"role": "user", "content": "¿Qué clima va a hacer mañana en Guadalajara?"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "web_search", "arg_substrings": {"query": ["guadalajara"]}}}
+{"id": "tc04", "messages": [{"role": "user", "content": "Recuérdame llamar al dentista mañana a las 10 de la mañana"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "create_reminder", "arg_substrings": {"text": ["dentista"]}}}
+{"id": "tc05", "messages": [{"role": "user", "content": "Ponme un recordatorio para tomar mi medicina hoy a las 9 de la noche"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "create_reminder", "arg_substrings": {"text": ["medicina"]}}}
+{"id": "tc06", "messages": [{"role": "user", "content": "No se me debe olvidar el cumpleaños de mi mamá el 3 de agosto, agéndame un recordatorio"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "create_reminder", "arg_substrings": {"text": ["mama"], "when_iso": ["08-03"]}}}
+{"id": "tc07", "messages": [{"role": "user", "content": "¿Cómo ha estado mi salud esta semana?"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "get_health_summary", "arg_substrings": {"days": ["7"]}}}
+{"id": "tc08", "messages": [{"role": "user", "content": "Dame un resumen de mi salud del último mes"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "get_health_summary", "arg_substrings": {"days": ["30"]}}}
+{"id": "tc09", "messages": [{"role": "user", "content": "Busca cuál es la última versión estable de Flutter"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "web_search", "arg_substrings": {"query": ["flutter"]}}}
+{"id": "tc10", "messages": [{"role": "user", "content": "Hola Axi, ¿cómo estás hoy?"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": null}}
+{"id": "tc11", "messages": [{"role": "user", "content": "Cuéntame un chiste corto de programadores"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": null}}
+{"id": "tc12", "messages": [{"role": "user", "content": "¿Cuánto es 15 por 12? Solo dime el resultado."}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": null}}

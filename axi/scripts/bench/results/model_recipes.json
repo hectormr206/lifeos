@@ -1,0 +1,34 @@
+{
+  "qwen35-0_8b": {
+    "cpu": {
+      "launch": {
+        "ngl": 0,
+        "cpu_moe": false,
+        "ctx": 32768,
+        "cell_name": "cpu-t8",
+        "extra_flags": [
+          "-b",
+          "512",
+          "-ub",
+          "256",
+          "-t",
+          "8",
+          "--no-mmap"
+        ]
+      },
+      "sampling": {
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "thinking": "off",
+      "scores": {
+        "stage_a_decode_toks_s": 56.15,
+        "stage_a_ttft_ms": 120.8,
+        "stage_a_vram_delta_mib": 0,
+        "stage_b_det": null
+      },
+      "timestamp_utc": "2026-07-15T22:24:36.918324+00:00"
+    }
+  }
+}

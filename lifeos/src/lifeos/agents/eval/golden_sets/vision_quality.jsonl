@@ -1,0 +1,15 @@
+// Golden set for vision quality eval — v1
+// Format: {"id", "image": relative path under golden_sets/, "question": str (Spanish),
+//          "must_contain": [[alt1, alt2, ...], ...]} — every group must be satisfied by
+//          at least ONE alternative (case- and accent-insensitive substring match).
+// Assets are tiny deterministic PNGs generated with PIL by
+// axi/scripts/bench/model_audit.py ensure_vision_assets() — regenerate anytime.
+// Requires launching the candidate with --mmproj; role is skipped (with a note) otherwise.
+{"id": "vq01", "image": "vision_assets/red_square.png", "question": "¿De qué color es el cuadrado en la imagen? Responde solo el color.", "must_contain": [["rojo", "red"]]}
+{"id": "vq02", "image": "vision_assets/blue_circle.png", "question": "¿Qué figura geométrica aparece en la imagen y de qué color es?", "must_contain": [["circulo", "circle", "redond"], ["azul", "blue"]]}
+{"id": "vq03", "image": "vision_assets/green_triangle.png", "question": "¿De qué color es el triángulo?", "must_contain": [["verde", "green"]]}
+{"id": "vq04", "image": "vision_assets/text_hola.png", "question": "¿Qué palabra está escrita en la imagen?", "must_contain": [["hola"]]}
+{"id": "vq05", "image": "vision_assets/bar_chart.png", "question": "¿Cuántas barras tiene la gráfica? Responde solo el número.", "must_contain": [["tres", "3"]]}
+{"id": "vq06", "image": "vision_assets/two_shapes.png", "question": "¿Cuántas figuras hay en la imagen? Responde solo el número.", "must_contain": [["dos", "2"]]}
+{"id": "vq07", "image": "vision_assets/yellow_bg.png", "question": "¿De qué color es el fondo de esta imagen?", "must_contain": [["amarillo", "yellow"]]}
+{"id": "vq08", "image": "vision_assets/black_cross.png", "question": "Describe brevemente el símbolo negro que aparece sobre el fondo blanco.", "must_contain": [["cruz", "cross", "equis", "x", "mas", "plus"]]}
