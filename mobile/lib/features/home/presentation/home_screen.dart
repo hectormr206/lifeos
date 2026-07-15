@@ -118,6 +118,18 @@ class _ConnectedView extends ConsumerWidget {
           icon: const Icon(Icons.insights_outlined),
           label: const Text('Resumen'),
         ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/briefings'),
+          icon: const Icon(Icons.campaign_outlined),
+          label: const Text('Boletines'),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/digest'),
+          icon: const Icon(Icons.today_outlined),
+          label: const Text('Resumen de hoy'),
+        ),
       ],
     );
   }

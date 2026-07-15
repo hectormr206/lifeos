@@ -4,10 +4,12 @@ import 'package:go_router/go_router.dart';
 
 import 'core/outbox/sync_service.dart';
 import 'features/body/presentation/body_screen.dart';
+import 'features/briefings/presentation/briefings_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
 import 'features/connection/domain/connection_status.dart';
 import 'features/connection/presentation/connection_notifier.dart';
 import 'features/connection/presentation/connection_screen.dart';
+import 'features/digest/presentation/digest_screen.dart';
 import 'features/domains/domain/domain_descriptor.dart';
 import 'features/domains/presentation/domain_list_screen.dart';
 import 'features/domains/presentation/domains_hub_screen.dart';
@@ -30,6 +32,11 @@ import 'features/reminders/presentation/reminders_screen.dart';
 /// `/insights` (digest preview) are gated behind pairing the same way as
 /// `/chat`/`/domains` — all three are read-mostly features that need a
 /// live paired engine.
+///
+/// "Axi intelligence" slice: `/briefings` (Boletines — agentic briefings)
+/// and `/digest` (today's smart digest) are gated behind pairing the same
+/// way — read-only surfaces that mirror the laptop dashboard's Boletines
+/// panel and daily digest card.
 final goRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     redirect: (context, state) {
@@ -38,7 +45,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           loc.startsWith('/domains') ||
           loc == '/body' ||
           loc == '/reminders' ||
-          loc == '/insights';
+          loc == '/insights' ||
+          loc == '/briefings' ||
+          loc == '/digest';
       if (needsPairing && ref.read(connectionNotifierProvider) is! ConnectionPaired) {
         return '/settings/connection';
       }
@@ -56,6 +65,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/body', builder: (context, state) => const BodyScreen()),
       GoRoute(path: '/reminders', builder: (context, state) => const RemindersScreen()),
       GoRoute(path: '/insights', builder: (context, state) => const InsightsScreen()),
+      GoRoute(path: '/briefings', builder: (context, state) => const BriefingsScreen()),
+      GoRoute(path: '/digest', builder: (context, state) => const DigestScreen()),
     ],
   );
 });
