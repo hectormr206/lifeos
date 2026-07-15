@@ -1,20 +1,94 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-/// Minimal foundation home screen (design D1 / M0->M1 bridge).
-///
-/// Deliberately NOT a chat/domain UI — those land in M1+. This screen only
-/// proves the app boots, and is the natural place M1 will wire its first
-/// real feature.
-class HomeScreen extends StatelessWidget {
+import '../../connection/domain/connection_status.dart';
+import '../../connection/presentation/connection_notifier.dart';
+import 'home_providers.dart';
+
+/// Foundation home screen (design D1 / M0->M1 bridge; spec
+/// mobile-app-shell, M1 slice 1): shows the connection status to the
+/// paired engine and a CTA to connect when unpaired. Deliberately NOT a
+/// chat/domain UI — that is the next slice.
+class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final connection = ref.watch(connectionNotifierProvider);
+
     return Scaffold(
-      appBar: AppBar(title: const Text('LifeOS')),
-      body: const Center(
-        child: Text('LifeOS mobile is alive.'),
+      appBar: AppBar(
+        title: const Text('LifeOS'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Conexión',
+            onPressed: () => context.push('/settings/connection'),
+          ),
+        ],
       ),
+      body: Center(
+        child: switch (connection) {
+          ConnectionPaired(engineUrl: final engineUrl) => _ConnectedView(engineUrl: engineUrl),
+          _ => _UnpairedView(onConnect: () => context.push('/settings/connection')),
+        },
+      ),
+    );
+  }
+}
+
+class _UnpairedView extends StatelessWidget {
+  const _UnpairedView({required this.onConnect});
+
+  final VoidCallback onConnect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('Aún no está conectado a ningún motor.'),
+        const SizedBox(height: 16),
+        ElevatedButton(
+          onPressed: onConnect,
+          child: const Text('Conectar con tu motor'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ConnectedView extends ConsumerWidget {
+  const _ConnectedView({required this.engineUrl});
+
+  final String engineUrl;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final reachable = ref.watch(engineReachableProvider);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('Conectado a $engineUrl'),
+        const SizedBox(height: 8),
+        reachable.when(
+          data: (ok) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(ok ? Icons.check_circle : Icons.error, color: ok ? Colors.green : Colors.red),
+              const SizedBox(width: 8),
+              Text(ok ? 'Motor accesible' : 'Motor no accesible'),
+            ],
+          ),
+          loading: () => const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          error: (_, _) => const Text('Motor no accesible'),
+        ),
+      ],
     );
   }
 }
