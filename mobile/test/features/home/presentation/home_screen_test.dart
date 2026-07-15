@@ -181,4 +181,35 @@ void main() {
     expect(find.text('Boletines'), findsOneWidget);
     expect(find.text('Resumen de hoy'), findsOneWidget);
   });
+
+  testWidgets('hides the "Ajustes" CTA when unpaired', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
+        child: MaterialApp.router(routerConfig: _routerToHome()),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Ajustes'), findsNothing);
+  });
+
+  testWidgets('shows the "Ajustes" CTA when paired', (tester) async {
+    final store = FakeTokenStore(
+      const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          tokenStoreProvider.overrideWithValue(store),
+          engineReachableProvider.overrideWith((ref) async => true),
+        ],
+        child: MaterialApp.router(routerConfig: _routerToHome()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Ajustes'), findsOneWidget);
+  });
 }

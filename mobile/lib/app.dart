@@ -16,6 +16,7 @@ import 'features/domains/presentation/domains_hub_screen.dart';
 import 'features/home/presentation/home_screen.dart';
 import 'features/insights/presentation/insights_screen.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
+import 'features/settings/presentation/settings_screen.dart';
 
 /// App shell routing (M1 slice 1). Design D1 did not pin a router package;
 /// `go_router` is the de-facto Flutter-recommended choice and is what this
@@ -37,6 +38,12 @@ import 'features/reminders/presentation/reminders_screen.dart';
 /// and `/digest` (today's smart digest) are gated behind pairing the same
 /// way — read-only surfaces that mirror the laptop dashboard's Boletines
 /// panel and daily digest card.
+///
+/// Settings slice: `/settings` (the engine config editor, laptop `/config`
+/// parity) is gated behind pairing the same way. Deliberately a DIFFERENT
+/// path from the pre-existing `/settings/connection` (pairing setup) — the
+/// exact-match `loc == '/settings'` check below never matches
+/// `/settings/connection`, so both routes coexist without conflict.
 final goRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     redirect: (context, state) {
@@ -47,7 +54,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           loc == '/reminders' ||
           loc == '/insights' ||
           loc == '/briefings' ||
-          loc == '/digest';
+          loc == '/digest' ||
+          loc == '/settings';
       if (needsPairing && ref.read(connectionNotifierProvider) is! ConnectionPaired) {
         return '/settings/connection';
       }
@@ -67,6 +75,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/insights', builder: (context, state) => const InsightsScreen()),
       GoRoute(path: '/briefings', builder: (context, state) => const BriefingsScreen()),
       GoRoute(path: '/digest', builder: (context, state) => const DigestScreen()),
+      GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
     ],
   );
 });

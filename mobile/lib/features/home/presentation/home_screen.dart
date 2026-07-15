@@ -130,6 +130,12 @@ class _ConnectedView extends ConsumerWidget {
           icon: const Icon(Icons.today_outlined),
           label: const Text('Resumen de hoy'),
         ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/settings'),
+          icon: const Icon(Icons.tune),
+          label: const Text('Ajustes'),
+        ),
       ],
     );
   }
