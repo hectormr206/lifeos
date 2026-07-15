@@ -111,6 +111,24 @@ void main() {
     expect(find.text('Reintentar'), findsOneWidget);
   });
 
+  testWidgets('renders a new (M2 slice 2) domain the same way — calendar, "events" wrapper key', (tester) async {
+    final calendar = domainDescriptors.firstWhere((d) => d.key == 'calendar');
+    final entry = DomainEntry(id: 'ev1', title: 'Cita con el doctor', timestamp: DateTime.utc(2026, 2, 1, 18));
+    final repo = _FakeDomainRepository(entries: [entry]);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [domainRepositoryProvider.overrideWithValue(repo)],
+        child: MaterialApp(home: DomainListScreen(descriptor: calendar)),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Calendario'), findsOneWidget);
+    expect(find.text('Cita con el doctor'), findsOneWidget);
+  });
+
   testWidgets('the capture bar sends text through the chat endpoint and refreshes the list', (tester) async {
     final repo = _FakeDomainRepository();
     final chat = _FakeChatRepository();

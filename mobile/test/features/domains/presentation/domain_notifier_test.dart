@@ -137,6 +137,29 @@ void main() {
       expect(state.captureError, isNotNull);
     });
 
+    test('NL capture works for a new (M2 slice 2) domain the same generic way — relationships', () async {
+      final relationships = domainDescriptors.firstWhere((d) => d.key == 'relationships');
+      final domainRepo = _FakeDomainRepository();
+      final chatRepo = _FakeChatRepository(
+        sendResult: ChatMessage(id: 'a', role: ChatRole.axi, text: 'listo', timestamp: DateTime.now()),
+      );
+      final container = ProviderContainer(overrides: [
+        domainRepositoryProvider.overrideWithValue(domainRepo),
+        chatRepositoryProvider.overrideWithValue(chatRepo),
+      ]);
+      addTearDown(container.dispose);
+      final notifier = container.read(domainNotifierProvider(relationships).notifier);
+      await notifier.ready;
+
+      await notifier.capture('llamé a mi mamá y platicamos');
+
+      expect(chatRepo.sendCalls, 1);
+      expect(chatRepo.lastText, 'llamé a mi mamá y platicamos');
+      expect(domainRepo.listCalls, 2);
+      final state = container.read(domainNotifierProvider(relationships));
+      expect(state.captureError, isNull);
+    });
+
     test('capture ignores blank input', () async {
       final domainRepo = _FakeDomainRepository();
       final chatRepo = _FakeChatRepository();

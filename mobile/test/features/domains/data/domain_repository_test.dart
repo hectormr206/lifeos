@@ -60,6 +60,10 @@ void main() {
   final health = domainDescriptors.firstWhere((d) => d.key == 'health');
   final finance = domainDescriptors.firstWhere((d) => d.key == 'finance');
   final exercise = domainDescriptors.firstWhere((d) => d.key == 'exercise');
+  final relationships = domainDescriptors.firstWhere((d) => d.key == 'relationships');
+  final spirituality = domainDescriptors.firstWhere((d) => d.key == 'spirituality');
+  final learning = domainDescriptors.firstWhere((d) => d.key == 'learning');
+  final calendar = domainDescriptors.firstWhere((d) => d.key == 'calendar');
 
   group('HttpDomainRepository.list', () {
     test('parses the real health entries shape (subject absent today)', () async {
@@ -180,6 +184,142 @@ void main() {
       expect(entries[0].id, 'e1');
       expect(entries[0].title, 'Carrera matutina');
       expect(entries[0].raw['duration_minutes'], 30);
+    });
+
+    test('parses the real relationships interactions shape ("interactions" wrapper key, '
+        'no person name on the row — only person_id)', () async {
+      final fixture = jsonEncode({
+        'interactions': [
+          {
+            'id': 'i1',
+            'ts': '2026-01-01T20:00:00+00:00',
+            'person_id': 'p1',
+            'kind': 'call',
+            'title': 'Llamada con mamá',
+            'body': 'Platicamos del fin de semana',
+            'mood_pre': 6,
+            'mood_post': 8,
+            'mood_delta': 2,
+            'tags': [],
+            'source': 'manual',
+            'confidence': 1.0,
+            'created_at': '2026-01-01T20:05:00+00:00',
+          },
+        ],
+      });
+      final dio = _dioWith(200, fixture);
+      final repo = HttpDomainRepository(dio);
+
+      final entries = await repo.list(relationships);
+
+      expect(adapterRequestPathOf(dio), '/api/v1/relationships/interactions');
+      expect(entries, hasLength(1));
+      expect(entries[0].id, 'i1');
+      // The interaction's own `title` (a required field on creation) is what
+      // the generic list renders — resolving `person_id` -> person name (via
+      // a separate GET /api/relationships/people) is a documented follow-up,
+      // not needed for this row to render meaningfully.
+      expect(entries[0].title, 'Llamada con mamá');
+      expect(entries[0].subject, isNull);
+      expect(entries[0].raw['person_id'], 'p1');
+      expect(entries[0].raw['mood_pre'], 6);
+    });
+
+    test('parses the real spirituality entries shape', () async {
+      final fixture = jsonEncode({
+        'entries': [
+          {
+            'id': 's1',
+            'ts': '2026-01-01T07:00:00+00:00',
+            'kind': 'prayer',
+            'title': 'Oración matutina',
+            'body': null,
+            'mood': 7,
+            'data': {},
+            'tags': [],
+            'source': 'manual',
+            'confidence': 1.0,
+            'reminder_id': null,
+            'created_at': '2026-01-01T07:05:00+00:00',
+          },
+        ],
+      });
+      final dio = _dioWith(200, fixture);
+      final repo = HttpDomainRepository(dio);
+
+      final entries = await repo.list(spirituality);
+
+      expect(entries, hasLength(1));
+      expect(entries[0].id, 's1');
+      expect(entries[0].title, 'Oración matutina');
+      expect(entries[0].raw['mood'], 7);
+    });
+
+    test('parses the real learning entries shape', () async {
+      final fixture = jsonEncode({
+        'entries': [
+          {
+            'id': 'l1',
+            'ts': '2026-01-01T09:00:00+00:00',
+            'kind': 'book',
+            'title': 'Deep Work',
+            'body': null,
+            'author': 'Cal Newport',
+            'status': 'in_progress',
+            'progress': 40,
+            'rating': null,
+            'data': {},
+            'tags': [],
+            'source': 'manual',
+            'confidence': 1.0,
+            'completed_at': null,
+            'created_at': '2026-01-01T09:05:00+00:00',
+          },
+        ],
+      });
+      final dio = _dioWith(200, fixture);
+      final repo = HttpDomainRepository(dio);
+
+      final entries = await repo.list(learning);
+
+      expect(entries, hasLength(1));
+      expect(entries[0].id, 'l1');
+      expect(entries[0].title, 'Deep Work');
+      expect(entries[0].raw['author'], 'Cal Newport');
+    });
+
+    test('parses the real calendar events shape ("events" wrapper key, '
+        'a different noun/path than the other 6 domains)', () async {
+      final fixture = jsonEncode({
+        'events': [
+          {
+            'id': 'ev1',
+            'ts': '2026-02-01T18:00:00+00:00',
+            'kind': 'appointment',
+            'title': 'Cita con el doctor',
+            'body': null,
+            'location': 'Consultorio',
+            'people': ['Héctor'],
+            'data': {},
+            'tags': [],
+            'source': 'manual',
+            'confidence': 1.0,
+            'reminder_id': null,
+            'is_upcoming': true,
+            'created_at': '2026-01-20T10:00:00+00:00',
+          },
+        ],
+      });
+      final dio = _dioWith(200, fixture);
+      final repo = HttpDomainRepository(dio);
+
+      final entries = await repo.list(calendar);
+
+      expect(adapterRequestPathOf(dio), '/api/v1/calendar');
+      expect(entries, hasLength(1));
+      expect(entries[0].id, 'ev1');
+      expect(entries[0].title, 'Cita con el doctor');
+      expect(entries[0].raw['is_upcoming'], isTrue);
     });
 
     test('a non-2xx response throws DomainException', () async {
