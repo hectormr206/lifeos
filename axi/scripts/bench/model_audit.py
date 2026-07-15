@@ -29,7 +29,12 @@ conversation (judge-scored conversational pleasantness + Spanish checks),
 recordsqa (grounded personal-records QA + fabricated-number detector),
 narration (digest narration with numeric fidelity + warmth judge),
 longsum (long-context meeting/chat summarization with planted atoms),
-parsejson (strict JSON/label parsing fallbacks incl. negative traps).
+parsejson (strict JSON/label parsing fallbacks incl. negative traps),
+agentic (REAL multi-round tool loop with canned web handlers, <=5 rounds,
+forced final JSON synthesis), proactive (autonomous thought quality +
+ESPERAR/NADA restraint discipline), visionclass (posture-style strict-JSON
+vision classification, needs --mmproj), devplan (self-dev director:
+instruction authoring + DONE/NOT DONE goal-satisfaction review).
 
 BUILDS ON bench_model.py — spawn/kill/registry/scorer wiring is imported, not
 rewritten. Reuses cpu_sweep.check_deterministic, subjective_judge, and
@@ -105,7 +110,8 @@ HOUSE_SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
 VALID_THINKING_MODES = ("none", "off", "on", "budget512")
 VALID_ROLES = ("speed", "brain", "extraction", "domain", "toolcall",
                "vision", "codereview", "embed", "codegen", "conversation",
-               "recordsqa", "narration", "longsum", "parsejson")
+               "recordsqa", "narration", "longsum", "parsejson",
+               "agentic", "proactive", "visionclass", "devplan")
 
 FAST_SUBSET_SIZE = 12
 FAST_SUBSET_STRIDE = 3
@@ -1234,6 +1240,469 @@ def aggregate_parsejson(per_case: list[dict]) -> dict:
     }
 
 
+# ── agentic role pure helpers (multi-round research → JSON synthesis) ────────
+
+AGENTIC_MAX_ROUNDS = 5  # mirrors briefing.run_agentic_briefing max_tool_rounds
+
+# Mirror of web_tools.web_fetch_tool_def (the second briefing tool; web_search
+# already lives in TOOL_SCHEMAS for the toolcall role).
+WEB_FETCH_SCHEMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "web_fetch",
+        "description": (
+            "Lee el contenido ACTUAL de una URL específica (la portada o "
+            "página que el usuario pidió). Usala cuando el pedido trae un "
+            "enlace concreto, en vez de web_search."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL http(s) a leer."},
+            },
+            "required": ["url"],
+        },
+    },
+}
+
+# Compact mirror of briefing.build_briefing_system: curate with tools, never
+# fabricate, answer as one JSON object. Unlike production (which derives
+# `markdown` in parse_briefing_result), the audit contract asks the model for
+# all four keys directly so scoring stays a pure JSON check.
+def build_agentic_system(today: str) -> str:
+    return (
+        "Eres un asistente que prepara boletines curados usando herramientas "
+        f"web. Estás respondiendo con fecha de HOY = {today}. "
+        "Usa web_search para buscar información actual en la web abierta y "
+        "web_fetch para LEER una URL concreta que el usuario haya nombrado. "
+        "Basa el boletín ÚNICAMENTE en lo que devuelvan las herramientas: "
+        "NUNCA inventes noticias, datos, cifras ni URLs. Si para un ítem no "
+        "tienes una URL real de las herramientas, deja su 'url' vacío (\"\").\n"
+        "Cuando tengas suficiente información, responde ÚNICAMENTE con un "
+        "objeto JSON con esta forma exacta:\n"
+        '{"title": "<título del boletín>", "summary": "<resumen general breve>", '
+        '"items": [{"title": "<título del ítem>", '
+        '"summary": "<resumen corto 1-2 líneas en español>", '
+        '"url": "<url real de las herramientas o cadena vacía>"}], '
+        '"markdown": "<el boletín completo en formato Markdown>"}\n'
+        "No agregues texto fuera del JSON."
+    )
+
+
+# Mirror of briefing._FINAL_SYNTHESIS_PROMPT (adapted to the audit's 4-key
+# contract): appended on the FINAL round with the tools removed.
+AGENTIC_SYNTHESIS_PROMPT = (
+    "Ya tienes suficiente información de las herramientas anteriores. NO "
+    "busques más. Devuelve AHORA únicamente el objeto JSON del boletín "
+    "(title, summary, items, markdown) con los datos más recientes y "
+    "relevantes que encontraste. No inventes noticias ni URLs."
+)
+
+
+def agentic_tool_schemas() -> list[dict]:
+    """Both briefing tools, in production offer order (search, fetch)."""
+    return [TOOL_SCHEMAS["web_search"], WEB_FETCH_SCHEMA]
+
+
+def make_canned_tool_handlers(case: dict, call_log: list[dict]) -> dict:
+    """Canned web_search / web_fetch handlers for one golden case.
+
+    Each handler records the call into ``call_log`` (for the tool-usage
+    scorer) and returns the case's planted snippets/page text as a JSON
+    string — the shape a model sees from the real handlers.
+    """
+    canned = case.get("canned_tools") or {}
+
+    def web_search(args: dict) -> str:
+        query = str((args or {}).get("query", ""))
+        call_log.append({"tool": "web_search", "query": query})
+        results = (canned.get("web_search") or {}).get("results") or []
+        return json.dumps({"results": results}, ensure_ascii=False)
+
+    def web_fetch(args: dict) -> str:
+        url = str((args or {}).get("url", ""))
+        call_log.append({"tool": "web_fetch", "url": url})
+        pages = canned.get("web_fetch") or {}
+        page = pages.get(url)
+        if page is None:  # tolerate a trailing-slash mismatch
+            for known, text in pages.items():
+                if url.rstrip("/") == known.rstrip("/"):
+                    page = text
+                    break
+        if page is None:
+            return f"Tool error in web_fetch: could not fetch {url!r}"
+        return json.dumps({"url": url, "text": page}, ensure_ascii=False)
+
+    return {"web_search": web_search, "web_fetch": web_fetch}
+
+
+def execute_canned_tool_call(tool_call: dict, handlers: dict) -> dict:
+    """Mirror brain._run_tool_call: parsed-JSON args in, tool message out.
+
+    Unknown tools / bad arguments / handler errors become model-visible
+    'Tool error' results, never exceptions."""
+    call_id = str((tool_call or {}).get("id") or "tool_call")
+    fn = (tool_call or {}).get("function")
+    fn = fn if isinstance(fn, dict) else {}
+    name = str(fn.get("name") or "")
+    raw_args = fn.get("arguments") or "{}"
+    if name not in handlers:
+        content = f"Tool error: unknown tool '{name}'."
+    else:
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            if not isinstance(args, dict):
+                raise ValueError("tool arguments must be a JSON object")
+            content = handlers[name](args)
+        except Exception as e:  # noqa: BLE001 — tool failures stay model-visible
+            content = f"Tool error in {name}: {e}"
+    return {"role": "tool", "tool_call_id": call_id, "name": name,
+            "content": content}
+
+
+def run_agentic_loop(case: dict, chat_fn,
+                     max_rounds: int = AGENTIC_MAX_ROUNDS,
+                     today: str = "2026-07-15") -> dict:
+    """Drive a REAL multi-round tool loop against a candidate.
+
+    Mirrors brain._ask_with_tools_impl as used by run_agentic_briefing:
+    tools are offered every round; when the model calls them, the CANNED
+    handlers execute and their results are fed back; a model that keeps
+    calling tools is capped at ``max_rounds`` tool rounds, after which the
+    tools are DROPPED and AGENTIC_SYNTHESIS_PROMPT is appended as a user turn
+    to force the final JSON (forced synthesis).
+
+    ``chat_fn(messages, tools)`` returns a response message dict (the shape
+    chat_completion returns) — injected so unit tests can script a fake
+    candidate with zero network.
+    """
+    call_log: list[dict] = []
+    handlers = make_canned_tool_handlers(case, call_log)
+    tools = agentic_tool_schemas()
+    messages: list[dict] = [
+        {"role": "system", "content": build_agentic_system(today)},
+        {"role": "user", "content": case.get("prompt", "")},
+    ]
+    rounds_used = 0
+    for rnd in range(max_rounds + 1):
+        if rnd == max_rounds:  # forced final synthesis: drop tools, nudge
+            messages.append({"role": "user",
+                             "content": AGENTIC_SYNTHESIS_PROMPT})
+            msg = chat_fn(messages, None) or {}
+            return {"text": msg.get("content") or "", "rounds": rounds_used,
+                    "calls": call_log, "forced_synthesis": True}
+        msg = chat_fn(messages, tools) or {}
+        tool_calls = msg.get("tool_calls") or []
+        if not tool_calls:
+            return {"text": msg.get("content") or "", "rounds": rounds_used,
+                    "calls": call_log, "forced_synthesis": False}
+        rounds_used += 1
+        messages.append({"role": "assistant",
+                         "content": msg.get("content") or "",
+                         "tool_calls": tool_calls})
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                messages.append(execute_canned_tool_call(tc, handlers))
+    # Unreachable (the final round always returns), kept for type-safety.
+    return {"text": "", "rounds": rounds_used, "calls": call_log,
+            "forced_synthesis": True}
+
+
+def score_agentic_case(case: dict, loop_result: dict) -> dict:
+    """Deterministic: tool usage + rounds cap + JSON keys + planted facts."""
+    expected = case.get("expected") or {}
+    text = loop_result.get("text") or ""
+    calls = loop_result.get("calls") or []
+    called = {c.get("tool") for c in calls}
+    must = expected.get("must_call_tools") or []
+    tools_ok = all(t in called for t in must)
+    # Query discipline: every query_must_mention term must appear in at least
+    # one issued web_search query (accent/case-insensitive).
+    qmm = ((case.get("canned_tools") or {}).get("web_search")
+           or {}).get("query_must_mention") or []
+    if tools_ok and qmm and "web_search" in must:
+        queries = [c.get("query", "") for c in calls
+                   if c.get("tool") == "web_search"]
+        tools_ok = all(any(_contains(q, term) for q in queries) for term in qmm)
+    data = parse_model_json(text)
+    keys = expected.get("final_json_keys") or []
+    json_valid = data is not None and all(k in data for k in keys)
+    facts_missing = [f for f in (expected.get("facts_must_appear") or [])
+                     if not _contains(text, f)]
+    rounds = loop_result.get("rounds", 0)
+    rounds_ok = rounds <= AGENTIC_MAX_ROUNDS
+    return {"id": case.get("id"), "tools_ok": tools_ok,
+            "json_valid": json_valid, "facts_missing": facts_missing,
+            "rounds": rounds, "forced_synthesis":
+                bool(loop_result.get("forced_synthesis")),
+            "passed": tools_ok and json_valid and not facts_missing
+                      and rounds_ok}
+
+
+def aggregate_agentic(per_case: list[dict]) -> dict:
+    n = len(per_case)
+
+    def rate(hits: int) -> float:
+        return round(hits / n, 4) if n else 0.0
+
+    return {
+        "n": n,
+        "pass_rate": rate(sum(1 for r in per_case if r.get("passed"))),
+        "tool_correct_rate": rate(sum(1 for r in per_case if r.get("tools_ok"))),
+        "json_valid_rate": rate(sum(1 for r in per_case if r.get("json_valid"))),
+        "mean_rounds": (round(sum(r.get("rounds", 0) for r in per_case) / n, 2)
+                        if n else 0.0),
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+
+
+# ── proactive role pure helpers (autonomous thought quality + restraint) ─────
+
+PROACTIVE_SENTINEL_WAIT = "ESPERAR"   # mirrors autonomous.cron.SENTINEL_WAIT
+PROACTIVE_SENTINEL_NONE = "NADA"      # mirrors autonomous.cron.SENTINEL_NONE
+
+_PROACTIVE_VERDICT_BY_SENTINEL = {PROACTIVE_SENTINEL_WAIT: "esperar",
+                                  PROACTIVE_SENTINEL_NONE: "nada"}
+
+
+def parse_proactive_reply(reply: str, max_chars: int) -> tuple[str, Optional[str]]:
+    """Mirror autonomous.cron.parse_reply exactly.
+
+    Sentinel detection is WHOLE-STRING equality after trimming and stripping
+    trailing punctuation/quotes; a reply that merely CONTAINS a sentinel word
+    is a real message. Empty / brain-error replies map to 'nada'.
+    """
+    norm = (reply or "").strip()
+    upper = norm.upper().strip(" .!¡¿?\"'`")
+    if upper == PROACTIVE_SENTINEL_WAIT:
+        return ("esperar", None)
+    if upper == PROACTIVE_SENTINEL_NONE:
+        return ("nada", None)
+    if not norm:
+        return ("nada", None)
+    if norm.startswith("[") and "brain" in norm.lower():
+        return ("nada", None)
+    return ("msg", norm[:max_chars].rstrip())
+
+
+def score_proactive_case(case: dict, reply: str) -> dict:
+    """Sentinel discipline on restraint cases; short-Spanish-on-topic on speak.
+
+    Restraint: the verdict must be the exact expected sentinel (a null
+    sentinel accepts either ESPERAR or NADA). Speak: the reply must be a real
+    message (NOT a sentinel), fit max_chars RAW (production truncates; the
+    audit fails oversize instead), be Spanish, and mention the topic when
+    ``topic_must_mention_any`` is present.
+    """
+    import cpu_sweep
+    expected = case.get("expected") or {}
+    max_chars = case.get("max_chars", 220)
+    verdict, message = parse_proactive_reply(reply, max_chars)
+
+    if expected.get("sentinel_expected"):
+        want = expected.get("sentinel")
+        if want is None:
+            passed = verdict in ("esperar", "nada")
+        else:
+            passed = verdict == _PROACTIVE_VERDICT_BY_SENTINEL.get(want)
+        return {"id": case.get("id"), "restraint": True, "verdict": verdict,
+                "passed": passed}
+
+    spoke = verdict == "msg" and bool(message)
+    raw = (reply or "").strip()
+    length_ok = spoke and len(raw) <= max_chars
+    spanish = spoke and cpu_sweep.is_spanish(message or "")
+    topics = expected.get("topic_must_mention_any") or []
+    topic_ok = (not topics) or (spoke and any(_contains(message or "", t)
+                                              for t in topics))
+    return {"id": case.get("id"), "restraint": False, "verdict": verdict,
+            "spoke": spoke, "length_ok": length_ok, "spanish": spanish,
+            "topic_ok": topic_ok,
+            "passed": spoke and length_ok and spanish and topic_ok}
+
+
+def aggregate_proactive(per_case: list[dict]) -> dict:
+    restraint = [r for r in per_case if r.get("restraint")]
+    speak = [r for r in per_case if not r.get("restraint")]
+
+    def rate(hits: int, total: int) -> float:
+        return round(hits / total, 4) if total else 0.0
+
+    return {
+        "n": len(per_case),
+        "restraint_rate": rate(sum(1 for r in restraint if r.get("passed")),
+                               len(restraint)),
+        "speak_pass_rate": rate(sum(1 for r in speak if r.get("passed")),
+                                len(speak)),
+        "pass_rate": rate(sum(1 for r in per_case if r.get("passed")),
+                          len(per_case)),
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+
+
+# ── visionclass role pure helpers (structured vision classification) ─────────
+
+# Mirror of posture.analyze._PROMPT_ES (the production posture classifier).
+VISIONCLASS_PROMPT_ES = (
+    "Mirá la imagen y analizá la postura de la persona frente al escritorio "
+    "(si hay alguien). Clasificá en UNO de estos estados:\n"
+    "  - good           — postura correcta, espalda recta, cabeza alineada\n"
+    "  - slouched       — hombros caídos, espalda encorvada\n"
+    "  - forward_head   — cabeza adelantada respecto al cuerpo\n"
+    "  - leaning        — inclinado hacia un lado\n"
+    "  - not_at_desk    — no hay nadie sentado al escritorio\n"
+    "  - face_not_visible — hay alguien pero no se ve la cara/postura\n\n"
+    "Devolvé SOLO un JSON, sin texto extra antes ni después:\n"
+    '{"state":"...","confidence":0.0-1.0,"suggestion":"breve texto en español"}\n'
+    "La sugerencia debe ser corta (≤ 100 chars), específica si la postura es "
+    "problemática, vacía si es 'good' o 'not_at_desk'."
+)
+
+# States whose suggestion must be empty/near-empty (mirrors the prompt rule).
+VISIONCLASS_GOOD_STATES = ("good", "not_at_desk")
+VISIONCLASS_GOOD_SUGGESTION_MAX = 40
+VISIONCLASS_SUGGESTION_MAX = 100
+
+
+def score_visionclass_case(case: dict, reply: str) -> dict:
+    """JSON contract + label accuracy + confidence range + suggestion rule."""
+    contract_keys = ((case.get("json_contract") or {}).get("keys")
+                     or ["state", "confidence", "suggestion"])
+    data = parse_model_json(reply or "")
+    json_valid = data is not None and all(k in data for k in contract_keys)
+    if not json_valid:
+        return {"id": case.get("id"), "json_valid": False,
+                "label_correct": False, "passed": False}
+    state = str(data.get("state", "")).lower().strip()
+    label_correct = state == case.get("expected_label")
+    in_labels = state in (case.get("labels") or [])
+    try:
+        conf = float(data.get("confidence"))
+        conf_ok = 0.0 <= conf <= 1.0
+    except (TypeError, ValueError):
+        conf_ok = False
+    suggestion = str(data.get("suggestion") or "").strip()
+    if state in VISIONCLASS_GOOD_STATES:
+        suggestion_ok = len(suggestion) <= VISIONCLASS_GOOD_SUGGESTION_MAX
+    else:
+        suggestion_ok = len(suggestion) <= VISIONCLASS_SUGGESTION_MAX
+    return {"id": case.get("id"), "json_valid": True,
+            "label_correct": label_correct, "in_labels": in_labels,
+            "conf_ok": conf_ok, "suggestion_ok": suggestion_ok,
+            "passed": label_correct and in_labels and conf_ok and suggestion_ok}
+
+
+def aggregate_visionclass(per_case: list[dict]) -> dict:
+    n = len(per_case)
+
+    def rate(hits: int) -> float:
+        return round(hits / n, 4) if n else 0.0
+
+    return {
+        "n": n,
+        "label_accuracy": rate(sum(1 for r in per_case
+                                   if r.get("label_correct"))),
+        "json_valid_rate": rate(sum(1 for r in per_case
+                                    if r.get("json_valid"))),
+        "pass_rate": rate(sum(1 for r in per_case if r.get("passed"))),
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+
+
+# ── devplan role pure helpers (self-dev director: instruction + review) ──────
+
+# Mirrors of dev_director's ENGLISH production prompts (VT-3B's director role).
+DEVPLAN_DIRECTOR_SYSTEM = (
+    "You are a senior software engineer directing an AI coding agent. "
+    "Given a goal, produce ONE specific, actionable coding instruction for Claude Code. "
+    "Include: what file/function to target, the expected behavior, edge cases to handle, "
+    "and that tests must be added. Be concise and precise. Output only the instruction."
+)
+
+DEVPLAN_REVIEWER_SYSTEM = (
+    "You are a code reviewer. Given a goal and a git diff, decide if the implementation "
+    "is correct and complete. Start your answer with 'DONE' if satisfied, or 'NOT DONE' "
+    "if there are issues, followed by a brief reason."
+)
+
+# Deterministic keyword classes for the instruction scorer: at least one hit
+# per class = the instruction names a concrete target, describes behavior, and
+# demands tests/edge cases (matching is accent/case-insensitive).
+DEVPLAN_INSTRUCTION_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "target": ("file", ".py", "module", "function", "class", "method", "def "),
+    "behavior": ("should", "must", "return", "when", "expect", "ensure",
+                 "behavior", "behaviour", "so that"),
+    "tests": ("test", "edge case", "edge-case", "pytest"),
+}
+
+DEVPLAN_INSTRUCTION_MAX_CHARS = 1200
+
+_DEVPLAN_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _devplan_strip_think(text: str) -> str:
+    """VT-3B replies may carry <think> blocks (dev_director strips them too)."""
+    return _DEVPLAN_THINK_RE.sub("", text or "").strip()
+
+
+def score_devplan_instruction(case: dict, reply: str) -> dict:
+    """Keyword-class + length scorer for a director instruction."""
+    text = _devplan_strip_think(reply)
+    hits = {name: any(_contains(text, kw) for kw in kws)
+            for name, kws in DEVPLAN_INSTRUCTION_KEYWORDS.items()}
+    max_chars = case.get("max_chars", DEVPLAN_INSTRUCTION_MAX_CHARS)
+    length_ok = 0 < len(text) <= max_chars
+    return {"id": case.get("id"), "kind": "instruction",
+            "keyword_hits": hits, "length_ok": length_ok,
+            "passed": length_ok and all(hits.values()),
+            "judge_score": None}
+
+
+def devplan_review_verdict(reply: str) -> bool:
+    """Mirror dev_director._review's verdict parse exactly."""
+    low = _devplan_strip_think(reply).lower().strip()
+    return low.startswith("done") and not low.startswith("not done")
+
+
+def score_devplan_review(case: dict, reply: str) -> dict:
+    """DONE/NOT DONE verdict must match the case's ``satisfies`` flag."""
+    done = devplan_review_verdict(reply)
+    return {"id": case.get("id"), "kind": "review", "verdict_done": done,
+            "passed": done == bool(case.get("satisfies"))}
+
+
+def devplan_judge_case(case: dict) -> dict:
+    """Adapt an instruction case to the conversation rubric-judge helpers."""
+    return {"messages": [{"role": "user",
+                          "content": f"Goal: {case.get('goal', '')}"}],
+            "rubric": case.get("rubric")}
+
+
+def aggregate_devplan(per_case: list[dict], note: Optional[str] = None) -> dict:
+    instr = [r for r in per_case if r.get("kind") == "instruction"]
+    rev = [r for r in per_case if r.get("kind") == "review"]
+    judged = [r["judge_score"] for r in instr
+              if r.get("judge_score") is not None]
+
+    def rate(hits: int, total: int) -> float:
+        return round(hits / total, 4) if total else 0.0
+
+    out = {
+        "n": len(per_case),
+        "instruction_pass_rate": rate(sum(1 for r in instr if r.get("passed")),
+                                      len(instr)),
+        "review_accuracy": rate(sum(1 for r in rev if r.get("passed")),
+                                len(rev)),
+        "pass_rate": rate(sum(1 for r in per_case if r.get("passed")),
+                          len(per_case)),
+        "judge_score": (round(sum(judged) / len(judged), 4) if judged else None),
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+    if note:
+        out["note"] = note
+    return out
+
+
 # ── audit registry rows & comparison matrix ──────────────────────────────────
 
 def assemble_audit_row(label: str, tier: str, gguf: str, server_bin: str,
@@ -1273,15 +1742,16 @@ def _brain_metric(roles: dict) -> Optional[float]:
 def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> str:
     """Side-by-side matrix: newest row per label+tier, key metric per role."""
     latest = newest_per_label_tier(rows)
-    bar = "=" * 160
+    bar = "=" * 190
     lines = [bar, f"  {title}  (newest audit per label+tier)", bar]
     lines.append(
         f"  {'Label':<20} {'tier':<7} {'brain':>6} {'extr%':>6} {'dom%':>6} "
         f"{'tool%':>6} {'vis%':>6} {'rev%':>6} {'code%':>6} {'conv':>6} "
         f"{'recQA%':>6} {'narr':>6} {'lsum%':>6} {'parse%':>6} "
+        f"{'agent%':>6} {'proact%':>7} {'vcls%':>6} {'dev%':>6} "
         f"{'tok/s':>7} {'VRAM MiB':>9} {'thinking':<9}"
     )
-    lines.append("  " + "-" * 156)
+    lines.append("  " + "-" * 186)
     if not latest:
         lines.append("  (audit registry is empty — nothing audited yet)")
         lines.append(bar)
@@ -1305,6 +1775,10 @@ def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> s
             f"{bm._fmt((roles.get('narration') or {}).get('numeric_fidelity_rate'), '6.1%')} "
             f"{bm._fmt((roles.get('longsum') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt((roles.get('parsejson') or {}).get('pass_rate'), '6.1%')} "
+            f"{bm._fmt((roles.get('agentic') or {}).get('pass_rate'), '6.1%')} "
+            f"{bm._fmt((roles.get('proactive') or {}).get('pass_rate'), '7.1%')} "
+            f"{bm._fmt((roles.get('visionclass') or {}).get('pass_rate'), '6.1%')} "
+            f"{bm._fmt((roles.get('devplan') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt(speed.get('decode_p50_toks_s'), '7.1f')} "
             f"{bm._fmt(vram, '9.0f')} "
             f"{recipe.get('thinking', '-'):<9}"
@@ -1384,9 +1858,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--roles",
                    default="speed,brain,extraction,domain,toolcall,codereview,"
                            "vision,codegen,conversation,recordsqa,narration,"
-                           "longsum,parsejson",
-                   help=f"Comma list from {list(VALID_ROLES)}; vision auto-skips "
-                        "without --mmproj; embed needs --embedding")
+                           "longsum,parsejson,agentic,proactive,visionclass,"
+                           "devplan",
+                   help=f"Comma list from {list(VALID_ROLES)}; vision/visionclass "
+                        "auto-skip without --mmproj; embed needs --embedding")
     p.add_argument("--quick", action="store_true",
                    help="Reduced Stage-A grid + skip Stage B")
     p.add_argument("--use-recipe", action="store_true",
@@ -2025,6 +2500,152 @@ def run_parsejson_role(port: int, sampling: dict, thinking: str) -> dict:
     return agg
 
 
+def run_agentic_role(port: int, sampling: dict, thinking: str) -> dict:
+    """agentic_research.jsonl: REAL multi-round tool loop against the candidate
+    (canned web_search/web_fetch handlers, <=5 rounds, forced synthesis)."""
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "agentic_research.jsonl")
+    print(f"  [agentic] {len(cases)} cases (max {AGENTIC_MAX_ROUNDS} tool rounds)",
+          flush=True)
+
+    def chat_fn(messages: list[dict], tools: Optional[list[dict]]) -> dict:
+        return chat_completion(port, messages, sampling=sampling,
+                               thinking=thinking, max_tokens=1024, tools=tools)
+
+    per_case: list[dict] = []
+    for case in cases:
+        loop_result = run_agentic_loop(case, chat_fn)
+        result = score_agentic_case(case, loop_result)
+        print(f"  [agentic] {result['id']}: rounds={result['rounds']} "
+              f"tools={result['tools_ok']} json={result['json_valid']} "
+              f"{'PASS' if result['passed'] else 'FAIL'}"
+              + (f" missing={result['facts_missing']}"
+                 if result["facts_missing"] else ""), flush=True)
+        per_case.append(result)
+    agg = aggregate_agentic(per_case)
+    print(f"  [agentic] pass={agg['pass_rate']:.0%} "
+          f"tools={agg['tool_correct_rate']:.0%} "
+          f"json={agg['json_valid_rate']:.0%} rounds={agg['mean_rounds']}",
+          flush=True)
+    return agg
+
+
+def run_proactive_role(port: int, sampling: dict, thinking: str) -> dict:
+    """proactive_thought.jsonl: the production reflection/elicitation prompt
+    verbatim as the user turn (max_tokens=150 like cron's _brain_ask)."""
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "proactive_thought.jsonl")
+    print(f"  [proactive] {len(cases)} cases", flush=True)
+    per_case: list[dict] = []
+    for case in cases:
+        msg = chat_completion(
+            port, [{"role": "user", "content": case.get("context_block", "")}],
+            sampling=sampling, thinking=thinking, max_tokens=150)
+        result = score_proactive_case(case, _message_text(msg))
+        print(f"  [proactive] {result['id']}: verdict={result['verdict']} "
+              f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
+        per_case.append(result)
+    agg = aggregate_proactive(per_case)
+    print(f"  [proactive] restraint={agg['restraint_rate']:.0%} "
+          f"speak={agg['speak_pass_rate']:.0%} pass={agg['pass_rate']:.0%}",
+          flush=True)
+    return agg
+
+
+def run_visionclass_role(port: int, mmproj: Optional[str],
+                         sampling: dict, thinking: str) -> dict:
+    """vision_classification.jsonl: posture-style strict-JSON classification
+    over deterministic PIL scenes; needs --mmproj (skips with a note)."""
+    if not mmproj:
+        note = "visionclass skipped: no --mmproj provided"
+        print(f"  [visionclass] {note}", flush=True)
+        return {"skipped": note}
+    try:
+        ensure_posture_assets()
+    except Exception as e:  # noqa: BLE001 — record, don't crash the audit
+        note = f"visionclass skipped: could not generate assets ({e})"
+        print(f"  [visionclass] {note}", flush=True)
+        return {"skipped": note}
+
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "vision_classification.jsonl")
+    print(f"  [visionclass] {len(cases)} cases", flush=True)
+    per_case: list[dict] = []
+    for case in cases:
+        image_path = GOLDEN_DIR / case["image"]
+        b64 = base64.b64encode(image_path.read_bytes()).decode()
+        content = [
+            {"type": "text", "text": VISIONCLASS_PROMPT_ES},
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/png;base64,{b64}"}},
+        ]
+        msg = chat_completion(port, [{"role": "user", "content": content}],
+                              sampling=sampling, thinking=thinking,
+                              max_tokens=200)
+        result = score_visionclass_case(case, _message_text(msg))
+        print(f"  [visionclass] {result['id']}: "
+              f"json={result['json_valid']} label={result['label_correct']} "
+              f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
+        per_case.append(result)
+    agg = aggregate_visionclass(per_case)
+    print(f"  [visionclass] label={agg['label_accuracy']:.0%} "
+          f"json={agg['json_valid_rate']:.0%} pass={agg['pass_rate']:.0%}",
+          flush=True)
+    return agg
+
+
+def run_devplan_role(port: int, sampling: dict, thinking: str) -> dict:
+    """dev_planning.jsonl: director-instruction authoring (keyword classes +
+    optional actionability rubric via the prod 35B judge) and DONE/NOT DONE
+    goal-satisfaction review, mirroring dev_director's English prompts."""
+    import cpu_sweep
+    import subjective_judge as sj
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "dev_planning.jsonl")
+    judge_healthy = sj.http_get_status(
+        f"http://127.0.0.1:{bm.JUDGE_PORT}/health") == 200
+    note = None if judge_healthy else \
+        f"judge skipped: 35B judge not healthy on {bm.JUDGE_PORT}"
+    if note:
+        print(f"  [devplan] {note}", flush=True)
+    print(f"  [devplan] {len(cases)} cases", flush=True)
+    per_case: list[dict] = []
+    for case in cases:
+        if case.get("kind") == "instruction":
+            msg = chat_completion(
+                port,
+                [{"role": "system", "content": DEVPLAN_DIRECTOR_SYSTEM},
+                 {"role": "user", "content": f"Goal: {case.get('goal', '')}"}],
+                sampling=sampling, thinking=thinking, max_tokens=600)
+            text = _message_text(msg)
+            result = score_devplan_instruction(case, text)
+            if judge_healthy and case.get("rubric"):
+                result["judge_score"] = (judge_conversation_case(
+                    devplan_judge_case(case), _devplan_strip_think(text))
+                    .get("weighted_score", 0.0)
+                    if text.strip() and not text.startswith("__ERROR__")
+                    else 0.0)
+        else:
+            # Mirror dev_director._review's user-message shape exactly.
+            review_user = (f"Goal: {case.get('goal', '')}\n\n"
+                           f"Diff:\n{case.get('diff', '')}")
+            if case.get("tests_output") is not None:
+                review_user += f"\n\nTest results:\n{case['tests_output']}"
+            msg = chat_completion(
+                port,
+                [{"role": "system", "content": DEVPLAN_REVIEWER_SYSTEM},
+                 {"role": "user", "content": review_user}],
+                sampling=sampling, thinking=thinking, max_tokens=300)
+            result = score_devplan_review(case, _message_text(msg))
+        print(f"  [devplan] {result['id']} ({result['kind']}): "
+              f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
+        per_case.append(result)
+    agg = aggregate_devplan(per_case, note=note)
+    print(f"  [devplan] instr={agg['instruction_pass_rate']:.0%} "
+          f"review={agg['review_accuracy']:.0%} pass={agg['pass_rate']:.0%}",
+          flush=True)
+    return agg
+
+
 def run_embed_role(args, recipe: dict, vram_baseline: Optional[int]) -> dict:
     """Separate --embedding spawn: latency + tiny cosine retrieval sanity."""
     launch = recipe.get("launch") or {}
@@ -2134,6 +2755,18 @@ def run_stage_c(args, recipe: dict, roles: list[str],
                 elif role == "parsejson":
                     results["parsejson"] = run_parsejson_role(args.port,
                                                               sampling, thinking)
+                elif role == "agentic":
+                    results["agentic"] = run_agentic_role(args.port,
+                                                          sampling, thinking)
+                elif role == "proactive":
+                    results["proactive"] = run_proactive_role(args.port,
+                                                              sampling, thinking)
+                elif role == "visionclass":
+                    results["visionclass"] = run_visionclass_role(
+                        args.port, args.mmproj, sampling, thinking)
+                elif role == "devplan":
+                    results["devplan"] = run_devplan_role(args.port,
+                                                          sampling, thinking)
         finally:
             bm.kill_server(proc)
             wait_vram_drain(vram_baseline)
@@ -2220,6 +2853,72 @@ def ensure_vision_assets(assets_dir: Path = VISION_ASSETS_DIR) -> list[Path]:
         d.rectangle([32, 112, 224, 144], fill=(0, 0, 0))
 
     build("black_cross.png", paint_cross)
+    return made
+
+
+def ensure_posture_assets(assets_dir: Path = VISION_ASSETS_DIR) -> list[Path]:
+    """Generate the deterministic posture-scene PNGs for the visionclass role.
+
+    Same contract as ensure_vision_assets: idempotent, PIL imported ONLY when
+    generation is needed. Each scene is a side-view desk (line) + chair with a
+    stick figure whose spine/head geometry encodes the posture label:
+    upright spine (good), curved forward spine + dropped head (slouched),
+    straight spine + head far forward (forward_head), whole figure tilted
+    (leaning), and an empty chair (not_at_desk).
+    """
+    expected = [
+        "posture_good.png", "posture_slouched.png", "posture_forward_head.png",
+        "posture_leaning.png", "posture_not_at_desk.png", "posture_good_2.png",
+    ]
+    existing = [assets_dir / n for n in expected]
+    if all(p.exists() for p in existing):
+        return existing
+
+    from PIL import Image, ImageDraw
+
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    made: list[Path] = []
+    ink = (20, 20, 20)
+
+    def scene(name: str, painter) -> None:
+        path = assets_dir / name
+        if path.exists():
+            return
+        img = Image.new("RGB", (256, 256), (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        # Shared furniture, side view: desk slab (right) + chair seat (left).
+        d.rectangle([150, 150, 246, 158], fill=(150, 100, 60))   # desk top
+        d.rectangle([236, 158, 246, 236], fill=(150, 100, 60))   # desk leg
+        d.rectangle([60, 176, 130, 184], fill=(90, 90, 90))      # chair seat
+        d.rectangle([62, 184, 70, 236], fill=(90, 90, 90))       # chair leg
+        painter(d)
+        img.save(path, format="PNG")
+        made.append(path)
+
+    def figure(d, *, spine, head_center, arm) -> None:
+        """Stick figure: spine polyline, head circle, one arm to the desk."""
+        d.line(spine, fill=ink, width=6)
+        hx, hy = head_center
+        d.ellipse([hx - 16, hy - 16, hx + 16, hy + 16], outline=ink, width=5)
+        d.line(arm, fill=ink, width=5)
+        d.line([(95, 176), (120, 214), (150, 214)], fill=ink, width=5)  # leg
+
+    scene("posture_good.png", lambda d: figure(
+        d, spine=[(95, 176), (95, 96)], head_center=(95, 74),
+        arm=[(95, 116), (150, 148)]))
+    scene("posture_good_2.png", lambda d: figure(
+        d, spine=[(90, 176), (90, 94)], head_center=(90, 72),
+        arm=[(90, 118), (150, 146)]))
+    scene("posture_slouched.png", lambda d: figure(
+        d, spine=[(95, 176), (98, 140), (116, 116), (136, 106)],
+        head_center=(150, 106), arm=[(116, 116), (156, 146)]))
+    scene("posture_forward_head.png", lambda d: figure(
+        d, spine=[(95, 176), (95, 100)], head_center=(138, 84),
+        arm=[(95, 118), (150, 148)]))
+    scene("posture_leaning.png", lambda d: figure(
+        d, spine=[(95, 176), (58, 104)], head_center=(48, 82),
+        arm=[(76, 140), (150, 150)]))
+    scene("posture_not_at_desk.png", lambda d: None)
     return made
 
 

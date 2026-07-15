@@ -1502,3 +1502,488 @@ def test_run_longsum_role_ctx_skip_and_note(monkeypatch):
     assert agg["n"] == 0 and calls == []            # every case skipped
     assert len(agg["skipped_ids"]) == 6
     assert "skipped" in agg["note"]
+
+
+# ── agentic: multi-round loop with scripted fake candidates ──────────────────
+
+_AGENTIC_CASE = {
+    "id": "ag-t1",
+    "prompt": "Tráeme las noticias de tecnología de hoy.",
+    "canned_tools": {
+        "web_search": {
+            "query_must_mention": ["tecnolog"],
+            "results": [{"title": "Quantum chip",
+                         "url": "https://t.example/q",
+                         "snippet": "Quantum Photonics recaudó 850 millones."}],
+        },
+        "web_fetch": {"https://t.example/portada": "peso a 16.8 por dólar"},
+    },
+    "expected": {"must_call_tools": ["web_search"],
+                 "final_json_keys": ["title", "summary", "items", "markdown"],
+                 "facts_must_appear": ["quantum photonics", "850"]},
+}
+
+_AGENTIC_GOOD_JSON = ('{"title": "Tech hoy", "summary": "Quantum Photonics '
+                      'recaudó 850 millones.", "items": [{"title": "Quantum '
+                      'chip", "summary": "Quantum Photonics recaudó 850 '
+                      'millones.", "url": "https://t.example/q"}], '
+                      '"markdown": "## Tech hoy"}')
+
+
+def _tool_call(name, args):
+    return {"id": "c1", "function": {"name": name,
+                                     "arguments": json.dumps(args)}}
+
+
+def test_agentic_loop_tool_then_synthesize():
+    """Round 1 calls web_search, round 2 answers — canned result fed back."""
+    seen = []
+
+    def fake_chat(messages, tools):
+        seen.append((list(messages), tools))
+        if len(seen) == 1:
+            assert tools is not None and len(tools) == 2
+            return {"content": "",
+                    "tool_calls": [_tool_call("web_search",
+                                              {"query": "noticias tecnología"})]}
+        # The canned snippet must have come back as a role=tool message.
+        tool_msgs = [m for m in messages if m.get("role") == "tool"]
+        assert tool_msgs and "850 millones" in tool_msgs[-1]["content"]
+        assert tool_msgs[-1]["name"] == "web_search"
+        return {"content": _AGENTIC_GOOD_JSON}
+
+    result = ma.run_agentic_loop(_AGENTIC_CASE, fake_chat)
+    assert result["rounds"] == 1
+    assert result["forced_synthesis"] is False
+    assert result["calls"] == [{"tool": "web_search",
+                                "query": "noticias tecnología"}]
+    score = ma.score_agentic_case(_AGENTIC_CASE, result)
+    assert score["passed"] and score["tools_ok"] and score["json_valid"]
+
+
+def test_agentic_loop_never_calls_tool_fails_tool_usage():
+    result = ma.run_agentic_loop(_AGENTIC_CASE,
+                                 lambda m, t: {"content": _AGENTIC_GOOD_JSON})
+    assert result["rounds"] == 0 and result["calls"] == []
+    score = ma.score_agentic_case(_AGENTIC_CASE, result)
+    assert score["json_valid"] is True
+    assert score["tools_ok"] is False and score["passed"] is False
+
+
+def test_agentic_loop_infinite_tool_loop_capped_and_forced():
+    """A model that never stops searching is capped at 5 rounds, then the
+    tools are dropped and the synthesis nudge forces the final JSON."""
+    final_calls = []
+
+    def fake_chat(messages, tools):
+        if tools is not None:
+            return {"content": "",
+                    "tool_calls": [_tool_call("web_search",
+                                              {"query": "tecnología hoy"})]}
+        final_calls.append(list(messages))
+        return {"content": _AGENTIC_GOOD_JSON}
+
+    result = ma.run_agentic_loop(_AGENTIC_CASE, fake_chat)
+    assert result["rounds"] == ma.AGENTIC_MAX_ROUNDS == 5
+    assert result["forced_synthesis"] is True
+    assert len(result["calls"]) == 5
+    # The forced round appended the synthesis prompt as the last user turn.
+    assert final_calls[0][-1] == {"role": "user",
+                                  "content": ma.AGENTIC_SYNTHESIS_PROMPT}
+    assert ma.score_agentic_case(_AGENTIC_CASE, result)["passed"]
+
+
+def test_agentic_canned_handlers_fetch_unknown_and_bad_args():
+    log = []
+    handlers = ma.make_canned_tool_handlers(_AGENTIC_CASE, log)
+    # web_fetch maps url → canned page (trailing slash tolerated)
+    msg = ma.execute_canned_tool_call(
+        _tool_call("web_fetch", {"url": "https://t.example/portada/"}), handlers)
+    assert msg["role"] == "tool" and "16.8" in msg["content"]
+    unknown_url = ma.execute_canned_tool_call(
+        _tool_call("web_fetch", {"url": "https://other.example"}), handlers)
+    assert "Tool error" in unknown_url["content"]
+    unknown_tool = ma.execute_canned_tool_call(
+        _tool_call("rm_rf", {}), handlers)
+    assert "unknown tool" in unknown_tool["content"]
+    bad_args = ma.execute_canned_tool_call(
+        {"id": "x", "function": {"name": "web_search", "arguments": "[1,2]"}},
+        handlers)
+    assert "Tool error in web_search" in bad_args["content"]
+    assert log == [{"tool": "web_fetch", "url": "https://t.example/portada/"},
+                   {"tool": "web_fetch", "url": "https://other.example"}]
+
+
+def test_score_agentic_case_json_keys_facts_and_query_discipline():
+    base = {"rounds": 1, "forced_synthesis": False,
+            "calls": [{"tool": "web_search", "query": "avances tecnología"}]}
+    # Missing 'markdown' key → json invalid
+    bad_json = dict(base, text='{"title": "t", "summary": "Quantum Photonics '
+                               '850", "items": []}')
+    assert ma.score_agentic_case(_AGENTIC_CASE, bad_json)["json_valid"] is False
+    # Missing planted fact → fails with the fact listed
+    no_fact = dict(base, text='{"title": "t", "summary": "nada", "items": [], '
+                              '"markdown": "x"}')
+    score = ma.score_agentic_case(_AGENTIC_CASE, no_fact)
+    assert not score["passed"] and "quantum photonics" in score["facts_missing"]
+    # Query discipline: web_search called but query never mentions the term
+    off_topic = dict(base, text=_AGENTIC_GOOD_JSON,
+                     calls=[{"tool": "web_search", "query": "recetas de pastel"}])
+    assert ma.score_agentic_case(_AGENTIC_CASE, off_topic)["tools_ok"] is False
+
+
+def test_aggregate_agentic_metrics():
+    per = [
+        {"id": "a", "passed": True, "tools_ok": True, "json_valid": True,
+         "rounds": 1},
+        {"id": "b", "passed": False, "tools_ok": True, "json_valid": False,
+         "rounds": 5},
+        {"id": "c", "passed": False, "tools_ok": False, "json_valid": True,
+         "rounds": 0},
+    ]
+    agg = ma.aggregate_agentic(per)
+    assert agg["n"] == 3
+    assert agg["pass_rate"] == round(1 / 3, 4)
+    assert agg["tool_correct_rate"] == round(2 / 3, 4)
+    assert agg["json_valid_rate"] == round(2 / 3, 4)
+    assert agg["mean_rounds"] == 2.0
+    assert agg["failed_ids"] == ["b", "c"]
+
+
+def test_agentic_research_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "agentic_research.jsonl")
+    assert len(cases) == 5
+    for c in cases:
+        exp = c["expected"]
+        assert exp["final_json_keys"] == ["title", "summary", "items", "markdown"]
+        assert exp["must_call_tools"] and exp["facts_must_appear"]
+        for tool in exp["must_call_tools"]:
+            assert tool in ("web_search", "web_fetch")
+        # Every planted fact must actually be plantable from the canned tools.
+        canned = json.dumps(c["canned_tools"], ensure_ascii=False)
+        for fact in exp["facts_must_appear"]:
+            assert ma._contains(canned, fact), (c["id"], fact)
+    assert any("web_fetch" in c["expected"]["must_call_tools"] for c in cases)
+
+
+# ── proactive: sentinel discipline + speak-case scoring ──────────────────────
+
+_RESTRAINT_CASE = {"id": "pt-r", "max_chars": 220,
+                   "expected": {"sentinel_expected": True,
+                                "sentinel": "ESPERAR"}}
+_SPEAK_CASE = {"id": "pt-s", "max_chars": 220,
+               "expected": {"sentinel_expected": False, "sentinel": None,
+                            "topic_must_mention_any": ["presion", "145"]}}
+
+
+def test_parse_proactive_reply_mirrors_production():
+    assert ma.parse_proactive_reply("ESPERAR.", 220) == ("esperar", None)
+    assert ma.parse_proactive_reply('  "nada" ', 220) == ("nada", None)
+    assert ma.parse_proactive_reply("", 220) == ("nada", None)
+    assert ma.parse_proactive_reply("[Axi brain no responde]", 220) == ("nada", None)
+    # A reply that merely CONTAINS a sentinel is a real message
+    verdict, msg = ma.parse_proactive_reply("Mejor ESPERAR a la tarde.", 220)
+    assert verdict == "msg" and msg == "Mejor ESPERAR a la tarde."
+    # Truncation to max_chars mirrors production
+    _, long_msg = ma.parse_proactive_reply("x" * 300, 220)
+    assert len(long_msg) == 220
+
+
+def test_proactive_restraint_exact_sentinel_and_null_accepts_either():
+    assert ma.score_proactive_case(_RESTRAINT_CASE, "ESPERAR")["passed"]
+    # Wrong sentinel on an exact-sentinel case fails
+    assert not ma.score_proactive_case(_RESTRAINT_CASE, "NADA")["passed"]
+    # Speaking on a restraint case fails
+    r = ma.score_proactive_case(_RESTRAINT_CASE, "Tu presión está alta.")
+    assert r["verdict"] == "msg" and not r["passed"]
+    # sentinel: null → either sentinel passes, a message still fails
+    any_case = {"id": "pt-a", "max_chars": 220,
+                "expected": {"sentinel_expected": True, "sentinel": None}}
+    assert ma.score_proactive_case(any_case, "NADA")["passed"]
+    assert ma.score_proactive_case(any_case, "esperar!")["passed"]
+    assert not ma.score_proactive_case(any_case, "Hola, ¿cómo vas?")["passed"]
+
+
+def test_proactive_speak_case_passes_on_short_spanish_on_topic():
+    r = ma.score_proactive_case(
+        _SPEAK_CASE, "Tu presión de hace 20 minutos salió en 145/95, "
+                     "bastante arriba de tu rango; tómala de nuevo con calma.")
+    assert r["passed"] and r["spanish"] and r["topic_ok"] and r["length_ok"]
+    # A sentinel on a speak case fails (missed the moment to speak)
+    s = ma.score_proactive_case(_SPEAK_CASE, "ESPERAR")
+    assert s["verdict"] == "esperar" and not s["passed"]
+
+
+def test_proactive_speak_fails_on_length_language_and_topic():
+    over = "La presión 145 " + "muy alta " * 40
+    assert not ma.score_proactive_case(_SPEAK_CASE, over)["length_ok"]
+    english = ma.score_proactive_case(
+        _SPEAK_CASE, "I can see your blood pressure was 145/95 today.")
+    assert not english["spanish"] and not english["passed"]
+    off_topic = ma.score_proactive_case(
+        _SPEAK_CASE, "Hoy es un buen día para salir a caminar un rato.")
+    assert not off_topic["topic_ok"] and not off_topic["passed"]
+
+
+def test_aggregate_proactive_rates():
+    per = [
+        {"id": "r1", "restraint": True, "passed": True},
+        {"id": "r2", "restraint": True, "passed": False},
+        {"id": "s1", "restraint": False, "passed": True},
+        {"id": "s2", "restraint": False, "passed": True},
+    ]
+    agg = ma.aggregate_proactive(per)
+    assert agg["n"] == 4
+    assert agg["restraint_rate"] == 0.5
+    assert agg["speak_pass_rate"] == 1.0
+    assert agg["pass_rate"] == 0.75
+    assert agg["failed_ids"] == ["r2"]
+
+
+def test_proactive_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "proactive_thought.jsonl")
+    assert len(cases) == 8
+    restraint = [c for c in cases if c["expected"]["sentinel_expected"]]
+    speak = [c for c in cases if not c["expected"]["sentinel_expected"]]
+    assert len(restraint) >= 4
+    for c in restraint:
+        assert c["expected"]["sentinel"] in ("ESPERAR", "NADA", None)
+    for c in speak:
+        assert c["expected"]["topic_must_mention_any"]
+    for c in cases:
+        assert c["kind"] in ("thought", "elicitation")
+        # The context block carries the production sentinel instructions.
+        assert "ESPERAR" in c["context_block"] and "NADA" in c["context_block"]
+        assert str(c["max_chars"]) in c["context_block"]
+
+
+# ── visionclass: strict-JSON posture classification scoring ──────────────────
+
+_VC_CASE = {"id": "vc-t", "image": "vision_assets/posture_good.png",
+            "labels": ["good", "slouched", "forward_head", "leaning",
+                       "not_at_desk", "face_not_visible"],
+            "expected_label": "slouched",
+            "json_contract": {"keys": ["state", "confidence", "suggestion"]}}
+
+
+def test_visionclass_valid_json_correct_label_passes_with_fences():
+    reply = ('Claro, aquí está:\n```json\n{"state": "slouched", '
+             '"confidence": 0.85, "suggestion": "endereza la espalda"}\n```')
+    r = ma.score_visionclass_case(_VC_CASE, reply)
+    assert r["json_valid"] and r["label_correct"] and r["passed"]
+
+
+def test_visionclass_wrong_label_bad_confidence_and_bad_json_fail():
+    wrong = ma.score_visionclass_case(
+        _VC_CASE, '{"state": "good", "confidence": 0.9, "suggestion": ""}')
+    assert wrong["json_valid"] and not wrong["label_correct"] and not wrong["passed"]
+    out_of_range = ma.score_visionclass_case(
+        _VC_CASE, '{"state": "slouched", "confidence": 1.7, "suggestion": "x"}')
+    assert out_of_range["json_valid"] and not out_of_range["conf_ok"]
+    assert not out_of_range["passed"]
+    unknown_state = ma.score_visionclass_case(
+        _VC_CASE, '{"state": "slouched-ish", "confidence": 0.5, "suggestion": ""}')
+    assert not unknown_state["in_labels"] and not unknown_state["passed"]
+    prose = ma.score_visionclass_case(_VC_CASE, "La persona está encorvada.")
+    assert prose["json_valid"] is False and not prose["passed"]
+
+
+def test_visionclass_suggestion_rule_for_good_states():
+    good_case = dict(_VC_CASE, expected_label="good")
+    long_sugg = ma.score_visionclass_case(
+        good_case, '{"state": "good", "confidence": 0.9, "suggestion": "'
+                   + "deberías considerar ajustar la silla y el monitor" * 3
+                   + '"}')
+    assert not long_sugg["suggestion_ok"] and not long_sugg["passed"]
+    empty = ma.score_visionclass_case(
+        good_case, '{"state": "good", "confidence": 0.9, "suggestion": ""}')
+    assert empty["passed"]
+    # Problem states allow a real (<=100 chars) suggestion
+    slouched = ma.score_visionclass_case(
+        _VC_CASE, '{"state": "slouched", "confidence": 0.7, '
+                  '"suggestion": "sube el monitor y endereza los hombros"}')
+    assert slouched["suggestion_ok"] and slouched["passed"]
+
+
+def test_visionclass_aggregate_and_mmproj_skip():
+    per = [{"id": "a", "json_valid": True, "label_correct": True, "passed": True},
+           {"id": "b", "json_valid": True, "label_correct": False, "passed": False},
+           {"id": "c", "json_valid": False, "label_correct": False, "passed": False}]
+    agg = ma.aggregate_visionclass(per)
+    assert agg["n"] == 3
+    assert agg["label_accuracy"] == round(1 / 3, 4)
+    assert agg["json_valid_rate"] == round(2 / 3, 4)
+    assert agg["pass_rate"] == round(1 / 3, 4)
+    assert agg["failed_ids"] == ["b", "c"]
+    # No --mmproj → skip note, no network, no assets touched
+    assert "skipped" in ma.run_visionclass_role(18080, None,
+                                                dict(ma.HOUSE_SAMPLING), "none")
+
+
+def test_ensure_posture_assets_generates_and_is_idempotent(tmp_path):
+    made = ma.ensure_posture_assets(tmp_path)
+    names = sorted(p.name for p in made)
+    assert names == sorted([
+        "posture_good.png", "posture_slouched.png", "posture_forward_head.png",
+        "posture_leaning.png", "posture_not_at_desk.png", "posture_good_2.png"])
+    assert all(p.exists() and p.stat().st_size > 0 for p in made)
+    # Second call: everything exists → returns paths without regenerating
+    again = ma.ensure_posture_assets(tmp_path)
+    assert sorted(p.name for p in again) == names
+
+
+def test_vision_classification_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "vision_classification.jsonl")
+    assert len(cases) == 6
+    labels = {"good", "slouched", "forward_head", "leaning", "not_at_desk",
+              "face_not_visible"}
+    for c in cases:
+        assert set(c["labels"]) == labels
+        assert c["expected_label"] in labels
+        assert c["json_contract"]["keys"] == ["state", "confidence", "suggestion"]
+        assert c["image"].startswith("vision_assets/posture_")
+    assert {c["expected_label"] for c in cases} >= {"good", "slouched",
+                                                    "not_at_desk"}
+
+
+# ── devplan: verdict + instruction scorers ────────────────────────────────────
+
+def test_devplan_review_verdict_parse_mirrors_production():
+    assert ma.devplan_review_verdict("DONE — implementation looks complete.")
+    assert ma.devplan_review_verdict("done, everything matches the goal")
+    assert not ma.devplan_review_verdict("NOT DONE: domain check is missing.")
+    assert not ma.devplan_review_verdict("not done — no tests were added")
+    assert not ma.devplan_review_verdict("The work is DONE.")  # prefix rule
+    assert not ma.devplan_review_verdict("")
+    # <think> blocks are stripped before the verdict scan (VT-3B artefacts)
+    assert ma.devplan_review_verdict("<think>hmm not done?</think>DONE — ok")
+
+
+def test_devplan_review_scored_against_satisfies():
+    good = {"id": "r1", "satisfies": True}
+    bad = {"id": "r2", "satisfies": False}
+    assert ma.score_devplan_review(good, "DONE — matches the goal")["passed"]
+    assert not ma.score_devplan_review(good, "NOT DONE: missing tests")["passed"]
+    assert ma.score_devplan_review(bad, "NOT DONE: no domain validation")["passed"]
+    assert not ma.score_devplan_review(bad, "DONE")["passed"]
+
+
+def test_devplan_instruction_keyword_scorer():
+    case = {"id": "i1", "kind": "instruction", "goal": "g", "max_chars": 1200}
+    good = ("Modify the paginate() function in utils/pagination.py so the "
+            "last page must be returned when total is an exact multiple of "
+            "page size. Add a pytest regression test for that edge case.")
+    r = ma.score_devplan_instruction(case, good)
+    assert r["passed"] and all(r["keyword_hits"].values())
+    # No mention of tests/edge cases → fails the tests keyword class
+    no_tests = ma.score_devplan_instruction(
+        case, "Change the paginate() function in utils/pagination.py so it "
+              "must include the final page.")
+    assert not no_tests["keyword_hits"]["tests"] and not no_tests["passed"]
+    # Vague instruction with no concrete target → fails the target class
+    vague = ma.score_devplan_instruction(
+        case, "Improve pagination so it works correctly and add tests.")
+    assert not vague["keyword_hits"]["target"] and not vague["passed"]
+    # Over-length instructions fail even with every keyword present
+    bloated = ma.score_devplan_instruction(case, good + " padding" * 200)
+    assert not bloated["length_ok"] and not bloated["passed"]
+    assert ma.score_devplan_instruction(case, "")["passed"] is False
+
+
+def test_aggregate_devplan_metrics_and_note():
+    per = [
+        {"id": "i1", "kind": "instruction", "passed": True, "judge_score": 0.8},
+        {"id": "i2", "kind": "instruction", "passed": False, "judge_score": None},
+        {"id": "r1", "kind": "review", "passed": True},
+        {"id": "r2", "kind": "review", "passed": True},
+        {"id": "r3", "kind": "review", "passed": False},
+    ]
+    agg = ma.aggregate_devplan(per, note="judge skipped")
+    assert agg["n"] == 5
+    assert agg["instruction_pass_rate"] == 0.5
+    assert agg["review_accuracy"] == round(2 / 3, 4)
+    assert agg["pass_rate"] == 0.6
+    assert agg["judge_score"] == 0.8
+    assert agg["failed_ids"] == ["i2", "r3"]
+    assert agg["note"] == "judge skipped"
+    assert ma.aggregate_devplan(per[2:])["judge_score"] is None
+
+
+def test_dev_planning_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "dev_planning.jsonl")
+    assert len(cases) == 8
+    instr = [c for c in cases if c["kind"] == "instruction"]
+    reviews = [c for c in cases if c["kind"] == "review"]
+    assert len(instr) == 3 and len(reviews) == 5
+    assert sum(1 for c in reviews if not c["satisfies"]) >= 2
+    assert sum(1 for c in reviews if c["satisfies"]) >= 1
+    for c in reviews:
+        assert c["diff"].startswith("diff --git")
+        assert isinstance(c["tests_output"], str)
+    for c in instr:
+        assert c["rubric"]["criteria"]
+    # dev prompts are ENGLISH (mirrors dev_director's production prompts)
+    assert "You are a senior software engineer" in ma.DEVPLAN_DIRECTOR_SYSTEM
+    assert "'DONE'" in ma.DEVPLAN_REVIEWER_SYSTEM
+
+
+def test_run_devplan_role_end_to_end_on_canned_responses(monkeypatch):
+    """Golden set through the runner with a perfect canned model, judge absent."""
+    import subjective_judge as sj
+
+    instruction_reply = (
+        "Modify the target function in its module file so the expected "
+        "behavior holds: it must return the documented result, handle the "
+        "edge cases named in the goal, and add pytest tests for each one.")
+
+    def fake_chat(port, messages, sampling=None, thinking="none",
+                  max_tokens=512, tools=None, timeout=240):
+        system = messages[0]["content"]
+        if system == ma.DEVPLAN_DIRECTOR_SYSTEM:
+            return {"content": instruction_reply}
+        user = messages[-1]["content"]
+        cases = _load_jsonl(GOLDEN / "dev_planning.jsonl")
+        case = next(c for c in cases if c["kind"] == "review"
+                    and c["goal"] in user)
+        return {"content": "DONE — complete." if case["satisfies"]
+                else "NOT DONE: incomplete."}
+
+    monkeypatch.setattr(ma, "chat_completion", fake_chat)
+    monkeypatch.setattr(sj, "http_get_status", lambda url, timeout=5: 503)
+    agg = ma.run_devplan_role(18080, dict(ma.HOUSE_SAMPLING), "none")
+    assert agg["n"] == 8
+    assert agg["instruction_pass_rate"] == 1.0
+    assert agg["review_accuracy"] == 1.0
+    assert agg["pass_rate"] == 1.0
+    assert agg["judge_score"] is None and "judge skipped" in agg["note"]
+
+
+# ── batch-2 roles: wiring (parser, dispatch defaults, matrix columns) ────────
+
+def test_batch2_roles_in_valid_roles_and_parser():
+    for role in ("agentic", "proactive", "visionclass", "devplan"):
+        assert role in ma.VALID_ROLES
+    assert ma.parse_audit_roles("agentic,proactive,visionclass,devplan") == \
+        ["agentic", "proactive", "visionclass", "devplan"]
+    defaults = ma.build_parser().parse_args(["--gguf", "/m.gguf",
+                                             "--label", "m"]).roles
+    for role in ("agentic", "proactive", "visionclass", "devplan"):
+        assert role in defaults
+
+
+def test_audit_matrix_shows_batch2_columns():
+    rows = [_audit_row("epsilon", "vram12", "2026-07-15T00:00:00+00:00",
+                       agentic={"pass_rate": 0.8, "tool_correct_rate": 1.0},
+                       proactive={"pass_rate": 0.875, "restraint_rate": 1.0},
+                       visionclass={"pass_rate": 0.667, "label_accuracy": 0.833},
+                       devplan={"pass_rate": 0.625, "review_accuracy": 0.8})]
+    out = ma.build_audit_matrix(rows)
+    for header in ("agent%", "proact%", "vcls%", "dev%"):
+        assert header in out
+    assert "80.0%" in out                          # agentic pass rate
+    assert "87.5%" in out                          # proactive pass rate
+    assert "66.7%" in out                          # visionclass pass rate
+    assert "62.5%" in out                          # devplan pass rate
+    # rows without the new roles render dashes, not crashes
+    assert "epsilon" in ma.build_audit_matrix(
+        [_audit_row("epsilon", "cpu", "2026-07-15T00:00:00+00:00")])
