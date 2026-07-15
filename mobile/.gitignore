@@ -31,6 +31,8 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+# Nested Gradle build outputs (android/, plugin modules) — never commit build artifacts.
+**/build/
 /coverage/
 
 # Symbolication related
