@@ -25,7 +25,11 @@ grid + skip Stage B.
 Roles: speed, brain, extraction (reused from bench_model.py) + domain,
 toolcall, vision (needs --mmproj), codereview, embed (needs --embedding),
 codegen (writes code, harness EXECUTES it in a sandboxed subprocess),
-conversation (judge-scored conversational pleasantness + Spanish checks).
+conversation (judge-scored conversational pleasantness + Spanish checks),
+recordsqa (grounded personal-records QA + fabricated-number detector),
+narration (digest narration with numeric fidelity + warmth judge),
+longsum (long-context meeting/chat summarization with planted atoms),
+parsejson (strict JSON/label parsing fallbacks incl. negative traps).
 
 BUILDS ON bench_model.py — spawn/kill/registry/scorer wiring is imported, not
 rewritten. Reuses cpu_sweep.check_deterministic, subjective_judge, and
@@ -100,7 +104,8 @@ HOUSE_SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
 
 VALID_THINKING_MODES = ("none", "off", "on", "budget512")
 VALID_ROLES = ("speed", "brain", "extraction", "domain", "toolcall",
-               "vision", "codereview", "embed", "codegen", "conversation")
+               "vision", "codereview", "embed", "codegen", "conversation",
+               "recordsqa", "narration", "longsum", "parsejson")
 
 FAST_SUBSET_SIZE = 12
 FAST_SUBSET_STRIDE = 3
@@ -773,6 +778,462 @@ def aggregate_conversation(per_case: list[dict],
     return out
 
 
+# ── shared numeric-fidelity helpers (recordsqa / narration / longsum) ────────
+
+_NUM_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)*")
+
+FABRICATION_TRIVIAL_MAX = 10
+
+
+def number_tokens(text: str) -> list[str]:
+    """All numeric tokens in ``text`` ('118', '7.5', '1,200', date parts)."""
+    return _NUM_TOKEN_RE.findall(text or "")
+
+
+def _canon_num(tok: str) -> str:
+    """Canonical number form: drop es-MX thousands commas ('1,200' → '1200'),
+    strip leading zeros on pure integers ('05' → '5'). Decimals keep their
+    period ('83.5' stays '83.5' — never collides with '835')."""
+    c = tok.replace(",", "")
+    if c.isdigit():
+        return str(int(c))
+    return c
+
+
+def fabricated_numbers(reply: str, source: str) -> list[str]:
+    """Numeric tokens in ``reply`` that do NOT appear in ``source``.
+
+    Tolerance rules (the anti-fabrication contract):
+      - membership is canonical: '1,200' == '1200', '05' == '5';
+      - bare integers 0..FABRICATION_TRIVIAL_MAX (10) are always allowed
+        (counting words: 'los 2 registros', '3 frases');
+      - anything the source itself mentions is allowed — for recordsqa the
+        source is records_block + question, so years named in the question
+        ('¿...en 2025?') never count as fabricated.
+    Every other number in the reply is a fabrication.
+    """
+    allowed = {_canon_num(t) for t in number_tokens(source)}
+    fabricated: list[str] = []
+    for tok in number_tokens(reply):
+        c = _canon_num(tok)
+        if c in allowed:
+            continue
+        if c.isdigit() and int(c) <= FABRICATION_TRIVIAL_MAX:
+            continue
+        fabricated.append(tok)
+    return fabricated
+
+
+# ── recordsqa role pure helpers (grounded personal-records QA) ───────────────
+
+RECORDSQA_REFUSAL_MARKERS = (
+    "no tengo", "no hay", "no aparece", "no encuentro", "no existe",
+    "sin registro", "no cuento con", "no esta registrado", "no se registro",
+)
+
+
+def build_recordsqa_system(case: dict) -> str:
+    """Mirror domain_chat._build_query_system (records-only, no graph block)."""
+    domain = case.get("domain", "salud")
+    upper = domain.upper()
+    today = case.get("today", "")
+    year = today[:4]
+    return (
+        f"Eres el asistente del chat de {upper} de Axi. Respondes en español, claro y breve.\n"
+        f"HOY es {today} (año {year}). Usa esta fecha para resolver toda "
+        "referencia temporal relativa: 'diciembre' significa el diciembre MÁS RECIENTE "
+        "anterior o igual a hoy; 'el mes pasado', 'la semana pasada', etc. se resuelven "
+        "siempre contra HOY.\n\n"
+        f"Responde ÚNICAMENTE con base en los siguientes registros de {domain} del usuario. "
+        "NO inventes datos. Si la información pedida NO está en los registros ni en la "
+        "memoria del grafo, di claramente que no tienes ese registro.\n"
+        "REGLAS ABSOLUTAS SOBRE FECHAS Y VALORES:\n"
+        "- Usa EXACTAMENTE la fecha que aparece en cada registro. JAMÁS inventes "
+        "ni infieras una fecha distinta. Si varios registros comparten la misma "
+        "fecha, NO los repartas en días distintos.\n"
+        "- Copia los valores TAL CUAL (no cambies un 83 por 85). No estimes.\n"
+        "- Para preguntas de TENDENCIA o '¿cómo va/cómo se ha comportado X?': "
+        "responde BREVE (2-3 frases) con la tendencia general (estable/sube/baja, "
+        "rango aproximado) y el valor MÁS RECIENTE con su fecha. NO enumeres cada "
+        "registro uno por uno.\n\n"
+        f"REGISTROS DE {upper} (más recientes primero):\n{case.get('records_block', '')}"
+    )
+
+
+def score_recordsqa_case(case: dict, reply: str) -> dict:
+    """must_contain any-of groups + fabricated-number detector + refusal check."""
+    expected = case.get("expected") or {}
+    text = reply or ""
+    missing = [group for group in (expected.get("must_contain") or [])
+               if not any(_contains(text, alt) for alt in group)]
+    fabricated: list[str] = []
+    if expected.get("must_not_contain_numbers_absent_from_records"):
+        source = f"{case.get('records_block', '')}\n{case.get('question', '')}"
+        fabricated = fabricated_numbers(text, source)
+    refusal_ok = True
+    if expected.get("refusal_expected"):
+        refusal_ok = any(_contains(text, m) for m in RECORDSQA_REFUSAL_MARKERS)
+    return {"id": case.get("id"),
+            "passed": not missing and not fabricated and refusal_ok,
+            "missing": missing, "fabricated": fabricated,
+            "refusal_ok": refusal_ok}
+
+
+def aggregate_recordsqa(per_case: list[dict]) -> dict:
+    n = len(per_case)
+
+    def rate(hits: int) -> float:
+        return round(hits / n, 4) if n else 0.0
+
+    return {
+        "n": n,
+        "pass_rate": rate(sum(1 for r in per_case if r.get("passed"))),
+        "fabrication_rate": rate(sum(1 for r in per_case if r.get("fabricated"))),
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+
+
+# ── narration role pure helpers (digest narration, numeric fidelity) ─────────
+
+# Mirror of dashboard._DIGEST_NARRATOR_SYSTEM (the production digest narrator).
+NARRATION_SYSTEM = (
+    "Eres Axi. Vas a narrar el resumen del día del usuario. La entrada es una "
+    "lista de HECHOS ya calculados (secciones con conteos, números y valores "
+    "exactos). Escribe de 4 a 6 frases cálidas y concisas en español que "
+    "conecten los puntos del día.\n"
+    "REGLAS ABSOLUTAS:\n"
+    "- Copia cada número, monto, fecha y valor EXACTAMENTE como aparece en los hechos.\n"
+    "- NUNCA agregues datos, fechas, correlaciones ni conclusiones que no estén en los hechos.\n"
+    "- No inventes causas: si dos hechos no aparecen conectados, no los conectes.\n"
+    "- Si una sección no aparece o está vacía, NO la menciones.\n"
+    "- Sin listas ni encabezados: solo texto corrido de 4 a 6 frases."
+)
+
+_SENT_SPLIT_RE = re.compile(r"[.!?…]+(?:\s+|$)")
+
+
+def count_sentences(text: str) -> int:
+    """Sentence count via terminal punctuation followed by space/end — decimals
+    ('7.5') and times inside a sentence never split."""
+    return len([s for s in _SENT_SPLIT_RE.split((text or "").strip())
+                if s.strip()])
+
+
+def score_narration_case(case: dict, reply: str) -> dict:
+    """Numeric fidelity (every facts number present, none fabricated) +
+    structure (sentence count within bounds, Spanish)."""
+    import cpu_sweep
+    facts = case.get("facts_text", "")
+    text = reply or ""
+    reply_nums = {_canon_num(t) for t in number_tokens(text)}
+    missing_numbers = sorted({t for t in number_tokens(facts)
+                              if _canon_num(t) not in reply_nums})
+    fabricated = fabricated_numbers(text, facts)
+    numeric_fidelity = not missing_numbers and not fabricated
+    cons = case.get("constraints") or {}
+    n_sent = count_sentences(text)
+    sentences_ok = (cons.get("min_sentences", 1) <= n_sent
+                    <= cons.get("max_sentences", 99))
+    spanish = bool(text.strip()) and cpu_sweep.is_spanish(text)
+    return {"id": case.get("id"), "numeric_fidelity": numeric_fidelity,
+            "structure": sentences_ok and spanish,
+            "missing_numbers": missing_numbers, "fabricated": fabricated,
+            "sentences": n_sent, "spanish": spanish,
+            "passed": numeric_fidelity and sentences_ok and spanish,
+            "judge_score": None}
+
+
+def narration_judge_case(case: dict) -> dict:
+    """Adapt a narration case to the conversation rubric-judge helpers."""
+    return {"messages": [{"role": "user",
+                          "content": "HECHOS DEL DÍA:\n" + case.get("facts_text", "")}],
+            "rubric": case.get("rubric")}
+
+
+def aggregate_narration(per_case: list[dict], note: Optional[str] = None) -> dict:
+    n = len(per_case)
+    judged = [r["judge_score"] for r in per_case
+              if r.get("judge_score") is not None]
+
+    def rate(hits: int) -> float:
+        return round(hits / n, 4) if n else 0.0
+
+    out = {
+        "n": n,
+        "numeric_fidelity_rate": rate(sum(1 for r in per_case
+                                          if r.get("numeric_fidelity"))),
+        "structure_rate": rate(sum(1 for r in per_case if r.get("structure"))),
+        "judge_score": round(sum(judged) / len(judged), 4) if judged else None,
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+    if note:
+        out["note"] = note
+    return out
+
+
+# ── longsum role pure helpers (long-context summarization) ───────────────────
+
+LONGSUM_WINDOW_MINUTES = 15  # mirrors config default meeting_window_minutes
+
+# Mirror of meeting.py's mandated executive-report section headers.
+LONGSUM_EXECUTIVE_SECTIONS = (
+    "## Participantes", "## Contexto y propósito",
+    "## Necesidades / pain points del cliente", "## Temas tratados",
+    "## Decisiones tomadas", "## Action items", "## Objeciones y riesgos",
+    "## Cifras y plazos mencionados", "## Próximos pasos",
+    "## Observaciones del consultor",
+)
+
+# Mirror of chat_archive._SUMMARY_SYSTEM.
+LONGSUM_CHAT_ARCHIVE_SYSTEM = (
+    "Resumí esta tanda de conversación entre Héctor y su asistente Axi en un "
+    "párrafo compacto (máximo 8 líneas), en español. CONSERVÁ los hechos y "
+    "decisiones importantes (nombres propios, fechas, datos personales, temas "
+    "tratados, acuerdos). NO inventes nada que no esté en el texto. Es un "
+    "resumen para la memoria de largo plazo de Axi."
+)
+
+LONGSUM_CTX_CHARS_PER_TOKEN = 3  # safe chars-per-token heuristic for the skip
+
+
+def longsum_case_fits_ctx(prompt_chars: int, ctx: int) -> bool:
+    """Skip heuristic: a prompt longer than ctx*3 chars cannot safely fit."""
+    return prompt_chars <= ctx * LONGSUM_CTX_CHARS_PER_TOKEN
+
+
+def build_longsum_prompt(case: dict) -> tuple[Optional[str], str]:
+    """(system, user) mirroring the production prompt for the case's kind:
+    meeting.py's window pass, meeting.py's executive pass, or
+    chat_archive's archive summary."""
+    kind = case.get("kind")
+    transcript = case.get("transcript", "")
+    wm = LONGSUM_WINDOW_MINUTES
+    if kind == "meeting_window":
+        user = (
+            f"Eres un asistente que toma notas para reuniones de negocios y ventas. "
+            f"Analiza estos {wm} minutos. "
+            f"`[mic]` = Héctor (asistente/dueño). `[system]` = cliente/prospecto u otros participantes.\n\n"
+            f"Produce notas en bullets concretos. Captura SIEMPRE:\n"
+            f"- Pain points, necesidades o problemas mencionados\n"
+            f"- Cifras, fechas, presupuestos, plazos (también los visibles en pantalla)\n"
+            f"- Compromisos asumidos por cualquier parte\n"
+            f"- Objeciones del cliente\n"
+            f"- Preguntas sin responder\n"
+            f"- Decisiones tomadas\n\n"
+            f"NO inventes datos. Si una ventana solo tiene saludos o setup técnico, di 'solo logística/setup'. "
+            f"Si hay silencios o contenido irrelevante, ignóralos.\n\n"
+            f"Transcripción:\n{transcript}"
+        )
+        return None, user
+    if kind == "executive":
+        sections = "\n\n".join(
+            f"{h}\n..." for h in (case.get("required_sections")
+                                  or LONGSUM_EXECUTIVE_SECTIONS))
+        user = (
+            "Eres un consultor senior que escribe el reporte ejecutivo de una reunión "
+            "de negocios con un cliente o prospecto.\n\n"
+            "A continuación tienes notas por ventanas de "
+            f"{wm} minutos:\n\n{transcript}\n\n"
+            "Escribe el REPORTE EJECUTIVO en español mexicano, formato Markdown, "
+            "con EXACTAMENTE estas secciones (en este orden). Si una sección no "
+            "aplica, escribe `—` y nada más. NO inventes información: si no está "
+            "en las notas, no la incluyas.\n\n"
+            f"{sections}\n"
+        )
+        return None, user
+    # chat_archive: system prompt + raw transcript as the user message.
+    return LONGSUM_CHAT_ARCHIVE_SYSTEM, transcript
+
+
+def score_longsum_case(case: dict, reply: str) -> dict:
+    """Planted-atom recall + executive section structure + fabricated numbers."""
+    text = reply or ""
+    atoms = case.get("planted_atoms") or []
+    missing_atoms = [a.get("label") for a in atoms
+                     if not any(_contains(text, alt)
+                                for alt in (a.get("must_contain_any") or []))]
+    atom_recall = (round((len(atoms) - len(missing_atoms)) / len(atoms), 4)
+                   if atoms else 1.0)
+    missing_sections = [sec for sec in (case.get("required_sections") or [])
+                        if not _contains(text, sec)]
+    fabricated = fabricated_numbers(text, case.get("transcript", ""))
+    structure_ok = not missing_sections
+    return {"id": case.get("id"), "kind": case.get("kind"),
+            "atom_recall": atom_recall, "missing_atoms": missing_atoms,
+            "structure_ok": structure_ok, "missing_sections": missing_sections,
+            "fabricated": fabricated,
+            "passed": not missing_atoms and structure_ok and not fabricated}
+
+
+def aggregate_longsum(per_case: list[dict],
+                      skipped_ids: Optional[list] = None,
+                      note: Optional[str] = None) -> dict:
+    n = len(per_case)
+
+    def rate(hits: int) -> float:
+        return round(hits / n, 4) if n else 0.0
+
+    out = {
+        "n": n,
+        "atom_recall": (round(sum(r.get("atom_recall", 0.0) for r in per_case) / n, 4)
+                        if n else 0.0),
+        "structure_rate": rate(sum(1 for r in per_case if r.get("structure_ok"))),
+        "pass_rate": rate(sum(1 for r in per_case if r.get("passed"))),
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+    if skipped_ids:
+        out["skipped_ids"] = list(skipped_ids)
+    if note:
+        out["note"] = note
+    return out
+
+
+# ── parsejson role pure helpers (strict structured-parsing fallbacks) ────────
+
+# Mirror of intents._KNOWN_INTENTS (scan order matters — production returns
+# the FIRST known label found in the model's reply).
+VOICE_INTENT_LABELS = (
+    "dictation", "meeting_start", "meeting_stop", "open_dashboard",
+    "translate_on", "translate_off", "game_on", "game_off",
+    "clear_conversation", "dev_develop",
+)
+
+PARSEJSON_SCHEDULE_KEYS = ("is_reminder", "kind", "recurring", "cron",
+                           "when_iso", "content")
+
+_MODEL_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def parse_model_json(text: str) -> Optional[dict]:
+    """Recover a JSON object from a model reply — mirrors the production
+    tolerance (extractor._parse_json_strict / reminder_brain fence strip):
+    markdown fences, leading prose before '{', trailing junk after '}'."""
+    if not text:
+        return None
+    m = _MODEL_JSON_FENCE_RE.search(text)
+    if m:
+        text = m.group(1)
+    if not text.lstrip().startswith("{"):
+        idx = text.find("{")
+        if idx == -1:
+            return None
+        text = text[idx:]
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        last = text.rfind("}")
+        if last != -1:
+            try:
+                data = json.loads(text[: last + 1])
+                return data if isinstance(data, dict) else None
+            except json.JSONDecodeError:
+                return None
+        return None
+
+
+def _iso_parses(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        datetime.fromisoformat(value)
+        return True
+    except ValueError:
+        return False
+
+
+def score_parsejson_case(case: dict, reply: str) -> dict:
+    """Score one structured-parsing case against its production contract."""
+    kind = case.get("kind")
+    expected = case.get("expected") or {}
+    text = reply or ""
+    json_valid: Optional[bool] = None
+    passed = False
+
+    if kind == "when":
+        data = parse_model_json(text)
+        json_valid = data is not None and "when_iso" in data
+        if json_valid:
+            val = data.get("when_iso")
+            if expected.get("null_expected"):
+                passed = val is None
+            else:
+                prefix = expected.get("iso_prefix")
+                passed = _iso_parses(val) and \
+                    (not prefix or str(val).startswith(prefix))
+    elif kind == "schedule":
+        data = parse_model_json(text)
+        json_valid = data is not None
+        if json_valid:
+            exact = expected.get("exact") or {}
+            if not exact.get("is_reminder", True):
+                # Negative: production only checks data.get("is_reminder").
+                passed = not data.get("is_reminder")
+            else:
+                ok = all(data.get(k) == v for k, v in exact.items())
+                prefix = expected.get("when_iso_prefix")
+                if prefix:
+                    val = data.get("when_iso")
+                    ok = ok and _iso_parses(val) and str(val).startswith(prefix)
+                content = str(data.get("content") or "")
+                ok = ok and all(_contains(content, sub)
+                                for sub in expected.get("content_contains") or [])
+                passed = ok
+    elif kind == "voice_intent":
+        lower = text.strip().lower()
+        found = next((lab for lab in VOICE_INTENT_LABELS if lab in lower), None)
+        passed = found == expected.get("label")
+    elif kind == "graph_facts":
+        data = parse_model_json(text)
+        json_valid = data is not None and isinstance(data.get("facts"), list)
+        if json_valid:
+            facts = data["facts"]
+            if expected.get("facts_empty"):
+                passed = facts == []
+            else:
+                labels = " || ".join(str((f or {}).get("label", ""))
+                                     for f in facts if isinstance(f, dict))
+                groups = expected.get("fact_label_substrings") or []
+                passed = bool(facts) and all(
+                    any(_contains(labels, alt) for alt in group)
+                    for group in groups)
+    elif kind == "coreference":
+        # Mirror identity._llm_same_entity's yes-detection exactly.
+        is_yes = (text or "").strip().lower()[:2] in ("si", "sí", "s.", "ye")
+        passed = is_yes == (expected.get("label") == "si")
+
+    return {"id": case.get("id"), "kind": kind,
+            "negative": bool(case.get("negative")),
+            "json_valid": json_valid, "passed": passed}
+
+
+def aggregate_parsejson(per_case: list[dict]) -> dict:
+    """Metrics with negatives weighted: a failed negative case (the over-eager
+    failure mode) appears TWICE in failed_ids."""
+    n = len(per_case)
+    negatives = [r for r in per_case if r.get("negative")]
+    json_scored = [r for r in per_case if r.get("json_valid") is not None]
+
+    def rate(hits: int, total: int) -> float:
+        return round(hits / total, 4) if total else 0.0
+
+    failed_ids: list = []
+    for r in per_case:
+        if not r.get("passed"):
+            failed_ids.append(r.get("id"))
+            if r.get("negative"):
+                failed_ids.append(r.get("id"))  # negatives count double
+    return {
+        "n": n,
+        "pass_rate": rate(sum(1 for r in per_case if r.get("passed")), n),
+        "negative_pass_rate": rate(sum(1 for r in negatives if r.get("passed")),
+                                   len(negatives)),
+        "json_valid_rate": rate(sum(1 for r in json_scored if r.get("json_valid")),
+                                len(json_scored)),
+        "failed_ids": failed_ids,
+    }
+
+
 # ── audit registry rows & comparison matrix ──────────────────────────────────
 
 def assemble_audit_row(label: str, tier: str, gguf: str, server_bin: str,
@@ -812,14 +1273,15 @@ def _brain_metric(roles: dict) -> Optional[float]:
 def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> str:
     """Side-by-side matrix: newest row per label+tier, key metric per role."""
     latest = newest_per_label_tier(rows)
-    bar = "=" * 132
+    bar = "=" * 160
     lines = [bar, f"  {title}  (newest audit per label+tier)", bar]
     lines.append(
         f"  {'Label':<20} {'tier':<7} {'brain':>6} {'extr%':>6} {'dom%':>6} "
         f"{'tool%':>6} {'vis%':>6} {'rev%':>6} {'code%':>6} {'conv':>6} "
+        f"{'recQA%':>6} {'narr':>6} {'lsum%':>6} {'parse%':>6} "
         f"{'tok/s':>7} {'VRAM MiB':>9} {'thinking':<9}"
     )
-    lines.append("  " + "-" * 128)
+    lines.append("  " + "-" * 156)
     if not latest:
         lines.append("  (audit registry is empty — nothing audited yet)")
         lines.append(bar)
@@ -839,6 +1301,10 @@ def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> s
             f"{bm._fmt((roles.get('codereview') or {}).get('score'), '6.1%')} "
             f"{bm._fmt((roles.get('codegen') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt((roles.get('conversation') or {}).get('judge_score'), '6.3f')} "
+            f"{bm._fmt((roles.get('recordsqa') or {}).get('pass_rate'), '6.1%')} "
+            f"{bm._fmt((roles.get('narration') or {}).get('numeric_fidelity_rate'), '6.1%')} "
+            f"{bm._fmt((roles.get('longsum') or {}).get('pass_rate'), '6.1%')} "
+            f"{bm._fmt((roles.get('parsejson') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt(speed.get('decode_p50_toks_s'), '7.1f')} "
             f"{bm._fmt(vram, '9.0f')} "
             f"{recipe.get('thinking', '-'):<9}"
@@ -917,7 +1383,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"Comma list from {sorted(TIER_BUDGETS_MIB)} (default: vram12)")
     p.add_argument("--roles",
                    default="speed,brain,extraction,domain,toolcall,codereview,"
-                           "vision,codegen,conversation",
+                           "vision,codegen,conversation,recordsqa,narration,"
+                           "longsum,parsejson",
                    help=f"Comma list from {list(VALID_ROLES)}; vision auto-skips "
                         "without --mmproj; embed needs --embedding")
     p.add_argument("--quick", action="store_true",
@@ -1434,6 +1901,130 @@ def run_conversation_role(port: int, sampling: dict, thinking: str) -> dict:
     return agg
 
 
+def run_recordsqa_role(port: int, sampling: dict, thinking: str) -> dict:
+    """records_qa.jsonl: grounded records QA in the domain_chat prompt shape."""
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "records_qa.jsonl")
+    print(f"  [recordsqa] {len(cases)} cases", flush=True)
+    per_case: list[dict] = []
+    for case in cases:
+        system = build_recordsqa_system(case)
+        msg = chat_completion(
+            port,
+            [{"role": "system", "content": system},
+             {"role": "user", "content": case.get("question", "")}],
+            sampling=sampling, thinking=thinking, max_tokens=400)
+        result = score_recordsqa_case(case, _message_text(msg))
+        print(f"  [recordsqa] {result['id']}: "
+              f"{'PASS' if result['passed'] else 'FAIL'}"
+              + (f" fabricated={result['fabricated']}"
+                 if result["fabricated"] else ""), flush=True)
+        per_case.append(result)
+    agg = aggregate_recordsqa(per_case)
+    print(f"  [recordsqa] pass={agg['pass_rate']:.0%} "
+          f"fabrication={agg['fabrication_rate']:.0%}", flush=True)
+    return agg
+
+
+def run_narration_role(port: int, sampling: dict, thinking: str) -> dict:
+    """digest_narration.jsonl: numeric fidelity + structure, plus the warmth
+    rubric judge (prod 35B) when healthy — judge-absent skips with a note."""
+    import cpu_sweep
+    import subjective_judge as sj
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "digest_narration.jsonl")
+    judge_healthy = sj.http_get_status(
+        f"http://127.0.0.1:{bm.JUDGE_PORT}/health") == 200
+    note = None if judge_healthy else \
+        f"judge skipped: 35B judge not healthy on {bm.JUDGE_PORT}"
+    if note:
+        print(f"  [narration] {note}", flush=True)
+    print(f"  [narration] {len(cases)} cases", flush=True)
+    per_case: list[dict] = []
+    for case in cases:
+        msg = chat_completion(
+            port,
+            [{"role": "system", "content": NARRATION_SYSTEM},
+             {"role": "user", "content": case.get("facts_text", "")}],
+            sampling=sampling, thinking=thinking, max_tokens=320)
+        text = _message_text(msg)
+        row = score_narration_case(case, text)
+        if judge_healthy:
+            row["judge_score"] = (judge_conversation_case(
+                narration_judge_case(case), text).get("weighted_score", 0.0)
+                if text.strip() and not text.startswith("__ERROR__") else 0.0)
+        print(f"  [narration] {row['id']}: fidelity={row['numeric_fidelity']} "
+              f"structure={row['structure']} judge={row['judge_score']}",
+              flush=True)
+        per_case.append(row)
+    agg = aggregate_narration(per_case, note=note)
+    print(f"  [narration] fidelity={agg['numeric_fidelity_rate']:.0%} "
+          f"structure={agg['structure_rate']:.0%}", flush=True)
+    return agg
+
+
+def run_longsum_role(port: int, sampling: dict, thinking: str, ctx: int) -> dict:
+    """long_summarization.jsonl: planted-atom recall on meeting-window,
+    executive and chat-archive prompts. Long prompts that cannot fit the
+    recipe ctx (chars > ctx*3) are skipped with a note, never truncated."""
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "long_summarization.jsonl")
+    print(f"  [longsum] {len(cases)} cases (ctx={ctx})", flush=True)
+    per_case: list[dict] = []
+    skipped_ids: list = []
+    max_tokens_by_kind = {"meeting_window": 600, "executive": 2048,
+                          "chat_archive": 400}
+    for case in cases:
+        system, user = build_longsum_prompt(case)
+        prompt_chars = len(user) + len(system or "")
+        if not longsum_case_fits_ctx(prompt_chars, ctx):
+            skipped_ids.append(case.get("id"))
+            print(f"  [longsum] {case.get('id')}: SKIP "
+                  f"({prompt_chars} chars > ctx*{LONGSUM_CTX_CHARS_PER_TOKEN})",
+                  flush=True)
+            continue
+        messages = ([{"role": "system", "content": system}] if system else []) \
+                   + [{"role": "user", "content": user}]
+        msg = chat_completion(
+            port, messages, sampling=sampling, thinking=thinking,
+            max_tokens=max_tokens_by_kind.get(case.get("kind"), 600))
+        result = score_longsum_case(case, _message_text(msg))
+        print(f"  [longsum] {result['id']}: recall={result['atom_recall']} "
+              f"structure={result['structure_ok']} "
+              f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
+        per_case.append(result)
+    note = (f"{len(skipped_ids)} case(s) skipped: prompt exceeds ctx*"
+            f"{LONGSUM_CTX_CHARS_PER_TOKEN} chars" if skipped_ids else None)
+    agg = aggregate_longsum(per_case, skipped_ids=skipped_ids, note=note)
+    print(f"  [longsum] atom_recall={agg['atom_recall']:.0%} "
+          f"pass={agg['pass_rate']:.0%}", flush=True)
+    return agg
+
+
+def run_parsejson_role(port: int, sampling: dict, thinking: str) -> dict:
+    """structured_parsing.jsonl: the strict JSON/label parsing fallbacks
+    (when / schedule / voice_intent / graph_facts / coreference)."""
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "structured_parsing.jsonl")
+    print(f"  [parsejson] {len(cases)} cases", flush=True)
+    per_case: list[dict] = []
+    for case in cases:
+        system = case.get("system")
+        messages = ([{"role": "system", "content": system}] if system else []) \
+                   + [{"role": "user", "content": case.get("prompt", "")}]
+        msg = chat_completion(port, messages, sampling=sampling,
+                              thinking=thinking,
+                              max_tokens=case.get("max_tokens", 256))
+        result = score_parsejson_case(case, _message_text(msg))
+        print(f"  [parsejson] {result['id']}: "
+              f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
+        per_case.append(result)
+    agg = aggregate_parsejson(per_case)
+    print(f"  [parsejson] pass={agg['pass_rate']:.0%} "
+          f"negatives={agg['negative_pass_rate']:.0%} "
+          f"json={agg['json_valid_rate']:.0%}", flush=True)
+    return agg
+
+
 def run_embed_role(args, recipe: dict, vram_baseline: Optional[int]) -> dict:
     """Separate --embedding spawn: latency + tiny cosine retrieval sanity."""
     launch = recipe.get("launch") or {}
@@ -1530,6 +2121,19 @@ def run_stage_c(args, recipe: dict, roles: list[str],
                 elif role == "conversation":
                     results["conversation"] = run_conversation_role(
                         args.port, sampling, thinking)
+                elif role == "recordsqa":
+                    results["recordsqa"] = run_recordsqa_role(args.port,
+                                                              sampling, thinking)
+                elif role == "narration":
+                    results["narration"] = run_narration_role(args.port,
+                                                              sampling, thinking)
+                elif role == "longsum":
+                    results["longsum"] = run_longsum_role(
+                        args.port, sampling, thinking,
+                        (launch.get("ctx") or args.ctx))
+                elif role == "parsejson":
+                    results["parsejson"] = run_parsejson_role(args.port,
+                                                              sampling, thinking)
         finally:
             bm.kill_server(proc)
             wait_vram_drain(vram_baseline)

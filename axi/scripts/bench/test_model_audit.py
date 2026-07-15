@@ -991,3 +991,514 @@ def test_conversation_golden_set_shape():
             assert 0 < crit["weight"] <= 1
         assert sum(crit["weight"] for crit in criteria) == pytest.approx(1.0)
     assert multi_turn >= 3                           # real multi-turn coverage
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Batch-1 gap-closure roles: recordsqa / narration / longsum / parsejson
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── shared fabricated-number detector ────────────────────────────────────────
+
+_RQ_RECORDS = ("- [2026-07-14] presión 118/76, pulso 62\n"
+               "- [2026-07-11] gasto: 1,200 pesos — consulta dental")
+
+
+def test_fabricated_numbers_flags_absent_numbers():
+    fab = ma.fabricated_numbers("tu presión fue 130/85 el día 14",
+                                _RQ_RECORDS)
+    assert fab == ["130", "85"]                   # 14 is in the records
+
+
+def test_fabricated_numbers_trivial_1_to_10_tolerated():
+    # counting words never count as fabrication — including the '1' edge
+    assert ma.fabricated_numbers("tienes 2 registros y 1 gasto, van 10 días",
+                                 _RQ_RECORDS) == []
+    assert ma.fabricated_numbers("son 47 registros", _RQ_RECORDS) == ["47"]
+
+
+def test_fabricated_numbers_question_years_allowed():
+    source = _RQ_RECORDS + "\n¿Cuál fue mi presión en diciembre de 2025?"
+    assert ma.fabricated_numbers(
+        "No tengo registros de diciembre de 2025.", source) == []
+    # a year NOBODY mentioned is still a fabrication
+    assert ma.fabricated_numbers("en 2023 no hay nada", source) == ["2023"]
+
+
+def test_fabricated_numbers_canonical_forms_match():
+    # thousands comma and leading zeros normalize both ways
+    assert ma.fabricated_numbers("gastaste 1200 pesos", _RQ_RECORDS) == []
+    assert ma.fabricated_numbers("el día 05 de mayo", "registro del 5") == []
+    # decimals never collapse: '83.5' is NOT '835'
+    assert ma.fabricated_numbers("promedio 83.5", "el valor fue 835") == ["83.5"]
+
+
+# ── recordsqa: grounded records QA ───────────────────────────────────────────
+
+def _rq_case(**over):
+    case = {"id": "rq-t", "domain": "salud", "today": "2026-07-15",
+            "records_block": _RQ_RECORDS,
+            "question": "¿Cuál fue mi última presión?",
+            "expected": {"must_contain": [["118"], ["76"]],
+                         "must_not_contain_numbers_absent_from_records": True}}
+    case.update(over)
+    return case
+
+
+def test_recordsqa_system_mirrors_domain_chat_prompt():
+    system = ma.build_recordsqa_system(_rq_case())
+    assert "chat de SALUD de Axi" in system
+    assert "HOY es 2026-07-15 (año 2026)" in system
+    assert "NO inventes datos" in system
+    assert "Copia los valores TAL CUAL" in system
+    assert system.rstrip().endswith(_RQ_RECORDS)
+
+
+def test_recordsqa_grounded_answer_passes():
+    r = ma.score_recordsqa_case(_rq_case(),
+                                "Tu última presión fue 118/76 el 2026-07-14.")
+    assert r["passed"] and not r["missing"] and not r["fabricated"]
+
+
+def test_recordsqa_fabricated_number_fails():
+    r = ma.score_recordsqa_case(_rq_case(),
+                                "Tu última presión fue 118/76, antes 135/90.")
+    assert not r["passed"]
+    assert r["fabricated"] == ["135", "90"]
+
+
+def test_recordsqa_refusal_trap_pass_and_fail():
+    trap = _rq_case(question="¿Cuál es mi colesterol?",
+                    expected={"must_contain": [],
+                              "must_not_contain_numbers_absent_from_records": True,
+                              "refusal_expected": True})
+    ok = ma.score_recordsqa_case(trap, "No tengo ese registro de colesterol.")
+    assert ok["passed"] and ok["refusal_ok"]
+    # answering with an invented value fails BOTH refusal and fabrication
+    bad = ma.score_recordsqa_case(trap, "Tu colesterol es 190 mg/dL.")
+    assert not bad["passed"] and not bad["refusal_ok"]
+    assert bad["fabricated"] == ["190"]
+
+
+def test_recordsqa_aggregate_rates():
+    per_case = [
+        {"id": "a", "passed": True, "fabricated": []},
+        {"id": "b", "passed": False, "fabricated": ["135"]},
+        {"id": "c", "passed": False, "fabricated": []},   # missing must_contain
+        {"id": "d", "passed": True, "fabricated": []},
+    ]
+    agg = ma.aggregate_recordsqa(per_case)
+    assert agg == {"n": 4, "pass_rate": 0.5, "fabrication_rate": 0.25,
+                   "failed_ids": ["b", "c"]}
+
+
+def test_records_qa_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "records_qa.jsonl")
+    assert len(cases) == 10
+    assert len({c["id"] for c in cases}) == 10
+    traps = [c for c in cases if c["expected"].get("refusal_expected")]
+    assert len(traps) >= 3                        # anti-fabrication traps
+    for c in cases:
+        assert c["records_block"] and c["question"] and c["today"]
+        assert c["expected"]["must_not_contain_numbers_absent_from_records"]
+        assert all(isinstance(g, list) for g in c["expected"]["must_contain"])
+
+
+# ── narration: digest numeric fidelity ───────────────────────────────────────
+
+def _dn_case(**over):
+    case = {"id": "dn-t",
+            "facts_text": ("SALUD: presión 118/76.\nEJERCICIO: corriste 5 km "
+                           "en 31 minutos."),
+            "constraints": {"min_sentences": 2, "max_sentences": 4},
+            "rubric": {"criteria": [
+                {"name": "calidez", "weight": 1.0, "description": "Cálido."}]}}
+    case.update(over)
+    return case
+
+
+_DN_GOOD = ("¡Buen día el de hoy! Tu presión estuvo en 118/76, muy bien. "
+            "Además corriste 5 km en 31 minutos. Sigue así de constante.")
+
+
+def test_narration_faithful_reply_passes():
+    r = ma.score_narration_case(_dn_case(), _DN_GOOD)
+    assert r["passed"] and r["numeric_fidelity"] and r["structure"]
+    assert r["missing_numbers"] == [] and r["fabricated"] == []
+    assert r["sentences"] == 4 and r["spanish"]   # ¡...! counts as a sentence
+
+
+def test_narration_missing_and_fabricated_numbers_fail_fidelity():
+    missing = ma.score_narration_case(
+        _dn_case(), "Tu presión estuvo en 118/76 y saliste a correr. Bien.")
+    assert not missing["numeric_fidelity"]
+    assert set(missing["missing_numbers"]) == {"5", "31"}
+    fabricated = ma.score_narration_case(
+        _dn_case(), "Presión 118/76, corriste 5 km en 31 minutos y dormiste "
+                    "8.5 horas. Genial. ¡Sigue así!")
+    assert not fabricated["numeric_fidelity"]
+    assert fabricated["fabricated"] == ["8.5"]
+
+
+def test_narration_sentence_bounds_and_decimals_dont_split():
+    # decimals inside a sentence never split the count
+    assert ma.count_sentences("Dormiste 7.5 horas. Muy bien.") == 2
+    too_short = ma.score_narration_case(
+        _dn_case(), "Presión 118/76, 5 km en 31 minutos.")
+    assert too_short["numeric_fidelity"] and not too_short["structure"]
+    assert too_short["sentences"] == 1
+
+
+def test_narration_aggregate_with_judge_and_note():
+    per_case = [
+        {"id": "a", "numeric_fidelity": True, "structure": True,
+         "passed": True, "judge_score": 0.9},
+        {"id": "b", "numeric_fidelity": False, "structure": True,
+         "passed": False, "judge_score": 0.5},
+    ]
+    agg = ma.aggregate_narration(per_case)
+    assert agg["n"] == 2
+    assert agg["numeric_fidelity_rate"] == 0.5
+    assert agg["structure_rate"] == 1.0
+    assert agg["judge_score"] == pytest.approx(0.7)
+    assert agg["failed_ids"] == ["b"]
+    # judge skipped → None + note (never zeroed)
+    skipped = [{"id": "a", "numeric_fidelity": True, "structure": True,
+                "passed": True, "judge_score": None}]
+    agg = ma.aggregate_narration(skipped, note="judge skipped: not healthy")
+    assert agg["judge_score"] is None and "judge skipped" in agg["note"]
+
+
+def test_narration_judge_reuses_conversation_rubric_helpers():
+    case = _dn_case()
+    prompt = ma.build_conversation_judge_prompt(
+        ma.narration_judge_case(case), _DN_GOOD)
+    assert "HECHOS DEL DÍA:" in prompt and "118/76" in prompt
+    assert '"c1" — calidez (weight=1.0)' in prompt
+
+
+def test_digest_narration_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "digest_narration.jsonl")
+    assert len(cases) == 8
+    assert len({c["id"] for c in cases}) == 8
+    for c in cases:
+        assert c["facts_text"]
+        assert ma.number_tokens(c["facts_text"])   # every case has numbers
+        cons = c["constraints"]
+        assert 1 <= cons["min_sentences"] <= cons["max_sentences"]
+        criteria = c["rubric"]["criteria"]
+        assert criteria
+        assert sum(cr["weight"] for cr in criteria) == pytest.approx(1.0)
+
+
+# ── longsum: planted atoms, sections, ctx skip ───────────────────────────────
+
+def _ls_case(**over):
+    case = {"id": "ls-t", "kind": "meeting_window",
+            "transcript": ("[mic] El presupuesto total es de $45,000 dólares.\n"
+                           "[system] Nos parece caro.\n"
+                           "[mic] La fecha límite es el 15 de septiembre."),
+            "planted_atoms": [
+                {"label": "budget", "must_contain_any": ["45,000", "45000"]},
+                {"label": "deadline", "must_contain_any": ["15 de septiembre"]},
+                {"label": "objection", "must_contain_any": ["caro", "precio"]}]}
+    case.update(over)
+    return case
+
+
+def test_longsum_atom_recall_full_and_partial():
+    full = ma.score_longsum_case(_ls_case(),
+                                 "- Presupuesto: $45,000 USD\n"
+                                 "- Límite: 15 de septiembre\n"
+                                 "- Objeción: les parece caro")
+    assert full["passed"] and full["atom_recall"] == 1.0
+    partial = ma.score_longsum_case(_ls_case(),
+                                    "- Presupuesto: $45,000 USD\n"
+                                    "- Hubo una objeción de precio")
+    assert not partial["passed"]
+    assert partial["atom_recall"] == pytest.approx(round(2 / 3, 4))
+    assert partial["missing_atoms"] == ["deadline"]
+
+
+def test_longsum_executive_section_validation():
+    case = _ls_case(kind="executive",
+                    required_sections=["## Participantes", "## Action items"])
+    ok = ma.score_longsum_case(case,
+                               "## Participantes\nHéctor, cliente\n"
+                               "## Action items\n- [ ] enviar propuesta con "
+                               "el presupuesto de 45,000 antes del 15 de "
+                               "septiembre (les pareció caro)")
+    assert ok["structure_ok"] and ok["passed"]
+    missing = ma.score_longsum_case(case, "## Participantes\nHéctor. 45,000, "
+                                          "15 de septiembre, caro.")
+    assert not missing["structure_ok"] and not missing["passed"]
+    assert missing["missing_sections"] == ["## Action items"]
+
+
+def test_longsum_fabricated_number_fails_even_with_full_recall():
+    r = ma.score_longsum_case(_ls_case(),
+                              "- Presupuesto: $45,000 (subiría a $52,000)\n"
+                              "- Límite: 15 de septiembre\n- Les pareció caro")
+    assert r["atom_recall"] == 1.0 and not r["passed"]
+    assert r["fabricated"] == ["52,000"]
+
+
+def test_longsum_ctx_skip_heuristic():
+    assert ma.longsum_case_fits_ctx(3000, ctx=1024)        # 3000 <= 3072
+    assert not ma.longsum_case_fits_ctx(3073, ctx=1024)    # over ctx*3
+    system, user = ma.build_longsum_prompt(_ls_case())
+    assert system is None and "Transcripción:" in user
+    # chat_archive kind gets the archive system prompt + raw transcript
+    system, user = ma.build_longsum_prompt(
+        _ls_case(kind="chat_archive", transcript="Héctor: hola\nAxi: ¡hola!"))
+    assert system == ma.LONGSUM_CHAT_ARCHIVE_SYSTEM
+    assert user == "Héctor: hola\nAxi: ¡hola!"
+    # executive kind embeds the mandated section headers
+    system, user = ma.build_longsum_prompt(
+        _ls_case(kind="executive",
+                 required_sections=list(ma.LONGSUM_EXECUTIVE_SECTIONS)))
+    assert system is None
+    for sec in ma.LONGSUM_EXECUTIVE_SECTIONS:
+        assert sec in user
+
+
+def test_longsum_aggregate_with_skips():
+    per_case = [
+        {"id": "a", "atom_recall": 1.0, "structure_ok": True, "passed": True},
+        {"id": "b", "atom_recall": 0.5, "structure_ok": False, "passed": False},
+    ]
+    agg = ma.aggregate_longsum(per_case, skipped_ids=["c"],
+                               note="1 case(s) skipped: prompt exceeds ctx*3 chars")
+    assert agg["n"] == 2
+    assert agg["atom_recall"] == 0.75
+    assert agg["structure_rate"] == 0.5 and agg["pass_rate"] == 0.5
+    assert agg["failed_ids"] == ["b"] and agg["skipped_ids"] == ["c"]
+    assert "skipped" in agg["note"]
+    assert "skipped_ids" not in ma.aggregate_longsum(per_case)
+
+
+def test_long_summarization_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "long_summarization.jsonl")
+    assert len(cases) == 6
+    kinds = {c["kind"] for c in cases}
+    assert kinds == {"meeting_window", "executive", "chat_archive"}
+    for c in cases:
+        assert 3000 <= len(c["transcript"]) <= 8000
+        labels = [a["label"] for a in c["planted_atoms"]]
+        assert len(labels) >= 4                     # budget/deadline/commit/objection
+        assert all(a["must_contain_any"] for a in c["planted_atoms"])
+        if c["kind"] == "executive":
+            assert c["required_sections"] == list(ma.LONGSUM_EXECUTIVE_SECTIONS)
+
+
+# ── parsejson: strict structured-parsing fallbacks ───────────────────────────
+
+def test_parse_model_json_tolerates_fences_and_prose():
+    assert ma.parse_model_json('{"when_iso": null}') == {"when_iso": None}
+    assert ma.parse_model_json('```json\n{"when_iso": null}\n```') == \
+        {"when_iso": None}
+    assert ma.parse_model_json('Claro: {"a": 1} listo')["a"] == 1
+    assert ma.parse_model_json("no json here") is None
+    assert ma.parse_model_json("") is None
+    assert ma.parse_model_json("[1, 2]") is None   # must be an object
+
+
+def test_parsejson_when_positive_and_negative():
+    pos = {"id": "w1", "kind": "when",
+           "expected": {"null_expected": False, "iso_prefix": "2026-07-16T09"}}
+    ok = ma.score_parsejson_case(pos, '{"when_iso": "2026-07-16T09:00:00-06:00"}')
+    assert ok["passed"] and ok["json_valid"]
+    wrong_day = ma.score_parsejson_case(pos, '{"when_iso": "2026-07-17T09:00:00-06:00"}')
+    assert not wrong_day["passed"] and wrong_day["json_valid"]
+    garbage = ma.score_parsejson_case(pos, '{"when_iso": "next tuesday"}')
+    assert not garbage["passed"]                   # not ISO-parseable
+    neg = {"id": "w2", "kind": "when", "negative": True,
+           "expected": {"null_expected": True}}
+    assert ma.score_parsejson_case(neg, '{"when_iso": null}')["passed"]
+    invented = ma.score_parsejson_case(neg, '{"when_iso": "2026-07-16T09:00:00-06:00"}')
+    assert not invented["passed"]                  # over-eager: invented a time
+
+
+def test_parsejson_schedule_exact_and_negative():
+    pos = {"id": "s1", "kind": "schedule",
+           "expected": {"exact": {"is_reminder": True, "kind": "agentic",
+                                  "recurring": True, "cron": "0 7 * * *"},
+                        "content_contains": ["clima"]}}
+    reply = ('{"is_reminder": true, "kind": "agentic", "recurring": true, '
+             '"cron": "0 7 * * *", "when_iso": null, "content": "el clima"}')
+    assert ma.score_parsejson_case(pos, reply)["passed"]
+    bad_cron = reply.replace("0 7 * * *", "0 7 * * 1")
+    assert not ma.score_parsejson_case(pos, bad_cron)["passed"]
+    neg = {"id": "s2", "kind": "schedule", "negative": True,
+           "expected": {"exact": {"is_reminder": False}}}
+    assert ma.score_parsejson_case(
+        neg, '{"is_reminder": false, "kind": "message", "recurring": false, '
+             '"cron": null, "when_iso": null, "content": ""}')["passed"]
+    overeager = ma.score_parsejson_case(
+        neg, '{"is_reminder": true, "kind": "message", "recurring": false, '
+             '"cron": null, "when_iso": "2026-07-16T09:00:00-06:00", '
+             '"content": "opinar de la serie"}')
+    assert not overeager["passed"]
+
+
+def test_parsejson_voice_intent_label_scan_mirrors_production():
+    pos = {"id": "v1", "kind": "voice_intent",
+           "expected": {"label": "meeting_start"}}
+    # bare label, wrapped label — both fine (production scans the reply)
+    assert ma.score_parsejson_case(pos, "meeting_start")["passed"]
+    assert ma.score_parsejson_case(pos, "Categoría: meeting_start.")["passed"]
+    assert not ma.score_parsejson_case(pos, "open_dashboard")["passed"]
+    assert ma.score_parsejson_case(pos, "no sé")["json_valid"] is None
+    neg = {"id": "v2", "kind": "voice_intent", "negative": True,
+           "expected": {"label": "dictation"}}
+    assert ma.score_parsejson_case(neg, "dictation")["passed"]
+    assert not ma.score_parsejson_case(neg, "meeting_start")["passed"]
+
+
+def test_parsejson_graph_facts_and_coreference():
+    pos = {"id": "f1", "kind": "graph_facts",
+           "expected": {"fact_label_substrings": [["laura"], ["guadalajara"]]}}
+    reply = ('{"facts": [{"kind": "biographical", "label": "Hermana Laura '
+             'Martínez se mudó a Guadalajara (≈2026)", "data": {}, '
+             '"domain": "personal"}], "relations": []}')
+    assert ma.score_parsejson_case(pos, reply)["passed"]
+    neg = {"id": "f2", "kind": "graph_facts", "negative": True,
+           "expected": {"facts_empty": True}}
+    assert ma.score_parsejson_case(neg, '{"facts": [], "relations": []}')["passed"]
+    overeager = ma.score_parsejson_case(
+        neg, '{"facts": [{"label": "hoy hace frío"}], "relations": []}')
+    assert not overeager["passed"]
+    # coreference mirrors identity._llm_same_entity's [:2] yes-detection
+    si = {"id": "c1", "kind": "coreference", "expected": {"label": "si"}}
+    assert ma.score_parsejson_case(si, "sí")["passed"]
+    assert ma.score_parsejson_case(si, "Si, son la misma persona")["passed"]
+    assert not ma.score_parsejson_case(si, "no")["passed"]
+    no = {"id": "c2", "kind": "coreference", "negative": True,
+          "expected": {"label": "no"}}
+    assert ma.score_parsejson_case(no, "no")["passed"]
+    assert not ma.score_parsejson_case(no, "sí")["passed"]
+
+
+def test_parsejson_aggregate_negatives_count_double():
+    per_case = [
+        {"id": "p1", "negative": False, "json_valid": True, "passed": True},
+        {"id": "p2", "negative": False, "json_valid": False, "passed": False},
+        {"id": "n1", "negative": True, "json_valid": True, "passed": False},
+        {"id": "n2", "negative": True, "json_valid": None, "passed": True},
+    ]
+    agg = ma.aggregate_parsejson(per_case)
+    assert agg["n"] == 4
+    assert agg["pass_rate"] == 0.5
+    assert agg["negative_pass_rate"] == 0.5
+    assert agg["json_valid_rate"] == pytest.approx(round(2 / 3, 4))
+    assert agg["failed_ids"] == ["p2", "n1", "n1"]   # negative listed twice
+
+
+def test_structured_parsing_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "structured_parsing.jsonl")
+    assert len(cases) == 14
+    assert len({c["id"] for c in cases}) == 14
+    kinds = {c["kind"] for c in cases}
+    assert kinds == {"when", "schedule", "voice_intent", "graph_facts",
+                     "coreference"}
+    negatives = [c for c in cases if c.get("negative")]
+    assert len(negatives) >= 5
+    assert {c["kind"] for c in negatives} == kinds   # every sub-kind has a trap
+    for c in cases:
+        assert c["prompt"] and c["expected"] and c["max_tokens"] > 0
+        if c["kind"] in ("when", "schedule", "graph_facts"):
+            assert c["system"]                       # JSON contracts carry systems
+        if c["kind"] == "voice_intent":
+            assert c["expected"]["label"] in ma.VOICE_INTENT_LABELS
+
+
+# ── batch-1 roles: wiring (parser, dispatch defaults, matrix columns) ────────
+
+def test_batch1_roles_in_valid_roles_and_parser():
+    for role in ("recordsqa", "narration", "longsum", "parsejson"):
+        assert role in ma.VALID_ROLES
+    assert ma.parse_audit_roles("recordsqa,narration,longsum,parsejson") == \
+        ["recordsqa", "narration", "longsum", "parsejson"]
+    defaults = ma.build_parser().parse_args(["--gguf", "/m.gguf",
+                                             "--label", "m"]).roles
+    for role in ("recordsqa", "narration", "longsum", "parsejson"):
+        assert role in defaults
+
+
+def test_audit_matrix_shows_batch1_columns():
+    rows = [_audit_row("delta", "vram12", "2026-07-15T00:00:00+00:00",
+                       recordsqa={"pass_rate": 0.9, "fabrication_rate": 0.1},
+                       narration={"numeric_fidelity_rate": 0.875,
+                                  "structure_rate": 1.0},
+                       longsum={"pass_rate": 0.667, "atom_recall": 0.833},
+                       parsejson={"pass_rate": 0.929,
+                                  "negative_pass_rate": 1.0})]
+    out = ma.build_audit_matrix(rows)
+    for header in ("recQA%", "narr", "lsum%", "parse%"):
+        assert header in out
+    assert "90.0%" in out                          # recordsqa pass rate
+    assert "87.5%" in out                          # narration numeric fidelity
+    assert "66.7%" in out                          # longsum pass rate
+    assert "92.9%" in out                          # parsejson pass rate
+    # rows without the new roles render dashes, not crashes
+    assert "delta" in ma.build_audit_matrix(
+        [_audit_row("delta", "cpu", "2026-07-15T00:00:00+00:00")])
+
+
+def test_run_parsejson_role_end_to_end_on_canned_responses(monkeypatch):
+    """Golden set through the runner with a canned 'perfect' model."""
+    perfect = {
+        "sp-when-01": '{"when_iso": "2026-07-16T09:00:00-06:00"}',
+        "sp-when-02": '{"when_iso": "2026-07-15T12:00:00-06:00"}',
+        "sp-when-03-neg": '{"when_iso": null}',
+        "sp-sched-01": ('{"is_reminder": true, "kind": "agentic", '
+                        '"recurring": true, "cron": "0 7 * * *", '
+                        '"when_iso": null, "content": "el clima"}'),
+        "sp-sched-02": ('{"is_reminder": true, "kind": "message", '
+                        '"recurring": false, "cron": null, '
+                        '"when_iso": "2026-07-16T16:00:00-06:00", '
+                        '"content": "llamar al dentista"}'),
+        "sp-sched-03": ('{"is_reminder": true, "kind": "message", '
+                        '"recurring": true, "cron": "0 6 * * 1,3", '
+                        '"when_iso": null, "content": "ir al gimnasio"}'),
+        "sp-sched-04-neg": ('{"is_reminder": false, "kind": "message", '
+                            '"recurring": false, "cron": null, '
+                            '"when_iso": null, "content": ""}'),
+        "sp-voice-01": "meeting_start",
+        "sp-voice-02": "open_dashboard",
+        "sp-voice-03-neg": "dictation",
+        "sp-facts-01": ('{"facts": [{"kind": "biographical", "label": '
+                        '"Hermana Laura Martínez se mudó a Guadalajara", '
+                        '"data": {}, "domain": "personal"}], "relations": []}'),
+        "sp-facts-02-neg": '{"facts": [], "relations": []}',
+        "sp-coref-01": "si",
+        "sp-coref-02-neg": "no",
+    }
+    cases = _load_jsonl(GOLDEN / "structured_parsing.jsonl")
+    by_prompt = {c["prompt"]: perfect[c["id"]] for c in cases}
+
+    def fake_chat(port, messages, sampling=None, thinking="none",
+                  max_tokens=512, tools=None, timeout=240):
+        return {"content": by_prompt[messages[-1]["content"]]}
+
+    monkeypatch.setattr(ma, "chat_completion", fake_chat)
+    agg = ma.run_parsejson_role(18080, dict(ma.HOUSE_SAMPLING), "none")
+    assert agg["n"] == 14
+    assert agg["pass_rate"] == 1.0
+    assert agg["negative_pass_rate"] == 1.0
+    assert agg["json_valid_rate"] == 1.0
+    assert agg["failed_ids"] == []
+
+
+def test_run_longsum_role_ctx_skip_and_note(monkeypatch):
+    """A tiny ctx skips every long transcript with a note instead of truncating."""
+    calls = []
+
+    def fake_chat(port, messages, sampling=None, thinking="none",
+                  max_tokens=512, tools=None, timeout=240):
+        calls.append(messages)
+        return {"content": "resumen"}
+
+    monkeypatch.setattr(ma, "chat_completion", fake_chat)
+    agg = ma.run_longsum_role(18080, dict(ma.HOUSE_SAMPLING), "none", ctx=256)
+    assert agg["n"] == 0 and calls == []            # every case skipped
+    assert len(agg["skipped_ids"]) == 6
+    assert "skipped" in agg["note"]
