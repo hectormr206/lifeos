@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'features/body/presentation/body_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
 import 'features/connection/domain/connection_status.dart';
 import 'features/connection/presentation/connection_notifier.dart';
@@ -10,6 +11,8 @@ import 'features/domains/domain/domain_descriptor.dart';
 import 'features/domains/presentation/domain_list_screen.dart';
 import 'features/domains/presentation/domains_hub_screen.dart';
 import 'features/home/presentation/home_screen.dart';
+import 'features/insights/presentation/insights_screen.dart';
+import 'features/reminders/presentation/reminders_screen.dart';
 
 /// App shell routing (M1 slice 1). Design D1 did not pin a router package;
 /// `go_router` is the de-facto Flutter-recommended choice and is what this
@@ -21,11 +24,20 @@ import 'features/home/presentation/home_screen.dart';
 ///
 /// M2 slice 1: `/domains` (hub) and `/domains/:key` (per-domain list, spec
 /// `mobile-domain-crud`) are gated behind pairing the same way.
+///
+/// "Visible soul" slice: `/body` (Axi's organs), `/reminders`, and
+/// `/insights` (digest preview) are gated behind pairing the same way as
+/// `/chat`/`/domains` — all three are read-mostly features that need a
+/// live paired engine.
 final goRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     redirect: (context, state) {
       final loc = state.matchedLocation;
-      final needsPairing = loc == '/chat' || loc.startsWith('/domains');
+      final needsPairing = loc == '/chat' ||
+          loc.startsWith('/domains') ||
+          loc == '/body' ||
+          loc == '/reminders' ||
+          loc == '/insights';
       if (needsPairing && ref.read(connectionNotifierProvider) is! ConnectionPaired) {
         return '/settings/connection';
       }
@@ -40,6 +52,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/domains/:key',
         builder: (context, state) => DomainListScreen(descriptor: domainDescriptorFor(state.pathParameters['key']!)),
       ),
+      GoRoute(path: '/body', builder: (context, state) => const BodyScreen()),
+      GoRoute(path: '/reminders', builder: (context, state) => const RemindersScreen()),
+      GoRoute(path: '/insights', builder: (context, state) => const InsightsScreen()),
     ],
   );
 });

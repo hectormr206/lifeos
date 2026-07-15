@@ -100,6 +100,24 @@ class _ConnectedView extends ConsumerWidget {
           icon: const Icon(Icons.dashboard_outlined),
           label: const Text('Mis datos'),
         ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/body'),
+          icon: const Icon(Icons.favorite_border),
+          label: const Text('¿Cómo está Axi?'),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/reminders'),
+          icon: const Icon(Icons.notifications_outlined),
+          label: const Text('Recordatorios'),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/insights'),
+          icon: const Icon(Icons.insights_outlined),
+          label: const Text('Resumen'),
+        ),
       ],
     );
   }

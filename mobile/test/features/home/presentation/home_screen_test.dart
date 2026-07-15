@@ -113,4 +113,39 @@ void main() {
 
     expect(find.text('Mis datos'), findsOneWidget);
   });
+
+  testWidgets('hides the "visible soul" CTAs (body/reminders/insights) when unpaired', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
+        child: MaterialApp.router(routerConfig: _routerToHome()),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('¿Cómo está Axi?'), findsNothing);
+    expect(find.text('Recordatorios'), findsNothing);
+    expect(find.text('Resumen'), findsNothing);
+  });
+
+  testWidgets('shows the "visible soul" CTAs (body/reminders/insights) when paired', (tester) async {
+    final store = FakeTokenStore(
+      const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          tokenStoreProvider.overrideWithValue(store),
+          engineReachableProvider.overrideWith((ref) async => true),
+        ],
+        child: MaterialApp.router(routerConfig: _routerToHome()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('¿Cómo está Axi?'), findsOneWidget);
+    expect(find.text('Recordatorios'), findsOneWidget);
+    expect(find.text('Resumen'), findsOneWidget);
+  });
 }
