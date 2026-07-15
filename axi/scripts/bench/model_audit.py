@@ -23,7 +23,9 @@ Stages A/B and audits straight at the saved recipe. --quick = reduced Stage-A
 grid + skip Stage B.
 
 Roles: speed, brain, extraction (reused from bench_model.py) + domain,
-toolcall, vision (needs --mmproj), codereview, embed (needs --embedding).
+toolcall, vision (needs --mmproj), codereview, embed (needs --embedding),
+codegen (writes code, harness EXECUTES it in a sandboxed subprocess),
+conversation (judge-scored conversational pleasantness + Spanish checks).
 
 BUILDS ON bench_model.py — spawn/kill/registry/scorer wiring is imported, not
 rewritten. Reuses cpu_sweep.check_deterministic, subjective_judge, and
@@ -60,8 +62,12 @@ import base64
 import json
 import math
 import os
+import re
+import signal
 import statistics
+import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 import urllib.request
@@ -94,7 +100,7 @@ HOUSE_SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
 
 VALID_THINKING_MODES = ("none", "off", "on", "budget512")
 VALID_ROLES = ("speed", "brain", "extraction", "domain", "toolcall",
-               "vision", "codereview", "embed")
+               "vision", "codereview", "embed", "codegen", "conversation")
 
 FAST_SUBSET_SIZE = 12
 FAST_SUBSET_STRIDE = 3
@@ -551,6 +557,222 @@ def cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+# ── codegen role pure helpers (extraction / harness / scoring) ───────────────
+
+CODEGEN_PASS_SENTINEL = "__CODEGEN_PASS__"
+
+CODEGEN_SYSTEM = (
+    "Eres un ingeniero de software senior escribiendo código Python para LifeOS. "
+    "Implementa EXACTAMENTE la función pedida, en Python puro, sin dependencias "
+    "externas ni entrada/salida. Maneja los casos borde indicados. Responde "
+    "ÚNICAMENTE con un bloque ```python``` que contenga el código completo, "
+    "sin explicaciones."
+)
+
+_CODE_FENCE_RE = re.compile(r"```([A-Za-z0-9_+-]*)[ \t]*\n(.*?)```", re.DOTALL)
+
+
+def extract_code_block(text: str) -> str:
+    """Pull the model's code out of its reply.
+
+    Preference order: all ```python fenced blocks (joined — models often split
+    the function and a demo), else the first fenced block of any language, else
+    the raw text. <think> blocks are stripped first.
+    """
+    cleaned = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL)
+    blocks = _CODE_FENCE_RE.findall(cleaned)
+    python_blocks = [body for lang, body in blocks
+                     if lang.lower() in ("python", "py", "python3")]
+    if python_blocks:
+        return "\n\n".join(b.strip() for b in python_blocks).strip()
+    if blocks:
+        return blocks[0][1].strip()
+    return cleaned.strip()
+
+
+def code_compiles(code: str) -> bool:
+    """Does the extracted code at least parse as Python? (compile rate metric)"""
+    import ast
+    try:
+        ast.parse(code)
+        return True
+    except SyntaxError:
+        return False
+
+
+def build_codegen_harness(case: dict, code: str) -> str:
+    """Model code + injected asserts → one self-contained ``python -c`` script.
+
+    The case's tests travel as embedded JSON (repr-quoted, so arbitrary args /
+    expected values survive). Prints CODEGEN_PASS_SENTINEL only when every
+    assert holds; any failure exits non-zero via the raised AssertionError.
+    """
+    tests_json = json.dumps(case.get("tests") or [], ensure_ascii=False)
+    fn = case["function_name"]
+    return (
+        f"{code}\n\n"
+        "import json as _json\n"
+        f"_tests = _json.loads({tests_json!r})\n"
+        "for _i, _t in enumerate(_tests):\n"
+        f"    _got = {fn}(*_t.get('args', []), **(_t.get('kwargs') or {{}}))\n"
+        "    _exp = _t['expected']\n"
+        "    assert _got == _exp, f'test {_i}: got {_got!r}, expected {_exp!r}'\n"
+        f"print({CODEGEN_PASS_SENTINEL!r})\n"
+    )
+
+
+def execute_codegen_harness(harness: str, timeout_s: float,
+                            python_bin: str = sys.executable) -> dict:
+    """Run the harness in an ISOLATED subprocess (never exec() in-process).
+
+    Sandboxing: ``python -I`` (isolated mode: no user site, env python vars
+    ignored), a minimal env, cwd = throwaway temp dir, own session/process
+    group (start_new_session), hard timeout with a process-GROUP kill so
+    forked/spun-off children die too. Local-model code is untrusted-ish.
+    """
+    with tempfile.TemporaryDirectory(prefix="axi-codegen-") as tmp:
+        env = {"PATH": "/usr/bin:/bin", "HOME": tmp,
+               "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"}
+        proc = subprocess.Popen(
+            [python_bin, "-I", "-c", harness], cwd=tmp, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=True, text=True)
+        try:
+            out, err = proc.communicate(timeout=timeout_s)
+            return {"returncode": proc.returncode, "stdout": out or "",
+                    "stderr": err or "", "timed_out": False}
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            proc.wait(timeout=5)
+            return {"returncode": None, "stdout": "", "stderr": "",
+                    "timed_out": True}
+
+
+def score_codegen_case(case: dict, code: str,
+                       exec_result: Optional[dict]) -> dict:
+    """Pure scorer on a canned subprocess result (pass = all asserts held)."""
+    compiled = bool(code) and code_compiles(code)
+    if not compiled:
+        return {"id": case.get("id"), "compiled": False, "passed": False,
+                "error": "no code / does not parse"}
+    r = exec_result or {}
+    if r.get("timed_out"):
+        return {"id": case.get("id"), "compiled": True, "passed": False,
+                "error": f"timeout after {case.get('timeout_s')}s (killed)"}
+    passed = (r.get("returncode") == 0
+              and CODEGEN_PASS_SENTINEL in (r.get("stdout") or ""))
+    return {"id": case.get("id"), "compiled": True, "passed": passed,
+            "error": None if passed
+            else ((r.get("stderr") or "").strip()[-300:] or "tests failed")}
+
+
+def aggregate_codegen(per_case: list[dict]) -> dict:
+    n = len(per_case)
+
+    def rate(hits: int) -> float:
+        return round(hits / n, 4) if n else 0.0
+
+    return {
+        "n": n,
+        "pass_rate": rate(sum(1 for r in per_case if r.get("passed"))),
+        "compile_rate": rate(sum(1 for r in per_case if r.get("compiled"))),
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+
+
+# ── conversation role pure helpers (rubric judge prompt + det checks) ────────
+
+CONVERSATION_MAX_CHARS = 1500  # warm-but-concise: past this a reply is a lecture
+
+
+def _conversation_transcript(messages: list[dict]) -> str:
+    return "\n".join(f"[{m.get('role', 'user')}] {m.get('content', '')}"
+                     for m in messages or [])
+
+
+def build_conversation_judge_prompt(case: dict, response: str) -> str:
+    """Judge prompt built from the CASE'S OWN rubric (criteria have
+    name/weight/description — a different shape than brain_quality's, so we
+    mirror subjective_judge._build_judge_prompt instead of calling it)."""
+    criteria = (case.get("rubric") or {}).get("criteria") or []
+    lines: list[str] = []
+    keys: list[str] = []
+    for idx, c in enumerate(criteria):
+        key = f"c{idx + 1}"
+        keys.append(key)
+        lines.append(f'  "{key}" — {c.get("name", key)} '
+                     f'(weight={c.get("weight", 1.0)}): {c.get("description", "")}')
+    criteria_block = "\n".join(lines)
+    keys_str = ", ".join(f'"{k}": 0.0..1.0' for k in keys)
+    return f"""\
+Evaluá la calidad conversacional de la ÚLTIMA respuesta del asistente,
+considerando toda la conversación previa.
+
+=== CONVERSACIÓN ===
+{_conversation_transcript(case.get("messages") or [])}
+
+=== RESPUESTA DEL CANDIDATO ===
+{response}
+
+=== RUBRIC ===
+Criterios a evaluar (puntuá cada uno entre 0.0 y 1.0):
+{criteria_block}
+
+Devolvé SOLO este JSON (sin markdown, sin texto adicional):
+{{{keys_str}, "note": "observación breve en ≤15 palabras"}}"""
+
+
+def weighted_rubric_score(criteria: list[dict], parsed: dict) -> float:
+    """Weighted 0-1 score from judge JSON keys c1..cN (clamped, missing = 0)."""
+    weighted = 0.0
+    total = 0.0
+    for idx, c in enumerate(criteria):
+        try:
+            score = float(parsed.get(f"c{idx + 1}", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        score = max(0.0, min(1.0, score))
+        weight = c.get("weight", 1.0)
+        weighted += score * weight
+        total += weight
+    return round(weighted / total, 4) if total > 0 else 0.0
+
+
+def check_conversation_deterministic(response: str,
+                                     max_chars: int = CONVERSATION_MAX_CHARS) -> dict:
+    """Judge-free checks: reply is Spanish; non-empty, non-error, sane length."""
+    import cpu_sweep
+    text = (response or "").strip()
+    sane = bool(text) and not text.startswith("__ERROR__") and len(text) <= max_chars
+    return {"spanish": bool(text) and cpu_sweep.is_spanish(text), "sane": sane}
+
+
+def aggregate_conversation(per_case: list[dict],
+                           note: Optional[str] = None) -> dict:
+    """{n, judge_score (weighted mean, None when judge skipped), spanish_rate}."""
+    n = len(per_case)
+    judged = [r["judge_score"] for r in per_case
+              if r.get("judge_score") is not None]
+
+    def rate(hits: int) -> float:
+        return round(hits / n, 4) if n else 0.0
+
+    out = {
+        "n": n,
+        "judge_score": round(sum(judged) / len(judged), 4) if judged else None,
+        "spanish_rate": rate(sum(1 for r in per_case if r.get("spanish"))),
+        "sane_rate": rate(sum(1 for r in per_case if r.get("sane"))),
+        "failed_ids": [r.get("id") for r in per_case
+                       if not (r.get("spanish") and r.get("sane"))],
+    }
+    if note:
+        out["note"] = note
+    return out
+
+
 # ── audit registry rows & comparison matrix ──────────────────────────────────
 
 def assemble_audit_row(label: str, tier: str, gguf: str, server_bin: str,
@@ -590,14 +812,14 @@ def _brain_metric(roles: dict) -> Optional[float]:
 def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> str:
     """Side-by-side matrix: newest row per label+tier, key metric per role."""
     latest = newest_per_label_tier(rows)
-    bar = "=" * 118
+    bar = "=" * 132
     lines = [bar, f"  {title}  (newest audit per label+tier)", bar]
     lines.append(
         f"  {'Label':<20} {'tier':<7} {'brain':>6} {'extr%':>6} {'dom%':>6} "
-        f"{'tool%':>6} {'vis%':>6} {'rev%':>6} {'tok/s':>7} {'VRAM MiB':>9} "
-        f"{'thinking':<9}"
+        f"{'tool%':>6} {'vis%':>6} {'rev%':>6} {'code%':>6} {'conv':>6} "
+        f"{'tok/s':>7} {'VRAM MiB':>9} {'thinking':<9}"
     )
-    lines.append("  " + "-" * 114)
+    lines.append("  " + "-" * 128)
     if not latest:
         lines.append("  (audit registry is empty — nothing audited yet)")
         lines.append(bar)
@@ -615,6 +837,8 @@ def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> s
             f"{bm._fmt((roles.get('toolcall') or {}).get('score'), '6.1%')} "
             f"{bm._fmt((roles.get('vision') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt((roles.get('codereview') or {}).get('score'), '6.1%')} "
+            f"{bm._fmt((roles.get('codegen') or {}).get('pass_rate'), '6.1%')} "
+            f"{bm._fmt((roles.get('conversation') or {}).get('judge_score'), '6.3f')} "
             f"{bm._fmt(speed.get('decode_p50_toks_s'), '7.1f')} "
             f"{bm._fmt(vram, '9.0f')} "
             f"{recipe.get('thinking', '-'):<9}"
@@ -692,7 +916,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tiers", default="vram12",
                    help=f"Comma list from {sorted(TIER_BUDGETS_MIB)} (default: vram12)")
     p.add_argument("--roles",
-                   default="speed,brain,extraction,domain,toolcall,codereview,vision",
+                   default="speed,brain,extraction,domain,toolcall,codereview,"
+                           "vision,codegen,conversation",
                    help=f"Comma list from {list(VALID_ROLES)}; vision auto-skips "
                         "without --mmproj; embed needs --embedding")
     p.add_argument("--quick", action="store_true",
@@ -1102,6 +1327,113 @@ def run_codereview_role(port: int, sampling: dict, thinking: str) -> dict:
     return agg
 
 
+def run_codegen_role(port: int, sampling: dict, thinking: str) -> dict:
+    """code_generation.jsonl: model writes code, harness EXECUTES it (sandboxed)."""
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "code_generation.jsonl")
+    print(f"  [codegen] {len(cases)} cases", flush=True)
+    per_case: list[dict] = []
+    for case in cases:
+        msg = chat_completion(
+            port,
+            [{"role": "system", "content": CODEGEN_SYSTEM},
+             {"role": "user", "content": case.get("prompt", "")}],
+            sampling=sampling, thinking=thinking, max_tokens=768)
+        code = extract_code_block(_message_text(msg))
+        exec_result = None
+        if code and code_compiles(code):
+            harness = build_codegen_harness(case, code)
+            exec_result = execute_codegen_harness(harness,
+                                                  case.get("timeout_s", 10))
+        result = score_codegen_case(case, code, exec_result)
+        print(f"  [codegen] {case.get('id')}: "
+              f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
+        per_case.append(result)
+    agg = aggregate_codegen(per_case)
+    print(f"  [codegen] pass={agg['pass_rate']:.0%} "
+          f"compile={agg['compile_rate']:.0%}", flush=True)
+    return agg
+
+
+def judge_conversation_case(case: dict, response: str) -> dict:
+    """One judge call (port 8080) scored against the case's own rubric."""
+    import subjective_judge as sj
+    prompt = build_conversation_judge_prompt(case, response)
+    criteria = (case.get("rubric") or {}).get("criteria") or []
+
+    def call_judge() -> str:
+        body = _http_post_json(
+            f"http://127.0.0.1:{bm.JUDGE_PORT}/v1/chat/completions",
+            {"model": "judge",
+             "messages": [{"role": "system", "content": sj.JUDGE_SYSTEM_PROMPT},
+                          {"role": "user", "content": prompt}],
+             "max_tokens": 200, "temperature": 0.0, "stream": False,
+             "chat_template_kwargs": {"enable_thinking": False}},
+            timeout=120)
+        msg = body["choices"][0]["message"]
+        return msg.get("content") or msg.get("reasoning_content") or ""
+
+    raw = ""
+    parsed = None
+    for _attempt in range(2):
+        try:
+            raw = call_judge()
+        except Exception as e:  # noqa: BLE001 — bench robustness: record, don't crash
+            raw = f"__JUDGE_ERROR__: {e}"
+            break
+        parsed = sj._parse_judge_json(raw)
+        if parsed is not None:
+            break
+        time.sleep(1)
+    if parsed is None:
+        return {"weighted_score": 0.0, "note": f"parse_error: {raw[:100]}",
+                "error": True}
+    return {"weighted_score": weighted_rubric_score(criteria, parsed),
+            "note": parsed.get("note", "")}
+
+
+def run_conversation_role(port: int, sampling: dict, thinking: str) -> dict:
+    """conversation_quality.jsonl: is Axi PLEASANT to talk to?
+
+    Candidate reply at the recipe sampling/thinking (same as brain), judged by
+    the prod 35B (port 8080) against each case's own rubric — plus two
+    deterministic judge-free checks (Spanish reply, non-empty + sane length).
+    Judge unhealthy → judge layer skipped with a recorded note, like brain.
+    """
+    import cpu_sweep
+    import subjective_judge as sj
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "conversation_quality.jsonl")
+    judge_healthy = sj.http_get_status(
+        f"http://127.0.0.1:{bm.JUDGE_PORT}/health") == 200
+    note = None if judge_healthy else \
+        f"judge skipped: 35B judge not healthy on {bm.JUDGE_PORT}"
+    if note:
+        print(f"  [conversation] {note}", flush=True)
+    print(f"  [conversation] {len(cases)} cases", flush=True)
+
+    per_case: list[dict] = []
+    for case in cases:
+        msg = chat_completion(port, case["messages"], sampling=sampling,
+                              thinking=thinking, max_tokens=256)
+        text = _message_text(msg)
+        det = check_conversation_deterministic(text)
+        row = {"id": case.get("id"), **det, "judge_score": None}
+        if judge_healthy:
+            # Empty / errored / bloated replies score 0 without wasting a judge
+            # call (mirrors brain's zero for missing responses).
+            row["judge_score"] = (judge_conversation_case(case, text)
+                                  .get("weighted_score", 0.0)
+                                  if det["sane"] else 0.0)
+        print(f"  [conversation] {row['id']}: es={det['spanish']} "
+              f"sane={det['sane']} judge={row['judge_score']}", flush=True)
+        per_case.append(row)
+    agg = aggregate_conversation(per_case, note=note)
+    js = agg.get("judge_score")
+    print(f"  [conversation] judge={js if js is not None else '-'} "
+          f"spanish={agg['spanish_rate']:.0%}", flush=True)
+    return agg
+
+
 def run_embed_role(args, recipe: dict, vram_baseline: Optional[int]) -> dict:
     """Separate --embedding spawn: latency + tiny cosine retrieval sanity."""
     launch = recipe.get("launch") or {}
@@ -1192,6 +1524,12 @@ def run_stage_c(args, recipe: dict, roles: list[str],
                 elif role == "codereview":
                     results["codereview"] = run_codereview_role(args.port, sampling,
                                                                 thinking)
+                elif role == "codegen":
+                    results["codegen"] = run_codegen_role(args.port, sampling,
+                                                          thinking)
+                elif role == "conversation":
+                    results["conversation"] = run_conversation_role(
+                        args.port, sampling, thinking)
         finally:
             bm.kill_server(proc)
             wait_vram_drain(vram_baseline)

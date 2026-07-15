@@ -650,3 +650,344 @@ def test_code_review_golden_set_shape():
     assert clean[0]["must_not_contain"]
     for c in buggy:
         assert c["snippet"] and c["must_contain"]
+
+
+# ── codegen: code-block extraction ───────────────────────────────────────────
+
+def test_extract_code_block_fenced_python():
+    text = ("Claro, aquí está:\n```python\ndef f(x):\n    return x + 1\n```\n"
+            "Espero que sirva.")
+    assert ma.extract_code_block(text) == "def f(x):\n    return x + 1"
+
+
+def test_extract_code_block_prefers_python_and_joins_multiple():
+    text = ("```json\n{\"no\": 1}\n```\n"
+            "```python\ndef f(x):\n    return x\n```\n"
+            "y un ejemplo:\n```python\nprint(f(2))\n```")
+    out = ma.extract_code_block(text)
+    assert out == "def f(x):\n    return x\n\nprint(f(2))"
+    # no python fence at all → first generic fence
+    only_generic = "```\ndef g():\n    pass\n```"
+    assert ma.extract_code_block(only_generic) == "def g():\n    pass"
+
+
+def test_extract_code_block_unfenced_fallback_and_think_strip():
+    raw = "<think>debo usar regex</think>def h():\n    return 3"
+    assert ma.extract_code_block(raw) == "def h():\n    return 3"
+    assert ma.extract_code_block("") == ""
+    assert ma.extract_code_block(None) == ""
+
+
+def test_code_compiles():
+    assert ma.code_compiles("def f():\n    return 1") is True
+    assert ma.code_compiles("def f(:\n    oops") is False
+
+
+# ── codegen: harness assembly & real sandbox round-trip ──────────────────────
+
+def _cg_case(**over):
+    case = {"id": "cg", "function_name": "suma",
+            "tests": [{"args": [1, 2], "expected": 3},
+                      {"args": [0], "kwargs": {"b": 5}, "expected": 5}],
+            "timeout_s": 5}
+    case.update(over)
+    return case
+
+
+def test_build_codegen_harness_contains_code_tests_and_sentinel():
+    code = "def suma(a, b=0):\n    return a + b"
+    harness = ma.build_codegen_harness(_cg_case(), code)
+    assert harness.startswith(code)
+    assert "suma(*_t.get('args', [])" in harness
+    assert ma.CODEGEN_PASS_SENTINEL in harness
+    assert '"expected": 3' in harness            # tests embedded as JSON
+
+
+def test_codegen_harness_executes_pass_and_fail(tmp_path):
+    # Real subprocess, trusted code we wrote — fast and proves the wiring.
+    ok = ma.execute_codegen_harness(
+        ma.build_codegen_harness(_cg_case(), "def suma(a, b=0):\n    return a + b"),
+        timeout_s=15)
+    assert ok["returncode"] == 0 and not ok["timed_out"]
+    assert ma.CODEGEN_PASS_SENTINEL in ok["stdout"]
+    bad = ma.execute_codegen_harness(
+        ma.build_codegen_harness(_cg_case(), "def suma(a, b=0):\n    return a - b"),
+        timeout_s=15)
+    assert bad["returncode"] != 0
+    assert "AssertionError" in bad["stderr"]
+
+
+def test_execute_codegen_harness_timeout_kills_process_group(monkeypatch):
+    killed = {}
+
+    class FakeProc:
+        pid = 4242
+        def communicate(self, timeout=None):
+            raise ma.subprocess.TimeoutExpired(cmd="python", timeout=timeout)
+        def kill(self):
+            killed["fallback_kill"] = True
+        def wait(self, timeout=None):
+            killed["waited"] = True
+
+    monkeypatch.setattr(ma.subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(ma.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(ma.os, "killpg",
+                        lambda pgid, sig: killed.update(pgid=pgid, sig=sig))
+    r = ma.execute_codegen_harness("while True: pass", timeout_s=0.01)
+    assert r["timed_out"] is True and r["returncode"] is None
+    assert killed["pgid"] == 4242                 # whole GROUP killed
+    assert killed["sig"] == ma.signal.SIGKILL
+    assert killed["waited"] is True
+
+
+def test_execute_codegen_harness_uses_minimal_env_and_temp_cwd(monkeypatch):
+    seen = {}
+
+    class FakeProc:
+        pid = 1
+        returncode = 0
+        def communicate(self, timeout=None):
+            return (ma.CODEGEN_PASS_SENTINEL, "")
+
+    def fake_popen(argv, **kwargs):
+        seen["argv"] = argv
+        seen.update(kwargs)
+        return FakeProc()
+
+    monkeypatch.setattr(ma.subprocess, "Popen", fake_popen)
+    ma.execute_codegen_harness("print('x')", timeout_s=1)
+    assert "-I" in seen["argv"] and "-c" in seen["argv"]   # isolated interpreter
+    assert set(seen["env"]) == {"PATH", "HOME", "PYTHONDONTWRITEBYTECODE",
+                                "PYTHONIOENCODING"}        # minimal env only
+    assert seen["cwd"].startswith(ma.tempfile.gettempdir())
+    assert seen["start_new_session"] is True               # own process group
+
+
+# ── codegen: scorer & aggregate on canned subprocess results ─────────────────
+
+def test_score_codegen_case_on_canned_results():
+    case = _cg_case()
+    ok = ma.score_codegen_case(case, "def suma(a, b=0): return a + b",
+                               {"returncode": 0,
+                                "stdout": ma.CODEGEN_PASS_SENTINEL + "\n",
+                                "stderr": "", "timed_out": False})
+    assert ok == {"id": "cg", "compiled": True, "passed": True, "error": None}
+    fail = ma.score_codegen_case(case, "def suma(a, b=0): return a - b",
+                                 {"returncode": 1, "stdout": "",
+                                  "stderr": "AssertionError: test 0",
+                                  "timed_out": False})
+    assert fail["compiled"] is True and fail["passed"] is False
+    assert "AssertionError" in fail["error"]
+    timeout = ma.score_codegen_case(case, "while True: pass",
+                                    {"returncode": None, "stdout": "",
+                                     "stderr": "", "timed_out": True})
+    assert timeout["passed"] is False and "timeout" in timeout["error"]
+    broken = ma.score_codegen_case(case, "def suma(:", None)
+    assert broken == {"id": "cg", "compiled": False, "passed": False,
+                      "error": "no code / does not parse"}
+    # sentinel must actually be printed — rc 0 alone is not a pass
+    silent = ma.score_codegen_case(case, "def suma(a, b=0): return a + b",
+                                   {"returncode": 0, "stdout": "", "stderr": "",
+                                    "timed_out": False})
+    assert silent["passed"] is False
+
+
+def test_aggregate_codegen_pass_and_compile_rates():
+    per_case = [
+        {"id": "a", "compiled": True, "passed": True},
+        {"id": "b", "compiled": True, "passed": False},
+        {"id": "c", "compiled": False, "passed": False},
+        {"id": "d", "compiled": True, "passed": True},
+    ]
+    agg = ma.aggregate_codegen(per_case)
+    assert agg["n"] == 4
+    assert agg["pass_rate"] == 0.5
+    assert agg["compile_rate"] == 0.75
+    assert agg["failed_ids"] == ["b", "c"]
+    assert ma.aggregate_codegen([]) == {"n": 0, "pass_rate": 0.0,
+                                        "compile_rate": 0.0, "failed_ids": []}
+
+
+# ── conversation: judge prompt from the case's own rubric ────────────────────
+
+def _conv_case(**over):
+    case = {
+        "id": "cq", "messages": [
+            {"role": "user", "content": "no puedo dormir bien"},
+            {"role": "assistant", "content": "¿Desde cuándo te pasa?"},
+            {"role": "user", "content": "¿y entonces qué me recomiendas?"},
+        ],
+        "rubric": {"criteria": [
+            {"name": "calidez", "weight": 0.6,
+             "description": "Muestra empatía genuina."},
+            {"name": "concision", "weight": 0.4,
+             "description": "Breve y al punto."},
+        ]},
+    }
+    case.update(over)
+    return case
+
+
+def test_conversation_judge_prompt_built_from_case_rubric():
+    prompt = ma.build_conversation_judge_prompt(_conv_case(), "Te recomiendo...")
+    # transcript: every turn present, role-tagged
+    assert "[user] no puedo dormir bien" in prompt
+    assert "[assistant] ¿Desde cuándo te pasa?" in prompt
+    assert "[user] ¿y entonces qué me recomiendas?" in prompt
+    assert "Te recomiendo..." in prompt
+    # rubric criteria drive the keys — name, weight AND description surface
+    assert '"c1" — calidez (weight=0.6): Muestra empatía genuina.' in prompt
+    assert '"c2" — concision (weight=0.4): Breve y al punto.' in prompt
+    assert '"c1": 0.0..1.0, "c2": 0.0..1.0' in prompt
+    assert "c3" not in prompt                     # exactly as many keys as criteria
+
+
+def test_weighted_rubric_score():
+    criteria = _conv_case()["rubric"]["criteria"]
+    assert ma.weighted_rubric_score(criteria, {"c1": 1.0, "c2": 0.5}) == \
+        pytest.approx(0.6 * 1.0 + 0.4 * 0.5)
+    # clamping + missing key = 0 + junk tolerated
+    assert ma.weighted_rubric_score(criteria, {"c1": 7.0}) == pytest.approx(0.6)
+    assert ma.weighted_rubric_score(criteria, {"c1": -3, "c2": "x"}) == 0.0
+    assert ma.weighted_rubric_score([], {"c1": 1.0}) == 0.0
+
+
+# ── conversation: deterministic judge-free checks ────────────────────────────
+
+def test_conversation_deterministic_spanish_and_sanity():
+    es = ma.check_conversation_deterministic("¡Qué gusto! Me alegra mucho por ti.")
+    assert es == {"spanish": True, "sane": True}
+    en = ma.check_conversation_deterministic("I'm so happy for you, great job!")
+    assert en["spanish"] is False and en["sane"] is True
+    empty = ma.check_conversation_deterministic("   ")
+    assert empty == {"spanish": False, "sane": False}
+    err = ma.check_conversation_deterministic("__ERROR__: connection refused")
+    assert err["sane"] is False
+    bloated = ma.check_conversation_deterministic("la respuesta es larga. " * 200)
+    assert bloated["spanish"] is True and bloated["sane"] is False
+
+
+def test_aggregate_conversation_scores_and_note():
+    per_case = [
+        {"id": "a", "spanish": True, "sane": True, "judge_score": 0.9},
+        {"id": "b", "spanish": True, "sane": True, "judge_score": 0.5},
+        {"id": "c", "spanish": False, "sane": True, "judge_score": 0.4},
+        {"id": "d", "spanish": True, "sane": False, "judge_score": 0.0},
+    ]
+    agg = ma.aggregate_conversation(per_case)
+    assert agg["n"] == 4
+    assert agg["judge_score"] == pytest.approx(0.45)
+    assert agg["spanish_rate"] == 0.75
+    assert agg["sane_rate"] == 0.75
+    assert agg["failed_ids"] == ["c", "d"]
+    assert "note" not in agg
+    # judge skipped: scores None → judge_score None, note recorded
+    skipped = [{"id": "a", "spanish": True, "sane": True, "judge_score": None}]
+    agg = ma.aggregate_conversation(skipped, note="judge skipped: not healthy")
+    assert agg["judge_score"] is None
+    assert agg["note"] == "judge skipped: not healthy"
+
+
+def test_run_conversation_role_judge_absent_skips_with_note(monkeypatch):
+    import subjective_judge as sj
+    monkeypatch.setattr(sj, "http_get_status", lambda url, timeout=5: 0)
+    seen_messages = []
+
+    def fake_chat(port, messages, sampling=None, thinking="none",
+                  max_tokens=512, tools=None, timeout=240):
+        seen_messages.append(messages)
+        return {"content": "¡Claro! Te recomiendo dejar el café después de las 2."}
+
+    monkeypatch.setattr(ma, "chat_completion", fake_chat)
+    monkeypatch.setattr(
+        ma, "judge_conversation_case",
+        lambda *a, **k: pytest.fail("judge must not be called when unhealthy"))
+
+    agg = ma.run_conversation_role(18080, dict(ma.HOUSE_SAMPLING), "none")
+    assert agg["judge_score"] is None             # skipped, not zeroed
+    assert "note" in agg and "judge skipped" in agg["note"]
+    assert agg["spanish_rate"] == 1.0             # det checks still ran
+    assert agg["n"] == len(seen_messages) == 8
+    # multi-turn cases pass their FULL messages array through untouched
+    golden = _load_jsonl(GOLDEN / "conversation_quality.jsonl")
+    assert seen_messages == [c["messages"] for c in golden]
+    multi = [m for m in seen_messages if len(m) >= 3]
+    assert len(multi) >= 3
+    assert all(m[-1]["role"] == "user" for m in seen_messages)
+
+
+def test_judge_conversation_case_scores_from_parsed_json(monkeypatch):
+    case = _conv_case()
+    monkeypatch.setattr(
+        ma, "_http_post_json",
+        lambda url, payload, timeout=240: {
+            "choices": [{"message":
+                         {"content": '{"c1": 1.0, "c2": 0.5, "note": "bien"}'}}]})
+    r = ma.judge_conversation_case(case, "Te recomiendo cortar el café.")
+    assert r["weighted_score"] == pytest.approx(0.8)
+    assert r["note"] == "bien"
+    # judge HTTP failure → 0.0 with error, never a crash
+    def boom(url, payload, timeout=240):
+        raise OSError("connection refused")
+    monkeypatch.setattr(ma, "_http_post_json", boom)
+    r = ma.judge_conversation_case(case, "hola")
+    assert r["weighted_score"] == 0.0 and r.get("error") is True
+
+
+# ── new roles: wiring (parser, matrix columns) ───────────────────────────────
+
+def test_new_roles_in_valid_roles_and_parser():
+    assert "codegen" in ma.VALID_ROLES and "conversation" in ma.VALID_ROLES
+    assert ma.parse_audit_roles("codegen,conversation") == \
+        ["codegen", "conversation"]
+    defaults = ma.build_parser().parse_args(["--gguf", "/m.gguf",
+                                             "--label", "m"]).roles
+    assert "codegen" in defaults and "conversation" in defaults
+
+
+def test_audit_matrix_shows_codegen_and_conversation_columns():
+    rows = [_audit_row("gamma", "vram12", "2026-07-15T00:00:00+00:00",
+                       codegen={"pass_rate": 0.625, "compile_rate": 1.0},
+                       conversation={"judge_score": 0.812, "spanish_rate": 1.0})]
+    out = ma.build_audit_matrix(rows)
+    assert "code%" in out and "conv" in out       # new header columns
+    assert "62.5%" in out                         # codegen pass rate
+    assert "0.812" in out                         # conversation judge score
+    # rows without the new roles render dashes, not crashes
+    assert "gamma" in ma.build_audit_matrix(
+        [_audit_row("gamma", "cpu", "2026-07-15T00:00:00+00:00")])
+
+
+# ── new golden-set files are loadable and well-formed ────────────────────────
+
+def test_code_generation_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "code_generation.jsonl")
+    assert len(cases) == 8
+    assert len({c["id"] for c in cases}) == 8
+    for c in cases:
+        assert c["prompt"] and c["function_name"] and c["tests"]
+        assert f"`{c['function_name']}(" in c["prompt"]   # spec names the target
+        assert c["timeout_s"] > 0
+        for t in c["tests"]:
+            assert "args" in t and "expected" in t
+    # at least one case exercises edge-case handling with a null expected
+    assert any(t["expected"] is None for c in cases for t in c["tests"])
+
+
+def test_conversation_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "conversation_quality.jsonl")
+    assert len(cases) == 8
+    assert len({c["id"] for c in cases}) == 8
+    multi_turn = 0
+    for c in cases:
+        msgs = c["messages"]
+        assert msgs and msgs[-1]["role"] == "user"   # candidate replies next
+        if len(msgs) >= 3:
+            multi_turn += 1
+        criteria = c["rubric"]["criteria"]
+        assert criteria
+        for crit in criteria:
+            assert crit["name"] and crit["description"]
+            assert 0 < crit["weight"] <= 1
+        assert sum(crit["weight"] for crit in criteria) == pytest.approx(1.0)
+    assert multi_turn >= 3                           # real multi-turn coverage
