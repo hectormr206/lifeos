@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/cache/response_cache.dart';
+import '../../../core/connectivity/connectivity_status.dart';
 import '../domain/organ.dart';
 
 /// Raised when `GET /api/v1/organs` fails (non-2xx, network error).
@@ -24,9 +26,16 @@ abstract class OrgansRepository {
 }
 
 class HttpOrgansRepository implements OrgansRepository {
-  HttpOrgansRepository(this._dio);
+  HttpOrgansRepository(this._dio, {ResponseCache? cache, ConnectivityReporter? connectivity})
+      : _cache = cache ?? InMemoryResponseCache(),
+        _connectivity = connectivity ?? const NoopConnectivityReporter();
+
+  /// Offline read cache key (M3 slice 1) — see design's cache-key naming.
+  static const _cacheKey = 'body:organs';
 
   final Dio _dio;
+  final ResponseCache _cache;
+  final ConnectivityReporter _connectivity;
 
   @override
   Future<List<OrganState>> list() async {
@@ -34,9 +43,18 @@ class HttpOrgansRepository implements OrgansRepository {
       final response = await _dio.get<Map<String, Object?>>('/api/v1/organs');
       final body = response.data ?? const <String, Object?>{};
       final rows = body['organs'];
+      _connectivity.reportOnline();
       if (rows is! List) return const [];
+      await _cache.put(_cacheKey, rows);
       return rows.whereType<Map>().map((row) => _parseRow(Map<String, Object?>.from(row))).toList();
     } on DioException catch (error) {
+      final cached = await _cache.get(_cacheKey);
+      if (cached is List) {
+        final fetchedAt = await _cache.fetchedAt(_cacheKey) ?? DateTime.now();
+        _connectivity.reportOfflineWithCache(fetchedAt);
+        return cached.whereType<Map>().map((row) => _parseRow(Map<String, Object?>.from(row))).toList();
+      }
+      _connectivity.reportOffline();
       throw OrgansException(_messageFor(error), statusCode: error.response?.statusCode);
     }
   }

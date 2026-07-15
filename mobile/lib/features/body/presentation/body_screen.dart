@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/offline_banner.dart';
 import '../domain/organ.dart';
 import 'organs_notifier.dart';
 
@@ -17,9 +18,16 @@ class BodyScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('El cuerpo de Axi')),
-      body: RefreshIndicator(
-        onRefresh: () => ref.read(organsNotifierProvider.notifier).refresh(),
-        child: _buildBody(context, ref, state),
+      body: Column(
+        children: [
+          const OfflineBanner(),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: () => ref.read(organsNotifierProvider.notifier).refresh(),
+              child: _buildBody(context, ref, state),
+            ),
+          ),
+        ],
       ),
     );
   }

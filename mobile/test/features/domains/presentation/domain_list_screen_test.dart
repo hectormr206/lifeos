@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/connectivity/connectivity_status.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
@@ -13,6 +14,15 @@ import 'package:lifeos/features/domains/domain/domain_descriptor.dart';
 import 'package:lifeos/features/domains/domain/domain_entry.dart';
 import 'package:lifeos/features/domains/presentation/domain_list_screen.dart';
 import 'package:lifeos/features/domains/presentation/domain_notifier.dart';
+
+class _FixedConnectivityNotifier extends ConnectivityNotifier {
+  _FixedConnectivityNotifier(this._fixed);
+
+  final ConnectivityStatus _fixed;
+
+  @override
+  ConnectivityStatus build() => _fixed;
+}
 
 class _FakeDomainRepository implements DomainRepository {
   _FakeDomainRepository({this.entries = const [], this.error});
@@ -154,5 +164,26 @@ void main() {
     expect(chat.sendCalls, 1);
     expect(chat.lastText, 'presión 120/80');
     expect(repo.listCalls, 2);
+  });
+
+  testWidgets('shows the offline banner when connectivity is offlineWithCache (M3 slice 1)', (tester) async {
+    final entry = DomainEntry(id: '1', title: 'Presión', timestamp: DateTime.utc(2026, 1, 1, 10, 30));
+    final repo = _FakeDomainRepository(entries: [entry]);
+    final fixed = ConnectivityStatus(state: ConnectivityState.offlineWithCache, lastSyncAt: DateTime.now());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          domainRepositoryProvider.overrideWithValue(repo),
+          connectivityStatusProvider.overrideWith(() => _FixedConnectivityNotifier(fixed)),
+        ],
+        child: MaterialApp(home: DomainListScreen(descriptor: descriptor)),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byIcon(Icons.cloud_off), findsOneWidget);
+    expect(find.textContaining('Sin conexión'), findsOneWidget);
   });
 }

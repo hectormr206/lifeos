@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
+import '../../../core/cache/response_cache.dart';
+import '../../../core/connectivity/connectivity_status.dart';
 import '../../chat/data/chat_repository.dart';
 import '../../chat/presentation/chat_notifier.dart' show chatRepositoryProvider;
 import '../data/domain_repository.dart';
@@ -8,7 +10,12 @@ import '../domain/domain_descriptor.dart';
 import '../domain/domain_entry.dart';
 
 /// Real [DomainRepository] used app-wide; overridden with a fake in tests.
-final domainRepositoryProvider = Provider<DomainRepository>((ref) => HttpDomainRepository(ref.watch(dioProvider)));
+/// Wired with the offline read cache + connectivity reporter (M3 slice 1).
+final domainRepositoryProvider = Provider<DomainRepository>((ref) => HttpDomainRepository(
+      ref.watch(dioProvider),
+      cache: ref.watch(responseCacheProvider),
+      connectivity: ref.watch(connectivityStatusProvider.notifier),
+    ));
 
 /// One domain screen's UI state: the list (loading/data/error) plus the
 /// NL quick-capture sub-state (capturing/captureError).

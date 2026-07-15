@@ -5,10 +5,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/connectivity/connectivity_status.dart';
 import 'package:lifeos/features/body/data/organs_repository.dart';
 import 'package:lifeos/features/body/domain/organ.dart';
 import 'package:lifeos/features/body/presentation/body_screen.dart';
 import 'package:lifeos/features/body/presentation/organs_notifier.dart';
+
+class _FixedConnectivityNotifier extends ConnectivityNotifier {
+  _FixedConnectivityNotifier(this._fixed);
+
+  final ConnectivityStatus _fixed;
+
+  @override
+  ConnectivityStatus build() => _fixed;
+}
 
 class _FakeOrgansRepository implements OrgansRepository {
   _FakeOrgansRepository({this.organs = const [], this.error});
@@ -114,5 +124,25 @@ void main() {
 
     expect(find.text('boom'), findsOneWidget);
     expect(find.text('Reintentar'), findsOneWidget);
+  });
+
+  testWidgets('shows the offline banner when connectivity is offlineWithCache (M3 slice 1)', (tester) async {
+    final repo = _FakeOrgansRepository(organs: const [heart]);
+    final fixed = ConnectivityStatus(state: ConnectivityState.offlineWithCache, lastSyncAt: DateTime.now());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          organsRepositoryProvider.overrideWithValue(repo),
+          connectivityStatusProvider.overrideWith(() => _FixedConnectivityNotifier(fixed)),
+        ],
+        child: const MaterialApp(home: BodyScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byIcon(Icons.cloud_off), findsOneWidget);
+    expect(find.textContaining('Sin conexión'), findsOneWidget);
   });
 }

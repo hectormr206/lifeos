@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/cache/response_cache.dart';
+import '../../../core/connectivity/connectivity_status.dart';
 import '../domain/domain_descriptor.dart';
 import '../domain/domain_entry.dart';
 
@@ -32,19 +34,37 @@ abstract class DomainRepository {
 }
 
 class HttpDomainRepository implements DomainRepository {
-  HttpDomainRepository(this._dio);
+  HttpDomainRepository(this._dio, {ResponseCache? cache, ConnectivityReporter? connectivity})
+      : _cache = cache ?? InMemoryResponseCache(),
+        _connectivity = connectivity ?? const NoopConnectivityReporter();
 
   final Dio _dio;
+  final ResponseCache _cache;
+  final ConnectivityReporter _connectivity;
+
+  /// Offline read cache key (M3 slice 1) — one per domain, e.g.
+  /// `"domains:health:entries"`.
+  String _cacheKeyFor(DomainDescriptor descriptor) => 'domains:${descriptor.key}:entries';
 
   @override
   Future<List<DomainEntry>> list(DomainDescriptor descriptor) async {
+    final cacheKey = _cacheKeyFor(descriptor);
     try {
       final response = await _dio.get<Map<String, Object?>>(descriptor.listPath);
       final body = response.data ?? const <String, Object?>{};
       final rows = body[descriptor.listKey];
+      _connectivity.reportOnline();
       if (rows is! List) return const [];
+      await _cache.put(cacheKey, rows);
       return rows.whereType<Map>().map((row) => _parseRow(Map<String, Object?>.from(row))).toList();
     } on DioException catch (error) {
+      final cached = await _cache.get(cacheKey);
+      if (cached is List) {
+        final fetchedAt = await _cache.fetchedAt(cacheKey) ?? DateTime.now();
+        _connectivity.reportOfflineWithCache(fetchedAt);
+        return cached.whereType<Map>().map((row) => _parseRow(Map<String, Object?>.from(row))).toList();
+      }
+      _connectivity.reportOffline();
       throw DomainException(_messageFor(error), statusCode: error.response?.statusCode);
     }
   }

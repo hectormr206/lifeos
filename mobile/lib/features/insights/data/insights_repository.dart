@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/cache/response_cache.dart';
+import '../../../core/connectivity/connectivity_status.dart';
 import '../domain/digest.dart';
 
 /// Raised when `GET /api/v1/insights/preview` fails (non-2xx, network
@@ -34,30 +36,50 @@ abstract class InsightsRepository {
 }
 
 class HttpInsightsRepository implements InsightsRepository {
-  HttpInsightsRepository(this._dio);
+  HttpInsightsRepository(this._dio, {ResponseCache? cache, ConnectivityReporter? connectivity})
+      : _cache = cache ?? InMemoryResponseCache(),
+        _connectivity = connectivity ?? const NoopConnectivityReporter();
 
   final Dio _dio;
+  final ResponseCache _cache;
+  final ConnectivityReporter _connectivity;
+
+  /// Offline read cache key (M3 slice 1) — one per `cadence`, e.g.
+  /// `"insights:daily"`.
+  String _cacheKeyFor(String cadence) => 'insights:$cadence';
 
   @override
   Future<DigestModel> preview({String cadence = 'daily'}) async {
+    final cacheKey = _cacheKeyFor(cadence);
     try {
       final response = await _dio.get<Map<String, Object?>>(
         '/api/v1/insights/preview',
         queryParameters: {'cadence': cadence},
       );
       final body = response.data ?? const <String, Object?>{};
-      return DigestModel(
-        cadence: body['cadence'] as String? ?? cadence,
+      _connectivity.reportOnline();
+      await _cache.put(cacheKey, body);
+      return _parseDigest(body, fallbackCadence: cadence);
+    } on DioException catch (error) {
+      final cached = await _cache.get(cacheKey);
+      if (cached is Map) {
+        final fetchedAt = await _cache.fetchedAt(cacheKey) ?? DateTime.now();
+        _connectivity.reportOfflineWithCache(fetchedAt);
+        return _parseDigest(Map<String, Object?>.from(cached), fallbackCadence: cadence);
+      }
+      _connectivity.reportOffline();
+      throw InsightsException(_messageFor(error), statusCode: error.response?.statusCode);
+    }
+  }
+
+  DigestModel _parseDigest(Map<String, Object?> body, {required String fallbackCadence}) => DigestModel(
+        cadence: body['cadence'] as String? ?? fallbackCadence,
         body: body['body'] as String? ?? '',
         sectionsCount: (body['sections_count'] as num?)?.toInt() ?? 0,
         patternsCount: (body['patterns_count'] as num?)?.toInt() ?? 0,
         correlationsCount: (body['correlations_count'] as num?)?.toInt() ?? 0,
         generatedAt: DateTime.tryParse(body['generated_at'] as String? ?? '') ?? DateTime.now(),
       );
-    } on DioException catch (error) {
-      throw InsightsException(_messageFor(error), statusCode: error.response?.statusCode);
-    }
-  }
 
   String _messageFor(DioException error) {
     final status = error.response?.statusCode;

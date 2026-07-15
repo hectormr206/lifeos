@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/offline_banner.dart';
 import '../domain/reminder.dart';
 import 'reminders_notifier.dart';
 
@@ -48,6 +49,7 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
       appBar: AppBar(title: const Text('Recordatorios')),
       body: Column(
         children: [
+          const OfflineBanner(),
           Expanded(
             child: RefreshIndicator(
               onRefresh: () => ref.read(remindersNotifierProvider.notifier).refresh(),

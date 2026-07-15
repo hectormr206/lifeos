@@ -1,13 +1,19 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
+import '../../../core/cache/response_cache.dart';
+import '../../../core/connectivity/connectivity_status.dart';
 import '../data/insights_repository.dart';
 import '../domain/digest.dart';
 
 /// Real [InsightsRepository] used app-wide; overridden with a fake in
-/// tests.
-final insightsRepositoryProvider =
-    Provider<InsightsRepository>((ref) => HttpInsightsRepository(ref.watch(dioProvider)));
+/// tests. Wired with the offline read cache + connectivity reporter (M3
+/// slice 1).
+final insightsRepositoryProvider = Provider<InsightsRepository>((ref) => HttpInsightsRepository(
+      ref.watch(dioProvider),
+      cache: ref.watch(responseCacheProvider),
+      connectivity: ref.watch(connectivityStatusProvider.notifier),
+    ));
 
 /// The insights screen's UI state: the current cadence, the loaded digest
 /// (nullable until first load / on error), loading and error.

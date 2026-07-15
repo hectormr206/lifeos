@@ -1,11 +1,18 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
+import '../../../core/cache/response_cache.dart';
+import '../../../core/connectivity/connectivity_status.dart';
 import '../data/organs_repository.dart';
 import '../domain/organ.dart';
 
 /// Real [OrgansRepository] used app-wide; overridden with a fake in tests.
-final organsRepositoryProvider = Provider<OrgansRepository>((ref) => HttpOrgansRepository(ref.watch(dioProvider)));
+/// Wired with the offline read cache + connectivity reporter (M3 slice 1).
+final organsRepositoryProvider = Provider<OrgansRepository>((ref) => HttpOrgansRepository(
+      ref.watch(dioProvider),
+      cache: ref.watch(responseCacheProvider),
+      connectivity: ref.watch(connectivityStatusProvider.notifier),
+    ));
 
 /// The body screen's UI state: the organ list (loading/data/error).
 class OrgansUiState {

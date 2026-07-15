@@ -4,10 +4,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/connectivity/connectivity_status.dart';
 import 'package:lifeos/features/insights/data/insights_repository.dart';
 import 'package:lifeos/features/insights/domain/digest.dart';
 import 'package:lifeos/features/insights/presentation/insights_notifier.dart';
 import 'package:lifeos/features/insights/presentation/insights_screen.dart';
+
+class _FixedConnectivityNotifier extends ConnectivityNotifier {
+  _FixedConnectivityNotifier(this._fixed);
+
+  final ConnectivityStatus _fixed;
+
+  @override
+  ConnectivityStatus build() => _fixed;
+}
 
 class _FakeInsightsRepository implements InsightsRepository {
   _FakeInsightsRepository({this.error});
@@ -83,5 +93,25 @@ void main() {
 
     expect(find.text('boom'), findsOneWidget);
     expect(find.text('Reintentar'), findsOneWidget);
+  });
+
+  testWidgets('shows the offline banner when connectivity is offlineWithCache (M3 slice 1)', (tester) async {
+    final repo = _FakeInsightsRepository();
+    final fixed = ConnectivityStatus(state: ConnectivityState.offlineWithCache, lastSyncAt: DateTime.now());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          insightsRepositoryProvider.overrideWithValue(repo),
+          connectivityStatusProvider.overrideWith(() => _FixedConnectivityNotifier(fixed)),
+        ],
+        child: const MaterialApp(home: InsightsScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byIcon(Icons.cloud_off), findsOneWidget);
+    expect(find.textContaining('Sin conexión'), findsOneWidget);
   });
 }

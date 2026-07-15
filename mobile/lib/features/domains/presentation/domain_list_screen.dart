@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/offline_banner.dart';
 import '../domain/domain_descriptor.dart';
 import '../domain/domain_entry.dart';
 import 'domain_notifier.dart';
@@ -52,6 +53,7 @@ class _DomainListScreenState extends ConsumerState<DomainListScreen> {
       appBar: AppBar(title: Text(widget.descriptor.title)),
       body: Column(
         children: [
+          const OfflineBanner(),
           Expanded(
             child: RefreshIndicator(
               onRefresh: () => ref.read(provider.notifier).refresh(),

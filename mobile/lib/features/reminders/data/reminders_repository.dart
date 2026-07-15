@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/cache/response_cache.dart';
+import '../../../core/connectivity/connectivity_status.dart';
 import '../domain/reminder.dart';
 
 /// Raised when a reminders call fails (non-2xx, network error). [message]
@@ -32,12 +34,21 @@ abstract class RemindersRepository {
 }
 
 class HttpRemindersRepository implements RemindersRepository {
-  HttpRemindersRepository(this._dio);
+  HttpRemindersRepository(this._dio, {ResponseCache? cache, ConnectivityReporter? connectivity})
+      : _cache = cache ?? InMemoryResponseCache(),
+        _connectivity = connectivity ?? const NoopConnectivityReporter();
 
   final Dio _dio;
+  final ResponseCache _cache;
+  final ConnectivityReporter _connectivity;
+
+  /// Offline read cache key (M3 slice 1) — one per `status`, e.g.
+  /// `"reminders:pending"` (the only status the app currently calls with).
+  String _cacheKeyFor(String status) => 'reminders:$status';
 
   @override
   Future<List<ReminderModel>> list({String status = 'pending'}) async {
+    final cacheKey = _cacheKeyFor(status);
     try {
       final response = await _dio.get<Map<String, Object?>>(
         '/api/v1/reminders',
@@ -45,9 +56,18 @@ class HttpRemindersRepository implements RemindersRepository {
       );
       final body = response.data ?? const <String, Object?>{};
       final rows = body['reminders'];
+      _connectivity.reportOnline();
       if (rows is! List) return const [];
+      await _cache.put(cacheKey, rows);
       return rows.whereType<Map>().map((row) => _parseRow(Map<String, Object?>.from(row))).toList();
     } on DioException catch (error) {
+      final cached = await _cache.get(cacheKey);
+      if (cached is List) {
+        final fetchedAt = await _cache.fetchedAt(cacheKey) ?? DateTime.now();
+        _connectivity.reportOfflineWithCache(fetchedAt);
+        return cached.whereType<Map>().map((row) => _parseRow(Map<String, Object?>.from(row))).toList();
+      }
+      _connectivity.reportOffline();
       throw RemindersException(_messageFor(error), statusCode: error.response?.statusCode);
     }
   }

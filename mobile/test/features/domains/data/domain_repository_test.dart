@@ -21,6 +21,8 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/cache/response_cache.dart';
+import 'package:lifeos/core/connectivity/connectivity_status.dart';
 import 'package:lifeos/features/domains/data/domain_repository.dart';
 import 'package:lifeos/features/domains/domain/domain_descriptor.dart';
 
@@ -51,9 +53,44 @@ class _FixedResponseAdapter implements HttpClientAdapter {
   }
 }
 
+/// Simulates the engine being unreachable (M3 slice 1's offline read cache
+/// fallback path) — dio wraps this in a [DioException] with no `.response`.
+class _UnreachableAdapter implements HttpClientAdapter {
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    throw DioException.connectionError(requestOptions: options, reason: 'no route to host');
+  }
+}
+
 Dio _dioWith(int statusCode, String body) {
   final adapter = _FixedResponseAdapter(statusCode, body);
   return Dio(BaseOptions(baseUrl: 'https://engine.local'))..httpClientAdapter = adapter;
+}
+
+Dio _unreachableDio() => Dio(BaseOptions(baseUrl: 'https://engine.local'))..httpClientAdapter = _UnreachableAdapter();
+
+class _FakeConnectivityReporter implements ConnectivityReporter {
+  final List<String> calls = [];
+  DateTime? lastFetchedAt;
+
+  @override
+  void reportOnline() => calls.add('online');
+
+  @override
+  void reportOfflineWithCache(DateTime fetchedAt) {
+    calls.add('offlineWithCache');
+    lastFetchedAt = fetchedAt;
+  }
+
+  @override
+  void reportOffline() => calls.add('offline');
 }
 
 void main() {
@@ -336,6 +373,66 @@ void main() {
       final entries = await repo.list(health);
 
       expect(entries, isEmpty);
+    });
+  });
+
+  group('HttpDomainRepository offline read cache (M3 slice 1)', () {
+    test('on success, writes through to a per-domain cache key and reports online', () async {
+      final fixture = jsonEncode({
+        'entries': [
+          {'id': 'h1', 'ts': '2026-01-01T10:00:00+00:00', 'title': 'Presión'},
+        ],
+      });
+      final dio = _dioWith(200, fixture);
+      final cache = InMemoryResponseCache();
+      final connectivity = _FakeConnectivityReporter();
+      final repo = HttpDomainRepository(dio, cache: cache, connectivity: connectivity);
+
+      await repo.list(health);
+
+      expect(await cache.get('domains:health:entries'), isNotNull);
+      expect(connectivity.calls, ['online']);
+    });
+
+    test('on network failure with a cached value, falls back to it and reports offlineWithCache', () async {
+      final cache = InMemoryResponseCache();
+      await cache.put('domains:health:entries', [
+        {'id': 'cached1', 'ts': '2026-01-01T10:00:00+00:00', 'title': 'Presión (cache)'},
+      ]);
+      final connectivity = _FakeConnectivityReporter();
+      final repo = HttpDomainRepository(_unreachableDio(), cache: cache, connectivity: connectivity);
+
+      final entries = await repo.list(health);
+
+      expect(entries, hasLength(1));
+      expect(entries[0].title, 'Presión (cache)');
+      expect(connectivity.calls, ['offlineWithCache']);
+      expect(connectivity.lastFetchedAt, isNotNull);
+    });
+
+    test('on network failure with no cached value, still throws and reports offline', () async {
+      final cache = InMemoryResponseCache();
+      final connectivity = _FakeConnectivityReporter();
+      final repo = HttpDomainRepository(_unreachableDio(), cache: cache, connectivity: connectivity);
+
+      await expectLater(() => repo.list(health), throwsA(isA<DomainException>()));
+      expect(connectivity.calls, ['offline']);
+    });
+
+    test('different domains use different cache keys', () async {
+      final fixture = jsonEncode({
+        'entries': [
+          {'id': 'f1', 'ts': '2026-01-01T10:00:00+00:00', 'title': 'Súper'},
+        ],
+      });
+      final dio = _dioWith(200, fixture);
+      final cache = InMemoryResponseCache();
+      final repo = HttpDomainRepository(dio, cache: cache);
+
+      await repo.list(finance);
+
+      expect(await cache.get('domains:finance:entries'), isNotNull);
+      expect(await cache.get('domains:health:entries'), isNull);
     });
   });
 }

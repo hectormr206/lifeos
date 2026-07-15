@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/offline_banner.dart';
 import '../domain/digest.dart';
 import 'insights_notifier.dart';
 
@@ -17,20 +18,27 @@ class InsightsScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Resumen')),
-      body: RefreshIndicator(
-        onRefresh: () => ref.read(insightsNotifierProvider.notifier).refresh(),
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(16),
-          children: [
-            _CadenceToggle(
-              cadence: state.cadence,
-              onChanged: (cadence) => ref.read(insightsNotifierProvider.notifier).setCadence(cadence),
+      body: Column(
+        children: [
+          const OfflineBanner(),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: () => ref.read(insightsNotifierProvider.notifier).refresh(),
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  _CadenceToggle(
+                    cadence: state.cadence,
+                    onChanged: (cadence) => ref.read(insightsNotifierProvider.notifier).setCadence(cadence),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildBody(context, ref, state),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
-            _buildBody(context, ref, state),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

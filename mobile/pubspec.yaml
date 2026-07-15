@@ -50,6 +50,12 @@ dependencies:
   flutter_secure_storage: ^10.3.1
   go_router: ^17.3.0
 
+  # App support directory lookup for the offline read cache's file-backed
+  # impl (M3 slice 1, core/cache/response_cache.dart's FileResponseCache).
+  # Was already resolved transitively (via flutter_secure_storage); made
+  # direct since we import it explicitly now.
+  path_provider: ^2.1.6
+
   # SHA-256 for TLS cert-pinning fingerprint compare (design D5/D6 hardening,
   # core/tls/ca_fingerprint.dart). Was already resolved transitively; made
   # direct because we import it explicitly now.

@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/connectivity/connectivity_status.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
@@ -12,6 +13,15 @@ import 'package:lifeos/features/reminders/data/reminders_repository.dart';
 import 'package:lifeos/features/reminders/domain/reminder.dart';
 import 'package:lifeos/features/reminders/presentation/reminders_notifier.dart';
 import 'package:lifeos/features/reminders/presentation/reminders_screen.dart';
+
+class _FixedConnectivityNotifier extends ConnectivityNotifier {
+  _FixedConnectivityNotifier(this._fixed);
+
+  final ConnectivityStatus _fixed;
+
+  @override
+  ConnectivityStatus build() => _fixed;
+}
 
 class _FakeRemindersRepository implements RemindersRepository {
   _FakeRemindersRepository({this.reminders = const [], this.listError});
@@ -146,5 +156,27 @@ void main() {
 
     expect(repo.lastCancelledId, 'r1');
     expect(repo.listCalls, 2);
+  });
+
+  testWidgets('shows the offline banner when connectivity is offlineWithCache (M3 slice 1)', (tester) async {
+    final reminder =
+        ReminderModel(id: 'r1', whenTs: DateTime.utc(2026, 7, 15, 15), message: 'Llamar al doctor', status: 'pending');
+    final repo = _FakeRemindersRepository(reminders: [reminder]);
+    final fixed = ConnectivityStatus(state: ConnectivityState.offlineWithCache, lastSyncAt: DateTime.now());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          remindersRepositoryProvider.overrideWithValue(repo),
+          connectivityStatusProvider.overrideWith(() => _FixedConnectivityNotifier(fixed)),
+        ],
+        child: const MaterialApp(home: RemindersScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byIcon(Icons.cloud_off), findsOneWidget);
+    expect(find.textContaining('Sin conexión'), findsOneWidget);
   });
 }
