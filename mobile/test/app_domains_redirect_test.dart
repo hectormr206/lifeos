@@ -19,6 +19,10 @@ import 'support/fake_token_store.dart';
 class _FakeDomainRepository implements DomainRepository {
   @override
   Future<List<DomainEntry>> list(DomainDescriptor descriptor) async => const [];
+
+  @override
+  Future<DomainEntry> createEntry(DomainDescriptor descriptor, Map<String, Object?> body) async =>
+      DomainEntry(id: 'x', title: body['title'] as String? ?? '', timestamp: DateTime.now());
 }
 
 void main() {

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_providers.dart';
 import '../../../core/cache/response_cache.dart';
 import '../../../core/connectivity/connectivity_status.dart';
+import '../../../core/outbox/outbox.dart';
 import '../../chat/data/chat_repository.dart';
 import '../../chat/presentation/chat_notifier.dart' show chatRepositoryProvider;
 import '../data/domain_repository.dart';
@@ -10,11 +11,16 @@ import '../domain/domain_descriptor.dart';
 import '../domain/domain_entry.dart';
 
 /// Real [DomainRepository] used app-wide; overridden with a fake in tests.
-/// Wired with the offline read cache + connectivity reporter (M3 slice 1).
+/// Wired with the offline read cache + connectivity reporter (M3 slice 1)
+/// and the offline write outbox + pending-sync reporter (M3 slice 2, same
+/// wiring as `settingsRepositoryProvider`) for structured create (spec
+/// structured-domain-forms).
 final domainRepositoryProvider = Provider<DomainRepository>((ref) => HttpDomainRepository(
       ref.watch(dioProvider),
       cache: ref.watch(responseCacheProvider),
       connectivity: ref.watch(connectivityStatusProvider.notifier),
+      outbox: ref.watch(outboxProvider),
+      pendingSync: ref.watch(pendingSyncCountProvider.notifier),
     ));
 
 /// One domain screen's UI state: the list (loading/data/error) plus the
@@ -26,6 +32,8 @@ class DomainUiState {
     this.error,
     this.capturing = false,
     this.captureError,
+    this.creating = false,
+    this.createError,
   });
 
   final List<DomainEntry> entries;
@@ -34,12 +42,19 @@ class DomainUiState {
   final bool capturing;
   final String? captureError;
 
+  /// Structured create-form sub-state (spec structured-domain-forms) —
+  /// mirrors `capturing`/`captureError`'s shape for the NL quick-capture bar.
+  final bool creating;
+  final String? createError;
+
   DomainUiState copyWith({
     List<DomainEntry>? entries,
     bool? loading,
     String? error,
     bool? capturing,
     String? captureError,
+    bool? creating,
+    String? createError,
   }) =>
       DomainUiState(
         entries: entries ?? this.entries,
@@ -47,6 +62,8 @@ class DomainUiState {
         error: error,
         capturing: capturing ?? this.capturing,
         captureError: captureError,
+        creating: creating ?? this.creating,
+        createError: createError,
       );
 }
 
@@ -112,6 +129,29 @@ class DomainNotifier extends Notifier<DomainUiState> {
       state = state.copyWith(capturing: false, captureError: error.message);
     } catch (error) {
       state = state.copyWith(capturing: false, captureError: 'No se pudo capturar: $error');
+    }
+  }
+
+  /// Structured create (spec structured-domain-forms): POSTs [body] (built
+  /// by `buildDomainEntryBody` from the domain's `DomainEntryForm`) via the
+  /// repository, then prepends the resulting entry to the list — the
+  /// repository already handles the offline-enqueue path (returning a
+  /// best-effort local entry instead of throwing), so this optimistic
+  /// prepend covers both the online AND offline-queued cases the same way.
+  /// Returns `true` on success (including offline-enqueued), `false` on a
+  /// definite rejection from the engine (see [DomainUiState.createError]).
+  Future<bool> createEntry(Map<String, Object?> body) async {
+    state = state.copyWith(creating: true, createError: null);
+    try {
+      final entry = await ref.read(domainRepositoryProvider).createEntry(descriptor, body);
+      state = state.copyWith(creating: false, entries: [entry, ...state.entries]);
+      return true;
+    } on DomainException catch (error) {
+      state = state.copyWith(creating: false, createError: error.message);
+      return false;
+    } catch (error) {
+      state = state.copyWith(creating: false, createError: 'No se pudo guardar: $error');
+      return false;
     }
   }
 }

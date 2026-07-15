@@ -23,6 +23,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/cache/response_cache.dart';
 import 'package:lifeos/core/connectivity/connectivity_status.dart';
+import 'package:lifeos/core/outbox/outbox.dart';
 import 'package:lifeos/features/domains/data/domain_repository.dart';
 import 'package:lifeos/features/domains/domain/domain_descriptor.dart';
 
@@ -435,6 +436,134 @@ void main() {
       expect(await cache.get('domains:health:entries'), isNull);
     });
   });
+
+  group('HttpDomainRepository.createEntry', () {
+    test('POSTs the exact health body to the health list path and parses the created entry', () async {
+      final responseBody = jsonEncode({
+        'id': 'h9',
+        'ts': '2026-01-01T10:00:00+00:00',
+        'kind': 'vital',
+        'title': 'Presión',
+        'data': {'systolic': 120, 'diastolic': 80},
+      });
+      final dio = _dioWith(200, responseBody);
+      final repo = HttpDomainRepository(dio);
+      final body = {
+        'kind': 'vital',
+        'title': 'Presión',
+        'ts': '2026-01-01T10:00:00.000Z',
+        'data': {'systolic': 120, 'diastolic': 80},
+      };
+
+      final entry = await repo.createEntry(health, body);
+
+      final adapter = dio.httpClientAdapter as _FixedResponseAdapter;
+      expect(adapter.lastRequest?.path, '/api/v1/health/entries');
+      expect(adapter.lastRequest?.method, 'POST');
+      expect(adapter.lastRequest?.data, body);
+      expect(entry.id, 'h9');
+      expect(entry.title, 'Presión');
+    });
+
+    test('POSTs the exact finance body to the finance list path', () async {
+      final responseBody = jsonEncode({
+        'id': 'f9',
+        'ts': '2026-01-01T10:00:00+00:00',
+        'kind': 'expense',
+        'amount': 500.0,
+        'title': 'Súper',
+      });
+      final dio = _dioWith(200, responseBody);
+      final repo = HttpDomainRepository(dio);
+      final body = {
+        'kind': 'expense',
+        'title': 'Súper',
+        'amount': 500.0,
+        'ts': '2026-01-01T10:00:00.000Z',
+        'category': 'food',
+      };
+
+      final entry = await repo.createEntry(finance, body);
+
+      final adapter = dio.httpClientAdapter as _FixedResponseAdapter;
+      expect(adapter.lastRequest?.path, '/api/v1/finance/entries');
+      expect(adapter.lastRequest?.data, body);
+      expect(entry.id, 'f9');
+    });
+
+    test('POSTs the exact exercise body to the exercise sessions path', () async {
+      final responseBody = jsonEncode({
+        'id': 'e9',
+        'ts': '2026-01-01T08:00:00+00:00',
+        'kind': 'run',
+        'title': 'Carrera',
+        'duration_minutes': 30,
+      });
+      final dio = _dioWith(200, responseBody);
+      final repo = HttpDomainRepository(dio);
+      final body = {
+        'kind': 'run',
+        'title': 'Carrera',
+        'duration_minutes': 30,
+        'ts': '2026-01-01T08:00:00.000Z',
+      };
+
+      final entry = await repo.createEntry(exercise, body);
+
+      final adapter = dio.httpClientAdapter as _FixedResponseAdapter;
+      expect(adapter.lastRequest?.path, '/api/v1/exercise/sessions');
+      expect(adapter.lastRequest?.data, body);
+      expect(entry.id, 'e9');
+    });
+
+    test('a non-2xx response throws DomainException and does not enqueue to the outbox', () async {
+      final dio = _dioWith(400, jsonEncode({'detail': 'kind, title and ts are required'}));
+      final outbox = InMemoryOutbox();
+      final repo = HttpDomainRepository(dio, outbox: outbox);
+
+      await expectLater(() => repo.createEntry(health, {'title': 'sin kind'}), throwsA(isA<DomainException>()));
+      expect(await outbox.list(), isEmpty);
+    });
+
+    test('on network failure, enqueues the POST to the outbox and returns an optimistic local entry', () async {
+      final outbox = InMemoryOutbox();
+      final connectivity = _FakeConnectivityReporter();
+      final repo = HttpDomainRepository(_unreachableDio(), outbox: outbox, connectivity: connectivity);
+      final body = {'kind': 'vital', 'title': 'Pulso', 'ts': '2026-01-01T10:00:00.000Z'};
+
+      final entry = await repo.createEntry(health, body);
+
+      final queued = await outbox.list();
+      expect(queued, hasLength(1));
+      expect(queued[0].httpMethod, 'POST');
+      expect(queued[0].path, '/api/v1/health/entries');
+      expect(queued[0].jsonBody, body);
+      expect(entry.title, 'Pulso');
+    });
+
+    test('reports the pending sync count after an offline-enqueued create', () async {
+      final outbox = InMemoryOutbox();
+      final pendingCounts = <int>[];
+      final repo = HttpDomainRepository(
+        _unreachableDio(),
+        outbox: outbox,
+        pendingSync: _RecordingPendingSyncReporter(pendingCounts),
+      );
+
+      await repo.createEntry(finance, {'kind': 'expense', 'title': 'Café', 'amount': 50.0});
+
+      expect(pendingCounts, [1]);
+    });
+  });
+}
+
+class _RecordingPendingSyncReporter implements PendingSyncReporter {
+  _RecordingPendingSyncReporter(this.counts);
+
+  final List<int> counts;
+
+  @override
+  void reportPendingCount(int count) => counts.add(count);
 }
 
 /// Small helper so the exercise-sessions test above can assert the exact

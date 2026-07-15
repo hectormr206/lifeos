@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/widgets/offline_banner.dart';
 import '../domain/domain_descriptor.dart';
 import '../domain/domain_entry.dart';
+import '../domain/domain_form_spec.dart';
+import 'domain_entry_form.dart';
 import 'domain_notifier.dart';
 
 /// The generic domain data list screen (design D2's "generic data-table
@@ -37,6 +39,47 @@ class _DomainListScreenState extends ConsumerState<DomainListScreen> {
     _captureController.clear();
   }
 
+  /// Opens the structured create-entry form (spec structured-domain-forms)
+  /// as a modal bottom sheet — the entry point for typed-field capture,
+  /// alongside the NL quick-capture bar above. A [Consumer] inside the sheet
+  /// keeps `creating`/`createError` reactive without rebuilding the whole
+  /// screen. On success (including an offline-enqueued create — the
+  /// repository never throws for that case), the sheet closes and the new
+  /// entry is already visible at the top of the (optimistically-updated)
+  /// list.
+  void _openCreateForm() {
+    final provider = domainNotifierProvider(widget.descriptor);
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+        ),
+        child: SingleChildScrollView(
+          child: Consumer(
+            builder: (context, ref, _) {
+              final state = ref.watch(provider);
+              return DomainEntryForm(
+                spec: domainFormSpecFor(widget.descriptor.key),
+                submitting: state.creating,
+                errorText: state.createError,
+                onSubmit: (body) {
+                  ref.read(provider.notifier).createEntry(body).then((ok) {
+                    if (ok && sheetContext.mounted) Navigator.of(sheetContext).pop();
+                  });
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = domainNotifierProvider(widget.descriptor);
@@ -50,7 +93,16 @@ class _DomainListScreenState extends ConsumerState<DomainListScreen> {
     });
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.descriptor.title)),
+      appBar: AppBar(
+        title: Text(widget.descriptor.title),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.post_add),
+            tooltip: 'Agregar registro',
+            onPressed: _openCreateForm,
+          ),
+        ],
+      ),
       body: Column(
         children: [
           const OfflineBanner(),

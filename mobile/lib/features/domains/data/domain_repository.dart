@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../../core/cache/response_cache.dart';
 import '../../../core/connectivity/connectivity_status.dart';
+import '../../../core/outbox/outbox.dart';
 import '../domain/domain_descriptor.dart';
 import '../domain/domain_entry.dart';
 
@@ -31,16 +32,39 @@ abstract class DomainRepository {
   /// JSON body via `descriptor.listKey` (handles the "entries" vs "sessions"
   /// noun difference), and parses each row into a [DomainEntry].
   Future<List<DomainEntry>> list(DomainDescriptor descriptor);
+
+  /// Creates one entry for [descriptor] from a structured form (spec:
+  /// structured-domain-forms). POSTs [body] (built by
+  /// `buildDomainEntryBody`) to `descriptor.listPath` — verified against
+  /// `axi/src/axi/dashboard.py`, the engine's create endpoint for all 7
+  /// domains is the SAME path as the GET list (`POST /api/v1/health/entries`,
+  /// `POST /api/v1/finance/entries`, etc.), so no separate "create path" is
+  /// needed on [DomainDescriptor]. On a network-class failure, enqueues the
+  /// POST to the offline write outbox (M3 slice 2) and returns a best-effort
+  /// local [DomainEntry] instead of throwing — mirrors
+  /// `HttpSettingsRepository.updateConfig`'s offline-write pattern. A
+  /// definite 4xx/5xx (the engine DID answer, e.g. a validation rejection)
+  /// still throws [DomainException].
+  Future<DomainEntry> createEntry(DomainDescriptor descriptor, Map<String, Object?> body);
 }
 
 class HttpDomainRepository implements DomainRepository {
-  HttpDomainRepository(this._dio, {ResponseCache? cache, ConnectivityReporter? connectivity})
-      : _cache = cache ?? InMemoryResponseCache(),
-        _connectivity = connectivity ?? const NoopConnectivityReporter();
+  HttpDomainRepository(
+    this._dio, {
+    ResponseCache? cache,
+    ConnectivityReporter? connectivity,
+    Outbox? outbox,
+    PendingSyncReporter? pendingSync,
+  })  : _cache = cache ?? InMemoryResponseCache(),
+        _connectivity = connectivity ?? const NoopConnectivityReporter(),
+        _outbox = outbox ?? InMemoryOutbox(),
+        _pendingSync = pendingSync ?? const NoopPendingSyncReporter();
 
   final Dio _dio;
   final ResponseCache _cache;
   final ConnectivityReporter _connectivity;
+  final Outbox _outbox;
+  final PendingSyncReporter _pendingSync;
 
   /// Offline read cache key (M3 slice 1) — one per domain, e.g.
   /// `"domains:health:entries"`.
@@ -85,6 +109,49 @@ class HttpDomainRepository implements DomainRepository {
       timestamp: timestamp,
       subject: row['subject'] as String?,
       raw: row,
+    );
+  }
+
+  @override
+  Future<DomainEntry> createEntry(DomainDescriptor descriptor, Map<String, Object?> body) async {
+    try {
+      final response = await _dio.post<Map<String, Object?>>(descriptor.listPath, data: body);
+      final row = response.data ?? const <String, Object?>{};
+      _connectivity.reportOnline();
+      return _parseRow(row);
+    } on DioException catch (error) {
+      if (isNetworkFailure(error)) {
+        await _outbox.enqueue(
+          httpMethod: 'POST',
+          path: descriptor.listPath,
+          jsonBody: body,
+          kind: '${descriptor.key}_create',
+        );
+        await _reportPendingCount();
+        _connectivity.reportOffline();
+        return _localEntryFrom(body);
+      }
+      throw DomainException(_messageFor(error), statusCode: error.response?.statusCode);
+    }
+  }
+
+  Future<void> _reportPendingCount() async {
+    _pendingSync.reportPendingCount((await _outbox.list()).length);
+  }
+
+  /// Best-effort optimistic entry built from the form [body] itself, used
+  /// when a create is offline-enqueued rather than confirmed by the engine.
+  /// The synthetic `local-` id is never a real entry id — replaced once
+  /// [SyncService] drains the outbox and a subsequent list refresh pulls the
+  /// canonical row.
+  DomainEntry _localEntryFrom(Map<String, Object?> body) {
+    final tsRaw = body['ts'] as String?;
+    final timestamp = tsRaw != null ? (DateTime.tryParse(tsRaw) ?? DateTime.now()) : DateTime.now();
+    return DomainEntry(
+      id: 'local-${DateTime.now().microsecondsSinceEpoch}',
+      title: body['title'] as String? ?? '',
+      timestamp: timestamp,
+      raw: body,
     );
   }
 

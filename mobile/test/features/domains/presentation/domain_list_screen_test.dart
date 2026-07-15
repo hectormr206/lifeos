@@ -30,12 +30,21 @@ class _FakeDomainRepository implements DomainRepository {
   final List<DomainEntry> entries;
   final DomainException? error;
   int listCalls = 0;
+  int createCalls = 0;
+  Map<String, Object?>? lastCreateBody;
 
   @override
   Future<List<DomainEntry>> list(DomainDescriptor descriptor) async {
     listCalls++;
     if (error != null) throw error!;
     return entries;
+  }
+
+  @override
+  Future<DomainEntry> createEntry(DomainDescriptor descriptor, Map<String, Object?> body) async {
+    createCalls++;
+    lastCreateBody = body;
+    return DomainEntry(id: 'created1', title: body['title'] as String? ?? '', timestamp: DateTime.now());
   }
 }
 
@@ -164,6 +173,40 @@ void main() {
     expect(chat.sendCalls, 1);
     expect(chat.lastText, 'presión 120/80');
     expect(repo.listCalls, 2);
+  });
+
+  testWidgets('tapping the structured-add affordance opens the form and submitting POSTs the built body',
+      (tester) async {
+    final finance = domainDescriptors.firstWhere((d) => d.key == 'finance');
+    final repo = _FakeDomainRepository();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [domainRepositoryProvider.overrideWithValue(repo)],
+        child: MaterialApp(home: DomainListScreen(descriptor: finance)),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.post_add));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Título'), findsOneWidget);
+    expect(find.text('Monto'), findsOneWidget);
+
+    await tester.enterText(find.widgetWithText(TextFormField, 'Título'), 'Súper');
+    await tester.enterText(find.widgetWithText(TextFormField, 'Monto'), '500');
+    await tester.ensureVisible(find.widgetWithText(FilledButton, 'Guardar'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Guardar'));
+    await tester.pumpAndSettle();
+
+    expect(repo.createCalls, 1);
+    expect(repo.lastCreateBody!['kind'], 'expense');
+    expect(repo.lastCreateBody!['title'], 'Súper');
+    expect(repo.lastCreateBody!['amount'], 500.0);
+    // The form closes and the new entry appears in the list.
+    expect(find.text('Súper'), findsOneWidget);
   });
 
   testWidgets('shows the offline banner when connectivity is offlineWithCache (M3 slice 1)', (tester) async {

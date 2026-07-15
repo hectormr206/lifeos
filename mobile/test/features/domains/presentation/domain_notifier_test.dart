@@ -13,17 +13,29 @@ import 'package:lifeos/features/domains/domain/domain_entry.dart';
 import 'package:lifeos/features/domains/presentation/domain_notifier.dart';
 
 class _FakeDomainRepository implements DomainRepository {
-  _FakeDomainRepository({this.entries = const [], this.error});
+  _FakeDomainRepository({this.entries = const [], this.error, this.createError, this.createResult});
 
   final List<DomainEntry> entries;
   final DomainException? error;
+  final DomainException? createError;
+  final DomainEntry? createResult;
   int listCalls = 0;
+  int createCalls = 0;
+  Map<String, Object?>? lastCreateBody;
 
   @override
   Future<List<DomainEntry>> list(DomainDescriptor descriptor) async {
     listCalls++;
     if (error != null) throw error!;
     return entries;
+  }
+
+  @override
+  Future<DomainEntry> createEntry(DomainDescriptor descriptor, Map<String, Object?> body) async {
+    createCalls++;
+    lastCreateBody = body;
+    if (createError != null) throw createError!;
+    return createResult ?? DomainEntry(id: 'created1', title: body['title'] as String? ?? '', timestamp: DateTime.now());
   }
 }
 
@@ -175,6 +187,46 @@ void main() {
 
       expect(chatRepo.sendCalls, 0);
       expect(domainRepo.listCalls, 1);
+    });
+  });
+
+  group('DomainNotifier.createEntry (spec structured-domain-forms)', () {
+    test('posts the body via the repository and prepends the created entry to the list', () async {
+      final repo = _FakeDomainRepository(
+        entries: [DomainEntry(id: 'existing', title: 'Viejo', timestamp: DateTime.utc(2026, 1, 1))],
+        createResult: DomainEntry(id: 'new1', title: 'Presión', timestamp: DateTime.utc(2026, 1, 2)),
+      );
+      final container = ProviderContainer(overrides: [domainRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(domainNotifierProvider(descriptor).notifier);
+      await notifier.ready;
+
+      final ok = await notifier.createEntry({'kind': 'vital', 'title': 'Presión'});
+
+      expect(ok, isTrue);
+      expect(repo.createCalls, 1);
+      expect(repo.lastCreateBody, {'kind': 'vital', 'title': 'Presión'});
+      final state = container.read(domainNotifierProvider(descriptor));
+      expect(state.entries.map((e) => e.id), ['new1', 'existing']);
+      expect(state.creating, isFalse);
+      expect(state.createError, isNull);
+    });
+
+    test('a repository failure sets createError and does not touch the entries list', () async {
+      final existing = DomainEntry(id: 'existing', title: 'Viejo', timestamp: DateTime.utc(2026, 1, 1));
+      final repo = _FakeDomainRepository(entries: [existing], createError: DomainException('kind is required'));
+      final container = ProviderContainer(overrides: [domainRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(domainNotifierProvider(descriptor).notifier);
+      await notifier.ready;
+
+      final ok = await notifier.createEntry({'title': 'sin kind'});
+
+      expect(ok, isFalse);
+      final state = container.read(domainNotifierProvider(descriptor));
+      expect(state.createError, 'kind is required');
+      expect(state.entries, [existing]);
+      expect(state.creating, isFalse);
     });
   });
 }
