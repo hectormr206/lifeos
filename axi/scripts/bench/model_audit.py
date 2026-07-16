@@ -34,7 +34,10 @@ agentic (REAL multi-round tool loop with canned web handlers, <=5 rounds,
 forced final JSON synthesis), proactive (autonomous thought quality +
 ESPERAR/NADA restraint discipline), visionclass (posture-style strict-JSON
 vision classification, needs --mmproj), devplan (self-dev director:
-instruction authoring + DONE/NOT DONE goal-satisfaction review).
+instruction authoring + DONE/NOT DONE goal-satisfaction review),
+toolstress (MCP-style tool-protocol robustness: right-tool selection among
+~13 confusable tools, exact nested-JSON args, error-retry recovery, and
+skill-like procedure following with values threaded between calls).
 
 BUILDS ON bench_model.py — spawn/kill/registry/scorer wiring is imported, not
 rewritten. Reuses cpu_sweep.check_deterministic, subjective_judge, and
@@ -134,7 +137,8 @@ VALID_THINKING_MODES = ("none", "off", "on", "budget512")
 VALID_ROLES = ("speed", "brain", "extraction", "domain", "toolcall",
                "vision", "codereview", "embed", "codegen", "conversation",
                "recordsqa", "narration", "longsum", "parsejson",
-               "agentic", "proactive", "visionclass", "devplan")
+               "agentic", "proactive", "visionclass", "devplan",
+               "toolstress")
 
 FAST_SUBSET_SIZE = 12
 FAST_SUBSET_STRIDE = 3
@@ -1533,6 +1537,392 @@ def aggregate_agentic(per_case: list[dict]) -> dict:
     }
 
 
+# ── toolstress role pure helpers (MCP-style tool-protocol robustness) ────────
+
+TOOLSTRESS_MAX_ROUNDS = 6
+TOOLSTRESS_MAX_TOKENS = 1024
+
+# What MCP demands of a model, distilled into a deterministic role: pick the
+# RIGHT tool among many confusable ones, fill deep nested JSON args exactly,
+# recover from tool errors by retrying with corrected args, and follow a
+# skill-like procedure document step by step with values threaded between
+# calls. LifeOS runs no MCP servers today; this measures readiness.
+TOOLSTRESS_SYSTEM_ES = (
+    "Eres Axi, el asistente personal de LifeOS. Tienes HERRAMIENTAS locales "
+    "declaradas en tools; úsalas cuando la petición lo requiera.\n"
+    "- Elige EXACTAMENTE la herramienta correcta: hay varias parecidas y solo "
+    "una es la adecuada para cada petición.\n"
+    "- Llena los argumentos EXACTAMENTE según el esquema de la herramienta "
+    "(objetos anidados, enums y fechas ISO 8601 incluidos).\n"
+    "- Si una herramienta devuelve un error, corrige los argumentos que el "
+    "error señale y reintenta la MISMA herramienta.\n"
+    "- Si este mensaje incluye un PROCEDIMIENTO, ejecuta sus pasos EN ORDEN y "
+    "usa los datos que devuelva cada paso en los pasos siguientes.\n"
+    "- Al terminar, confirma al usuario en una frase corta en español."
+)
+
+# Forced wrap-up nudge when the model exhausts the round cap (tools dropped).
+TOOLSTRESS_WRAPUP_PROMPT = (
+    "Ya no puedes usar más herramientas. Responde ahora al usuario en una "
+    "frase corta en español confirmando qué se hizo (o qué falló)."
+)
+
+
+def _ts_tool(name: str, description: str, properties: dict,
+             required: list[str]) -> dict:
+    """One OpenAI function schema for the toolstress registry."""
+    return {"type": "function", "function": {
+        "name": name, "description": description,
+        "parameters": {"type": "object", "properties": properties,
+                       "required": required}}}
+
+
+_TS_DATE_RANGE = {"type": "object",
+                  "description": "Rango de fechas ISO (YYYY-MM-DD).",
+                  "properties": {"from": {"type": "string"},
+                                 "to": {"type": "string"}},
+                  "required": ["from", "to"]}
+
+# ~12 deliberately confusable tools, offered ALL AT ONCE on every case (the
+# MCP-style stress: a crowded registry of near-neighbours). Separate from the
+# simpler TOOL_SCHEMAS used by the toolcall role.
+TOOLSTRESS_REGISTRY: dict[str, dict] = {
+    "create_reminder": _ts_tool(
+        "create_reminder",
+        "Crea un recordatorio puntual que Axi disparará a la hora indicada.",
+        {"text": {"type": "string", "description": "Qué recordar."},
+         "when_iso": {"type": "string",
+                      "description": "Cuándo, datetime ISO 8601."}},
+        ["text", "when_iso"]),
+    "create_calendar_event": _ts_tool(
+        "create_calendar_event",
+        "Agenda un evento en el calendario con hora de inicio Y de fin.",
+        {"title": {"type": "string"},
+         "start_iso": {"type": "string", "description": "Inicio ISO 8601."},
+         "end_iso": {"type": "string", "description": "Fin ISO 8601."},
+         "location": {"type": "string"},
+         "attendees": {"type": "array", "items": {"type": "string"},
+                       "description": "Nombres de los invitados."}},
+        ["title", "start_iso", "end_iso"]),
+    "create_task": _ts_tool(
+        "create_task",
+        "Añade una tarea pendiente SIN hora a la lista de un proyecto.",
+        {"title": {"type": "string"},
+         "project": {"type": "string"},
+         "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+         "tags": {"type": "array", "items": {"type": "string"}}},
+        ["title", "priority"]),
+    "search_web": _ts_tool(
+        "search_web",
+        "Busca información pública y actual en internet.",
+        {"query": {"type": "string"}}, ["query"]),
+    "search_memory": _ts_tool(
+        "search_memory",
+        "Busca en la memoria personal del usuario (conversaciones, acuerdos y "
+        "personas conocidas).",
+        {"query": {"type": "string"},
+         "domain": {"type": "string",
+                    "enum": ["salud", "finanzas", "agenda", "personas",
+                             "todo"]}},
+        ["query"]),
+    "search_files": _ts_tool(
+        "search_files",
+        "Busca archivos locales por nombre o patrón.",
+        {"pattern": {"type": "string"}, "path": {"type": "string"}},
+        ["pattern"]),
+    "get_health_summary": _ts_tool(
+        "get_health_summary",
+        "Resumen AGREGADO de todas las métricas de salud de los últimos N "
+        "días.",
+        {"days": {"type": "integer",
+                  "description": "Cuántos días hacia atrás."}},
+        ["days"]),
+    "get_health_entries": _ts_tool(
+        "get_health_entries",
+        "Registros CRUDOS de UNA métrica de salud dentro de un rango de "
+        "fechas.",
+        {"metric": {"type": "string",
+                    "enum": ["pressure", "pulse", "weight", "sleep"]},
+         "date_range": _TS_DATE_RANGE},
+        ["metric", "date_range"]),
+    "send_notification": _ts_tool(
+        "send_notification",
+        "Manda una notificación del sistema al PROPIO usuario.",
+        {"message": {"type": "string"},
+         "channel": {"type": "string", "enum": ["push", "email"]}},
+        ["message", "channel"]),
+    "send_message": _ts_tool(
+        "send_message",
+        "Envía un mensaje de chat a OTRA persona.",
+        {"recipient": {"type": "string"}, "text": {"type": "string"}},
+        ["recipient", "text"]),
+    "update_config": _ts_tool(
+        "update_config",
+        "Actualiza la configuración: una sección + un objeto changes "
+        "{clave: valor}.",
+        {"section": {"type": "string"},
+         "changes": {"type": "object",
+                     "description": "Objeto {clave: valor} con los cambios.",
+                     "additionalProperties": True}},
+        ["section", "changes"]),
+    "export_data": _ts_tool(
+        "export_data",
+        "Exporta registros del usuario a un archivo.",
+        {"format": {"type": "string", "enum": ["csv", "json", "pdf"]},
+         "filters": {"type": "object",
+                     "properties": {
+                         "domain": {"type": "string",
+                                    "enum": ["salud", "finanzas", "agenda",
+                                             "todo"]},
+                         "date_range": _TS_DATE_RANGE},
+                     "required": ["domain", "date_range"]}},
+        ["format", "filters"]),
+    "create_expense": _ts_tool(
+        "create_expense",
+        "Registra un gasto; usa split=true y person_id para gastos "
+        "compartidos.",
+        {"amount": {"type": "number"},
+         "category": {"type": "string"},
+         "split": {"type": "boolean"},
+         "person_id": {"type": "string"}},
+        ["amount", "category"]),
+}
+
+
+def toolstress_tool_schemas() -> list[dict]:
+    """The full registry, fixed order — every case offers ALL the tools."""
+    return list(TOOLSTRESS_REGISTRY.values())
+
+
+def build_toolstress_system(case: dict) -> str:
+    """Base system prompt + the case's skill-like procedure doc (if any)."""
+    procedure = case.get("procedure")
+    if procedure:
+        return TOOLSTRESS_SYSTEM_ES + "\n\n" + procedure
+    return TOOLSTRESS_SYSTEM_ES
+
+
+def make_toolstress_handlers(case: dict, call_log: list[dict]) -> dict:
+    """Canned handlers for EVERY registry tool.
+
+    Per-tool case spec (``canned_tools``):
+    - ``first_error``: JSON returned verbatim on the FIRST call to the tool
+      (the error-recovery planted failure); later calls fall through.
+    - ``result``: JSON returned on (subsequent) calls.
+    Tools without a spec return ``{"ok": true, "tool": name}``. Every call is
+    recorded into ``call_log`` as {tool, args} for the scorer.
+    """
+    canned = case.get("canned_tools") or {}
+    counts: dict[str, int] = {}
+
+    def make(name: str):
+        spec = canned.get(name) or {}
+
+        def handler(args: dict) -> str:
+            counts[name] = counts.get(name, 0) + 1
+            call_log.append({"tool": name, "args": dict(args or {})})
+            if counts[name] == 1 and spec.get("first_error") is not None:
+                return json.dumps(spec["first_error"], ensure_ascii=False)
+            result = spec.get("result")
+            if result is None:
+                result = {"ok": True, "tool": name}
+            return json.dumps(result, ensure_ascii=False)
+
+        return handler
+
+    return {name: make(name) for name in TOOLSTRESS_REGISTRY}
+
+
+def run_toolstress_loop(case: dict, chat_fn,
+                        max_rounds: int = TOOLSTRESS_MAX_ROUNDS) -> dict:
+    """Multi-round tool loop against a candidate (agentic-role plumbing).
+
+    Tools are offered every round; canned handlers execute and feed results
+    back as role=tool messages. A model still calling tools after
+    ``max_rounds`` rounds gets the tools DROPPED and TOOLSTRESS_WRAPUP_PROMPT
+    appended as a user turn (forced wrap-up). ``chat_fn(messages, tools)``
+    returns a response message dict — injected so unit tests can script a
+    fake candidate with zero network.
+    """
+    call_log: list[dict] = []
+    handlers = make_toolstress_handlers(case, call_log)
+    tools = toolstress_tool_schemas()
+    messages: list[dict] = [
+        {"role": "system", "content": build_toolstress_system(case)},
+        {"role": "user", "content": case.get("prompt", "")},
+    ]
+    rounds_used = 0
+    for rnd in range(max_rounds + 1):
+        if rnd == max_rounds:  # forced wrap-up: drop tools, nudge
+            messages.append({"role": "user",
+                             "content": TOOLSTRESS_WRAPUP_PROMPT})
+            msg = chat_fn(messages, None) or {}
+            return {"text": (msg.get("content") or "").strip(),
+                    "rounds": rounds_used,
+                    "calls": call_log, "forced_wrapup": True}
+        msg = chat_fn(messages, tools) or {}
+        tool_calls = msg.get("tool_calls") or []
+        if not tool_calls:
+            return {"text": (msg.get("content") or "").strip(),
+                    "rounds": rounds_used,
+                    "calls": call_log, "forced_wrapup": False}
+        rounds_used += 1
+        messages.append({"role": "assistant",
+                         "content": msg.get("content") or "",
+                         "tool_calls": tool_calls})
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                messages.append(execute_canned_tool_call(tc, handlers))
+    # Unreachable (the final round always returns), kept for type-safety.
+    return {"text": "", "rounds": rounds_used, "calls": call_log,
+            "forced_wrapup": True}
+
+
+_TS_MISSING = object()
+
+
+def _ts_nested_lookup(obj, path: str):
+    """Dotted-path lookup into nested dicts: 'filters.date_range.from'."""
+    cur = obj
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return _TS_MISSING
+        cur = cur[part]
+    return cur
+
+
+def _ts_value_matches(expected, actual, exact: bool) -> bool:
+    """Type-aware match for one expected arg value.
+
+    Strings: exact → accent/case-insensitive equality; subset → containment
+    (so 'karla' matches 'Karla Ruiz' and a stringified attendees list).
+    Booleans require a real JSON bool (True never matches 1). Numbers compare
+    numerically (450 matches 450.0 but not '450a').
+    """
+    if actual is _TS_MISSING:
+        return False
+    if isinstance(expected, bool):
+        return isinstance(actual, bool) and actual == expected
+    if isinstance(expected, str):
+        if exact:
+            return _norm(str(actual)) == _norm(expected)
+        return _contains(str(actual), expected)
+    if isinstance(expected, (int, float)):
+        if isinstance(actual, bool):
+            return False
+        try:
+            return float(actual) == float(expected)
+        except (TypeError, ValueError):
+            return False
+    return actual == expected
+
+
+def toolstress_arg_mismatches(args: dict, paths: dict,
+                              exact: bool = False) -> list[str]:
+    """Dotted paths whose expected value does NOT match ``args`` (sorted)."""
+    return sorted(p for p, v in (paths or {}).items()
+                  if not _ts_value_matches(v, _ts_nested_lookup(args or {}, p),
+                                           exact))
+
+
+def score_toolstress_case(case: dict, loop_result: dict) -> dict:
+    """Deterministic per-kind scoring. Kinds and their pass conditions:
+
+    - selection: the expected tool was called, NO forbidden neighbour was
+      called, and some call to it satisfied required_args_subset (containment
+      semantics, nested paths supported).
+    - nested_args: the expected tool was called with EVERY args_exact dotted
+      path matching exactly (accent/case-insensitive for strings).
+    - error_recovery: after the planted first_error the model RETRIED the
+      SAME tool (>=2 calls), a retry satisfied corrected_paths, and the final
+      answer acknowledges the outcome (final_must_mention_any, any-of).
+    - procedure: the call log contains the expected steps as an ORDERED
+      subsequence, each step's args_subset matching — threaded values (ids /
+      ranges returned by earlier canned steps) are checked by exact planted
+      values in later steps' args_subset.
+    """
+    kind = case.get("kind")
+    expected = case.get("expected") or {}
+    calls = loop_result.get("calls") or []
+    text = loop_result.get("text") or ""
+    rounds = loop_result.get("rounds", 0)
+    rounds_ok = rounds <= TOOLSTRESS_MAX_ROUNDS
+    out: dict = {"id": case.get("id"), "kind": kind, "rounds": rounds,
+                 "forced_wrapup": bool(loop_result.get("forced_wrapup"))}
+    tool = expected.get("tool")
+    tool_args = [c.get("args") or {} for c in calls if c.get("tool") == tool]
+
+    if kind == "selection":
+        forbidden_called = sorted(
+            {c.get("tool") for c in calls}
+            & set(expected.get("forbidden_tools") or []))
+        subset = expected.get("required_args_subset") or {}
+        args_ok = any(not toolstress_arg_mismatches(a, subset)
+                      for a in tool_args)
+        selection_ok = bool(tool_args) and not forbidden_called
+        out.update(selection_ok=selection_ok,
+                   forbidden_called=forbidden_called, args_ok=args_ok,
+                   passed=selection_ok and args_ok and rounds_ok)
+    elif kind == "nested_args":
+        exact_paths = expected.get("args_exact") or {}
+        best = min((toolstress_arg_mismatches(a, exact_paths, exact=True)
+                    for a in tool_args),
+                   key=len, default=sorted(exact_paths))
+        args_ok = bool(tool_args) and not best
+        out.update(tool_called=bool(tool_args), mismatched_paths=best,
+                   args_ok=args_ok, passed=args_ok and rounds_ok)
+    elif kind == "error_recovery":
+        corrected = expected.get("corrected_paths") or {}
+        retried = len(tool_args) >= 2
+        recovery_ok = retried and any(
+            not toolstress_arg_mismatches(a, corrected)
+            for a in tool_args[1:])
+        terms = expected.get("final_must_mention_any") or []
+        ack_ok = bool(text.strip()) and (
+            not terms or any(_contains(text, t) for t in terms))
+        out.update(retried=retried, recovery_ok=recovery_ok, ack_ok=ack_ok,
+                   passed=recovery_ok and ack_ok and rounds_ok)
+    elif kind == "procedure":
+        steps = expected.get("steps") or []
+        idx = 0
+        for c in calls:
+            if idx >= len(steps):
+                break
+            step = steps[idx]
+            if (c.get("tool") == step.get("tool")
+                    and not toolstress_arg_mismatches(
+                        c.get("args") or {}, step.get("args_subset") or {})):
+                idx += 1
+        procedure_ok = bool(steps) and idx == len(steps)
+        out.update(steps_completed=idx, steps_total=len(steps),
+                   procedure_ok=procedure_ok,
+                   passed=procedure_ok and rounds_ok)
+    else:
+        out.update(passed=False, error=f"unknown kind {kind!r}")
+    return out
+
+
+def aggregate_toolstress(per_case: list[dict]) -> dict:
+    """Role aggregate. Per-kind rates are pass rates over that kind's cases
+    (0.0 when the kind is absent); pass_rate covers every case."""
+    def rate(sub: list[dict]) -> float:
+        return (round(sum(1 for r in sub if r.get("passed")) / len(sub), 4)
+                if sub else 0.0)
+
+    def by(kind: str) -> list[dict]:
+        return [r for r in per_case if r.get("kind") == kind]
+
+    return {
+        "n": len(per_case),
+        "pass_rate": rate(per_case),
+        "tool_selection_rate": rate(by("selection")),
+        "arg_exactness_rate": rate(by("nested_args")),
+        "recovery_rate": rate(by("error_recovery")),
+        "procedure_rate": rate(by("procedure")),
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+
+
 # ── proactive role pure helpers (autonomous thought quality + restraint) ─────
 
 PROACTIVE_SENTINEL_WAIT = "ESPERAR"   # mirrors autonomous.cron.SENTINEL_WAIT
@@ -1819,16 +2209,17 @@ def _brain_metric(roles: dict) -> Optional[float]:
 def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> str:
     """Side-by-side matrix: newest row per label+tier, key metric per role."""
     latest = newest_per_label_tier(rows)
-    bar = "=" * 190
+    bar = "=" * 199
     lines = [bar, f"  {title}  (newest audit per label+tier)", bar]
     lines.append(
         f"  {'Label':<20} {'tier':<7} {'brain':>6} {'extr%':>6} {'dom%':>6} "
         f"{'tool%':>6} {'vis%':>6} {'rev%':>6} {'code%':>6} {'conv':>6} "
         f"{'recQA%':>6} {'narr':>6} {'lsum%':>6} {'parse%':>6} "
         f"{'agent%':>6} {'proact%':>7} {'vcls%':>6} {'dev%':>6} "
+        f"{'tstress%':>8} "
         f"{'tok/s':>7} {'VRAM MiB':>9} {'thinking':<9}"
     )
-    lines.append("  " + "-" * 186)
+    lines.append("  " + "-" * 195)
     if not latest:
         lines.append("  (audit registry is empty — nothing audited yet)")
         lines.append(bar)
@@ -1856,6 +2247,7 @@ def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> s
             f"{bm._fmt((roles.get('proactive') or {}).get('pass_rate'), '7.1%')} "
             f"{bm._fmt((roles.get('visionclass') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt((roles.get('devplan') or {}).get('pass_rate'), '6.1%')} "
+            f"{bm._fmt((roles.get('toolstress') or {}).get('pass_rate'), '8.1%')} "
             f"{bm._fmt(speed.get('decode_p50_toks_s'), '7.1f')} "
             f"{bm._fmt(vram, '9.0f')} "
             f"{recipe.get('thinking', '-'):<9}"
@@ -1936,7 +2328,7 @@ def build_parser() -> argparse.ArgumentParser:
                    default="speed,brain,extraction,domain,toolcall,codereview,"
                            "vision,codegen,conversation,recordsqa,narration,"
                            "longsum,parsejson,agentic,proactive,visionclass,"
-                           "devplan",
+                           "devplan,toolstress",
                    help=f"Comma list from {list(VALID_ROLES)}; vision/visionclass "
                         "auto-skip without --mmproj; embed needs --embedding")
     p.add_argument("--quick", action="store_true",
@@ -2627,6 +3019,39 @@ def run_agentic_role(port: int, sampling: dict, thinking: str) -> dict:
     return agg
 
 
+def run_toolstress_role(port: int, sampling: dict, thinking: str) -> dict:
+    """tool_stress.jsonl: MCP-style tool-protocol robustness. Multi-round loop
+    (agentic-role plumbing) with the full ~13-tool confusable registry offered
+    every round, canned handlers (incl. planted first-call errors), <=6 tool
+    rounds, forced wrap-up. Deterministic scoring per kind: selection /
+    nested_args / error_recovery / procedure."""
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "tool_stress.jsonl")
+    print(f"  [toolstress] {len(cases)} cases (max {TOOLSTRESS_MAX_ROUNDS} "
+          f"tool rounds, {len(TOOLSTRESS_REGISTRY)} tools offered)",
+          flush=True)
+
+    def chat_fn(messages: list[dict], tools: Optional[list[dict]]) -> dict:
+        return chat_completion(port, messages, sampling=sampling,
+                               thinking=thinking,
+                               max_tokens=TOOLSTRESS_MAX_TOKENS, tools=tools)
+
+    per_case: list[dict] = []
+    for case in cases:
+        result = score_toolstress_case(case, run_toolstress_loop(case, chat_fn))
+        print(f"  [toolstress] {result['id']} ({result['kind']}): "
+              f"rounds={result['rounds']} "
+              f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
+        per_case.append(result)
+    agg = aggregate_toolstress(per_case)
+    print(f"  [toolstress] pass={agg['pass_rate']:.0%} "
+          f"sel={agg['tool_selection_rate']:.0%} "
+          f"args={agg['arg_exactness_rate']:.0%} "
+          f"recov={agg['recovery_rate']:.0%} "
+          f"proc={agg['procedure_rate']:.0%}", flush=True)
+    return agg
+
+
 def run_proactive_role(port: int, sampling: dict, thinking: str) -> dict:
     """proactive_thought.jsonl: the production reflection/elicitation prompt
     verbatim as the user turn (max_tokens=150 like cron's _brain_ask)."""
@@ -2864,6 +3289,10 @@ def run_stage_c(args, recipe: dict, roles: list[str],
                 elif role == "devplan":
                     results["devplan"] = run_devplan_role(args.port,
                                                           sampling, thinking)
+                elif role == "toolstress":
+                    results["toolstress"] = run_toolstress_role(args.port,
+                                                                sampling,
+                                                                thinking)
         finally:
             bm.kill_server(proc)
             wait_vram_drain(vram_baseline)

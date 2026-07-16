@@ -58,9 +58,9 @@ for spec in \
   IFS='|' read -r lbl gguf mmproj <<<"$spec"
   extra=()
   [[ $lbl == gemma* ]] && extra=(--extra-flags --reasoning off)
-  log "BACKFILL $lbl agentic+proactive"
+  log "BACKFILL $lbl agentic+proactive+toolstress"
   "$PY" "$AUDIT" --label "$lbl" --gguf "$gguf" --mmproj "$mmproj" \
-    --tiers cpu --use-recipe --roles agentic,proactive "${extra[@]}" \
+    --tiers cpu --use-recipe --roles agentic,proactive,toolstress "${extra[@]}" \
     > "$LOGDIR/a_backfill_$lbl.log" 2>&1
   log "BACKFILL $lbl exit=$?"
 done

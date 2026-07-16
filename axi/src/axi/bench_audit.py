@@ -32,6 +32,7 @@ _ROLE_HEADLINE_KEYS: dict[str, tuple[str, ...]] = {
     "proactive": ("pass_rate",),
     "visionclass": ("pass_rate",),
     "devplan": ("pass_rate",),
+    "toolstress": ("pass_rate",),
     "speed": ("decode_p50_toks_s",),
 }
 

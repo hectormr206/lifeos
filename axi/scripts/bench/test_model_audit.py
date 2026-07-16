@@ -2208,3 +2208,291 @@ def test_global_extra_flags_reach_every_spawn(monkeypatch):
         port=18080, mmproj=None, extra_flags=["--reasoning", "off"])
     ma._spawn_recipe_server(args, ngl=0, cpu_moe=False, extra_flags=["-t", "8"])
     assert captured["flags"] == ["-t", "8", "--reasoning", "off"]
+
+
+# ── toolstress: MCP-style tool-protocol robustness ───────────────────────────
+
+_TS_SEL_CASE = {
+    "id": "ts-sel-x", "kind": "selection",
+    "prompt": "Recuérdame la pastilla mañana a las 8.",
+    "expected": {"tool": "create_reminder",
+                 "required_args_subset": {"text": "pastilla",
+                                          "when_iso": "2026-07-16T08:00"},
+                 "forbidden_tools": ["create_task", "create_calendar_event"]},
+}
+
+
+def _ts_loop_result(calls, text="Listo.", rounds=1, forced=False):
+    return {"text": text, "rounds": rounds, "calls": calls,
+            "forced_wrapup": forced}
+
+
+def test_toolstress_selection_scoring_right_wrong_and_forbidden():
+    good = ma.score_toolstress_case(_TS_SEL_CASE, _ts_loop_result(
+        [{"tool": "create_reminder",
+          "args": {"text": "Tomar la PASTILLA de la presión",
+                   "when_iso": "2026-07-16T08:00:00"}}]))
+    assert good["passed"] and good["selection_ok"] and good["args_ok"]
+    # Plausible-but-wrong neighbour instead of the right tool → fail.
+    wrong = ma.score_toolstress_case(_TS_SEL_CASE, _ts_loop_result(
+        [{"tool": "create_task",
+          "args": {"title": "pastilla", "priority": "high"}}]))
+    assert not wrong["passed"] and not wrong["selection_ok"]
+    assert wrong["forbidden_called"] == ["create_task"]
+    # Right tool called but a forbidden neighbour ALSO called → fail.
+    both = ma.score_toolstress_case(_TS_SEL_CASE, _ts_loop_result(
+        [{"tool": "create_calendar_event",
+          "args": {"title": "pastilla", "start_iso": "x", "end_iso": "y"}},
+         {"tool": "create_reminder",
+          "args": {"text": "pastilla", "when_iso": "2026-07-16T08:00"}}]))
+    assert not both["passed"]
+    assert both["forbidden_called"] == ["create_calendar_event"]
+    assert both["args_ok"]                       # only selection failed it
+    # Right tool, missing required arg value → args fail the case.
+    bad_args = ma.score_toolstress_case(_TS_SEL_CASE, _ts_loop_result(
+        [{"tool": "create_reminder", "args": {"text": "pastilla"}}]))
+    assert not bad_args["passed"] and bad_args["selection_ok"]
+    assert not bad_args["args_ok"]
+
+
+def test_toolstress_nested_path_matcher_exact_and_missing():
+    args = {"format": "csv",
+            "filters": {"domain": "salud",
+                        "date_range": {"from": "2026-06-01",
+                                       "to": "2026-06-30"}}}
+    paths = {"format": "csv", "filters.domain": "salud",
+             "filters.date_range.from": "2026-06-01",
+             "filters.date_range.to": "2026-06-30"}
+    assert ma.toolstress_arg_mismatches(args, paths, exact=True) == []
+    # Exact string match is accent/case-insensitive but NOT substring.
+    assert ma.toolstress_arg_mismatches(
+        {"format": "CSV"}, {"format": "csv"}, exact=True) == []
+    assert ma.toolstress_arg_mismatches(
+        {"format": "csv y algo más"}, {"format": "csv"}, exact=True) \
+        == ["format"]
+    # ...while subset (exact=False) semantics use containment.
+    assert ma.toolstress_arg_mismatches(
+        {"recipient": "Karla Ruiz"}, {"recipient": "karla"}) == []
+    # Missing nested path + wrong leaf both reported, sorted.
+    broken = dict(args, filters={"domain": "finanzas"})
+    assert ma.toolstress_arg_mismatches(broken, paths, exact=True) == [
+        "filters.date_range.from", "filters.date_range.to", "filters.domain"]
+    # Booleans are type-strict (true never matches 1); numbers compare
+    # numerically (450 == 450.0).
+    assert ma.toolstress_arg_mismatches({"split": 1}, {"split": True}) \
+        == ["split"]
+    assert ma.toolstress_arg_mismatches({"split": True, "amount": 450.0},
+                                        {"split": True, "amount": 450}) == []
+
+
+def test_toolstress_error_recovery_retry_with_fix_vs_give_up():
+    """Real loop + canned handlers: the FIRST export_data call gets the
+    planted error JSON; the retry with corrected args gets the result."""
+    case = {
+        "id": "ts-err-x", "kind": "error_recovery",
+        "prompt": "Exporta mis finanzas de julio en JSON.",
+        "canned_tools": {"export_data": {
+            "first_error": {"ok": False,
+                            "error": "filters.date_range requerido"},
+            "result": {"ok": True, "file": "/exports/f.json"}}},
+        "expected": {"tool": "export_data",
+                     "corrected_paths": {"filters.date_range.from": "2026-07-01",
+                                         "filters.date_range.to": "2026-07-13"},
+                     "final_must_mention_any": ["export", "listo"]},
+    }
+    bad_args = {"format": "json", "filters": {"domain": "finanzas"}}
+    good_args = {"format": "json",
+                 "filters": {"domain": "finanzas",
+                             "date_range": {"from": "2026-07-01",
+                                            "to": "2026-07-13"}}}
+    seen_tool_payloads = []
+
+    def fake_chat(messages, tools):
+        tool_msgs = [m for m in messages if m.get("role") == "tool"]
+        seen_tool_payloads[:] = [json.loads(m["content"]) for m in tool_msgs]
+        if not tool_msgs:
+            return {"content": "",
+                    "tool_calls": [_tool_call("export_data", bad_args)]}
+        if len(tool_msgs) == 1:      # saw the error → retry same tool, fixed
+            return {"content": "",
+                    "tool_calls": [_tool_call("export_data", good_args)]}
+        return {"content": "Listo: exporté tus finanzas a /exports/f.json."}
+
+    result = ma.run_toolstress_loop(case, fake_chat)
+    assert result["rounds"] == 2 and result["forced_wrapup"] is False
+    # First feedback was the planted error, second the canned success.
+    assert seen_tool_payloads[0]["ok"] is False
+    assert seen_tool_payloads[1] == {"ok": True, "file": "/exports/f.json"}
+    score = ma.score_toolstress_case(case, result)
+    assert score["passed"] and score["retried"] and score["recovery_ok"]
+    assert score["ack_ok"]
+    # Give-up (single call, then answers) → fail.
+    give_up = ma.score_toolstress_case(case, _ts_loop_result(
+        [{"tool": "export_data", "args": bad_args}], text="No pude, listo."))
+    assert not give_up["passed"] and not give_up["retried"]
+    # Retry WITHOUT fixing the named arg → fail.
+    no_fix = ma.score_toolstress_case(case, _ts_loop_result(
+        [{"tool": "export_data", "args": bad_args},
+         {"tool": "export_data", "args": bad_args}], text="Listo.", rounds=2))
+    assert not no_fix["passed"] and no_fix["retried"]
+    assert not no_fix["recovery_ok"]
+
+
+def test_toolstress_loop_capped_and_forced_wrapup():
+    """A model that never stops calling tools is capped at 6 rounds, then the
+    tools are dropped and the wrap-up nudge forces a final answer."""
+    final_msgs = []
+
+    def fake_chat(messages, tools):
+        if tools is not None:
+            assert tools == ma.toolstress_tool_schemas()
+            return {"content": "",
+                    "tool_calls": [_tool_call("search_web", {"query": "x"})]}
+        final_msgs.append(list(messages))
+        return {"content": "No lo logré, lo siento."}
+
+    result = ma.run_toolstress_loop(_TS_SEL_CASE, fake_chat)
+    assert result["rounds"] == ma.TOOLSTRESS_MAX_ROUNDS == 6
+    assert result["forced_wrapup"] is True and len(result["calls"]) == 6
+    assert final_msgs[0][-1] == {"role": "user",
+                                 "content": ma.TOOLSTRESS_WRAPUP_PROMPT}
+    assert final_msgs[0][0]["content"] == ma.TOOLSTRESS_SYSTEM_ES
+    assert ma.score_toolstress_case(_TS_SEL_CASE, result)["passed"] is False
+
+
+def test_toolstress_procedure_order_and_threading():
+    case = {
+        "id": "ts-proc-x", "kind": "procedure",
+        "prompt": "Registra el gasto compartido de 450 pesos con Diego.",
+        "procedure": "PROCEDIMIENTO: 1) search_memory 2) create_expense "
+                     "3) send_notification",
+        "canned_tools": {"search_memory": {"result": {
+            "ok": True, "matches": [{"person": "Diego",
+                                     "person_id": "p-042"}]}}},
+        "expected": {"steps": [
+            {"tool": "search_memory", "args_subset": {"query": "diego"}},
+            {"tool": "create_expense",
+             "args_subset": {"amount": 450, "split": True,
+                             "person_id": "p-042"}},
+            {"tool": "send_notification", "args_subset": {"channel": "push"}},
+        ]},
+    }
+    ordered = [
+        {"tool": "search_memory", "args": {"query": "Diego Ramos"}},
+        {"tool": "create_expense",
+         "args": {"amount": 450, "category": "comida", "split": True,
+                  "person_id": "p-042"}},
+        {"tool": "send_notification",
+         "args": {"message": "Gasto registrado", "channel": "push"}},
+    ]
+    good = ma.score_toolstress_case(case, _ts_loop_result(ordered, rounds=3))
+    assert good["passed"] and good["procedure_ok"]
+    assert good["steps_completed"] == good["steps_total"] == 3
+    # The procedure system prompt embeds the skill doc.
+    assert ma.build_toolstress_system(case).endswith(case["procedure"])
+    # Swapped order (expense before the memory lookup) → fail.
+    swapped = ma.score_toolstress_case(
+        case, _ts_loop_result([ordered[1], ordered[0], ordered[2]], rounds=3))
+    assert not swapped["passed"] and swapped["steps_completed"] == 1
+    # Right order but the threaded person_id was NOT reused → fail.
+    unthreaded = [dict(ordered[0]),
+                  {"tool": "create_expense",
+                   "args": {"amount": 450, "category": "comida",
+                            "split": True, "person_id": "p-999"}},
+                  dict(ordered[2])]
+    bad_thread = ma.score_toolstress_case(
+        case, _ts_loop_result(unthreaded, rounds=3))
+    assert not bad_thread["passed"] and bad_thread["steps_completed"] == 1
+
+
+def test_toolstress_aggregate_metrics():
+    per = [
+        {"id": "s1", "kind": "selection", "passed": True},
+        {"id": "s2", "kind": "selection", "passed": False},
+        {"id": "n1", "kind": "nested_args", "passed": True},
+        {"id": "e1", "kind": "error_recovery", "passed": False},
+        {"id": "p1", "kind": "procedure", "passed": True},
+    ]
+    agg = ma.aggregate_toolstress(per)
+    assert agg["n"] == 5
+    assert agg["pass_rate"] == 0.6
+    assert agg["tool_selection_rate"] == 0.5
+    assert agg["arg_exactness_rate"] == 1.0
+    assert agg["recovery_rate"] == 0.0
+    assert agg["procedure_rate"] == 1.0
+    assert agg["failed_ids"] == ["s2", "e1"]
+
+
+def test_tool_stress_golden_set_shape():
+    cases = _load_jsonl(GOLDEN / "tool_stress.jsonl")
+    assert len(cases) == 10
+    kinds = [c["kind"] for c in cases]
+    assert kinds.count("selection") == 4
+    assert kinds.count("nested_args") == 2
+    assert kinds.count("error_recovery") == 2
+    assert kinds.count("procedure") == 2
+    # The confusable registry: >=12 well-formed schemas with the MCP-style
+    # stress surface (nested required objects, enums, an array param).
+    assert len(ma.TOOLSTRESS_REGISTRY) >= 12
+    for name, schema in ma.TOOLSTRESS_REGISTRY.items():
+        assert schema["function"]["name"] == name
+        assert schema["function"]["parameters"]["type"] == "object"
+    export_props = (ma.TOOLSTRESS_REGISTRY["export_data"]["function"]
+                    ["parameters"]["properties"])
+    assert export_props["filters"]["properties"]["date_range"]["required"] \
+        == ["from", "to"]
+    assert export_props["format"]["enum"] == ["csv", "json", "pdf"]
+    assert (ma.TOOLSTRESS_REGISTRY["create_calendar_event"]["function"]
+            ["parameters"]["properties"]["attendees"]["type"]) == "array"
+    for c in cases:
+        assert c["id"] and c["prompt"]
+        exp = c["expected"]
+        if c["kind"] == "procedure":
+            assert c["procedure"]              # the skill-like doc exists
+            step_tools = [s["tool"] for s in exp["steps"]]
+            assert len(exp["steps"]) >= 3
+            assert all(t in ma.TOOLSTRESS_REGISTRY for t in step_tools)
+            # Threaded values in later steps must be plantable: present in
+            # the canned step results, the procedure doc, or the prompt.
+            sources = (json.dumps(c.get("canned_tools") or {},
+                                  ensure_ascii=False)
+                       + c["procedure"] + c["prompt"])
+            for step in exp["steps"][1:]:
+                for v in (step.get("args_subset") or {}).values():
+                    if isinstance(v, str):
+                        assert ma._contains(sources, v), (c["id"], v)
+            continue
+        assert exp["tool"] in ma.TOOLSTRESS_REGISTRY
+        if c["kind"] == "selection":
+            forb = exp["forbidden_tools"]
+            assert 2 <= len(forb) <= 3 and exp["tool"] not in forb
+            assert all(t in ma.TOOLSTRESS_REGISTRY for t in forb)
+            assert exp["required_args_subset"]
+        elif c["kind"] == "nested_args":
+            paths = exp["args_exact"]
+            assert any("." in p for p in paths)   # genuinely nested
+        elif c["kind"] == "error_recovery":
+            spec = c["canned_tools"][exp["tool"]]
+            assert spec["first_error"]["ok"] is False
+            assert spec["first_error"]["error"]
+            assert exp["corrected_paths"]
+            assert exp["final_must_mention_any"]
+
+
+def test_toolstress_wiring_roles_matrix_and_headline():
+    assert "toolstress" in ma.VALID_ROLES
+    assert ma.parse_audit_roles("toolstress") == ["toolstress"]
+    defaults = ma.build_parser().parse_args(["--gguf", "/m.gguf",
+                                             "--label", "m"]).roles
+    assert "toolstress" in defaults
+    rows = [_audit_row("zeta", "vram12", "2026-07-15T00:00:00+00:00",
+                       toolstress={"pass_rate": 0.9,
+                                   "tool_selection_rate": 1.0})]
+    out = ma.build_audit_matrix(rows)
+    assert "tstress%" in out and "90.0%" in out
+    # rows without the role render dashes, not crashes
+    assert "zeta" in ma.build_audit_matrix(
+        [_audit_row("zeta", "cpu", "2026-07-15T00:00:00+00:00")])
+    bench_audit = pytest.importorskip("axi.bench_audit")
+    assert bench_audit._ROLE_HEADLINE_KEYS["toolstress"] == ("pass_rate",)
+    assert "toolstress" in bench_audit._OVERALL_ROLES
