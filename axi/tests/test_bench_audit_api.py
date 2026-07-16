@@ -111,6 +111,30 @@ def test_compute_overall_none_when_no_quality_role_scored():
     assert roles_counted == 0
 
 
+def test_ctxprobe_headline_scalar_and_overall_exclusion():
+    """ctxprobe's headline is ctx_max_current (max context in tokens), a
+    capacity number on a different scale — like speed, it must never be
+    averaged into the 0-1 quality overall."""
+    from axi import bench_audit
+
+    roles = {
+        "brain": {"det": 0.5},
+        "domain": {"overall_accuracy": 0.9},
+        "ctxprobe": {"ctx_max_current": 139264,
+                     "ctx_max": {"vram12": 139264}},
+    }
+    summary = bench_audit.summarize_roles(roles)
+    assert summary["ctxprobe"] == 139264
+    assert "ctxprobe" not in bench_audit._OVERALL_ROLES
+    overall, counted = bench_audit.compute_overall(summary)
+    assert counted == 2                          # brain + domain only
+    assert overall == pytest.approx(0.7)
+    # a skipped probe (cpu tier) yields None, exactly like other roles
+    assert bench_audit.summarize_roles(
+        {"ctxprobe": {"skipped": "cpu tier — no VRAM ceiling"}}
+    )["ctxprobe"] is None
+
+
 def test_load_audit_rows_skips_malformed_lines(tmp_path):
     from axi import bench_audit
 

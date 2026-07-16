@@ -157,6 +157,15 @@ FORBIDDEN_PORTS = {8080, 8081, 8082, 8090, 8091}
 # Tier VRAM budgets in MiB (max VRAM the candidate may occupy).
 TIER_BUDGETS_MIB = {"cpu": 0, "vram4": 3500, "vram8": 7500, "vram12": 11000}
 
+# ctx_max probe (role "ctxprobe"): two-point linear KV extrapolation. Measure
+# VRAM at the SAME launch config with two ctx values, fit a line, and predict
+# the maximum -c that fits each tier budget. No binary search — KV cache
+# growth is linear in ctx for llama.cpp.
+CTX_PROBE_LO = 8192
+CTX_PROBE_HI = 32768
+CTX_PROBE_NOTE_CPU = "cpu tier — no VRAM ceiling"
+CTX_PROBE_NOTE_SLOPE = "slope unmeasurable"
+
 # House default sampling (our standard bench sampling).
 HOUSE_SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
 
@@ -199,7 +208,7 @@ def role_sampling_used(role: str, sampling: Optional[dict],
       per-case seed.
     - everything else: the recipe sampling + thinking, per-case seed.
     """
-    if role in ("speed", "embed"):
+    if role in ("speed", "embed", "ctxprobe"):
         return build_sampling_used(None, "n/a", SEED_POLICY_NA)
     if role in ("extraction", "domain"):
         return build_sampling_used({"temperature": 0.0}, "n/a",
@@ -214,7 +223,7 @@ VALID_ROLES = ("speed", "brain", "extraction", "domain", "toolcall",
                "vision", "codereview", "embed", "codegen", "conversation",
                "recordsqa", "narration", "longsum", "parsejson",
                "agentic", "proactive", "visionclass", "devplan",
-               "toolstress")
+               "toolstress", "ctxprobe")
 
 FAST_SUBSET_SIZE = 12
 FAST_SUBSET_STRIDE = 3
@@ -424,6 +433,48 @@ def pareto_pick(results: list[dict], tier: str,
                 ttft if ttft is not None else float("inf"), i)
 
     return min(eligible, key=key)[1]
+
+
+def compute_ctx_probe(vram_lo_mib: float, vram_hi_mib: float,
+                      ctx_lo: int = CTX_PROBE_LO, ctx_hi: int = CTX_PROBE_HI,
+                      budgets: dict[str, int] = TIER_BUDGETS_MIB,
+                      native_ctx: Optional[int] = None) -> dict:
+    """Two-point linear KV extrapolation → per-tier maximum context.
+
+    Given VRAM measurements (delta vs baseline, MiB) of the SAME launch config
+    at two ctx values:
+      slope = (vram_hi - vram_lo) / (ctx_hi - ctx_lo)        [MiB per token]
+      weights_vram ≈ vram_lo - slope * ctx_lo                 [model weights]
+      ctx_max(tier) = floor((budget - weights_vram) / slope), clamped to ≥0
+
+    ``native_ctx`` (the model's trained context, when known) additionally
+    reports ``ctx_max_native_cap = min(ctx_max, native_ctx)`` per tier.
+    A non-positive slope means the two measurements did not order as KV
+    growth requires → note 'slope unmeasurable', no extrapolation.
+    """
+    result: dict = {
+        "vram_lo_mib": vram_lo_mib,
+        "vram_hi_mib": vram_hi_mib,
+    }
+    slope = (vram_hi_mib - vram_lo_mib) / float(ctx_hi - ctx_lo)
+    result["slope_mib_per_1k_tokens"] = round(slope * 1000.0, 3)
+    if slope <= 0:
+        result["note"] = CTX_PROBE_NOTE_SLOPE
+        result["ctx_max"] = {}
+        return result
+    weights = vram_lo_mib - slope * ctx_lo
+    result["weights_vram_mib"] = round(weights, 1)
+    ctx_max: dict[str, int] = {}
+    for tier, budget in budgets.items():
+        if budget <= 0:  # cpu tier: no VRAM budget, nothing to extrapolate
+            continue
+        ctx_max[tier] = max(0, math.floor((budget - weights) / slope))
+    result["ctx_max"] = ctx_max
+    if native_ctx is not None:
+        result["ctx_max_native_cap"] = {
+            t: min(v, int(native_ctx)) for t, v in ctx_max.items()
+        }
+    return result
 
 
 # ── Stage B (quality tune) pure helpers ──────────────────────────────────────
@@ -2282,10 +2333,18 @@ def _brain_metric(roles: dict) -> Optional[float]:
     return brain.get("final") if brain.get("final") is not None else brain.get("det")
 
 
+def _fmt_ctx_k(roles: dict) -> str:
+    """ctxprobe's ctx_max for the audited tier, in thousands (e.g. '48k')."""
+    val = (roles.get("ctxprobe") or {}).get("ctx_max_current")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return f"{int(val // 1000)}k"
+    return "-"
+
+
 def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> str:
     """Side-by-side matrix: newest row per label+tier, key metric per role."""
     latest = newest_per_label_tier(rows)
-    bar = "=" * 199
+    bar = "=" * 205
     lines = [bar, f"  {title}  (newest audit per label+tier)", bar]
     lines.append(
         f"  {'Label':<20} {'tier':<7} {'brain':>6} {'extr%':>6} {'dom%':>6} "
@@ -2293,9 +2352,9 @@ def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> s
         f"{'recQA%':>6} {'narr':>6} {'lsum%':>6} {'parse%':>6} "
         f"{'agent%':>6} {'proact%':>7} {'vcls%':>6} {'dev%':>6} "
         f"{'tstress%':>8} "
-        f"{'tok/s':>7} {'VRAM MiB':>9} {'thinking':<9}"
+        f"{'ctxK':>5} {'tok/s':>7} {'VRAM MiB':>9} {'thinking':<9}"
     )
-    lines.append("  " + "-" * 195)
+    lines.append("  " + "-" * 201)
     if not latest:
         lines.append("  (audit registry is empty — nothing audited yet)")
         lines.append(bar)
@@ -2324,6 +2383,7 @@ def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> s
             f"{bm._fmt((roles.get('visionclass') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt((roles.get('devplan') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt((roles.get('toolstress') or {}).get('pass_rate'), '8.1%')} "
+            f"{_fmt_ctx_k(roles):>5} "
             f"{bm._fmt(speed.get('decode_p50_toks_s'), '7.1f')} "
             f"{bm._fmt(vram, '9.0f')} "
             f"{recipe.get('thinking', '-'):<9}"
@@ -2354,6 +2414,7 @@ ROLE_HEADLINE_KEYS: dict[str, tuple[str, ...]] = {
     "toolstress": ("pass_rate",),
     "speed": ("decode_p50_toks_s",),
     "embed": ("retrieval_rate",),
+    "ctxprobe": ("ctx_max_current",),
 }
 
 
@@ -2491,6 +2552,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--embedding", action="store_true",
                    help="Enable the embed role (spawns a separate --embedding server)")
     p.add_argument("--ctx", type=int, default=32768, help="Context size (default 32768)")
+    p.add_argument("--native-ctx", type=int, default=None,
+                   help="Model's trained context length; caps the ctxprobe "
+                        "extrapolation as ctx_max_native_cap (default: no cap)")
+    p.add_argument("--ctx-verify", action="store_true",
+                   help="ctxprobe: one confirmation spawn at the predicted "
+                        "ctx_max for the CURRENT tier (default off)")
     p.add_argument("--port", type=int, default=18080,
                    help="Bench port (default 18080; NEVER 8080/8081/8082/8090/8091)")
     p.add_argument("--n-runs", type=int, default=10, help="Speed-role runs (default 10)")
@@ -2574,14 +2641,17 @@ def wait_vram_drain(baseline: Optional[int],
 
 
 def _spawn_recipe_server(args, ngl: int, cpu_moe: bool, extra_flags: list[str],
-                         with_mmproj: bool = True):
-    """Spawn one candidate server; returns (proc, healthy)."""
+                         with_mmproj: bool = True, ctx: Optional[int] = None):
+    """Spawn one candidate server; returns (proc, healthy).
+
+    ``ctx`` overrides args.ctx for this spawn only (the ctxprobe role launches
+    the same config at two different context sizes)."""
     import brain_bench as bb
     # Global --extra-flags apply to EVERY spawn, after the per-cell flags.
     all_flags = list(extra_flags or []) + list(getattr(args, "extra_flags", None) or [])
     argv = bm.build_server_argv(
         server_bin=args.server_bin, gguf=args.gguf, ngl=ngl, cpu_moe=cpu_moe,
-        ctx=args.ctx, port=args.port,
+        ctx=ctx if ctx is not None else args.ctx, port=args.port,
         mmproj=args.mmproj if with_mmproj else None,
         extra_flags=all_flags)
     # Tripwire: refuse to spawn if something ALREADY answers on the bench port.
@@ -3398,8 +3468,74 @@ def run_embed_role(args, recipe: dict, vram_baseline: Optional[int]) -> dict:
         wait_vram_drain(vram_baseline)
 
 
+def run_ctxprobe(args, launch: dict, vram_baseline: Optional[int],
+                 tier: Optional[str] = None) -> dict:
+    """ctx_max probe: two spawns of the SAME launch config at CTX_PROBE_LO and
+    CTX_PROBE_HI, then linear KV extrapolation to every tier VRAM budget.
+
+    Runs OUTSIDE the shared stage-C server lifecycle (like embed) because it
+    owns its own spawns. Per-role isolation: any failure is recorded as a
+    note/skip, never raised. ``tier`` (the audited tier) adds the scalar
+    ``ctx_max_current`` used by --compare and the dashboard headline.
+    """
+    import brain_bench as bb
+    ngl = launch.get("ngl", 0)
+    if ngl == 0:
+        return {"skipped": CTX_PROBE_NOTE_CPU}
+
+    flags = list(launch.get("extra_flags") or [])
+
+    def probe(ctx: int) -> tuple[str, Optional[float]]:
+        """One spawn at ``ctx``; returns (status, vram_delta_mib)."""
+        try:
+            proc, healthy = _spawn_recipe_server(
+                args, ngl, launch.get("cpu_moe", False), flags,
+                with_mmproj=False, ctx=ctx)
+        except Exception as e:  # noqa: BLE001 — bench robustness
+            return f"spawn error: {e}", None
+        try:
+            if not healthy:
+                return "health timeout (OOM or unsupported flags)", None
+            vram, _ = bb.query_vram()
+            if vram is None:
+                return "no-gpu", None
+            return "ok", float(vram - (vram_baseline or 0))
+        finally:
+            bm.kill_server(proc)
+            wait_vram_drain(vram_baseline)
+
+    deltas: dict[int, float] = {}
+    for ctx in (CTX_PROBE_LO, CTX_PROBE_HI):
+        print(f"  [ctxprobe] spawn at ctx={ctx}", flush=True)
+        status, delta = probe(ctx)
+        if status == "no-gpu":
+            return {"skipped": CTX_PROBE_NOTE_CPU}
+        if delta is None:
+            return {"note": f"probe spawn failed at ctx={ctx}: {status} — "
+                            "ctx_max not measured"}
+        deltas[ctx] = delta
+
+    result = compute_ctx_probe(
+        deltas[CTX_PROBE_LO], deltas[CTX_PROBE_HI],
+        native_ctx=getattr(args, "native_ctx", None))
+    result["ctx_max_current"] = (result.get("ctx_max") or {}).get(tier)
+    print(f"  [ctxprobe] slope={result.get('slope_mib_per_1k_tokens')} "
+          f"MiB/1k tok, weights≈{result.get('weights_vram_mib')} MiB, "
+          f"ctx_max={result.get('ctx_max')}", flush=True)
+
+    predicted = result["ctx_max_current"]
+    if getattr(args, "ctx_verify", False) and predicted and predicted > 0:
+        print(f"  [ctxprobe] verify spawn at predicted ctx_max={predicted}",
+              flush=True)
+        status, delta = probe(predicted)
+        result["verify"] = {"ctx": predicted, "ok": status == "ok",
+                            "vram_delta_mib": delta, "status": status}
+    return result
+
+
 def run_stage_c(args, recipe: dict, roles: list[str],
-                vram_baseline: Optional[int]) -> dict:
+                vram_baseline: Optional[int],
+                tier: Optional[str] = None) -> dict:
     """Full role suite at the peak recipe. Sequential; one server at a time."""
     launch = recipe.get("launch") or {}
     sampling = recipe.get("sampling") or dict(HOUSE_SAMPLING)
@@ -3407,7 +3543,7 @@ def run_stage_c(args, recipe: dict, roles: list[str],
     extra = list(launch.get("extra_flags") or []) + thinking_server_flags(thinking)
 
     results: dict = {}
-    main_roles = [r for r in roles if r != "embed"]
+    main_roles = [r for r in roles if r not in ("embed", "ctxprobe")]
     if main_roles:
         proc, healthy = _spawn_recipe_server(
             args, launch.get("ngl", 0), launch.get("cpu_moe", False), extra)
@@ -3492,6 +3628,17 @@ def run_stage_c(args, recipe: dict, roles: list[str],
     if "embed" in roles:
         print("[stage C] role embed (separate --embedding spawn)", flush=True)
         results["embed"] = run_embed_role(args, recipe, vram_baseline)
+
+    if "ctxprobe" in roles:
+        print("[stage C] role ctxprobe (two separate KV-probe spawns)",
+              flush=True)
+        try:
+            results["ctxprobe"] = run_ctxprobe(args, launch, vram_baseline,
+                                               tier=tier)
+        except Exception as role_exc:  # noqa: BLE001 — per-role isolation
+            print(f"  [ctxprobe] ERROR (recorded, audit continues): "
+                  f"{role_exc}", flush=True)
+            results["ctxprobe"] = {"error": str(role_exc)[:300]}
 
     # Per-role sampling record: WITH WHICH config each score was earned
     # (registry answers "good WHERE and WITH WHAT config", not just "good").
@@ -3736,7 +3883,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                   f"{recipes_path}", flush=True)
 
         try:
-            roles_results = run_stage_c(args, recipe, roles, vram_baseline)
+            roles_results = run_stage_c(args, recipe, roles, vram_baseline,
+                                        tier=tier)
         except RuntimeError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             exit_code = 1

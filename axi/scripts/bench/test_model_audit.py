@@ -300,9 +300,10 @@ def test_use_recipe_skips_tuning_and_audits_at_saved_recipe(tmp_path, monkeypatc
 
     seen = {}
 
-    def fake_stage_c(args, recipe, roles, baseline):
+    def fake_stage_c(args, recipe, roles, baseline, tier=None):
         seen["recipe"] = recipe
         seen["roles"] = roles
+        seen["tier"] = tier
         return {"speed": {"decode_p50_toks_s": 40.0}}
 
     monkeypatch.setattr(ma, "run_stage_c", fake_stage_c)
@@ -321,6 +322,7 @@ def test_use_recipe_skips_tuning_and_audits_at_saved_recipe(tmp_path, monkeypatc
     ])
     assert rc == 0
     assert seen["recipe"]["scores"]["stage_b_det"] == 0.8   # saved recipe used
+    assert seen["tier"] == "vram12"          # ctxprobe needs the audited tier
     rows = [json.loads(l) for l in registry.read_text().splitlines()]
     assert len(rows) == 1
     assert rows[0]["label"] == "foo" and rows[0]["tier"] == "vram12"
@@ -2755,3 +2757,132 @@ def test_role_headline_metric_ignores_sampling_used():
     bench_audit = pytest.importorskip("axi.bench_audit")
     for role, keys in bench_audit._ROLE_HEADLINE_KEYS.items():
         assert ma.ROLE_HEADLINE_KEYS[role] == keys
+
+
+# ── ctxprobe: two-point linear KV probe for maximum context per tier ─────────
+
+def test_compute_ctx_probe_exact_two_point_extrapolation():
+    """3000 MiB @8192 / 4500 MiB @32768 → slope 1500/24576 MiB/tok,
+    weights 2500 MiB, and exact per-tier ctx_max values."""
+    out = ma.compute_ctx_probe(3000.0, 4500.0)
+    assert out["vram_lo_mib"] == 3000.0 and out["vram_hi_mib"] == 4500.0
+    assert out["slope_mib_per_1k_tokens"] == pytest.approx(61.035, abs=1e-3)
+    assert out["weights_vram_mib"] == pytest.approx(2500.0)
+    assert out["ctx_max"] == {"vram4": 16384, "vram8": 81920, "vram12": 139264}
+    assert "cpu" not in out["ctx_max"]            # no VRAM ceiling on cpu
+    assert "note" not in out
+    assert "ctx_max_native_cap" not in out        # default: no native cap
+
+
+def test_compute_ctx_probe_native_ctx_caps_per_tier():
+    out = ma.compute_ctx_probe(3000.0, 4500.0, native_ctx=40960)
+    assert out["ctx_max"] == {"vram4": 16384, "vram8": 81920, "vram12": 139264}
+    assert out["ctx_max_native_cap"] == {"vram4": 16384, "vram8": 40960,
+                                         "vram12": 40960}
+
+
+def test_compute_ctx_probe_non_positive_slope_is_unmeasurable():
+    for lo, hi in ((4500.0, 3000.0), (3000.0, 3000.0)):
+        out = ma.compute_ctx_probe(lo, hi)
+        assert out["note"] == ma.CTX_PROBE_NOTE_SLOPE
+        assert out["ctx_max"] == {}
+        assert "weights_vram_mib" not in out
+
+
+def test_compute_ctx_probe_clamps_ctx_max_to_zero():
+    """Weights alone above a tier budget → ctx_max 0 for that tier, never
+    negative. 4100 @8192 / 4700 @32768 → weights 3900 MiB > vram4's 3500."""
+    out = ma.compute_ctx_probe(4100.0, 4700.0)
+    assert out["weights_vram_mib"] == pytest.approx(3900.0)
+    assert out["ctx_max"]["vram4"] == 0
+    assert out["ctx_max"]["vram8"] == 147456
+    assert out["ctx_max"]["vram12"] == 290816
+
+
+def test_run_ctxprobe_cpu_launch_skipped_without_spawn(monkeypatch):
+    import types
+
+    def boom(*a, **k):
+        raise AssertionError("cpu launch must never spawn a probe server")
+
+    monkeypatch.setattr(ma, "_spawn_recipe_server", boom)
+    args = types.SimpleNamespace(native_ctx=None, ctx_verify=False)
+    out = ma.run_ctxprobe(args, {"ngl": 0, "cpu_moe": False}, 500, tier="cpu")
+    assert out == {"skipped": ma.CTX_PROBE_NOTE_CPU}
+
+
+def test_run_ctxprobe_spawn_failure_records_note_no_crash(monkeypatch):
+    import types
+
+    class FakeProc:
+        pid = 1
+        def poll(self): return None
+
+    killed = []
+    monkeypatch.setattr(ma, "_spawn_recipe_server",
+                        lambda *a, **k: (FakeProc(), False))  # health timeout
+    monkeypatch.setattr(ma.bm, "kill_server", lambda p: killed.append(p))
+    monkeypatch.setattr(ma, "wait_vram_drain", lambda *a, **k: None)
+
+    args = types.SimpleNamespace(native_ctx=None, ctx_verify=False)
+    out = ma.run_ctxprobe(args, {"ngl": 999}, 500, tier="vram12")
+    assert "ctx_max" not in out
+    assert f"ctx={ma.CTX_PROBE_LO}" in out["note"]
+    assert killed                                  # server still torn down
+
+
+def test_run_ctxprobe_two_spawns_math_and_verify(monkeypatch):
+    """Happy path: lo/hi spawns at 8192/32768 with the recipe launch config,
+    exact extrapolation, ctx_max_current for the audited tier, and (with
+    --ctx-verify) one confirmation spawn at the predicted ctx_max."""
+    import types
+    import brain_bench as bb
+
+    class FakeProc:
+        pid = 1
+        def poll(self): return None
+
+    spawn_ctxs = []
+    spawn_ngls = []
+
+    def fake_spawn(args, ngl, cpu_moe, extra_flags, with_mmproj=True, ctx=None):
+        spawn_ctxs.append(ctx)
+        spawn_ngls.append(ngl)
+        return FakeProc(), True
+
+    vram_seq = iter([3500, 5000, 11000])           # baseline 500 → deltas
+    monkeypatch.setattr(ma, "_spawn_recipe_server", fake_spawn)
+    monkeypatch.setattr(bb, "query_vram", lambda: (next(vram_seq), None))
+    monkeypatch.setattr(ma.bm, "kill_server", lambda p: None)
+    monkeypatch.setattr(ma, "wait_vram_drain", lambda *a, **k: None)
+
+    args = types.SimpleNamespace(native_ctx=None, ctx_verify=True)
+    launch = {"ngl": 999, "cpu_moe": False, "extra_flags": ["-fa", "on"]}
+    out = ma.run_ctxprobe(args, launch, 500, tier="vram12")
+
+    assert spawn_ctxs == [ma.CTX_PROBE_LO, ma.CTX_PROBE_HI, 139264]
+    assert spawn_ngls == [999, 999, 999]
+    assert out["vram_lo_mib"] == 3000.0 and out["vram_hi_mib"] == 4500.0
+    assert out["ctx_max"] == {"vram4": 16384, "vram8": 81920, "vram12": 139264}
+    assert out["ctx_max_current"] == 139264
+    assert out["verify"] == {"ctx": 139264, "ok": True,
+                             "vram_delta_mib": 10500.0, "status": "ok"}
+
+
+def test_ctxprobe_wiring_role_default_exclusion_and_compare_column():
+    # valid opt-in role, but NOT in the default role list (it double-spawns)
+    assert "ctxprobe" in ma.VALID_ROLES
+    default_roles = ma.build_parser().get_default("roles")
+    assert "ctxprobe" not in default_roles
+    assert ma.parse_audit_roles("speed,ctxprobe") == ["speed", "ctxprobe"]
+    # --compare: ctxK column shows the CURRENT tier's ctx_max in thousands
+    row = _audit_row("probe-model", "vram12", "2026-07-16T00:00:00+00:00",
+                     ctxprobe={"ctx_max_current": 139264,
+                               "ctx_max": {"vram12": 139264}})
+    out = ma.build_audit_matrix([row])
+    assert "ctxK" in out
+    assert "139k" in out
+    # rows without a ctxprobe result render a dash, not a crash
+    bare = ma.build_audit_matrix(
+        [_audit_row("bare", "cpu", "2026-07-16T00:00:00+00:00")])
+    assert "ctxK" in bare

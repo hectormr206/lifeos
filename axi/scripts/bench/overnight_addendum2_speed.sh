@@ -23,9 +23,13 @@ sleep 5
 
 speed() { # label tier gguf extra-args...
   local lbl=$1 tier=$2 gguf=$3; shift 3
-  log "SPEED $lbl $tier"
+  # vram tiers also run the ctx_max probe (two extra spawns); cpu has no
+  # VRAM ceiling so the probe is meaningless there.
+  local roles=speed
+  [ "$tier" != cpu ] && roles=speed,ctxprobe
+  log "SPEED $lbl $tier (roles=$roles)"
   "$PY" "$AUDIT" --label "$lbl" --gguf "$gguf" --tiers "$tier" \
-    --roles speed --thinking-modes none "$@" \
+    --roles "$roles" --thinking-modes none "$@" \
     > "$LOGDIR/speed_${lbl}_${tier}.log" 2>&1
   log "SPEED $lbl $tier exit=$?"
 }

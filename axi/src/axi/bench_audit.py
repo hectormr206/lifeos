@@ -34,12 +34,14 @@ _ROLE_HEADLINE_KEYS: dict[str, tuple[str, ...]] = {
     "devplan": ("pass_rate",),
     "toolstress": ("pass_rate",),
     "speed": ("decode_p50_toks_s",),
+    "ctxprobe": ("ctx_max_current",),
 }
 
-# Roles counted toward the 0-1 "overall" quality average. Speed is excluded:
-# tok/s lives on a different scale entirely, not a 0-1 quality score.
+# Roles counted toward the 0-1 "overall" quality average. Speed and ctxprobe
+# are excluded: tok/s and max-context-tokens live on different scales
+# entirely (capacity, not a 0-1 quality score).
 _OVERALL_ROLES: tuple[str, ...] = tuple(
-    role for role in _ROLE_HEADLINE_KEYS if role != "speed"
+    role for role in _ROLE_HEADLINE_KEYS if role not in ("speed", "ctxprobe")
 )
 
 
