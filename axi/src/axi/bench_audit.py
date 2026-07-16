@@ -40,13 +40,17 @@ _ROLE_HEADLINE_KEYS: dict[str, tuple[str, ...]] = {
     "visionclass": ("pass_rate",),
     "devplan": ("pass_rate",),
     "toolstress": ("pass_rate",),
+    "devbench": ("full_pass_rate",),
     "speed": ("decode_p50_toks_s",),
     "ctxprobe": ("ctx_max_current",),
 }
 
 # Roles counted toward the 0-1 "overall" quality average. Speed and ctxprobe
 # are excluded: tok/s and max-context-tokens live on different scales
-# entirely (capacity, not a 0-1 quality score).
+# entirely (capacity, not a 0-1 quality score). devbench IS included: its
+# full_pass_rate is a 0-1 quality metric like any other role's — being
+# opt-in/heavy changes when it runs, not what it measures, and partial
+# audits already skip missing roles rather than zeroing them.
 _OVERALL_ROLES: tuple[str, ...] = tuple(
     role for role in _ROLE_HEADLINE_KEYS if role not in ("speed", "ctxprobe")
 )

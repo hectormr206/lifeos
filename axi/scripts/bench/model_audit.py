@@ -55,7 +55,21 @@ vision classification, needs --mmproj), devplan (self-dev director:
 instruction authoring + DONE/NOT DONE goal-satisfaction review),
 toolstress (MCP-style tool-protocol robustness: right-tool selection among
 ~13 confusable tools, exact nested-JSON args, error-retry recovery, and
-skill-like procedure following with values threaded between calls).
+skill-like procedure following with values threaded between calls),
+devbench (mini-SWE-bench: each case is a real mini-project — source files +
+a pytest suite that is RED as shipped + a Spanish TASK.md — copied to a fresh
+temp dir; the candidate works in a multi-round tool session with
+read_file/write_file/list_files/run_tests until the suite passes or rounds
+run out; the verdict is the REAL sandboxed pytest run, inapelable).
+
+NOTE devbench is EXPLICIT OPT-IN ONLY (--roles devbench): it is deliberately
+NOT in the default --roles list. Each case is a full agentic coding session
+(up to 12 tool rounds with large read_file/run_tests payloads), so the role
+costs an order of magnitude more wall-clock and tokens than any other role —
+it belongs to its own separate audit night, not the standard sweep. It also
+runs on a DEDICATED server spawn at ctx=65536 (DEVBENCH_CTX) for EVERY model
+— a uniform, fair software-development context — instead of piggybacking the
+shared Stage-C server at the recipe ctx (see run_devbench_dedicated).
 
 BUILDS ON bench_model.py — spawn/kill/registry/scorer wiring is imported, not
 rewritten. Reuses cpu_sweep.check_deterministic, subjective_judge, and
@@ -103,6 +117,7 @@ import json
 import math
 import os
 import re
+import shutil
 import signal
 import statistics
 import subprocess
@@ -329,7 +344,7 @@ VALID_ROLES = ("speed", "brain", "extraction", "domain", "toolcall",
                "vision", "codereview", "embed", "codegen", "conversation",
                "recordsqa", "narration", "longsum", "parsejson",
                "agentic", "proactive", "visionclass", "devplan",
-               "toolstress", "ctxprobe")
+               "toolstress", "devbench", "ctxprobe")
 
 FAST_SUBSET_SIZE = 12
 FAST_SUBSET_STRIDE = 3
@@ -668,6 +683,16 @@ ROLE_TUNE_SUBSET_SIZE = 6
 ROLE_TUNE_SUBSET_STRIDE = 2
 # toolstress is loop-based (each case costs up to 7 model rounds) — tune on 3.
 TOOLSTRESS_TUNE_SUBSET_SIZE = 3
+# devbench is tunable but by far the heaviest role (each case = a full dev
+# session of up to 12 tool rounds with large read_file/run_tests payloads),
+# so its Stage-B2 grid is REDUCED to bound cost: tune on db-01 ONLY (the easy
+# project — a config that can't solve it won't solve the hard ones either, so
+# pass/fail there still separates configs) and cap the variant grid at 3.
+# Thinking-major variant order means the cap keeps all 3 sampling presets
+# (house/warm/precise) at the earliest thinking mode. The full 6-variant x
+# 6-case grid would cost more wall-clock than the rest of Stage B2 combined.
+DEVBENCH_TUNE_MAX_VARIANTS = 3
+DEVBENCH_TUNE_CASE_ID = "db-01"
 
 # Roles NEVER per-role tuned, and WHY. extraction/domain go through the
 # production extractor which pins temperature=0.0/seed=0 itself — tuning them
@@ -2265,6 +2290,303 @@ def aggregate_toolstress(per_case: list[dict]) -> dict:
     }
 
 
+# ── devbench role pure helpers (mini-SWE-bench: tool-driven programming) ─────
+
+DEVBENCH_MAX_ROUNDS = 12          # default tool-round cap (per-case override)
+DEVBENCH_MAX_TOKENS = 2048        # room for a full write_file in one reply
+DEVBENCH_TEST_TIMEOUT_S = 30.0    # per pytest run inside the sandbox
+DEVBENCH_TOOL_OUTPUT_CAP = 2000   # chars of run_tests output fed to the model
+DEVBENCH_READ_CAP = 8000          # chars of read_file content fed to the model
+# Uniform software-development context for EVERY model (user decision:
+# fair comparison — dev sessions need room for big files + test output, and
+# no candidate should win or lose on recipe ctx). devbench therefore runs on
+# its own dedicated server spawn at this ctx (run_devbench_dedicated), NOT on
+# the shared Stage-C server at the recipe ctx — which also keeps the big KV
+# allocation out of every other role's spawn.
+DEVBENCH_CTX = 65536
+
+DEVBENCH_SYSTEM_ES = (
+    "Eres un ingeniero de software senior trabajando en un mini-proyecto "
+    "Python de LifeOS. El proyecto trae una suite pytest que HOY FALLA; tu "
+    "trabajo termina cuando TODA la suite pasa.\n"
+    "Tienes estas herramientas:\n"
+    "- list_files(): lista los archivos del proyecto.\n"
+    "- read_file(path): lee un archivo (ruta relativa al proyecto).\n"
+    "- write_file(path, content): escribe el archivo COMPLETO (reemplaza su "
+    "contenido; no hay edición parcial).\n"
+    "- run_tests(): corre la suite pytest real y te devuelve el resultado.\n"
+    "Reglas:\n"
+    "- Lee TASK.md y el código antes de escribir.\n"
+    "- Modifica SOLO lo necesario; los archivos test_*.py y conftest.py son "
+    "de SOLO LECTURA (reescribir los tests es trampa y está bloqueado).\n"
+    "- Después de cada cambio, corre run_tests para verificar.\n"
+    "- Cuando la suite pase (o no puedas avanzar), responde al usuario en "
+    "una frase corta en español SIN llamar más herramientas."
+)
+
+# Test files are the verdict: the candidate may never rewrite them.
+_DEVBENCH_PROTECTED_RE = re.compile(r"(^|/)(test_[^/]*\.py|conftest\.py)$")
+
+
+def devbench_tool_schemas() -> list[dict]:
+    """The 4 dev-session tools (MCP-style file + test surface)."""
+    return [
+        _ts_tool("list_files",
+                 "Lista todos los archivos del proyecto (rutas relativas).",
+                 {}, []),
+        _ts_tool("read_file",
+                 "Lee un archivo del proyecto y devuelve su contenido.",
+                 {"path": {"type": "string",
+                           "description": "Ruta relativa al proyecto."}},
+                 ["path"]),
+        _ts_tool("write_file",
+                 "Escribe el contenido COMPLETO de un archivo del proyecto "
+                 "(lo crea o lo reemplaza).",
+                 {"path": {"type": "string",
+                           "description": "Ruta relativa al proyecto."},
+                  "content": {"type": "string",
+                              "description": "Contenido completo del "
+                                             "archivo."}},
+                 ["path", "content"]),
+        _ts_tool("run_tests",
+                 "Corre la suite pytest real del proyecto y devuelve el "
+                 "veredicto.",
+                 {}, []),
+    ]
+
+
+def devbench_resolve_path(root: Path, path: str) -> Path:
+    """Resolve ``path`` strictly INSIDE ``root`` (path-traversal guard).
+
+    Rejects absolute paths, ``..`` segments, and anything that resolves
+    outside the project root (symlink escapes included) with ValueError —
+    which the tool loop surfaces to the model as a 'Tool error'.
+    """
+    raw = str(path or "").strip()
+    if not raw:
+        raise ValueError("empty path")
+    if raw.startswith(("/", "\\")) or (len(raw) > 1 and raw[1] == ":"):
+        raise ValueError(f"absolute paths are not allowed: {raw!r}")
+    if ".." in Path(raw).parts:
+        raise ValueError(f"'..' is not allowed in paths: {raw!r}")
+    root_res = Path(root).resolve()
+    target = (root_res / raw).resolve()
+    if target != root_res and root_res not in target.parents:
+        raise ValueError(f"path escapes the project root: {raw!r}")
+    return target
+
+
+_PYTEST_COUNT_RE = re.compile(r"(\d+)\s+(passed|failed|error(?:s)?)")
+
+
+def parse_pytest_counts(output: str) -> dict:
+    """{passed, failed, errors} from a ``pytest -q`` summary line."""
+    counts = {"passed": 0, "failed": 0, "errors": 0}
+    for num, kind in _PYTEST_COUNT_RE.findall(output or ""):
+        key = "errors" if kind.startswith("error") else kind
+        counts[key] = int(num)
+    return counts
+
+
+def run_devbench_tests(project_root: Path,
+                       timeout_s: float = DEVBENCH_TEST_TIMEOUT_S,
+                       python_bin: str = sys.executable,
+                       output_cap: int = DEVBENCH_TOOL_OUTPUT_CAP) -> dict:
+    """Run the project's REAL pytest suite in an isolated sandbox.
+
+    Same containment as the codegen role: ``python -I`` (isolated mode),
+    minimal env, cwd = the temp project copy, own session/process group,
+    hard timeout with a process-GROUP SIGKILL. ``-B`` + ``-p
+    no:cacheprovider`` keep the copy byte-clean between runs — ``-B`` is
+    load-bearing, not hygiene: ``-I`` implies ``-E`` so
+    PYTHONDONTWRITEBYTECODE would be IGNORED, and a stale ``__pycache__``
+    from a previous run can mask the model's fix (same-size rewrite within
+    the same mtime second reuses old bytecode — seen in unit tests). Output
+    fed back to the model is capped at ``output_cap`` chars (tail — the
+    verdict lives at the end).
+    """
+    root = Path(project_root)
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(root),
+           "PYTHONIOENCODING": "utf-8"}
+    proc = subprocess.Popen(
+        [python_bin, "-I", "-B", "-m", "pytest", "-q", "--tb=short",
+         "-p", "no:cacheprovider"],
+        cwd=str(root), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        start_new_session=True, text=True)
+    try:
+        out, _ = proc.communicate(timeout=timeout_s)
+        timed_out = False
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        proc.wait(timeout=5)
+        out, timed_out = "(pytest timed out — killed)", True
+    counts = parse_pytest_counts(out)
+    return {"passed": counts["passed"], "failed": counts["failed"],
+            "errors": counts["errors"], "returncode": proc.returncode,
+            "timed_out": timed_out,
+            "output": (out or "")[-output_cap:]}
+
+
+def make_devbench_handlers(project_root: Path, state: dict,
+                           python_bin: str = sys.executable) -> dict:
+    """Real handlers over the temp project copy (not canned — this role's
+    tools DO things). ``state`` collects files_touched + last_test_result.
+    Guard rails: every path goes through devbench_resolve_path; writes to
+    test_*.py / conftest.py are rejected (the suite is the verdict)."""
+    root = Path(project_root)
+
+    def list_files(args: dict) -> str:
+        del args
+        names = sorted(
+            str(p.relative_to(root)) for p in root.rglob("*")
+            if p.is_file() and "__pycache__" not in p.parts
+            and ".pytest_cache" not in p.parts)
+        return json.dumps({"files": names}, ensure_ascii=False)
+
+    def read_file(args: dict) -> str:
+        target = devbench_resolve_path(root, args.get("path", ""))
+        if not target.is_file():
+            raise ValueError(f"no such file: {args.get('path')!r}")
+        content = target.read_text(encoding="utf-8")
+        truncated = len(content) > DEVBENCH_READ_CAP
+        return json.dumps({"path": args.get("path"),
+                           "content": content[:DEVBENCH_READ_CAP],
+                           "truncated": truncated}, ensure_ascii=False)
+
+    def write_file(args: dict) -> str:
+        rel = str(args.get("path", ""))
+        target = devbench_resolve_path(root, rel)
+        rel_norm = str(target.relative_to(root.resolve()))
+        if _DEVBENCH_PROTECTED_RE.search(rel_norm):
+            raise ValueError(
+                f"{rel_norm} es de solo lectura (los tests son el veredicto)")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(args.get("content", "")), encoding="utf-8")
+        state.setdefault("files_touched", set()).add(rel_norm)
+        return json.dumps({"ok": True, "path": rel_norm}, ensure_ascii=False)
+
+    def run_tests(args: dict) -> str:
+        del args
+        result = run_devbench_tests(root, python_bin=python_bin)
+        state["last_test_result"] = result
+        return json.dumps({"passed": result["passed"],
+                           "failed": result["failed"],
+                           "errors": result["errors"],
+                           "timed_out": result["timed_out"],
+                           "output": result["output"]}, ensure_ascii=False)
+
+    return {"list_files": list_files, "read_file": read_file,
+            "write_file": write_file, "run_tests": run_tests}
+
+
+def run_devbench_loop(case: dict, project_root: Path, chat_fn,
+                      python_bin: str = sys.executable) -> dict:
+    """Drive one dev session against a candidate model.
+
+    Round = one model reply containing tool_calls (like the agentic /
+    toolstress loops). The session ends when the model replies WITHOUT tool
+    calls (it considers itself done) or the per-case ``max_rounds`` cap is
+    hit. Either way the harness then (1) RESTORES the pristine protected
+    test files (belt-and-braces against tampering) and (2) runs one final
+    sandboxed pytest — that verdict is the only one that counts.
+
+    ``chat_fn(messages, tools)`` returns a response message dict — injected
+    so unit tests can script a fake candidate with zero network.
+    """
+    root = Path(project_root)
+    max_rounds = int(case.get("max_rounds", DEVBENCH_MAX_ROUNDS))
+    # Snapshot the protected verdict files before the model can touch anything.
+    protected = {
+        p.relative_to(root): p.read_bytes() for p in root.rglob("*")
+        if p.is_file() and _DEVBENCH_PROTECTED_RE.search(p.as_posix())}
+    state: dict = {"files_touched": set()}
+    handlers = make_devbench_handlers(root, state, python_bin=python_bin)
+    tools = devbench_tool_schemas()
+    task_md = root / "TASK.md"
+    task_text = (task_md.read_text(encoding="utf-8")
+                 if task_md.is_file() else case.get("task_summary", ""))
+    messages: list[dict] = [
+        {"role": "system", "content": DEVBENCH_SYSTEM_ES},
+        {"role": "user", "content": task_text},
+    ]
+    rounds_used = 0
+    hit_cap = False
+    text = ""
+    for _ in range(max_rounds):
+        msg = chat_fn(messages, tools) or {}
+        tool_calls = msg.get("tool_calls") or []
+        if not tool_calls:
+            text = (msg.get("content") or "").strip()
+            break
+        rounds_used += 1
+        messages.append({"role": "assistant",
+                         "content": msg.get("content") or "",
+                         "tool_calls": tool_calls})
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                messages.append(execute_canned_tool_call(tc, handlers))
+    else:
+        hit_cap = True
+    # Restore the pristine suite, then the authoritative final verdict.
+    for rel, blob in protected.items():
+        (root / rel).write_bytes(blob)
+    final = run_devbench_tests(root, python_bin=python_bin)
+    return {"rounds": rounds_used, "hit_cap": hit_cap, "text": text,
+            "files_touched": sorted(state["files_touched"]),
+            "final": final}
+
+
+def score_devbench_case(case: dict, loop_result: dict) -> dict:
+    """Pure scorer on the loop result. The pass bar comes from
+    ``expected.min_tests_passed``: ``"all"`` = zero failures/errors (and at
+    least one test actually ran), or an integer floor of passed tests
+    (errors still disqualify — a broken import passes nothing honestly)."""
+    expected = case.get("expected") or {}
+    final = loop_result.get("final") or {}
+    passed_n = final.get("passed", 0)
+    failed_n = final.get("failed", 0)
+    errors_n = final.get("errors", 0)
+    total = passed_n + failed_n
+    bar = expected.get("min_tests_passed", "all")
+    full_pass = (passed_n >= 1 and failed_n == 0 and errors_n == 0
+                 and not final.get("timed_out"))
+    if bar == "all":
+        ok = full_pass
+    else:
+        ok = passed_n >= int(bar) and errors_n == 0
+    return {"id": case.get("id"),
+            "tests_passed": passed_n, "tests_failed": failed_n,
+            "tests_errors": errors_n, "tests_total": total,
+            "test_pass_ratio": round(passed_n / total, 4) if total else 0.0,
+            "rounds": loop_result.get("rounds", 0),
+            "hit_cap": bool(loop_result.get("hit_cap")),
+            "files_touched": list(loop_result.get("files_touched") or []),
+            "full_pass": full_pass, "passed": ok}
+
+
+def aggregate_devbench(per_case: list[dict]) -> dict:
+    """{n, full_pass_rate, mean_test_pass_ratio, mean_rounds, failed_ids}."""
+    n = len(per_case)
+
+    def rate(hits: int) -> float:
+        return round(hits / n, 4) if n else 0.0
+
+    return {
+        "n": n,
+        "full_pass_rate": rate(sum(1 for r in per_case if r.get("passed"))),
+        "mean_test_pass_ratio": (round(sum(r.get("test_pass_ratio", 0.0)
+                                           for r in per_case) / n, 4)
+                                 if n else 0.0),
+        "mean_rounds": (round(sum(r.get("rounds", 0) for r in per_case) / n, 2)
+                        if n else 0.0),
+        "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
+    }
+
+
 # ── proactive role pure helpers (autonomous thought quality + restraint) ─────
 
 PROACTIVE_SENTINEL_WAIT = "ESPERAR"   # mirrors autonomous.cron.SENTINEL_WAIT
@@ -2559,17 +2881,17 @@ def _fmt_ctx_k(roles: dict) -> str:
 def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> str:
     """Side-by-side matrix: newest row per label+tier, key metric per role."""
     latest = newest_per_label_tier(rows)
-    bar = "=" * 205
+    bar = "=" * 214
     lines = [bar, f"  {title}  (newest audit per label+tier)", bar]
     lines.append(
         f"  {'Label':<20} {'tier':<7} {'brain':>6} {'extr%':>6} {'dom%':>6} "
         f"{'tool%':>6} {'vis%':>6} {'rev%':>6} {'code%':>6} {'conv':>6} "
         f"{'recQA%':>6} {'narr':>6} {'lsum%':>6} {'parse%':>6} "
         f"{'agent%':>6} {'proact%':>7} {'vcls%':>6} {'dev%':>6} "
-        f"{'tstress%':>8} "
+        f"{'tstress%':>8} {'dbench%':>8} "
         f"{'ctxK':>5} {'tok/s':>7} {'VRAM MiB':>9} {'thinking':<9}"
     )
-    lines.append("  " + "-" * 201)
+    lines.append("  " + "-" * 210)
     if not latest:
         lines.append("  (audit registry is empty — nothing audited yet)")
         lines.append(bar)
@@ -2598,6 +2920,7 @@ def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> s
             f"{bm._fmt((roles.get('visionclass') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt((roles.get('devplan') or {}).get('pass_rate'), '6.1%')} "
             f"{bm._fmt((roles.get('toolstress') or {}).get('pass_rate'), '8.1%')} "
+            f"{bm._fmt((roles.get('devbench') or {}).get('full_pass_rate'), '8.1%')} "
             f"{_fmt_ctx_k(roles):>5} "
             f"{bm._fmt(speed.get('decode_p50_toks_s'), '7.1f')} "
             f"{bm._fmt(vram, '9.0f')} "
@@ -2627,6 +2950,7 @@ ROLE_HEADLINE_KEYS: dict[str, tuple[str, ...]] = {
     "visionclass": ("pass_rate",),
     "devplan": ("pass_rate",),
     "toolstress": ("pass_rate",),
+    "devbench": ("full_pass_rate",),
     "speed": ("decode_p50_toks_s",),
     "embed": ("retrieval_rate",),
     "ctxprobe": ("ctx_max_current",),
@@ -2752,7 +3076,9 @@ def build_parser() -> argparse.ArgumentParser:
                            "longsum,parsejson,agentic,proactive,visionclass,"
                            "devplan,toolstress",
                    help=f"Comma list from {list(VALID_ROLES)}; vision/visionclass "
-                        "auto-skip without --mmproj; embed needs --embedding")
+                        "auto-skip without --mmproj; embed needs --embedding; "
+                        "devbench is opt-in only (heavy; dedicated spawn at "
+                        f"ctx={DEVBENCH_CTX} — see module docstring)")
     p.add_argument("--quick", action="store_true",
                    help="Reduced Stage-A grid + skip Stage B (and Stage B2)")
     p.add_argument("--use-recipe", action="store_true",
@@ -3268,6 +3594,35 @@ def make_role_case_scorer(role: str, port: int, mmproj: Optional[str] = None,
                 case, loop_result).get("passed") else 0.0
         return cases, score
 
+    if role == "devbench":
+        # REDUCED tuning surface (cost bound — see DEVBENCH_TUNE_MAX_VARIANTS
+        # rationale): db-01 ONLY, the easy project. Tuning runs on the shared
+        # Stage-B2 server at the recipe ctx — db-01 is tiny, so the recipe ctx
+        # is plenty for the tuning signal; Stage C then runs the full set on
+        # the dedicated ctx=DEVBENCH_CTX spawn.
+        all_cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "dev_bench.jsonl")
+        cases = [c for c in all_cases if c.get("id") == DEVBENCH_TUNE_CASE_ID]
+        if not cases:
+            return None, (f"tuning case {DEVBENCH_TUNE_CASE_ID!r} not found "
+                          "in dev_bench.jsonl")
+
+        def score(case, sampling, thinking):
+            def chat_fn(messages, tools):
+                return chat_completion(port, messages, sampling=sampling,
+                                       thinking=thinking,
+                                       max_tokens=DEVBENCH_MAX_TOKENS,
+                                       tools=tools,
+                                       seed=case_seed(case.get("id")))
+            src = GOLDEN_DIR / case["project_dir"]
+            with tempfile.TemporaryDirectory(prefix="axi-devbench-") as tmp:
+                root = Path(tmp) / "project"
+                shutil.copytree(src, root, ignore=shutil.ignore_patterns(
+                    "__pycache__", ".pytest_cache"))
+                loop_result = run_devbench_loop(case, root, chat_fn)
+            return 1.0 if score_devbench_case(
+                case, loop_result).get("passed") else 0.0
+        return cases, score
+
     return None, f"role {role!r} has no tuner"
 
 
@@ -3307,8 +3662,14 @@ def tune_role_configs(args, recipe: dict, roles: list[str],
         return {}
 
     variants = build_role_tuning_variants(thinking_modes)
+    # devbench sweeps a REDUCED grid (first DEVBENCH_TUNE_MAX_VARIANTS of the
+    # thinking-major list = all 3 sampling presets at the earliest thinking
+    # mode) — each devbench variant costs a full dev session on db-01.
+    devbench_variants = variants[:DEVBENCH_TUNE_MAX_VARIANTS]
     print(f"[stage B2] per-role tuning: {len(prepared)} roles x "
-          f"{len(variants)} variants", flush=True)
+          f"{len(variants)} variants"
+          + (f" (devbench capped at {len(devbench_variants)})"
+             if "devbench" in prepared else ""), flush=True)
     write_status(phase="stageB2")
 
     scored: dict[str, list[dict]] = {role: [] for role in prepared}
@@ -3328,12 +3689,16 @@ def tune_role_configs(args, recipe: dict, roles: list[str],
             wait_vram_drain(vram_baseline)
             for role in scored:
                 for v in group:
+                    if role == "devbench" and v not in devbench_variants:
+                        continue          # reduced grid — cost bound
                     scored[role].append({**v, "score": None,
                                          "error": "health timeout"})
             continue
         try:
             for role, (subset, score_fn) in prepared.items():
                 for v in group:
+                    if role == "devbench" and v not in devbench_variants:
+                        continue          # reduced grid — cost bound
                     write_status(phase="stageB2",
                                  cell_or_variant=f"{role}/{v['name']}")
                     vals: list[float] = []
@@ -3870,6 +4235,50 @@ def run_toolstress_role(port: int, sampling: dict, thinking: str) -> dict:
     return agg
 
 
+def run_devbench_role(port: int, sampling: dict, thinking: str) -> dict:
+    """dev_bench.jsonl: mini-SWE-bench. Each case copies its mini-project to
+    a FRESH temp dir and drives a real multi-round dev session (read_file/
+    write_file/list_files/run_tests) against the candidate; the verdict is
+    the real sandboxed pytest suite after the session. Every round of a case
+    pins that case's deterministic seed (case_seed — same policy as the
+    agentic/toolstress loops); the pytest verdict is inherently deterministic.
+    """
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "dev_bench.jsonl")
+    print(f"  [devbench] {len(cases)} mini-projects (default max "
+          f"{DEVBENCH_MAX_ROUNDS} tool rounds, per-case seeds)", flush=True)
+
+    def make_chat_fn(seed: int):
+        def chat_fn(messages: list[dict], tools: Optional[list[dict]]) -> dict:
+            return chat_completion(port, messages, sampling=sampling,
+                                   thinking=thinking,
+                                   max_tokens=DEVBENCH_MAX_TOKENS,
+                                   tools=tools, seed=seed)
+        return chat_fn
+
+    per_case: list[dict] = []
+    for case in cases:
+        src = GOLDEN_DIR / case["project_dir"]
+        with tempfile.TemporaryDirectory(prefix="axi-devbench-") as tmp:
+            root = Path(tmp) / "project"
+            shutil.copytree(src, root, ignore=shutil.ignore_patterns(
+                "__pycache__", ".pytest_cache"))
+            loop_result = run_devbench_loop(
+                case, root, make_chat_fn(case_seed(case.get("id"))))
+        result = score_devbench_case(case, loop_result)
+        print(f"  [devbench] {result['id']}: "
+              f"tests={result['tests_passed']}/{result['tests_total']} "
+              f"rounds={result['rounds']} files={len(result['files_touched'])} "
+              f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
+        per_case.append(result)
+        _tick("devbench", len(per_case), len(cases))
+    agg = aggregate_devbench(per_case)
+    print(f"  [devbench] full_pass={agg['full_pass_rate']:.0%} "
+          f"test_ratio={agg['mean_test_pass_ratio']:.0%} "
+          f"rounds={agg['mean_rounds']}", flush=True)
+    return agg
+
+
 def run_proactive_role(port: int, sampling: dict, thinking: str) -> dict:
     """proactive_thought.jsonl: the production reflection/elicitation prompt
     verbatim as the user turn (max_tokens=150 like cron's _brain_ask)."""
@@ -4042,6 +4451,41 @@ def run_embed_role(args, recipe: dict, vram_baseline: Optional[int]) -> dict:
         wait_vram_drain(vram_baseline)
 
 
+def run_devbench_dedicated(args, recipe: dict, cfg: tuple[dict, str],
+                           vram_baseline: Optional[int]) -> dict:
+    """devbench on its OWN server spawn at ctx=DEVBENCH_CTX (65536).
+
+    Runs OUTSIDE the shared stage-C server lifecycle (embed/ctxprobe
+    pattern) because the role needs a UNIFORM dev context for every model
+    (user decision: fair software-development comparison, independent of the
+    recipe ctx) — and spawning it separately keeps the big KV allocation out
+    of every other role's server. Launch config is otherwise the recipe's
+    (ngl/cpu_moe/extra_flags + the role's own thinking server flags).
+    ``cfg`` is the (sampling, thinking) pair from role_config_for.
+    """
+    launch = recipe.get("launch") or {}
+    sampling, thinking = cfg
+    extra = list(launch.get("extra_flags") or [])
+    for flag in thinking_server_flags(thinking):
+        if flag not in extra:
+            extra.append(flag)
+    proc, healthy = _spawn_recipe_server(
+        args, launch.get("ngl", 0), launch.get("cpu_moe", False), extra,
+        with_mmproj=False, ctx=DEVBENCH_CTX)
+    if not healthy:
+        bm.kill_server(proc)
+        wait_vram_drain(vram_baseline)
+        return {"skipped": f"devbench skipped: server unhealthy at "
+                           f"ctx={DEVBENCH_CTX} (KV may not fit this tier)"}
+    try:
+        result = run_devbench_role(args.port, sampling, thinking)
+        result["ctx"] = DEVBENCH_CTX
+        return result
+    finally:
+        bm.kill_server(proc)
+        wait_vram_drain(vram_baseline)
+
+
 def run_ctxprobe(args, launch: dict, vram_baseline: Optional[int],
                  tier: Optional[str] = None) -> dict:
     """ctx_max probe: two spawns of the SAME launch config at CTX_PROBE_LO and
@@ -4139,7 +4583,10 @@ def run_stage_c(args, recipe: dict, roles: list[str],
                      roles_pending=[r for r in roles
                                     if r != role and r not in done_roles])
 
-    main_roles = [r for r in roles if r not in ("embed", "ctxprobe")]
+    # embed/ctxprobe/devbench own their spawns: embed needs --embedding,
+    # ctxprobe probes two ctx points, devbench runs at ctx=DEVBENCH_CTX.
+    main_roles = [r for r in roles
+                  if r not in ("embed", "ctxprobe", "devbench")]
     if main_roles:
         proc, healthy = _spawn_recipe_server(
             args, launch.get("ngl", 0), launch.get("cpu_moe", False), extra)
@@ -4242,6 +4689,19 @@ def run_stage_c(args, recipe: dict, roles: list[str],
                   f"{role_exc}", flush=True)
             results["ctxprobe"] = {"error": str(role_exc)[:300]}
         done_roles.append("ctxprobe")
+
+    if "devbench" in roles:
+        print(f"[stage C] role devbench (dedicated spawn at "
+              f"ctx={DEVBENCH_CTX})", flush=True)
+        _status_role_start("devbench")
+        try:
+            results["devbench"] = run_devbench_dedicated(
+                args, recipe, role_cfg["devbench"], vram_baseline)
+        except Exception as role_exc:  # noqa: BLE001 — per-role isolation
+            print(f"  [devbench] ERROR (recorded, audit continues): "
+                  f"{role_exc}", flush=True)
+            results["devbench"] = {"error": str(role_exc)[:300]}
+        done_roles.append("devbench")
 
     # Per-role sampling record: WITH WHICH config each score was earned
     # (registry answers "good WHERE and WITH WHAT config", not just "good").

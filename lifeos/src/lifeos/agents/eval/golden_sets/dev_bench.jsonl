@@ -1,0 +1,11 @@
+// dev_bench v1 (2026-07) — mini-SWE-bench: real tool-driven programming.
+// Each case is a mini-project under devbench_projects/<id>/ (source files +
+// a pytest suite that is RED as shipped + TASK.md in Spanish). The candidate
+// works in a multi-round tool session (read_file/write_file/list_files/
+// run_tests) inside a fresh temp copy; the verdict is the REAL pytest suite.
+// expected.min_tests_passed: "all" = zero failures/errors, or an integer N.
+{"id": "db-01", "project_dir": "devbench_projects/db-01", "task_summary": "easy: implement one missing function (moving_average) from a precise spec; 4 red tests", "max_rounds": 12, "expected": {"min_tests_passed": "all"}}
+{"id": "db-02", "project_dir": "devbench_projects/db-02", "task_summary": "medium: fix a subtle off-by-one in slots.py plus a boundary bug in booking.overlaps; tests encode the truth", "max_rounds": 12, "expected": {"min_tests_passed": "all"}}
+{"id": "db-03", "project_dir": "devbench_projects/db-03", "task_summary": "medium: add an optional ISO-date feature across parser + formatter without breaking 4 green regression tests", "max_rounds": 12, "expected": {"min_tests_passed": "all"}}
+{"id": "db-04", "project_dir": "devbench_projects/db-04", "task_summary": "hard: refactor-under-contract — dedupe drifted copy-paste AND satisfy a fetch_price call-count contract (once per distinct product)", "max_rounds": 12, "expected": {"min_tests_passed": "all"}}
+{"id": "db-05", "project_dir": "devbench_projects/db-05", "task_summary": "hard: debug from a production traceback; the symptom is in notifier/alerts but the root cause is in settings.py (INI strings never coerced)", "max_rounds": 12, "expected": {"min_tests_passed": "all"}}

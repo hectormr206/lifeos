@@ -2508,6 +2508,436 @@ def test_toolstress_wiring_roles_matrix_and_headline():
     assert "toolstress" in bench_audit._OVERALL_ROLES
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# devbench role (mini-SWE-bench: tool-driven programming)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _write_mini_project(root):
+    """Tiny broken fixture: add() is wrong; one test red, one green."""
+    (root / "calc.py").write_text(
+        "def add(a, b):\n    return a - b\n\n"
+        "def sub(a, b):\n    return a - b\n", encoding="utf-8")
+    (root / "test_calc.py").write_text(
+        "from calc import add, sub\n\n"
+        "def test_add():\n    assert add(2, 3) == 5\n\n"
+        "def test_sub():\n    assert sub(5, 3) == 2\n", encoding="utf-8")
+    (root / "TASK.md").write_text(
+        "# Tarea\nCorrige add() en calc.py.\n", encoding="utf-8")
+
+
+_CALC_FIXED = ("def add(a, b):\n    return a + b\n\n"
+               "def sub(a, b):\n    return a - b\n")
+
+
+def test_devbench_path_traversal_guard(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    assert ma.devbench_resolve_path(root, "ok.py") == (root / "ok.py").resolve()
+    assert ma.devbench_resolve_path(root, "pkg/mod.py").name == "mod.py"
+    for bad in ("../outside.py", "a/../../etc/passwd", "/etc/passwd",
+                "..", "sub/../../x.py", ""):
+        with pytest.raises(ValueError):
+            ma.devbench_resolve_path(root, bad)
+    # And via the real handler surface: errors become model-visible strings.
+    handlers = ma.make_devbench_handlers(root, {})
+    msg = ma.execute_canned_tool_call(
+        _tool_call("read_file", {"path": "../secrets"}), handlers)
+    assert msg["content"].startswith("Tool error")
+    # Test files are read-only through write_file (the suite is the verdict).
+    msg = ma.execute_canned_tool_call(
+        _tool_call("write_file", {"path": "test_calc.py", "content": "pass"}),
+        handlers)
+    assert msg["content"].startswith("Tool error")
+    assert not (root / "test_calc.py").exists()
+
+
+def test_devbench_run_tests_sandbox_failing_then_fixed(tmp_path):
+    """Real pytest execution in the sandbox: red as shipped, green after fix."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _write_mini_project(root)
+    red = ma.run_devbench_tests(root)
+    assert red["failed"] == 1 and red["passed"] == 1
+    assert red["timed_out"] is False and red["returncode"] != 0
+    assert len(red["output"]) <= ma.DEVBENCH_TOOL_OUTPUT_CAP
+    assert "test_add" in red["output"]          # the model sees WHAT failed
+    (root / "calc.py").write_text(_CALC_FIXED, encoding="utf-8")
+    green = ma.run_devbench_tests(root)
+    assert green["failed"] == 0 and green["passed"] == 2
+    assert green["returncode"] == 0
+
+
+def test_devbench_loop_scripted_candidate_fixes_project(tmp_path):
+    """A scripted fake candidate lists, reads, writes the fix, verifies, and
+    stops — the loop's final verdict is the real pytest run."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _write_mini_project(root)
+    script = iter([
+        {"content": "", "tool_calls": [_tool_call("list_files", {})]},
+        {"content": "", "tool_calls": [_tool_call("read_file",
+                                                  {"path": "calc.py"})]},
+        {"content": "", "tool_calls": [_tool_call(
+            "write_file", {"path": "calc.py", "content": _CALC_FIXED})]},
+        {"content": "", "tool_calls": [_tool_call("run_tests", {})]},
+        {"content": "Listo: la suite pasa."},
+    ])
+    seen_tool_msgs = []
+
+    def fake_chat(messages, tools):
+        assert tools == ma.devbench_tool_schemas()
+        assert messages[0]["content"] == ma.DEVBENCH_SYSTEM_ES
+        assert "Corrige add()" in messages[1]["content"]   # TASK.md as user turn
+        seen_tool_msgs.extend(m for m in messages if m.get("role") == "tool")
+        return next(script)
+
+    case = {"id": "x", "max_rounds": 12,
+            "expected": {"min_tests_passed": "all"}}
+    loop = ma.run_devbench_loop(case, root, fake_chat)
+    assert loop["rounds"] == 4 and loop["hit_cap"] is False
+    assert loop["files_touched"] == ["calc.py"]
+    assert loop["final"]["failed"] == 0 and loop["final"]["passed"] == 2
+    # The model actually saw file content and a test verdict along the way.
+    contents = [m["content"] for m in seen_tool_msgs]
+    assert any('"calc.py"' in c and "def add" in c for c in contents)
+    assert any('"failed": 0' in c for c in contents)
+    result = ma.score_devbench_case(case, loop)
+    assert result["passed"] and result["full_pass"]
+    assert result["tests_total"] == 2 and result["test_pass_ratio"] == 1.0
+
+
+def test_devbench_loop_max_rounds_cap_and_pristine_test_restore(tmp_path):
+    """A model that loops forever is capped at max_rounds; and even if the
+    suite is clobbered MID-SESSION (outside the guarded write_file path),
+    the final verdict runs against the restored pristine tests."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _write_mini_project(root)
+    pristine = (root / "test_calc.py").read_text(encoding="utf-8")
+    tampered = "def test_free():\n    assert True\n"
+
+    def endless_and_tampering(messages, tools):
+        # Simulate an escape from the write guard: clobber the suite directly
+        # after the session snapshot was taken.
+        (root / "test_calc.py").write_text(tampered, encoding="utf-8")
+        return {"content": "", "tool_calls": [_tool_call("read_file",
+                                                         {"path": "calc.py"})]}
+
+    case = {"id": "x", "max_rounds": 3, "expected": {"min_tests_passed": "all"}}
+    loop = ma.run_devbench_loop(case, root, endless_and_tampering)
+    assert loop["rounds"] == 3 and loop["hit_cap"] is True
+    # The pristine suite was restored before the final verdict...
+    assert (root / "test_calc.py").read_text(encoding="utf-8") == pristine
+    # ...so the tampering bought nothing: the real red test still fails.
+    assert loop["final"]["failed"] == 1
+    assert ma.score_devbench_case(case, loop)["passed"] is False
+
+
+def test_devbench_scorer_min_tests_and_aggregate():
+    case_all = {"id": "a", "expected": {"min_tests_passed": "all"}}
+    case_n = {"id": "b", "expected": {"min_tests_passed": 3}}
+    green = {"rounds": 2, "files_touched": ["m.py"],
+             "final": {"passed": 4, "failed": 0, "errors": 0,
+                       "timed_out": False}}
+    partial = {"rounds": 5, "files_touched": [],
+               "final": {"passed": 3, "failed": 1, "errors": 0,
+                         "timed_out": False}}
+    broken = {"rounds": 1, "files_touched": ["m.py"],
+              "final": {"passed": 0, "failed": 0, "errors": 1,
+                        "timed_out": False}}
+    assert ma.score_devbench_case(case_all, green)["passed"] is True
+    assert ma.score_devbench_case(case_all, partial)["passed"] is False
+    assert ma.score_devbench_case(case_n, partial)["passed"] is True   # 3 >= 3
+    assert ma.score_devbench_case(case_n, broken)["passed"] is False   # errors
+    # zero tests run never counts as "all passing"
+    empty = {"rounds": 0, "files_touched": [],
+             "final": {"passed": 0, "failed": 0, "errors": 0,
+                       "timed_out": False}}
+    assert ma.score_devbench_case(case_all, empty)["passed"] is False
+    agg = ma.aggregate_devbench([
+        {"id": "a", "passed": True, "test_pass_ratio": 1.0, "rounds": 4},
+        {"id": "b", "passed": False, "test_pass_ratio": 0.75, "rounds": 12},
+        {"id": "c", "passed": True, "test_pass_ratio": 1.0, "rounds": 6},
+        {"id": "d", "passed": False, "test_pass_ratio": 0.5, "rounds": 2},
+    ])
+    assert agg["n"] == 4
+    assert agg["full_pass_rate"] == 0.5
+    assert agg["mean_test_pass_ratio"] == 0.8125
+    assert agg["mean_rounds"] == 6.0
+    assert agg["failed_ids"] == ["b", "d"]
+
+
+def test_devbench_parse_pytest_counts():
+    assert ma.parse_pytest_counts("4 failed, 2 passed in 0.02s") == \
+        {"passed": 2, "failed": 4, "errors": 0}
+    assert ma.parse_pytest_counts("6 passed in 0.01s") == \
+        {"passed": 6, "failed": 0, "errors": 0}
+    assert ma.parse_pytest_counts("1 error in 0.01s")["errors"] == 1
+    assert ma.parse_pytest_counts("") == {"passed": 0, "failed": 0, "errors": 0}
+
+
+def test_devbench_tool_schemas_shape():
+    schemas = ma.devbench_tool_schemas()
+    names = [s["function"]["name"] for s in schemas]
+    assert names == ["list_files", "read_file", "write_file", "run_tests"]
+    write = next(s for s in schemas if s["function"]["name"] == "write_file")
+    assert write["function"]["parameters"]["required"] == ["path", "content"]
+    for s in schemas:
+        assert s["type"] == "function"
+        assert s["function"]["parameters"]["type"] == "object"
+
+
+def test_dev_bench_golden_set_and_fixture_projects_are_red_as_shipped(tmp_path):
+    """Golden-set shape + THE core fixture invariant: every mini-project's
+    suite must FAIL as shipped (run for real on a temp copy), otherwise the
+    role measures nothing."""
+    import shutil
+    cases = _load_jsonl(GOLDEN / "dev_bench.jsonl")
+    assert [c["id"] for c in cases] == ["db-01", "db-02", "db-03",
+                                       "db-04", "db-05"]
+    for case in cases:
+        assert case["task_summary"]
+        assert isinstance(case["max_rounds"], int) and case["max_rounds"] >= 1
+        assert case["expected"]["min_tests_passed"] == "all"
+        src = GOLDEN / case["project_dir"]
+        assert src.is_dir(), src
+        assert (src / "TASK.md").read_text(encoding="utf-8").strip()
+        py_files = [p for p in src.iterdir() if p.suffix == ".py"]
+        test_files = [p for p in py_files if p.name.startswith("test_")]
+        source_files = [p for p in py_files if not p.name.startswith("test_")]
+        assert test_files, case["id"]
+        assert 1 <= len(source_files) <= 4, case["id"]
+        # RED as shipped: >=1 failing test, and >=1 passing (a suite that is
+        # 100% red gives no regression pressure).
+        copy = tmp_path / case["id"]
+        shutil.copytree(src, copy)
+        verdict = ma.run_devbench_tests(copy)
+        assert verdict["failed"] >= 1, (case["id"], verdict["output"])
+        assert verdict["passed"] >= 1, (case["id"], verdict["output"])
+        assert verdict["errors"] == 0, (case["id"], verdict["output"])
+    # The fixture tree carries a collection guard so repo-wide pytest sweeps
+    # never trip over the red-by-design suites.
+    guard = GOLDEN / "devbench_projects" / "conftest.py"
+    assert "collect_ignore_glob" in guard.read_text(encoding="utf-8")
+
+
+def test_devbench_wiring_matrix_headline_and_default_roles_exclusion():
+    assert "devbench" in ma.VALID_ROLES
+    assert ma.parse_audit_roles("devbench") == ["devbench"]
+    # EXPLICIT OPT-IN ONLY: never part of the default role sweep.
+    defaults = ma.build_parser().parse_args(["--gguf", "/m.gguf",
+                                             "--label", "m"]).roles
+    assert "devbench" not in ma.parse_audit_roles(defaults)
+    assert "toolstress" in defaults              # the rest of the suite intact
+    # tunable in Stage B2 (with its own reduced grid), not pinned
+    assert "devbench" in ma.PER_ROLE_TUNABLE
+    assert "devbench" not in ma.PER_ROLE_TUNING_PINNED
+    rows = [_audit_row("zeta", "vram12", "2026-07-15T00:00:00+00:00",
+                       devbench={"full_pass_rate": 0.6,
+                                 "mean_test_pass_ratio": 0.85,
+                                 "mean_rounds": 7.4})]
+    out = ma.build_audit_matrix(rows)
+    assert "dbench%" in out and "60.0%" in out
+    # rows without the role render dashes, not crashes
+    assert "zeta" in ma.build_audit_matrix(
+        [_audit_row("zeta", "cpu", "2026-07-15T00:00:00+00:00")])
+    assert ma.ROLE_HEADLINE_KEYS["devbench"] == ("full_pass_rate",)
+    # dashboard mirror: headline present AND counted in the quality overall
+    # (full_pass_rate is a 0-1 quality metric — opt-in changes when it runs,
+    # not what it measures; partial audits skip missing roles anyway).
+    bench_audit = pytest.importorskip("axi.bench_audit")
+    assert bench_audit._ROLE_HEADLINE_KEYS["devbench"] == ("full_pass_rate",)
+    assert "devbench" in bench_audit._OVERALL_ROLES
+
+
+def test_run_devbench_role_pins_per_case_seed(tmp_path, monkeypatch):
+    """Every request of a devbench case carries the case's crc32 seed and the
+    recipe sampling passed in (per-case seed era, not a fixed global seed)."""
+    import cpu_sweep
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _write_mini_project(proj)
+    cases = [{"id": "db-a", "project_dir": "proj", "max_rounds": 2,
+              "expected": {"min_tests_passed": "all"}},
+             {"id": "db-b", "project_dir": "proj", "max_rounds": 2,
+              "expected": {"min_tests_passed": "all"}}]
+    monkeypatch.setattr(cpu_sweep, "load_golden_set", lambda path: cases)
+    monkeypatch.setattr(ma, "GOLDEN_DIR", tmp_path)
+    payloads = []
+    replies = iter([
+        # db-a: one tool round, then done. db-b: answers directly.
+        {"content": "", "tool_calls": [_tool_call("read_file",
+                                                  {"path": "calc.py"})]},
+        {"content": "Listo.", "tool_calls": None},
+        {"content": "No puedo.", "tool_calls": None},
+    ])
+
+    def fake_post(url, payload, timeout=240):
+        payloads.append(payload)
+        return {"choices": [{"message": next(replies)}]}
+
+    monkeypatch.setattr(ma, "_http_post_json", fake_post)
+    agg = ma.run_devbench_role(18080, dict(ma.HOUSE_SAMPLING), "none")
+    seeds = [p["seed"] for p in payloads]
+    # db-a's two rounds share ONE seed; db-b gets a different one.
+    assert seeds == [ma.case_seed("db-a"), ma.case_seed("db-a"),
+                     ma.case_seed("db-b")]
+    assert all(p["temperature"] == 0.6 for p in payloads)
+    assert all("tools" in p for p in payloads)   # tool surface every round
+    # nobody fixed the project → the real pytest verdict fails both cases
+    assert agg["n"] == 2 and agg["full_pass_rate"] == 0.0
+
+
+def test_stage_c_devbench_dedicated_spawn_at_ctx_65536(monkeypatch):
+    """devbench never runs on the shared Stage-C server: it gets its own
+    spawn at ctx=DEVBENCH_CTX (65536, uniform dev context for every model)
+    AFTER the shared server died, with the recipe launch config otherwise."""
+    import types
+
+    class FakeProc:
+        pid = 1
+
+    events = []
+    spawns = []
+
+    def fake_spawn(args, ngl, cpu_moe, extra_flags, with_mmproj=False,
+                   ctx=None):
+        spawns.append({"ngl": ngl, "cpu_moe": cpu_moe,
+                       "extra_flags": list(extra_flags),
+                       "with_mmproj": with_mmproj, "ctx": ctx})
+        events.append("spawn")
+        return FakeProc(), True
+
+    monkeypatch.setattr(ma, "_spawn_recipe_server", fake_spawn)
+    monkeypatch.setattr(ma.bm, "kill_server",
+                        lambda proc: events.append("kill"))
+    monkeypatch.setattr(ma, "wait_vram_drain", lambda *a, **k: None)
+
+    seen = {}
+
+    def fake_brain(port, sampling, thinking, max_tokens):
+        return {"det": 0.8, "final": None}
+
+    def fake_devbench(port, sampling, thinking):
+        seen["devbench"] = (dict(sampling), thinking)
+        events.append("devbench")
+        return {"n": 5, "full_pass_rate": 0.4}
+
+    monkeypatch.setattr(ma, "run_brain_role", fake_brain)
+    monkeypatch.setattr(ma, "run_devbench_role", fake_devbench)
+
+    recipe = {"launch": {"ngl": 999, "cpu_moe": False, "ctx": 32768,
+                         "extra_flags": ["-fa", "on"]},
+              "sampling": dict(ma.HOUSE_SAMPLING), "thinking": "off"}
+    args = types.SimpleNamespace(port=18080, n_runs=1, brain_max_tokens=0,
+                                 mmproj=None, ctx=32768)
+    results = ma.run_stage_c(args, recipe, ["brain", "devbench"], None)
+    # shared server first (recipe ctx), THEN the dedicated devbench spawn
+    assert [s["ctx"] for s in spawns] == [None, ma.DEVBENCH_CTX]
+    assert ma.DEVBENCH_CTX == 65536
+    assert spawns[1]["ngl"] == 999 and spawns[1]["extra_flags"] == ["-fa", "on"]
+    assert spawns[1]["with_mmproj"] is False
+    assert events == ["spawn", "kill", "spawn", "devbench", "kill"]
+    # devbench ran at the recipe config and recorded ctx + sampling_used
+    assert seen["devbench"] == (ma.HOUSE_SAMPLING, "off")
+    assert results["devbench"]["ctx"] == ma.DEVBENCH_CTX
+    su = results["devbench"]["sampling_used"]
+    assert su["seed_policy"] == ma.SEED_POLICY_PER_CASE
+    assert su["thinking"] == "off"
+
+
+def test_stage_c_devbench_unhealthy_spawn_records_skip(monkeypatch):
+    """An OOM/unhealthy dedicated spawn degrades to a skip note — it must
+    never kill the audit (per-role isolation)."""
+    import types
+
+    class FakeProc:
+        pid = 1
+
+    monkeypatch.setattr(ma, "_spawn_recipe_server",
+                        lambda *a, **k: (FakeProc(), False))
+    monkeypatch.setattr(ma.bm, "kill_server", lambda proc: None)
+    monkeypatch.setattr(ma, "wait_vram_drain", lambda *a, **k: None)
+    monkeypatch.setattr(ma, "run_devbench_role",
+                        lambda *a, **k: pytest.fail("must not run"))
+    recipe = {"launch": {"ngl": 999, "cpu_moe": False, "extra_flags": []},
+              "sampling": dict(ma.HOUSE_SAMPLING), "thinking": "off"}
+    args = types.SimpleNamespace(port=18080, n_runs=1, brain_max_tokens=0,
+                                 mmproj=None, ctx=32768)
+    results = ma.run_stage_c(args, recipe, ["devbench"], None)
+    assert "65536" in results["devbench"]["skipped"]
+
+
+def test_devbench_stage_b2_reduced_grid_and_db01_only(monkeypatch):
+    """Stage B2 tunes devbench on a REDUCED grid: db-01 only, at most
+    DEVBENCH_TUNE_MAX_VARIANTS (3) variants; other roles keep the full grid."""
+    import types
+
+    # the real scorer factory limits devbench to the easy pilot project
+    assert ma.DEVBENCH_TUNE_MAX_VARIANTS == 3
+    assert ma.DEVBENCH_TUNE_CASE_ID == "db-01"
+    cases, _score = ma.make_role_case_scorer("devbench", 18080)
+    assert [c["id"] for c in cases] == ["db-01"]
+
+    class FakeProc:
+        pid = 1
+
+    monkeypatch.setattr(ma, "_spawn_recipe_server",
+                        lambda *a, **k: (FakeProc(), True))
+    monkeypatch.setattr(ma.bm, "kill_server", lambda proc: None)
+    monkeypatch.setattr(ma, "wait_vram_drain", lambda *a, **k: None)
+
+    calls = {"brain": 0, "devbench": 0}
+
+    def fake_scorer(role, port, mmproj=None, ctx=32768):
+        if role in ma.PER_ROLE_TUNING_PINNED:
+            return None, "pinned"
+        if role == "devbench":
+            role_cases = [{"id": "db-01"}]
+        else:
+            role_cases = [{"id": f"{role}-{i}"} for i in range(4)]
+
+        def score(case, sampling, thinking):
+            calls[role] += 1
+            return 1.0 if sampling == ma.HOUSE_SAMPLING else 0.5
+        return role_cases, score
+
+    monkeypatch.setattr(ma, "make_role_case_scorer", fake_scorer)
+    args = types.SimpleNamespace(port=18080, mmproj=None, ctx=32768,
+                                 extra_flags=[])
+    recipe = {"launch": {"ngl": 999, "cpu_moe": False, "ctx": 32768,
+                         "extra_flags": []},
+              "sampling": dict(ma.HOUSE_SAMPLING), "thinking": "off"}
+    rc = ma.tune_role_configs(args, recipe, ["brain", "devbench"],
+                              ["off", "on"], None)
+    # brain swept the full 3x2 grid on 4 cases; devbench only 3 variants x 1
+    assert rc["brain"]["variants_tried"] == 6
+    assert calls["brain"] == 6 * 4
+    assert rc["devbench"]["variants_tried"] == ma.DEVBENCH_TUNE_MAX_VARIANTS
+    assert calls["devbench"] == 3 * 1
+    assert rc["devbench"]["sampling"] == ma.HOUSE_SAMPLING
+
+
+def test_finale_plan_devbench_pilot_only_on_qwen35_0_8b():
+    """The finale plan pilots devbench on the fastest model ONLY: the first
+    qwen35-0_8b vram12 job lists the full default suite + devbench; no other
+    job opts in."""
+    plan = json.loads(
+        (Path(ma.__file__).parent / "results" / "finale_plan.json")
+        .read_text(encoding="utf-8"))
+    jobs = plan["jobs"]
+    pilots = [j for j in jobs if "devbench" in (j.get("roles") or [])]
+    assert len(pilots) == 1
+    pilot = pilots[0]
+    assert pilot is jobs[0]
+    assert pilot["label"] == "qwen35-0_8b" and pilot["tiers"] == ["vram12"]
+    # explicit default suite + devbench (plan roles override the CLI default)
+    defaults = ma.build_parser().parse_args(["--gguf", "/m.gguf",
+                                             "--label", "m"]).roles
+    assert pilot["roles"] == ma.parse_audit_roles(defaults) + ["devbench"]
+
+
 # ── seed pinning + per-role sampling record (2026-07-16 era) ─────────────────
 
 def test_case_seed_stable_and_distinct():

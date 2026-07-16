@@ -385,10 +385,23 @@ def test_finale_plan_ships_and_is_valid():
     plan = ab.load_plan(ab.DEFAULT_PLAN_PATH)
     assert len(plan) == 33                     # (14 roster + coder) + 14 + 4
 
-    quality = [j for j in plan if not j.get("roles")]
+    # quality jobs: default suite (no roles key) OR the devbench pilot (the
+    # explicit default suite + devbench — see the plan notes)
+    quality = [j for j in plan
+               if not j.get("roles") or "devbench" in j["roles"]]
     speed = [j for j in plan if j.get("roles") == ["speed"]]
     ctxprobe = [j for j in plan if j.get("roles") == ["ctxprobe"]]
     assert len(quality) == 15 and len(speed) == 14 and len(ctxprobe) == 4
+
+    # devbench pilot: exactly ONE job opts in — the fastest model, so the
+    # user can gauge devbench duration before rolling it out to the roster
+    pilots = [j for j in plan if "devbench" in (j.get("roles") or [])]
+    assert len(pilots) == 1
+    assert pilots[0]["label"] == "qwen35-0_8b"
+    assert pilots[0]["tiers"] == ["vram12"]
+    defaults = ma.parse_audit_roles(
+        ma.build_parser().get_default("roles"))
+    assert pilots[0]["roles"] == defaults + ["devbench"]
 
     # all 14 viable roster models present in both quality and cpu-speed
     # blocks; qwen25-coder-3b (VT-3B's base — the father-vs-son duel) joins
