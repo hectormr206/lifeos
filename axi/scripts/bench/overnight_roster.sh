@@ -38,8 +38,26 @@ systemctl --user stop axi-heartbeat.service axi-voice.service \
   >> "$LOGDIR/driver.log" 2>&1
 sleep 3
 
-# ─── Block A: prod judge alive — CPU quality ────────────────────────────
-log "=== BLOCK A: CPU quality (prod judge on 8080) ==="
+# Héctor left game mode ON (CPU co-pilot 2B on 8080, VRAM already clean).
+# Go full offline from the start: the 2B co-pilot is too small to judge,
+# so free 8080 and let a stand-in CPU 4b judge preside over the WHOLE
+# night (Blocks A and B) — one consistent judge for every model.
+log "=== OFFLINE + stand-in judge for the whole night ==="
+bash "$REPO/axi/scripts/axi-game-on" --offline >> "$LOGDIR/driver.log" 2>&1
+sleep 5
+CUDA_VISIBLE_DEVICES="" nohup /usr/bin/llama-server \
+  -m "$M/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf" \
+  -ngl 0 --jinja -c 16384 --host 127.0.0.1 --port 8080 -t 6 --no-mmap -np 1 \
+  > "$LOGDIR/judge_standin.log" 2>&1 &
+JUDGE_PID=$!
+for i in $(seq 1 60); do
+  sleep 2
+  curl -s http://127.0.0.1:8080/health 2>/dev/null | grep -q ok && break
+done
+log "stand-in judge (4b CPU) pid=$JUDGE_PID"
+
+# ─── Block A: CPU quality (stand-in judge on 8080) ──────────────────────
+log "=== BLOCK A: CPU quality ==="
 
 run_audit gemma4-e4b a_e4b \
   --gguf "$M/gemma4-e4b-it/gemma-4-E4B-it-Q4_K_M.gguf" \
@@ -68,23 +86,8 @@ for spec in \
   log "BACKFILL $lbl exit=$?"
 done
 
-# ─── Block B: free VRAM, stand-in CPU judge, GPU quality for heavies ────
-log "=== BLOCK B: GPU quality (axi offline, stand-in CPU judge) ==="
-bash "$REPO/axi/scripts/axi-game-on" --offline >> "$LOGDIR/driver.log" 2>&1
-sleep 5
-
-# Stand-in judge: qwen35-4b CPU-only on 8080 (same model class as the day
-# judge). Short judge calls only — CPU speed is fine.
-CUDA_VISIBLE_DEVICES="" nohup /usr/bin/llama-server \
-  -m "$M/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf" \
-  -ngl 0 --jinja -c 16384 --host 127.0.0.1 --port 8080 -t 6 --no-mmap -np 1 \
-  > "$LOGDIR/judge_standin.log" 2>&1 &
-JUDGE_PID=$!
-for i in $(seq 1 60); do
-  sleep 2
-  curl -s http://127.0.0.1:8080/health 2>/dev/null | grep -q ok && break
-done
-log "stand-in judge pid=$JUDGE_PID"
+# ─── Block B: GPU quality for heavies (VRAM already free, judge running) ─
+log "=== BLOCK B: GPU quality (vram12) ==="
 
 # Heavy models — full quality on GPU (vram12 tier). MoE models marked.
 run_audit bonsai-1bit b_bonsai1 \
