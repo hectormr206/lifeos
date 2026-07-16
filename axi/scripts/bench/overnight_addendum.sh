@@ -17,6 +17,16 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOGDIR/driver.log"; }
 
 ROLES="toolcall,codereview,vision,codegen,recordsqa,longsum,parsejson,visionclass,devplan"
 
+# Casualties of the 2026-07-15 marathon's agentic-import bug (fixed):
+# gemma4-e4b died at the agentic role before persisting its row, and the
+# stale-code vibethinker-3b run was cut early. Full re-audits FIRST.
+rerun_full() { # label log args...
+  local lbl=$1 lname=$2; shift 2
+  log "REAUDIT $lbl start"
+  "$PY" "$AUDIT" --label "$lbl" "$@" > "$LOGDIR/$lname.log" 2>&1
+  log "REAUDIT $lbl exit=$?"
+}
+
 log "=== ADDENDUM quiet mode ==="
 systemctl --user stop axi-heartbeat.service axi-voice.service \
   axi-whisper.service axi-tray.service axi-dashboard.service \
@@ -33,6 +43,14 @@ for i in $(seq 1 60); do
   curl -s http://127.0.0.1:8080/health 2>/dev/null | grep -q ok && break
 done
 log "stand-in judge pid=$JUDGE_PID"
+
+# Re-audits first (marathon casualties — see above).
+rerun_full gemma4-e4b reaudit_e4b \
+  --gguf "$M/gemma4-e4b-it/gemma-4-E4B-it-Q4_K_M.gguf" \
+  --tiers cpu --thinking-modes off --extra-flags --reasoning off
+rerun_full vibethinker-3b reaudit_vt3b \
+  --gguf "$M/vibethinker-3b/VibeThinker-3B-Q4_K_M.gguf" \
+  --tiers cpu --thinking-modes on,off
 
 for spec in \
   "qwen35-4b|$M/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf|$M/qwen35-4b/mmproj-F16.gguf" \

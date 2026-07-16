@@ -112,15 +112,31 @@ import bench_model as bm  # v1 orchestrator — spawn/kill/registry/roles reused
 # harness cannot drift from production. Both modules are stdlib-only at import
 # time. When the axi package is unavailable the rest of the audit still works;
 # only the agentic role raises with a clear message.
+def _import_axi_prod():
+    """Import the production briefing prompt + web tool schemas.
+
+    The audits run under the LIFEOS venv (extraction needs it), which does
+    not have axi installed — inject axi/src into sys.path as a fallback so
+    the agentic role can still import the REAL production prompt/schemas
+    (this exact gap killed the gemma4-e4b audit on the 2026-07-15 marathon:
+    the role raised and the whole audit died before persisting its row).
+    """
+    try:
+        from axi.briefing import _FINAL_SYNTHESIS_PROMPT, build_briefing_system
+        from axi.web_tools import web_fetch_tool_def, web_search_tool_def
+    except ImportError:
+        axi_src = str((SCRIPT_DIR.parents[1] / "src").resolve())
+        if axi_src not in sys.path:
+            sys.path.insert(0, axi_src)
+        from axi.briefing import _FINAL_SYNTHESIS_PROMPT, build_briefing_system
+        from axi.web_tools import web_fetch_tool_def, web_search_tool_def
+    return (_FINAL_SYNTHESIS_PROMPT, build_briefing_system,
+            web_fetch_tool_def, web_search_tool_def)
+
+
 try:
-    from axi.briefing import (
-        _FINAL_SYNTHESIS_PROMPT as AGENTIC_SYNTHESIS_PROMPT,
-        build_briefing_system as _prod_briefing_system,
-    )
-    from axi.web_tools import (
-        web_fetch_tool_def as _prod_web_fetch_tool_def,
-        web_search_tool_def as _prod_web_search_tool_def,
-    )
+    (AGENTIC_SYNTHESIS_PROMPT, _prod_briefing_system,
+     _prod_web_fetch_tool_def, _prod_web_search_tool_def) = _import_axi_prod()
     _AXI_IMPORT_ERROR: Optional[Exception] = None
 except Exception as _axi_import_exc:  # noqa: BLE001 — standalone run without axi
     AGENTIC_SYNTHESIS_PROMPT = None  # type: ignore[assignment]
@@ -3400,63 +3416,75 @@ def run_stage_c(args, recipe: dict, roles: list[str],
             wait_vram_drain(vram_baseline)
             raise RuntimeError("stage C server never became healthy at the recipe "
                                "launch config — recipe may be stale for this host")
+        def _dispatch_role(role: str) -> None:
+            if role == "speed":
+                results["speed"] = bm.run_speed_role(args.port, proc.pid,
+                                                     args.n_runs)
+            elif role == "brain":
+                results["brain"] = run_brain_role(args.port, sampling, thinking,
+                                                  args.brain_max_tokens)
+            elif role == "extraction":
+                results["extraction"] = bm.run_extraction_role(args.port)
+            elif role == "domain":
+                results["domain"] = run_domain_role(args.port)
+            elif role == "toolcall":
+                results["toolcall"] = run_toolcall_role(args.port, sampling,
+                                                        thinking)
+            elif role == "vision":
+                results["vision"] = run_vision_role(args.port, args.mmproj,
+                                                    sampling, thinking)
+            elif role == "codereview":
+                results["codereview"] = run_codereview_role(args.port, sampling,
+                                                            thinking)
+            elif role == "codegen":
+                results["codegen"] = run_codegen_role(args.port, sampling,
+                                                      thinking)
+            elif role == "conversation":
+                results["conversation"] = run_conversation_role(
+                    args.port, sampling, thinking)
+            elif role == "recordsqa":
+                results["recordsqa"] = run_recordsqa_role(args.port,
+                                                          sampling, thinking)
+            elif role == "narration":
+                results["narration"] = run_narration_role(args.port,
+                                                          sampling, thinking)
+            elif role == "longsum":
+                results["longsum"] = run_longsum_role(
+                    args.port, sampling, thinking,
+                    (launch.get("ctx") or args.ctx))
+            elif role == "parsejson":
+                results["parsejson"] = run_parsejson_role(args.port,
+                                                          sampling, thinking)
+            elif role == "agentic":
+                results["agentic"] = run_agentic_role(args.port,
+                                                      sampling, thinking)
+            elif role == "proactive":
+                results["proactive"] = run_proactive_role(args.port,
+                                                          sampling, thinking)
+            elif role == "visionclass":
+                results["visionclass"] = run_visionclass_role(
+                    args.port, args.mmproj, sampling, thinking)
+            elif role == "devplan":
+                results["devplan"] = run_devplan_role(args.port,
+                                                      sampling, thinking)
+            elif role == "toolstress":
+                results["toolstress"] = run_toolstress_role(args.port,
+                                                            sampling,
+                                                            thinking)
+
         try:
             for role in main_roles:
                 print(f"[stage C] role {role}", flush=True)
-                if role == "speed":
-                    results["speed"] = bm.run_speed_role(args.port, proc.pid,
-                                                         args.n_runs)
-                elif role == "brain":
-                    results["brain"] = run_brain_role(args.port, sampling, thinking,
-                                                      args.brain_max_tokens)
-                elif role == "extraction":
-                    results["extraction"] = bm.run_extraction_role(args.port)
-                elif role == "domain":
-                    results["domain"] = run_domain_role(args.port)
-                elif role == "toolcall":
-                    results["toolcall"] = run_toolcall_role(args.port, sampling,
-                                                            thinking)
-                elif role == "vision":
-                    results["vision"] = run_vision_role(args.port, args.mmproj,
-                                                        sampling, thinking)
-                elif role == "codereview":
-                    results["codereview"] = run_codereview_role(args.port, sampling,
-                                                                thinking)
-                elif role == "codegen":
-                    results["codegen"] = run_codegen_role(args.port, sampling,
-                                                          thinking)
-                elif role == "conversation":
-                    results["conversation"] = run_conversation_role(
-                        args.port, sampling, thinking)
-                elif role == "recordsqa":
-                    results["recordsqa"] = run_recordsqa_role(args.port,
-                                                              sampling, thinking)
-                elif role == "narration":
-                    results["narration"] = run_narration_role(args.port,
-                                                              sampling, thinking)
-                elif role == "longsum":
-                    results["longsum"] = run_longsum_role(
-                        args.port, sampling, thinking,
-                        (launch.get("ctx") or args.ctx))
-                elif role == "parsejson":
-                    results["parsejson"] = run_parsejson_role(args.port,
-                                                              sampling, thinking)
-                elif role == "agentic":
-                    results["agentic"] = run_agentic_role(args.port,
-                                                          sampling, thinking)
-                elif role == "proactive":
-                    results["proactive"] = run_proactive_role(args.port,
-                                                              sampling, thinking)
-                elif role == "visionclass":
-                    results["visionclass"] = run_visionclass_role(
-                        args.port, args.mmproj, sampling, thinking)
-                elif role == "devplan":
-                    results["devplan"] = run_devplan_role(args.port,
-                                                          sampling, thinking)
-                elif role == "toolstress":
-                    results["toolstress"] = run_toolstress_role(args.port,
-                                                                sampling,
-                                                                thinking)
+                try:
+                    _dispatch_role(role)
+                except Exception as role_exc:  # noqa: BLE001
+                    # One broken role must NEVER kill the whole audit — the
+                    # 2026-07-15 e4b run lost 15 finished roles when agentic
+                    # raised. Record the error, keep going; the row still
+                    # persists and the role can be backfilled later.
+                    print(f"  [{role}] ERROR (recorded, audit continues): "
+                          f"{role_exc}", flush=True)
+                    results[role] = {"error": str(role_exc)[:300]}
         finally:
             bm.kill_server(proc)
             wait_vram_drain(vram_baseline)
