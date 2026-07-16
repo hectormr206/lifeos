@@ -894,7 +894,7 @@ def test_run_conversation_role_judge_absent_skips_with_note(monkeypatch):
     seen_messages = []
 
     def fake_chat(port, messages, sampling=None, thinking="none",
-                  max_tokens=512, tools=None, timeout=240):
+                  max_tokens=512, tools=None, timeout=240, seed=None):
         seen_messages.append(messages)
         return {"content": "¡Claro! Te recomiendo dejar el café después de las 2."}
 
@@ -1476,7 +1476,7 @@ def test_run_parsejson_role_end_to_end_on_canned_responses(monkeypatch):
     by_prompt = {c["prompt"]: perfect[c["id"]] for c in cases}
 
     def fake_chat(port, messages, sampling=None, thinking="none",
-                  max_tokens=512, tools=None, timeout=240):
+                  max_tokens=512, tools=None, timeout=240, seed=None):
         return {"content": by_prompt[messages[-1]["content"]]}
 
     monkeypatch.setattr(ma, "chat_completion", fake_chat)
@@ -1493,7 +1493,7 @@ def test_run_longsum_role_ctx_skip_and_note(monkeypatch):
     calls = []
 
     def fake_chat(port, messages, sampling=None, thinking="none",
-                  max_tokens=512, tools=None, timeout=240):
+                  max_tokens=512, tools=None, timeout=240, seed=None):
         calls.append(messages)
         return {"content": "resumen"}
 
@@ -2129,7 +2129,7 @@ def test_run_devplan_role_end_to_end_on_canned_responses(monkeypatch):
         "edge cases named in the goal, and add pytest tests for each one.")
 
     def fake_chat(port, messages, sampling=None, thinking="none",
-                  max_tokens=512, tools=None, timeout=240):
+                  max_tokens=512, tools=None, timeout=240, seed=None):
         system = messages[0]["content"]
         if system == ma.DEVPLAN_DIRECTOR_SYSTEM:
             return {"content": instruction_reply}
@@ -2496,3 +2496,262 @@ def test_toolstress_wiring_roles_matrix_and_headline():
     bench_audit = pytest.importorskip("axi.bench_audit")
     assert bench_audit._ROLE_HEADLINE_KEYS["toolstress"] == ("pass_rate",)
     assert "toolstress" in bench_audit._OVERALL_ROLES
+
+
+# ── seed pinning + per-role sampling record (2026-07-16 era) ─────────────────
+
+def test_case_seed_stable_and_distinct():
+    """Same case id → same seed, always; different ids → different seeds."""
+    import zlib
+    assert ma.case_seed("bq-01") == ma.case_seed("bq-01")
+    assert ma.case_seed("bq-01") != ma.case_seed("bq-02")
+    ids = ("bq-01", "conv-03", "ts-sel-01", "ag-t1", "np-07")
+    seeds = {ma.case_seed(i) for i in ids}
+    assert len(seeds) == len(ids)                  # distinct per case
+    assert all(0 <= s <= 0x7FFFFFFF for s in seeds)
+    # exact derivation contract: crc32 of the utf-8 id, masked positive
+    assert ma.case_seed("x") == zlib.crc32(b"x") & 0x7FFFFFFF
+    # non-string ids (defensive) go through str()
+    assert ma.case_seed(7) == ma.case_seed("7")
+
+
+def test_chat_completion_payload_carries_seed(monkeypatch):
+    """seed lands in the request payload; None keeps the key absent."""
+    captured = {}
+
+    def fake_post(url, payload, timeout=240):
+        captured.clear()
+        captured.update(payload)
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    monkeypatch.setattr(ma, "_http_post_json", fake_post)
+    ma.chat_completion(18080, [{"role": "user", "content": "hola"}],
+                       sampling=dict(ma.HOUSE_SAMPLING),
+                       seed=ma.case_seed("c-1"))
+    assert captured["seed"] == ma.case_seed("c-1")
+    assert captured["temperature"] == 0.6
+    ma.chat_completion(18080, [{"role": "user", "content": "hola"}])
+    assert "seed" not in captured                  # None → key omitted
+
+
+def test_run_brain_role_pins_per_case_seed(monkeypatch):
+    """Brain-style calls: each case's request carries ITS crc32 seed."""
+    import cpu_sweep
+    import subjective_judge as sj
+    cases = [{"id": "bq-01", "prompt": "hola"},
+             {"id": "bq-02", "prompt": "adiós"}]
+    monkeypatch.setattr(sj, "load_golden_set", lambda path: cases)
+    monkeypatch.setattr(sj, "get_system_prompt_for_case", lambda case: "")
+    monkeypatch.setattr(cpu_sweep, "check_deterministic",
+                        lambda case, text: (True, ""))
+    monkeypatch.setattr(sj, "http_get_status", lambda url, timeout=5: 503)
+    payloads = []
+
+    def fake_post(url, payload, timeout=240):
+        payloads.append(payload)
+        return {"choices": [{"message": {"content": "hola"}}]}
+
+    monkeypatch.setattr(ma, "_http_post_json", fake_post)
+    ma.run_brain_role(18080, dict(ma.HOUSE_SAMPLING), "none", 0)
+    assert [p["seed"] for p in payloads] == \
+        [ma.case_seed("bq-01"), ma.case_seed("bq-02")]
+    assert all(p["temperature"] == 0.6 for p in payloads)
+
+
+def test_run_toolstress_role_pins_per_case_seed(monkeypatch):
+    """Toolstress LOOP calls: every round of a case reuses the case's seed."""
+    import cpu_sweep
+    cases = [{"id": "ts-a", "kind": "selection", "prompt": "recuérdame algo",
+              "expected": {"tool": "create_reminder"}},
+             {"id": "ts-b", "kind": "selection", "prompt": "agenda algo",
+              "expected": {"tool": "create_calendar_event"}}]
+    monkeypatch.setattr(cpu_sweep, "load_golden_set", lambda path: cases)
+    payloads = []
+    replies = iter([
+        # ts-a round 1: one tool call → round 2: done. ts-b: answers directly.
+        {"content": "", "tool_calls": [
+            {"id": "c1", "function": {"name": "create_reminder",
+                                      "arguments": "{}"}}]},
+        {"content": "Listo.", "tool_calls": None},
+        {"content": "Listo.", "tool_calls": None},
+    ])
+
+    def fake_post(url, payload, timeout=240):
+        payloads.append(payload)
+        return {"choices": [{"message": next(replies)}]}
+
+    monkeypatch.setattr(ma, "_http_post_json", fake_post)
+    ma.run_toolstress_role(18080, dict(ma.HOUSE_SAMPLING), "none")
+    seeds = [p["seed"] for p in payloads]
+    # ts-a's two rounds share ONE seed; ts-b gets a different one.
+    assert seeds == [ma.case_seed("ts-a"), ma.case_seed("ts-a"),
+                     ma.case_seed("ts-b")]
+    assert all("tools" in p for p in payloads)     # registry offered each round
+
+
+def test_run_agentic_role_pins_prod_sampling_and_per_case_seed(monkeypatch):
+    """Agentic loop: prod-pinned 0.7/0.8/20 sampling + per-case seed."""
+    import cpu_sweep
+    cases = [{"id": "ag-a", "prompt": "noticias",
+              "expected": {"tools_required": False, "final_json_keys": []}}]
+    monkeypatch.setattr(cpu_sweep, "load_golden_set", lambda path: cases)
+    payloads = []
+
+    def fake_post(url, payload, timeout=240):
+        payloads.append(payload)
+        return {"choices": [{"message": {"content": "{}", "tool_calls": None}}]}
+
+    monkeypatch.setattr(ma, "_http_post_json", fake_post)
+    ma.run_agentic_role(18080, dict(ma.HOUSE_SAMPLING), "none")
+    assert payloads[0]["seed"] == ma.case_seed("ag-a")
+    assert payloads[0]["temperature"] == ma.AGENTIC_PROD_SAMPLING["temperature"]
+    assert payloads[0]["top_p"] == ma.AGENTIC_PROD_SAMPLING["top_p"]
+    assert payloads[0]["top_k"] == ma.AGENTIC_PROD_SAMPLING["top_k"]
+
+
+def test_judge_calls_pin_seed_zero(monkeypatch):
+    """Both judge payload builders run at temperature 0.0 AND seed 0."""
+    captured = {}
+
+    def fake_post(url, payload, timeout=240):
+        captured.update(payload)
+        return {"choices": [{"message":
+                             {"content": '{"c1": 1.0, "note": "ok"}'}}]}
+
+    monkeypatch.setattr(ma, "_http_post_json", fake_post)
+    case = {"messages": [{"role": "user", "content": "hola"}],
+            "rubric": {"criteria": [{"name": "calidez", "weight": 1.0,
+                                     "description": "d"}]}}
+    ma.judge_conversation_case(case, "respuesta")
+    assert captured["temperature"] == 0.0 and captured["seed"] == 0
+
+    # subjective_judge.judge_response builds its own payload — same pin.
+    import io
+    import urllib.request as _url
+    import subjective_judge as sj
+    sj_captured = {}
+
+    class FakeResp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=120):
+        sj_captured.update(json.loads(req.data))
+        return FakeResp(json.dumps(
+            {"choices": [{"message":
+                          {"content": '{"c1": 1.0, "note": "ok"}'}}]}
+        ).encode())
+
+    monkeypatch.setattr(_url, "urlopen", fake_urlopen)
+    sj_case = {"prompt": "hola",
+               "rubric": {"criteria": [{"criterion": "calidez",
+                                        "weight": 1.0}],
+                          "pass_threshold": 0.5}}
+    r = sj.judge_response(sj_case, "respuesta")
+    assert r["weighted_score"] == 1.0
+    assert sj_captured["temperature"] == 0.0 and sj_captured["seed"] == 0
+
+
+def test_role_sampling_used_mapping():
+    """The per-role record is accurate: recipe roles, prod-pinned agentic,
+    extractor-pinned extraction/domain, and n/a for speed/embed."""
+    recipe_sampling = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
+    brain = ma.role_sampling_used("brain", recipe_sampling, "off")
+    assert brain == {"temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                     "seed_policy": "per-case-crc32", "thinking": "off"}
+    for role in ("conversation", "narration", "toolstress", "codegen",
+                 "parsejson", "longsum", "recordsqa", "proactive",
+                 "toolcall", "codereview", "vision", "visionclass",
+                 "devplan"):
+        assert ma.role_sampling_used(role, recipe_sampling, "on")[
+            "seed_policy"] == ma.SEED_POLICY_PER_CASE
+    agentic = ma.role_sampling_used("agentic", recipe_sampling, "off")
+    assert (agentic["temperature"], agentic["top_p"], agentic["top_k"]) == \
+        (0.7, 0.8, 20)                             # prod-pinned, NOT the recipe
+    assert agentic["seed_policy"] == ma.SEED_POLICY_PER_CASE
+    for role in ("extraction", "domain"):
+        su = ma.role_sampling_used(role, recipe_sampling, "off")
+        assert su["temperature"] == 0.0
+        assert su["seed_policy"] == ma.SEED_POLICY_FIXED_0
+    for role in ("speed", "embed"):
+        su = ma.role_sampling_used(role, recipe_sampling, "off")
+        assert su["temperature"] is None
+        assert su["seed_policy"] == ma.SEED_POLICY_NA
+
+
+def test_run_stage_c_attaches_sampling_used_to_every_role(monkeypatch):
+    """Every Stage-C role result gains a sampling_used record (canned roles)."""
+    import types
+
+    class FakeProc:
+        pid = 1
+
+    monkeypatch.setattr(ma, "_spawn_recipe_server",
+                        lambda *a, **k: (FakeProc(), True))
+    monkeypatch.setattr(ma.bm, "kill_server", lambda proc: None)
+    monkeypatch.setattr(ma, "wait_vram_drain", lambda *a, **k: None)
+    monkeypatch.setattr(ma.bm, "run_speed_role",
+                        lambda port, pid, n: {"decode_p50_toks_s": 40.0})
+    monkeypatch.setattr(ma.bm, "run_extraction_role",
+                        lambda port: {"case_pass_rate": 0.9})
+    monkeypatch.setattr(ma, "run_brain_role",
+                        lambda *a, **k: {"det": 0.8, "final": None})
+    monkeypatch.setattr(ma, "run_agentic_role",
+                        lambda *a, **k: {"pass_rate": 0.75})
+    args = types.SimpleNamespace(port=18080, n_runs=1, brain_max_tokens=0,
+                                 mmproj=None, ctx=32768)
+    recipe = {"launch": {"ngl": 0, "cpu_moe": False, "extra_flags": []},
+              "sampling": {"temperature": 0.6, "top_p": 0.95, "top_k": 20},
+              "thinking": "off"}
+    results = ma.run_stage_c(args, recipe,
+                             ["speed", "brain", "extraction", "agentic"], None)
+    assert all("sampling_used" in r for r in results.values())
+    assert results["brain"]["sampling_used"]["temperature"] == 0.6
+    assert results["brain"]["sampling_used"]["seed_policy"] == \
+        ma.SEED_POLICY_PER_CASE
+    assert results["brain"]["sampling_used"]["thinking"] == "off"
+    assert results["agentic"]["sampling_used"]["temperature"] == 0.7
+    assert results["extraction"]["sampling_used"]["seed_policy"] == \
+        ma.SEED_POLICY_FIXED_0
+    assert results["speed"]["sampling_used"]["seed_policy"] == \
+        ma.SEED_POLICY_NA
+    # existing metrics untouched
+    assert results["brain"]["det"] == 0.8
+
+
+def test_report_prints_role_config_table():
+    """--report answers 'good WHERE and WITH WHAT config': a per-role table
+    of headline metric + sampling summary; era-less rows render dashes."""
+    su = ma.role_sampling_used("brain", {"temperature": 0.6, "top_p": 0.95,
+                                         "top_k": 20}, "off")
+    row = _audit_row("eta", "cpu", "2026-07-16T00:00:00+00:00",
+                     brain={"det": 0.51, "final": None, "sampling_used": su},
+                     toolstress={"pass_rate": 0.9},
+                     speed={"decode_p50_toks_s": 40.0,
+                            "sampling_used": ma.role_sampling_used(
+                                "speed", None, "off")})
+    out = ma.build_model_report([row], "eta")
+    assert "role config" in out
+    assert "per-case-crc32" in out
+    assert "T=0.6" in out and "top_p=0.95" in out and "top_k=20" in out
+    assert "0.51" in out                           # brain headline (det)
+    assert "n/a" in out                            # speed seed policy
+    # toolstress row (no sampling_used — old era) renders a dash, not a crash
+    lines = [l for l in out.splitlines() if l.strip().startswith("toolstress")]
+    assert lines and lines[0].rstrip().endswith("-")
+
+
+def test_role_headline_metric_ignores_sampling_used():
+    """sampling_used is a dict, never a metric — headline extraction skips it."""
+    result = {"sampling_used": {"temperature": 0.6}, "pass_rate": 0.7}
+    assert ma.role_headline_metric("toolstress", result) == 0.7
+    assert ma.role_headline_metric("brain", {"final": None, "det": 0.4,
+                                             "sampling_used": {}}) == 0.4
+    assert ma.role_headline_metric("vision", {"skipped": "no mmproj"}) is None
+    # local table stays in sync with the dashboard's mirror
+    bench_audit = pytest.importorskip("axi.bench_audit")
+    for role, keys in bench_audit._ROLE_HEADLINE_KEYS.items():
+        assert ma.ROLE_HEADLINE_KEYS[role] == keys

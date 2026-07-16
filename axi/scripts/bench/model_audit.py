@@ -48,6 +48,16 @@ Safety: candidate servers run ONLY on --port (default 18080; 8080/8081/8082/
 process group. Strictly sequential: one server at a time, VRAM must drain
 (<500 MiB above baseline) between cells.
 
+Comparability era: seeds are pinned as of 2026-07-16. Every sampling-
+sensitive request (temperature > 0: brain, conversation, narration, longsum,
+recordsqa, proactive, toolcall, codereview, codegen, parsejson, devplan,
+vision/visionclass, the agentic and toolstress tool loops, and Stage B) now
+carries a DETERMINISTIC per-case seed (crc32 of the case id), and judge
+calls pin seed=0 on top of their temperature 0.0. Results recorded BEFORE
+2026-07-16 are a DIFFERENT comparability era for sampling-sensitive roles —
+do not compare their scores 1:1 against pinned-seed rows. Each role result
+records the exact configuration it was scored with in "sampling_used".
+
 Sample usage
 ------------
   # Fresh full audit (tune + full suite) on the 12GB GPU tier:
@@ -83,6 +93,7 @@ import tempfile
 import time
 import unicodedata
 import urllib.request
+import zlib
 from dataclasses import dataclass, asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -132,6 +143,55 @@ TIER_BUDGETS_MIB = {"cpu": 0, "vram4": 3500, "vram8": 7500, "vram12": 11000}
 
 # House default sampling (our standard bench sampling).
 HOUSE_SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
+
+# Seed policies recorded in each role's "sampling_used" (2026-07-16 era).
+SEED_POLICY_PER_CASE = "per-case-crc32"   # deterministic seed per golden case
+SEED_POLICY_FIXED_0 = "fixed-0"           # extractor path: temperature 0, seed 0
+SEED_POLICY_NA = "n/a"                    # no sampling at all (speed, embed)
+
+
+def case_seed(case_id) -> int:
+    """Deterministic per-case sampling seed: crc32 of the case id.
+
+    Same case always samples with the same seed (kills run-to-run variance at
+    temperature > 0 — qwen35-4b brain det swung 0.37↔0.51 across identical
+    runs before pinning); different cases get different seeds so a golden set
+    never samples with one correlated stream.
+    """
+    return zlib.crc32(str(case_id).encode("utf-8")) & 0x7FFFFFFF
+
+
+def build_sampling_used(sampling: Optional[dict], thinking: str,
+                        seed_policy: str) -> dict:
+    """The per-role sampling record: WITH WHICH config a score was earned."""
+    s = sampling or {}
+    return {"temperature": s.get("temperature"), "top_p": s.get("top_p"),
+            "top_k": s.get("top_k"), "seed_policy": seed_policy,
+            "thinking": thinking}
+
+
+def role_sampling_used(role: str, sampling: Optional[dict],
+                       thinking: str) -> dict:
+    """Accurate "sampling_used" for one role result.
+
+    - speed/embed: no sampling is exercised at all (streaming perf /
+      /v1/embeddings) → everything n/a.
+    - extraction/domain: requests go through the production extractor, which
+      pins temperature=0.0 / seed=0 itself → fixed-0.
+    - agentic: production tool-loop sampling is PINNED (brain._base_payload
+      engine='4b': 0.7/0.8/20) regardless of the recipe → prod values,
+      per-case seed.
+    - everything else: the recipe sampling + thinking, per-case seed.
+    """
+    if role in ("speed", "embed"):
+        return build_sampling_used(None, "n/a", SEED_POLICY_NA)
+    if role in ("extraction", "domain"):
+        return build_sampling_used({"temperature": 0.0}, "n/a",
+                                   SEED_POLICY_FIXED_0)
+    if role == "agentic":
+        return build_sampling_used(AGENTIC_PROD_SAMPLING, thinking,
+                                   SEED_POLICY_PER_CASE)
+    return build_sampling_used(sampling, thinking, SEED_POLICY_PER_CASE)
 
 VALID_THINKING_MODES = ("none", "off", "on", "budget512")
 VALID_ROLES = ("speed", "brain", "extraction", "domain", "toolcall",
@@ -2256,6 +2316,73 @@ def build_audit_matrix(rows: list[dict], title: str = "MODEL AUDIT MATRIX") -> s
     return "\n".join(lines)
 
 
+# Role → ordered candidate keys for its headline scalar (report table; the
+# dashboard keeps its own mirror in axi.bench_audit._ROLE_HEADLINE_KEYS).
+ROLE_HEADLINE_KEYS: dict[str, tuple[str, ...]] = {
+    "brain": ("final", "det"),
+    "extraction": ("case_pass_rate",),
+    "domain": ("overall_accuracy",),
+    "toolcall": ("score",),
+    "vision": ("pass_rate",),
+    "codereview": ("score",),
+    "codegen": ("pass_rate",),
+    "conversation": ("judge_score",),
+    "recordsqa": ("pass_rate",),
+    "narration": ("numeric_fidelity_rate",),
+    "longsum": ("pass_rate",),
+    "parsejson": ("pass_rate",),
+    "agentic": ("pass_rate",),
+    "proactive": ("pass_rate",),
+    "visionclass": ("pass_rate",),
+    "devplan": ("pass_rate",),
+    "toolstress": ("pass_rate",),
+    "speed": ("decode_p50_toks_s",),
+    "embed": ("retrieval_rate",),
+}
+
+
+def role_headline_metric(role: str, result) -> Optional[float]:
+    """One role's headline scalar from its result dict (None if skipped)."""
+    if not isinstance(result, dict) or "skipped" in result:
+        return None
+    for key in ROLE_HEADLINE_KEYS.get(role, ()):
+        val = result.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return float(val)
+    return None
+
+
+def format_sampling_summary(sampling_used) -> str:
+    """Compact one-line summary of a role's sampling_used record."""
+    if not isinstance(sampling_used, dict):
+        return "-"
+
+    def fmt(v):
+        return "-" if v is None else v
+
+    return (f"T={fmt(sampling_used.get('temperature'))} "
+            f"top_p={fmt(sampling_used.get('top_p'))} "
+            f"top_k={fmt(sampling_used.get('top_k'))} "
+            f"seed={sampling_used.get('seed_policy', '-')} "
+            f"think={sampling_used.get('thinking', '-')}")
+
+
+def build_role_config_table(roles: dict) -> list[str]:
+    """Per-role config table lines: role | headline | sampling summary.
+
+    This is what makes the registry answer "good WHERE and WITH WHAT config".
+    Rows from the pre-2026-07-16 era have no sampling_used and render '-'.
+    """
+    lines = [f"  {'role':<12} {'headline':>9}  sampling used"]
+    lines.append("  " + "-" * 74)
+    for role, result in (roles or {}).items():
+        head = role_headline_metric(role, result)
+        head_s = "-" if head is None else f"{head:.4g}"
+        su = result.get("sampling_used") if isinstance(result, dict) else None
+        lines.append(f"  {role:<12} {head_s:>9}  {format_sampling_summary(su)}")
+    return lines
+
+
 def build_model_report(rows: list[dict], label: str) -> str:
     """Full audit detail for one label (all tiers, newest per tier)."""
     mine = [r for r in newest_per_label_tier(rows) if r.get("label") == label]
@@ -2271,6 +2398,9 @@ def build_model_report(rows: list[dict], label: str) -> str:
         out.append("  recipe     : "
                    + json.dumps(row.get("recipe"), ensure_ascii=False, indent=2)
                      .replace("\n", "\n  "))
+        if row.get("roles"):
+            out.append("  role config (headline metric + sampling it was earned with):")
+            out += build_role_config_table(row.get("roles") or {})
         for role, result in (row.get("roles") or {}).items():
             out.append(f"  role {role:<11}: "
                        + json.dumps(result, ensure_ascii=False, default=str))
@@ -2382,12 +2512,20 @@ def _http_post_json(url: str, payload: dict, timeout: int = 240) -> dict:
 
 def chat_completion(port: int, messages: list[dict], sampling: Optional[dict] = None,
                     thinking: str = "none", max_tokens: int = 512,
-                    tools: Optional[list[dict]] = None, timeout: int = 240) -> dict:
-    """Non-streaming /v1/chat/completions; returns the response message dict."""
+                    tools: Optional[list[dict]] = None, timeout: int = 240,
+                    seed: Optional[int] = None) -> dict:
+    """Non-streaming /v1/chat/completions; returns the response message dict.
+
+    ``seed`` pins llama-server's sampler RNG for the request (pass
+    case_seed(case_id) on every sampling-sensitive call — 2026-07-16 era).
+    None omits the key (extraction/domain pin their own seed downstream).
+    """
     payload: dict = {"model": "bench", "messages": messages,
                      "max_tokens": max_tokens, "stream": False}
     payload.update(sampling or {})
     payload.update(thinking_request_kwargs(thinking))
+    if seed is not None:
+        payload["seed"] = int(seed)
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -2558,7 +2696,8 @@ def run_stage_b(args, winner: dict, card_sampling: Optional[dict],
                     msg = chat_completion(args.port, messages,
                                           sampling=v["sampling"],
                                           thinking=v["thinking"],
-                                          max_tokens=max_tokens)
+                                          max_tokens=max_tokens,
+                                          seed=case_seed(case.get("id")))
                     ok, _ = cpu_sweep.check_deterministic(case, _message_text(msg))
                     passed += 1 if ok else 0
                 det = round(passed / len(subset), 4) if subset else 0.0
@@ -2600,7 +2739,8 @@ def run_brain_role(port: int, sampling: dict, thinking: str,
         messages = ([{"role": "system", "content": system}] if system else []) \
                    + [{"role": "user", "content": case.get("prompt", "")}]
         msg = chat_completion(port, messages, sampling=sampling,
-                              thinking=thinking, max_tokens=max_tokens)
+                              thinking=thinking, max_tokens=max_tokens,
+                              seed=case_seed(case.get("id")))
         text = _message_text(msg)
         responses[case["id"]] = text
         ok, _ = cpu_sweep.check_deterministic(case, text)
@@ -2676,7 +2816,8 @@ def run_toolcall_role(port: int, sampling: dict, thinking: str) -> dict:
         tools = [TOOL_SCHEMAS[name] for name in case.get("tools", [])
                  if name in TOOL_SCHEMAS]
         msg = chat_completion(port, case["messages"], sampling=sampling,
-                              thinking=thinking, max_tokens=256, tools=tools)
+                              thinking=thinking, max_tokens=256, tools=tools,
+                              seed=case_seed(case.get("id")))
         per_case.append(score_toolcall_case(case, msg))
     agg = aggregate_toolcall(per_case)
     print(f"  [toolcall] tool={agg['correct_tool_rate']:.0%} "
@@ -2712,7 +2853,8 @@ def run_vision_role(port: int, mmproj: Optional[str],
              "image_url": {"url": f"data:image/png;base64,{b64}"}},
         ]
         msg = chat_completion(port, [{"role": "user", "content": content}],
-                              sampling=sampling, thinking=thinking, max_tokens=128)
+                              sampling=sampling, thinking=thinking, max_tokens=128,
+                              seed=case_seed(case.get("id")))
         per_case.append(score_vision_case(case, _message_text(msg)))
     agg = aggregate_pass_rate(per_case)
     print(f"  [vision] pass={agg['pass_rate']:.0%}", flush=True)
@@ -2737,7 +2879,8 @@ def run_codereview_role(port: int, sampling: dict, thinking: str) -> dict:
         prompt = CODEREVIEW_PROMPT.format(lang=case.get("lang", ""),
                                           snippet=case.get("snippet", ""))
         msg = chat_completion(port, [{"role": "user", "content": prompt}],
-                              sampling=sampling, thinking=thinking, max_tokens=384)
+                              sampling=sampling, thinking=thinking, max_tokens=384,
+                              seed=case_seed(case.get("id")))
         per_case.append(score_codereview_case(case, _message_text(msg)))
     agg = aggregate_codereview(per_case)
     print(f"  [codereview] detect={agg['detection_rate']:.0%} "
@@ -2756,7 +2899,8 @@ def run_codegen_role(port: int, sampling: dict, thinking: str) -> dict:
             port,
             [{"role": "system", "content": CODEGEN_SYSTEM},
              {"role": "user", "content": case.get("prompt", "")}],
-            sampling=sampling, thinking=thinking, max_tokens=768)
+            sampling=sampling, thinking=thinking, max_tokens=768,
+            seed=case_seed(case.get("id")))
         code = extract_code_block(_message_text(msg))
         exec_result = None
         if code and code_compiles(code):
@@ -2785,7 +2929,7 @@ def judge_conversation_case(case: dict, response: str) -> dict:
             {"model": "judge",
              "messages": [{"role": "system", "content": sj.JUDGE_SYSTEM_PROMPT},
                           {"role": "user", "content": prompt}],
-             "max_tokens": 200, "temperature": 0.0, "stream": False,
+             "max_tokens": 200, "temperature": 0.0, "seed": 0, "stream": False,
              "chat_template_kwargs": {"enable_thinking": False}},
             timeout=120)
         msg = body["choices"][0]["message"]
@@ -2832,7 +2976,8 @@ def run_conversation_role(port: int, sampling: dict, thinking: str) -> dict:
     per_case: list[dict] = []
     for case in cases:
         msg = chat_completion(port, case["messages"], sampling=sampling,
-                              thinking=thinking, max_tokens=256)
+                              thinking=thinking, max_tokens=256,
+                              seed=case_seed(case.get("id")))
         text = _message_text(msg)
         det = check_conversation_deterministic(text)
         row = {"id": case.get("id"), **det, "judge_score": None}
@@ -2864,7 +3009,8 @@ def run_recordsqa_role(port: int, sampling: dict, thinking: str) -> dict:
             port,
             [{"role": "system", "content": system},
              {"role": "user", "content": case.get("question", "")}],
-            sampling=sampling, thinking=thinking, max_tokens=400)
+            sampling=sampling, thinking=thinking, max_tokens=400,
+            seed=case_seed(case.get("id")))
         result = score_recordsqa_case(case, _message_text(msg))
         print(f"  [recordsqa] {result['id']}: "
               f"{'PASS' if result['passed'] else 'FAIL'}"
@@ -2896,7 +3042,8 @@ def run_narration_role(port: int, sampling: dict, thinking: str) -> dict:
             port,
             [{"role": "system", "content": NARRATION_SYSTEM},
              {"role": "user", "content": case.get("facts_text", "")}],
-            sampling=sampling, thinking=thinking, max_tokens=320)
+            sampling=sampling, thinking=thinking, max_tokens=320,
+            seed=case_seed(case.get("id")))
         text = _message_text(msg)
         row = score_narration_case(case, text)
         if judge_healthy:
@@ -2937,7 +3084,8 @@ def run_longsum_role(port: int, sampling: dict, thinking: str, ctx: int) -> dict
                    + [{"role": "user", "content": user}]
         msg = chat_completion(
             port, messages, sampling=sampling, thinking=thinking,
-            max_tokens=max_tokens_by_kind.get(case.get("kind"), 600))
+            max_tokens=max_tokens_by_kind.get(case.get("kind"), 600),
+            seed=case_seed(case.get("id")))
         result = score_longsum_case(case, _message_text(msg))
         print(f"  [longsum] {result['id']}: recall={result['atom_recall']} "
               f"structure={result['structure_ok']} "
@@ -2964,7 +3112,8 @@ def run_parsejson_role(port: int, sampling: dict, thinking: str) -> dict:
                    + [{"role": "user", "content": case.get("prompt", "")}]
         msg = chat_completion(port, messages, sampling=sampling,
                               thinking=thinking,
-                              max_tokens=case.get("max_tokens", 256))
+                              max_tokens=case.get("max_tokens", 256),
+                              seed=case_seed(case.get("id")))
         result = score_parsejson_case(case, _message_text(msg))
         print(f"  [parsejson] {result['id']}: "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
@@ -2994,14 +3143,20 @@ def run_agentic_role(port: int, sampling: dict, thinking: str) -> dict:
           f"rounds, prod sampling {AGENTIC_PROD_SAMPLING}, "
           f"max_tokens={AGENTIC_MAX_TOKENS})", flush=True)
 
-    def chat_fn(messages: list[dict], tools: Optional[list[dict]]) -> dict:
-        return chat_completion(port, messages, sampling=AGENTIC_PROD_SAMPLING,
-                               thinking=thinking,
-                               max_tokens=AGENTIC_MAX_TOKENS, tools=tools)
+    def make_chat_fn(seed: int):
+        # Per-case seed: every round of one case samples with the same pinned
+        # seed; different cases differ (2026-07-16 seed era).
+        def chat_fn(messages: list[dict], tools: Optional[list[dict]]) -> dict:
+            return chat_completion(port, messages,
+                                   sampling=AGENTIC_PROD_SAMPLING,
+                                   thinking=thinking,
+                                   max_tokens=AGENTIC_MAX_TOKENS, tools=tools,
+                                   seed=seed)
+        return chat_fn
 
     per_case: list[dict] = []
     for case in cases:
-        loop_result = run_agentic_loop(case, chat_fn)
+        loop_result = run_agentic_loop(case, make_chat_fn(case_seed(case.get("id"))))
         result = score_agentic_case(case, loop_result)
         print(f"  [agentic] {result['id']}: rounds={result['rounds']} "
               f"tools={result['tools_ok']} json={result['json_valid']} "
@@ -3031,14 +3186,20 @@ def run_toolstress_role(port: int, sampling: dict, thinking: str) -> dict:
           f"tool rounds, {len(TOOLSTRESS_REGISTRY)} tools offered)",
           flush=True)
 
-    def chat_fn(messages: list[dict], tools: Optional[list[dict]]) -> dict:
-        return chat_completion(port, messages, sampling=sampling,
-                               thinking=thinking,
-                               max_tokens=TOOLSTRESS_MAX_TOKENS, tools=tools)
+    def make_chat_fn(seed: int):
+        # Per-case seed, same policy as the agentic loop (2026-07-16 era).
+        def chat_fn(messages: list[dict], tools: Optional[list[dict]]) -> dict:
+            return chat_completion(port, messages, sampling=sampling,
+                                   thinking=thinking,
+                                   max_tokens=TOOLSTRESS_MAX_TOKENS,
+                                   tools=tools, seed=seed)
+        return chat_fn
 
     per_case: list[dict] = []
     for case in cases:
-        result = score_toolstress_case(case, run_toolstress_loop(case, chat_fn))
+        result = score_toolstress_case(
+            case, run_toolstress_loop(case,
+                                      make_chat_fn(case_seed(case.get("id")))))
         print(f"  [toolstress] {result['id']} ({result['kind']}): "
               f"rounds={result['rounds']} "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
@@ -3062,7 +3223,8 @@ def run_proactive_role(port: int, sampling: dict, thinking: str) -> dict:
     for case in cases:
         msg = chat_completion(
             port, [{"role": "user", "content": case.get("context_block", "")}],
-            sampling=sampling, thinking=thinking, max_tokens=150)
+            sampling=sampling, thinking=thinking, max_tokens=150,
+            seed=case_seed(case.get("id")))
         result = score_proactive_case(case, _message_text(msg))
         print(f"  [proactive] {result['id']}: verdict={result['verdict']} "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
@@ -3103,7 +3265,7 @@ def run_visionclass_role(port: int, mmproj: Optional[str],
         ]
         msg = chat_completion(port, [{"role": "user", "content": content}],
                               sampling=sampling, thinking=thinking,
-                              max_tokens=200)
+                              max_tokens=200, seed=case_seed(case.get("id")))
         result = score_visionclass_case(case, _message_text(msg))
         print(f"  [visionclass] {result['id']}: "
               f"json={result['json_valid']} label={result['label_correct']} "
@@ -3137,7 +3299,8 @@ def run_devplan_role(port: int, sampling: dict, thinking: str) -> dict:
                 port,
                 [{"role": "system", "content": DEVPLAN_DIRECTOR_SYSTEM},
                  {"role": "user", "content": f"Goal: {case.get('goal', '')}"}],
-                sampling=sampling, thinking=thinking, max_tokens=600)
+                sampling=sampling, thinking=thinking, max_tokens=600,
+                seed=case_seed(case.get("id")))
             text = _message_text(msg)
             result = score_devplan_instruction(case, text)
             if judge_healthy and case.get("rubric"):
@@ -3156,7 +3319,8 @@ def run_devplan_role(port: int, sampling: dict, thinking: str) -> dict:
                 port,
                 [{"role": "system", "content": DEVPLAN_REVIEWER_SYSTEM},
                  {"role": "user", "content": review_user}],
-                sampling=sampling, thinking=thinking, max_tokens=300)
+                sampling=sampling, thinking=thinking, max_tokens=300,
+                seed=case_seed(case.get("id")))
             result = score_devplan_review(case, _message_text(msg))
         print(f"  [devplan] {result['id']} ({result['kind']}): "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
@@ -3300,6 +3464,12 @@ def run_stage_c(args, recipe: dict, roles: list[str],
     if "embed" in roles:
         print("[stage C] role embed (separate --embedding spawn)", flush=True)
         results["embed"] = run_embed_role(args, recipe, vram_baseline)
+
+    # Per-role sampling record: WITH WHICH config each score was earned
+    # (registry answers "good WHERE and WITH WHAT config", not just "good").
+    for role, res in results.items():
+        if isinstance(res, dict) and "sampling_used" not in res:
+            res["sampling_used"] = role_sampling_used(role, sampling, thinking)
     return results
 
 

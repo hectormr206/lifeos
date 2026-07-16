@@ -461,6 +461,7 @@ def judge_response(case: dict, response: str) -> dict:
             ],
             "max_tokens": 200,
             "temperature": 0.0,
+            "seed": 0,  # fully deterministic judge (2026-07-16 seed era)
             "stream": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }

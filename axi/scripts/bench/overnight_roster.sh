@@ -49,7 +49,9 @@ run_audit vibethinker-3b a_vt3b \
   --gguf "$M/vibethinker-3b/VibeThinker-3B-Q4_K_M.gguf" \
   --tiers cpu --thinking-modes on,off
 
-# Corrected agentic (production-fidelity, 12 cases) + proactive backfills.
+# Pinned-seed era backfills (2026-07-16): the sampling-sensitive roles are
+# re-scored at deterministic per-case seeds so the already-audited four are
+# comparable with every model audited from tonight on.
 for spec in \
   "qwen35-4b|$M/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf|$M/qwen35-4b/mmproj-F16.gguf" \
   "qwen35-0_8b|$M/qwen35-0_8b/Qwen3.5-0.8B-Q4_K_M.gguf|$M/qwen35-0_8b/mmproj-F16.gguf" \
@@ -58,9 +60,10 @@ for spec in \
   IFS='|' read -r lbl gguf mmproj <<<"$spec"
   extra=()
   [[ $lbl == gemma* ]] && extra=(--extra-flags --reasoning off)
-  log "BACKFILL $lbl agentic+proactive+toolstress"
+  log "BACKFILL $lbl brain+conversation+narration+agentic+proactive+toolstress (pinned-seed era)"
   "$PY" "$AUDIT" --label "$lbl" --gguf "$gguf" --mmproj "$mmproj" \
-    --tiers cpu --use-recipe --roles agentic,proactive,toolstress "${extra[@]}" \
+    --tiers cpu --use-recipe \
+    --roles brain,conversation,narration,agentic,proactive,toolstress "${extra[@]}" \
     > "$LOGDIR/a_backfill_$lbl.log" 2>&1
   log "BACKFILL $lbl exit=$?"
 done

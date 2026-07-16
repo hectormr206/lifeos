@@ -28,6 +28,33 @@ def test_summarize_roles_uses_headline_key():
     assert summary["domain"] == 0.9
 
 
+def test_summarize_roles_ignores_sampling_used_record():
+    """sampling_used (2026-07-16 seed era) is a config record, not a metric —
+    headline extraction must skip it and still find the numeric key."""
+    from axi import bench_audit
+
+    sampling_used = {"temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                     "seed_policy": "per-case-crc32", "thinking": "off"}
+    roles = {
+        "brain": {"final": None, "det": 0.51, "sampling_used": sampling_used},
+        "toolstress": {"pass_rate": 0.9, "sampling_used": sampling_used},
+        "speed": {"decode_p50_toks_s": 40.0,
+                  "sampling_used": {"temperature": None, "top_p": None,
+                                    "top_k": None, "seed_policy": "n/a",
+                                    "thinking": "n/a"}},
+    }
+    summary = bench_audit.summarize_roles(roles)
+    assert summary["brain"] == 0.51
+    assert summary["toolstress"] == 0.9
+    assert summary["speed"] == 40.0
+    # a role dict containing ONLY sampling_used yields None, never the dict
+    assert bench_audit._role_headline(
+        {"sampling_used": sampling_used}, ("pass_rate",)) is None
+    overall, counted = bench_audit.compute_overall(summary)
+    assert counted == 2                      # speed excluded, as always
+    assert overall == pytest.approx((0.51 + 0.9) / 2)
+
+
 def test_summarize_roles_brain_falls_back_to_det_when_final_missing():
     from axi import bench_audit
 
