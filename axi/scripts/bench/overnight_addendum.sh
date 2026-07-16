@@ -52,6 +52,16 @@ rerun_full vibethinker-3b reaudit_vt3b \
   --gguf "$M/vibethinker-3b/VibeThinker-3B-Q4_K_M.gguf" \
   --tiers cpu --thinking-modes on,off
 
+# Omni IS multimodal but its vision roles were skipped (mmproj wasn't
+# downloaded at audit time — now it is). Backfill its vision cells.
+log "BACKFILL qwen3-omni-30b vision+visionclass"
+"$PY" "$AUDIT" --label qwen3-omni-30b \
+  --gguf "$M/qwen3-omni-30b/Qwen3-Omni-30B-A3B-Instruct-Q4_K_M.gguf" \
+  --mmproj "$M/qwen3-omni-30b/mmproj-Q8_0.gguf" \
+  --tiers vram12 --use-recipe --roles vision,visionclass \
+  > "$LOGDIR/backfill_omni_vision.log" 2>&1
+log "BACKFILL qwen3-omni-30b exit=$?"
+
 for spec in \
   "qwen35-4b|$M/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf|$M/qwen35-4b/mmproj-F16.gguf" \
   "qwen35-0_8b|$M/qwen35-0_8b/Qwen3.5-0.8B-Q4_K_M.gguf|$M/qwen35-0_8b/mmproj-F16.gguf" \
