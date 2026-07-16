@@ -1519,15 +1519,14 @@ _AGENTIC_CASE = {
         "web_fetch": {"https://t.example/portada": "peso a 16.8 por dólar"},
     },
     "expected": {"must_call_tools": ["web_search"],
-                 "final_json_keys": ["title", "summary", "items", "markdown"],
+                 "final_json_keys": ["title", "summary", "items"],
                  "facts_must_appear": ["quantum photonics", "850"]},
 }
 
 _AGENTIC_GOOD_JSON = ('{"title": "Tech hoy", "summary": "Quantum Photonics '
                       'recaudó 850 millones.", "items": [{"title": "Quantum '
                       'chip", "summary": "Quantum Photonics recaudó 850 '
-                      'millones.", "url": "https://t.example/q"}], '
-                      '"markdown": "## Tech hoy"}')
+                      'millones.", "url": "https://t.example/q"}]}')
 
 
 def _tool_call(name, args):
@@ -1536,20 +1535,41 @@ def _tool_call(name, args):
 
 
 def test_agentic_loop_tool_then_synthesize():
-    """Round 1 calls web_search, round 2 answers — canned result fed back."""
+    """Round 1 calls web_search, round 2 answers — canned result fed back,
+    with production-fidelity message shapes on every round."""
     seen = []
 
     def fake_chat(messages, tools):
         seen.append((list(messages), tools))
         if len(seen) == 1:
-            assert tools is not None and len(tools) == 2
+            # Production fidelity: the exact briefing system prompt + brain's
+            # tool-instructions suffix, then the user prompt; the production
+            # web_tools schemas offered in production order.
+            assert tools == ma.agentic_tool_schemas()
+            assert messages[0] == {"role": "system",
+                                   "content": ma.build_agentic_system("2026-07-15")}
+            assert messages[1] == {"role": "user",
+                                   "content": _AGENTIC_CASE["prompt"]}
             return {"content": "",
                     "tool_calls": [_tool_call("web_search",
                                               {"query": "noticias tecnología"})]}
-        # The canned snippet must have come back as a role=tool message.
+        # The assistant tool-call turn is echoed brain-style (content + calls).
+        assert messages[2] == {"role": "assistant", "content": "",
+                               "tool_calls": [_tool_call(
+                                   "web_search",
+                                   {"query": "noticias tecnología"})]}
+        # The canned snippet must have come back as a role=tool message with
+        # the production result shape ({ok, query, results}) and the exact
+        # brain._run_tool_call message fields.
         tool_msgs = [m for m in messages if m.get("role") == "tool"]
         assert tool_msgs and "850 millones" in tool_msgs[-1]["content"]
+        assert set(tool_msgs[-1]) == {"role", "tool_call_id", "name", "content"}
         assert tool_msgs[-1]["name"] == "web_search"
+        assert tool_msgs[-1]["tool_call_id"] == "c1"
+        payload = json.loads(tool_msgs[-1]["content"])
+        assert payload["ok"] is True
+        assert payload["query"] == "noticias tecnología"
+        assert payload["results"][0]["url"] == "https://t.example/q"
         return {"content": _AGENTIC_GOOD_JSON}
 
     result = ma.run_agentic_loop(_AGENTIC_CASE, fake_chat)
@@ -1596,13 +1616,20 @@ def test_agentic_loop_infinite_tool_loop_capped_and_forced():
 def test_agentic_canned_handlers_fetch_unknown_and_bad_args():
     log = []
     handlers = ma.make_canned_tool_handlers(_AGENTIC_CASE, log)
-    # web_fetch maps url → canned page (trailing slash tolerated)
+    # web_fetch maps url → canned page (trailing slash tolerated), returning
+    # the production handler shape {ok, url, text, links}.
     msg = ma.execute_canned_tool_call(
         _tool_call("web_fetch", {"url": "https://t.example/portada/"}), handlers)
     assert msg["role"] == "tool" and "16.8" in msg["content"]
+    page = json.loads(msg["content"])
+    assert page["ok"] is True and page["links"] == []
+    # An unfetchable URL mirrors web_fetch_handler: ok=False JSON, never a
+    # raised error nor a 'Tool error' string (read_fn absorbs failures).
     unknown_url = ma.execute_canned_tool_call(
         _tool_call("web_fetch", {"url": "https://other.example"}), handlers)
-    assert "Tool error" in unknown_url["content"]
+    missing = json.loads(unknown_url["content"])
+    assert missing == {"ok": False, "url": "https://other.example",
+                       "text": "", "links": []}
     unknown_tool = ma.execute_canned_tool_call(
         _tool_call("rm_rf", {}), handlers)
     assert "unknown tool" in unknown_tool["content"]
@@ -1614,22 +1641,148 @@ def test_agentic_canned_handlers_fetch_unknown_and_bad_args():
                    {"tool": "web_fetch", "url": "https://other.example"}]
 
 
+def test_agentic_canned_search_shapes_and_fetch_links():
+    """Canned handlers return the exact production web_tools JSON shapes."""
+    log = []
+    handlers = ma.make_canned_tool_handlers(_AGENTIC_CASE, log)
+    hit = json.loads(handlers["web_search"]({"query": "tecnología hoy"}))
+    assert hit["ok"] is True and hit["query"] == "tecnología hoy"
+    assert hit["results"][0]["snippet"].startswith("Quantum Photonics")
+    # Empty canned results → ok=False with the query echoed (prod shape).
+    empty_case = {"canned_tools": {"web_search": {"results": []}}}
+    empty = json.loads(ma.make_canned_tool_handlers(empty_case, [])
+                       ["web_search"]({"query": "nada"}))
+    assert empty == {"ok": False, "query": "nada", "results": []}
+    # Dict-shaped canned page carries the links field through.
+    links_case = {"canned_tools": {"web_fetch": {
+        "https://p.example": {"text": "Portada.",
+                              "links": [{"text": "Nota",
+                                         "url": "https://p.example/nota"}]}}}}
+    fetched = json.loads(ma.make_canned_tool_handlers(links_case, [])
+                         ["web_fetch"]({"url": "https://p.example"}))
+    assert fetched["ok"] is True and fetched["text"] == "Portada."
+    assert fetched["links"] == [{"text": "Nota", "url": "https://p.example/nota"}]
+
+
+def test_agentic_canned_search_keyed_reformulation():
+    """queries/match_any keying: the first query finds nothing (default []),
+    the reformulated query keyed by keyword returns the planted results."""
+    case = {"canned_tools": {"web_search": {
+        "queries": [{"match_any": ["digital axolotl"],
+                     "results": [{"title": "v2", "url": "https://d.example",
+                                  "snippet": "versión 2.0"}]}],
+        "default_results": []}}}
+    log = []
+    handlers = ma.make_canned_tool_handlers(case, log)
+    first = json.loads(handlers["web_search"]({"query": "Ajolote Digital"}))
+    assert first == {"ok": False, "query": "Ajolote Digital", "results": []}
+    second = json.loads(handlers["web_search"]({"query": "Digital Axolotl news"}))
+    assert second["ok"] is True and second["results"][0]["title"] == "v2"
+    # Accent/case-insensitive matching, mirroring the scorer's _contains.
+    third = json.loads(handlers["web_search"]({"query": "DIGITAL AXOLOTL"}))
+    assert third["ok"] is True
+    assert [c["query"] for c in log] == ["Ajolote Digital",
+                                         "Digital Axolotl news",
+                                         "DIGITAL AXOLOTL"]
+
+
 def test_score_agentic_case_json_keys_facts_and_query_discipline():
     base = {"rounds": 1, "forced_synthesis": False,
             "calls": [{"tool": "web_search", "query": "avances tecnología"}]}
-    # Missing 'markdown' key → json invalid
+    # Missing 'items' key → json invalid (production contract title/summary/items)
     bad_json = dict(base, text='{"title": "t", "summary": "Quantum Photonics '
-                               '850", "items": []}')
+                               '850"}')
     assert ma.score_agentic_case(_AGENTIC_CASE, bad_json)["json_valid"] is False
     # Missing planted fact → fails with the fact listed
-    no_fact = dict(base, text='{"title": "t", "summary": "nada", "items": [], '
-                              '"markdown": "x"}')
+    no_fact = dict(base, text='{"title": "t", "summary": "nada", "items": []}')
     score = ma.score_agentic_case(_AGENTIC_CASE, no_fact)
     assert not score["passed"] and "quantum photonics" in score["facts_missing"]
     # Query discipline: web_search called but query never mentions the term
     off_topic = dict(base, text=_AGENTIC_GOOD_JSON,
                      calls=[{"tool": "web_search", "query": "recetas de pastel"}])
     assert ma.score_agentic_case(_AGENTIC_CASE, off_topic)["tools_ok"] is False
+
+
+def test_score_agentic_facts_must_not_appear():
+    """A planted distractor fact surfacing in the final answer fails the case."""
+    case = dict(_AGENTIC_CASE,
+                expected=dict(_AGENTIC_CASE["expected"],
+                              facts_must_not_appear=["aguacate"]))
+    base = {"rounds": 1, "forced_synthesis": False,
+            "calls": [{"tool": "web_search", "query": "noticias tecnología"}]}
+    clean = ma.score_agentic_case(case, dict(base, text=_AGENTIC_GOOD_JSON))
+    assert clean["passed"] and clean["facts_forbidden"] == []
+    tainted_json = _AGENTIC_GOOD_JSON.replace(
+        "Tech hoy", "Tech hoy y el AGUACATE a 95 pesos")
+    tainted = ma.score_agentic_case(case, dict(base, text=tainted_json))
+    assert not tainted["passed"]
+    assert tainted["facts_forbidden"] == ["aguacate"]
+    # Everything else still held — only the forbidden fact failed it.
+    assert tainted["tools_ok"] and tainted["json_valid"]
+    assert tainted["facts_missing"] == []
+
+
+def test_score_agentic_tools_required_false_scores_facts_not_tools():
+    """Tool-OPTIONAL case: pass/fail rides on JSON + facts, with or without
+    tool calls; a smart model may answer straight from the prompt."""
+    case = {"id": "ag-opt",
+            "prompt": "Ya tengo el dato: junta el jueves 23 en el salón Roble.",
+            "canned_tools": {"web_search": {"results": []}},
+            "expected": {"tools_required": False, "must_call_tools": [],
+                         "final_json_keys": ["title", "summary", "items"],
+                         "facts_must_appear": ["jueves 23", "roble"]}}
+    good = ('{"title": "Junta vecinal", "summary": "La junta se movió al '
+            'jueves 23 en el salón Roble.", "items": []}')
+    # No tools called → still a pass (tools_ok is True by definition).
+    no_tools = ma.score_agentic_case(
+        case, {"text": good, "rounds": 0, "calls": [], "forced_synthesis": False})
+    assert no_tools["passed"] and no_tools["tools_ok"]
+    # Tools called anyway → also fine; facts still decide.
+    with_tools = ma.score_agentic_case(
+        case, {"text": good, "rounds": 1,
+               "calls": [{"tool": "web_search", "query": "junta vecinal"}],
+               "forced_synthesis": False})
+    assert with_tools["passed"]
+    # Facts missing still fails even though tool usage is unscored.
+    bad = ma.score_agentic_case(
+        case, {"text": '{"title": "x", "summary": "y", "items": []}',
+               "rounds": 0, "calls": [], "forced_synthesis": False})
+    assert not bad["passed"] and bad["facts_missing"]
+
+
+def test_agentic_system_prompt_and_synthesis_match_production():
+    """The harness must send byte-identical production prompts."""
+    briefing = pytest.importorskip("axi.briefing")
+    assert ma.build_agentic_system("2026-07-15") == (
+        briefing.build_briefing_system("2026-07-15")
+        + ma.BRAIN_TOOL_INSTRUCTIONS_ES)
+    assert ma.AGENTIC_SYNTHESIS_PROMPT == briefing._FINAL_SYNTHESIS_PROMPT
+    # The production JSON contract asks for title/summary/items (markdown is
+    # derived server-side) — the system prompt must carry that exact contract.
+    system = ma.build_agentic_system("2026-07-15")
+    assert '"items"' in system and '"title_es"' in system
+    assert '"markdown"' not in system
+
+
+def test_agentic_tool_schemas_match_production():
+    web_tools = pytest.importorskip("axi.web_tools")
+    schemas = ma.agentic_tool_schemas()
+    assert schemas == [web_tools.web_search_tool_def(),
+                       web_tools.web_fetch_tool_def()]
+    # The production web_search schema exposes freshness controls the
+    # briefing system prompt references (time_range/categories).
+    params = schemas[0]["function"]["parameters"]["properties"]
+    assert {"query", "time_range", "categories"} <= set(params)
+
+
+def test_brain_tool_instructions_mirror_matches_source():
+    """BRAIN_TOOL_INSTRUCTIONS_ES must stay a verbatim mirror of the Spanish
+    tool-instructions suffix in brain._ask_with_tools_impl."""
+    briefing = pytest.importorskip("axi.briefing")
+    brain_src = (Path(briefing.__file__).with_name("brain.py")
+                 .read_text(encoding="utf-8"))
+    for line in ma.BRAIN_TOOL_INSTRUCTIONS_ES.strip().splitlines():
+        assert line.rstrip("\n") in brain_src, line
 
 
 def test_aggregate_agentic_metrics():
@@ -1652,18 +1805,44 @@ def test_aggregate_agentic_metrics():
 
 def test_agentic_research_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "agentic_research.jsonl")
-    assert len(cases) == 5
+    assert len(cases) == 12
     for c in cases:
         exp = c["expected"]
-        assert exp["final_json_keys"] == ["title", "summary", "items", "markdown"]
-        assert exp["must_call_tools"] and exp["facts_must_appear"]
+        # Production JSON contract: markdown is derived, never requested.
+        assert exp["final_json_keys"] == ["title", "summary", "items"]
+        assert exp["facts_must_appear"]
+        tools_required = exp.get("tools_required", True)
+        if tools_required:
+            assert exp["must_call_tools"]
         for tool in exp["must_call_tools"]:
             assert tool in ("web_search", "web_fetch")
-        # Every planted fact must actually be plantable from the canned tools.
-        canned = json.dumps(c["canned_tools"], ensure_ascii=False)
+        # Every planted fact must actually be plantable from the canned tools
+        # (or, on a tool-optional case, from the user prompt itself).
+        sources = json.dumps(c["canned_tools"], ensure_ascii=False) + c["prompt"]
         for fact in exp["facts_must_appear"]:
+            assert ma._contains(sources, fact), (c["id"], fact)
+        # Forbidden facts must be REAL planted distractors (present in the
+        # canned tool output) or the check would be vacuous.
+        canned = json.dumps(c["canned_tools"], ensure_ascii=False)
+        for fact in exp.get("facts_must_not_appear") or []:
             assert ma._contains(canned, fact), (c["id"], fact)
+    # Variety guarantees: fetch usage, chained search+fetch, keyed
+    # reformulation, distractor checks, and one tool-optional case.
     assert any("web_fetch" in c["expected"]["must_call_tools"] for c in cases)
+    assert any(set(c["expected"]["must_call_tools"])
+               == {"web_search", "web_fetch"} for c in cases)
+    assert any((c["canned_tools"].get("web_search") or {}).get("queries")
+               for c in cases)
+    assert sum(1 for c in cases
+               if c["expected"].get("facts_must_not_appear")) >= 2
+    assert sum(1 for c in cases
+               if c["expected"].get("tools_required", True) is False) == 1
+    # The keyed cases must key off terms the scorer also demands in queries.
+    reform = next(c for c in cases if c["id"] == "ag-reformulate-01")
+    spec = reform["canned_tools"]["web_search"]
+    assert spec["default_results"] == []
+    assert any(ma._contains(term, "digital axolotl")
+               for entry in spec["queries"] for term in entry["match_any"])
 
 
 # ── proactive: sentinel discipline + speak-case scoring ──────────────────────
@@ -1742,10 +1921,10 @@ def test_aggregate_proactive_rates():
 
 def test_proactive_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "proactive_thought.jsonl")
-    assert len(cases) == 8
+    assert len(cases) == 12
     restraint = [c for c in cases if c["expected"]["sentinel_expected"]]
     speak = [c for c in cases if not c["expected"]["sentinel_expected"]]
-    assert len(restraint) >= 4
+    assert len(restraint) == 6 and len(speak) == 6
     for c in restraint:
         assert c["expected"]["sentinel"] in ("ESPERAR", "NADA", None)
     for c in speak:
@@ -1754,7 +1933,20 @@ def test_proactive_golden_set_shape():
         assert c["kind"] in ("thought", "elicitation")
         # The context block carries the production sentinel instructions.
         assert "ESPERAR" in c["context_block"] and "NADA" in c["context_block"]
-        assert str(c["max_chars"]) in c["context_block"]
+        # Production prompt-shape invariants (cron._build_prompt /
+        # cron._build_elicitation_prompt): timestamp opener, task block, and
+        # the reflection-only perception lines.
+        assert c["context_block"].startswith("Es ")
+        assert "Tu tarea:" in c["context_block"]
+        assert f"máx {c['max_chars']} caracteres" in c["context_block"]
+        if c["kind"] == "thought":
+            assert "Estado de presencia:" in c["context_block"]
+            assert "No inventes urgencia." in c["context_block"]
+    # The presence-blocked "user likely in a meeting" restraint case exists.
+    meeting = next(c for c in cases if c["id"] == "pt-restraint-05")
+    assert "cámara ocupada" in meeting["context_block"]
+    assert "EN CURSO" in meeting["context_block"]
+    assert meeting["expected"]["sentinel"] == "ESPERAR"
 
 
 # ── visionclass: strict-JSON posture classification scoring ──────────────────

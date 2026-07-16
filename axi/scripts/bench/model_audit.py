@@ -92,6 +92,29 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import bench_model as bm  # v1 orchestrator — spawn/kill/registry/roles reused
 
+# Production sources of truth for the agentic role. The harness sends the
+# EXACT system prompt, forced-synthesis nudge, and tool schemas that
+# axi.briefing.run_agentic_briefing sends, imported (not paraphrased) so the
+# harness cannot drift from production. Both modules are stdlib-only at import
+# time. When the axi package is unavailable the rest of the audit still works;
+# only the agentic role raises with a clear message.
+try:
+    from axi.briefing import (
+        _FINAL_SYNTHESIS_PROMPT as AGENTIC_SYNTHESIS_PROMPT,
+        build_briefing_system as _prod_briefing_system,
+    )
+    from axi.web_tools import (
+        web_fetch_tool_def as _prod_web_fetch_tool_def,
+        web_search_tool_def as _prod_web_search_tool_def,
+    )
+    _AXI_IMPORT_ERROR: Optional[Exception] = None
+except Exception as _axi_import_exc:  # noqa: BLE001 — standalone run without axi
+    AGENTIC_SYNTHESIS_PROMPT = None  # type: ignore[assignment]
+    _prod_briefing_system = None  # type: ignore[assignment]
+    _prod_web_fetch_tool_def = None  # type: ignore[assignment]
+    _prod_web_search_tool_def = None  # type: ignore[assignment]
+    _AXI_IMPORT_ERROR = _axi_import_exc
+
 RESULTS_DIR = SCRIPT_DIR / "results"
 AUDIT_REGISTRY_PATH = RESULTS_DIR / "model_audit.jsonl"
 RECIPES_PATH = RESULTS_DIR / "model_recipes.json"
@@ -1242,82 +1265,101 @@ def aggregate_parsejson(per_case: list[dict]) -> dict:
 
 # ── agentic role pure helpers (multi-round research → JSON synthesis) ────────
 
-AGENTIC_MAX_ROUNDS = 5  # mirrors briefing.run_agentic_briefing max_tool_rounds
+AGENTIC_MAX_ROUNDS = 5   # mirrors briefing.run_agentic_briefing max_tool_rounds=5
+AGENTIC_MAX_TOKENS = 4096  # mirrors briefing.run_agentic_briefing max_tokens=4096
 
-# Mirror of web_tools.web_fetch_tool_def (the second briefing tool; web_search
-# already lives in TOOL_SCHEMAS for the toolcall role).
-WEB_FETCH_SCHEMA: dict = {
-    "type": "function",
-    "function": {
-        "name": "web_fetch",
-        "description": (
-            "Lee el contenido ACTUAL de una URL específica (la portada o "
-            "página que el usuario pidió). Usala cuando el pedido trae un "
-            "enlace concreto, en vez de web_search."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "URL http(s) a leer."},
-            },
-            "required": ["url"],
-        },
-    },
-}
+# Production tool-loop sampling. brain._ask_with_tools_impl builds every round
+# with _base_payload(engine="4b") — temp 0.7 / top_p 0.8 / top_k 20 — for ANY
+# model serving 8080, so a candidate promoted to the briefing role would run
+# with exactly these values. The audit pins them (house sampling is ignored
+# for this role) so agentic numbers are production-realistic.
+AGENTIC_PROD_SAMPLING = {"temperature": 0.7, "top_p": 0.8, "top_k": 20}
 
-# Compact mirror of briefing.build_briefing_system: curate with tools, never
-# fabricate, answer as one JSON object. Unlike production (which derives
-# `markdown` in parse_briefing_result), the audit contract asks the model for
-# all four keys directly so scoring stays a pure JSON check.
-def build_agentic_system(today: str) -> str:
-    return (
-        "Eres un asistente que prepara boletines curados usando herramientas "
-        f"web. Estás respondiendo con fecha de HOY = {today}. "
-        "Usa web_search para buscar información actual en la web abierta y "
-        "web_fetch para LEER una URL concreta que el usuario haya nombrado. "
-        "Basa el boletín ÚNICAMENTE en lo que devuelvan las herramientas: "
-        "NUNCA inventes noticias, datos, cifras ni URLs. Si para un ítem no "
-        "tienes una URL real de las herramientas, deja su 'url' vacío (\"\").\n"
-        "Cuando tengas suficiente información, responde ÚNICAMENTE con un "
-        "objeto JSON con esta forma exacta:\n"
-        '{"title": "<título del boletín>", "summary": "<resumen general breve>", '
-        '"items": [{"title": "<título del ítem>", '
-        '"summary": "<resumen corto 1-2 líneas en español>", '
-        '"url": "<url real de las herramientas o cadena vacía>"}], '
-        '"markdown": "<el boletín completo en formato Markdown>"}\n'
-        "No agregues texto fuera del JSON."
-    )
-
-
-# Mirror of briefing._FINAL_SYNTHESIS_PROMPT (adapted to the audit's 4-key
-# contract): appended on the FINAL round with the tools removed.
-AGENTIC_SYNTHESIS_PROMPT = (
-    "Ya tienes suficiente información de las herramientas anteriores. NO "
-    "busques más. Devuelve AHORA únicamente el objeto JSON del boletín "
-    "(title, summary, items, markdown) con los datos más recientes y "
-    "relevantes que encontraste. No inventes noticias ni URLs."
+# Verbatim mirror of the Spanish tool-instructions suffix that
+# brain._ask_with_tools_impl appends to the caller's system prompt
+# (lang=None → Spanish branch; the graph-recall block is absent in a bench
+# environment with no memory graph, which is also the production no-recall
+# branch). test_model_audit.py asserts this against the brain.py source.
+BRAIN_TOOL_INSTRUCTIONS_ES = (
+    "\n\nHERRAMIENTAS ACTIVAS:\n"
+    "- En esta llamada sí puedes usar las herramientas locales declaradas en tools.\n"
+    "- Si una herramienta devuelve resultados, trátalos como información real provista por el sistema.\n"
+    "- No digas que necesitas /busca si ya recibiste resultados de una herramienta web_search.\n"
+    "- Si los resultados son insuficientes, dilo con precisión y cita lo que sí hay."
 )
 
 
+def _require_axi(symbol) -> None:
+    if symbol is None:
+        raise RuntimeError(
+            "agentic role needs the axi package for the production prompt/"
+            f"schemas — run inside axi/.venv (import error: {_AXI_IMPORT_ERROR})")
+
+
+def build_agentic_system(today: str) -> str:
+    """The EXACT system prompt production sends for an agentic briefing.
+
+    run_agentic_briefing passes briefing.build_briefing_system(today) to
+    ask_with_tools, and brain._ask_with_tools_impl appends the Spanish
+    tool-instructions suffix. The production JSON contract is
+    {title, summary, items:[{title, title_es, summary, detailed_summary, url,
+    hn_url, hn_comments_summary}]} — `markdown` is DERIVED by
+    parse_briefing_result, never requested from the model.
+    """
+    _require_axi(_prod_briefing_system)
+    return _prod_briefing_system(today) + BRAIN_TOOL_INSTRUCTIONS_ES
+
+
 def agentic_tool_schemas() -> list[dict]:
-    """Both briefing tools, in production offer order (search, fetch)."""
-    return [TOOL_SCHEMAS["web_search"], WEB_FETCH_SCHEMA]
+    """Both briefing tools, exactly as production offers them (search, fetch).
+
+    These are axi.web_tools' real schemas — web_search with time_range and
+    categories params and Spanish descriptions — NOT the simplified toolcall-
+    role schema in TOOL_SCHEMAS.
+    """
+    _require_axi(_prod_web_search_tool_def)
+    return [_prod_web_search_tool_def(), _prod_web_fetch_tool_def()]
+
+
+def _canned_search_results(spec: dict, query: str) -> list[dict]:
+    """Resolve the canned result set for one web_search query.
+
+    Two shapes are supported:
+    - flat: {"results": [...]} — every query gets the same set;
+    - keyed: {"queries": [{"match_any": [...], "results": [...]}, ...],
+      "default_results": [...]} — the first entry with a match_any term
+      contained in the query (accent/case-insensitive) wins; queries matching
+      no entry get default_results (usually [] — the planted "first search
+      finds nothing, reformulate and retry" scenario).
+    """
+    for entry in spec.get("queries") or []:
+        if any(_contains(query, term) for term in entry.get("match_any") or []):
+            return entry.get("results") or []
+    if spec.get("queries"):
+        return spec.get("default_results") or []
+    return spec.get("results") or []
 
 
 def make_canned_tool_handlers(case: dict, call_log: list[dict]) -> dict:
     """Canned web_search / web_fetch handlers for one golden case.
 
     Each handler records the call into ``call_log`` (for the tool-usage
-    scorer) and returns the case's planted snippets/page text as a JSON
-    string — the shape a model sees from the real handlers.
+    scorer) and returns EXACTLY the JSON shape the production handlers in
+    axi.web_tools produce — web_search: {ok, query, results:[{title, url,
+    snippet}]}; web_fetch: {ok, url, text, links:[{text, url}]} — serialized
+    the way brain._run_tool_call serializes handler dicts
+    (json.dumps ensure_ascii=False).
     """
     canned = case.get("canned_tools") or {}
 
     def web_search(args: dict) -> str:
         query = str((args or {}).get("query", ""))
         call_log.append({"tool": "web_search", "query": query})
-        results = (canned.get("web_search") or {}).get("results") or []
-        return json.dumps({"results": results}, ensure_ascii=False)
+        results = _canned_search_results(canned.get("web_search") or {}, query)
+        # web_search_handler shape: ok=False on an empty hit list (the system
+        # prompt tells the model to retry with a simpler query).
+        return json.dumps({"ok": bool(results), "query": query,
+                           "results": results}, ensure_ascii=False)
 
     def web_fetch(args: dict) -> str:
         url = str((args or {}).get("url", ""))
@@ -1325,13 +1367,23 @@ def make_canned_tool_handlers(case: dict, call_log: list[dict]) -> dict:
         pages = canned.get("web_fetch") or {}
         page = pages.get(url)
         if page is None:  # tolerate a trailing-slash mismatch
-            for known, text in pages.items():
+            for known, spec in pages.items():
                 if url.rstrip("/") == known.rstrip("/"):
-                    page = text
+                    page = spec
                     break
+        # web_fetch_handler never raises: an unfetchable URL comes back as
+        # ok=False with empty text/links (read_fn absorbs the failure).
         if page is None:
-            return f"Tool error in web_fetch: could not fetch {url!r}"
-        return json.dumps({"url": url, "text": page}, ensure_ascii=False)
+            return json.dumps({"ok": False, "url": url, "text": "",
+                               "links": []}, ensure_ascii=False)
+        # Canned page: plain string (text only) or {"text": ..., "links": [...]}
+        if isinstance(page, dict):
+            text = str(page.get("text") or "")
+            links = list(page.get("links") or [])
+        else:
+            text, links = str(page), []
+        return json.dumps({"ok": bool(text or links), "url": url,
+                           "text": text, "links": links}, ensure_ascii=False)
 
     return {"web_search": web_search, "web_fetch": web_fetch}
 
@@ -1389,12 +1441,14 @@ def run_agentic_loop(case: dict, chat_fn,
             messages.append({"role": "user",
                              "content": AGENTIC_SYNTHESIS_PROMPT})
             msg = chat_fn(messages, None) or {}
-            return {"text": msg.get("content") or "", "rounds": rounds_used,
+            return {"text": (msg.get("content") or "").strip(),
+                    "rounds": rounds_used,
                     "calls": call_log, "forced_synthesis": True}
         msg = chat_fn(messages, tools) or {}
         tool_calls = msg.get("tool_calls") or []
         if not tool_calls:
-            return {"text": msg.get("content") or "", "rounds": rounds_used,
+            return {"text": (msg.get("content") or "").strip(),
+                    "rounds": rounds_used,
                     "calls": call_log, "forced_synthesis": False}
         rounds_used += 1
         messages.append({"role": "assistant",
@@ -1409,18 +1463,27 @@ def run_agentic_loop(case: dict, chat_fn,
 
 
 def score_agentic_case(case: dict, loop_result: dict) -> dict:
-    """Deterministic: tool usage + rounds cap + JSON keys + planted facts."""
+    """Deterministic: tool usage + rounds cap + JSON keys + planted facts.
+
+    ``expected.tools_required: false`` marks a tool-OPTIONAL case (the user
+    prompt already carries the facts): tool usage is NOT scored — the case
+    passes/fails on the JSON contract and facts alone, whether or not the
+    model chose to call tools. ``facts_must_not_appear`` lists planted
+    DISTRACTOR facts that must be absent from the final answer
+    (selection/anti-fabrication check).
+    """
     expected = case.get("expected") or {}
     text = loop_result.get("text") or ""
     calls = loop_result.get("calls") or []
     called = {c.get("tool") for c in calls}
+    tools_required = expected.get("tools_required", True)
     must = expected.get("must_call_tools") or []
-    tools_ok = all(t in called for t in must)
+    tools_ok = all(t in called for t in must) if tools_required else True
     # Query discipline: every query_must_mention term must appear in at least
     # one issued web_search query (accent/case-insensitive).
     qmm = ((case.get("canned_tools") or {}).get("web_search")
            or {}).get("query_must_mention") or []
-    if tools_ok and qmm and "web_search" in must:
+    if tools_required and tools_ok and qmm and "web_search" in must:
         queries = [c.get("query", "") for c in calls
                    if c.get("tool") == "web_search"]
         tools_ok = all(any(_contains(q, term) for q in queries) for term in qmm)
@@ -1429,17 +1492,31 @@ def score_agentic_case(case: dict, loop_result: dict) -> dict:
     json_valid = data is not None and all(k in data for k in keys)
     facts_missing = [f for f in (expected.get("facts_must_appear") or [])
                      if not _contains(text, f)]
+    facts_forbidden = [f for f in (expected.get("facts_must_not_appear") or [])
+                       if _contains(text, f)]
     rounds = loop_result.get("rounds", 0)
     rounds_ok = rounds <= AGENTIC_MAX_ROUNDS
     return {"id": case.get("id"), "tools_ok": tools_ok,
             "json_valid": json_valid, "facts_missing": facts_missing,
+            "facts_forbidden": facts_forbidden,
             "rounds": rounds, "forced_synthesis":
                 bool(loop_result.get("forced_synthesis")),
             "passed": tools_ok and json_valid and not facts_missing
-                      and rounds_ok}
+                      and not facts_forbidden and rounds_ok}
 
 
 def aggregate_agentic(per_case: list[dict]) -> dict:
+    """Role aggregate. Metric semantics (documented in golden_sets/README.md):
+
+    - tool_correct_rate: share of cases whose tool discipline held — every
+      must_call_tools tool was called AND query_must_mention terms appeared in
+      the issued queries; tool-OPTIONAL cases (tools_required=false) count as
+      satisfied by definition, so the rate never punishes skipping tools when
+      the case allows it.
+    - mean_rounds: average number of TOOL rounds used (a round = one model
+      reply containing tool_calls; 0 = answered directly; 5 = exhausted the
+      cap and was forced to synthesize without tools).
+    """
     n = len(per_case)
 
     def rate(hits: int) -> float:
@@ -2509,15 +2586,26 @@ def run_parsejson_role(port: int, sampling: dict, thinking: str) -> dict:
 
 def run_agentic_role(port: int, sampling: dict, thinking: str) -> dict:
     """agentic_research.jsonl: REAL multi-round tool loop against the candidate
-    (canned web_search/web_fetch handlers, <=5 rounds, forced synthesis)."""
+    (canned web_search/web_fetch handlers, <=5 rounds, forced synthesis).
+
+    Fidelity: sampling and max_tokens are PINNED to what production's tool
+    loop would send to any model serving the brain port — brain._base_payload
+    (engine='4b'): temp 0.7 / top_p 0.8 / top_k 20, and
+    briefing.run_agentic_briefing max_tokens=4096. The caller's house/recipe
+    sampling is intentionally ignored for this role: the production loop never
+    consults per-model recipes, so neither may the audit.
+    """
+    del sampling  # see docstring — the prod tool loop pins its own sampling
     import cpu_sweep
     cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "agentic_research.jsonl")
-    print(f"  [agentic] {len(cases)} cases (max {AGENTIC_MAX_ROUNDS} tool rounds)",
-          flush=True)
+    print(f"  [agentic] {len(cases)} cases (max {AGENTIC_MAX_ROUNDS} tool "
+          f"rounds, prod sampling {AGENTIC_PROD_SAMPLING}, "
+          f"max_tokens={AGENTIC_MAX_TOKENS})", flush=True)
 
     def chat_fn(messages: list[dict], tools: Optional[list[dict]]) -> dict:
-        return chat_completion(port, messages, sampling=sampling,
-                               thinking=thinking, max_tokens=1024, tools=tools)
+        return chat_completion(port, messages, sampling=AGENTIC_PROD_SAMPLING,
+                               thinking=thinking,
+                               max_tokens=AGENTIC_MAX_TOKENS, tools=tools)
 
     per_case: list[dict] = []
     for case in cases:
@@ -2527,7 +2615,9 @@ def run_agentic_role(port: int, sampling: dict, thinking: str) -> dict:
               f"tools={result['tools_ok']} json={result['json_valid']} "
               f"{'PASS' if result['passed'] else 'FAIL'}"
               + (f" missing={result['facts_missing']}"
-                 if result["facts_missing"] else ""), flush=True)
+                 if result["facts_missing"] else "")
+              + (f" forbidden={result['facts_forbidden']}"
+                 if result["facts_forbidden"] else ""), flush=True)
         per_case.append(result)
     agg = aggregate_agentic(per_case)
     print(f"  [agentic] pass={agg['pass_rate']:.0%} "
