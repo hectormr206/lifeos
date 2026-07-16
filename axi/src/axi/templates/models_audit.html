@@ -1,0 +1,214 @@
+{% extends "_base.html" %}
+{% block nav_models %}active{% endblock %}
+{% block title %}Auditoría de modelos · Axi{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="auditPage()" x-init="init()">
+  <div class="flex items-baseline justify-between flex-wrap gap-2">
+    <h1 class="text-2xl font-semibold">Auditoría de modelos</h1>
+    <div class="muted text-sm">
+      <span x-text="audits.length"></span> auditorías ·
+      actualizado <span x-text="generatedAtLabel()"></span>
+    </div>
+  </div>
+
+  <div class="panel p-3 muted text-sm">
+    Comparativa en vivo del audit secuencial (15+ modelos × 16 roles). Los datos
+    se leen de <code>model_audit.jsonl</code> y se refrescan solos cada 30s.
+    Esta página nunca escribe en los resultados del audit.
+  </div>
+
+  <template x-if="audits.length === 0">
+    <div class="panel p-12 text-center muted">Aún no hay auditorías.</div>
+  </template>
+
+  <template x-if="audits.length > 0">
+    <div class="space-y-3">
+      <div class="panel p-3 text-sm" x-show="leader">
+        🏆 Va ganando: <strong x-text="leader && leader.label"></strong>
+        con <strong x-text="leader && fmtPct(leader.overall)"></strong>
+        (<span x-text="leader && leader.roles_counted"></span> roles)
+      </div>
+
+      <div id="audit-matrix" class="panel p-2 overflow-x-auto">
+        <table class="w-full text-sm border-collapse">
+          <thead>
+            <tr>
+              <th class="text-left p-2 muted text-xs">#</th>
+              <th class="text-left p-2 muted text-xs">Modelo</th>
+              <th class="text-right p-2 muted text-xs cursor-pointer select-none"
+                  @click="sortBy('overall')">General</th>
+              <template x-for="col in columns" :key="col.role">
+                <th class="text-right p-2 muted text-xs cursor-pointer select-none"
+                    @click="sortBy(col.role)"
+                    x-text="col.header"></th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="row in sortedRows()" :key="row.label + ':' + row.tier">
+              <tr :style="row.overallRank <= 3 ? 'background: var(--panel2)' : ''">
+                <td class="p-2 text-xs" x-text="medal(row.overallRank) + row.overallRank"></td>
+                <td class="p-2">
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium" x-text="row.label"></span>
+                    <span class="px-2 py-0.5 text-xs rounded-full panel2" x-text="row.tier"></span>
+                    <button class="text-xs muted underline" @click="toggleDetail(row)">
+                      <span x-text="detailOpen === detailKey(row) ? 'ocultar' : 'detalle'"></span>
+                    </button>
+                  </div>
+                </td>
+                <td class="text-right p-2" :style="cellStyle(row.overall, 0, 1)" x-text="fmtPct(row.overall)"></td>
+                <template x-for="col in columns" :key="col.role">
+                  <td class="text-right p-2"
+                      :style="col.role === 'speed' ? cellStyle(row.role_summary[col.role], speedRange().min, speedRange().max) : cellStyle(row.role_summary[col.role], 0, 1)"
+                      x-text="col.role === 'speed' ? fmtSpeed(row.role_summary[col.role]) : fmtPct(row.role_summary[col.role])"></td>
+                </template>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <template x-for="row in audits" :key="'detail-' + row.label + ':' + row.tier">
+        <template x-if="detailOpen === detailKey(row)">
+          <div class="panel p-4 space-y-3">
+            <div class="font-semibold" x-text="row.label + ' · ' + row.tier"></div>
+            <div>
+              <div class="text-xs uppercase tracking-wide muted mb-1">Receta</div>
+              <pre class="panel2 p-2 rounded text-xs overflow-x-auto" x-text="JSON.stringify(row.recipe || {}, null, 2)"></pre>
+            </div>
+            <div>
+              <div class="text-xs uppercase tracking-wide muted mb-1">Roles (completo)</div>
+              <pre class="panel2 p-2 rounded text-xs overflow-x-auto" x-text="JSON.stringify(row.roles || {}, null, 2)"></pre>
+            </div>
+            <template x-if="row.stage_a_cells">
+              <div>
+                <div class="text-xs uppercase tracking-wide muted mb-1">Stage A (celdas)</div>
+                <pre class="panel2 p-2 rounded text-xs overflow-x-auto" x-text="JSON.stringify(row.stage_a_cells || [], null, 2)"></pre>
+              </div>
+            </template>
+          </div>
+        </template>
+      </template>
+    </div>
+  </template>
+</div>
+
+<script>
+  function auditPage() {
+    return {
+      audits: [],
+      generatedAt: null,
+      sortField: 'overall',
+      sortDir: 'desc',
+      detailOpen: null,
+      columns: [
+        { role: 'brain',       header: 'cerebro' },
+        { role: 'extraction',  header: 'extracción' },
+        { role: 'domain',      header: 'dominio' },
+        { role: 'toolcall',    header: 'herramientas' },
+        { role: 'vision',      header: 'visión' },
+        { role: 'codereview',  header: 'código-rev' },
+        { role: 'codegen',     header: 'código-gen' },
+        { role: 'conversation', header: 'conversación' },
+        { role: 'recordsqa',   header: 'registros' },
+        { role: 'narration',   header: 'narración' },
+        { role: 'longsum',     header: 'resumen-largo' },
+        { role: 'parsejson',   header: 'parseo' },
+        { role: 'agentic',     header: 'agéntico' },
+        { role: 'proactive',   header: 'proactivo' },
+        { role: 'visionclass', header: 'visión-cls' },
+        { role: 'devplan',     header: 'dev-plan' },
+        { role: 'speed',       header: 'tok/s' },
+      ],
+
+      get leader() {
+        return this.audits.length ? this.audits[0] : null;
+      },
+
+      speedRange() {
+        const values = this.audits
+          .map(r => r.role_summary && r.role_summary.speed)
+          .filter(v => v !== null && v !== undefined);
+        if (!values.length) return { min: 0, max: 1 };
+        return { min: Math.min(...values), max: Math.max(...values) };
+      },
+
+      detailKey(row) { return row.label + ':' + row.tier; },
+      toggleDetail(row) {
+        const key = this.detailKey(row);
+        this.detailOpen = this.detailOpen === key ? null : key;
+      },
+
+      medal(rank) {
+        return rank === 1 ? '🥇 ' : rank === 2 ? '🥈 ' : rank === 3 ? '🥉 ' : '';
+      },
+
+      fmtPct(v) {
+        if (v === null || v === undefined) return '—';
+        return (v * 100).toFixed(1) + '%';
+      },
+      fmtSpeed(v) {
+        if (v === null || v === undefined) return '—';
+        return v.toFixed(1) + ' tok/s';
+      },
+      generatedAtLabel() {
+        if (!this.generatedAt) return '—';
+        try { return new Date(this.generatedAt).toLocaleTimeString(); }
+        catch (e) { return this.generatedAt; }
+      },
+
+      cellStyle(value, min, max) {
+        if (value === null || value === undefined) return 'color: var(--muted)';
+        const range = (max - min) || 1;
+        const t = Math.max(0, Math.min(1, (value - min) / range));
+        const hue = t * 120; // 0 = red, 120 = green
+        return 'color: hsl(' + hue.toFixed(0) + ', 70%, 55%); font-variant-numeric: tabular-nums;';
+      },
+
+      sortBy(field) {
+        if (this.sortField === field) {
+          this.sortDir = this.sortDir === 'desc' ? 'asc' : 'desc';
+        } else {
+          this.sortField = field;
+          this.sortDir = 'desc';
+        }
+      },
+
+      sortedRows() {
+        const field = this.sortField;
+        const dir = this.sortDir === 'desc' ? -1 : 1;
+        const rows = [...this.audits];
+        rows.sort((a, b) => {
+          const av = field === 'overall' ? a.overall : a.role_summary[field];
+          const bv = field === 'overall' ? b.overall : b.role_summary[field];
+          if (av === null || av === undefined) return 1;   // nulls always last
+          if (bv === null || bv === undefined) return -1;
+          return dir * (av - bv) * -1;
+        });
+        return rows;
+      },
+
+      async refresh() {
+        try {
+          const r = await fetch('/api/bench/audit');
+          if (!r.ok) return;
+          const body = await r.json();
+          // overallRank is fixed to the API's ranking order (overall DESC)
+          // regardless of which column the table is currently sorted by, so
+          // the leader medal always tracks the true leaderboard position.
+          body.audits.forEach((row, i) => { row.overallRank = i + 1; });
+          this.audits = body.audits;
+          this.generatedAt = body.generated_at;
+        } catch (e) { /* keep last good list */ }
+      },
+
+      init() {
+        this.refresh();
+        this._timer = setInterval(() => this.refresh(), 30000);
+      },
+    };
+  }
+</script>
+{% endblock %}

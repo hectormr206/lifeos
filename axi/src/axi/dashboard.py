@@ -76,6 +76,7 @@ from axi.interoception import (  # noqa: F401
     _vram_snapshot,
     disk_free_gb,
 )
+from axi import bench_audit
 from axi import models_manager
 from axi import model_params_schema
 
@@ -2926,6 +2927,23 @@ def api_model_progress(model_id: str) -> dict[str, Any]:
     if models_manager.by_id(model_id) is None:
         raise HTTPException(status_code=404, detail="unknown model id")
     return _get_model_progress(model_id)
+
+
+# ────────────────────────── model audit results ────────────────────────
+#
+# Read-only view of scripts/bench/results/model_audit.jsonl + model_recipes
+# .json, written by the bench harness (scripts/bench/model_audit.py) during a
+# long sequential model x role audit. This dashboard page never writes to
+# those files — see axi/bench_audit.py for the aggregation logic.
+
+@app.get("/models/audit", response_class=HTMLResponse)
+def models_audit_page(request: Request):
+    return templates.TemplateResponse(request, "models_audit.html", {})
+
+
+@app.get("/api/bench/audit")
+def api_bench_audit() -> dict[str, Any]:
+    return bench_audit.build_audit_payload(bench_audit.results_dir())
 
 
 @app.post("/api/models/{model_id}/download")

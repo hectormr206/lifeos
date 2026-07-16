@@ -468,6 +468,7 @@
       {{ navlink('/posture', '🪑 Postura', request.url.path) }}
       <div class="sidebar-section">Sistema</div>
       {{ navlink('/models', '🧠 Modelos', request.url.path) }}
+      {{ navlink('/models/audit', '📊 Auditoría de modelos', request.url.path) }}
       {{ navlink('/desarrollo', '🛠️ Desarrollo', request.url.path) }}
       {{ navlink('/dev', '🤖 Autodesarrollo', request.url.path) }}
       {{ navlink('/setup', '🩹 Setup & Salud', request.url.path) }}
@@ -773,6 +774,7 @@
       <div class="text-xs uppercase tracking-wider muted mb-3">Sistema</div>
       <div class="grid grid-cols-4 gap-2">
         {{ navtile('/models', '🧠', 'Modelos', request.url.path) }}
+        {{ navtile('/models/audit', '📊', 'Auditoría', request.url.path) }}
         {{ navtile('/desarrollo', '🛠️', 'Desarrollo', request.url.path) }}
         {{ navtile('/dev', '🤖', 'Autodesarrollo', request.url.path) }}
         {{ navtile('/setup', '🩹', 'Setup', request.url.path) }}
@@ -1171,6 +1173,7 @@
         '/calendar': 'Calendario', '/reminders': 'Recordatorios',
         '/insights': 'Insights', '/posture': 'Postura', '/meetings': 'Reuniones',
         '/memory': 'Memoria', '/brain3d': 'Grafo', '/models': 'Modelos',
+        '/models/audit': 'Auditoría de modelos',
         '/events': 'Eventos', '/translate': 'Traductor', '/calculator': 'Calculadora',
       };
       // Only hidden where it's truly redundant: /desarrollo already has "+ Nuevo".
