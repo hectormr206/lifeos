@@ -244,3 +244,23 @@ def test_models_audit_page_renders_matrix_and_spanish_title(bench_client):
     assert r.status_code == 200
     assert 'id="audit-matrix"' in r.text
     assert "Auditoría de modelos" in r.text
+
+
+def test_load_audit_rows_merges_roles_per_label_tier(tmp_path):
+    """A targeted backfill row (single role) must FILL the card, not clobber it."""
+    import json as _json
+    from axi import bench_audit
+
+    p = tmp_path / "model_audit.jsonl"
+    full = {"label": "m", "tier": "cpu", "timestamp_utc": "2026-07-15T01:00:00+00:00",
+            "roles": {"brain": {"final": 0.7}, "visionclass": {"skipped": "no assets"}}}
+    backfill = {"label": "m", "tier": "cpu", "timestamp_utc": "2026-07-15T02:00:00+00:00",
+                "roles": {"visionclass": {"pass_rate": 0.5}}}
+    p.write_text(_json.dumps(full) + "\n" + _json.dumps(backfill) + "\n")
+
+    rows = bench_audit.load_audit_rows(p)
+    assert len(rows) == 1
+    roles = rows[0]["roles"]
+    # brain preserved from the full audit, visionclass overlaid by the backfill
+    assert roles["brain"] == {"final": 0.7}
+    assert roles["visionclass"] == {"pass_rate": 0.5}

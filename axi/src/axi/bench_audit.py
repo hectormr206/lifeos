@@ -92,11 +92,19 @@ def compute_overall(summary: dict[str, float | None]) -> tuple[float | None, int
 
 
 def load_audit_rows(jsonl_path: Path) -> list[dict[str, Any]]:
-    """Read model_audit.jsonl, skip malformed lines, keep newest per (label, tier)."""
+    """Read model_audit.jsonl and MERGE rows per (label, tier).
+
+    Rows are merged in chronological order: top-level fields come from the
+    newest row, but ``roles`` are overlaid PER ROLE (a newer row's roles
+    update only the roles it actually ran). This matters for backfills — a
+    targeted re-run like ``--use-recipe --roles visionclass`` appends a row
+    containing only that role, and it must fill the gap in the model's card
+    rather than clobber the full audit. Malformed lines are skipped.
+    """
     if not jsonl_path.exists():
         return []
 
-    newest: dict[tuple[str, str], dict[str, Any]] = {}
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     with jsonl_path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -108,11 +116,20 @@ def load_audit_rows(jsonl_path: Path) -> list[dict[str, Any]]:
                 continue
             if not isinstance(row, dict) or "label" not in row or "tier" not in row:
                 continue
-            key = (row["label"], row["tier"])
-            prev = newest.get(key)
-            if prev is None or (row.get("timestamp_utc") or "") >= (prev.get("timestamp_utc") or ""):
-                newest[key] = row
-    return list(newest.values())
+            grouped.setdefault((row["label"], row["tier"]), []).append(row)
+
+    merged_rows: list[dict[str, Any]] = []
+    for rows in grouped.values():
+        rows.sort(key=lambda r: r.get("timestamp_utc") or "")
+        merged = dict(rows[-1])  # newest row wins for top-level fields
+        roles: dict[str, Any] = {}
+        for row in rows:  # chronological — later rows overlay per role
+            row_roles = row.get("roles")
+            if isinstance(row_roles, dict):
+                roles.update(row_roles)
+        merged["roles"] = roles
+        merged_rows.append(merged)
+    return merged_rows
 
 
 def load_recipes(recipes_path: Path) -> dict[str, Any]:
