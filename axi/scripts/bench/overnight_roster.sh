@@ -27,6 +27,17 @@ run_audit() { # label log-name args...
   log "AUDIT $label exit=$?"
 }
 
+# ─── Quiet mode: silence every scheduled CPU consumer for the night ─────
+# Order matters: heartbeat first (it resurrects axi-voice), then the rest.
+# axi-dashboard hosts ALL crons (morning news briefing, adaptive digest,
+# autonomous agent, posture) — stopping it silences them in one blow.
+# llama-server stays up: it IS the Block-A judge.
+log "=== QUIET MODE: stopping heartbeat/voice/whisper/tray/dashboard ==="
+systemctl --user stop axi-heartbeat.service axi-voice.service \
+  axi-whisper.service axi-tray.service axi-dashboard.service \
+  >> "$LOGDIR/driver.log" 2>&1
+sleep 3
+
 # ─── Block A: prod judge alive — CPU quality ────────────────────────────
 log "=== BLOCK A: CPU quality (prod judge on 8080) ==="
 
@@ -136,11 +147,24 @@ kill "$JUDGE_PID" 2>/dev/null
 sleep 3
 bash "$REPO/axi/scripts/axi-game-off" >> "$LOGDIR/driver.log" 2>&1
 
-# Re-enable the nightly self-improve (paused for tonight only).
-curl -sk -X POST https://127.0.0.1:8081/api/config \
-  -H 'Content-Type: application/json' \
-  -d '{"dev_self_improve_enabled": true}' >> "$LOGDIR/driver.log" 2>&1
-systemctl --user restart axi-voice.service
+# Re-enable the nightly self-improve DIRECTLY in config.json (the dashboard
+# is still stopped at this point, so its API is unavailable). config.save()
+# validates; axi-voice reads the flag fresh on start.
+"$REPO/axi/.venv/bin/python" - <<'PYEOF' >> "$LOGDIR/driver.log" 2>&1
+from axi import config
+cfg = dict(config._load())
+cfg["dev_self_improve_enabled"] = True
+config.save(cfg)
+print("dev_self_improve_enabled restored to True")
+PYEOF
+
+# Leave quiet mode: dashboard first (crons + audit page back), then voice
+# stack, then heartbeat LAST (so it never sees a half-restored stack).
+systemctl --user start axi-dashboard.service
+sleep 5
+systemctl --user start axi-whisper.service axi-tray.service axi-voice.service
+sleep 3
+systemctl --user start axi-heartbeat.service
 
 log "=== FINAL MATRIX ==="
 "$PY" "$AUDIT" --compare | tee -a "$LOGDIR/driver.log"
