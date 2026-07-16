@@ -1891,6 +1891,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--report", default=None, metavar="LABEL",
                    help="Print one model's full audit detail and exit")
     p.add_argument("--now", default=None, help="Override timestamp_utc (ISO 8601)")
+    p.add_argument("--extra-flags", nargs=argparse.REMAINDER, default=[],
+                   help="Verbatim llama-server flags appended to EVERY spawn "
+                        "(stage A cells and stage C). Must come LAST. e.g. "
+                        "--extra-flags --reasoning off  (gemma E-series leaks "
+                        "reasoning as prose without it — June 2026 lesson)")
     return p
 
 
@@ -1949,11 +1954,13 @@ def _spawn_recipe_server(args, ngl: int, cpu_moe: bool, extra_flags: list[str],
                          with_mmproj: bool = True):
     """Spawn one candidate server; returns (proc, healthy)."""
     import brain_bench as bb
+    # Global --extra-flags apply to EVERY spawn, after the per-cell flags.
+    all_flags = list(extra_flags or []) + list(getattr(args, "extra_flags", None) or [])
     argv = bm.build_server_argv(
         server_bin=args.server_bin, gguf=args.gguf, ngl=ngl, cpu_moe=cpu_moe,
         ctx=args.ctx, port=args.port,
         mmproj=args.mmproj if with_mmproj else None,
-        extra_flags=extra_flags)
+        extra_flags=all_flags)
     # Tripwire: refuse to spawn if something ALREADY answers on the bench port.
     # Otherwise our health poll could succeed against a foreign/dying server and
     # every quality role would silently measure the wrong process (this exact

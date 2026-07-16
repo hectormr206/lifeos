@@ -1987,3 +1987,32 @@ def test_audit_matrix_shows_batch2_columns():
     # rows without the new roles render dashes, not crashes
     assert "epsilon" in ma.build_audit_matrix(
         [_audit_row("epsilon", "cpu", "2026-07-15T00:00:00+00:00")])
+
+
+def test_global_extra_flags_reach_every_spawn(monkeypatch):
+    """--extra-flags (argparse REMAINDER) must be appended to the spawn argv
+    after per-cell flags — gemma E-series needs a global --reasoning off."""
+    import types
+    import model_audit as ma
+
+    captured = {}
+
+    def fake_build(server_bin, gguf, ngl, cpu_moe, ctx, port, mmproj, extra_flags):
+        captured["flags"] = list(extra_flags)
+        return ["/bin/true"]
+
+    class FakeProc:
+        pid = 1
+        def poll(self): return None
+
+    monkeypatch.setattr(ma.bm, "build_server_argv", fake_build)
+    monkeypatch.setattr(ma.bm, "spawn_server", lambda argv, hide_gpu=False: FakeProc())
+    monkeypatch.setattr(ma.bm, "http_ok", lambda url, timeout=3: False)
+    import brain_bench as bb
+    monkeypatch.setattr(bb, "poll_health", lambda port, timeout_s=180: True)
+
+    args = types.SimpleNamespace(
+        server_bin="/usr/bin/llama-server", gguf="/tmp/x.gguf", ctx=1024,
+        port=18080, mmproj=None, extra_flags=["--reasoning", "off"])
+    ma._spawn_recipe_server(args, ngl=0, cpu_moe=False, extra_flags=["-t", "8"])
+    assert captured["flags"] == ["-t", "8", "--reasoning", "off"]
