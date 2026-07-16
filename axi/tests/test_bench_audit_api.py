@@ -297,6 +297,113 @@ def test_models_audit_page_renders_matrix_and_spanish_title(bench_client):
     assert "Auditoría de modelos" in r.text
 
 
+def test_api_bench_audit_status_idle_when_missing(bench_client):
+    client, _results_root = bench_client
+    r = client.get("/api/bench/audit")
+    assert r.status_code == 200
+    assert r.json()["status"] == {"state": "idle"}
+
+
+def test_api_bench_audit_includes_live_status(bench_client):
+    client, results_root = bench_client
+    status = {
+        "state": "running", "label": "gemma4-e2b", "tier": "gpu",
+        "phase": "stageA", "current_role": "extraction",
+        "role_case_done": 5, "role_case_total": 10,
+        "batch": {"queue": ["gemma4-e2b"], "position": 1, "total": 1},
+        "updated_at": "2026-07-16T00:00:00+00:00",
+    }
+    (results_root / "audit_status.json").write_text(json.dumps(status))
+    r = client.get("/api/bench/audit")
+    assert r.status_code == 200
+    assert r.json()["status"] == status
+
+
+def test_api_bench_audit_control_pause_and_run(bench_client):
+    client, results_root = bench_client
+    for action in ("pause", "run"):
+        r = client.post("/api/bench/audit/control", json={"action": action})
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "action": action}
+        written = json.loads((results_root / "audit_control.json").read_text())
+        assert written == {"action": action}
+
+
+def test_api_bench_audit_control_rejects_invalid(bench_client):
+    client, results_root = bench_client
+    for body in ({"action": "stop"}, {"action": ""}, {}, {"other": 1}, [1], "x"):
+        r = client.post("/api/bench/audit/control", json=body)
+        assert r.status_code == 400
+    assert not (results_root / "audit_control.json").exists()
+
+
+def test_models_audit_page_has_status_card_and_controls(bench_client):
+    client, _results_root = bench_client
+    r = client.get("/models/audit")
+    assert r.status_code == 200
+    assert 'id="audit-status-card"' in r.text
+    assert "Pausar tras el modelo actual" in r.text
+    assert "Reanudar" in r.text
+    assert "Pausado — GPU libre para jugar" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Live-status + pause/resume control (audit_status.json / audit_control.json)
+# ---------------------------------------------------------------------------
+
+def test_load_status_missing_file_is_idle(tmp_path):
+    from axi import bench_audit
+
+    assert bench_audit.load_status(tmp_path) == {"state": "idle"}
+
+
+def test_load_status_malformed_is_idle(tmp_path):
+    from axi import bench_audit
+
+    (tmp_path / "audit_status.json").write_text("{not json")
+    assert bench_audit.load_status(tmp_path) == {"state": "idle"}
+    # non-dict JSON is malformed too — never leak a list/scalar to the UI
+    (tmp_path / "audit_status.json").write_text("[1, 2]")
+    assert bench_audit.load_status(tmp_path) == {"state": "idle"}
+
+
+def test_load_status_returns_valid_content(tmp_path):
+    from axi import bench_audit
+
+    status = {
+        "state": "running", "label": "qwen35-0_8b", "tier": "cpu",
+        "phase": "stageC", "current_role": "brain",
+        "role_case_done": 3, "role_case_total": 12,
+        "batch": {"queue": ["a", "b"], "position": 1, "total": 2},
+        "updated_at": "2026-07-16T00:00:00+00:00",
+    }
+    (tmp_path / "audit_status.json").write_text(json.dumps(status))
+    assert bench_audit.load_status(tmp_path) == status
+
+
+def test_write_control_writes_pause_and_run(tmp_path):
+    from axi import bench_audit
+
+    results = tmp_path / "results"
+    results.mkdir()
+    bench_audit.write_control(results, "pause")
+    control = results / "audit_control.json"
+    assert json.loads(control.read_text()) == {"action": "pause"}
+    bench_audit.write_control(results, "run")
+    assert json.loads(control.read_text()) == {"action": "run"}
+    # atomic write must not leave the tmp file behind
+    assert list(results.iterdir()) == [control]
+
+
+def test_write_control_rejects_invalid_action(tmp_path):
+    from axi import bench_audit
+
+    for bad in ("stop", "", None, "PAUSE", {"action": "pause"}):
+        with pytest.raises(ValueError):
+            bench_audit.write_control(tmp_path, bad)
+    assert not (tmp_path / "audit_control.json").exists()
+
+
 def test_load_audit_rows_merges_roles_per_label_tier(tmp_path):
     """A targeted backfill row (single role) must FILL the card, not clobber it."""
     import json as _json

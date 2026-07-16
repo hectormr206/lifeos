@@ -1,0 +1,176 @@
+Audit: gemma4-e4b | tiers=['cpu'] | roles=['speed', 'brain', 'extraction', 'domain', 'toolcall', 'codereview', 'vision', 'codegen', 'conversation', 'recordsqa', 'narration', 'longsum', 'parsejson', 'agentic', 'proactive', 'visionclass', 'devplan', 'toolstress'] | moe=False | vram baseline=333 MiB
+
+######################################################################
+#  TIER cpu
+######################################################################
+[stage A] tier=cpu — sweeping 3 cells
+  [stage A] cell cpu-t4 ...
+  Spawning: /usr/bin/llama-server -m gemma-4-E4B-it-Q4_K_M.gguf ...
+    -> decode=11.34 tok/s ttft=532.3ms vramΔ=0
+  [stage A] cell cpu-t8 ...
+  Spawning: /usr/bin/llama-server -m gemma-4-E4B-it-Q4_K_M.gguf ...
+    -> decode=14.93 tok/s ttft=333.1ms vramΔ=0
+  [stage A] cell cpu-t16 ...
+  Spawning: /usr/bin/llama-server -m gemma-4-E4B-it-Q4_K_M.gguf ...
+    -> decode=14.63 tok/s ttft=319.2ms vramΔ=0
+[stage B] 1 variants x 12 fast cases
+  Spawning: /usr/bin/llama-server -m gemma-4-E4B-it-Q4_K_M.gguf ...
+  [stage B] house-think_off: det=0.6667
+[recipe] saved peak recipe for gemma4-e4b/cpu → /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+  Spawning: /usr/bin/llama-server -m gemma-4-E4B-it-Q4_K_M.gguf ...
+[stage C] role speed
+  [speed] warmup (discarded)...
+  [speed 1/10] ttft=141.2ms decode=15.69tok/s
+  [speed 2/10] ttft=356.5ms decode=15.49tok/s
+  [speed 3/10] ttft=398.0ms decode=15.39tok/s
+  [speed 4/10] ttft=371.7ms decode=15.26tok/s
+  [speed 5/10] ttft=337.1ms decode=15.27tok/s
+  [speed 6/10] ttft=153.9ms decode=15.54tok/s
+  [speed 7/10] ttft=345.3ms decode=15.27tok/s
+  [speed 8/10] ttft=396.7ms decode=15.27tok/s
+  [speed 9/10] ttft=390.9ms decode=15.23tok/s
+  [speed 10/10] ttft=364.7ms decode=15.32tok/s
+[stage C] role brain
+  [brain] 35 cases (6 rubric), max_tokens=200
+  [brain 1/35] conv_001: PASS
+  [brain 2/35] conv_002: PASS
+  [brain 3/35] conv_003: PASS
+  [brain 4/35] conv_004: FAIL
+  [brain 5/35] remind_001: PASS
+  [brain 6/35] remind_002: PASS
+  [brain 7/35] remind_003: PASS
+  [brain 8/35] remind_004: FAIL
+  [brain 9/35] remind_005: PASS
+  [brain 10/35] intent_001: PASS
+  [brain 11/35] intent_002: PASS
+  [brain 12/35] intent_003: PASS
+  [brain 13/35] summ_001: PASS
+  [brain 14/35] summ_002: PASS
+  [brain 15/35] summ_003: FAIL
+  [brain 16/35] summ_004: PASS
+  [brain 17/35] summ_005: FAIL
+  [brain 18/35] reason_001: PASS
+  [brain 19/35] reason_002: PASS
+  [brain 20/35] reason_003: FAIL
+  [brain 21/35] reason_004: PASS
+  [brain 22/35] instruct_001: PASS
+  [brain 23/35] instruct_002: PASS
+  [brain 24/35] instruct_003: PASS
+  [brain 25/35] instruct_004: PASS
+  [brain 26/35] refusal_001: FAIL
+  [brain 27/35] refusal_002: PASS
+  [brain 28/35] refusal_003: FAIL
+  [brain 29/35] fluency_001: FAIL
+  [brain 30/35] fluency_002: FAIL
+  [brain 31/35] fluency_003: FAIL
+  [brain 32/35] hard_001: PASS
+  [brain 33/35] hard_002: FAIL
+  [brain 34/35] hard_003: FAIL
+  [brain 35/35] hard_004: PASS
+[stage C] role extraction
+  [extraction] 69 cases via nano endpoint http://127.0.0.1:18080
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+  [extraction 10/69]
+  [extraction 20/69]
+  [extraction 30/69]
+  [extraction 40/69]
+  [extraction 50/69]
+  [extraction 60/69]
+[stage C] role domain
+  [domain] 36 cases via http://127.0.0.1:18080
+  [domain 15/36]
+  [domain 30/36]
+[stage C] role toolcall
+  [toolcall] 12 cases
+  [toolcall] tool=78% args=78% false-call=0%
+[stage C] role codereview
+  [codereview] 8 cases
+  [codereview] detect=100% false-pos=0%
+[stage C] role vision
+  [vision] vision skipped: no --mmproj provided
+[stage C] role codegen
+  [codegen] 8 cases
+  [codegen] cg01: FAIL
+  [codegen] cg02: PASS
+  [codegen] cg03: FAIL
+  [codegen] cg04: PASS
+  [codegen] cg05: PASS
+  [codegen] cg06: PASS
+  [codegen] cg07: PASS
+  [codegen] cg08: PASS
+  [codegen] pass=75% compile=100%
+[stage C] role conversation
+  [conversation] 8 cases
+  [conversation] cq01: es=True sane=True judge=0.805
+  [conversation] cq02: es=True sane=True judge=0.68
+  [conversation] cq03: es=True sane=True judge=0.945
+  [conversation] cq04: es=True sane=True judge=0.445
+  [conversation] cq05: es=True sane=True judge=0.86
+  [conversation] cq06: es=True sane=True judge=0.82
+  [conversation] cq07: es=True sane=True judge=0.9175
+  [conversation] cq08: es=True sane=True judge=0.85
+  [conversation] judge=0.7903 spanish=100%
+[stage C] role recordsqa
+  [recordsqa] 10 cases
+  [recordsqa] rq-01: PASS
+  [recordsqa] rq-02: PASS
+  [recordsqa] rq-03: PASS
+  [recordsqa] rq-04: PASS
+  [recordsqa] rq-05: PASS
+  [recordsqa] rq-06: PASS
+  [recordsqa] rq-07: PASS
+  [recordsqa] rq-08-trap: PASS
+  [recordsqa] rq-09-trap: FAIL
+  [recordsqa] rq-10-trap: PASS
+  [recordsqa] pass=90% fabrication=0%
+[stage C] role narration
+  [narration] 8 cases
+  [narration] dn-01: fidelity=True structure=True judge=0.92
+  [narration] dn-02: fidelity=True structure=True judge=0.92
+  [narration] dn-03: fidelity=True structure=True judge=0.92
+  [narration] dn-04: fidelity=False structure=True judge=0.92
+  [narration] dn-05: fidelity=False structure=True judge=0.92
+  [narration] dn-06: fidelity=True structure=True judge=0.87
+  [narration] dn-07: fidelity=True structure=False judge=0.92
+  [narration] dn-08: fidelity=True structure=True judge=0.87
+  [narration] fidelity=75% structure=88%
+[stage C] role longsum
+  [longsum] 6 cases (ctx=32768)
+  [longsum] ls-01-window: recall=1.0 structure=True PASS
+  [longsum] ls-02-window: recall=1.0 structure=True PASS
+  [longsum] ls-03-exec: recall=1.0 structure=True PASS
+  [longsum] ls-04-exec: recall=1.0 structure=True PASS
+  [longsum] ls-05-chat: recall=1.0 structure=True PASS
+  [longsum] ls-06-chat: recall=0.75 structure=True FAIL
+  [longsum] atom_recall=96% pass=83%
+[stage C] role parsejson
+  [parsejson] 14 cases
+  [parsejson] sp-when-01: FAIL
+  [parsejson] sp-when-02: PASS
+  [parsejson] sp-when-03-neg: PASS
+  [parsejson] sp-sched-01: PASS
+  [parsejson] sp-sched-02: PASS
+  [parsejson] sp-sched-03: PASS
+  [parsejson] sp-sched-04-neg: PASS
+  [parsejson] sp-voice-01: PASS
+  [parsejson] sp-voice-02: PASS
+  [parsejson] sp-voice-03-neg: PASS
+  [parsejson] sp-facts-01: PASS
+  [parsejson] sp-facts-02-neg: PASS
+  [parsejson] sp-coref-01: FAIL
+  [parsejson] sp-coref-02-neg: PASS
+  [parsejson] pass=86% negatives=100% json=100%
+[stage C] role agentic
+  [agentic] 12 cases (max 5 tool rounds, prod sampling {'temperature': 0.7, 'top_p': 0.8, 'top_k': 20}, max_tokens=4096)
+ERROR: agentic role needs the axi package for the production prompt/schemas — run inside axi/.venv (import error: No module named 'axi')
+
+=======================================================================================================================================================================================================
+  MODEL AUDIT MATRIX  (newest audit per label+tier)
+=======================================================================================================================================================================================================
+  Label                tier     brain  extr%   dom%  tool%   vis%   rev%  code%   conv recQA%   narr  lsum% parse% agent% proact%  vcls%   dev% tstress%   tok/s  VRAM MiB thinking 
+  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  gemma4-e2b           cpu      0.730  84.1% 100.0% 100.0% 100.0% 100.0%  75.0%  0.713  90.0%  75.0% 100.0%  78.6%  20.0%   37.5%  16.7% 100.0% -    19.4         0 off      
+  qwen35-0_8b          cpu      0.480  62.3%  94.4%  41.7%  62.5%  25.0%  25.0%  0.276  30.0%  37.5%  66.7%  21.4%   0.0%   25.0%   0.0%  62.5% -    55.5         0 off      
+  qwen35-2b            cpu      0.483  75.4%  97.2% 100.0%  87.5%  62.5%  12.5%  0.596  70.0%  50.0%  83.3%  71.4%  40.0%   12.5%  16.7%  62.5% -    33.0         0 off      
+  qwen35-4b            cpu     - - - - - - - - - - - - - -  16.7% - - -         0 off      
+=======================================================================================================================================================================================================

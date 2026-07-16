@@ -2934,7 +2934,9 @@ def api_model_progress(model_id: str) -> dict[str, Any]:
 # Read-only view of scripts/bench/results/model_audit.jsonl + model_recipes
 # .json, written by the bench harness (scripts/bench/model_audit.py) during a
 # long sequential model x role audit. This dashboard page never writes to
-# those files — see axi/bench_audit.py for the aggregation logic.
+# those files — see axi/bench_audit.py for the aggregation logic. The one
+# sanctioned write is audit_control.json (pause/resume handshake), via the
+# POST /api/bench/audit/control endpoint below.
 
 @app.get("/models/audit", response_class=HTMLResponse)
 def models_audit_page(request: Request):
@@ -2944,6 +2946,27 @@ def models_audit_page(request: Request):
 @app.get("/api/bench/audit")
 def api_bench_audit() -> dict[str, Any]:
     return bench_audit.build_audit_payload(bench_audit.results_dir())
+
+
+@app.post("/api/bench/audit/control")
+async def api_bench_audit_control(request: Request) -> dict[str, Any]:
+    """Pause/resume the running bench batch: writes audit_control.json.
+
+    The batch driver polls that file between jobs, so "pause" takes effect
+    after the CURRENT model finishes — this endpoint never kills a job.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be a JSON object")
+    action = body.get("action")
+    try:
+        bench_audit.write_control(bench_audit.results_dir(), action)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "action": action}
 
 
 @app.post("/api/models/{model_id}/download")

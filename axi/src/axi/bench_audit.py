@@ -4,10 +4,17 @@ This module aggregates ``scripts/bench/results/model_audit.jsonl`` and
 ``model_recipes.json`` for display in ``/models/audit``. Those files are
 owned and appended-to by the bench harness (``scripts/bench/model_audit.py``)
 — this module MUST NEVER write to them, only read.
+
+The SINGLE sanctioned write is ``audit_control.json`` (via
+:func:`write_control`): a tiny ``{"action": "pause"|"run"}`` handshake file
+that the bench batch driver polls between jobs. Everything else in
+``results/`` — including ``audit_status.json``, which the harness updates
+live — stays strictly read-only here.
 """
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -146,6 +153,46 @@ def load_recipes(recipes_path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+#: Actions the batch driver understands. Anything else must be rejected —
+#: this file is a control channel into a long-running GPU job.
+_CONTROL_ACTIONS: tuple[str, ...] = ("pause", "run")
+
+
+def load_status(results_dir_path: Path) -> dict[str, Any]:
+    """Read ``audit_status.json`` (live harness progress), read-only.
+
+    Missing file (no audit running) or malformed/non-dict content degrades
+    to ``{"state": "idle"}`` so the dashboard never breaks on a partial
+    write by the harness.
+    """
+    status_path = results_dir_path / "audit_status.json"
+    try:
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"state": "idle"}
+    if not isinstance(data, dict):
+        return {"state": "idle"}
+    return data
+
+
+def write_control(results_dir_path: Path, action: Any) -> None:
+    """Write ``{"action": "pause"|"run"}`` to ``audit_control.json``.
+
+    This is the ONLY write this module is allowed to perform in the bench
+    results directory. Input is validated strictly (exact lowercase string
+    match) and the write is atomic (tmp + rename) so the polling batch
+    driver never reads a half-written file.
+    """
+    if action not in _CONTROL_ACTIONS:
+        raise ValueError(
+            f"invalid control action {action!r}; must be one of {_CONTROL_ACTIONS}"
+        )
+    control_path = results_dir_path / "audit_control.json"
+    tmp_path = control_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps({"action": action}), encoding="utf-8")
+    os.replace(tmp_path, control_path)
+
+
 def build_audit_payload(results_dir_path: Path) -> dict[str, Any]:
     """Build the full ``/api/bench/audit`` payload: ranked audits + recipes."""
     rows = load_audit_rows(results_dir_path / "model_audit.jsonl")
@@ -167,5 +214,6 @@ def build_audit_payload(results_dir_path: Path) -> dict[str, Any]:
     return {
         "audits": augmented,
         "recipes": recipes,
+        "status": load_status(results_dir_path),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

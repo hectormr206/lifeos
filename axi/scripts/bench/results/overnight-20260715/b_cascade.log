@@ -1,0 +1,340 @@
+Audit: nemotron-cascade2-30b | tiers=['vram12'] | roles=['speed', 'brain', 'extraction', 'domain', 'toolcall', 'codereview', 'vision', 'codegen', 'conversation', 'recordsqa', 'narration', 'longsum', 'parsejson', 'agentic', 'proactive', 'visionclass', 'devplan', 'toolstress'] | moe=True | vram baseline=333 MiB
+
+######################################################################
+#  TIER vram12
+######################################################################
+[stage A] tier=vram12 — sweeping 8 cells
+  [stage A] cell gpu-ngl999-cpumoe-q8_0-b2048 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> decode=29.06 tok/s ttft=434.5ms vramΔ=3495
+  [stage A] cell gpu-ngl999-cpumoe-q8_0-b8192 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> decode=26.52 tok/s ttft=494.0ms vramΔ=4055
+  [stage A] cell gpu-ngl999-cpumoe-f16-b2048 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> decode=26.81 tok/s ttft=465.1ms vramΔ=3583
+  [stage A] cell gpu-ngl999-cpumoe-f16-b8192 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> decode=26.92 tok/s ttft=483.4ms vramΔ=4143
+  [stage A] cell gpu-ngl999-q8_0-b2048 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+  [stage A] cell gpu-ngl999-q8_0-b8192 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+  [stage A] cell gpu-ngl999-f16-b2048 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+  [stage A] cell gpu-ngl999-f16-b8192 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+[stage B] 2 variants x 12 fast cases
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+  [stage B] house-think_off: det=0.5833
+  [stage B] house-think_on: det=0.6667
+[recipe] saved peak recipe for nemotron-cascade2-30b/vram12 → /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+[stage C] role speed
+  [speed] warmup (discarded)...
+  [speed 1/10] ttft=200.0ms decode=32.83tok/s
+  [speed 2/10] ttft=482.0ms decode=30.96tok/s
+  [speed 3/10] ttft=512.4ms decode=31.37tok/s
+  [speed 4/10] ttft=444.5ms decode=30.94tok/s
+  [speed 5/10] ttft=443.4ms decode=31.58tok/s
+  [speed 6/10] ttft=581.3ms decode=30.89tok/s
+  [speed 7/10] ttft=471.3ms decode=31.04tok/s
+  [speed 8/10] ttft=502.6ms decode=31.25tok/s
+  [speed 9/10] ttft=452.0ms decode=30.8tok/s
+  [speed 10/10] ttft=453.3ms decode=31.49tok/s
+[stage C] role brain
+  [brain] 35 cases (6 rubric), max_tokens=1024
+  [brain 1/35] conv_001: PASS
+  [brain 2/35] conv_002: PASS
+  [brain 3/35] conv_003: FAIL
+  [brain 4/35] conv_004: FAIL
+  [brain 5/35] remind_001: PASS
+  [brain 6/35] remind_002: FAIL
+  [brain 7/35] remind_003: PASS
+  [brain 8/35] remind_004: PASS
+  [brain 9/35] remind_005: FAIL
+  [brain 10/35] intent_001: PASS
+  [brain 11/35] intent_002: PASS
+  [brain 12/35] intent_003: FAIL
+  [brain 13/35] summ_001: FAIL
+  [brain 14/35] summ_002: FAIL
+  [brain 15/35] summ_003: FAIL
+  [brain 16/35] summ_004: FAIL
+  [brain 17/35] summ_005: FAIL
+  [brain 18/35] reason_001: FAIL
+  [brain 19/35] reason_002: PASS
+  [brain 20/35] reason_003: PASS
+  [brain 21/35] reason_004: PASS
+  [brain 22/35] instruct_001: PASS
+  [brain 23/35] instruct_002: PASS
+  [brain 24/35] instruct_003: PASS
+  [brain 25/35] instruct_004: FAIL
+  [brain 26/35] refusal_001: FAIL
+  [brain 27/35] refusal_002: FAIL
+  [brain 28/35] refusal_003: FAIL
+  [brain 29/35] fluency_001: FAIL
+  [brain 30/35] fluency_002: PASS
+  [brain 31/35] fluency_003: FAIL
+  [brain 32/35] hard_001: PASS
+  [brain 33/35] hard_002: FAIL
+  [brain 34/35] hard_003: PASS
+  [brain 35/35] hard_004: PASS
+[stage C] role extraction
+  [extraction] 69 cases via nano endpoint http://127.0.0.1:18080
+  [extraction 10/69]
+  [extraction 20/69]
+  [extraction 30/69]
+  [extraction 40/69]
+  [extraction 50/69]
+  [extraction 60/69]
+[stage C] role domain
+  [domain] 36 cases via http://127.0.0.1:18080
+  [domain 15/36]
+  [domain 30/36]
+[stage C] role toolcall
+  [toolcall] 12 cases
+  [toolcall] tool=67% args=67% false-call=0%
+[stage C] role codereview
+  [codereview] 8 cases
+  [codereview] detect=86% false-pos=0%
+[stage C] role vision
+  [vision] vision skipped: no --mmproj provided
+[stage C] role codegen
+  [codegen] 8 cases
+  [codegen] cg01: FAIL
+  [codegen] cg02: FAIL
+  [codegen] cg03: FAIL
+  [codegen] cg04: FAIL
+  [codegen] cg05: FAIL
+  [codegen] cg06: FAIL
+  [codegen] cg07: FAIL
+  [codegen] cg08: FAIL
+  [codegen] pass=0% compile=0%
+[stage C] role conversation
+  [conversation] 8 cases
+  [conversation] cq01: es=True sane=True judge=0.765
+  [conversation] cq02: es=True sane=True judge=0.0
+  [conversation] cq03: es=True sane=True judge=0.63
+  [conversation] cq04: es=True sane=True judge=0.0
+  [conversation] cq05: es=True sane=True judge=0.705
+  [conversation] cq06: es=True sane=True judge=0.0
+  [conversation] cq07: es=True sane=True judge=0.8675
+  [conversation] cq08: es=True sane=True judge=0.7925
+  [conversation] judge=0.47 spanish=100%
+[stage C] role recordsqa
+  [recordsqa] 10 cases
+  [recordsqa] rq-01: PASS
+  [recordsqa] rq-02: PASS
+  [recordsqa] rq-03: PASS
+  [recordsqa] rq-04: FAIL fabricated=['15', '15', '15', '13,11,10', '15', '09,12,14,15', '202']
+  [recordsqa] rq-05: PASS
+  [recordsqa] rq-06: PASS
+  [recordsqa] rq-07: PASS
+  [recordsqa] rq-08-trap: PASS
+  [recordsqa] rq-09-trap: PASS
+  [recordsqa] rq-10-trap: PASS
+  [recordsqa] pass=90% fabrication=10%
+[stage C] role narration
+  [narration] 8 cases
+  [narration] dn-01: fidelity=True structure=False judge=0.0
+  [narration] dn-02: fidelity=True structure=False judge=0.0
+  [narration] dn-03: fidelity=True structure=False judge=0.0
+  [narration] dn-04: fidelity=True structure=False judge=0.0
+  [narration] dn-05: fidelity=True structure=False judge=0.0
+  [narration] dn-06: fidelity=True structure=False judge=0.0
+  [narration] dn-07: fidelity=True structure=False judge=0.0
+  [narration] dn-08: fidelity=True structure=False judge=0.87
+  [narration] fidelity=100% structure=0%
+[stage C] role longsum
+  [longsum] 6 cases (ctx=32768)
+  [longsum] ls-01-window: recall=0.0 structure=True FAIL
+  [longsum] ls-02-window: recall=0.0 structure=True FAIL
+  [longsum] ls-03-exec: recall=1.0 structure=True PASS
+  [longsum] ls-04-exec: recall=1.0 structure=False FAIL
+  [longsum] ls-05-chat: recall=0.75 structure=True FAIL
+  [longsum] ls-06-chat: recall=0.75 structure=True FAIL
+  [longsum] atom_recall=58% pass=17%
+[stage C] role parsejson
+  [parsejson] 14 cases
+  [parsejson] sp-when-01: FAIL
+  [parsejson] sp-when-02: FAIL
+  [parsejson] sp-when-03-neg: FAIL
+  [parsejson] sp-sched-01: FAIL
+  [parsejson] sp-sched-02: FAIL
+  [parsejson] sp-sched-03: FAIL
+  [parsejson] sp-sched-04-neg: FAIL
+  [parsejson] sp-voice-01: FAIL
+  [parsejson] sp-voice-02: FAIL
+  [parsejson] sp-voice-03-neg: PASS
+  [parsejson] sp-facts-01: FAIL
+  [parsejson] sp-facts-02-neg: PASS
+  [parsejson] sp-coref-01: FAIL
+  [parsejson] sp-coref-02-neg: PASS
+  [parsejson] pass=21% negatives=60% json=11%
+[stage C] role agentic
+  [agentic] 12 cases (max 5 tool rounds, prod sampling {'temperature': 0.7, 'top_p': 0.8, 'top_k': 20}, max_tokens=4096)
+  [agentic] ag-news-01: rounds=4 tools=False json=True FAIL
+  [agentic] ag-fetch-01: rounds=5 tools=True json=True PASS
+  [agentic] ag-clima-01: rounds=5 tools=True json=False FAIL missing=['24', '70']
+  [agentic] ag-multi-01: rounds=5 tools=True json=True PASS
+  [agentic] ag-modelos-01: rounds=5 tools=True json=False FAIL missing=['mistral large 3', 'millones de tokens', 'qwen4']
+  [agentic] ag-chain-01: rounds=3 tools=True json=True PASS
+  [agentic] ag-multitopic-01: rounds=5 tools=True json=True PASS
+  [agentic] ag-reformulate-01: rounds=5 tools=True json=True PASS
+  [agentic] ag-distractor-01: rounds=3 tools=True json=True PASS
+  [agentic] ag-distractor-02: rounds=3 tools=True json=True PASS
+  [agentic] ag-links-01: rounds=3 tools=True json=True PASS
+  [agentic] ag-noolt-01: rounds=0 tools=True json=True PASS
+  [agentic] pass=75% tools=92% json=83% rounds=3.83
+[stage C] role proactive
+  [proactive] 12 cases
+  [proactive] pt-restraint-01: verdict=msg FAIL
+  [proactive] pt-restraint-02: verdict=msg FAIL
+  [proactive] pt-restraint-03: verdict=msg FAIL
+  [proactive] pt-restraint-04: verdict=msg FAIL
+  [proactive] pt-speak-01: verdict=msg FAIL
+  [proactive] pt-speak-02: verdict=msg FAIL
+  [proactive] pt-speak-03: verdict=msg FAIL
+  [proactive] pt-speak-04: verdict=msg FAIL
+  [proactive] pt-restraint-05: verdict=msg FAIL
+  [proactive] pt-restraint-06: verdict=msg FAIL
+  [proactive] pt-speak-05: verdict=msg FAIL
+  [proactive] pt-speak-06: verdict=msg FAIL
+  [proactive] restraint=0% speak=0% pass=0%
+[stage C] role visionclass
+  [visionclass] visionclass skipped: no --mmproj provided
+[stage C] role devplan
+  [devplan] 8 cases
+  [devplan] dp-instr-01 (instruction): FAIL
+  [devplan] dp-instr-02 (instruction): FAIL
+  [devplan] dp-instr-03 (instruction): FAIL
+  [devplan] dp-rev-01 (review): FAIL
+  [devplan] dp-rev-02 (review): PASS
+  [devplan] dp-rev-03 (review): PASS
+  [devplan] dp-rev-04 (review): PASS
+  [devplan] dp-rev-05 (review): PASS
+  [devplan] instr=0% review=80% pass=50%
+[stage C] role toolstress
+  [toolstress] 10 cases (max 6 tool rounds, 13 tools offered)
+  [toolstress] ts-sel-reminder-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-memory-01 (selection): rounds=4 PASS
+  [toolstress] ts-sel-health-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-message-01 (selection): rounds=1 PASS
+  [toolstress] ts-nest-export-01 (nested_args): rounds=1 PASS
+  [toolstress] ts-nest-config-01 (nested_args): rounds=1 PASS
+  [toolstress] ts-err-export-01 (error_recovery): rounds=2 PASS
+  [toolstress] ts-err-event-01 (error_recovery): rounds=2 PASS
+  [toolstress] ts-proc-expense-01 (procedure): rounds=3 PASS
+  [toolstress] ts-proc-healthreport-01 (procedure): rounds=3 PASS
+  [toolstress] pass=100% sel=100% args=100% recov=100% proc=100%
+==============================================================================
+  AUDIT REPORT — nemotron-cascade2-30b  [tier vram12]  2026-07-16T10:12:57.583473+00:00
+==============================================================================
+  gguf       : /home/hectormr/LifeOS/models/nemotron-cascade2-30b/Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf
+  server_bin : /usr/bin/llama-server
+  recipe     : {
+    "launch": {
+      "ngl": 999,
+      "cpu_moe": true,
+      "ctx": 32768,
+      "cell_name": "gpu-ngl999-cpumoe-q8_0-b2048",
+      "extra_flags": [
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q8_0",
+        "-fa",
+        "on",
+        "-b",
+        "2048",
+        "-ub",
+        "512",
+        "-t",
+        "8"
+      ]
+    },
+    "sampling": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "thinking": "on",
+    "scores": {
+      "stage_a_decode_toks_s": 29.06,
+      "stage_a_ttft_ms": 434.5,
+      "stage_a_vram_delta_mib": 3495,
+      "stage_b_det": 0.6667
+    },
+    "timestamp_utc": "2026-07-16T09:09:26.066736+00:00"
+  }
+  role config (headline metric + sampling it was earned with):
+  role          headline  sampling used
+  --------------------------------------------------------------------------
+  speed            31.25  T=- top_p=- top_k=- seed=n/a think=n/a
+  brain            0.558  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  extraction      0.7826  T=0.0 top_p=- top_k=- seed=fixed-0 think=n/a
+  domain          0.9722  T=0.0 top_p=- top_k=- seed=fixed-0 think=n/a
+  toolcall          0.75  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  codereview       0.875  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  vision               -  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  codegen              0  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  conversation      0.47  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  recordsqa          0.9  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  narration            1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  longsum         0.1667  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  parsejson       0.2143  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  agentic           0.75  T=0.7 top_p=0.8 top_k=20 seed=per-case-crc32 think=on
+  proactive            0  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  visionclass          -  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  devplan            0.5  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  toolstress           1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  role speed      : {"n_runs": 10, "ttft_p50_ms": 471.3, "ttft_p95_ms": 581.3, "decode_p50_toks_s": 31.25, "decode_mean_toks_s": 31.32, "vram_before_mib": 3758, "vram_after_mib": 3828, "vram_total_mib": 12227, "idle_rss_mb": 25933.2, "sampling_used": {"temperature": null, "top_p": null, "top_k": null, "seed_policy": "n/a", "thinking": "n/a"}}
+  role brain      : {"det": 0.4857, "subj": 0.7267, "final": 0.558, "note": null, "n_cases": 35, "n_rubric": 6, "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role extraction : {"case_pass_rate": 0.7826, "field_accuracy": {"domain": 0.9706, "kind": 0.8723, "systolic": 1.0, "diastolic": 1.0, "pulse_bpm": 1.0, "people": 0.9831, "dates_text": 0.8367, "sleep_hours": 1.0, "weight_kg": 1.0, "glucose_mg_dl": 1.0, "amount": 1.0, "currency": 1.0, "items": 0.8571, "merchant": 1.0, "duration_minutes": 1.0}, "total": 69, "sampling_used": {"temperature": 0.0, "top_p": null, "top_k": null, "seed_policy": "fixed-0", "thinking": "n/a"}}
+  role domain     : {"overall_accuracy": 0.9722, "nano_accuracy": 0.9583, "per_layer": {"overall": 0.9722, "guard": 1.0, "nano": 0.9583, "regex": 1.0}, "n": 36, "sampling_used": {"temperature": 0.0, "top_p": null, "top_k": null, "seed_policy": "fixed-0", "thinking": "n/a"}}
+  role toolcall   : {"n": 12, "correct_tool_rate": 0.6667, "arg_accuracy": 0.6667, "false_call_rate": 0.0, "score": 0.75, "failed_ids": ["tc04", "tc05", "tc06"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role codereview : {"n": 8, "detection_rate": 0.8571, "false_positive_rate": 0.0, "score": 0.875, "failed_ids": ["cr06"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role vision     : {"skipped": "vision skipped: no --mmproj provided", "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role codegen    : {"n": 8, "pass_rate": 0.0, "compile_rate": 0.0, "failed_ids": ["cg01", "cg02", "cg03", "cg04", "cg05", "cg06", "cg07", "cg08"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role conversation: {"n": 8, "judge_score": 0.47, "spanish_rate": 1.0, "sane_rate": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role recordsqa  : {"n": 10, "pass_rate": 0.9, "fabrication_rate": 0.1, "failed_ids": ["rq-04"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role narration  : {"n": 8, "numeric_fidelity_rate": 1.0, "structure_rate": 0.0, "judge_score": 0.1087, "failed_ids": ["dn-01", "dn-02", "dn-03", "dn-04", "dn-05", "dn-06", "dn-07", "dn-08"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role longsum    : {"n": 6, "atom_recall": 0.5833, "structure_rate": 0.8333, "pass_rate": 0.1667, "failed_ids": ["ls-01-window", "ls-02-window", "ls-04-exec", "ls-05-chat", "ls-06-chat"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role parsejson  : {"n": 14, "pass_rate": 0.2143, "negative_pass_rate": 0.6, "json_valid_rate": 0.1111, "failed_ids": ["sp-when-01", "sp-when-02", "sp-when-03-neg", "sp-when-03-neg", "sp-sched-01", "sp-sched-02", "sp-sched-03", "sp-sched-04-neg", "sp-sched-04-neg", "sp-voice-01", "sp-voice-02", "sp-facts-01", "sp-coref-01"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role agentic    : {"n": 12, "pass_rate": 0.75, "tool_correct_rate": 0.9167, "json_valid_rate": 0.8333, "mean_rounds": 3.83, "failed_ids": ["ag-news-01", "ag-clima-01", "ag-modelos-01"], "sampling_used": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role proactive  : {"n": 12, "restraint_rate": 0.0, "speak_pass_rate": 0.0, "pass_rate": 0.0, "failed_ids": ["pt-restraint-01", "pt-restraint-02", "pt-restraint-03", "pt-restraint-04", "pt-speak-01", "pt-speak-02", "pt-speak-03", "pt-speak-04", "pt-restraint-05", "pt-restraint-06", "pt-speak-05", "pt-speak-06"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role visionclass: {"skipped": "visionclass skipped: no --mmproj provided", "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role devplan    : {"n": 8, "instruction_pass_rate": 0.0, "review_accuracy": 0.8, "pass_rate": 0.5, "judge_score": 0.8833, "failed_ids": ["dp-instr-01", "dp-instr-02", "dp-instr-03", "dp-rev-01"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role toolstress : {"n": 10, "pass_rate": 1.0, "tool_selection_rate": 1.0, "arg_exactness_rate": 1.0, "recovery_rate": 1.0, "procedure_rate": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  stage A    : 8 cells swept
+    - gpu-ngl999-cpumoe-q8_0-b2048 ok   decode=29.06 ttft=434.5 vramΔ=3495
+    - gpu-ngl999-cpumoe-q8_0-b8192 ok   decode=26.52 ttft=494.0 vramΔ=4055
+    - gpu-ngl999-cpumoe-f16-b2048  ok   decode=26.81 ttft=465.1 vramΔ=3583
+    - gpu-ngl999-cpumoe-f16-b8192  ok   decode=26.92 ttft=483.4 vramΔ=4143
+    - gpu-ngl999-q8_0-b2048        FAIL (health timeout (OOM or unsupported flags)) decode=None ttft=None vramΔ=None
+    - gpu-ngl999-q8_0-b8192        FAIL (health timeout (OOM or unsupported flags)) decode=None ttft=None vramΔ=None
+    - gpu-ngl999-f16-b2048         FAIL (health timeout (OOM or unsupported flags)) decode=None ttft=None vramΔ=None
+    - gpu-ngl999-f16-b8192         FAIL (health timeout (OOM or unsupported flags)) decode=None ttft=None vramΔ=None
+  stage B    : 2 variants scored
+    - house-think_off          det=0.5833
+    - house-think_on           det=0.6667
+==============================================================================
+
+=======================================================================================================================================================================================================
+  MODEL AUDIT MATRIX  (newest audit per label+tier)
+=======================================================================================================================================================================================================
+  Label                tier     brain  extr%   dom%  tool%   vis%   rev%  code%   conv recQA%   narr  lsum% parse% agent% proact%  vcls%   dev% tstress%   tok/s  VRAM MiB thinking 
+  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  bonsai-1bit          vram12   0.696  89.9% 100.0% 100.0% 100.0% 100.0%  50.0%  0.703  70.0%  75.0%  50.0%  85.7%  91.7%   33.3%  50.0%  87.5%    90.0%    53.5      6561 off      
+  bonsai-ternary       vram12   0.603  87.0%  97.2%  75.0%  87.5% 100.0%  25.0%  0.442  10.0% 100.0%   0.0%  14.3%  50.0%    0.0%   0.0%  37.5%   100.0%    44.1      8623 on       
+  gemma4-26b           vram12   0.758  87.0% 100.0% 100.0% 100.0% 100.0% 100.0%  0.793 100.0% 100.0% 100.0%  85.7%  75.0%   83.3%  33.3%  87.5%   100.0%    33.4      6265 off      
+  gemma4-e2b           cpu      0.736 - - - - - -  0.693 -  75.0% - -  16.7%   50.0% - -    80.0% -         0 off      
+  nemotron-cascade2-30b vram12   0.558  78.3%  97.2%  75.0% -  87.5%   0.0%  0.470  90.0% 100.0%  16.7%  21.4%  75.0%    0.0% -  50.0%   100.0%    31.2      3495 on       
+  qwen35-0_8b          cpu      0.364 - - - - - -  0.349 -  12.5% - -  41.7%   33.3% - -    80.0% -         0 off      
+  qwen35-2b            cpu      0.636 - - - - - -  0.552 -  25.0% - -  58.3%   25.0% - -    90.0% -         0 off      
+  qwen35-4b            cpu      0.592 - - - - - -  0.783 -  62.5% - -  66.7%   50.0% - -   100.0% -         0 off      
+=======================================================================================================================================================================================================

@@ -1,0 +1,8 @@
+Audit: qwen36-35b | tiers=['vram12'] | roles=['speed', 'brain', 'extraction', 'domain', 'toolcall', 'codereview', 'vision', 'codegen', 'conversation', 'recordsqa', 'narration', 'longsum', 'parsejson', 'agentic', 'proactive', 'visionclass', 'devplan', 'toolstress'] | moe=True | vram baseline=333 MiB
+
+######################################################################
+#  TIER vram12
+######################################################################
+[stage A] tier=vram12 — sweeping 8 cells
+  [stage A] cell gpu-ngl999-cpumoe-q8_0-b2048 ...
+  Spawning: /usr/bin/llama-server -m Qwen3.6-35B-A3B-MXFP4_MOE.gguf ...

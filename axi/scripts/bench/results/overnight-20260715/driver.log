@@ -1,0 +1,46 @@
+[23:08:28] === QUIET MODE: stopping heartbeat/voice/whisper/tray/dashboard ===
+[23:08:33] === OFFLINE + stand-in judge for the whole night ===
+[axi-game-on] WARNING: game-pre-model already exists — game-on may have been run twice.
+  Skipping model backup to avoid clobbering the original brain id.
+  Run 'axi-game-off' first if you want to reset.
+[axi-game-on] writing CPU drop-ins (persist across reboot)…
+[axi-game-on] relocating axi-whisper to CPU…
+[axi-game-on] --offline: co-pilot disabled — stopping llama-server (0 CPU for LLM)…
+[axi-game-on] --offline: masking llama-vt.service (VibeThinker-3B — reboot-safe VRAM eviction)…
+[axi-game-on] enabling wake-word listener (AXI_WAKEWORD_ENABLED=1) and restarting axi-voice…
+[axi-game-on] GPU VRAM: 333 / 12227 MiB usado
+[axi-game-on] MODO JUEGO (offline) activo — co-pilot disabled, VRAM libre.
+  Persiste tras reiniciar/apagar: nada se carga en VRAM hasta 'axi-game-off'.
+  Para volver a GPU:  axi-game-off
+[23:08:44] stand-in judge (4b CPU) pid=1971984
+[23:08:44] === BLOCK A: CPU quality ===
+[23:08:44] AUDIT gemma4-e4b start
+[23:50:42] AUDIT gemma4-e4b exit=1
+[23:50:42] AUDIT vibethinker-3b start
+[23:54:54] AUDIT vibethinker-3b exit=143
+[23:54:54] BACKFILL qwen35-4b brain+conversation+narration+agentic+proactive+toolstress (pinned-seed era)
+[00:23:37] BACKFILL qwen35-4b exit=0
+[00:23:37] BACKFILL qwen35-0_8b brain+conversation+narration+agentic+proactive+toolstress (pinned-seed era)
+[00:33:07] BACKFILL qwen35-0_8b exit=0
+[00:33:07] BACKFILL qwen35-2b brain+conversation+narration+agentic+proactive+toolstress (pinned-seed era)
+[00:46:09] BACKFILL qwen35-2b exit=0
+[00:46:09] BACKFILL gemma4-e2b brain+conversation+narration+agentic+proactive+toolstress (pinned-seed era)
+[00:56:20] BACKFILL gemma4-e2b exit=0
+[00:56:20] === BLOCK B: GPU quality (vram12) ===
+[00:56:20] AUDIT bonsai-1bit start
+[01:20:21] AUDIT bonsai-1bit exit=0
+[01:20:21] AUDIT bonsai-ternary start
+[02:10:26] AUDIT bonsai-ternary exit=0
+[02:10:26] AUDIT gemma4-26b start
+[02:52:25] AUDIT gemma4-26b exit=0
+[02:52:25] AUDIT nemotron-cascade2-30b start
+[04:12:57] AUDIT nemotron-cascade2-30b exit=0
+[04:12:57] AUDIT diffusiongemma-26b start
+[04:43:19] AUDIT diffusiongemma-26b exit=1
+[04:43:19] AUDIT qwen3-omni-30b start
+[05:23:18] AUDIT qwen3-omni-30b exit=0
+[05:23:18] AUDIT laguna-xs-2.1 start
+[05:53:40] AUDIT laguna-xs-2.1 exit=1
+[05:53:40] AUDIT qwen36-27b start
+[10:32:56] AUDIT qwen36-27b exit=0
+[10:32:56] AUDIT qwen36-35b start

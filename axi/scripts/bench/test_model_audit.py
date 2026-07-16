@@ -28,6 +28,14 @@ import pytest
 import model_audit as ma
 
 
+@pytest.fixture(autouse=True)
+def _isolate_status_file(tmp_path, monkeypatch):
+    """No test may touch the REAL results/audit_status.json — tests that call
+    ma.main() (which enables status writing) get a tmp target instead."""
+    monkeypatch.setitem(ma._STATUS, "enabled", False)
+    monkeypatch.setitem(ma._STATUS, "path", tmp_path / "audit_status.json")
+
+
 # ── Stage-A grid generation & pruning ────────────────────────────────────────
 
 def test_gpu_grid_moe_full_is_pruned_and_capped():
@@ -2886,3 +2894,442 @@ def test_ctxprobe_wiring_role_default_exclusion_and_compare_column():
     bare = ma.build_audit_matrix(
         [_audit_row("bare", "cpu", "2026-07-16T00:00:00+00:00")])
     assert "ctxK" in bare
+
+
+# ── Stage B2: per-role config tuning ─────────────────────────────────────────
+
+def test_role_tuning_grid_build_and_cap():
+    # one mode → the 3 sampling presets, house first
+    v = ma.build_role_tuning_variants(["none"])
+    assert [x["name"] for x in v] == [
+        "house-think_none", "warm-think_none", "precise-think_none"]
+    assert v[0]["sampling"] == ma.HOUSE_SAMPLING
+    assert v[1]["sampling"] == {"temperature": 0.7, "top_p": 0.8, "top_k": 20}
+    assert v[2]["sampling"] == {"temperature": 0.2, "top_p": 0.9, "top_k": 20}
+    # two modes → full 3x2 grid
+    assert len(ma.build_role_tuning_variants(["off", "on"])) == 6
+    # three modes → capped at 6, thinking-major so every preset survives
+    v = ma.build_role_tuning_variants(["none", "off", "on"])
+    assert len(v) == ma.ROLE_TUNING_MAX_VARIANTS == 6
+    names = [x["name"] for x in v]
+    assert names[:3] == ["house-think_none", "warm-think_none",
+                         "precise-think_none"]
+    assert all("think_on" not in n for n in names)
+    # duplicate modes are deduped before crossing
+    assert len(ma.build_role_tuning_variants(["off", "off"])) == 3
+    # empty → template default
+    assert [x["thinking"] for x in ma.build_role_tuning_variants([])] == \
+        ["none"] * 3
+
+
+def test_role_tune_subset_deterministic_every_2nd_cap_6():
+    cases = [{"id": i} for i in range(20)]
+    sub = ma.select_role_tune_subset(cases)
+    assert sub == cases[::2][:6]
+    assert [c["id"] for c in sub] == [0, 2, 4, 6, 8, 10]
+    assert ma.select_role_tune_subset(cases) == sub      # deterministic
+    # n <= 6 → all cases, in order
+    small = [{"id": i} for i in range(6)]
+    assert ma.select_role_tune_subset(small) == small
+    assert ma.select_role_tune_subset(small[:2]) == small[:2]
+    # toolstress cap (loop-based role): 3-case subset
+    ts = ma.select_role_tune_subset(cases, n=ma.TOOLSTRESS_TUNE_SUBSET_SIZE)
+    assert [c["id"] for c in ts] == [0, 2, 4]
+
+
+def test_role_winner_pick_highest_then_tie_house_thinking_off():
+    warm = {"temperature": 0.7, "top_p": 0.8, "top_k": 20}
+    precise = {"temperature": 0.2, "top_p": 0.9, "top_k": 20}
+    scored = [
+        {"name": "warm-think_on", "sampling": warm, "thinking": "on",
+         "score": 0.8},
+        {"name": "house-think_off", "sampling": dict(ma.HOUSE_SAMPLING),
+         "thinking": "off", "score": 0.8},
+        {"name": "precise-think_off", "sampling": precise, "thinking": "off",
+         "score": 0.5},
+    ]
+    # tie at 0.8 → house sampling + thinking off wins
+    assert ma.pick_role_config_winner(scored)["name"] == "house-think_off"
+    # outright highest wins even when non-house / thinking on
+    scored[0]["score"] = 0.9
+    assert ma.pick_role_config_winner(scored)["name"] == "warm-think_on"
+    # errored variants (score None) are skipped
+    assert ma.pick_role_config_winner(
+        [{"name": "x", "sampling": warm, "thinking": "on", "score": None},
+         {"name": "y", "sampling": precise, "thinking": "off", "score": 0.1}]
+    )["name"] == "y"
+    # everything errored → None
+    assert ma.pick_role_config_winner(
+        [{"name": "x", "sampling": warm, "thinking": "on", "score": None}]) \
+        is None
+    # tie between house-think_none and warm-think_off → house preference wins
+    tie = [
+        {"name": "warm-think_off", "sampling": warm, "thinking": "off",
+         "score": 0.7},
+        {"name": "house-think_none", "sampling": dict(ma.HOUSE_SAMPLING),
+         "thinking": "none", "score": 0.7},
+    ]
+    assert ma.pick_role_config_winner(tie)["name"] == "house-think_none"
+
+
+def test_pinned_roles_excluded_from_per_role_tuning():
+    assert set(ma.PER_ROLE_TUNING_PINNED) == {
+        "extraction", "domain", "agentic", "speed", "embed", "ctxprobe"}
+    for role in ma.PER_ROLE_TUNING_PINNED:
+        assert role not in ma.PER_ROLE_TUNABLE
+    # every quality role IS tunable
+    for role in ("brain", "toolcall", "vision", "codereview", "codegen",
+                 "conversation", "recordsqa", "narration", "longsum",
+                 "parsejson", "proactive", "visionclass", "devplan",
+                 "toolstress"):
+        assert role in ma.PER_ROLE_TUNABLE
+    # the scorer factory refuses pinned roles with the documented reason
+    cases, reason = ma.make_role_case_scorer("agentic", 18080)
+    assert cases is None and "production parity" in reason
+    cases, reason = ma.make_role_case_scorer("extraction", 18080)
+    assert cases is None and "temperature=0.0" in reason
+    # vision without mmproj is un-tunable here (falls back to global config)
+    cases, reason = ma.make_role_case_scorer("vision", 18080, mmproj=None)
+    assert cases is None and "mmproj" in reason
+
+
+def test_recipe_role_configs_roundtrip(tmp_path):
+    path = tmp_path / "recipes.json"
+    recipe = _recipe(0.8)
+    recipe["role_configs"] = {
+        "brain": {"sampling": {"temperature": 0.2, "top_p": 0.9, "top_k": 20},
+                  "thinking": "on", "subset_score": 0.8333,
+                  "variants_tried": 6},
+        "toolcall": {"sampling": dict(ma.HOUSE_SAMPLING), "thinking": "off",
+                     "subset_score": 1.0, "variants_tried": 6},
+    }
+    ma.save_recipe(path, "foo", "vram12", recipe)
+    loaded = ma.get_recipe(ma.load_recipes(path), "foo", "vram12")
+    assert loaded["role_configs"]["brain"]["subset_score"] == 0.8333
+    assert loaded["role_configs"]["brain"]["thinking"] == "on"
+    assert loaded["role_configs"]["toolcall"]["sampling"] == ma.HOUSE_SAMPLING
+
+
+def test_role_config_for_override_and_fallback():
+    warm = {"temperature": 0.7, "top_p": 0.8, "top_k": 20}
+    recipe = {"sampling": dict(ma.HOUSE_SAMPLING), "thinking": "off",
+              "role_configs": {"brain": {"sampling": warm, "thinking": "on"}}}
+    assert ma.role_config_for(recipe, "brain") == (warm, "on")
+    # roles without an entry fall back to the global recipe
+    assert ma.role_config_for(recipe, "toolcall") == (ma.HOUSE_SAMPLING, "off")
+    # recipes without role_configs at all (old era / --no-per-role-tuning)
+    bare = {"sampling": dict(ma.HOUSE_SAMPLING), "thinking": "off"}
+    assert ma.role_config_for(bare, "brain") == (ma.HOUSE_SAMPLING, "off")
+
+
+def test_tune_role_configs_scores_grid_and_excludes_pinned(monkeypatch):
+    """Mocked end-to-end Stage B2: pinned roles never tuned, winner per role
+    respects the subset score, recipe payload carries score + variant count."""
+    import types
+
+    class FakeProc:
+        pid = 1
+
+    monkeypatch.setattr(ma, "_spawn_recipe_server",
+                        lambda *a, **k: (FakeProc(), True))
+    monkeypatch.setattr(ma.bm, "kill_server", lambda proc: None)
+    monkeypatch.setattr(ma, "wait_vram_drain", lambda *a, **k: None)
+
+    tuned_roles = []
+
+    def fake_scorer(role, port, mmproj=None, ctx=32768):
+        if role in ma.PER_ROLE_TUNING_PINNED:
+            return None, "pinned"
+        tuned_roles.append(role)
+        cases = [{"id": f"{role}-{i}"} for i in range(4)]
+
+        def score(case, sampling, thinking):
+            # brain prefers precise; toolcall prefers house
+            if role == "brain":
+                return 1.0 if sampling["temperature"] == 0.2 else 0.5
+            return 1.0 if sampling == ma.HOUSE_SAMPLING else 0.25
+        return cases, score
+
+    monkeypatch.setattr(ma, "make_role_case_scorer", fake_scorer)
+    args = types.SimpleNamespace(port=18080, mmproj=None, ctx=32768,
+                                 extra_flags=[])
+    recipe = {"launch": {"ngl": 999, "cpu_moe": False, "ctx": 32768,
+                         "extra_flags": []},
+              "sampling": dict(ma.HOUSE_SAMPLING), "thinking": "off"}
+    rc = ma.tune_role_configs(
+        args, recipe, ["speed", "brain", "toolcall", "extraction", "domain",
+                       "agentic"], ["off"], None)
+    # pinned roles excluded; only real quality roles tuned
+    assert set(rc) == {"brain", "toolcall"}
+    assert set(tuned_roles) == {"brain", "toolcall"}
+    assert rc["brain"]["sampling"]["temperature"] == 0.2
+    assert rc["brain"]["subset_score"] == 1.0
+    assert rc["brain"]["variants_tried"] == 3          # 3 presets x 1 mode
+    assert rc["toolcall"]["sampling"] == ma.HOUSE_SAMPLING
+    assert rc["toolcall"]["thinking"] == "off"
+    # no tunable roles requested → no spawns, empty mapping
+    monkeypatch.setattr(ma, "_spawn_recipe_server",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    assert ma.tune_role_configs(args, recipe, ["speed", "extraction"],
+                                ["off"], None) == {}
+
+
+def test_stage_c_runs_each_role_at_its_role_config(monkeypatch):
+    """Stage C honours recipe['role_configs'] per role AND records it in
+    sampling_used; roles without an entry fall back to the global recipe;
+    agentic stays prod-pinned regardless."""
+    import types
+
+    class FakeProc:
+        pid = 1
+
+    monkeypatch.setattr(ma, "_spawn_recipe_server",
+                        lambda *a, **k: (FakeProc(), True))
+    monkeypatch.setattr(ma.bm, "kill_server", lambda proc: None)
+    monkeypatch.setattr(ma, "wait_vram_drain", lambda *a, **k: None)
+
+    seen = {}
+
+    def fake_brain(port, sampling, thinking, max_tokens):
+        seen["brain"] = (dict(sampling), thinking)
+        return {"det": 0.8, "final": None}
+
+    def fake_toolcall(port, sampling, thinking):
+        seen["toolcall"] = (dict(sampling), thinking)
+        return {"score": 0.9}
+
+    def fake_agentic(port, sampling, thinking):
+        seen["agentic"] = (dict(sampling), thinking)
+        return {"pass_rate": 0.75}
+
+    monkeypatch.setattr(ma, "run_brain_role", fake_brain)
+    monkeypatch.setattr(ma, "run_toolcall_role", fake_toolcall)
+    monkeypatch.setattr(ma, "run_agentic_role", fake_agentic)
+    monkeypatch.setattr(ma.bm, "run_extraction_role",
+                        lambda port: {"case_pass_rate": 0.9})
+
+    precise = {"temperature": 0.2, "top_p": 0.9, "top_k": 20}
+    recipe = {"launch": {"ngl": 0, "cpu_moe": False, "extra_flags": []},
+              "sampling": dict(ma.HOUSE_SAMPLING), "thinking": "off",
+              "role_configs": {"brain": {"sampling": precise, "thinking": "on",
+                                         "subset_score": 1.0,
+                                         "variants_tried": 6}}}
+    args = types.SimpleNamespace(port=18080, n_runs=1, brain_max_tokens=0,
+                                 mmproj=None, ctx=32768)
+    results = ma.run_stage_c(args, recipe,
+                             ["brain", "toolcall", "extraction", "agentic"],
+                             None)
+    # brain ran at ITS config; toolcall fell back to the global recipe
+    assert seen["brain"] == (precise, "on")
+    assert seen["toolcall"] == (ma.HOUSE_SAMPLING, "off")
+    # sampling_used reflects the ACTUAL per-role config
+    su = results["brain"]["sampling_used"]
+    assert (su["temperature"], su["top_p"], su["thinking"]) == (0.2, 0.9, "on")
+    su = results["toolcall"]["sampling_used"]
+    assert (su["temperature"], su["thinking"]) == (0.6, "off")
+    # agentic stays prod-pinned no matter what
+    su = results["agentic"]["sampling_used"]
+    assert (su["temperature"], su["top_p"], su["top_k"]) == (0.7, 0.8, 20)
+    # extraction stays extractor-pinned
+    assert results["extraction"]["sampling_used"]["seed_policy"] == \
+        ma.SEED_POLICY_FIXED_0
+
+
+def test_per_role_tuning_cli_default_on_and_opt_out():
+    p = ma.build_parser()
+    args = p.parse_args(["--gguf", "/m.gguf", "--label", "m"])
+    assert args.per_role_tuning is True                  # default ON
+    args = p.parse_args(["--gguf", "/m.gguf", "--label", "m",
+                         "--no-per-role-tuning"])
+    assert args.per_role_tuning is False
+    args = p.parse_args(["--gguf", "/m.gguf", "--label", "m",
+                         "--per-role-tuning"])
+    assert args.per_role_tuning is True
+
+
+def test_use_recipe_reuses_saved_role_configs_without_retuning(
+        tmp_path, monkeypatch):
+    gguf = tmp_path / "m.gguf"
+    gguf.write_bytes(b"gguf")
+    server = tmp_path / "llama-server"
+    server.write_text("")
+    recipes = tmp_path / "recipes.json"
+    registry = tmp_path / "audit.jsonl"
+    recipe = _recipe(0.8)
+    recipe["role_configs"] = {"brain": {"sampling": {"temperature": 0.2,
+                                                     "top_p": 0.9,
+                                                     "top_k": 20},
+                                        "thinking": "on",
+                                        "subset_score": 1.0,
+                                        "variants_tried": 6}}
+    ma.save_recipe(recipes, "foo", "vram12", recipe)
+
+    seen = {}
+
+    def fake_stage_c(args, recipe, roles, baseline, tier=None):
+        seen["recipe"] = recipe
+        return {"speed": {"decode_p50_toks_s": 40.0}}
+
+    monkeypatch.setattr(ma, "run_stage_c", fake_stage_c)
+    monkeypatch.setattr(ma, "tune_role_configs",
+                        lambda *a, **k: pytest.fail(
+                            "B2 must not re-tune with --use-recipe"))
+    monkeypatch.setattr(ma, "run_stage_a",
+                        lambda *a, **k: pytest.fail("no Stage A"))
+    rc = ma.main(["--gguf", str(gguf), "--label", "foo",
+                  "--server-bin", str(server), "--tiers", "vram12",
+                  "--roles", "speed", "--use-recipe",
+                  "--recipes", str(recipes), "--registry", str(registry)])
+    assert rc == 0
+    assert seen["recipe"]["role_configs"]["brain"]["thinking"] == "on"
+
+    # --no-per-role-tuning with --use-recipe IGNORES the saved role_configs
+    rc = ma.main(["--gguf", str(gguf), "--label", "foo",
+                  "--server-bin", str(server), "--tiers", "vram12",
+                  "--roles", "speed", "--use-recipe", "--no-per-role-tuning",
+                  "--recipes", str(recipes), "--registry", str(registry)])
+    assert rc == 0
+    assert "role_configs" not in seen["recipe"]
+    # the saved recipe on disk keeps its role_configs untouched
+    saved = ma.get_recipe(ma.load_recipes(recipes), "foo", "vram12")
+    assert "role_configs" in saved
+
+
+def test_fresh_audit_runs_b2_and_persists_role_configs(tmp_path, monkeypatch):
+    gguf = tmp_path / "m.gguf"
+    gguf.write_bytes(b"gguf")
+    server = tmp_path / "llama-server"
+    server.write_text("")
+    recipes = tmp_path / "recipes.json"
+    registry = tmp_path / "audit.jsonl"
+
+    winner = {"cell": {"name": "cpu-t8", "ngl": 0, "cpu_moe": False,
+                       "cache_type": None, "flash_attn": False, "batch": 512,
+                       "ubatch": 256, "threads": 8, "no_mmap": True},
+              "ok": True, "decode_toks_s": 10.0, "ttft_ms": 100.0,
+              "vram_delta_mib": 0}
+    monkeypatch.setattr(ma, "run_stage_a", lambda *a, **k: (winner, [winner]))
+    monkeypatch.setattr(
+        ma, "run_stage_b",
+        lambda *a, **k: ({"name": "house-think_off",
+                          "sampling": dict(ma.HOUSE_SAMPLING),
+                          "thinking": "off", "det": 0.8}, []))
+    tuned = {"brain": {"sampling": {"temperature": 0.2, "top_p": 0.9,
+                                    "top_k": 20},
+                       "thinking": "off", "subset_score": 0.9,
+                       "variants_tried": 3}}
+    monkeypatch.setattr(ma, "tune_role_configs", lambda *a, **k: dict(tuned))
+    monkeypatch.setattr(ma, "run_stage_c",
+                        lambda args, recipe, roles, baseline, tier=None:
+                        {"speed": {"decode_p50_toks_s": 40.0}})
+
+    rc = ma.main(["--gguf", str(gguf), "--label", "fresh",
+                  "--server-bin", str(server), "--tiers", "cpu",
+                  "--roles", "speed,brain",
+                  "--recipes", str(recipes), "--registry", str(registry)])
+    assert rc == 0
+    saved = ma.get_recipe(ma.load_recipes(recipes), "fresh", "cpu")
+    assert saved["role_configs"] == tuned            # persisted round-trip
+    row = json.loads(registry.read_text().splitlines()[0])
+    assert row["recipe"]["role_configs"] == tuned
+
+    # --no-per-role-tuning skips B2 entirely on a fresh audit
+    monkeypatch.setattr(ma, "tune_role_configs",
+                        lambda *a, **k: pytest.fail("B2 must not run"))
+    rc = ma.main(["--gguf", str(gguf), "--label", "fresh2",
+                  "--server-bin", str(server), "--tiers", "cpu",
+                  "--roles", "speed", "--no-per-role-tuning",
+                  "--recipes", str(recipes), "--registry", str(registry)])
+    assert rc == 0
+    assert "role_configs" not in ma.get_recipe(ma.load_recipes(recipes),
+                                               "fresh2", "cpu")
+
+
+# ── live status file (results/audit_status.json) ─────────────────────────────
+
+def test_write_status_atomic_no_tmp_leftover(tmp_path):
+    path = tmp_path / "audit_status.json"
+    out = ma.write_status(_path=path, state="running", label="foo")
+    assert out["state"] == "running"
+    on_disk = json.loads(path.read_text())
+    assert on_disk["state"] == "running" and on_disk["label"] == "foo"
+    assert "updated_at" in on_disk
+    # atomic rename: no tmp files left behind
+    assert [p.name for p in tmp_path.iterdir()] == ["audit_status.json"]
+
+
+def test_write_status_merges_and_preserves_batch(tmp_path):
+    path = tmp_path / "audit_status.json"
+    # the batch DRIVER writes the batch key…
+    ma.write_status(_path=path, state="running",
+                    batch={"queue": ["a", "b"], "position": 1, "total": 2})
+    # …then the HARNESS updates its own keys and must PRESERVE batch
+    ma.write_status(_path=path, phase="stageC", current_role="brain",
+                    role_case_done=3, role_case_total=12)
+    status = json.loads(path.read_text())
+    assert status["batch"] == {"queue": ["a", "b"], "position": 1, "total": 2}
+    assert status["state"] == "running"
+    assert status["phase"] == "stageC"
+    assert status["current_role"] == "brain"
+    assert (status["role_case_done"], status["role_case_total"]) == (3, 12)
+    # a corrupt existing file never crashes the harness — it starts fresh
+    path.write_text("{not json")
+    out = ma.write_status(_path=path, state="idle")
+    assert out["state"] == "idle"
+    assert json.loads(path.read_text())["state"] == "idle"
+
+
+def test_write_status_disabled_is_noop(tmp_path, monkeypatch):
+    """Role runners call write_status on every case — with status disabled
+    (the unit-test default) nothing is written anywhere."""
+    monkeypatch.setitem(ma._STATUS, "enabled", False)
+    monkeypatch.setitem(ma._STATUS, "path", tmp_path / "audit_status.json")
+    assert ma.write_status(state="running") is None
+    assert not (tmp_path / "audit_status.json").exists()
+    # enable_status() turns it on at the configured path
+    monkeypatch.setitem(ma._STATUS, "enabled", True)
+    assert ma.write_status(state="running")["state"] == "running"
+    assert (tmp_path / "audit_status.json").exists()
+
+
+def test_status_schema_matches_dashboard_contract(tmp_path):
+    """The harness-side writer produces exactly the keys the dashboard's
+    load_status test fixtures use."""
+    path = tmp_path / "audit_status.json"
+    ma.write_status(_path=path, state="running", label="gemma4-e2b",
+                    tier="vram12", phase="stageB2",
+                    cell_or_variant="brain/house-think_off",
+                    current_role="brain", role_case_done=3,
+                    role_case_total=12, roles_done=["speed"],
+                    roles_pending=["brain"],
+                    batch={"queue": ["a"], "position": 1, "total": 1},
+                    started_at="2026-07-16T00:00:00+00:00")
+    status = json.loads(path.read_text())
+    for key in ("state", "label", "tier", "phase", "cell_or_variant",
+                "current_role", "role_case_done", "role_case_total",
+                "roles_done", "roles_pending", "batch", "started_at",
+                "updated_at"):
+        assert key in status
+    assert status["phase"] == "stageB2"
+
+
+def test_main_writes_idle_status_on_exit(tmp_path, monkeypatch):
+    gguf = tmp_path / "m.gguf"
+    gguf.write_bytes(b"gguf")
+    server = tmp_path / "llama-server"
+    server.write_text("")
+    status_path = tmp_path / "audit_status.json"
+    real_enable = ma.enable_status
+    monkeypatch.setattr(ma, "enable_status",
+                        lambda path=None: real_enable(status_path))
+    monkeypatch.setattr(ma, "run_stage_a", lambda *a, **k: (None, []))
+    rc = ma.main(["--gguf", str(gguf), "--label", "x",
+                  "--server-bin", str(server), "--tiers", "cpu",
+                  "--roles", "speed",
+                  "--recipes", str(tmp_path / "r.json"),
+                  "--registry", str(tmp_path / "a.jsonl")])
+    assert rc == 1                                     # no stage-A winner
+    status = json.loads(status_path.read_text())
+    assert status["state"] == "idle"                   # exit contract
+    assert status["label"] == "x"
+    assert ma._STATUS["enabled"] is False              # disabled again

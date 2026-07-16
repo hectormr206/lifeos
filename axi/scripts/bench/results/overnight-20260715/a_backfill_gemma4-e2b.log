@@ -1,0 +1,171 @@
+Audit: gemma4-e2b | tiers=['cpu'] | roles=['brain', 'conversation', 'narration', 'agentic', 'proactive', 'toolstress'] | moe=False | vram baseline=333 MiB
+
+######################################################################
+#  TIER cpu
+######################################################################
+[recipe] using saved recipe from /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+  Spawning: /usr/bin/llama-server -m gemma-4-E2B-it-Q4_K_M.gguf ...
+[stage C] role brain
+  [brain] 35 cases (6 rubric), max_tokens=200
+  [brain 1/35] conv_001: PASS
+  [brain 2/35] conv_002: PASS
+  [brain 3/35] conv_003: PASS
+  [brain 4/35] conv_004: FAIL
+  [brain 5/35] remind_001: PASS
+  [brain 6/35] remind_002: PASS
+  [brain 7/35] remind_003: PASS
+  [brain 8/35] remind_004: PASS
+  [brain 9/35] remind_005: PASS
+  [brain 10/35] intent_001: PASS
+  [brain 11/35] intent_002: PASS
+  [brain 12/35] intent_003: FAIL
+  [brain 13/35] summ_001: FAIL
+  [brain 14/35] summ_002: PASS
+  [brain 15/35] summ_003: FAIL
+  [brain 16/35] summ_004: PASS
+  [brain 17/35] summ_005: FAIL
+  [brain 18/35] reason_001: PASS
+  [brain 19/35] reason_002: FAIL
+  [brain 20/35] reason_003: FAIL
+  [brain 21/35] reason_004: PASS
+  [brain 22/35] instruct_001: PASS
+  [brain 23/35] instruct_002: PASS
+  [brain 24/35] instruct_003: PASS
+  [brain 25/35] instruct_004: FAIL
+  [brain 26/35] refusal_001: PASS
+  [brain 27/35] refusal_002: PASS
+  [brain 28/35] refusal_003: FAIL
+  [brain 29/35] fluency_001: FAIL
+  [brain 30/35] fluency_002: PASS
+  [brain 31/35] fluency_003: FAIL
+  [brain 32/35] hard_001: PASS
+  [brain 33/35] hard_002: PASS
+  [brain 34/35] hard_003: PASS
+  [brain 35/35] hard_004: PASS
+[stage C] role conversation
+  [conversation] 8 cases
+  [conversation] cq01: es=True sane=True judge=0.805
+  [conversation] cq02: es=True sane=True judge=0.76
+  [conversation] cq03: es=True sane=True judge=0.925
+  [conversation] cq04: es=True sane=True judge=0.445
+  [conversation] cq05: es=True sane=True judge=0.515
+  [conversation] cq06: es=True sane=True judge=0.82
+  [conversation] cq07: es=True sane=True judge=0.9175
+  [conversation] cq08: es=True sane=True judge=0.355
+  [conversation] judge=0.6928 spanish=100%
+[stage C] role narration
+  [narration] 8 cases
+  [narration] dn-01: fidelity=True structure=False judge=0.87
+  [narration] dn-02: fidelity=True structure=True judge=0.59
+  [narration] dn-03: fidelity=True structure=True judge=0.87
+  [narration] dn-04: fidelity=False structure=False judge=0.87
+  [narration] dn-05: fidelity=False structure=True judge=0.87
+  [narration] dn-06: fidelity=True structure=True judge=0.59
+  [narration] dn-07: fidelity=True structure=True judge=0.87
+  [narration] dn-08: fidelity=True structure=True judge=0.59
+  [narration] fidelity=75% structure=75%
+[stage C] role agentic
+  [agentic] 12 cases (max 5 tool rounds, prod sampling {'temperature': 0.7, 'top_p': 0.8, 'top_k': 20}, max_tokens=4096)
+  [agentic] ag-news-01: rounds=0 tools=False json=True FAIL missing=['quantum photonics', '850', 'loihi']
+  [agentic] ag-fetch-01: rounds=0 tools=False json=True FAIL missing=['16.8', 'insurgente']
+  [agentic] ag-clima-01: rounds=0 tools=False json=False FAIL missing=['24', '70']
+  [agentic] ag-multi-01: rounds=0 tools=False json=True FAIL missing=['openhome', 'gemma4']
+  [agentic] ag-modelos-01: rounds=0 tools=False json=True FAIL missing=['mistral large 3', 'millones de tokens', 'qwen4']
+  [agentic] ag-chain-01: rounds=2 tools=True json=False FAIL
+  [agentic] ag-multitopic-01: rounds=0 tools=False json=True FAIL missing=['1.6', '17.2']
+  [agentic] ag-reformulate-01: rounds=2 tools=True json=True PASS
+  [agentic] ag-distractor-01: rounds=0 tools=False json=False FAIL missing=['29', '20']
+  [agentic] ag-distractor-02: rounds=0 tools=False json=True FAIL missing=['colmena', 'microrobot']
+  [agentic] ag-links-01: rounds=0 tools=False json=True FAIL missing=['cide', 'tecno-mx.example/notas/diplomado-cide']
+  [agentic] ag-noolt-01: rounds=0 tools=True json=True PASS
+  [agentic] pass=17% tools=25% json=75% rounds=0.33
+[stage C] role proactive
+  [proactive] 12 cases
+  [proactive] pt-restraint-01: verdict=esperar PASS
+  [proactive] pt-restraint-02: verdict=esperar PASS
+  [proactive] pt-restraint-03: verdict=esperar FAIL
+  [proactive] pt-restraint-04: verdict=msg FAIL
+  [proactive] pt-speak-01: verdict=esperar FAIL
+  [proactive] pt-speak-02: verdict=esperar FAIL
+  [proactive] pt-speak-03: verdict=msg PASS
+  [proactive] pt-speak-04: verdict=esperar FAIL
+  [proactive] pt-restraint-05: verdict=esperar PASS
+  [proactive] pt-restraint-06: verdict=esperar PASS
+  [proactive] pt-speak-05: verdict=esperar FAIL
+  [proactive] pt-speak-06: verdict=msg PASS
+  [proactive] restraint=67% speak=33% pass=50%
+[stage C] role toolstress
+  [toolstress] 10 cases (max 6 tool rounds, 13 tools offered)
+  [toolstress] ts-sel-reminder-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-memory-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-health-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-message-01 (selection): rounds=1 PASS
+  [toolstress] ts-nest-export-01 (nested_args): rounds=1 PASS
+  [toolstress] ts-nest-config-01 (nested_args): rounds=1 PASS
+  [toolstress] ts-err-export-01 (error_recovery): rounds=1 FAIL
+  [toolstress] ts-err-event-01 (error_recovery): rounds=1 FAIL
+  [toolstress] ts-proc-expense-01 (procedure): rounds=3 PASS
+  [toolstress] ts-proc-healthreport-01 (procedure): rounds=3 PASS
+  [toolstress] pass=80% sel=100% args=100% recov=0% proc=100%
+==============================================================================
+  AUDIT REPORT — gemma4-e2b  [tier cpu]  2026-07-16T06:56:20.372283+00:00
+==============================================================================
+  gguf       : /home/hectormr/LifeOS/models/gemma4-e2b-it/gemma-4-E2B-it-Q4_K_M.gguf
+  server_bin : /usr/bin/llama-server
+  recipe     : {
+    "launch": {
+      "ngl": 0,
+      "cpu_moe": false,
+      "ctx": 32768,
+      "cell_name": "cpu-t8",
+      "extra_flags": [
+        "-b",
+        "512",
+        "-ub",
+        "256",
+        "-t",
+        "8",
+        "--no-mmap"
+      ]
+    },
+    "sampling": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "thinking": "off",
+    "scores": {
+      "stage_a_decode_toks_s": 24.04,
+      "stage_a_ttft_ms": 169.4,
+      "stage_a_vram_delta_mib": 0,
+      "stage_b_det": 0.5
+    },
+    "timestamp_utc": "2026-07-16T00:56:30.193532+00:00"
+  }
+  role config (headline metric + sampling it was earned with):
+  role          headline  sampling used
+  --------------------------------------------------------------------------
+  brain           0.7355  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  conversation    0.6928  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  narration         0.75  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  agentic         0.1667  T=0.7 top_p=0.8 top_k=20 seed=per-case-crc32 think=off
+  proactive          0.5  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  toolstress         0.8  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  role brain      : {"det": 0.6857, "subj": 0.8517, "final": 0.7355, "note": null, "n_cases": 35, "n_rubric": 6, "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role conversation: {"n": 8, "judge_score": 0.6928, "spanish_rate": 1.0, "sane_rate": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role narration  : {"n": 8, "numeric_fidelity_rate": 0.75, "structure_rate": 0.75, "judge_score": 0.765, "failed_ids": ["dn-01", "dn-04", "dn-05"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role agentic    : {"n": 12, "pass_rate": 0.1667, "tool_correct_rate": 0.25, "json_valid_rate": 0.75, "mean_rounds": 0.33, "failed_ids": ["ag-news-01", "ag-fetch-01", "ag-clima-01", "ag-multi-01", "ag-modelos-01", "ag-chain-01", "ag-multitopic-01", "ag-distractor-01", "ag-distractor-02", "ag-links-01"], "sampling_used": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role proactive  : {"n": 12, "restraint_rate": 0.6667, "speak_pass_rate": 0.3333, "pass_rate": 0.5, "failed_ids": ["pt-restraint-03", "pt-restraint-04", "pt-speak-01", "pt-speak-02", "pt-speak-04", "pt-speak-05"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role toolstress : {"n": 10, "pass_rate": 0.8, "tool_selection_rate": 1.0, "arg_exactness_rate": 1.0, "recovery_rate": 0.0, "procedure_rate": 1.0, "failed_ids": ["ts-err-export-01", "ts-err-event-01"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+==============================================================================
+
+=======================================================================================================================================================================================================
+  MODEL AUDIT MATRIX  (newest audit per label+tier)
+=======================================================================================================================================================================================================
+  Label                tier     brain  extr%   dom%  tool%   vis%   rev%  code%   conv recQA%   narr  lsum% parse% agent% proact%  vcls%   dev% tstress%   tok/s  VRAM MiB thinking 
+  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  gemma4-e2b           cpu      0.736 - - - - - -  0.693 -  75.0% - -  16.7%   50.0% - -    80.0% -         0 off      
+  qwen35-0_8b          cpu      0.364 - - - - - -  0.349 -  12.5% - -  41.7%   33.3% - -    80.0% -         0 off      
+  qwen35-2b            cpu      0.636 - - - - - -  0.552 -  25.0% - -  58.3%   25.0% - -    90.0% -         0 off      
+  qwen35-4b            cpu      0.592 - - - - - -  0.783 -  62.5% - -  66.7%   50.0% - -   100.0% -         0 off      
+=======================================================================================================================================================================================================

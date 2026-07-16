@@ -15,12 +15,30 @@ Pipeline per tier (cpu / vram4 / vram8 / vram12):
             presets (model-card default via --sampling, house default) x
             thinking modes (--thinking-modes), scored on a deterministic FAST
             SUBSET (~12 cases, every 3rd) of brain_quality.jsonl.
-  Stage C — full audit at peak: run the FULL role suite at the winning recipe
-            and append everything to results/model_audit.jsonl.
+  Stage B2 — PER-ROLE config tuning (default ON; --no-per-role-tuning opts
+            out): every model competes at its PER-TASK maximum. For each
+            tunable quality role, sweep sampling presets (house 0.6/0.95/20,
+            warm 0.7/0.8/20, precise 0.2/0.9/20) x --thinking-modes (<=6
+            variants) on a deterministic subset of the role's own golden
+            cases (every 2nd, cap 6; toolstress: 3) scored with the role's
+            own scorer. Winners land in recipe["role_configs"]. Pinned roles
+            are never tuned: extraction/domain (prod extractor pins
+            temp-0/seed-0) and agentic (prod tool loop pins 0.7/0.8/20 —
+            production parity IS the metric there).
+  Stage C — full audit at peak: run the FULL role suite at the winning
+            recipe — each role at its role_configs entry when present —
+            and append everything to results/model_audit.jsonl. Each role's
+            "sampling_used" records the config it ACTUALLY ran with; judge
+            calls stay temp-0/seed-0 always.
 
 Recipes are persisted to results/model_recipes.json; --use-recipe skips
-Stages A/B and audits straight at the saved recipe. --quick = reduced Stage-A
-grid + skip Stage B.
+Stages A/B/B2 and audits straight at the saved recipe (saved role_configs
+included). --quick = reduced Stage-A grid + skip Stages B and B2.
+
+Live status: the harness continuously writes results/audit_status.json
+(atomic tmp+rename, merge semantics) at every phase/role/case boundary for
+the dashboard's /models/audit page; the batch driver (audit_batches.py) owns
+the "batch" key and pause/resume via results/audit_control.json.
 
 Roles: speed, brain, extraction (reused from bench_model.py) + domain,
 toolcall, vision (needs --mmproj), codereview, embed (needs --embedding),
@@ -148,6 +166,7 @@ except Exception as _axi_import_exc:  # noqa: BLE001 — standalone run without 
 RESULTS_DIR = SCRIPT_DIR / "results"
 AUDIT_REGISTRY_PATH = RESULTS_DIR / "model_audit.jsonl"
 RECIPES_PATH = RESULTS_DIR / "model_recipes.json"
+STATUS_PATH = RESULTS_DIR / "audit_status.json"
 GOLDEN_DIR = bm.LIFEOS_SRC / "lifeos" / "agents" / "eval" / "golden_sets"
 VISION_ASSETS_DIR = GOLDEN_DIR / "vision_assets"
 
@@ -217,6 +236,93 @@ def role_sampling_used(role: str, sampling: Optional[dict],
         return build_sampling_used(AGENTIC_PROD_SAMPLING, thinking,
                                    SEED_POLICY_PER_CASE)
     return build_sampling_used(sampling, thinking, SEED_POLICY_PER_CASE)
+
+# ── live status file (dashboard contract: results/audit_status.json) ────────
+#
+# The harness continuously writes a tiny JSON status the dashboard polls
+# (axi.bench_audit.load_status). Schema (all keys optional except state):
+#   {"state": "running|paused|idle|done", "label": "...", "tier": "...",
+#    "phase": "stageA|stageB|stageB2|stageC|persist", "cell_or_variant": "...",
+#    "current_role": "...", "role_case_done": 3, "role_case_total": 12,
+#    "roles_done": ["speed"], "roles_pending": ["brain"],
+#    "batch": {"queue": [...], "position": 1, "total": 9},
+#    "started_at": "...", "updated_at": "..."}
+# Writes are atomic (tmp + rename) and MERGE into the existing file. The
+# ``batch`` key is OWNED by the batch driver (audit_batches.py): the harness
+# never sets it, and the merge preserves any existing value it didn't set.
+# Status writing is disabled by default so unit tests that call role runners
+# directly never touch the real results dir; main() enables it.
+
+_STATUS = {"enabled": False, "path": STATUS_PATH}
+
+
+def enable_status(path: Optional[Path] = None) -> None:
+    _STATUS["enabled"] = True
+    if path is not None:
+        _STATUS["path"] = Path(path)
+
+
+def disable_status() -> None:
+    """Stop status writes. Deliberately does NOT reset the target path: a
+    later enable_status() re-enables at the same place, and tests that
+    redirect _STATUS['path'] stay isolated across multiple main() calls."""
+    _STATUS["enabled"] = False
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """tmp + rename in the same directory — readers never see a torn file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, ensure_ascii=False) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def read_status(path: Path) -> dict:
+    """Current status content; {} when missing/corrupt (never raises)."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def write_status(_path: Optional[Path] = None, **kw) -> Optional[dict]:
+    """Merge ``kw`` into the status file and write it atomically.
+
+    ``_path`` forces a target (used by tests and the batch driver); without it
+    the call is a no-op unless enable_status() ran. Keys the caller did not
+    pass — notably ``batch``, owned by the batch driver — are preserved.
+    Returns the merged status (None when disabled). Never raises: a status
+    write must not be able to kill an audit.
+    """
+    path = _path if _path is not None else (
+        _STATUS["path"] if _STATUS["enabled"] else None)
+    if path is None:
+        return None
+    try:
+        status = read_status(path)
+        status.update(kw)
+        status["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _atomic_write_json(Path(path), status)
+        return status
+    except Exception as e:  # noqa: BLE001 — bench robustness
+        print(f"  WARNING: status write failed: {e}", flush=True)
+        return None
+
+
+def _tick(role: str, done: int, total: int) -> None:
+    """Per-case status increment (cheap — the status file is tiny)."""
+    write_status(current_role=role, role_case_done=done, role_case_total=total)
+
 
 VALID_THINKING_MODES = ("none", "off", "on", "budget512")
 VALID_ROLES = ("speed", "brain", "extraction", "domain", "toolcall",
@@ -539,6 +645,115 @@ def thinking_request_kwargs(mode: str) -> dict:
     if mode in ("on", "budget512"):
         return {"chat_template_kwargs": {"enable_thinking": True}}
     return {}
+
+
+# ── Stage B2 (PER-ROLE config tuning) pure helpers ───────────────────────────
+#
+# Stage B picks ONE (sampling, thinking) winner per model; Stage B2 goes
+# further and lets each model compete at its PER-TASK maximum: for each
+# quality role it scores a small variant grid on a deterministic subset of
+# that role's own golden cases (with the role's own scorer) and pins the
+# winning config into recipe["role_configs"]. Stage C then runs every role at
+# its own peak config.
+
+# Sampling presets swept per role (name → preset). House first: ties resolve
+# toward it (our standard, most comparable config).
+ROLE_TUNING_SAMPLINGS: tuple[tuple[str, dict], ...] = (
+    ("house", {"temperature": 0.6, "top_p": 0.95, "top_k": 20}),
+    ("warm", {"temperature": 0.7, "top_p": 0.8, "top_k": 20}),
+    ("precise", {"temperature": 0.2, "top_p": 0.9, "top_k": 20}),
+)
+ROLE_TUNING_MAX_VARIANTS = 6
+ROLE_TUNE_SUBSET_SIZE = 6
+ROLE_TUNE_SUBSET_STRIDE = 2
+# toolstress is loop-based (each case costs up to 7 model rounds) — tune on 3.
+TOOLSTRESS_TUNE_SUBSET_SIZE = 3
+
+# Roles NEVER per-role tuned, and WHY. extraction/domain go through the
+# production extractor which pins temperature=0.0/seed=0 itself — tuning them
+# would measure a config production never runs. agentic stays at the
+# prod-pinned 0.7/0.8/20 (brain._base_payload engine='4b'): the production
+# tool loop sends exactly that to ANY model on the brain port, so PRODUCTION
+# PARITY *IS* THE METRIC there — a tuned agentic score would be fiction.
+# speed/embed/ctxprobe exercise no sampling at all.
+PER_ROLE_TUNING_PINNED: dict[str, str] = {
+    "extraction": "production extractor pins temperature=0.0/seed=0",
+    "domain": "production extractor pins temperature=0.0/seed=0",
+    "agentic": "prod tool loop pins 0.7/0.8/20 — production parity IS the metric",
+    "speed": "no sampling exercised",
+    "embed": "no sampling exercised",
+    "ctxprobe": "no sampling exercised",
+}
+PER_ROLE_TUNABLE = tuple(r for r in VALID_ROLES
+                         if r not in PER_ROLE_TUNING_PINNED)
+
+
+def build_role_tuning_variants(thinking_modes: list[str],
+                               max_variants: int = ROLE_TUNING_MAX_VARIANTS
+                               ) -> list[dict]:
+    """Sampling presets x thinking modes, deduped, capped at 6.
+
+    Thinking-major order so that when the cap bites, every sampling preset is
+    still represented at the earliest thinking modes. 'none' means the chat
+    template default (no request kwargs at all).
+    """
+    modes: list[str] = []
+    for m in (thinking_modes or ["none"]):
+        if m not in modes:
+            modes.append(m)
+    variants = [
+        {"name": f"{s_name}-think_{mode}", "sampling": dict(s),
+         "thinking": mode}
+        for mode in modes
+        for s_name, s in ROLE_TUNING_SAMPLINGS
+    ]
+    return variants[:max_variants]
+
+
+def select_role_tune_subset(cases: list, n: int = ROLE_TUNE_SUBSET_SIZE,
+                            stride: int = ROLE_TUNE_SUBSET_STRIDE) -> list:
+    """Deterministic tuning subset: every ``stride``-th case, cap ``n``.
+
+    Roles with n or fewer cases use them ALL. Same input → same subset.
+    """
+    if len(cases) <= n:
+        return list(cases)
+    return list(cases[::stride][:n])
+
+
+def pick_role_config_winner(scored: list[dict]) -> Optional[dict]:
+    """Winner = highest subset score; ties → house sampling, thinking off.
+
+    Tie preference (cheapest / most deterministic): house sampling beats
+    non-house, thinking off/none beats on/budget, then earlier variant order.
+    None when nothing scored (every variant errored).
+    """
+    ranked = [(i, s) for i, s in enumerate(scored) if s.get("score") is not None]
+    if not ranked:
+        return None
+
+    def key(pair: tuple[int, dict]):
+        i, s = pair
+        return (-(s["score"]),
+                0 if s.get("sampling") == HOUSE_SAMPLING else 1,
+                0 if s.get("thinking") in ("off", "none") else 1,
+                i)
+
+    return min(ranked, key=key)[1]
+
+
+def role_config_for(recipe: dict, role: str) -> tuple[dict, str]:
+    """(sampling, thinking) one role runs at in Stage C.
+
+    Per-role config from recipe["role_configs"] when present (Stage B2
+    winner), falling back to the global recipe. Pinned roles never receive a
+    role_configs entry (see PER_ROLE_TUNING_PINNED) — and role_sampling_used
+    overrides their sampling_used record downstream regardless.
+    """
+    rc = (recipe.get("role_configs") or {}).get(role) or {}
+    sampling = rc.get("sampling") or recipe.get("sampling") or dict(HOUSE_SAMPLING)
+    thinking = rc.get("thinking") or recipe.get("thinking", "none")
+    return dict(sampling), thinking
 
 
 # ── recipe registry (results/model_recipes.json) ─────────────────────────────
@@ -2539,9 +2754,18 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"Comma list from {list(VALID_ROLES)}; vision/visionclass "
                         "auto-skip without --mmproj; embed needs --embedding")
     p.add_argument("--quick", action="store_true",
-                   help="Reduced Stage-A grid + skip Stage B")
+                   help="Reduced Stage-A grid + skip Stage B (and Stage B2)")
     p.add_argument("--use-recipe", action="store_true",
-                   help="Skip Stages A/B; audit at the saved recipe for label+tier")
+                   help="Skip Stages A/B/B2; audit at the saved recipe for "
+                        "label+tier (saved role_configs are reused without "
+                        "re-tuning)")
+    p.add_argument("--per-role-tuning", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="Stage B2: tune (sampling, thinking) PER ROLE on a "
+                        "deterministic subset of each role's golden cases "
+                        "(default ON for fresh audits; --no-per-role-tuning "
+                        "opts out; with --use-recipe, --no-per-role-tuning "
+                        "ignores the saved role_configs)")
     p.add_argument("--sampling", default=None,
                    help='Model-card default sampling as JSON, e.g. '
                         '\'{"temperature":0.7,"top_p":0.8}\'')
@@ -2681,6 +2905,7 @@ def run_cell(args, cell: Cell, vram_baseline: Optional[int],
     """Stage A: spawn one cell, measure decode/TTFT/VRAM/RSS on short prompts."""
     import brain_bench as bb
     print(f"  [stage A] cell {cell.name} ...", flush=True)
+    write_status(phase="stageA", cell_or_variant=cell.name)
     result: dict = {"cell": asdict(cell), "ok": False}
     proc, healthy = _spawn_recipe_server(args, cell.ngl, cell.cpu_moe,
                                          cell.to_extra_flags(), with_mmproj=False)
@@ -2774,8 +2999,9 @@ def run_stage_b(args, winner: dict, card_sampling: Optional[dict],
             max_tokens = 1024 if any(v["thinking"] != "off" and v["thinking"] != "none"
                                      for v in group) else 256
             for v in group:
+                write_status(phase="stageB", cell_or_variant=v["name"])
                 passed = 0
-                for case in subset:
+                for j, case in enumerate(subset):
                     system = sj.get_system_prompt_for_case(case)
                     messages = ([{"role": "system", "content": system}] if system else []) \
                                + [{"role": "user", "content": case.get("prompt", "")}]
@@ -2786,6 +3012,7 @@ def run_stage_b(args, winner: dict, card_sampling: Optional[dict],
                                           seed=case_seed(case.get("id")))
                     ok, _ = cpu_sweep.check_deterministic(case, _message_text(msg))
                     passed += 1 if ok else 0
+                    _tick("stageB-fast-subset", j + 1, len(subset))
                 det = round(passed / len(subset), 4) if subset else 0.0
                 scored.append({**v, "det": det})
                 print(f"  [stage B] {v['name']}: det={det}", flush=True)
@@ -2802,6 +3029,338 @@ def run_stage_b(args, winner: dict, card_sampling: Optional[dict],
     best_det = max(s["det"] for s in ranked)
     winner_variant = next(s for s in ranked if s["det"] == best_det)
     return winner_variant, scored
+
+
+# ── Stage B2: per-role config tuning ─────────────────────────────────────────
+
+def make_role_case_scorer(role: str, port: int, mmproj: Optional[str] = None,
+                          ctx: int = 32768):
+    """(cases, score_one(case, sampling, thinking) → float 0..1) for a role.
+
+    This is the per-role ``score_case``-ish surface Stage B2 tunes on: each
+    closure runs ONE golden case against the candidate at the given
+    (sampling, thinking) and scores it with the ROLE'S OWN scorer — the same
+    pure scorers Stage C uses. Judge-scored roles (conversation, narration,
+    devplan instructions) tune on their DETERMINISTIC component only: judge
+    calls are temp-0/seed-0 and config-insensitive, so they cannot separate
+    variants but would cost a judge round-trip per case.
+
+    Returns (None, reason) when the role cannot be tuned here (pinned role,
+    missing --mmproj, missing assets) — the role then runs at the global
+    recipe config.
+    """
+    import cpu_sweep
+
+    if role in PER_ROLE_TUNING_PINNED:
+        return None, f"pinned: {PER_ROLE_TUNING_PINNED[role]}"
+
+    def chat(case, messages, sampling, thinking, max_tokens, tools=None):
+        return chat_completion(port, messages, sampling=sampling,
+                               thinking=thinking, max_tokens=max_tokens,
+                               tools=tools, seed=case_seed(case.get("id")))
+
+    if role == "brain":
+        import subjective_judge as sj
+        cases = sj.load_golden_set(sj.GOLDEN_SET_PATH)
+
+        def score(case, sampling, thinking):
+            system = sj.get_system_prompt_for_case(case)
+            messages = ([{"role": "system", "content": system}] if system else []) \
+                       + [{"role": "user", "content": case.get("prompt", "")}]
+            max_tokens = 1024 if thinking in ("on", "budget512") else 200
+            msg = chat(case, messages, sampling, thinking, max_tokens)
+            ok, _ = cpu_sweep.check_deterministic(case, _message_text(msg))
+            return 1.0 if ok else 0.0
+        return cases, score
+
+    if role == "toolcall":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "tool_calling.jsonl")
+
+        def score(case, sampling, thinking):
+            tools = [TOOL_SCHEMAS[name] for name in case.get("tools", [])
+                     if name in TOOL_SCHEMAS]
+            msg = chat(case, case["messages"], sampling, thinking, 256,
+                       tools=tools)
+            return 1.0 if score_toolcall_case(case, msg).get("passed") else 0.0
+        return cases, score
+
+    if role == "vision":
+        if not mmproj:
+            return None, "no --mmproj"
+        try:
+            ensure_vision_assets()
+        except Exception as e:  # noqa: BLE001
+            return None, f"assets unavailable ({e})"
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "vision_quality.jsonl")
+
+        def score(case, sampling, thinking):
+            image_path = GOLDEN_DIR / case["image"]
+            b64 = base64.b64encode(image_path.read_bytes()).decode()
+            content = [{"type": "text", "text": case["question"]},
+                       {"type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"}}]
+            msg = chat(case, [{"role": "user", "content": content}],
+                       sampling, thinking, 128)
+            return 1.0 if score_vision_case(
+                case, _message_text(msg)).get("passed") else 0.0
+        return cases, score
+
+    if role == "codereview":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "code_review.jsonl")
+
+        def score(case, sampling, thinking):
+            prompt = CODEREVIEW_PROMPT.format(lang=case.get("lang", ""),
+                                              snippet=case.get("snippet", ""))
+            msg = chat(case, [{"role": "user", "content": prompt}],
+                       sampling, thinking, 384)
+            return 1.0 if score_codereview_case(
+                case, _message_text(msg)).get("passed") else 0.0
+        return cases, score
+
+    if role == "codegen":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "code_generation.jsonl")
+
+        def score(case, sampling, thinking):
+            msg = chat(case, [{"role": "system", "content": CODEGEN_SYSTEM},
+                              {"role": "user", "content": case.get("prompt", "")}],
+                       sampling, thinking, 768)
+            code = extract_code_block(_message_text(msg))
+            exec_result = None
+            if code and code_compiles(code):
+                exec_result = execute_codegen_harness(
+                    build_codegen_harness(case, code), case.get("timeout_s", 10))
+            return 1.0 if score_codegen_case(
+                case, code, exec_result).get("passed") else 0.0
+        return cases, score
+
+    if role == "conversation":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "conversation_quality.jsonl")
+
+        def score(case, sampling, thinking):
+            msg = chat(case, case["messages"], sampling, thinking, 256)
+            det = check_conversation_deterministic(_message_text(msg))
+            return 1.0 if (det["spanish"] and det["sane"]) else 0.0
+        return cases, score
+
+    if role == "recordsqa":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "records_qa.jsonl")
+
+        def score(case, sampling, thinking):
+            msg = chat(case, [{"role": "system", "content": build_recordsqa_system(case)},
+                              {"role": "user", "content": case.get("question", "")}],
+                       sampling, thinking, 400)
+            return 1.0 if score_recordsqa_case(
+                case, _message_text(msg)).get("passed") else 0.0
+        return cases, score
+
+    if role == "narration":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "digest_narration.jsonl")
+
+        def score(case, sampling, thinking):
+            msg = chat(case, [{"role": "system", "content": NARRATION_SYSTEM},
+                              {"role": "user", "content": case.get("facts_text", "")}],
+                       sampling, thinking, 320)
+            return 1.0 if score_narration_case(
+                case, _message_text(msg)).get("passed") else 0.0
+        return cases, score
+
+    if role == "longsum":
+        all_cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "long_summarization.jsonl")
+        max_tokens_by_kind = {"meeting_window": 600, "executive": 2048,
+                              "chat_archive": 400}
+        cases = []
+        for case in all_cases:  # only cases that fit the recipe ctx
+            system, user = build_longsum_prompt(case)
+            if longsum_case_fits_ctx(len(user) + len(system or ""), ctx):
+                cases.append(case)
+        if not cases:
+            return None, "no longsum case fits the recipe ctx"
+
+        def score(case, sampling, thinking):
+            system, user = build_longsum_prompt(case)
+            messages = ([{"role": "system", "content": system}] if system else []) \
+                       + [{"role": "user", "content": user}]
+            msg = chat(case, messages, sampling, thinking,
+                       max_tokens_by_kind.get(case.get("kind"), 600))
+            return 1.0 if score_longsum_case(
+                case, _message_text(msg)).get("passed") else 0.0
+        return cases, score
+
+    if role == "parsejson":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "structured_parsing.jsonl")
+
+        def score(case, sampling, thinking):
+            system = case.get("system")
+            messages = ([{"role": "system", "content": system}] if system else []) \
+                       + [{"role": "user", "content": case.get("prompt", "")}]
+            msg = chat(case, messages, sampling, thinking,
+                       case.get("max_tokens", 256))
+            return 1.0 if score_parsejson_case(
+                case, _message_text(msg)).get("passed") else 0.0
+        return cases, score
+
+    if role == "proactive":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "proactive_thought.jsonl")
+
+        def score(case, sampling, thinking):
+            msg = chat(case, [{"role": "user",
+                               "content": case.get("context_block", "")}],
+                       sampling, thinking, 150)
+            return 1.0 if score_proactive_case(
+                case, _message_text(msg)).get("passed") else 0.0
+        return cases, score
+
+    if role == "visionclass":
+        if not mmproj:
+            return None, "no --mmproj"
+        try:
+            ensure_posture_assets()
+        except Exception as e:  # noqa: BLE001
+            return None, f"assets unavailable ({e})"
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "vision_classification.jsonl")
+
+        def score(case, sampling, thinking):
+            image_path = GOLDEN_DIR / case["image"]
+            b64 = base64.b64encode(image_path.read_bytes()).decode()
+            content = [{"type": "text", "text": VISIONCLASS_PROMPT_ES},
+                       {"type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"}}]
+            msg = chat(case, [{"role": "user", "content": content}],
+                       sampling, thinking, 200)
+            return 1.0 if score_visionclass_case(
+                case, _message_text(msg)).get("passed") else 0.0
+        return cases, score
+
+    if role == "devplan":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "dev_planning.jsonl")
+
+        def score(case, sampling, thinking):
+            if case.get("kind") == "instruction":
+                msg = chat(case, [{"role": "system", "content": DEVPLAN_DIRECTOR_SYSTEM},
+                                  {"role": "user",
+                                   "content": f"Goal: {case.get('goal', '')}"}],
+                           sampling, thinking, 600)
+                result = score_devplan_instruction(case, _message_text(msg))
+            else:
+                review_user = (f"Goal: {case.get('goal', '')}\n\n"
+                               f"Diff:\n{case.get('diff', '')}")
+                if case.get("tests_output") is not None:
+                    review_user += f"\n\nTest results:\n{case['tests_output']}"
+                msg = chat(case, [{"role": "system", "content": DEVPLAN_REVIEWER_SYSTEM},
+                                  {"role": "user", "content": review_user}],
+                           sampling, thinking, 300)
+                result = score_devplan_review(case, _message_text(msg))
+            return 1.0 if result.get("passed") else 0.0
+        return cases, score
+
+    if role == "toolstress":
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "tool_stress.jsonl")
+
+        def score(case, sampling, thinking):
+            def chat_fn(messages, tools):
+                return chat_completion(port, messages, sampling=sampling,
+                                       thinking=thinking,
+                                       max_tokens=TOOLSTRESS_MAX_TOKENS,
+                                       tools=tools,
+                                       seed=case_seed(case.get("id")))
+            loop_result = run_toolstress_loop(case, chat_fn)
+            return 1.0 if score_toolstress_case(
+                case, loop_result).get("passed") else 0.0
+        return cases, score
+
+    return None, f"role {role!r} has no tuner"
+
+
+def tune_role_configs(args, recipe: dict, roles: list[str],
+                      thinking_modes: list[str],
+                      vram_baseline: Optional[int]) -> dict:
+    """Stage B2: per-role (sampling, thinking) tuning at the Stage-A launch.
+
+    For every tunable quality role in ``roles`` (PER_ROLE_TUNING_PINNED roles
+    are excluded), score the ROLE_TUNING_SAMPLINGS x thinking-mode grid
+    (≤ ROLE_TUNING_MAX_VARIANTS) on a deterministic subset of the role's own
+    golden cases with the role's own scorer. Winner per role = highest subset
+    score (ties → house sampling, thinking off).
+
+    Returns the role_configs mapping for the recipe:
+      {role: {"sampling": {...}, "thinking": mode,
+              "subset_score": x, "variants_tried": n}}
+    """
+    tunable = [r for r in roles if r in PER_ROLE_TUNABLE]
+    if not tunable:
+        return {}
+    launch = recipe.get("launch") or {}
+    ctx = launch.get("ctx") or args.ctx
+
+    prepared: dict[str, tuple[list, object]] = {}
+    for role in tunable:
+        cases, score_fn = make_role_case_scorer(role, args.port,
+                                                mmproj=args.mmproj, ctx=ctx)
+        if cases is None:
+            print(f"[stage B2] {role}: not tunable here ({score_fn}) — "
+                  "will run at the global recipe config", flush=True)
+            continue
+        n = (TOOLSTRESS_TUNE_SUBSET_SIZE if role == "toolstress"
+             else ROLE_TUNE_SUBSET_SIZE)
+        prepared[role] = (select_role_tune_subset(cases, n=n), score_fn)
+    if not prepared:
+        return {}
+
+    variants = build_role_tuning_variants(thinking_modes)
+    print(f"[stage B2] per-role tuning: {len(prepared)} roles x "
+          f"{len(variants)} variants", flush=True)
+    write_status(phase="stageB2")
+
+    scored: dict[str, list[dict]] = {role: [] for role in prepared}
+    # Group variants by required server flags so we relaunch only when needed
+    # (same trick as Stage B).
+    by_flags: dict[tuple, list[dict]] = {}
+    for v in variants:
+        by_flags.setdefault(tuple(thinking_server_flags(v["thinking"])), []).append(v)
+
+    for flags, group in by_flags.items():
+        proc, healthy = _spawn_recipe_server(
+            args, launch.get("ngl", 0), launch.get("cpu_moe", False),
+            list(launch.get("extra_flags") or []) + list(flags),
+            with_mmproj=bool(args.mmproj))
+        if not healthy:
+            bm.kill_server(proc)
+            wait_vram_drain(vram_baseline)
+            for role in scored:
+                for v in group:
+                    scored[role].append({**v, "score": None,
+                                         "error": "health timeout"})
+            continue
+        try:
+            for role, (subset, score_fn) in prepared.items():
+                for v in group:
+                    write_status(phase="stageB2",
+                                 cell_or_variant=f"{role}/{v['name']}")
+                    vals: list[float] = []
+                    for i, case in enumerate(subset):
+                        vals.append(score_fn(case, v["sampling"], v["thinking"]))
+                        _tick(role, i + 1, len(subset))
+                    s = round(sum(vals) / len(vals), 4) if vals else None
+                    scored[role].append({**v, "score": s})
+                    print(f"  [stage B2] {role} {v['name']}: {s}", flush=True)
+        finally:
+            bm.kill_server(proc)
+            wait_vram_drain(vram_baseline)
+
+    role_configs: dict[str, dict] = {}
+    for role, variants_scored in scored.items():
+        win = pick_role_config_winner(variants_scored)
+        if win is None:
+            print(f"[stage B2] {role}: every variant failed — global config",
+                  flush=True)
+            continue
+        role_configs[role] = {"sampling": dict(win["sampling"]),
+                              "thinking": win["thinking"],
+                              "subset_score": win["score"],
+                              "variants_tried": len(variants_scored)}
+        print(f"[stage B2] {role} → {win['name']} "
+              f"(subset_score={win['score']})", flush=True)
+    return role_configs
 
 
 # ── Stage C roles ────────────────────────────────────────────────────────────
@@ -2833,6 +3392,7 @@ def run_brain_role(port: int, sampling: dict, thinking: str,
         passed += 1 if ok else 0
         print(f"  [brain {i + 1}/{len(all_cases)}] {case['id']}: "
               f"{'PASS' if ok else 'FAIL'}", flush=True)
+        _tick("brain", i + 1, len(all_cases))
     det = round(passed / len(all_cases), 4) if all_cases else 0.0
 
     if sj.http_get_status(f"http://127.0.0.1:{bm.JUDGE_PORT}/health") != 200:
@@ -2905,6 +3465,7 @@ def run_toolcall_role(port: int, sampling: dict, thinking: str) -> dict:
                               thinking=thinking, max_tokens=256, tools=tools,
                               seed=case_seed(case.get("id")))
         per_case.append(score_toolcall_case(case, msg))
+        _tick("toolcall", len(per_case), len(cases))
     agg = aggregate_toolcall(per_case)
     print(f"  [toolcall] tool={agg['correct_tool_rate']:.0%} "
           f"args={agg['arg_accuracy']:.0%} false-call={agg['false_call_rate']:.0%}",
@@ -2942,6 +3503,7 @@ def run_vision_role(port: int, mmproj: Optional[str],
                               sampling=sampling, thinking=thinking, max_tokens=128,
                               seed=case_seed(case.get("id")))
         per_case.append(score_vision_case(case, _message_text(msg)))
+        _tick("vision", len(per_case), len(cases))
     agg = aggregate_pass_rate(per_case)
     print(f"  [vision] pass={agg['pass_rate']:.0%}", flush=True)
     return agg
@@ -2968,6 +3530,7 @@ def run_codereview_role(port: int, sampling: dict, thinking: str) -> dict:
                               sampling=sampling, thinking=thinking, max_tokens=384,
                               seed=case_seed(case.get("id")))
         per_case.append(score_codereview_case(case, _message_text(msg)))
+        _tick("codereview", len(per_case), len(cases))
     agg = aggregate_codereview(per_case)
     print(f"  [codereview] detect={agg['detection_rate']:.0%} "
           f"false-pos={agg['false_positive_rate']:.0%}", flush=True)
@@ -2997,6 +3560,7 @@ def run_codegen_role(port: int, sampling: dict, thinking: str) -> dict:
         print(f"  [codegen] {case.get('id')}: "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
         per_case.append(result)
+        _tick("codegen", len(per_case), len(cases))
     agg = aggregate_codegen(per_case)
     print(f"  [codegen] pass={agg['pass_rate']:.0%} "
           f"compile={agg['compile_rate']:.0%}", flush=True)
@@ -3076,6 +3640,7 @@ def run_conversation_role(port: int, sampling: dict, thinking: str) -> dict:
         print(f"  [conversation] {row['id']}: es={det['spanish']} "
               f"sane={det['sane']} judge={row['judge_score']}", flush=True)
         per_case.append(row)
+        _tick("conversation", len(per_case), len(cases))
     agg = aggregate_conversation(per_case, note=note)
     js = agg.get("judge_score")
     print(f"  [conversation] judge={js if js is not None else '-'} "
@@ -3103,6 +3668,7 @@ def run_recordsqa_role(port: int, sampling: dict, thinking: str) -> dict:
               + (f" fabricated={result['fabricated']}"
                  if result["fabricated"] else ""), flush=True)
         per_case.append(result)
+        _tick("recordsqa", len(per_case), len(cases))
     agg = aggregate_recordsqa(per_case)
     print(f"  [recordsqa] pass={agg['pass_rate']:.0%} "
           f"fabrication={agg['fabrication_rate']:.0%}", flush=True)
@@ -3140,6 +3706,7 @@ def run_narration_role(port: int, sampling: dict, thinking: str) -> dict:
               f"structure={row['structure']} judge={row['judge_score']}",
               flush=True)
         per_case.append(row)
+        _tick("narration", len(per_case), len(cases))
     agg = aggregate_narration(per_case, note=note)
     print(f"  [narration] fidelity={agg['numeric_fidelity_rate']:.0%} "
           f"structure={agg['structure_rate']:.0%}", flush=True)
@@ -3177,6 +3744,7 @@ def run_longsum_role(port: int, sampling: dict, thinking: str, ctx: int) -> dict
               f"structure={result['structure_ok']} "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
         per_case.append(result)
+        _tick("longsum", len(per_case) + len(skipped_ids), len(cases))
     note = (f"{len(skipped_ids)} case(s) skipped: prompt exceeds ctx*"
             f"{LONGSUM_CTX_CHARS_PER_TOKEN} chars" if skipped_ids else None)
     agg = aggregate_longsum(per_case, skipped_ids=skipped_ids, note=note)
@@ -3204,6 +3772,7 @@ def run_parsejson_role(port: int, sampling: dict, thinking: str) -> dict:
         print(f"  [parsejson] {result['id']}: "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
         per_case.append(result)
+        _tick("parsejson", len(per_case), len(cases))
     agg = aggregate_parsejson(per_case)
     print(f"  [parsejson] pass={agg['pass_rate']:.0%} "
           f"negatives={agg['negative_pass_rate']:.0%} "
@@ -3252,6 +3821,7 @@ def run_agentic_role(port: int, sampling: dict, thinking: str) -> dict:
               + (f" forbidden={result['facts_forbidden']}"
                  if result["facts_forbidden"] else ""), flush=True)
         per_case.append(result)
+        _tick("agentic", len(per_case), len(cases))
     agg = aggregate_agentic(per_case)
     print(f"  [agentic] pass={agg['pass_rate']:.0%} "
           f"tools={agg['tool_correct_rate']:.0%} "
@@ -3290,6 +3860,7 @@ def run_toolstress_role(port: int, sampling: dict, thinking: str) -> dict:
               f"rounds={result['rounds']} "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
         per_case.append(result)
+        _tick("toolstress", len(per_case), len(cases))
     agg = aggregate_toolstress(per_case)
     print(f"  [toolstress] pass={agg['pass_rate']:.0%} "
           f"sel={agg['tool_selection_rate']:.0%} "
@@ -3315,6 +3886,7 @@ def run_proactive_role(port: int, sampling: dict, thinking: str) -> dict:
         print(f"  [proactive] {result['id']}: verdict={result['verdict']} "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
         per_case.append(result)
+        _tick("proactive", len(per_case), len(cases))
     agg = aggregate_proactive(per_case)
     print(f"  [proactive] restraint={agg['restraint_rate']:.0%} "
           f"speak={agg['speak_pass_rate']:.0%} pass={agg['pass_rate']:.0%}",
@@ -3357,6 +3929,7 @@ def run_visionclass_role(port: int, mmproj: Optional[str],
               f"json={result['json_valid']} label={result['label_correct']} "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
         per_case.append(result)
+        _tick("visionclass", len(per_case), len(cases))
     agg = aggregate_visionclass(per_case)
     print(f"  [visionclass] label={agg['label_accuracy']:.0%} "
           f"json={agg['json_valid_rate']:.0%} pass={agg['pass_rate']:.0%}",
@@ -3411,6 +3984,7 @@ def run_devplan_role(port: int, sampling: dict, thinking: str) -> dict:
         print(f"  [devplan] {result['id']} ({result['kind']}): "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
         per_case.append(result)
+        _tick("devplan", len(per_case), len(cases))
     agg = aggregate_devplan(per_case, note=note)
     print(f"  [devplan] instr={agg['instruction_pass_rate']:.0%} "
           f"review={agg['review_accuracy']:.0%} pass={agg['pass_rate']:.0%}",
@@ -3536,13 +4110,35 @@ def run_ctxprobe(args, launch: dict, vram_baseline: Optional[int],
 def run_stage_c(args, recipe: dict, roles: list[str],
                 vram_baseline: Optional[int],
                 tier: Optional[str] = None) -> dict:
-    """Full role suite at the peak recipe. Sequential; one server at a time."""
+    """Full role suite at the peak recipe. Sequential; one server at a time.
+
+    Each role runs at its OWN (sampling, thinking) from recipe["role_configs"]
+    when present (Stage B2 winner), falling back to the global recipe — and
+    its recorded sampling_used reflects the config it ACTUALLY ran with.
+    Judge calls stay temp-0/seed-0 regardless. The one shared server is
+    spawned with the UNION of thinking server flags any per-role config needs
+    (only budget512 has a launch flag, and it only acts when thinking is on).
+    """
     launch = recipe.get("launch") or {}
-    sampling = recipe.get("sampling") or dict(HOUSE_SAMPLING)
-    thinking = recipe.get("thinking", "none")
-    extra = list(launch.get("extra_flags") or []) + thinking_server_flags(thinking)
+    role_cfg = {r: role_config_for(recipe, r) for r in roles}
+    extra = list(launch.get("extra_flags") or [])
+    modes_used = {recipe.get("thinking", "none")} | {t for _, t in role_cfg.values()}
+    for mode in sorted(modes_used):
+        for flag_pair in [thinking_server_flags(mode)]:
+            for f in flag_pair:
+                if f not in extra:
+                    extra.append(f)
 
     results: dict = {}
+    write_status(phase="stageC")
+    done_roles: list[str] = []
+
+    def _status_role_start(role: str) -> None:
+        write_status(phase="stageC", current_role=role, role_case_done=0,
+                     roles_done=list(done_roles),
+                     roles_pending=[r for r in roles
+                                    if r != role and r not in done_roles])
+
     main_roles = [r for r in roles if r not in ("embed", "ctxprobe")]
     if main_roles:
         proc, healthy = _spawn_recipe_server(
@@ -3553,6 +4149,7 @@ def run_stage_c(args, recipe: dict, roles: list[str],
             raise RuntimeError("stage C server never became healthy at the recipe "
                                "launch config — recipe may be stale for this host")
         def _dispatch_role(role: str) -> None:
+            sampling, thinking = role_cfg[role]
             if role == "speed":
                 results["speed"] = bm.run_speed_role(args.port, proc.pid,
                                                      args.n_runs)
@@ -3611,6 +4208,7 @@ def run_stage_c(args, recipe: dict, roles: list[str],
         try:
             for role in main_roles:
                 print(f"[stage C] role {role}", flush=True)
+                _status_role_start(role)
                 try:
                     _dispatch_role(role)
                 except Exception as role_exc:  # noqa: BLE001
@@ -3621,17 +4219,21 @@ def run_stage_c(args, recipe: dict, roles: list[str],
                     print(f"  [{role}] ERROR (recorded, audit continues): "
                           f"{role_exc}", flush=True)
                     results[role] = {"error": str(role_exc)[:300]}
+                done_roles.append(role)
         finally:
             bm.kill_server(proc)
             wait_vram_drain(vram_baseline)
 
     if "embed" in roles:
         print("[stage C] role embed (separate --embedding spawn)", flush=True)
+        _status_role_start("embed")
         results["embed"] = run_embed_role(args, recipe, vram_baseline)
+        done_roles.append("embed")
 
     if "ctxprobe" in roles:
         print("[stage C] role ctxprobe (two separate KV-probe spawns)",
               flush=True)
+        _status_role_start("ctxprobe")
         try:
             results["ctxprobe"] = run_ctxprobe(args, launch, vram_baseline,
                                                tier=tier)
@@ -3639,12 +4241,19 @@ def run_stage_c(args, recipe: dict, roles: list[str],
             print(f"  [ctxprobe] ERROR (recorded, audit continues): "
                   f"{role_exc}", flush=True)
             results["ctxprobe"] = {"error": str(role_exc)[:300]}
+        done_roles.append("ctxprobe")
 
     # Per-role sampling record: WITH WHICH config each score was earned
     # (registry answers "good WHERE and WITH WHAT config", not just "good").
+    # role_cfg carries the ACTUAL per-role config (Stage B2 winner or global
+    # fallback); role_sampling_used still overrides the pinned roles.
     for role, res in results.items():
         if isinstance(res, dict) and "sampling_used" not in res:
-            res["sampling_used"] = role_sampling_used(role, sampling, thinking)
+            r_sampling, r_thinking = role_cfg.get(
+                role, (recipe.get("sampling") or dict(HOUSE_SAMPLING),
+                       recipe.get("thinking", "none")))
+            res["sampling_used"] = role_sampling_used(role, r_sampling,
+                                                      r_thinking)
     return results
 
 
@@ -3847,56 +4456,83 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"Audit: {args.label} | tiers={tiers} | roles={roles} | "
           f"moe={moe} | vram baseline={vram_baseline} MiB", flush=True)
 
+    enable_status()
+    write_status(state="running", label=args.label,
+                 started_at=datetime.now(timezone.utc).isoformat())
     exit_code = 0
-    for tier in tiers:
-        print(f"\n{'#' * 70}\n#  TIER {tier}\n{'#' * 70}", flush=True)
-        stage_a_cells: list[dict] = []
-        stage_b_variants: list[dict] = []
+    try:
+        for tier in tiers:
+            print(f"\n{'#' * 70}\n#  TIER {tier}\n{'#' * 70}", flush=True)
+            write_status(state="running", tier=tier)
+            stage_a_cells: list[dict] = []
+            stage_b_variants: list[dict] = []
 
-        if args.use_recipe:
-            recipe = get_recipe(load_recipes(recipes_path), args.label, tier)
-            if recipe is None:
-                print(f"ERROR: no saved recipe for {args.label}/{tier} in "
-                      f"{recipes_path} — run once without --use-recipe.",
-                      file=sys.stderr)
-                exit_code = 1
-                continue
-            print(f"[recipe] using saved recipe from {recipes_path}", flush=True)
-        else:
-            winner, stage_a_cells = run_stage_a(args, tier, moe, vram_baseline)
-            if winner is None:
-                print(f"ERROR: no Stage-A cell fits tier {tier} "
-                      f"(all failed or over budget) — skipping tier.",
-                      file=sys.stderr)
-                exit_code = 1
-                continue
-            if args.quick:
-                variant = {"name": "house-think_" + thinking_modes[0],
-                           "sampling": dict(HOUSE_SAMPLING),
-                           "thinking": thinking_modes[0], "det": None}
+            if args.use_recipe:
+                recipe = get_recipe(load_recipes(recipes_path), args.label, tier)
+                if recipe is None:
+                    print(f"ERROR: no saved recipe for {args.label}/{tier} in "
+                          f"{recipes_path} — run once without --use-recipe.",
+                          file=sys.stderr)
+                    exit_code = 1
+                    continue
+                print(f"[recipe] using saved recipe from {recipes_path}",
+                      flush=True)
+                if not args.per_role_tuning and "role_configs" in recipe:
+                    # Opt-out: audit this run at the GLOBAL recipe config
+                    # without touching the saved role_configs on disk.
+                    recipe = {k: v for k, v in recipe.items()
+                              if k != "role_configs"}
+                    print("[recipe] --no-per-role-tuning: ignoring saved "
+                          "role_configs for this run", flush=True)
             else:
-                variant, stage_b_variants = run_stage_b(
-                    args, winner, card_sampling, thinking_modes, vram_baseline)
-            recipe = make_recipe(winner, variant, args.ctx, now=args.now)
-            save_recipe(recipes_path, args.label, tier, recipe)
-            print(f"[recipe] saved peak recipe for {args.label}/{tier} → "
-                  f"{recipes_path}", flush=True)
+                write_status(phase="stageA")
+                winner, stage_a_cells = run_stage_a(args, tier, moe,
+                                                    vram_baseline)
+                if winner is None:
+                    print(f"ERROR: no Stage-A cell fits tier {tier} "
+                          f"(all failed or over budget) — skipping tier.",
+                          file=sys.stderr)
+                    exit_code = 1
+                    continue
+                if args.quick:
+                    variant = {"name": "house-think_" + thinking_modes[0],
+                               "sampling": dict(HOUSE_SAMPLING),
+                               "thinking": thinking_modes[0], "det": None}
+                else:
+                    write_status(phase="stageB")
+                    variant, stage_b_variants = run_stage_b(
+                        args, winner, card_sampling, thinking_modes,
+                        vram_baseline)
+                recipe = make_recipe(winner, variant, args.ctx, now=args.now)
+                if args.per_role_tuning and not args.quick:
+                    role_configs = tune_role_configs(
+                        args, recipe, roles, thinking_modes, vram_baseline)
+                    if role_configs:
+                        recipe["role_configs"] = role_configs
+                save_recipe(recipes_path, args.label, tier, recipe)
+                print(f"[recipe] saved peak recipe for {args.label}/{tier} → "
+                      f"{recipes_path}", flush=True)
 
-        try:
-            roles_results = run_stage_c(args, recipe, roles, vram_baseline,
-                                        tier=tier)
-        except RuntimeError as e:
-            print(f"ERROR: {e}", file=sys.stderr)
-            exit_code = 1
-            continue
+            try:
+                roles_results = run_stage_c(args, recipe, roles, vram_baseline,
+                                            tier=tier)
+            except RuntimeError as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                exit_code = 1
+                continue
 
-        row = assemble_audit_row(
-            label=args.label, tier=tier, gguf=args.gguf,
-            server_bin=args.server_bin, recipe=recipe, roles=roles_results,
-            stage_a_cells=stage_a_cells, stage_b_variants=stage_b_variants,
-            now=args.now)
-        bm.append_registry_row(registry_path, row)
-        print(build_model_report([row], args.label))
+            write_status(phase="persist")
+            row = assemble_audit_row(
+                label=args.label, tier=tier, gguf=args.gguf,
+                server_bin=args.server_bin, recipe=recipe, roles=roles_results,
+                stage_a_cells=stage_a_cells, stage_b_variants=stage_b_variants,
+                now=args.now)
+            bm.append_registry_row(registry_path, row)
+            print(build_model_report([row], args.label))
+    finally:
+        # Process exit contract: never leave a stale "running" behind.
+        write_status(state="idle")
+        disable_status()
 
     print("\n" + build_audit_matrix(bm.load_registry(registry_path)))
     return exit_code

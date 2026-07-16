@@ -18,6 +18,66 @@
     Esta página nunca escribe en los resultados del audit.
   </div>
 
+  <div id="audit-status-card">
+    <template x-if="status.state && status.state !== 'idle'">
+      <div class="panel p-4 space-y-3">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div class="flex items-center gap-2">
+            <span class="font-semibold" x-text="status.label || '—'"></span>
+            <span class="px-2 py-0.5 text-xs rounded-full panel2" x-text="status.tier || ''"></span>
+            <span class="text-sm muted" x-text="phaseLabel(status.phase)"></span>
+            <template x-if="status.cell_or_variant">
+              <span class="text-xs muted" x-text="'· ' + status.cell_or_variant"></span>
+            </template>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs"
+                  :class="statusStale() ? '' : 'muted'"
+                  :style="statusStale() ? 'color: var(--warn, #e0a020)' : ''"
+                  x-text="statusStale() ? 'sin señal — ¿proceso caído?' : freshnessLabel()"></span>
+            <template x-if="status.state === 'running'">
+              <button class="px-3 py-1 text-sm rounded panel2"
+                      :disabled="controlBusy"
+                      @click="sendControl('pause')">⏸ Pausar tras el modelo actual</button>
+            </template>
+            <template x-if="status.state === 'paused'">
+              <button class="px-3 py-1 text-sm rounded panel2"
+                      :disabled="controlBusy"
+                      @click="sendControl('run')">▶ Reanudar</button>
+            </template>
+          </div>
+        </div>
+
+        <template x-if="status.state === 'paused'">
+          <div class="panel2 p-3 rounded text-sm">
+            ⏸ Pausado — GPU libre para jugar. La cola continúa al reanudar.
+          </div>
+        </template>
+
+        <template x-if="status.current_role">
+          <div class="space-y-1">
+            <div class="flex items-baseline justify-between text-sm">
+              <span>Rol actual: <strong x-text="status.current_role"></strong></span>
+              <span class="muted text-xs"
+                    x-text="(status.role_case_done ?? 0) + ' / ' + (status.role_case_total ?? '?') + ' casos'"></span>
+            </div>
+            <div class="panel2 rounded h-2 overflow-hidden">
+              <div class="h-2 rounded"
+                   :style="'width:' + rolePct() + '%; background: var(--accent, #2dd4bf)'"></div>
+            </div>
+          </div>
+        </template>
+
+        <div class="flex items-center gap-4 text-xs muted flex-wrap">
+          <span x-text="'Roles: ' + (status.roles_done || []).length + ' listos · ' + (status.roles_pending || []).length + ' pendientes'"></span>
+          <template x-if="status.batch && status.batch.total">
+            <span x-text="batchLabel()"></span>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+
   <template x-if="audits.length === 0">
     <div class="panel p-12 text-center muted">Aún no hay auditorías.</div>
   </template>
@@ -103,6 +163,9 @@
       sortField: 'overall',
       sortDir: 'desc',
       detailOpen: null,
+      status: { state: 'idle' },
+      controlBusy: false,
+      nowTick: Date.now(),
       columns: [
         { role: 'brain',       header: 'cerebro' },
         { role: 'extraction',  header: 'extracción' },
@@ -191,6 +254,79 @@
         return rows;
       },
 
+      // ── live status card (audit_status.json) ─────────────────────────
+      phaseLabel(phase) {
+        const labels = {
+          stageA: 'Etapa A ajuste rendimiento',
+          stageB: 'Etapa B ajuste calidad',
+          stageB2: 'Etapa B2 ajuste por tarea',
+          stageC: 'Etapa C auditoría completa',
+          persist: 'guardando',
+        };
+        return labels[phase] || phase || '';
+      },
+
+      rolePct() {
+        const done = this.status.role_case_done;
+        const total = this.status.role_case_total;
+        if (!total || done === null || done === undefined) return 0;
+        return Math.max(0, Math.min(100, (done / total) * 100));
+      },
+
+      statusAgeSecs() {
+        if (!this.status.updated_at) return null;
+        const t = Date.parse(this.status.updated_at);
+        if (isNaN(t)) return null;
+        return Math.max(0, Math.round((this.nowTick - t) / 1000));
+      },
+      statusStale() {
+        const age = this.statusAgeSecs();
+        return age !== null && age > 120;
+      },
+      freshnessLabel() {
+        const age = this.statusAgeSecs();
+        return age === null ? '' : 'hace ' + age + 's';
+      },
+
+      batchLabel() {
+        const b = this.status.batch || {};
+        let label = 'Modelo ' + (b.position || '?') + ' de ' + (b.total || '?');
+        if (Array.isArray(b.queue) && b.queue.length) {
+          label += ' · cola: ' + b.queue.join(', ');
+        }
+        return label;
+      },
+
+      async refreshStatus() {
+        try {
+          const r = await fetch('/api/bench/audit');
+          if (!r.ok) return;
+          const body = await r.json();
+          this.status = body.status || { state: 'idle' };
+          this.nowTick = Date.now();
+        } catch (e) { /* keep last good status */ }
+      },
+
+      async sendControl(action) {
+        // Optimistic UI: flip the state immediately, then refetch truth.
+        this.controlBusy = true;
+        const previous = this.status.state;
+        this.status.state = action === 'pause' ? 'paused' : 'running';
+        try {
+          const r = await fetch('/api/bench/audit/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action }),
+          });
+          if (!r.ok) this.status.state = previous;
+        } catch (e) {
+          this.status.state = previous;
+        } finally {
+          this.controlBusy = false;
+          this.refreshStatus();
+        }
+      },
+
       async refresh() {
         try {
           const r = await fetch('/api/bench/audit');
@@ -202,12 +338,17 @@
           body.audits.forEach((row, i) => { row.overallRank = i + 1; });
           this.audits = body.audits;
           this.generatedAt = body.generated_at;
+          this.status = body.status || { state: 'idle' };
+          this.nowTick = Date.now();
         } catch (e) { /* keep last good list */ }
       },
 
       init() {
         this.refresh();
+        // Matrix refresh stays at 30s; the status card polls every 5s on
+        // its own so only that card re-renders between matrix refreshes.
         this._timer = setInterval(() => this.refresh(), 30000);
+        this._statusTimer = setInterval(() => this.refreshStatus(), 5000);
       },
     };
   }
