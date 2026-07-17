@@ -2637,6 +2637,160 @@ def test_devbench_loop_max_rounds_cap_and_pristine_test_restore(tmp_path):
     assert ma.score_devbench_case(case, loop)["passed"] is False
 
 
+def test_devbench_loop_round0_text_replies_nudged_then_recovers(tmp_path):
+    """2026-07-17 regression: thinking/chatty candidates answer turn 1 with
+    plain text (no tool_calls). The loop must NOT end the session at rounds=0
+    — it re-prompts (DEVBENCH_NUDGE_ES) up to DEVBENCH_MAX_NUDGES times, and
+    a candidate that then engages gets a real session."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _write_mini_project(root)
+    script = iter([
+        {"content": "Pensando... el bug está en add()."},          # nudge 1
+        {"content": "<think>debería usar herramientas</think>"},   # nudge 2
+        {"content": "", "tool_calls": [_tool_call(
+            "write_file", {"path": "calc.py", "content": _CALC_FIXED})]},
+        {"content": "Listo: la suite pasa."},
+    ])
+    calls = []
+
+    def fake_chat(messages, tools):
+        calls.append([dict(m) for m in messages])
+        return next(script)
+
+    case = {"id": "x", "max_rounds": 12,
+            "expected": {"min_tests_passed": "all"}}
+    loop = ma.run_devbench_loop(case, root, fake_chat)
+    assert loop["rounds"] == 1 and loop["nudges"] == 2
+    assert loop["hit_cap"] is False
+    assert loop["files_touched"] == ["calc.py"]
+    assert loop["final"]["failed"] == 0 and loop["final"]["passed"] == 2
+    # Each nudge appended the text reply + the Spanish re-prompt.
+    assert calls[1][-1]["content"] == ma.DEVBENCH_NUDGE_ES
+    assert calls[1][-2]["role"] == "assistant"
+    assert calls[2][-1]["content"] == ma.DEVBENCH_NUDGE_ES
+    result = ma.score_devbench_case(case, loop)
+    assert result["passed"] and result["nudges"] == 2
+
+
+def test_devbench_loop_pure_text_candidate_ends_after_two_nudges(tmp_path):
+    """A candidate that NEVER calls tools ends after exactly
+    1 + DEVBENCH_MAX_NUDGES replies with rounds=0 and nudges=2 — the old
+    behavior (end on the FIRST text reply) is what produced tonight's
+    rounds=0/files=0 across every backfill case."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _write_mini_project(root)
+    n_calls = [0]
+
+    def text_only(messages, tools):
+        n_calls[0] += 1
+        return {"content": "No puedo avanzar.", "tool_calls": None}
+
+    case = {"id": "x", "max_rounds": 12,
+            "expected": {"min_tests_passed": "all"}}
+    loop = ma.run_devbench_loop(case, root, text_only)
+    assert n_calls[0] == 1 + ma.DEVBENCH_MAX_NUDGES == 3
+    assert loop["rounds"] == 0 and loop["nudges"] == 2
+    assert loop["hit_cap"] is False and loop["files_touched"] == []
+    result = ma.score_devbench_case(case, loop)
+    assert result["passed"] is False and result["nudges"] == 2
+    agg = ma.aggregate_devbench([result, ma.score_devbench_case(
+        case, dict(loop, nudges=0))])
+    assert agg["mean_nudges"] == 1.0
+
+
+def test_devbench_loop_no_nudge_after_engagement(tmp_path):
+    """The done-signal contract survives: AFTER the first tool round a
+    no-tool reply still ends the session immediately (no nudge) — nudges
+    exist only to force round-0 engagement, never to second-guess a model
+    that finished per DEVBENCH_SYSTEM_ES."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _write_mini_project(root)
+    script = iter([
+        {"content": "", "tool_calls": [_tool_call("list_files", {})]},
+        {"content": "Listo."},
+    ])
+    n_calls = [0]
+
+    def fake_chat(messages, tools):
+        n_calls[0] += 1
+        return next(script)
+
+    case = {"id": "x", "max_rounds": 12,
+            "expected": {"min_tests_passed": "all"}}
+    loop = ma.run_devbench_loop(case, root, fake_chat)
+    assert n_calls[0] == 2
+    assert loop["rounds"] == 1 and loop["nudges"] == 0
+    assert loop["text"] == "Listo."
+
+
+def test_devbench_backfill_recipe_fallback_passes_tools(tmp_path, monkeypatch):
+    """EXACT backfill shape (2026-07-17 batch): --use-recipe --roles devbench
+    with a recipe whose role_configs EXISTS but has NO devbench key (tuned
+    before devbench existed) and thinking='on'. Through run_stage_c →
+    run_devbench_dedicated → run_devbench_role → chat_completion, every
+    request must still carry the tool schemas + enable_thinking, and a
+    candidate that answers with tool calls must register rounds>0."""
+    import types
+    import cpu_sweep
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _write_mini_project(proj)
+    cases = [{"id": "db-x", "project_dir": "proj", "max_rounds": 4,
+              "expected": {"min_tests_passed": "all"}}]
+    monkeypatch.setattr(cpu_sweep, "load_golden_set", lambda path: cases)
+    monkeypatch.setattr(ma, "GOLDEN_DIR", tmp_path)
+
+    class FakeProc:
+        pid = 1
+
+    monkeypatch.setattr(ma, "_spawn_recipe_server",
+                        lambda *a, **k: (FakeProc(), True))
+    monkeypatch.setattr(ma.bm, "kill_server", lambda proc: None)
+    monkeypatch.setattr(ma, "wait_vram_drain", lambda *a, **k: None)
+
+    payloads = []
+    replies = iter([
+        {"content": "", "tool_calls": [_tool_call(
+            "write_file", {"path": "calc.py", "content": _CALC_FIXED})]},
+        {"content": "", "tool_calls": [_tool_call("run_tests", {})]},
+        {"content": "Listo.", "tool_calls": None},
+    ])
+
+    def fake_post(url, payload, timeout=240):
+        payloads.append(payload)
+        return {"choices": [{"message": next(replies)}]}
+
+    monkeypatch.setattr(ma, "_http_post_json", fake_post)
+
+    # Definitive-era recipe: role_configs present, devbench key ABSENT.
+    recipe = {"launch": {"ngl": 999, "cpu_moe": False, "ctx": 32768,
+                         "extra_flags": ["-fa", "on"]},
+              "sampling": dict(ma.HOUSE_SAMPLING), "thinking": "on",
+              "role_configs": {"toolstress": {
+                  "sampling": {"temperature": 0.2, "top_p": 0.9, "top_k": 20},
+                  "thinking": "off"}}}
+    assert ma.role_config_for(recipe, "devbench") == (ma.HOUSE_SAMPLING, "on")
+
+    args = types.SimpleNamespace(port=18080, mmproj=None, ctx=32768)
+    results = ma.run_stage_c(args, recipe, ["devbench"], None)
+    agg = results["devbench"]
+    # The candidate ALWAYS tool-called when tools were present → rounds>0.
+    assert agg["n"] == 1 and agg["mean_rounds"] == 2.0
+    assert agg["full_pass_rate"] == 1.0 and agg["mean_nudges"] == 0.0
+    # Every request on this path carried the tool surface + the recipe's
+    # global thinking mode (the fallback, not a degenerate request shape).
+    assert len(payloads) == 3
+    for p in payloads:
+        assert p["tools"] == ma.devbench_tool_schemas()
+        assert p["tool_choice"] == "auto"
+        assert p["chat_template_kwargs"] == {"enable_thinking": True}
+        assert p["temperature"] == 0.6 and p["seed"] == ma.case_seed("db-x")
+
+
 def test_devbench_scorer_min_tests_and_aggregate():
     case_all = {"id": "a", "expected": {"min_tests_passed": "all"}}
     case_n = {"id": "b", "expected": {"min_tests_passed": 3}}
@@ -2769,10 +2923,13 @@ def test_run_devbench_role_pins_per_case_seed(tmp_path, monkeypatch):
     monkeypatch.setattr(ma, "GOLDEN_DIR", tmp_path)
     payloads = []
     replies = iter([
-        # db-a: one tool round, then done. db-b: answers directly.
+        # db-a: one tool round, then done. db-b: answers with text only —
+        # nudged DEVBENCH_MAX_NUDGES times (round-0 tolerance), then ends.
         {"content": "", "tool_calls": [_tool_call("read_file",
                                                   {"path": "calc.py"})]},
         {"content": "Listo.", "tool_calls": None},
+        {"content": "No puedo.", "tool_calls": None},
+        {"content": "No puedo.", "tool_calls": None},
         {"content": "No puedo.", "tool_calls": None},
     ])
 
@@ -2783,8 +2940,10 @@ def test_run_devbench_role_pins_per_case_seed(tmp_path, monkeypatch):
     monkeypatch.setattr(ma, "_http_post_json", fake_post)
     agg = ma.run_devbench_role(18080, dict(ma.HOUSE_SAMPLING), "none")
     seeds = [p["seed"] for p in payloads]
-    # db-a's two rounds share ONE seed; db-b gets a different one.
+    # db-a's two rounds share ONE seed; db-b's three replies (text + two
+    # round-0 nudges) all share ANOTHER — nudge re-prompts keep the pin.
     assert seeds == [ma.case_seed("db-a"), ma.case_seed("db-a"),
+                     ma.case_seed("db-b"), ma.case_seed("db-b"),
                      ma.case_seed("db-b")]
     assert all(p["temperature"] == 0.6 for p in payloads)
     assert all("tools" in p for p in payloads)   # tool surface every round

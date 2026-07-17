@@ -2305,6 +2305,22 @@ DEVBENCH_READ_CAP = 8000          # chars of read_file content fed to the model
 # the shared Stage-C server at the recipe ctx — which also keeps the big KV
 # allocation out of every other role's spawn.
 DEVBENCH_CTX = 65536
+# Round-0 tolerance (2026-07-17): thinking/chatty candidates (vibethinker-3b
+# thinking=on, qwen25-coder-3b) may answer the FIRST turn with plain text or
+# pure reasoning instead of a tool call. The old loop treated ANY no-tool
+# reply as "session done", so those models ended every case at rounds=0 /
+# files=0 and their devbench score degenerated to the projects' pre-existing
+# green tests (identical test_ratio across models). Before the first tool
+# call we now re-prompt up to DEVBENCH_MAX_NUDGES times; AFTER the first tool
+# call a no-tool reply keeps its contractual meaning ("done" — see
+# DEVBENCH_SYSTEM_ES) and still ends the session immediately.
+DEVBENCH_MAX_NUDGES = 2
+DEVBENCH_NUDGE_ES = (
+    "No hiciste ninguna llamada a herramientas. Usa las herramientas "
+    "(list_files/read_file/write_file/run_tests) para leer y escribir los "
+    "archivos del proyecto y correr los tests — el trabajo solo cuenta a "
+    "través de ellas."
+)
 
 DEVBENCH_SYSTEM_ES = (
     "Eres un ingeniero de software senior trabajando en un mini-proyecto "
@@ -2491,7 +2507,11 @@ def run_devbench_loop(case: dict, project_root: Path, chat_fn,
     Round = one model reply containing tool_calls (like the agentic /
     toolstress loops). The session ends when the model replies WITHOUT tool
     calls (it considers itself done) or the per-case ``max_rounds`` cap is
-    hit. Either way the harness then (1) RESTORES the pristine protected
+    hit — EXCEPT before the first tool call: a round-0 no-tool reply gets a
+    re-prompt (DEVBENCH_NUDGE_ES), up to DEVBENCH_MAX_NUDGES times, counted
+    in the returned ``nudges`` (thinking/chatty models otherwise score 0 on
+    every case without ever touching the project — 2026-07-17 backfill bug).
+    Either way the harness then (1) RESTORES the pristine protected
     test files (belt-and-braces against tampering) and (2) runs one final
     sandboxed pytest — that verdict is the only one that counts.
 
@@ -2515,13 +2535,22 @@ def run_devbench_loop(case: dict, project_root: Path, chat_fn,
         {"role": "user", "content": task_text},
     ]
     rounds_used = 0
+    nudges_used = 0
     hit_cap = False
     text = ""
-    for _ in range(max_rounds):
+    while rounds_used < max_rounds:
         msg = chat_fn(messages, tools) or {}
         tool_calls = msg.get("tool_calls") or []
         if not tool_calls:
             text = (msg.get("content") or "").strip()
+            if rounds_used == 0 and nudges_used < DEVBENCH_MAX_NUDGES:
+                # Never engaged yet → nudge instead of ending at rounds=0.
+                nudges_used += 1
+                messages.append({"role": "assistant",
+                                 "content": msg.get("content") or ""})
+                messages.append({"role": "user",
+                                 "content": DEVBENCH_NUDGE_ES})
+                continue
             break
         rounds_used += 1
         messages.append({"role": "assistant",
@@ -2537,6 +2566,7 @@ def run_devbench_loop(case: dict, project_root: Path, chat_fn,
         (root / rel).write_bytes(blob)
     final = run_devbench_tests(root, python_bin=python_bin)
     return {"rounds": rounds_used, "hit_cap": hit_cap, "text": text,
+            "nudges": nudges_used,
             "files_touched": sorted(state["files_touched"]),
             "final": final}
 
@@ -2564,13 +2594,15 @@ def score_devbench_case(case: dict, loop_result: dict) -> dict:
             "tests_errors": errors_n, "tests_total": total,
             "test_pass_ratio": round(passed_n / total, 4) if total else 0.0,
             "rounds": loop_result.get("rounds", 0),
+            "nudges": loop_result.get("nudges", 0),
             "hit_cap": bool(loop_result.get("hit_cap")),
             "files_touched": list(loop_result.get("files_touched") or []),
             "full_pass": full_pass, "passed": ok}
 
 
 def aggregate_devbench(per_case: list[dict]) -> dict:
-    """{n, full_pass_rate, mean_test_pass_ratio, mean_rounds, failed_ids}."""
+    """{n, full_pass_rate, mean_test_pass_ratio, mean_rounds, mean_nudges,
+    failed_ids}."""
     n = len(per_case)
 
     def rate(hits: int) -> float:
@@ -2583,6 +2615,8 @@ def aggregate_devbench(per_case: list[dict]) -> dict:
                                            for r in per_case) / n, 4)
                                  if n else 0.0),
         "mean_rounds": (round(sum(r.get("rounds", 0) for r in per_case) / n, 2)
+                        if n else 0.0),
+        "mean_nudges": (round(sum(r.get("nudges", 0) for r in per_case) / n, 2)
                         if n else 0.0),
         "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
     }
@@ -4368,14 +4402,16 @@ def run_devbench_role(port: int, sampling: dict, thinking: str) -> dict:
         result = score_devbench_case(case, loop_result)
         print(f"  [devbench] {result['id']}: "
               f"tests={result['tests_passed']}/{result['tests_total']} "
-              f"rounds={result['rounds']} files={len(result['files_touched'])} "
+              f"rounds={result['rounds']} nudges={result['nudges']} "
+              f"files={len(result['files_touched'])} "
               f"{'PASS' if result['passed'] else 'FAIL'}", flush=True)
         per_case.append(result)
         _tick("devbench", len(per_case), len(cases))
     agg = aggregate_devbench(per_case)
     print(f"  [devbench] full_pass={agg['full_pass_rate']:.0%} "
           f"test_ratio={agg['mean_test_pass_ratio']:.0%} "
-          f"rounds={agg['mean_rounds']}", flush=True)
+          f"rounds={agg['mean_rounds']} nudges={agg['mean_nudges']}",
+          flush=True)
     return agg
 
 
