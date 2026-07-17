@@ -21,6 +21,7 @@ Run:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -520,7 +521,9 @@ def test_assemble_audit_row_schema():
     row = _audit_row("foo", "vram12", "2026-07-15T00:00:00+00:00",
                      speed={"decode_p50_toks_s": 40.0})
     assert set(row) == {"label", "tier", "timestamp_utc", "gguf", "server_bin",
-                        "recipe", "roles", "stage_a_cells", "stage_b_variants"}
+                        "hardware", "recipe", "roles", "stage_a_cells",
+                        "stage_b_variants"}
+    assert row["hardware"] is None  # not collected in tests unless passed
     assert row["timestamp_utc"] == "2026-07-15T00:00:00+00:00"
     assert row["roles"]["speed"]["decode_p50_toks_s"] == 40.0
     assert row["stage_a_cells"][0]["cell"]["name"] == "c1"
@@ -3763,3 +3766,217 @@ def test_main_writes_idle_status_on_exit(tmp_path, monkeypatch):
     assert status["state"] == "idle"                   # exit contract
     assert status["label"] == "x"
     assert ma._STATUS["enabled"] is False              # disabled again
+
+
+# ── hardware fingerprint ─────────────────────────────────────────────────────
+
+_CPUINFO = (
+    "processor\t: 0\nmodel name\t: Intel(R) Core(TM) i7-12700H\n"
+    "processor\t: 1\nmodel name\t: Intel(R) Core(TM) i7-12700H\n"
+    "processor\t: 2\nmodel name\t: Intel(R) Core(TM) i7-12700H\n"
+    "processor\t: 3\nmodel name\t: Intel(R) Core(TM) i7-12700H\n"
+)
+_MEMINFO = "MemTotal:       32612344 kB\nMemFree:  1 kB\n"
+
+
+class _FakeCompleted:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
+
+
+def _fake_probe_run(nvidia_smi=None, llama_version=None):
+    """subprocess.run stand-in for the hardware probes.
+
+    nvidia_smi / llama_version: stdout string, or an Exception to raise,
+    or None to raise FileNotFoundError (binary absent).
+    """
+    def run(cmd, **kwargs):
+        spec = nvidia_smi if cmd[0] == "nvidia-smi" else llama_version
+        if spec is None:
+            raise FileNotFoundError(cmd[0])
+        if isinstance(spec, Exception):
+            raise spec
+        # llama-server prints its version banner on stderr
+        if cmd[0] == "nvidia-smi":
+            return _FakeCompleted(stdout=spec)
+        return _FakeCompleted(stderr=spec)
+    return run
+
+
+def _proc_files(tmp_path):
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text(_CPUINFO)
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(_MEMINFO)
+    return str(cpuinfo), str(meminfo)
+
+
+def test_collect_hardware_fingerprint_full(tmp_path, monkeypatch):
+    cpuinfo, meminfo = _proc_files(tmp_path)
+    monkeypatch.setattr(ma.subprocess, "run", _fake_probe_run(
+        nvidia_smi="NVIDIA GeForce RTX 4070 Laptop GPU, 12282\n",
+        llama_version="version: 6209 (0a2f5496b)\nbuilt with cc\n"))
+    hw = ma.collect_hardware_fingerprint(server_bin="/usr/bin/llama-server",
+                                         cpuinfo_path=cpuinfo,
+                                         meminfo_path=meminfo)
+    assert hw["cpu_model"] == "Intel(R) Core(TM) i7-12700H"
+    assert hw["cpu_cores"] == 4
+    assert hw["ram_gb"] == pytest.approx(31.1)
+    assert hw["gpu_name"] == "NVIDIA GeForce RTX 4070 Laptop GPU"
+    assert hw["vram_total_mib"] == 12282
+    assert hw["llama_build"] == "6209 (0a2f5496b)"
+    assert hw["kernel"] and hw["hostname"]           # real platform values
+    assert re.fullmatch(r"[0-9a-f]{8}", hw["fingerprint_id"])
+    # Same inputs -> same id (stable across runs)
+    hw2 = ma.collect_hardware_fingerprint(server_bin="/usr/bin/llama-server",
+                                          cpuinfo_path=cpuinfo,
+                                          meminfo_path=meminfo)
+    assert hw2["fingerprint_id"] == hw["fingerprint_id"]
+
+
+def test_collect_hardware_fingerprint_gpu_absent(tmp_path, monkeypatch):
+    cpuinfo, meminfo = _proc_files(tmp_path)
+    monkeypatch.setattr(ma.subprocess, "run", _fake_probe_run(
+        nvidia_smi=None,                              # no nvidia-smi binary
+        llama_version="version: 6209 (0a2f5496b)\n"))
+    hw = ma.collect_hardware_fingerprint(server_bin="/usr/bin/llama-server",
+                                         cpuinfo_path=cpuinfo,
+                                         meminfo_path=meminfo)
+    assert hw["gpu_name"] is None
+    assert hw["vram_total_mib"] is None
+    assert hw["llama_build"] == "6209 (0a2f5496b)"
+    # GPU is part of the identity: CPU-only box gets a DIFFERENT id
+    monkeypatch.setattr(ma.subprocess, "run", _fake_probe_run(
+        nvidia_smi="GPU, 12282\n", llama_version=None))
+    with_gpu = ma.collect_hardware_fingerprint(cpuinfo_path=cpuinfo,
+                                               meminfo_path=meminfo)
+    assert with_gpu["fingerprint_id"] != hw["fingerprint_id"]
+
+
+def test_collect_hardware_fingerprint_never_crashes(tmp_path, monkeypatch):
+    """Every probe failing -> all fields None, still returns a fingerprint."""
+    monkeypatch.setattr(ma.subprocess, "run",
+                        _fake_probe_run(nvidia_smi=RuntimeError("boom"),
+                                        llama_version=RuntimeError("boom")))
+    hw = ma.collect_hardware_fingerprint(
+        server_bin="/nope", cpuinfo_path=str(tmp_path / "missing"),
+        meminfo_path=str(tmp_path / "missing2"))
+    for field in ("cpu_model", "cpu_cores", "ram_gb", "gpu_name",
+                  "vram_total_mib", "llama_build"):
+        assert hw[field] is None
+    assert re.fullmatch(r"[0-9a-f]{8}", hw["fingerprint_id"])
+    # server_bin=None skips the build probe entirely
+    assert ma.collect_hardware_fingerprint(
+        cpuinfo_path=str(tmp_path / "missing"),
+        meminfo_path=str(tmp_path / "missing2"))["llama_build"] is None
+
+
+def test_probe_llama_build_parses_version_line(monkeypatch):
+    monkeypatch.setattr(ma.subprocess, "run", _fake_probe_run(
+        llama_version="ggml_cuda_init: found 1 device\n"
+                      "version: 6209 (0a2f5496b)\nbuilt with cc 15.1\n"))
+    assert ma.probe_llama_build("/usr/bin/llama-server") == "6209 (0a2f5496b)"
+    monkeypatch.setattr(ma.subprocess, "run",
+                        _fake_probe_run(llama_version="no version here\n"))
+    assert ma.probe_llama_build("/usr/bin/llama-server") is None
+
+
+def test_assemble_audit_row_attaches_hardware():
+    hw = {"cpu_model": "x", "fingerprint_id": "deadbeef"}
+    row = ma.assemble_audit_row(
+        label="foo", tier="cpu", gguf="/m/foo.gguf",
+        server_bin="/usr/bin/llama-server", recipe={}, roles={},
+        stage_a_cells=[], stage_b_variants=[],
+        now="2026-07-17T00:00:00+00:00", hardware=hw)
+    assert row["hardware"] == hw
+
+
+# ── retro-annotation script (annotate_hardware.py) ───────────────────────────
+
+import annotate_hardware as ah  # noqa: E402
+
+
+_BASE_HW = {"cpu_model": "cpu-x", "cpu_cores": 4, "ram_gb": 31.1,
+            "gpu_name": "gpu-y", "vram_total_mib": 12282,
+            "llama_build": "6209 (aaa)", "kernel": "k", "hostname": "h",
+            "fingerprint_id": "cafe0123"}
+
+
+def _write_registry(tmp_path):
+    rows = [
+        {"label": "qwen35-0_8b", "tier": "cpu",
+         "timestamp_utc": "2026-07-01T00:00:00+00:00", "roles": {}},
+        {"label": "bonsai-1bit", "tier": "cpu",
+         "timestamp_utc": "2026-07-02T00:00:00+00:00", "roles": {}},
+        {"label": "already", "tier": "cpu",
+         "timestamp_utc": "2026-07-03T00:00:00+00:00", "roles": {},
+         "hardware": {"fingerprint_id": "feed0000"}},
+    ]
+    path = tmp_path / "model_audit.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in rows)
+                    + "\nnot json garbage\n")
+    return path
+
+
+def _patch_probes(monkeypatch, fork_build="7777 (fork)"):
+    monkeypatch.setattr(ah.ma, "collect_hardware_fingerprint",
+                        lambda server_bin=None, **kw: dict(_BASE_HW))
+    monkeypatch.setattr(ah.ma, "probe_llama_build", lambda bin_: fork_build)
+
+
+def test_annotate_hardware_dry_run_writes_nothing(tmp_path, monkeypatch):
+    path = _write_registry(tmp_path)
+    before = path.read_text()
+    _patch_probes(monkeypatch)
+    rc = ah.main(["--registry", str(path), "--dry-run"])
+    assert rc == 0
+    assert path.read_text() == before                # untouched
+    assert list(tmp_path.iterdir()) == [path]        # no backup, no tmp
+
+
+def test_annotate_hardware_annotates_with_backup_atomic(tmp_path, monkeypatch):
+    path = _write_registry(tmp_path)
+    before = path.read_text()
+    _patch_probes(monkeypatch)
+    rc = ah.main(["--registry", str(path)])
+    assert rc == 0
+    lines = path.read_text().splitlines()
+    rows = [json.loads(x) for x in lines if x.strip() and x != "not json garbage"]
+    by_label = {r["label"]: r for r in rows}
+    assert by_label["qwen35-0_8b"]["hardware"] == _BASE_HW
+    assert by_label["bonsai-1bit"]["hardware"] == _BASE_HW  # no fork flags
+    # already-annotated row is preserved, not overwritten
+    assert by_label["already"]["hardware"] == {"fingerprint_id": "feed0000"}
+    assert "not json garbage" in lines               # malformed line kept
+    # backup copy holds the original bytes; no tmp file leftover
+    backups = [p for p in tmp_path.iterdir() if ".bak-" in p.name]
+    assert len(backups) == 1 and backups[0].read_text() == before
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_annotate_hardware_stamps_fork_labels_with_fork_build(
+        tmp_path, monkeypatch):
+    path = _write_registry(tmp_path)
+    _patch_probes(monkeypatch, fork_build="7777 (prismml)")
+    rc = ah.main(["--registry", str(path),
+                  "--fork-labels", "bonsai-1bit,bonsai-ternary",
+                  "--fork-build", "/opt/prismml/llama-server"])
+    assert rc == 0
+    rows = [json.loads(x) for x in path.read_text().splitlines()
+            if x.strip() and x != "not json garbage"]
+    by_label = {r["label"]: r for r in rows}
+    assert by_label["bonsai-1bit"]["hardware"]["llama_build"] == "7777 (prismml)"
+    assert by_label["qwen35-0_8b"]["hardware"]["llama_build"] == "6209 (aaa)"
+    # same physical machine -> same fingerprint_id despite different build
+    assert (by_label["bonsai-1bit"]["hardware"]["fingerprint_id"]
+            == by_label["qwen35-0_8b"]["hardware"]["fingerprint_id"])
+
+
+def test_annotate_hardware_fork_flags_must_pair(tmp_path, monkeypatch):
+    path = _write_registry(tmp_path)
+    _patch_probes(monkeypatch)
+    assert ah.main(["--registry", str(path),
+                    "--fork-labels", "bonsai-1bit"]) == 2
+    assert ah.main(["--registry", str(path),
+                    "--fork-build", "/opt/fork"]) == 2
+    assert ah.main(["--registry", str(tmp_path / "missing.jsonl")]) == 2

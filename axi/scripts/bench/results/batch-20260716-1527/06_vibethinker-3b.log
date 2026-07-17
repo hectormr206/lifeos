@@ -1,0 +1,615 @@
+Audit: vibethinker-3b | tiers=['vram12'] | roles=['speed', 'brain', 'extraction', 'domain', 'toolcall', 'codereview', 'vision', 'codegen', 'conversation', 'recordsqa', 'narration', 'longsum', 'parsejson', 'agentic', 'proactive', 'visionclass', 'devplan', 'toolstress'] | moe=False | vram baseline=333 MiB
+
+######################################################################
+#  TIER vram12
+######################################################################
+[stage A] tier=vram12 — sweeping 4 cells
+  [stage A] cell gpu-ngl999-q8_0-b2048 ...
+  Spawning: /usr/bin/llama-server -m VibeThinker-3B-Q4_K_M.gguf ...
+    -> decode=174.75 tok/s ttft=16.8ms vramΔ=2747
+  [stage A] cell gpu-ngl999-q8_0-b8192 ...
+  Spawning: /usr/bin/llama-server -m VibeThinker-3B-Q4_K_M.gguf ...
+    -> decode=175.68 tok/s ttft=16.4ms vramΔ=3507
+  [stage A] cell gpu-ngl999-f16-b2048 ...
+  Spawning: /usr/bin/llama-server -m VibeThinker-3B-Q4_K_M.gguf ...
+    -> decode=192.73 tok/s ttft=17.2ms vramΔ=3283
+  [stage A] cell gpu-ngl999-f16-b8192 ...
+  Spawning: /usr/bin/llama-server -m VibeThinker-3B-Q4_K_M.gguf ...
+    -> decode=190.32 tok/s ttft=15.7ms vramΔ=4043
+[stage B] 2 variants x 12 fast cases
+  Spawning: /usr/bin/llama-server -m VibeThinker-3B-Q4_K_M.gguf ...
+  [stage B] house-think_on: det=0.3333
+  [stage B] house-think_off: det=0.3333
+[stage B2] vision: not tunable here (no --mmproj) — will run at the global recipe config
+[stage B2] visionclass: not tunable here (no --mmproj) — will run at the global recipe config
+[stage B2] per-role tuning: 12 roles x 6 variants
+  Spawning: /usr/bin/llama-server -m VibeThinker-3B-Q4_K_M.gguf ...
+  [stage B2] brain house-think_on: 0.1667
+  [stage B2] brain warm-think_on: 0.3333
+  [stage B2] brain precise-think_on: 0.3333
+  [stage B2] brain house-think_off: 0.0
+  [stage B2] brain warm-think_off: 0.0
+  [stage B2] brain precise-think_off: 0.0
+  [stage B2] toolcall house-think_on: 0.1667
+  [stage B2] toolcall warm-think_on: 0.1667
+  [stage B2] toolcall precise-think_on: 0.1667
+  [stage B2] toolcall house-think_off: 0.1667
+  [stage B2] toolcall warm-think_off: 0.1667
+  [stage B2] toolcall precise-think_off: 0.1667
+  [stage B2] codereview house-think_on: 1.0
+  [stage B2] codereview warm-think_on: 1.0
+  [stage B2] codereview precise-think_on: 1.0
+  [stage B2] codereview house-think_off: 1.0
+  [stage B2] codereview warm-think_off: 1.0
+  [stage B2] codereview precise-think_off: 1.0
+  [stage B2] codegen house-think_on: 0.5
+  [stage B2] codegen warm-think_on: 0.25
+  [stage B2] codegen precise-think_on: 0.0
+  [stage B2] codegen house-think_off: 0.5
+  [stage B2] codegen warm-think_off: 0.25
+  [stage B2] codegen precise-think_off: 0.0
+  [stage B2] conversation house-think_on: 0.5
+  [stage B2] conversation warm-think_on: 0.5
+  [stage B2] conversation precise-think_on: 0.5
+  [stage B2] conversation house-think_off: 0.5
+  [stage B2] conversation warm-think_off: 0.25
+  [stage B2] conversation precise-think_off: 0.5
+  [stage B2] recordsqa house-think_on: 0.2
+  [stage B2] recordsqa warm-think_on: 0.4
+  [stage B2] recordsqa precise-think_on: 0.2
+  [stage B2] recordsqa house-think_off: 0.2
+  [stage B2] recordsqa warm-think_off: 0.4
+  [stage B2] recordsqa precise-think_off: 0.2
+  [stage B2] narration house-think_on: 0.0
+  [stage B2] narration warm-think_on: 0.0
+  [stage B2] narration precise-think_on: 0.0
+  [stage B2] narration house-think_off: 0.0
+  [stage B2] narration warm-think_off: 0.0
+  [stage B2] narration precise-think_off: 0.0
+  [stage B2] longsum house-think_on: 0.5
+  [stage B2] longsum warm-think_on: 0.1667
+  [stage B2] longsum precise-think_on: 0.3333
+  [stage B2] longsum house-think_off: 0.1667
+  [stage B2] longsum warm-think_off: 0.1667
+  [stage B2] longsum precise-think_off: 0.3333
+  [stage B2] parsejson house-think_on: 0.0
+  [stage B2] parsejson warm-think_on: 0.0
+  [stage B2] parsejson precise-think_on: 0.0
+  [stage B2] parsejson house-think_off: 0.0
+  [stage B2] parsejson warm-think_off: 0.0
+  [stage B2] parsejson precise-think_off: 0.0
+  [stage B2] proactive house-think_on: 0.0
+  [stage B2] proactive warm-think_on: 0.0
+  [stage B2] proactive precise-think_on: 0.0
+  [stage B2] proactive house-think_off: 0.0
+  [stage B2] proactive warm-think_off: 0.0
+  [stage B2] proactive precise-think_off: 0.0
+  [stage B2] devplan house-think_on: 0.5
+  [stage B2] devplan warm-think_on: 0.5
+  [stage B2] devplan precise-think_on: 0.5
+  [stage B2] devplan house-think_off: 0.5
+  [stage B2] devplan warm-think_off: 0.5
+  [stage B2] devplan precise-think_off: 0.5
+  [stage B2] toolstress house-think_on: 0.0
+  [stage B2] toolstress warm-think_on: 0.0
+  [stage B2] toolstress precise-think_on: 0.0
+  [stage B2] toolstress house-think_off: 0.0
+  [stage B2] toolstress warm-think_off: 0.0
+  [stage B2] toolstress precise-think_off: 0.0
+[stage B2] brain → warm-think_on (subset_score=0.3333)
+[stage B2] toolcall → house-think_off (subset_score=0.1667)
+[stage B2] codereview → house-think_off (subset_score=1.0)
+[stage B2] codegen → house-think_off (subset_score=0.5)
+[stage B2] conversation → house-think_off (subset_score=0.5)
+[stage B2] recordsqa → warm-think_off (subset_score=0.4)
+[stage B2] narration → house-think_off (subset_score=0.0)
+[stage B2] longsum → house-think_on (subset_score=0.5)
+[stage B2] parsejson → house-think_off (subset_score=0.0)
+[stage B2] proactive → house-think_off (subset_score=0.0)
+[stage B2] devplan → house-think_off (subset_score=0.5)
+[stage B2] toolstress → house-think_off (subset_score=0.0)
+[recipe] saved peak recipe for vibethinker-3b/vram12 → /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+  Spawning: /usr/bin/llama-server -m VibeThinker-3B-Q4_K_M.gguf ...
+[stage C] role speed
+  [speed] warmup (discarded)...
+  [speed 1/10] ttft=16.2ms decode=189.16tok/s
+  [speed 2/10] ttft=20.0ms decode=189.49tok/s
+  [speed 3/10] ttft=21.8ms decode=189.48tok/s
+  [speed 4/10] ttft=21.3ms decode=189.21tok/s
+  [speed 5/10] ttft=21.8ms decode=189.47tok/s
+  [speed 6/10] ttft=20.1ms decode=189.67tok/s
+  [speed 7/10] ttft=18.9ms decode=189.04tok/s
+  [speed 8/10] ttft=23.4ms decode=188.43tok/s
+  [speed 9/10] ttft=22.9ms decode=188.82tok/s
+  [speed 10/10] ttft=18.4ms decode=189.96tok/s
+[stage C] role brain
+  [brain] 35 cases (6 rubric), max_tokens=1024
+  [brain 1/35] conv_001: FAIL
+  [brain 2/35] conv_002: FAIL
+  [brain 3/35] conv_003: FAIL
+  [brain 4/35] conv_004: FAIL
+  [brain 5/35] remind_001: FAIL
+  [brain 6/35] remind_002: PASS
+  [brain 7/35] remind_003: PASS
+  [brain 8/35] remind_004: FAIL
+  [brain 9/35] remind_005: PASS
+  [brain 10/35] intent_001: FAIL
+  [brain 11/35] intent_002: FAIL
+  [brain 12/35] intent_003: FAIL
+  [brain 13/35] summ_001: FAIL
+  [brain 14/35] summ_002: FAIL
+  [brain 15/35] summ_003: PASS
+  [brain 16/35] summ_004: FAIL
+  [brain 17/35] summ_005: FAIL
+  [brain 18/35] reason_001: FAIL
+  [brain 19/35] reason_002: PASS
+  [brain 20/35] reason_003: FAIL
+  [brain 21/35] reason_004: PASS
+  [brain 22/35] instruct_001: FAIL
+  [brain 23/35] instruct_002: FAIL
+  [brain 24/35] instruct_003: FAIL
+  [brain 25/35] instruct_004: PASS
+  [brain 26/35] refusal_001: FAIL
+  [brain 27/35] refusal_002: FAIL
+  [brain 28/35] refusal_003: FAIL
+  [brain 29/35] fluency_001: FAIL
+  [brain 30/35] fluency_002: FAIL
+  [brain 31/35] fluency_003: FAIL
+  [brain 32/35] hard_001: PASS
+  [brain 33/35] hard_002: FAIL
+  [brain 34/35] hard_003: PASS
+  [brain 35/35] hard_004: PASS
+[stage C] role extraction
+  [extraction] 69 cases via nano endpoint http://127.0.0.1:18080
+nano extractor: JSON parse failed. raw='<think>We need to output a JSON with domain "health" (since it\'s sleep-related). The user message is "dormí 8 horas". According to rules:\n\n- Domain: health (since sleep is a health vital).\n- amount: n'
+nano extractor: JSON parse failed. raw='<think>We need to parse the user request. The user says: "glucosa en 95 esta mañana". They want the system to respond with a JSON as per the specification. The user gave a message in Spanish: "glucosa'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the given prompt. The user says: "me duele mucho la cabeza desde esta mañana". According to the rules, this is a health domain (symptom). The JSON should h'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input "113, 82 y 55 de pulso." According to the rules, this is a Spanish phrase indicating blood pressure and pulse. The domain should be "health". The ki'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object according to the specification, based on the input message "pagué el gas, 580 pesos". The domain is finance (since "pagué" and "gas" is a service). The merchant'
+  [extraction 10/69]
+nano extractor: JSON parse failed. raw='<think>We need to parse the user request. The user says: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y devolvés EXCLUSIVAMENTE un JSON válido con esta forma exacta (sin t'
+nano extractor: JSON parse failed. raw='<think>We need to parse the user request. The user says: "pagué el internet, 450 pesos". They want the system to respond with a JSON as per the specification. The user also says "Responded EXCLUSIVAME'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON exactly as specified, with no extra text before or after. The user gave a prompt in Spanish instructing the assistant to respond with a JSON for a given message. The u'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input "gasté 200 pesos". The instructions: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y devolvés EXCLUSIVAMENTE un JSON '
+nano extractor: JSON parse failed. raw='<think>We need to parse the user request. The user says: "compré dólares, 500 USD en el banco". They want the assistant to respond with a JSON object exactly as described, containing a domain and othe'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON exactly as specified, with no extra text before or after. The user gave a prompt in Spanish: "Tuve una discusión fuerte con mi mamá esta tarde". According to the rules'
+  [extraction 20/69]
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input "llamé a mi suegra para saludarla". The instructions: "llamé a mi suegra para saludarla" is in Spanish. We need to parse the rules.\n\nWe have a do'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input "conocí a Valeria en el trabajo hoy". According to the rules:\n\n- Domain: "relationships" because "conocí a Valeria" is a relationship interaction. I'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message in Spanish: "tuvé una buena plática con Rodrigo y Ana en el café". According to the rules:\n\n- Domain detection: The message includes "plá'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON exactly as specified, with no extra text before or after. The JSON must be valid, with proper quoting, numbers, arrays, etc. The domain must be "exercise". The amount,'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input message: "Hicimos una caminata familiar de 1 hora en el parque". According to the rules:\n\n- Domain: exercise (caminé, corrí, gym, ejercicio, entrena'
+nano extractor: JSON parse failed. raw='<think>The user gave a long instruction in Spanish: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y devolvés EXCLUSIVAMENTE un JSON válido con esta forma exacta (sin texto '
+nano extractor: JSON parse failed. raw='<think>The user wants a response: "Responder EXCLUSIVAMENTE con el JSON. Nada más." So they want only a JSON object, no extra text. The prompt is in Spanish: "estuve viendo un video de memoria espacia'
+  [extraction 30/69]
+nano extractor: JSON parse failed. raw='<think>The user wants a response: "ok dormí ocho horas". The instruction: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y devolvés EXCLUSIVAMENTE un JSON válido con esta fo'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on a message in Spanish. The user says: "el próximo miércoles tengo cita con el cardiólogo a las 10 am". The instruction: "Sos un extractor de entidades para '
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message "mañana es el cumple de mi hermano". The instructions: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y devolv'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input: "hoy me desperté agradecido por todo lo que tengo". The user gave instructions: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en e'
+nano extractor: JSON parse failed. raw='<think>We need to parse the user request. The user says: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y devolvés EXCLUSIVAMENTE un JSON válido con esta forma exacta (sin t'
+nano extractor: JSON parse failed. raw='<think>The user gave a huge instruction to produce a JSON entity extractor for LifeOS based on a message in Spanish. They gave examples and rules. Then they said "ok ya entendí todo". Then they said "'
+  [extraction 40/69]
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object according to the specification. The user gave a message in Spanish: "Me dormí a las 11 pm y acabo de despertar". According to the rules, we need to classify dom'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message: "Me dormí a las 11 pm desperté a las 7". According to the rules, we need to parse the input and produce a JSON object exactly as specifi'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object according to the specification, based on the input message: "pesé 64.5 kg hoy en ayunas, glucosa 95". The user wants the answer in Spanish? The instruction: "So'
+nano extractor: JSON parse failed. raw='<think>The user wants a response: "tengo cita el 3 de marzo a las 9 am". They want the assistant to respond with a JSON object exactly as described, with no extra text before or after. The JSON must b'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object based on the input message "ayer fui al doctor y me recetaron metformina". The domain detection rules:\n\n- The message is in Spanish. It mentions being taken to '
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the incoming Spanish message: "mañana tengo la junta con el equipo a las 3 de la tarde". The user says: "Sos un extractor de entidades para LifeOS. Recibís'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input message: "el próximo viernes me toca revisión con la dermatóloga". The domain detection rules:\n\n- The message is in Spanish. It mentions a doctor (d'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object based on the input Spanish message: "del lunes al miércoles estaré en monterrey por trabajo". The domain detection rules:\n\n- It\'s about a date range (lunes al m'
+nano extractor: JSON parse failed. raw='<think>The user wants a response: "me vacuné contra el flu hoy a las 11 de la mañana". They want the assistant to respond with a JSON object exactly as described, with no extra text before or after. T'
+  [extraction 50/69]
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message "gasté 450 en la farmacia el sábado pasado". The user says: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y d'
+nano extractor: JSON parse failed. raw='<think>We need to parse the user request. The user says: "dormí de 10 pm a las 6 am". They want the assistant to respond with a JSON object exactly as described, with no extra text before or after. Th'
+nano extractor: JSON parse failed. raw='<think>We need to parse the user request. The user says: "Presión alta desde el martes, 145/90". They want the system to respond with a JSON as per the specification. The user gave a set of instructio'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message "pagué el teléfono 380 pesos este mes". The instructions: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y dev'
+nano extractor: JSON parse failed. raw='<think>We need to parse the user request. The user says: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y devolvés EXCLUSIVAMENTE un JSON válido con esta forma exacta (sin t'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message in Spanish: "tengo reunión con Alejandro y Patricia el jueves a mediodía". According to the rules:\n\n- Domain detection: This is an event '
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message in Spanish: "compré unos tenis en Liverpool, 1200 pesos". The user gave a set of instructions: receive a message in Spanish, return exclu'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input "fui al gym hoy temprano". The domain: exercise (caminé, corrí, gym, ejercicio, entrenar). The text mentions "gym". According to rules: "Actividad f'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object based on the input message: "hablé con el doctor Méndez sobre mis resultados". The user gave instructions: "Sos un extractor de entidades para LifeOS. Recibís u'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object based on the user input "mi jefe me llamó esta tarde para hablar del proyecto". The domain should be null (since no relevant keywords). The JSON must be valid, '
+  [extraction 60/69]
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON response exclusively, no extra text. The user says: "le mandé mensaje a Carlos Fuentes para coordinar la semana". This is Spanish: "I sent a message to Carlos Fuentes to c'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object based on the instructions. The user gave a Spanish message: "fui a cenar con Sofía, Gerardo y mi hermana". This is a statement about a dinner with three people:'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on a message in Spanish: "llamé a mi abuela Esperanza para felicitarla por su cumple". The user says: "Sos un extractor de entidades para LifeOS. Recibís un m'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message in Spanish: "hoy fui al gym a entrenar pierna, duré como una hora". The user says: "Sos un extractor de entidades para LifeOS. Recibís un'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message in Spanish: "me registré a un curso de Python en línea, costó 800 pesos". According to the rules, we need to parse the message and produc'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on a message in Spanish. The user says: "transferí 500 dólares a mi cuenta de USD". The instructions: "Sos un extractor de entidades para LifeOS. Recibís un m'
+nano extractor: JSON parse failed. raw='<think>We need to parse the user request. The user says: "me cobraron 1,200 pesos de renta este mes". They want the assistant to respond with a JSON as per the specification, exclusively, no extra tex'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on a message in Spanish. The user says: "nada, estuve todo el día en casa descansando". The instructions: "Sos un extractor de entidades para LifeOS. Recibís '
+[stage C] role domain
+  [domain] 36 cases via http://127.0.0.1:18080
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input: "Me cobraron 230 de Uber esta mañana". Let\'s parse the instructions carefully.\n\nThe user gave a prompt describing a system for extracting entities '
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON exactly as specified, with no extra text before or after. The user gave a prompt in Spanish: "Tuve una discusión fuerte con mi mamá esta tarde". According to the rules'
+nano extractor: JSON parse failed. raw='<think>The user wants the assistant to respond with a JSON only, no extra text. The user says "Llamé a mi hermana para ver cómo estaba". The instructions: "Recibís un mensaje en español y devolvés EXC'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object based on the input message: "Conocí a los papás de mi novia en la cena". The domain detection rules:\n\n- "Conocí" is a human interaction (relationships) word. Th'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message "Orí 5km en el parque esta mañana". Actually the user wrote "Orí 5km en el parque esta mañana". The instruction: "Orí 5km en el parque es'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message "Fui al gym a entrenar pierna, 1 hora". The user says: "Fui al gym a entrenar pierna, 1 hora". This is Spanish. The system says: "Sos un '
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON exactly as specified, with no extra text before or after. The user gave a message in Spanish: "Caminé con mi esposa Daniela durante 45 minutos". According to the rules'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message "Hice 30 minutos de yoga en casa". The user says: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y devolvés EX'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message "Entrené fuerza con pesas hoy en la mañana". The instructions: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español '
+  [domain 15/36]
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input "Estudié 2 horas de arquitectura hexagonal". The domain detection rules:\n\n- "Estudié" is a verb of learning (interaction humana? Actually "hablé, di'
+nano extractor: JSON parse failed. raw='<think>The user gave a prompt in Spanish: "Vi un video sobre sistemas de memoria espaciada". They ask the assistant to be an entity extractor for LifeOS, returning exclusively a JSON in a specific for'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input "Dormí mal, me desperté tres veces". The user says: "Dormí mal, me desperté tres veces". According to the rules, we need to parse the message and'
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input message: "Me tomé la presión: 120/80, estoy bien". The user gave a set of instructions: "Sos un extractor de entidades para LifeOS. Recibís un me'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the user input: "Tengo dolor de cabeza desde ayer en la tarde". The domain should be health (symptom). The input mentions "dolor de cabeza" which is a health '
+nano extractor: JSON parse failed. raw='<think>The user wants a JSON output based on the input "Pesé 78kg esta mañana en ayunas". The user says: "Pesé 78kg esta mañana en ayunas". According to the rules:\n\n- Domain: health (since "pesé" indi'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON object according to the specification, based on the input message in Spanish: "El cumpleaños de mi mamá es el 12 de julio". The user gave instructions: "Sos un extract'
+nano extractor: JSON parse failed. raw='<think>The user asks: "La graduación de mi sobrino es el próximo mes". They want a JSON output exactly as described. The domain detection rules: "Interacción humana (hablé, discutí, conocí, casarse, l'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input message: "Hoy me desperté agradecido por todo lo que tengo". The user gave instructions: "Hos un mensaje en español y devolvés EXCLUSIVAMENTE un JSO'
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the input message: "Medité 20 minutos al amanecer, me siento en paz". The domain detection rules:\n\n- The message includes "Medité", which is a Spanish word fo'
+nano extractor: JSON parse failed. raw='<think>The user asks: "Sos un extractor de entidades para LifeOS. Recibís un mensaje en español y devolvés EXCLUSIVAMENTE un JSON válido con esta forma exacta (sin texto antes ni después): ..." Then t'
+  [domain 30/36]
+nano extractor: JSON parse failed. raw='<think>We need to produce a JSON based on the user input. The user gave a long prompt describing how to process messages for entity extraction for LifeOS. The user says "Responda EXCLUSIVAMENTE con el'
+nano extractor: JSON parse failed. raw='<think>The user says: "no sé". The instructions: "Recibís un mensaje en español y devolvés EXCLUSIVAMENTE un JSON válido con esta forma exacta (sin texto antes ni después): { ... }". So we need to out'
+[stage C] role toolcall
+  [toolcall] 12 cases
+  [toolcall] tool=0% args=0% false-call=0%
+[stage C] role codereview
+  [codereview] 8 cases
+  [codereview] detect=100% false-pos=0%
+[stage C] role vision
+  [vision] vision skipped: no --mmproj provided
+[stage C] role codegen
+  [codegen] 8 cases
+  [codegen] cg01: FAIL
+  [codegen] cg02: FAIL
+  [codegen] cg03: PASS
+  [codegen] cg04: PASS
+  [codegen] cg05: FAIL
+  [codegen] cg06: FAIL
+  [codegen] cg07: FAIL
+  [codegen] cg08: FAIL
+  [codegen] pass=25% compile=38%
+[stage C] role conversation
+  [conversation] 8 cases
+  [conversation] cq01: es=True sane=True judge=0.0
+  [conversation] cq02: es=True sane=True judge=0.0
+  [conversation] cq03: es=False sane=True judge=0.0
+  [conversation] cq04: es=False sane=True judge=0.0
+  [conversation] cq05: es=True sane=True judge=0.0
+  [conversation] cq06: es=True sane=True judge=0.92
+  [conversation] cq07: es=False sane=True judge=0.0
+  [conversation] cq08: es=True sane=True judge=0.0
+  [conversation] judge=0.115 spanish=62%
+[stage C] role recordsqa
+  [recordsqa] 10 cases
+  [recordsqa] rq-01: PASS
+  [recordsqa] rq-02: FAIL fabricated=['15']
+  [recordsqa] rq-03: FAIL fabricated=['20']
+  [recordsqa] rq-04: FAIL fabricated=['15', '15', '15', '14', '15', '31']
+  [recordsqa] rq-05: FAIL fabricated=['15']
+  [recordsqa] rq-06: PASS
+  [recordsqa] rq-07: FAIL fabricated=['15']
+  [recordsqa] rq-08-trap: PASS
+  [recordsqa] rq-09-trap: FAIL
+  [recordsqa] rq-10-trap: PASS
+  [recordsqa] pass=40% fabrication=50%
+[stage C] role narration
+  [narration] 8 cases
+  [narration] dn-01: fidelity=True structure=False judge=0.0
+  [narration] dn-02: fidelity=True structure=False judge=0.87
+  [narration] dn-03: fidelity=True structure=False judge=0.31
+  [narration] dn-04: fidelity=True structure=False judge=0.87
+  [narration] dn-05: fidelity=True structure=False judge=0.87
+  [narration] dn-06: fidelity=True structure=False judge=0.87
+  [narration] dn-07: fidelity=True structure=False judge=0.87
+  [narration] dn-08: fidelity=True structure=False judge=0.0
+  [narration] fidelity=100% structure=0%
+[stage C] role longsum
+  [longsum] 6 cases (ctx=32768)
+  [longsum] ls-01-window: recall=0.25 structure=True FAIL
+  [longsum] ls-02-window: recall=0.0 structure=True FAIL
+  [longsum] ls-03-exec: recall=1.0 structure=True PASS
+  [longsum] ls-04-exec: recall=1.0 structure=True PASS
+  [longsum] ls-05-chat: recall=1.0 structure=True PASS
+  [longsum] ls-06-chat: recall=0.5 structure=True FAIL
+  [longsum] atom_recall=62% pass=50%
+[stage C] role parsejson
+  [parsejson] 14 cases
+  [parsejson] sp-when-01: FAIL
+  [parsejson] sp-when-02: FAIL
+  [parsejson] sp-when-03-neg: FAIL
+  [parsejson] sp-sched-01: FAIL
+  [parsejson] sp-sched-02: FAIL
+  [parsejson] sp-sched-03: FAIL
+  [parsejson] sp-sched-04-neg: FAIL
+  [parsejson] sp-voice-01: FAIL
+  [parsejson] sp-voice-02: FAIL
+  [parsejson] sp-voice-03-neg: FAIL
+  [parsejson] sp-facts-01: FAIL
+  [parsejson] sp-facts-02-neg: FAIL
+  [parsejson] sp-coref-01: FAIL
+  [parsejson] sp-coref-02-neg: PASS
+  [parsejson] pass=7% negatives=20% json=11%
+[stage C] role agentic
+  [agentic] 12 cases (max 5 tool rounds, prod sampling {'temperature': 0.7, 'top_p': 0.8, 'top_k': 20}, max_tokens=4096)
+  [agentic] ag-news-01: rounds=0 tools=False json=False FAIL missing=['quantum photonics', '850', 'loihi']
+  [agentic] ag-fetch-01: rounds=0 tools=False json=False FAIL missing=['16.8', 'insurgente']
+  [agentic] ag-clima-01: rounds=0 tools=False json=False FAIL missing=['24', '70']
+  [agentic] ag-multi-01: rounds=0 tools=False json=False FAIL missing=['openhome', 'gemma4']
+  [agentic] ag-modelos-01: rounds=0 tools=False json=False FAIL missing=['mistral large 3', 'millones de tokens', 'qwen4']
+  [agentic] ag-chain-01: rounds=0 tools=False json=False FAIL missing=['3.2', 'espectr']
+  [agentic] ag-multitopic-01: rounds=0 tools=False json=False FAIL missing=['1.6', '17.2']
+  [agentic] ag-reformulate-01: rounds=0 tools=False json=False FAIL missing=['2.0', '14']
+  [agentic] ag-distractor-01: rounds=0 tools=False json=False FAIL missing=['29']
+  [agentic] ag-distractor-02: rounds=0 tools=False json=False FAIL missing=['colmena', 'microrobot']
+  [agentic] ag-links-01: rounds=0 tools=False json=False FAIL missing=['tecno-mx.example/notas/diplomado-cide']
+  [agentic] ag-noolt-01: rounds=0 tools=True json=False FAIL
+  [agentic] pass=0% tools=8% json=0% rounds=0.0
+[stage C] role proactive
+  [proactive] 12 cases
+  [proactive] pt-restraint-01: verdict=msg FAIL
+  [proactive] pt-restraint-02: verdict=msg FAIL
+  [proactive] pt-restraint-03: verdict=msg FAIL
+  [proactive] pt-restraint-04: verdict=msg FAIL
+  [proactive] pt-speak-01: verdict=msg FAIL
+  [proactive] pt-speak-02: verdict=msg FAIL
+  [proactive] pt-speak-03: verdict=msg FAIL
+  [proactive] pt-speak-04: verdict=msg FAIL
+  [proactive] pt-restraint-05: verdict=msg FAIL
+  [proactive] pt-restraint-06: verdict=msg FAIL
+  [proactive] pt-speak-05: verdict=msg FAIL
+  [proactive] pt-speak-06: verdict=msg FAIL
+  [proactive] restraint=0% speak=0% pass=0%
+[stage C] role visionclass
+  [visionclass] visionclass skipped: no --mmproj provided
+[stage C] role devplan
+  [devplan] 8 cases
+  [devplan] dp-instr-01 (instruction): FAIL
+  [devplan] dp-instr-02 (instruction): FAIL
+  [devplan] dp-instr-03 (instruction): FAIL
+  [devplan] dp-rev-01 (review): FAIL
+  [devplan] dp-rev-02 (review): PASS
+  [devplan] dp-rev-03 (review): PASS
+  [devplan] dp-rev-04 (review): PASS
+  [devplan] dp-rev-05 (review): PASS
+  [devplan] instr=0% review=80% pass=50%
+[stage C] role toolstress
+  [toolstress] 10 cases (max 6 tool rounds, 13 tools offered)
+  [toolstress] ts-sel-reminder-01 (selection): rounds=0 FAIL
+  [toolstress] ts-sel-memory-01 (selection): rounds=0 FAIL
+  [toolstress] ts-sel-health-01 (selection): rounds=0 FAIL
+  [toolstress] ts-sel-message-01 (selection): rounds=0 FAIL
+  [toolstress] ts-nest-export-01 (nested_args): rounds=0 FAIL
+  [toolstress] ts-nest-config-01 (nested_args): rounds=0 FAIL
+  [toolstress] ts-err-export-01 (error_recovery): rounds=0 FAIL
+  [toolstress] ts-err-event-01 (error_recovery): rounds=0 FAIL
+  [toolstress] ts-proc-expense-01 (procedure): rounds=0 FAIL
+  [toolstress] ts-proc-healthreport-01 (procedure): rounds=0 FAIL
+  [toolstress] pass=0% sel=0% args=0% recov=0% proc=0%
+==============================================================================
+  AUDIT REPORT — vibethinker-3b  [tier vram12]  2026-07-16T23:41:04.848553+00:00
+==============================================================================
+  gguf       : /home/hectormr/LifeOS/models/vibethinker-3b/VibeThinker-3B-Q4_K_M.gguf
+  server_bin : /usr/bin/llama-server
+  recipe     : {
+    "launch": {
+      "ngl": 999,
+      "cpu_moe": false,
+      "ctx": 32768,
+      "cell_name": "gpu-ngl999-f16-b2048",
+      "extra_flags": [
+        "--cache-type-k",
+        "f16",
+        "--cache-type-v",
+        "f16",
+        "-fa",
+        "on",
+        "-b",
+        "2048",
+        "-ub",
+        "512",
+        "-t",
+        "8"
+      ]
+    },
+    "sampling": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "thinking": "on",
+    "scores": {
+      "stage_a_decode_toks_s": 192.73,
+      "stage_a_ttft_ms": 17.2,
+      "stage_a_vram_delta_mib": 3283,
+      "stage_b_det": 0.3333
+    },
+    "timestamp_utc": "2026-07-16T23:00:10.458199+00:00",
+    "role_configs": {
+      "brain": {
+        "sampling": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "top_k": 20
+        },
+        "thinking": "on",
+        "subset_score": 0.3333,
+        "variants_tried": 6
+      },
+      "toolcall": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.1667,
+        "variants_tried": 6
+      },
+      "codereview": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "codegen": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.5,
+        "variants_tried": 6
+      },
+      "conversation": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.5,
+        "variants_tried": 6
+      },
+      "recordsqa": {
+        "sampling": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.4,
+        "variants_tried": 6
+      },
+      "narration": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.0,
+        "variants_tried": 6
+      },
+      "longsum": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "on",
+        "subset_score": 0.5,
+        "variants_tried": 6
+      },
+      "parsejson": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.0,
+        "variants_tried": 6
+      },
+      "proactive": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.0,
+        "variants_tried": 6
+      },
+      "devplan": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.5,
+        "variants_tried": 6
+      },
+      "toolstress": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.0,
+        "variants_tried": 6
+      }
+    }
+  }
+  role config (headline metric + sampling it was earned with):
+  role          headline  sampling used
+  --------------------------------------------------------------------------
+  speed            189.5  T=- top_p=- top_k=- seed=n/a think=n/a
+  brain           0.4725  T=0.7 top_p=0.8 top_k=20 seed=per-case-crc32 think=on
+  extraction      0.2319  T=0.0 top_p=- top_k=- seed=fixed-0 think=n/a
+  domain          0.4444  T=0.0 top_p=- top_k=- seed=fixed-0 think=n/a
+  toolcall          0.25  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  codereview           1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  vision               -  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  codegen           0.25  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  conversation     0.115  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  recordsqa          0.4  T=0.7 top_p=0.8 top_k=20 seed=per-case-crc32 think=off
+  narration            1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  longsum            0.5  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  parsejson       0.0714  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  agentic              0  T=0.7 top_p=0.8 top_k=20 seed=per-case-crc32 think=on
+  proactive            0  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  visionclass          -  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  devplan            0.5  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  toolstress           0  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  role speed      : {"n_runs": 10, "ttft_p50_ms": 21.3, "ttft_p95_ms": 23.4, "decode_p50_toks_s": 189.47, "decode_mean_toks_s": 189.27, "vram_before_mib": 3614, "vram_after_mib": 3618, "vram_total_mib": 12227, "idle_rss_mb": 916.7, "sampling_used": {"temperature": null, "top_p": null, "top_k": null, "seed_policy": "n/a", "thinking": "n/a"}}
+  role brain      : {"det": 0.2857, "subj": 0.9083, "final": 0.4725, "note": null, "n_cases": 35, "n_rubric": 6, "sampling_used": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role extraction : {"case_pass_rate": 0.2319, "field_accuracy": {"domain": 0.2941, "kind": 0.2553, "systolic": 0.8824, "diastolic": 0.8824, "pulse_bpm": 0.9412, "people": 0.9153, "dates_text": 0.7551, "sleep_hours": 0.5, "weight_kg": 0.5, "glucose_mg_dl": 0.0, "amount": 0.7021, "currency": 0.125, "items": 0.1429, "merchant": 0.4, "duration_minutes": 0.4}, "total": 69, "sampling_used": {"temperature": 0.0, "top_p": null, "top_k": null, "seed_policy": "fixed-0", "thinking": "n/a"}}
+  role domain     : {"overall_accuracy": 0.4444, "nano_accuracy": 0.1667, "per_layer": {"overall": 0.4444, "guard": 1.0, "nano": 0.1667, "regex": 1.0}, "n": 36, "sampling_used": {"temperature": 0.0, "top_p": null, "top_k": null, "seed_policy": "fixed-0", "thinking": "n/a"}}
+  role toolcall   : {"n": 12, "correct_tool_rate": 0.0, "arg_accuracy": 0.0, "false_call_rate": 0.0, "score": 0.25, "failed_ids": ["tc01", "tc02", "tc03", "tc04", "tc05", "tc06", "tc07", "tc08", "tc09"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role codereview : {"n": 8, "detection_rate": 1.0, "false_positive_rate": 0.0, "score": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role vision     : {"skipped": "vision skipped: no --mmproj provided", "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role codegen    : {"n": 8, "pass_rate": 0.25, "compile_rate": 0.375, "failed_ids": ["cg01", "cg02", "cg05", "cg06", "cg07", "cg08"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role conversation: {"n": 8, "judge_score": 0.115, "spanish_rate": 0.625, "sane_rate": 1.0, "failed_ids": ["cq03", "cq04", "cq07"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role recordsqa  : {"n": 10, "pass_rate": 0.4, "fabrication_rate": 0.5, "failed_ids": ["rq-02", "rq-03", "rq-04", "rq-05", "rq-07", "rq-09-trap"], "sampling_used": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role narration  : {"n": 8, "numeric_fidelity_rate": 1.0, "structure_rate": 0.0, "judge_score": 0.5825, "failed_ids": ["dn-01", "dn-02", "dn-03", "dn-04", "dn-05", "dn-06", "dn-07", "dn-08"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role longsum    : {"n": 6, "atom_recall": 0.625, "structure_rate": 1.0, "pass_rate": 0.5, "failed_ids": ["ls-01-window", "ls-02-window", "ls-06-chat"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role parsejson  : {"n": 14, "pass_rate": 0.0714, "negative_pass_rate": 0.2, "json_valid_rate": 0.1111, "failed_ids": ["sp-when-01", "sp-when-02", "sp-when-03-neg", "sp-when-03-neg", "sp-sched-01", "sp-sched-02", "sp-sched-03", "sp-sched-04-neg", "sp-sched-04-neg", "sp-voice-01", "sp-voice-02", "sp-voice-03-neg", "sp-voice-03-neg", "sp-facts-01", "sp-facts-02-neg", "sp-facts-02-neg", "sp-coref-01"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role agentic    : {"n": 12, "pass_rate": 0.0, "tool_correct_rate": 0.0833, "json_valid_rate": 0.0, "mean_rounds": 0.0, "failed_ids": ["ag-news-01", "ag-fetch-01", "ag-clima-01", "ag-multi-01", "ag-modelos-01", "ag-chain-01", "ag-multitopic-01", "ag-reformulate-01", "ag-distractor-01", "ag-distractor-02", "ag-links-01", "ag-noolt-01"], "sampling_used": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role proactive  : {"n": 12, "restraint_rate": 0.0, "speak_pass_rate": 0.0, "pass_rate": 0.0, "failed_ids": ["pt-restraint-01", "pt-restraint-02", "pt-restraint-03", "pt-restraint-04", "pt-speak-01", "pt-speak-02", "pt-speak-03", "pt-speak-04", "pt-restraint-05", "pt-restraint-06", "pt-speak-05", "pt-speak-06"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role visionclass: {"skipped": "visionclass skipped: no --mmproj provided", "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role devplan    : {"n": 8, "instruction_pass_rate": 0.0, "review_accuracy": 0.8, "pass_rate": 0.5, "judge_score": 0.91, "failed_ids": ["dp-instr-01", "dp-instr-02", "dp-instr-03", "dp-rev-01"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role toolstress : {"n": 10, "pass_rate": 0.0, "tool_selection_rate": 0.0, "arg_exactness_rate": 0.0, "recovery_rate": 0.0, "procedure_rate": 0.0, "failed_ids": ["ts-sel-reminder-01", "ts-sel-memory-01", "ts-sel-health-01", "ts-sel-message-01", "ts-nest-export-01", "ts-nest-config-01", "ts-err-export-01", "ts-err-event-01", "ts-proc-expense-01", "ts-proc-healthreport-01"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  stage A    : 4 cells swept
+    - gpu-ngl999-q8_0-b2048        ok   decode=174.75 ttft=16.8 vramΔ=2747
+    - gpu-ngl999-q8_0-b8192        ok   decode=175.68 ttft=16.4 vramΔ=3507
+    - gpu-ngl999-f16-b2048         ok   decode=192.73 ttft=17.2 vramΔ=3283
+    - gpu-ngl999-f16-b8192         ok   decode=190.32 ttft=15.7 vramΔ=4043
+  stage B    : 2 variants scored
+    - house-think_on           det=0.3333
+    - house-think_off          det=0.3333
+==============================================================================
+
+======================================================================================================================================================================================================================
+  MODEL AUDIT MATRIX  (newest audit per label+tier)
+======================================================================================================================================================================================================================
+  Label                tier     brain  extr%   dom%  tool%   vis%   rev%  code%   conv recQA%   narr  lsum% parse% agent% proact%  vcls%   dev% tstress%  dbench%  ctxK   tok/s  VRAM MiB thinking 
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  bonsai-1bit          vram12   0.696  89.9% 100.0% 100.0% 100.0% 100.0%  50.0%  0.703  70.0%  75.0%  50.0%  85.7%  91.7%   33.3%  50.0%  87.5%    90.0% -     -    53.5      6561 off      
+  bonsai-ternary       vram12   0.603  87.0%  97.2%  75.0%  87.5% 100.0%  25.0%  0.442  10.0% 100.0%   0.0%  14.3%  50.0%    0.0%   0.0%  37.5%   100.0% -     -    44.1      8623 on       
+  gemma4-26b           vram12   0.758  87.0% 100.0% 100.0% 100.0% 100.0% 100.0%  0.793 100.0% 100.0% 100.0%  85.7%  75.0%   83.3%  33.3%  87.5%   100.0% -     -    33.4      6265 off      
+  gemma4-e2b           cpu      0.736 - - - - - -  0.693 -  75.0% - -  16.7%   50.0% - -    80.0% -     - -         0 off      
+  gemma4-e2b           vram12   0.735  82.6% 100.0%  91.7% 100.0% 100.0%  87.5%  0.794  90.0%  87.5% 100.0%  78.6%  16.7%   50.0%  16.7% 100.0%    80.0% -     -   210.4      2035 off      
+  gemma4-e4b           vram12   0.718  87.0% 100.0% 100.0% - 100.0% 100.0%  0.753  90.0%  87.5%  83.3%  85.7%  75.0%   66.7% - 100.0%    90.0% -     -    97.3      3889 off      
+  nemotron-cascade2-30b vram12   0.558  78.3%  97.2%  75.0% -  87.5%   0.0%  0.470  90.0% 100.0%  16.7%  21.4%  75.0%    0.0% -  50.0%   100.0% -     -    31.2      3495 on       
+  qwen3-omni-30b       vram12  - - - -  87.5% - - - - - - - - -  16.7% - - -     - -      4363 on       
+  qwen35-0_8b          cpu      0.364 - - - - - -  0.349 -  12.5% - -  41.7%   33.3% - -    80.0% -     - -         0 off      
+  qwen35-0_8b          vram12   0.407  60.9%  94.4%  58.3%  87.5%  87.5%  12.5%  0.331  70.0%  50.0%  66.7%  35.7%  16.7%   33.3%  16.7%  62.5%    60.0%    20.0%     -   362.1      1219 off      
+  qwen35-2b            cpu      0.636 - - - - - -  0.552 -  25.0% - -  58.3%   25.0% - -    90.0% -     - -         0 off      
+  qwen35-2b            vram12   0.596  72.5%  97.2% 100.0% 100.0%  87.5%  37.5%  0.531  80.0%  50.0%  66.7%  64.3%  58.3%   41.7%  16.7%  75.0%   100.0% -     -   217.7      1937 off      
+  qwen35-4b            cpu      0.592 - - - - - -  0.783 -  62.5% - -  66.7%   50.0% - -   100.0% -     - -         0 off      
+  qwen35-4b            vram12   0.627  87.0% 100.0% 100.0% 100.0% 100.0%  75.0%  0.768  90.0%  87.5% 100.0%  78.6%  75.0%   50.0%  50.0%  87.5%   100.0% -     -   110.4      4119 off      
+  qwen36-27b           vram12   0.771  87.0%  97.2% 100.0% 100.0% 100.0% 100.0%  0.759 100.0%  87.5%  66.7%  92.9%  83.3%   66.7%  50.0%  87.5%   100.0% -     -     4.3      8649 off      
+  vibethinker-3b       vram12   0.472  23.2%  44.4%  25.0% - 100.0%  25.0%  0.115  40.0% 100.0%  50.0%   7.1%   0.0%    0.0% -  50.0%     0.0% -     -   189.5      3283 on       
+======================================================================================================================================================================================================================

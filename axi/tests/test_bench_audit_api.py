@@ -422,3 +422,72 @@ def test_load_audit_rows_merges_roles_per_label_tier(tmp_path):
     # brain preserved from the full audit, visionclass overlaid by the backfill
     assert roles["brain"] == {"final": 0.7}
     assert roles["visionclass"] == {"pass_rate": 0.5}
+
+
+# ---------------------------------------------------------------------------
+# Hardware fingerprint (per-machine speed grouping)
+# ---------------------------------------------------------------------------
+
+_HW_LAPTOP = {
+    "cpu_model": "Intel(R) Core(TM) i7-12700H CPU @ 2.30GHz", "cpu_cores": 20,
+    "ram_gb": 31.1, "gpu_name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "vram_total_mib": 12282, "llama_build": "6209 (0a2f5496b)",
+    "kernel": "7.1.3", "hostname": "laptop", "fingerprint_id": "aaaa1111",
+}
+_HW_SERVER = {
+    "cpu_model": "AMD EPYC 7543", "cpu_cores": 64, "ram_gb": 256.0,
+    "gpu_name": None, "vram_total_mib": None, "llama_build": "6300 (deadbee)",
+    "kernel": "6.9", "hostname": "server", "fingerprint_id": "bbbb2222",
+}
+
+
+def test_hardware_summary_groups_by_fingerprint():
+    from axi import bench_audit
+
+    rows = [
+        {"label": "a", "tier": "cpu", "hardware": _HW_LAPTOP},
+        {"label": "b", "tier": "cpu", "hardware": _HW_LAPTOP},
+        {"label": "c", "tier": "cpu", "hardware": _HW_SERVER},
+        {"label": "old", "tier": "cpu"},                 # pre-fingerprint row
+    ]
+    summary = bench_audit.hardware_summary(rows)
+    by_fp = {e["fingerprint_id"]: e for e in summary}
+    assert set(by_fp) == {"aaaa1111", "bbbb2222", "unknown"}
+    assert by_fp["aaaa1111"]["rows"] == 2
+    assert summary[0]["fingerprint_id"] == "aaaa1111"    # dominant first
+    # description: short cpu (no (R)/(TM)/@ clock) + gpu with VRAM in GB
+    assert by_fp["aaaa1111"]["description"] == (
+        "Intel Core i7-12700H · NVIDIA GeForce RTX 4070 Laptop GPU 12GB")
+    assert by_fp["bbbb2222"]["description"] == "AMD EPYC 7543 · 256.0GB RAM"
+    assert by_fp["unknown"]["description"] == "hardware desconocido"
+    assert by_fp["unknown"]["hardware"] is None
+
+
+def test_api_bench_audit_exposes_hardware_and_summary(bench_client):
+    client, results_root = bench_client
+    _write_jsonl(results_root / "model_audit.jsonl", [
+        {"label": "qwen35-0_8b", "tier": "cpu",
+         "timestamp_utc": "2026-07-01T00:00:00+00:00",
+         "roles": {"brain": {"final": 0.5}}, "hardware": _HW_LAPTOP},
+        {"label": "epyc-run", "tier": "cpu",
+         "timestamp_utc": "2026-07-02T00:00:00+00:00",
+         "roles": {"brain": {"final": 0.6}}, "hardware": _HW_SERVER},
+    ])
+    r = client.get("/api/bench/audit")
+    assert r.status_code == 200
+    body = r.json()
+    by_label = {a["label"]: a for a in body["audits"]}
+    assert by_label["qwen35-0_8b"]["hardware"] == _HW_LAPTOP  # flows through
+    assert by_label["epyc-run"]["hardware"] == _HW_SERVER
+    fps = {e["fingerprint_id"] for e in body["hardware_summary"]}
+    assert fps == {"aaaa1111", "bbbb2222"}
+
+
+def test_models_audit_page_has_hardware_line_and_filter(bench_client):
+    client, _results_root = bench_client
+    r = client.get("/models/audit")
+    assert r.status_code == 200
+    assert 'id="hardware-line"' in r.text        # single-machine header line
+    assert 'id="hardware-filter"' in r.text      # multi-machine select filter
+    assert "Equipo:" in r.text and "Todos" in r.text
+    assert "row.hardware" in r.text              # detail card full object

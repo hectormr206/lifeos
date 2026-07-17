@@ -15,6 +15,20 @@
     </div>
   </div>
 
+  <div id="hardware-line" class="muted text-xs" x-show="hardwareSummary.length === 1"
+       x-text="'Hardware: ' + hardwareLine(hardwareSummary[0])"></div>
+  <div id="hardware-filter" class="text-sm flex items-center gap-2"
+       x-show="hardwareSummary.length > 1">
+    <span class="muted">Equipo:</span>
+    <select class="panel2 rounded px-2 py-1 text-sm" x-model="hardwareFilter">
+      <option value="all">Todos</option>
+      <template x-for="hw in hardwareSummary" :key="hw.fingerprint_id">
+        <option :value="hw.fingerprint_id"
+                x-text="hw.description + ' (' + hw.rows + ')'"></option>
+      </template>
+    </select>
+  </div>
+
   <div class="panel p-3 muted text-sm">
     Comparativa en vivo del audit secuencial (15+ modelos × 16 roles). Los datos
     se leen de <code>model_audit.jsonl</code> y se refrescan solos cada 30s.
@@ -137,6 +151,12 @@
         <template x-if="detailOpen === detailKey(row)">
           <div class="panel p-4 space-y-3">
             <div class="font-semibold" x-text="row.label + ' · ' + row.tier"></div>
+            <template x-if="row.hardware">
+              <div>
+                <div class="text-xs uppercase tracking-wide muted mb-1">Hardware</div>
+                <pre class="panel2 p-2 rounded text-xs overflow-x-auto" x-text="JSON.stringify(row.hardware || {}, null, 2)"></pre>
+              </div>
+            </template>
             <div>
               <div class="text-xs uppercase tracking-wide muted mb-1">Receta</div>
               <pre class="panel2 p-2 rounded text-xs overflow-x-auto" x-text="JSON.stringify(row.recipe || {}, null, 2)"></pre>
@@ -162,6 +182,8 @@
   function auditPage() {
     return {
       audits: [],
+      hardwareSummary: [],
+      hardwareFilter: 'all',
       onlyDefinitive: true,
       generatedAt: null,
       sortField: 'overall',
@@ -200,6 +222,19 @@
           .filter(v => v !== null && v !== undefined);
         if (!values.length) return { min: 0, max: 1 };
         return { min: Math.min(...values), max: Math.max(...values) };
+      },
+
+      // ── hardware fingerprint (header line / per-machine filter) ──────
+      hardwareLine(hw) {
+        if (!hw) return '—';
+        let line = hw.description;
+        if (hw.hardware && hw.hardware.llama_build) {
+          line += ' · llama.cpp ' + hw.hardware.llama_build;
+        }
+        return line;
+      },
+      rowFingerprint(row) {
+        return (row.hardware && row.hardware.fingerprint_id) || 'unknown';
       },
 
       detailKey(row) { return row.label + ':' + row.tier; },
@@ -246,7 +281,10 @@
       sortedRows() {
         const field = this.sortField;
         const dir = this.sortDir === 'desc' ? -1 : 1;
-        const rows = [...this.audits].filter(r => !this.onlyDefinitive || (r.recipe && r.recipe.role_configs));
+        const rows = [...this.audits]
+          .filter(r => !this.onlyDefinitive || (r.recipe && r.recipe.role_configs))
+          .filter(r => this.hardwareFilter === 'all'
+                       || this.rowFingerprint(r) === this.hardwareFilter);
         rows.sort((a, b) => {
           const av = field === 'overall' ? a.overall : a.role_summary[field];
           const bv = field === 'overall' ? b.overall : b.role_summary[field];
@@ -341,6 +379,11 @@
           // the leader medal always tracks the true leaderboard position.
           body.audits.forEach((row, i) => { row.overallRank = i + 1; });
           this.audits = body.audits;
+          this.hardwareSummary = body.hardware_summary || [];
+          if (this.hardwareFilter !== 'all'
+              && !this.hardwareSummary.some(h => h.fingerprint_id === this.hardwareFilter)) {
+            this.hardwareFilter = 'all';  // stale selection after data change
+          }
           this.generatedAt = body.generated_at;
           this.status = body.status || { state: 'idle' };
           this.nowTick = Date.now();

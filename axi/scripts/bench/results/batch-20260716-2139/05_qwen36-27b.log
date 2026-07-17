@@ -1,0 +1,133 @@
+Audit: qwen36-27b | tiers=['vram12'] | roles=['speed', 'brain', 'extraction', 'domain', 'toolcall', 'codereview', 'vision', 'codegen', 'conversation', 'recordsqa', 'narration', 'longsum', 'parsejson', 'agentic', 'proactive', 'visionclass', 'devplan', 'toolstress'] | moe=False | vram baseline=333 MiB
+
+######################################################################
+#  TIER vram12
+######################################################################
+[stage A] tier=vram12 — sweeping 4 cells
+  [stage A] cell gpu-ngl999-q8_0-b2048 ...
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+  [stage A] cell gpu-ngl999-q8_0-b8192 ...
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+  [stage A] cell gpu-ngl999-f16-b2048 ...
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+  [stage A] cell gpu-ngl999-f16-b8192 ...
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+[stage A] full offload failed/over budget — retrying 2 mid-ngl cells
+  [stage A] cell gpu-ngl24-q8_0-b2048 ...
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+    -> decode=3.9 tok/s ttft=2422.1ms vramΔ=7439
+  [stage A] cell gpu-ngl24-q8_0-b8192 ...
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+    -> decode=3.98 tok/s ttft=2499.6ms vramΔ=8649
+[stage B] 2 variants x 12 fast cases
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+  [stage B] house-think_off: det=0.8333
+  [stage B] house-think_on: det=0.5
+[stage B2] per-role tuning: 14 roles x 6 variants
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+  [stage B2] brain house-think_off: 1.0
+  [stage B2] brain warm-think_off: 1.0
+  [stage B2] brain precise-think_off: 1.0
+  [stage B2] brain house-think_on: 0.8333
+  [stage B2] brain warm-think_on: 0.8333
+  [stage B2] brain precise-think_on: 0.8333
+  [stage B2] toolcall house-think_off: 1.0
+  [stage B2] toolcall warm-think_off: 1.0
+  [stage B2] toolcall precise-think_off: 1.0
+  [stage B2] toolcall house-think_on: 0.8333
+  [stage B2] toolcall warm-think_on: 0.8333
+  [stage B2] toolcall precise-think_on: 0.8333
+  [stage B2] codereview house-think_off: 1.0
+  [stage B2] codereview warm-think_off: 1.0
+  [stage B2] codereview precise-think_off: 1.0
+  [stage B2] codereview house-think_on: 1.0
+  [stage B2] codereview warm-think_on: 1.0
+  [stage B2] codereview precise-think_on: 1.0
+  [stage B2] vision house-think_off: 1.0
+  [stage B2] vision warm-think_off: 1.0
+  [stage B2] vision precise-think_off: 1.0
+  [stage B2] vision house-think_on: 1.0
+  [stage B2] vision warm-think_on: 1.0
+  [stage B2] vision precise-think_on: 1.0
+  [stage B2] codegen house-think_off: 1.0
+  [stage B2] codegen warm-think_off: 1.0
+  [stage B2] codegen precise-think_off: 1.0
+  [stage B2] codegen house-think_on: 0.5
+  [stage B2] codegen warm-think_on: 0.25
+  [stage B2] codegen precise-think_on: 0.25
+  [stage B2] conversation house-think_off: 1.0
+  [stage B2] conversation warm-think_off: 1.0
+  [stage B2] conversation precise-think_off: 1.0
+  [stage B2] conversation house-think_on: 1.0
+  [stage B2] conversation warm-think_on: 0.75
+  [stage B2] conversation precise-think_on: 1.0
+  [stage B2] recordsqa house-think_off: 1.0
+  [stage B2] recordsqa warm-think_off: 1.0
+  [stage B2] recordsqa precise-think_off: 1.0
+  [stage B2] recordsqa house-think_on: 0.4
+  [stage B2] recordsqa warm-think_on: 0.4
+  [stage B2] recordsqa precise-think_on: 0.2
+  [stage B2] narration house-think_off: 1.0
+  [stage B2] narration warm-think_off: 1.0
+  [stage B2] narration precise-think_off: 1.0
+  [stage B2] narration house-think_on: 0.0
+  [stage B2] narration warm-think_on: 0.0
+  [stage B2] narration precise-think_on: 0.0
+  [stage B2] longsum house-think_off: 0.6667
+  [stage B2] longsum warm-think_off: 0.6667
+  [stage B2] longsum precise-think_off: 0.6667
+  [stage B2] longsum house-think_on: 0.0
+  [stage B2] longsum warm-think_on: 0.0
+  [stage B2] longsum precise-think_on: 0.0
+  [stage B2] parsejson house-think_off: 0.8333
+  [stage B2] parsejson warm-think_off: 0.8333
+  [stage B2] parsejson precise-think_off: 0.8333
+  [stage B2] parsejson house-think_on: 0.0
+  [stage B2] parsejson warm-think_on: 0.1667
+  [stage B2] parsejson precise-think_on: 0.0
+  [stage B2] proactive house-think_off: 0.8333
+  [stage B2] proactive warm-think_off: 0.8333
+  [stage B2] proactive precise-think_off: 0.6667
+  [stage B2] proactive house-think_on: 0.0
+  [stage B2] proactive warm-think_on: 0.0
+  [stage B2] proactive precise-think_on: 0.0
+  [stage B2] visionclass house-think_off: 0.5
+  [stage B2] visionclass warm-think_off: 0.5
+  [stage B2] visionclass precise-think_off: 0.8333
+  [stage B2] visionclass house-think_on: 0.0
+  [stage B2] visionclass warm-think_on: 0.0
+  [stage B2] visionclass precise-think_on: 0.0
+  [stage B2] devplan house-think_off: 0.75
+  [stage B2] devplan warm-think_off: 1.0
+  [stage B2] devplan precise-think_off: 0.75
+  [stage B2] devplan house-think_on: 0.5
+  [stage B2] devplan warm-think_on: 0.5
+  [stage B2] devplan precise-think_on: 0.5
+  [stage B2] toolstress house-think_off: 1.0
+  [stage B2] toolstress warm-think_off: 1.0
+  [stage B2] toolstress precise-think_off: 1.0
+  [stage B2] toolstress house-think_on: 1.0
+  [stage B2] toolstress warm-think_on: 1.0
+  [stage B2] toolstress precise-think_on: 1.0
+[stage B2] brain → house-think_off (subset_score=1.0)
+[stage B2] toolcall → house-think_off (subset_score=1.0)
+[stage B2] codereview → house-think_off (subset_score=1.0)
+[stage B2] vision → house-think_off (subset_score=1.0)
+[stage B2] codegen → house-think_off (subset_score=1.0)
+[stage B2] conversation → house-think_off (subset_score=1.0)
+[stage B2] recordsqa → house-think_off (subset_score=1.0)
+[stage B2] narration → house-think_off (subset_score=1.0)
+[stage B2] longsum → house-think_off (subset_score=0.6667)
+[stage B2] parsejson → house-think_off (subset_score=0.8333)
+[stage B2] proactive → house-think_off (subset_score=0.8333)
+[stage B2] visionclass → precise-think_off (subset_score=0.8333)
+[stage B2] devplan → warm-think_off (subset_score=1.0)
+[stage B2] toolstress → house-think_off (subset_score=1.0)
+[recipe] saved peak recipe for qwen36-27b/vram12 → /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+[stage C] role speed
+  [speed] warmup (discarded)...

@@ -116,6 +116,7 @@ import base64
 import json
 import math
 import os
+import platform
 import re
 import shutil
 import signal
@@ -2834,12 +2835,110 @@ def aggregate_devplan(per_case: list[dict], note: Optional[str] = None) -> dict:
     return out
 
 
+# ── hardware fingerprint ─────────────────────────────────────────────────────
+# Quality metrics travel across machines; SPEED metrics do not. Every registry
+# row carries the hardware it was measured on so tok/s numbers group/compare
+# per machine. All probes are cheap and failure-tolerant: any error degrades
+# that field to None — a hardware probe must never kill an audit.
+
+def probe_llama_build(server_bin: str) -> Optional[str]:
+    """Return the llama.cpp build line ('NNNN (hash)') from `<bin> --version`.
+
+    Probed per-audit (not cached globally) because --server-bin varies: fork
+    binaries (e.g. the PrismML fork used for bonsai) report their own build.
+    """
+    try:
+        proc = subprocess.run([server_bin, "--version"], capture_output=True,
+                              text=True, timeout=15)
+        for line in ((proc.stdout or "").splitlines()
+                     + (proc.stderr or "").splitlines()):
+            m = re.search(r"version:\s*(\S+\s*\([^)]+\))", line)
+            if m:
+                return m.group(1).strip()
+    except Exception:  # noqa: BLE001 — probe failure must never crash
+        pass
+    return None
+
+
+def collect_hardware_fingerprint(server_bin: Optional[str] = None,
+                                 cpuinfo_path: str = "/proc/cpuinfo",
+                                 meminfo_path: str = "/proc/meminfo") -> dict:
+    """Snapshot of the machine the audit ran on, for row["hardware"].
+
+    Schema (every field may be None on probe failure):
+      cpu_model, cpu_cores, ram_gb, gpu_name, vram_total_mib, llama_build,
+      kernel, hostname, fingerprint_id (short stable crc32 hex of
+      cpu+cores+ram+gpu — llama_build/kernel/hostname excluded so the same
+      physical box keeps one id across driver/binary upgrades).
+    """
+    cpu_model: Optional[str] = None
+    cpu_cores: Optional[int] = None
+    try:
+        models = [line.split(":", 1)[1].strip()
+                  for line in Path(cpuinfo_path).read_text(
+                      encoding="utf-8", errors="replace").splitlines()
+                  if line.startswith("model name")]
+        if models:
+            cpu_model = models[0]
+            cpu_cores = len(models)
+    except Exception:  # noqa: BLE001
+        pass
+
+    ram_gb: Optional[float] = None
+    try:
+        for line in Path(meminfo_path).read_text(
+                encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("MemTotal:"):
+                ram_gb = round(int(line.split()[1]) / (1024 * 1024), 1)
+                break
+    except Exception:  # noqa: BLE001
+        pass
+
+    gpu_name: Optional[str] = None
+    vram_total_mib: Optional[int] = None
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15)
+        first = (proc.stdout or "").strip().splitlines()
+        if proc.returncode == 0 and first:
+            name, _, mem = first[0].rpartition(",")
+            gpu_name = name.strip() or None
+            vram_total_mib = int(mem.strip())
+    except Exception:  # noqa: BLE001 — no NVIDIA GPU / no nvidia-smi
+        pass
+
+    try:
+        kernel: Optional[str] = platform.release()
+    except Exception:  # noqa: BLE001
+        kernel = None
+    try:
+        hostname: Optional[str] = platform.node()
+    except Exception:  # noqa: BLE001
+        hostname = None
+
+    fp_src = f"{cpu_model}|{cpu_cores}|{ram_gb}|{gpu_name}|{vram_total_mib}"
+    return {
+        "cpu_model": cpu_model,
+        "cpu_cores": cpu_cores,
+        "ram_gb": ram_gb,
+        "gpu_name": gpu_name,
+        "vram_total_mib": vram_total_mib,
+        "llama_build": probe_llama_build(server_bin) if server_bin else None,
+        "kernel": kernel,
+        "hostname": hostname,
+        "fingerprint_id": f"{zlib.crc32(fp_src.encode('utf-8')):08x}",
+    }
+
+
 # ── audit registry rows & comparison matrix ──────────────────────────────────
 
 def assemble_audit_row(label: str, tier: str, gguf: str, server_bin: str,
                        recipe: dict, roles: dict,
                        stage_a_cells: list[dict], stage_b_variants: list[dict],
-                       now: Optional[str] = None) -> dict:
+                       now: Optional[str] = None,
+                       hardware: Optional[dict] = None) -> dict:
     """One registry row: identity + peak recipe + role results + tuning trace."""
     return {
         "label": label,
@@ -2847,6 +2946,7 @@ def assemble_audit_row(label: str, tier: str, gguf: str, server_bin: str,
         "timestamp_utc": now or datetime.now(timezone.utc).isoformat(),
         "gguf": gguf,
         "server_bin": server_bin,
+        "hardware": hardware,
         "recipe": recipe,
         "roles": roles,
         "stage_a_cells": stage_a_cells,
@@ -4911,6 +5011,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         roles.append("embed")
 
     moe = detect_moe(args.gguf, args.moe)
+    # Once per audit run: same machine + same --server-bin for every tier.
+    hardware = collect_hardware_fingerprint(server_bin=args.server_bin)
     import brain_bench as bb
     vram_baseline, _ = bb.query_vram()
     print(f"Audit: {args.label} | tiers={tiers} | roles={roles} | "
@@ -4986,7 +5088,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 label=args.label, tier=tier, gguf=args.gguf,
                 server_bin=args.server_bin, recipe=recipe, roles=roles_results,
                 stage_a_cells=stage_a_cells, stage_b_variants=stage_b_variants,
-                now=args.now)
+                now=args.now, hardware=hardware)
             bm.append_registry_row(registry_path, row)
             print(build_model_report([row], args.label))
     finally:

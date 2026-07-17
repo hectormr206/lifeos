@@ -146,6 +146,56 @@ def load_audit_rows(jsonl_path: Path) -> list[dict[str, Any]]:
     return merged_rows
 
 
+def _short_cpu(cpu_model: str) -> str:
+    """'Intel(R) Core(TM) i7-12700H CPU @ 2.30GHz' -> 'Intel Core i7-12700H'."""
+    short = cpu_model.replace("(R)", "").replace("(TM)", "").replace("(tm)", "")
+    short = short.split("@", 1)[0]
+    short = short.replace(" CPU", "").replace(" Processor", "")
+    return " ".join(short.split())
+
+
+def hardware_description(hardware: dict[str, Any]) -> str:
+    """One-line human label for a hardware fingerprint (dashboard filter)."""
+    parts: list[str] = []
+    if hardware.get("cpu_model"):
+        parts.append(_short_cpu(str(hardware["cpu_model"])))
+    if hardware.get("gpu_name"):
+        gpu = str(hardware["gpu_name"])
+        vram = hardware.get("vram_total_mib")
+        if isinstance(vram, (int, float)) and not isinstance(vram, bool):
+            gpu += f" {vram / 1024:.0f}GB"
+        parts.append(gpu)
+    elif hardware.get("ram_gb") is not None:
+        parts.append(f"{hardware['ram_gb']}GB RAM")
+    if not parts and hardware.get("hostname"):
+        parts.append(str(hardware["hostname"]))
+    return " · ".join(parts) or "hardware desconocido"
+
+
+def hardware_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Distinct hardware fingerprints across audit rows, with row counts.
+
+    Rows lacking a ``hardware`` object (pre-fingerprint audits not yet
+    retro-annotated) are grouped under fingerprint_id ``"unknown"``. Sorted
+    by row count descending so the dominant machine comes first.
+    """
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        hw = row.get("hardware")
+        if not isinstance(hw, dict):
+            hw = {}
+        fp = hw.get("fingerprint_id") or "unknown"
+        entry = grouped.setdefault(fp, {
+            "fingerprint_id": fp,
+            "description": hardware_description(hw),
+            "hardware": hw or None,
+            "rows": 0,
+        })
+        entry["rows"] += 1
+    return sorted(grouped.values(),
+                  key=lambda e: (-e["rows"], e["fingerprint_id"]))
+
+
 def load_recipes(recipes_path: Path) -> dict[str, Any]:
     """Read model_recipes.json; empty dict when missing or malformed."""
     if not recipes_path.exists():
@@ -218,6 +268,7 @@ def build_audit_payload(results_dir_path: Path) -> dict[str, Any]:
     return {
         "audits": augmented,
         "recipes": recipes,
+        "hardware_summary": hardware_summary(rows),
         "status": load_status(results_dir_path),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
