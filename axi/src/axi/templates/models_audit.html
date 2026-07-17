@@ -6,6 +6,9 @@
 <div class="space-y-6" x-data="auditPage()" x-init="init()">
   <div class="flex items-baseline justify-between flex-wrap gap-2">
     <h1 class="text-2xl font-semibold">Auditoría de modelos</h1>
+    <label class="muted text-xs flex items-center gap-1 cursor-pointer">
+      <input type="checkbox" x-model="onlyDefinitive"> solo era definitiva
+    </label>
     <div class="muted text-sm">
       <span x-text="audits.length"></span> auditorías ·
       actualizado <span x-text="generatedAtLabel()"></span>
@@ -159,6 +162,7 @@
   function auditPage() {
     return {
       audits: [],
+      onlyDefinitive: true,
       generatedAt: null,
       sortField: 'overall',
       sortDir: 'desc',
@@ -242,7 +246,7 @@
       sortedRows() {
         const field = this.sortField;
         const dir = this.sortDir === 'desc' ? -1 : 1;
-        const rows = [...this.audits];
+        const rows = [...this.audits].filter(r => !this.onlyDefinitive || (r.recipe && r.recipe.role_configs));
         rows.sort((a, b) => {
           const av = field === 'overall' ? a.overall : a.role_summary[field];
           const bv = field === 'overall' ? b.overall : b.role_summary[field];
