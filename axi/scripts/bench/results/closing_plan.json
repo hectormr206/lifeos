@@ -1,5 +1,5 @@
 {
-  "notes": "CLOSING PLAN: vision backfills (Omni+35B) -> devbench x7 dev contenders -> ctxprobe x11 (all models) -> coder cpu speed -> 27B stage C last (sealed recipe).",
+  "notes": "CLOSING PLAN: vision backfills (Omni+35B) -> devbench x7 dev contenders -> ctxprobe x11 (all models) -> coder cpu speed -> 27B stage C last (sealed recipe). | vram8+vram4 speed/config sweeps for the 6 finalists (per-tier install logic for the multiplatform vision).",
   "jobs": [
     {
       "label": "qwen3-omni-30b",
@@ -278,6 +278,206 @@
       ],
       "use_recipe": true,
       "moe": "on"
+    },
+    {
+      "label": "gemma4-26b",
+      "gguf": "/home/hectormr/LifeOS/models/gemma4-26b-a4b/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+      "tiers": [
+        "vram8"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "moe": "on",
+      "extra_flags": [
+        "--reasoning",
+        "off"
+      ]
+    },
+    {
+      "label": "qwen36-35b",
+      "gguf": "/home/hectormr/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf",
+      "tiers": [
+        "vram8"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "moe": "on"
+    },
+    {
+      "label": "gemma4-e4b",
+      "gguf": "/home/hectormr/LifeOS/models/gemma4-e4b-it/gemma-4-E4B-it-Q4_K_M.gguf",
+      "tiers": [
+        "vram8"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "extra_flags": [
+        "--reasoning",
+        "off"
+      ]
+    },
+    {
+      "label": "bonsai-1bit",
+      "gguf": "/home/hectormr/LifeOS/models/bonsai-27b/Bonsai-27B-Q1_0.gguf",
+      "tiers": [
+        "vram8"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "server_bin": "/home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server"
+    },
+    {
+      "label": "nemotron-cascade2-30b",
+      "gguf": "/home/hectormr/LifeOS/models/nemotron-cascade2-30b/Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf",
+      "tiers": [
+        "vram8"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "moe": "on"
+    },
+    {
+      "label": "gemma4-e2b",
+      "gguf": "/home/hectormr/LifeOS/models/gemma4-e2b-it/gemma-4-E2B-it-Q4_K_M.gguf",
+      "tiers": [
+        "vram8"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "extra_flags": [
+        "--reasoning",
+        "off"
+      ]
+    },
+    {
+      "label": "gemma4-26b",
+      "gguf": "/home/hectormr/LifeOS/models/gemma4-26b-a4b/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+      "tiers": [
+        "vram4"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "moe": "on",
+      "extra_flags": [
+        "--reasoning",
+        "off"
+      ]
+    },
+    {
+      "label": "qwen36-35b",
+      "gguf": "/home/hectormr/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf",
+      "tiers": [
+        "vram4"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "moe": "on"
+    },
+    {
+      "label": "gemma4-e4b",
+      "gguf": "/home/hectormr/LifeOS/models/gemma4-e4b-it/gemma-4-E4B-it-Q4_K_M.gguf",
+      "tiers": [
+        "vram4"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "extra_flags": [
+        "--reasoning",
+        "off"
+      ]
+    },
+    {
+      "label": "bonsai-1bit",
+      "gguf": "/home/hectormr/LifeOS/models/bonsai-27b/Bonsai-27B-Q1_0.gguf",
+      "tiers": [
+        "vram4"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "server_bin": "/home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server"
+    },
+    {
+      "label": "nemotron-cascade2-30b",
+      "gguf": "/home/hectormr/LifeOS/models/nemotron-cascade2-30b/Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf",
+      "tiers": [
+        "vram4"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "moe": "on"
+    },
+    {
+      "label": "gemma4-e2b",
+      "gguf": "/home/hectormr/LifeOS/models/gemma4-e2b-it/gemma-4-E2B-it-Q4_K_M.gguf",
+      "tiers": [
+        "vram4"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed",
+        "ctxprobe"
+      ],
+      "extra_flags": [
+        "--reasoning",
+        "off"
+      ]
     },
     {
       "label": "qwen36-27b",
