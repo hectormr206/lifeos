@@ -1,0 +1,61 @@
+{
+  "notes": "North Mini Code (Cohere, from-scratch 30B-A3B MoE, 128 experts): full audit + devbench + ctxprobe + cpu speed. Fires after the 27B stage C. Risk: custom MoE arch may not load on b10034 — a fast health-fail is a documented verdict.",
+  "jobs": [
+    {
+      "label": "north-mini-code",
+      "gguf": "/home/hectormr/LifeOS/models/north-mini-code/North-Mini-Code-1.0-Q4_K_M.gguf",
+      "tiers": [
+        "vram12"
+      ],
+      "thinking_modes": [
+        "off",
+        "on"
+      ],
+      "moe": "on"
+    },
+    {
+      "label": "north-mini-code",
+      "gguf": "/home/hectormr/LifeOS/models/north-mini-code/North-Mini-Code-1.0-Q4_K_M.gguf",
+      "tiers": [
+        "vram12"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "devbench"
+      ],
+      "use_recipe": true,
+      "moe": "on"
+    },
+    {
+      "label": "north-mini-code",
+      "gguf": "/home/hectormr/LifeOS/models/north-mini-code/North-Mini-Code-1.0-Q4_K_M.gguf",
+      "tiers": [
+        "vram12"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "ctxprobe"
+      ],
+      "use_recipe": true,
+      "moe": "on"
+    },
+    {
+      "label": "north-mini-code",
+      "gguf": "/home/hectormr/LifeOS/models/north-mini-code/North-Mini-Code-1.0-Q4_K_M.gguf",
+      "tiers": [
+        "cpu"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "speed"
+      ],
+      "moe": "on"
+    }
+  ]
+}
