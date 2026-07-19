@@ -229,3 +229,174 @@ def default_authorize(client_host: str | None) -> bool:
     except ValueError:
         return True  # e.g. TestClient's "testclient", a mesh-DNS name, etc.
     return ip.is_loopback or ip.is_private or ip in _TAILSCALE_CGNAT
+
+
+# ═══════════════════════ mesh catalog aggregator (2nd slice) ══════════════════
+#
+# Read-only aggregation of PEER node manifests into one unified catalog
+# (roadmap Part 2 §2.2 transport/discovery, §2.3 model advertisement). This is
+# the fan-out side of the first slice: instead of "who am I?", it answers "which
+# nodes + models does the whole mesh currently offer?" by GET-ing each peer's
+# `/api/v1/node/manifest` and folding the results together.
+#
+# Still DECISION-INDEPENDENT and strictly out of scope (later slices / pending
+# decisions — roadmap §2.3b remote inference, §2.4 sync, §4 root-of-trust):
+#
+#   * NO remote inference, NO prompt/token routing, NO model picker UX.
+#   * NO data sync / event log — this fetches MODEL METADATA only.
+#   * NO real peer authentication (VPN membership + the read-only manifest is
+#     the current trust boundary; signed node tokens are the pending follow-up).
+#
+# Same invariants as the first slice: never touches the personal graph store,
+# never handles weights/secrets, and every function is pure/injectable so the
+# aggregation is unit-tested WITHOUT a real network.
+#
+# RESILIENCE is the load-bearing property: a dead, slow, or misbehaving peer
+# must NEVER raise or break the catalog — it degrades to an `online=False`
+# entry with an empty model list so the UI can grey it out.
+
+# Short per-peer HTTP timeout: the mesh is VPN-local and this is best-effort
+# gossip, so a wedged peer must not stall the whole fan-out.
+_PEER_TIMEOUT_S = 3.0
+
+
+def mesh_peers(*, config_get=None) -> list[str]:
+    """The configured peer node base-URLs on the VPN mesh (may be empty).
+
+    Read from the ``federation_peers`` config key — a static peer list seeded
+    from the always-on node (roadmap §2.2 discovery tier 1). Defaults to an
+    empty list (a lone node has no peers). Pure/injectable: pass ``config_get``
+    (signature ``(key, default) -> value``) to test without touching config;
+    the default reads the real per-user config.
+
+    Normalises defensively: non-list config yields ``[]``, blank/non-string
+    entries are dropped, and trailing slashes are stripped so URL joining is
+    unambiguous.
+    """
+    if config_get is None:
+        from axi import config
+        config_get = config.get
+    raw = config_get("federation_peers", [])
+    if not isinstance(raw, (list, tuple)):
+        return []
+    peers: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        url = item.strip().rstrip("/")
+        if url:
+            peers.append(url)
+    return peers
+
+
+def _default_http_get(url: str):
+    """Real HTTP GET with a short timeout (only used off the test path)."""
+    import httpx
+
+    return httpx.get(url, timeout=_PEER_TIMEOUT_S)
+
+
+def fetch_peer_manifest(base_url: str, *, http_get) -> dict | None:
+    """GET ``{base_url}/api/v1/node/manifest`` and return the parsed manifest.
+
+    Returns ``None`` on ANY failure — timeout, connection refused, non-200,
+    unparseable JSON, or a non-dict body. This function is the resilience seam:
+    it MUST NOT raise, so one dead/slow peer never breaks the mesh fan-out.
+
+    The HTTP getter is injected (a callable ``(url) -> response`` where the
+    response mirrors httpx/requests: ``.status_code`` + ``.json()``) so the
+    fetch is unit-testable without a real network.
+    """
+    url = f"{base_url.rstrip('/')}/api/v1/node/manifest"
+    try:
+        resp = http_get(url)
+        if getattr(resp, "status_code", None) != 200:
+            return None
+        data = resp.json()
+    except Exception:  # noqa: BLE001 — a misbehaving peer must never propagate.
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _catalog_entry(node: dict, *, online: bool, models: list) -> dict:
+    """One row of the unified mesh catalog (metadata only, never weights)."""
+    return {
+        "node_id": node.get("node_id"),
+        "hostname": node.get("hostname"),
+        "online": online,
+        "models": models,
+    }
+
+
+def mesh_catalog(
+    *,
+    peers=None,
+    http_get=None,
+    include_self: bool = True,
+    self_manifest: dict | None = None,
+) -> list[dict]:
+    """Unify this node + each configured peer into one mesh model catalog.
+
+    Returns a list of ``{node_id, hostname, online, models}`` rows:
+
+      * This node's own manifest first (``include_self``, default True).
+      * Each reachable peer as an ``online=True`` row carrying its advertised
+        model cards.
+      * Each UNREACHABLE peer as an ``online=False`` row with an EMPTY model
+        list and the peer's base-URL as a fallback ``hostname`` label, so the
+        UI can show it greyed out rather than dropping it silently.
+
+    Nodes are de-duplicated by ``node_id`` (first-writer-wins, so self and a
+    peer that report the same id collapse to one row). Pure aggregation over
+    injected fetches: ``peers`` defaults to :func:`mesh_peers` and ``http_get``
+    to a real short-timeout GET, but both are injectable so tests run with no
+    network. Never touches the personal graph store.
+    """
+    if peers is None:
+        peers = mesh_peers()
+    if http_get is None:
+        http_get = _default_http_get
+
+    catalog: list[dict] = []
+    seen_ids: set = set()
+    seen_offline: set = set()
+
+    def _append(entry: dict) -> None:
+        nid = entry["node_id"]
+        if nid is not None:
+            if nid in seen_ids:
+                return
+            seen_ids.add(nid)
+        catalog.append(entry)
+
+    if include_self:
+        if self_manifest is None:
+            self_manifest = node_manifest()
+        _append(_catalog_entry(
+            self_manifest.get("node") or {},
+            online=True,
+            models=self_manifest.get("models") or [],
+        ))
+
+    for base_url in peers:
+        manifest = fetch_peer_manifest(base_url, http_get=http_get)
+        if manifest is None:
+            # Unreachable/garbage peer — grey it out, keyed by url so repeated
+            # offline urls collapse but distinct ones each show.
+            if base_url in seen_offline:
+                continue
+            seen_offline.add(base_url)
+            _append(_catalog_entry(
+                {"node_id": None, "hostname": base_url},
+                online=False,
+                models=[],
+            ))
+            continue
+        _append(_catalog_entry(
+            manifest.get("node") or {},
+            online=True,
+            models=manifest.get("models") or [],
+        ))
+    return catalog

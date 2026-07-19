@@ -113,6 +113,40 @@
         "summary": "Capabilities"
       }
     },
+    "/api/v1/mesh/catalog": {
+      "get": {
+        "description": "Aggregate this node + configured peers into one unified model catalog.",
+        "operationId": "mesh_catalog_api_v1_mesh_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Mesh Catalog"
+      }
+    },
+    "/api/v1/node/manifest": {
+      "get": {
+        "description": "Advertise this node's identity + local model catalog over the mesh.",
+        "operationId": "node_manifest_api_v1_node_manifest_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Node Manifest"
+      }
+    },
     "/api/v1/pair": {
       "post": {
         "description": "Exchange a valid, unexpired, unused pairing code for a device token.\n\nAuth: this route is in `axi.api_auth.PUBLIC_V1_PATHS` — reachable with\nno bearer token even when `api_auth_enabled=true` (it is the mechanism\nthat BOOTSTRAPS a device's first token). The pairing code itself is the\nsecurity boundary: it can only be obtained from `/setup`'s\n`GET /api/setup/pairing_code`, an owner-facing legacy route (spec\n`api-auth-pairing`), is single-use, and expires after 5 minutes\n(`axi.pairing`, design D6).\n\nRaises 410 if the code is missing/unknown/expired/already-used — no\ndevice is created and no token is issued in that case (spec: \"Expired\ncode rejected\").",

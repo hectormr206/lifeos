@@ -718,6 +718,31 @@ def node_manifest(request: Request):
     return federation.node_manifest()
 
 
+# GET /api/v1/mesh/catalog — the read-only, aggregated view of the whole mesh:
+# this node's own manifest PLUS every configured peer's, folded into one
+# unified model catalog (roadmap Part 2 §2.2 discovery / §2.3 advertisement).
+# Second federation slice. Like the manifest endpoint it exposes MODEL/NODE
+# METADATA ONLY and NEVER reads the personal graph store.
+#
+# This handler FANS OUT to peers read-only (best-effort GETs of each peer's
+# /api/v1/node/manifest). It is resilient by construction: an unreachable or
+# misbehaving peer surfaces as an offline, empty-model row — it never fails the
+# response. Real peer authentication for those outbound calls is the pending
+# "mesh root-of-trust" follow-up (roadmap §2.2 / §4.3); today the VPN plus the
+# same `default_authorize` seam is the trust boundary. Swap it when that lands.
+
+
+@app.get("/api/v1/mesh/catalog")
+def mesh_catalog(request: Request):
+    """Aggregate this node + configured peers into one unified model catalog."""
+    from axi import federation
+
+    client_host = request.client.host if request.client else None
+    if not federation.default_authorize(client_host):
+        raise HTTPException(status_code=403, detail="not authorized on this mesh")
+    return federation.mesh_catalog()
+
+
 # ────────────────────── bearer auth middleware (M0-3) ──────────────────
 #
 # Per-device bearer auth for /api/v1 (design D5). Installed AFTER the v1
