@@ -50,6 +50,20 @@ def test_counts_reflect_today_activity():
     assert {f["label"] for f in d["top_facts"]} == {"hecho 1", "hecho 2", "hecho 3"}
 
 
+def test_digest_excludes_family_subject_facts():
+    """The daily digest is the USER's own — a family-subject fact
+    (data.subject set) must never surface in it."""
+    store.add_node(kind="fact", label="presión 118/74")  # self
+    store.add_node(kind="fact", label="presión 121/79, pulso 61",
+                   data={"subject": "esposa"})            # wife
+
+    d = digest.build_today()
+    labels = {f["label"] for f in d["top_facts"]}
+    assert "presión 118/74" in labels
+    assert "presión 121/79, pulso 61" not in labels
+    assert d["facts_added_count"] == 1
+
+
 def test_summary_disabled_by_default(monkeypatch):
     # Even if brain were reachable, kill switch defaults to False.
     called = {"ask": 0}

@@ -111,10 +111,29 @@
         <!-- Header row -->
         <div class="flex flex-wrap items-start justify-between gap-2 mb-1">
           <div class="font-semibold text-sm md:text-base break-words flex-1 min-w-0" x-text="r.goal || '(sin objetivo)'"></div>
-          <span class="shrink-0 px-2 py-0.5 rounded text-xs font-mono"
-                :style="badgeStyle(r.status)"
-                x-text="statusLabel(r.status)"></span>
+          <div class="shrink-0 flex items-center gap-1.5">
+            <!-- Disabled, non-clickable 'Bloqueado' pill for guard-blocked runs:
+                 the dev-engine guard refused this run, so it can never be
+                 approved/merged/deployed. It is a status badge, not a button. -->
+            <template x-if="r.guard_blocked">
+              <span class="px-2 py-0.5 rounded text-xs font-mono cursor-not-allowed select-none"
+                    style="background: rgba(238,51,51,0.12); border: 1px solid var(--red); color: var(--red);"
+                    :title="r.guard_reason"
+                    aria-disabled="true">🔒 Bloqueado</span>
+            </template>
+            <span class="px-2 py-0.5 rounded text-xs font-mono"
+                  :style="badgeStyle(r.status)"
+                  x-text="statusLabel(r.status)"></span>
+          </div>
         </div>
+
+        <!-- Guard-blocked reason: reads clearly as 'cannot deploy — reason'. -->
+        <template x-if="r.guard_blocked">
+          <div class="text-sm mb-3 px-3 py-2 rounded"
+               style="background: rgba(238,51,51,0.1); border: 1px solid var(--red); color: var(--red)">
+            <span class="font-semibold">🔒 Bloqueado — no se puede desplegar: </span><span x-text="r.guard_reason"></span>
+          </div>
+        </template>
 
         <!-- Meta row -->
         <div class="muted text-xs mb-3 flex flex-wrap gap-x-3 gap-y-0.5">
@@ -149,7 +168,7 @@
         </template>
 
         <!-- Merge action (only from state 'landed', explicit human click) -->
-        <template x-if="r.status === 'landed' && !actionResult[r.run_id]">
+        <template x-if="r.status === 'landed' && !r.guard_blocked && !actionResult[r.run_id]">
           <div class="flex flex-wrap gap-2 mb-3">
             <button type="button"
                     @click="mergeRun(r.run_id, r.landed_branch)"
@@ -177,7 +196,7 @@
             <span class="font-semibold">El último deploy falló: </span><span x-text="r.deploy_error"></span>
           </div>
         </template>
-        <template x-if="r.status === 'merged' && !actionResult[r.run_id]">
+        <template x-if="r.status === 'merged' && !r.guard_blocked && !actionResult[r.run_id]">
           <div class="flex flex-wrap gap-2 mb-3">
             <button type="button"
                     @click="deployRun(r.run_id)"
@@ -224,7 +243,7 @@
              previa" stay available (below) so the human still reviews first, and
              "Rechazar" stays here. Mid-flow states (landed/merged) keep the
              granular buttons above for backward compatibility. -->
-        <template x-if="r.status === 'done' && r.has_patch && !shipResult[r.run_id]">
+        <template x-if="r.status === 'done' && r.has_patch && !r.guard_blocked && !shipResult[r.run_id]">
           <div class="flex flex-wrap gap-2 mb-3">
             <button type="button"
                     @click="ship(r.run_id)"
@@ -261,7 +280,7 @@
         <!-- Actions for needs_human runs: the nightly autonomous runs escalate to
              needs_human and still land via the review branch (approve → land →
              merge → deploy), so they keep the granular approve + reject. -->
-        <template x-if="r.status === 'needs_human' && r.has_patch && !approveResult[r.run_id]">
+        <template x-if="r.status === 'needs_human' && r.has_patch && !r.guard_blocked && !approveResult[r.run_id]">
           <div class="flex flex-wrap gap-2 mb-3">
             <button type="button"
                     @click="approve(r.run_id)"

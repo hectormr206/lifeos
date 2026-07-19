@@ -23,7 +23,7 @@ class _Interaction:
 
 
 def _brain(extract_json):
-    def _ask(text, *, system=None, think=False, max_tokens=0):
+    def _ask(text, *, system=None, think=False, max_tokens=0, task=None):
         return "respuesta" if think else extract_json
     return _ask
 

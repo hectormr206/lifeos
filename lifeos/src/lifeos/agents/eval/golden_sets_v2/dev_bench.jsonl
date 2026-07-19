@@ -1,0 +1,13 @@
+// dev_bench v2 DRAFT — one NEW hard mini-project db-06 (NOT production).
+// Saturation: 6/16 finalists at a perfect score on v1 (db-01..db-05). db-06 is
+// "hard: refactor-under-contract" in the spirit of db-04+db-05 combined: a
+// drifted copy-paste parser (report.total_for re-parses inline instead of using
+// money.parse_amount) AND a root-cause bug (parse_amount never strips the
+// thousands separator, so every comma amount raises ValueError). The fix must
+// (a) coerce commas ONCE in parse_amount and (b) make report reuse that shared
+// helper — a monkeypatch call-count test enforces the dedupe contract.
+// Schema IDENTICAL to live set. On merge: move golden_sets_v2/devbench_projects/db-06
+// into the live devbench_projects/ dir; project_dir path stays relative to GOLDEN_DIR.
+// GOTCHA: test_*.py and conftest.py are PROTECTED (write_file rejected, restored
+// before verdict); do NOT add a per-project conftest.py.
+{"id": "db-06", "v2_draft": true, "project_dir": "devbench_projects/db-06", "task_summary": "hard: dedupe a drifted inline money parser AND fix the root-cause thousands-separator bug in money.parse_amount; a monkeypatch contract test requires report.total_for to call the shared parser", "max_rounds": 12, "expected": {"min_tests_passed": "all"}}

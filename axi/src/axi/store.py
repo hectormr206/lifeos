@@ -1380,12 +1380,12 @@ def same_day_neighbors(node_id: int, conn=None) -> list[dict[str, Any]]:
     try:
         rows = c.execute(
             """
-            SELECT n.id, n.kind, n.label, n.domain, n.created_at, n.occurred_at
+            SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
             FROM nodes n
             JOIN edges e ON e.from_id = ? AND e.to_id = n.id AND e.kind = 'same-day'
             WHERE n.id != ?
             UNION
-            SELECT n.id, n.kind, n.label, n.domain, n.created_at, n.occurred_at
+            SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
             FROM nodes n
             JOIN edges e ON e.to_id = ? AND e.from_id = n.id AND e.kind = 'same-day'
             WHERE n.id != ?
@@ -1431,7 +1431,7 @@ def recent_facts(days: int = 2, limit: int = 8, conn=None) -> list[dict[str, Any
     cutoff = time.time() - max(0, days) * 86400.0
     try:
         rows = c.execute(
-            "SELECT id, kind, label, domain, created_at, occurred_at FROM nodes "
+            "SELECT id, kind, label, domain, data, created_at, occurred_at FROM nodes "
             "WHERE kind = 'fact' AND COALESCE(occurred_at, created_at) >= ? "
             "ORDER BY COALESCE(occurred_at, created_at) DESC LIMIT ?",
             (cutoff, int(limit)),
@@ -2497,7 +2497,7 @@ def semantic_search_nodes(
     # Fetch node metadata in one query, preserving KNN order.
     placeholders = ",".join("?" * len(node_ids))
     rows = c.execute(
-        f"SELECT id, kind, label, domain, created_at, occurred_at FROM nodes WHERE id IN ({placeholders})",
+        f"SELECT id, kind, label, domain, data, created_at, occurred_at FROM nodes WHERE id IN ({placeholders})",
         node_ids,
     ).fetchall()
 

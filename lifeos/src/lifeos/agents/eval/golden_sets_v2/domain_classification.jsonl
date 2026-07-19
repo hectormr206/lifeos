@@ -1,0 +1,13 @@
+// domain_classification v2 DRAFTS — HARDER adversarial cases (NOT production).
+// Saturation: 14/15 finalists scored >=0.95 on v1. These cases add cross-domain
+// ambiguity, distractor keywords pointing at the WRONG domain, and long null
+// traps that survive the <12/<20 char guards. Schema IDENTICAL to live set:
+//   {"text", "expected_domain": str|null, "layer", "note"}  (extra "v2_draft" key ignored by scorer)
+// Valid domains: finance, relationships, exercise, learning, health, events, spirituality
+// Target: top model ~0.80-0.90 (each case has a plausible-but-wrong attractor).
+{"text": "Me lastimé la rodilla corriendo y ahora me duele hasta al caminar", "expected_domain": "health", "layer": "nano", "v2_draft": true, "note": "distractor: 'corriendo/caminar' scream exercise, but the SALIENT event is an injury -> health"}
+{"text": "Pagué el anticipo del salón para la boda de mi hermana en noviembre", "expected_domain": "events", "layer": "nano", "v2_draft": true, "note": "distractor: 'pagué el anticipo' looks finance/regex, but no bare 'gasté/pagué + amount' and the core is a scheduled event -> events. Verify regex _OUTFLOW_RE does NOT fire (no number adjacent)."}
+{"text": "Estuve leyendo sobre budismo zen para el ensayo final de la universidad", "expected_domain": "learning", "layer": "nano", "v2_draft": true, "note": "distractor: 'budismo zen' baits spirituality, but framing is academic study -> learning"}
+{"text": "Fui a correr con Diego y de paso platicamos del divorcio de su hermano", "expected_domain": "exercise", "layer": "nano", "v2_draft": true, "note": "two-domain: exercise (run) vs relationships (talk with Diego). Dominant logged activity is the run -> exercise"}
+{"text": "Hoy no tuve nada de tiempo para mí, todo el día ocupado con cosas", "expected_domain": null, "layer": "nano", "v2_draft": true, "note": "long null trap (>20 chars, passes guards, nano runs): vague venting, no extractable domain -> null. Adversarial because it is emotionally toned like spirituality/health."}
+{"text": "El seguro me reintegró 640 pesos de la consulta del doctor", "expected_domain": "finance", "layer": "nano", "v2_draft": true, "note": "distractor: 'doctor/consulta' baits health, but the salient logged fact is a money reimbursement -> finance. 'reintegró' is NOT in _INCOME_RE (cobré/me llegó/me depositaron/recibí) nor _OUTFLOW_RE, so it falls through to nano."}

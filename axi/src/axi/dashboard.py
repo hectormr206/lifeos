@@ -4418,6 +4418,7 @@ async def api_chat_ask(request: Request):
                     history=history,
                     image_b64=None,
                     lang=_web_lang,
+                    task="agentic",
                 )
                 # Deterministically append source citations so they never depend
                 # on model behavior.
@@ -4740,13 +4741,25 @@ async def api_chat_ask(request: Request):
                 }
                 fam = lifeos_localize.lang_family(lang)
                 kind_label = (kind_label_en if fam == "en" else kind_label_es)[hi.kind]
-                if fam == "en":
+                _conf_en = 'Confidence: %d%%.' % int(hi.confidence * 100) if hi.confidence < 1.0 else ''
+                _conf_es = 'Confianza: %d%%.' % int(hi.confidence * 100) if hi.confidence < 1.0 else ''
+                _subj = getattr(hi, "subject", None)
+                if _subj:
+                    # Family reading: name the person AND report the full parsed
+                    # value (hi.title), never an under-reported fragment.
+                    from lifeos._common.subject import subject_possessive  # noqa: PLC0415
+                    if fam == "en":
+                        answer = (f"Logged for {subject_possessive(_subj, en=True)}: "
+                                  f"{hi.title}. {_conf_en}").strip()
+                    else:
+                        answer = (f"Anotado para {subject_possessive(_subj)}: "
+                                  f"{hi.title}. {_conf_es}").strip()
+                elif fam == "en":
                     answer = (f"Got it. Logged as {kind_label} in /health: "
-                              f"\"{hi.title}\". "
-                              f"{'Confidence: %d%%.' % int(hi.confidence * 100) if hi.confidence < 1.0 else ''}").strip()
+                              f"\"{hi.title}\". {_conf_en}").strip()
                 else:
-                    answer = (f"Anotado en salud como {kind_label}: \"{hi.title}\". "
-                              f"{'Confianza: %d%%.' % int(hi.confidence * 100) if hi.confidence < 1.0 else ''}").strip()
+                    answer = (f"Anotado en salud como {kind_label}: "
+                              f"\"{hi.title}\". {_conf_es}").strip()
                 # P4: surface historical pattern when this is a symptom.
                 if entry.kind == "symptom":
                     try:
@@ -5280,7 +5293,7 @@ async def api_chat_ask(request: Request):
             except Exception:  # noqa: BLE001 — self-awareness must never break chat
                 log.warning("organs body-context injection skipped", exc_info=True)
             if image_b64:
-                answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64, lang=_chat_lang)
+                answer = brain.ask(text, system=brain_system, history=history, image_b64=image_b64, lang=_chat_lang, task="vision")
             else:
                 # Build tool list dynamically: recall_memory always present;
                 # web_search only when web research is enabled.
@@ -5311,6 +5324,7 @@ async def api_chat_ask(request: Request):
                     tool_handlers=tool_handlers,
                     tool_choice="auto",
                     lang=_chat_lang,
+                    task="toolcall",
                 )
             # NOTE: No persistence guardrail is applied here. In conversation
             # mode the brain answers freely and may legitimately use words like
@@ -6136,7 +6150,16 @@ def health_page(request: Request):
 def api_health_list(days: int = 30, kind: str | None = None, q: str | None = None):
     """List health entries. Optional filters: days back, kind, free-text query."""
     if q:
-        rows = health_entries.search(q, kind=kind if kind else None)
+        # Resolve subject the same way recall does: self-only unless the query
+        # explicitly names a family member ("presión de mi esposa"). Without
+        # this, the free-text filter leaked family entries into the user's view.
+        try:
+            from lifeos._common.subject import detect_query_subject
+            subject = detect_query_subject(q) or "self"
+        except Exception:
+            subject = "self"
+        rows = health_entries.search(q, kind=kind if kind else None,
+                                     subject=subject)
     else:
         rows = health_entries.list_recent(
             days=max(1, min(days, 3650)),
@@ -7537,6 +7560,34 @@ async def page_dev_runs(request: Request):
     return templates.TemplateResponse(request, "dev_runs.html", {})
 
 
+def _guard_reason(run: dict) -> str:
+    """Human-readable reason a run was dev-engine guard-blocked, or "".
+
+    Prefers the persisted ``guard_reason`` message; falls back to reconstructing
+    it from ``guard_offenders`` for older records that predate the stored reason.
+    Returns "" for runs that are not guard-blocked.
+    """
+    if not run.get("guard_blocked"):
+        return ""
+    reason = run.get("guard_reason")
+    if reason:
+        return str(reason)
+    offenders = run.get("guard_offenders") or []
+    tail = " (" + ", ".join(offenders) + ")" if offenders else ""
+    return (
+        "Bloqueado: un run de auto-mejora intentó modificar el motor de "
+        "desarrollo" + tail + ". No se hizo push."
+    )
+
+
+def _refuse_if_guard_blocked(run: dict) -> None:
+    """Server-side defense in depth: refuse any land/merge/deploy on a run the
+    dev-engine guard has blocked, BEFORE any git work — so a stale client or a
+    direct API call can never act on a blocked run. Raises HTTP 409."""
+    if run.get("guard_blocked"):
+        raise HTTPException(409, _guard_reason(run))
+
+
 @app.get("/api/dev-runs")
 async def api_list_dev_runs():
     from axi import dev_run as _dr  # noqa: PLC0415
@@ -7581,6 +7632,8 @@ async def api_list_dev_runs():
             "has_patch": has_patch,
             "preview_kind": preview_kind,
             "preview_reason": preview_reason,
+            "guard_blocked": bool(r.get("guard_blocked")),
+            "guard_reason": _guard_reason(r),
         })
     return JSONResponse(out)
 
@@ -7614,6 +7667,8 @@ async def api_get_dev_run(run_id: str):
         "diff": diff_text,
         "preview_kind": preview_kind,
         "preview_reason": preview_reason,
+        "guard_blocked": bool(r.get("guard_blocked")),
+        "guard_reason": _guard_reason(r),
     })
 
 
@@ -7624,6 +7679,7 @@ async def api_approve_dev_run(run_id: str):
     r = _dr.get_run(run_id)
     if r is None:
         raise HTTPException(404, "run not found")
+    _refuse_if_guard_blocked(r)
     result = dev_land.land_run(run_id)
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "land failed"))
@@ -7676,6 +7732,7 @@ async def api_merge_dev_run(run_id: str):
     r = _dr.get_run(run_id)
     if r is None:
         raise HTTPException(404, "run not found")
+    _refuse_if_guard_blocked(r)
     # Run the blocking git work off the event loop so a slow/hung git call
     # never freezes the whole dashboard.
     result = await asyncio.to_thread(dev_land.merge_run, run_id)
@@ -7693,6 +7750,7 @@ async def api_deploy_dev_run(run_id: str):
     r = _dr.get_run(run_id)
     if r is None:
         raise HTTPException(404, "run not found")
+    _refuse_if_guard_blocked(r)
     # Off-loop: local install trigger may shell out; keep the loop responsive.
     result = await asyncio.to_thread(dev_land.deploy_run, run_id)
     if not result.get("ok"):
@@ -7711,8 +7769,12 @@ async def api_ship_dev_run(run_id: str):
     """
     from axi import dev_preview as _dp  # noqa: PLC0415
     from axi import dev_land  # noqa: PLC0415
+    from axi import dev_run as _dr  # noqa: PLC0415
     if not _dp.is_valid_run_id(run_id):
         raise HTTPException(400, "invalid run id")
+    _blocked = _dr.get_run(run_id)
+    if _blocked is not None:
+        _refuse_if_guard_blocked(_blocked)
     # Off-loop: ship_run does subprocess/git + local install work; keep the loop
     # responsive and never let a hung git call freeze the dashboard.
     result = await asyncio.to_thread(dev_land.ship_run, run_id)

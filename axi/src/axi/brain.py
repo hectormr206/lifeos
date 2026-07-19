@@ -142,25 +142,23 @@ def _strip_think(text: str) -> str:
 
 
 def _route(prompt: str | None, image_b64: str | None, tools: list | None) -> str:
-    """Pure routing function — no I/O. Returns 'vt3b' or '4b'.
+    """Pure routing function — no I/O. Returns '4b' (VT-3B retired from routing).
 
-    Decision order (HARD rules first):
-    1. image_b64 non-empty OR tools non-empty → '4b' (VT-3B has no mmproj, no tools).
-    2. Prompt matches _VT_PATTERN (math/code/reasoning keywords) → 'vt3b'.
-    3. Default → '4b'.
+    VT->4B SWAP (Part C, July 2026):
+    VibeThinker-3B is no longer a routing target. Math/code/reasoning prompts
+    (which _VT_PATTERN still matches, for event-trigger labelling only) now run
+    on the 4B, which applies its own per-task role_config (codegen/brain) for
+    that job. The vt3b engine branch in _base_payload/_ask_impl is kept present
+    but is unreachable via _route — tests patch _route directly to exercise it.
 
-    Precision tradeoff (FIX 5, June 2026):
-    _VT_PATTERN is tuned for precision over recall for Spanish input. Axi is a
-    Spanish-first daily driver — false positives (common noun misrouted to VT-3B)
-    cause latency and degraded chat UX, while false negatives (real code/math
-    answered by 4B) are non-breaking (4B handles code adequately).
-    Broad single-word triggers that double as common nouns/verbs have been replaced
-    with multi-word / context patterns that signal genuine code or math intent.
+    Historical decision order (image/tools were always '4b' anyway):
+    1. image_b64 non-empty OR tools non-empty → '4b'.
+    2. Everything else → '4b'.
     """
     if image_b64 or tools:
         return "4b"
-    if _VT_PATTERN.search(prompt or ""):
-        return "vt3b"
+    # _VT_PATTERN retained for the routing-event trigger label in _ask_impl;
+    # it no longer changes the engine selection (all traffic stays on 4B).
     return "4b"
 
 
@@ -554,6 +552,69 @@ def _post_chat_completion(
         return json.loads(resp.read().decode("utf-8"))
 
 
+# ─────────────────────── per-task role_config routing ──────────────────────
+#
+# The model audit measures, PER TASK (role), the best sampling+thinking config
+# for the active model. Those per-role configs are snapshotted into the active
+# model state (active_model.json → "role_configs") whenever a model is set
+# active (see models_manager.write_active). Axi's internal pipelines already
+# know their own task ("extraction", "narration", "vision", …), so routing a
+# call to its best-measured config is deterministic — no runtime classifier.
+#
+# Precedence for the final sampling/thinking of a request:
+#   explicit caller temperature/seed  >  role_config  >  engine hard default.
+# Free-form chat (task=None) falls back to the "conversation" role_config.
+# A task with no matching role_config (or no role_configs at all) degrades
+# gracefully to today's engine-default behavior — it never crashes.
+
+# Sentinel distinguishing "caller did not opt into task routing at all"
+# (pure engine defaults, e.g. direct _base_payload unit calls) from an
+# explicit task=None (free chat → conversation role_config).
+_TASK_UNSET: Any = object()
+
+
+def _load_role_configs() -> dict[str, Any]:
+    """Return the active model's per-task ``role_configs`` map, or ``{}``.
+
+    Sourced from ``active_model.json`` (state, written by
+    ``models_manager.write_active`` at activation time). Read fresh each call —
+    the file is tiny and a llama-server round-trip dwarfs the read — and never
+    raises, so routing always degrades gracefully to engine defaults.
+    """
+    try:
+        from axi import models_manager  # lazy: avoid import cost at module load
+        data = models_manager.read_active() or {}
+        rc = data.get("role_configs")
+        return rc if isinstance(rc, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _resolve_role_config(task: Any) -> dict[str, Any] | None:
+    """Resolve the role_config dict to apply for ``task`` (or None).
+
+    - ``task is _TASK_UNSET`` → None (no task routing; pure engine defaults).
+    - ``task is None`` (free chat) → the "conversation" role_config, if present.
+    - ``task`` is a role name → that role's config, if present.
+    Missing role, or no role_configs at all → None (graceful engine fallback).
+    """
+    if task is _TASK_UNSET:
+        return None
+    rcs = _load_role_configs()
+    if not rcs:
+        return None
+    key = "conversation" if task is None else task
+    cfg = rcs.get(key)
+    return cfg if isinstance(cfg, dict) else None
+
+
+def _num(value: Any) -> float | int | None:
+    """Return value if it is a real (non-bool) number, else None."""
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, (int, float)) else None
+
+
 def _base_payload(
     messages: list[dict[str, Any]],
     max_tokens: int,
@@ -561,6 +622,7 @@ def _base_payload(
     engine: str = "4b",
     temperature: float | None = None,
     seed: int | None = None,
+    task: Any = _TASK_UNSET,
 ) -> dict[str, Any]:
     """Build the request payload with engine-appropriate sampling parameters.
 
@@ -583,15 +645,44 @@ def _base_payload(
         default_temperature = 0.7
         top_p = 0.8
         top_k = 20
+
+    # Per-task role_config overlay. Only applies to the 4B (its measured
+    # configs live in active_model.json); the vt3b engine keeps its own
+    # hardcoded params. A missing/empty config leaves the engine defaults.
+    role_temp = role_top_p = role_top_k = None
+    role_think: bool | None = None
+    if engine != "vt3b":
+        role_cfg = _resolve_role_config(task)
+        if role_cfg:
+            sampling = role_cfg.get("sampling")
+            if isinstance(sampling, dict):
+                role_temp = _num(sampling.get("temperature"))
+                role_top_p = _num(sampling.get("top_p"))
+                role_top_k = _num(sampling.get("top_k"))
+            thinking = role_cfg.get("thinking")
+            if thinking in ("on", "off"):
+                role_think = thinking == "on"
+
+    # Precedence: explicit caller override > role_config > engine default.
+    if temperature is not None:
+        eff_temperature: float | int = temperature
+    elif role_temp is not None:
+        eff_temperature = role_temp
+    else:
+        eff_temperature = default_temperature
+    eff_top_p = role_top_p if role_top_p is not None else top_p
+    eff_top_k = role_top_k if role_top_k is not None else top_k
+    eff_think = role_think if role_think is not None else think
+
     payload: dict[str, Any] = {
         "messages": messages,
-        "temperature": default_temperature if temperature is None else temperature,
-        "top_p": top_p,
-        "top_k": top_k,
+        "temperature": eff_temperature,
+        "top_p": eff_top_p,
+        "top_k": eff_top_k,
         "max_tokens": max_tokens,
         "stream": False,
         # Qwen3-specific: passed through llama-server's --jinja templating.
-        "chat_template_kwargs": {"enable_thinking": think},
+        "chat_template_kwargs": {"enable_thinking": eff_think},
     }
     if seed is not None:
         payload["seed"] = seed
@@ -609,6 +700,7 @@ def _ask_impl(
     lang: str | None = None,
     temperature: float | None = None,
     seed: int | None = None,
+    task: Any = _TASK_UNSET,
     _retry_budget: int | None = None,
     _skip_recall: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
@@ -680,7 +772,7 @@ def _ask_impl(
         data = _post_chat_completion(
             _base_payload(
                 messages, max_tokens=effective_max_tokens, think=think, engine=engine,
-                temperature=temperature, seed=seed,
+                temperature=temperature, seed=seed, task=task,
             ),
             timeout=timeout,
             endpoint=endpoint,
@@ -717,7 +809,7 @@ def _ask_impl(
                     return _ask_impl(
                         prompt, system=system, max_tokens=max_tokens, timeout=timeout,
                         think=think, image_b64=image_b64, history=history,
-                        lang=lang, temperature=temperature, seed=seed,
+                        lang=lang, temperature=temperature, seed=seed, task=task,
                         _retry_budget=retry_budget, _skip_recall=True,
                     )
         return content, data
@@ -784,6 +876,7 @@ def _ask_with_tools_impl(
     max_tool_rounds: int = 2,
     lang: str | None = None,
     final_synthesis_prompt: str | None = None,
+    task: Any = _TASK_UNSET,
 ) -> tuple[str, dict[str, Any] | None]:
     """Run a small OpenAI tool-calling loop against local llama-server.
 
@@ -869,11 +962,11 @@ def _ask_with_tools_impl(
             # remove the tools from the payload.
             if is_final and final_synthesis_prompt is not None:
                 messages.append({"role": "user", "content": final_synthesis_prompt})
-                payload = _base_payload(messages, max_tokens=max_tokens, think=think, engine="4b")
+                payload = _base_payload(messages, max_tokens=max_tokens, think=think, engine="4b", task=task)
                 data = _post_chat_completion(payload, timeout=timeout, endpoint=ENDPOINT)
                 last_data = data
                 return (data["choices"][0]["message"].get("content") or "").strip(), data
-            payload = _base_payload(messages, max_tokens=max_tokens, think=think, engine="4b")
+            payload = _base_payload(messages, max_tokens=max_tokens, think=think, engine="4b", task=task)
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
             data = _post_chat_completion(payload, timeout=timeout, endpoint=ENDPOINT)
@@ -919,6 +1012,7 @@ def ask_with_tools(
     max_tool_rounds: int = 2,
     lang: str | None = None,
     final_synthesis_prompt: str | None = None,
+    task: str | None = None,
 ) -> str:
     """Ask the local brain with whitelisted OpenAI-compatible tools.
 
@@ -948,6 +1042,7 @@ def ask_with_tools(
             max_tool_rounds=max_tool_rounds,
             lang=lang,
             final_synthesis_prompt=final_synthesis_prompt,
+            task=task,
         )
         return text
     except BaseException as e:  # noqa: BLE001
@@ -977,6 +1072,7 @@ def ask(
     lang: str | None = None,
     temperature: float | None = None,
     seed: int | None = None,
+    task: str | None = None,
 ) -> str:
     """Public chat completion call.
 
@@ -987,6 +1083,13 @@ def ask(
     `temperature`/`seed` are optional deterministic-decoding overrides passed
     through to the request payload only when not None (existing callers keep
     the engine's default sampling).
+
+    `task` selects the per-task role_config (best measured sampling+thinking
+    for that job on the active model). Internal pipelines pass their known task
+    ("extraction", "narration", "vision", …). ``task=None`` (the default, i.e.
+    free-form chat) falls back to the "conversation" role_config. Explicit
+    temperature/seed still win over the role_config; a missing role_config
+    degrades gracefully to the engine default. See `_resolve_role_config`.
 
     Wraps `_ask_impl` to record a brain metric (latency, model, token usage,
     ok flag) on a background thread. The metric write NEVER fails the brain
@@ -1009,6 +1112,7 @@ def ask(
             lang=lang,
             temperature=temperature,
             seed=seed,
+            task=task,
         )
         return text
     except BaseException as e:  # noqa: BLE001

@@ -62,7 +62,7 @@ def summarize_and_archive(hot_turns: int = 400, batch: int = 200) -> int:
         if not transcript:
             return 0
 
-        summary = brain.ask(transcript, system=_SUMMARY_SYSTEM, max_tokens=400, lang="es-MX")
+        summary = brain.ask(transcript, system=_SUMMARY_SYSTEM, max_tokens=400, lang="es-MX", task="longsum")
         if not summary or not summary.strip():
             return 0  # no summary -> do NOT delete; try again next cycle
 

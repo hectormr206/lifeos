@@ -203,6 +203,7 @@ def _land_run(run_id: str) -> dict:
             state["status"] = "needs_human"
             state["guard_blocked"] = True
             state["guard_offenders"] = offenders
+            state["guard_reason"] = reason
             _dr._write_state_file(_dr._state_path(run_id), state)
             _log_outcome(state, status="blocked", changed_paths=changed_paths,
                          guard_blocked=True)
@@ -520,15 +521,20 @@ def _ship_run_locked(run_id: str) -> dict:
     if origin == "self_improve":
         offenders = _si.violates_dev_engine_guard(changed_paths)
         if offenders:
+            reason = (
+                "Bloqueado: un run de auto-mejora intentó modificar el motor de "
+                "desarrollo (" + ", ".join(offenders) + "). No se hizo push."
+            )
             state["status"] = "needs_human"
             state["guard_blocked"] = True
             state["guard_offenders"] = offenders
+            state["guard_reason"] = reason
             _dr._write_state_file(_dr._state_path(run_id), state)
             _log_outcome(state, status="blocked", changed_paths=changed_paths,
                          guard_blocked=True)
             return {
                 "ok": False,
-                "error": "toca el motor de auto-desarrollo: " + ", ".join(offenders),
+                "error": reason,
                 "guard_blocked": True,
                 "offenders": offenders,
             }

@@ -39,6 +39,70 @@ LLAMA_VT_HEALTH_URL = "http://127.0.0.1:8082/health"
 LEGACY_QWEN_ID = "qwen36-35b-a3b"
 LEGACY_QWEN_DIR_NAME = "Qwen3.6-35B-A3B"
 
+# ───────────── per-task role_configs snapshot (from the model audit) ─────────
+#
+# The bench harness measures, PER TASK (role), the best sampling+thinking
+# config for each model and stores it in each audit row's
+# ``recipe.role_configs``. When a model is set active we snapshot ITS
+# role_configs into active_model.json so brain.py can route every internal job
+# to its best measured config with zero runtime classification. This is a
+# READ of scripts/bench/results/model_audit.jsonl (never a write).
+
+# Hardware/VRAM tier whose measured configs we snapshot (the laptop's tier).
+_AUDIT_TIER = "vram12"
+
+# Catalog entry id → audit label, for the few ids that differ from the label
+# the bench harness records (most match verbatim).
+_AUDIT_LABEL_BY_ID: dict[str, str] = {
+    "gemma4-e2b-it": "gemma4-e2b",
+    "qwen36-35b-a3b": "qwen36-35b",
+}
+
+
+def _audit_label(entry_id: str) -> str:
+    """Map a catalog entry id to its model-audit label."""
+    return _AUDIT_LABEL_BY_ID.get(entry_id, entry_id)
+
+
+def role_configs_for(entry_id: str, tier: str = _AUDIT_TIER) -> dict:
+    """Return the measured ``role_configs`` for ``entry_id`` at ``tier``, or {}.
+
+    Read-only best-effort snapshot source: reads the audit jsonl via
+    :mod:`axi.bench_audit`. Prefers the requested ``tier`` but falls back to any
+    tier that carries role_configs for the same label, so a model measured only
+    on another tier still routes. Never raises — missing data yields ``{}`` and
+    the brain simply keeps its engine defaults.
+    """
+    try:
+        from axi import bench_audit  # lazy: read-only audit access
+        rows = bench_audit.load_audit_rows(
+            bench_audit.results_dir() / "model_audit.jsonl"
+        )
+        label = _audit_label(entry_id)
+
+        def _rc(row: dict) -> dict | None:
+            recipe = row.get("recipe")
+            if not isinstance(recipe, dict):
+                return None
+            rc = recipe.get("role_configs")
+            return rc if isinstance(rc, dict) and rc else None
+
+        # Preferred tier first.
+        for row in rows:
+            if row.get("label") == label and row.get("tier") == tier:
+                rc = _rc(row)
+                if rc:
+                    return rc
+        # Any tier with role_configs for this label.
+        for row in rows:
+            if row.get("label") == label:
+                rc = _rc(row)
+                if rc:
+                    return rc
+    except Exception:  # noqa: BLE001 — snapshot is best-effort, never fatal
+        log.warning("role_configs snapshot failed for %s", entry_id, exc_info=True)
+    return {}
+
 
 # ────────────────────────── paths ───────────────────────────────
 
@@ -131,6 +195,11 @@ def write_active_vt(entry: ModelEntry) -> Path:
     # mmproj is optional; VibeThinker-3B has none.
     if "mmproj" in paths:
         out["mmproj"] = str(paths["mmproj"])
+    # Consistency with the primary brain: snapshot the VT model's measured
+    # per-task configs too (additive; empty audit → key omitted).
+    role_configs = role_configs_for(entry.id)
+    if role_configs:
+        out["role_configs"] = role_configs
     p = active_vt_model_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
@@ -197,6 +266,13 @@ def _entry_to_active_dict(entry: ModelEntry, overrides: dict | None = None) -> d
     }
     if "mmproj" in paths:
         out["mmproj"] = str(paths["mmproj"])
+    # Snapshot this model's per-task measured configs so brain.py can route
+    # each internal job to its best sampling+thinking. Additive: only present
+    # when the audit actually has role_configs for the entry (byte-identical
+    # for entries the audit never measured).
+    role_configs = role_configs_for(entry.id)
+    if role_configs:
+        out["role_configs"] = role_configs
     return out
 
 
@@ -629,6 +705,7 @@ __all__ = [
     "overrides_path",
     "read_active",
     "read_active_vt",
+    "role_configs_for",
     "save_overrides",
     "set_active",
     "wait_for_llama_health",

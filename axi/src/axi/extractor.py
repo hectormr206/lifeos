@@ -296,6 +296,7 @@ def extract_and_store(user_text: str, axi_text: str, conversation_node_id: int |
         history=None,
         temperature=0.0,
         seed=0,
+        task="extraction",
     )
     parsed = _parse_json_strict(raw)
     if not parsed:

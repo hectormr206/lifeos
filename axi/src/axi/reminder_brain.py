@@ -70,6 +70,7 @@ def parse_when_brain(when_text: str, tz: str) -> datetime | None:
             max_tokens=64,
             timeout=5.0,
             think=False,
+            task="parsejson",
         )
         latency_ms = int((time.monotonic() - t0) * 1000)
 

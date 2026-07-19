@@ -19,7 +19,7 @@ class _Entry:
 
 
 def _brain(extract_json, capture=None):
-    def _ask(text, *, system=None, think=False, max_tokens=0):
+    def _ask(text, *, system=None, think=False, max_tokens=0, task=None):
         if capture is not None:
             capture.append({"think": think, "system": system})
         return "respuesta" if think else extract_json

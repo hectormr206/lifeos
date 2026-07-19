@@ -17,7 +17,7 @@ class _Entry:
 
 
 def _fake_brain(extract_json, capture=None):
-    def _ask(text, *, system=None, think=False, max_tokens=0):
+    def _ask(text, *, system=None, think=False, max_tokens=0, task=None):
         if capture is not None:
             capture.append({"think": think, "system": system})
         return "respuesta de finanzas" if think else extract_json
@@ -112,7 +112,7 @@ def test_query_falls_back_to_larger_budget_when_empty(monkeypatch):
     _patch_store(monkeypatch, recent=[])
     calls: list[int] = []
 
-    def _brain(text, *, system=None, think=False, max_tokens=0):
+    def _brain(text, *, system=None, think=False, max_tokens=0, task=None):
         calls.append(max_tokens)
         if max_tokens == 256:
             return _extract(intent="query")   # step 1: classify+extract

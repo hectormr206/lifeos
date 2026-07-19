@@ -172,10 +172,16 @@ def list_recent(*, days: int = 30, kind: Kind | None = None,
     return [_row_to_entry(r) for r in rows]
 
 
-def search(query: str, *, kind: Kind | None = None, limit: int = 200) -> list[Entry]:
+def search(query: str, *, kind: Kind | None = None, limit: int = 200,
+           subject: str = "self") -> list[Entry]:
     """Naive LIKE search across title + body. FTS5 would be nice but
     SQLite FTS5 isn't enabled in the sqlcipher3-wheels build. Fine for
-    a single-user dataset that will stay well under 100k rows."""
+    a single-user dataset that will stay well under 100k rows.
+
+    subject: "self" (default) → only the user's own entries (family entries
+    are excluded, mirroring list_recent so the free-text filter can't leak
+    a family member's data); "any" → everyone; "<name>" → that member only.
+    """
     if not query.strip():
         return []
     q = (
@@ -184,6 +190,9 @@ def search(query: str, *, kind: Kind | None = None, limit: int = 200) -> list[En
     )
     needle = f"%{query.strip()}%"
     params: list = [needle, needle]
+    sub_q, sub_params = _subject_clause(subject)
+    q += sub_q
+    params.extend(sub_params)
     if kind is not None:
         q += " AND kind = ?"
         params.append(kind)

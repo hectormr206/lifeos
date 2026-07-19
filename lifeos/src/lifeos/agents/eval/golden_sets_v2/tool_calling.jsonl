@@ -1,0 +1,17 @@
+// tool_calling v2 DRAFTS — HARDER selection + arg extraction (NOT production).
+// Saturation: 9/16 finalists >=0.95 on v1. Only THREE tools exist in TOOL_SCHEMAS
+// (web_search[query], create_reminder[text,when_iso], get_health_summary[days]),
+// so distractor-tool expansion is impossible — hardening comes from (a) keyword
+// baits that point at the WRONG tool, (b) implicit web_search with no "busca"
+// verb, (c) unit-conversion arg extraction (dos semanas -> 14), and (d) tougher
+// false-call traps (capability questions / opinion requests that mention search
+// or reminder words). Schema IDENTICAL to live set.
+// Reminder: arg_substrings requires EVERY substring to appear; keep them robust
+// (topic words / absolute MM-DD), never rely on a computed absolute date the
+// model has no "today" for. Target top model ~0.80-0.90.
+{"id": "tc-v2-01", "v2_draft": true, "messages": [{"role": "user", "content": "Recuérdame revisar mi resumen de salud el domingo por la noche"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "create_reminder", "arg_substrings": {"text": ["salud"]}}, "note": "bait: 'resumen de salud' pulls toward get_health_summary, but the intent is to SCHEDULE a reminder -> create_reminder"}
+{"id": "tc-v2-02", "v2_draft": true, "messages": [{"role": "user", "content": "Oye Axi, ¿tú puedes buscar cosas en internet o no?"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": null}, "note": "false-call trap: capability question, not a search request. 'buscar/internet' baits web_search."}
+{"id": "tc-v2-03", "v2_draft": true, "messages": [{"role": "user", "content": "Dame el resumen de mi salud de las últimas dos semanas"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "get_health_summary", "arg_substrings": {"days": ["14"]}}, "note": "unit conversion: dos semanas -> days=14 (v1 only tested 7 and 30 verbatim)"}
+{"id": "tc-v2-04", "v2_draft": true, "messages": [{"role": "user", "content": "Que no se me pase pagar la tarjeta el 28 de agosto"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "create_reminder", "arg_substrings": {"text": ["tarjeta"], "when_iso": ["08-28"]}}, "note": "no explicit 'recuérdame' verb; must infer reminder intent AND extract absolute MM-DD"}
+{"id": "tc-v2-05", "v2_draft": true, "messages": [{"role": "user", "content": "¿Quién va ganando las elecciones en Argentina ahorita?"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": "web_search", "arg_substrings": {"query": ["argentina"]}}, "note": "implicit web_search: current-events question with NO search verb; model must decide it needs the web"}
+{"id": "tc-v2-06", "v2_draft": true, "messages": [{"role": "user", "content": "¿Tú crees que debería ponerme a hacer más ejercicio?"}], "tools": ["web_search", "create_reminder", "get_health_summary"], "expect": {"tool": null}, "note": "false-call trap: opinion/advice request; 'ejercicio' + 'ponerme' can bait create_reminder/get_health_summary"}

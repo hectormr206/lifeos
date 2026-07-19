@@ -457,13 +457,22 @@ def director_ensure_up(*, systemctl_run, http_get, port, timeout_s=180, poll_s=3
 
 
 def director_generate(system, user, *, http_post, port, max_tokens=200):
-    """POST the goal-gen prompt (thinking OFF) and return the answer, or None."""
+    """POST the goal-gen prompt (thinking OFF) and return the answer, or None.
+
+    Sampling uses gemma4-26b's measured ``devplan`` role_config (temperature
+    0.2, top_p 0.9, top_k 20, thinking off) — the director now runs on the
+    gemma-4-26B-A4B unit, and devplan is the task it performs (planning a
+    concrete self-improvement goal). The systemd gguf swap is a deployment
+    step; this is the code-side config to match it.
+    """
     body = {
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "temperature": 0.3,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "top_k": 20,
         "max_tokens": max_tokens,
         # These models default to chain-of-thought; the director only needs the
         # final goal, so disabling thinking keeps the whole budget for the answer.

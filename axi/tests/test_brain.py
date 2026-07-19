@@ -219,52 +219,55 @@ def test_route_image_and_tools_4b():
     assert brain._route("describe y resuelve", "abc", [{}]) == "4b"
 
 
+# VT->4B SWAP (Part C, July 2026): math/code/reasoning prompts, which used to
+# route to VT-3B, now stay on the 4B. VT-3B is retired from _route (its engine
+# branch survives only for tests that patch _route directly).
 def test_route_math_es_calcula():
-    assert brain._route("calcula la derivada de x^2", None, None) == "vt3b"
+    assert brain._route("calcula la derivada de x^2", None, None) == "4b"
 
 
 def test_route_math_es_resuelve():
-    assert brain._route("resuelve la integral de sin(x)", None, None) == "vt3b"
+    assert brain._route("resuelve la integral de sin(x)", None, None) == "4b"
 
 
 def test_route_math_es_demuestra():
-    assert brain._route("demuestra el teorema de Pitágoras", None, None) == "vt3b"
+    assert brain._route("demuestra el teorema de Pitágoras", None, None) == "4b"
 
 
 def test_route_code_es_funcion():
-    assert brain._route("escribe una función en Python", None, None) == "vt3b"
+    assert brain._route("escribe una función en Python", None, None) == "4b"
 
 
 def test_route_code_es_algoritmo():
-    assert brain._route("implementa un algoritmo de ordenamiento", None, None) == "vt3b"
+    assert brain._route("implementa un algoritmo de ordenamiento", None, None) == "4b"
 
 
 def test_route_code_es_debug():
-    assert brain._route("tengo un bug en mi programa", None, None) == "vt3b"
+    assert brain._route("tengo un bug en mi programa", None, None) == "4b"
 
 
 def test_route_code_es_refactoriza():
-    assert brain._route("refactoriza este código", None, None) == "vt3b"
+    assert brain._route("refactoriza este código", None, None) == "4b"
 
 
 def test_route_math_en_solve():
-    assert brain._route("solve the integral of x^2", None, None) == "vt3b"
+    assert brain._route("solve the integral of x^2", None, None) == "4b"
 
 
 def test_route_math_en_calculate():
-    assert brain._route("calculate the derivative", None, None) == "vt3b"
+    assert brain._route("calculate the derivative", None, None) == "4b"
 
 
 def test_route_code_en_function():
-    assert brain._route("write a function to sort a list", None, None) == "vt3b"
+    assert brain._route("write a function to sort a list", None, None) == "4b"
 
 
 def test_route_code_en_algorithm():
-    assert brain._route("implement a binary search algorithm", None, None) == "vt3b"
+    assert brain._route("implement a binary search algorithm", None, None) == "4b"
 
 
 def test_route_code_en_debug():
-    assert brain._route("debug this stacktrace for me", None, None) == "vt3b"
+    assert brain._route("debug this stacktrace for me", None, None) == "4b"
 
 
 def test_route_general_hola():
@@ -440,7 +443,8 @@ def test_vt3b_payload_uses_vt_sampling_params():
 
 
 def test_4b_payload_keeps_original_sampling_params():
-    """When routing to 4b, temp=0.7 / top_p=0.8 / top_k=20 (NOT VT params)."""
+    """With NO role_configs active, 4b keeps its engine default sampling
+    (temp=0.7 / top_p=0.8 / top_k=20) — the graceful-fallback path."""
     captured: dict = {}
 
     def fake_urlopen(req, timeout=0):  # noqa: ARG001
@@ -451,6 +455,7 @@ def test_4b_payload_keeps_original_sampling_params():
     with (
         patch.object(brain.urllib.request, "urlopen", fake_urlopen),
         patch.object(brain, "_route", return_value="4b"),
+        patch.object(brain, "_load_role_configs", return_value={}),
     ):
         brain.ask("hola")
 
@@ -571,25 +576,27 @@ def test_route_compila_conversational_routes_4b():
     assert brain._route("compila el informe", None, None) == "4b"
 
 
-# These genuine code/math intent cases MUST still route to 'vt3b'.
-def test_route_escribe_funcion_python_routes_vt3b():
-    """'escribe una función en Python' is explicit code intent → vt3b."""
-    assert brain._route("escribe una función en Python", None, None) == "vt3b"
+# VT->4B SWAP (Part C, July 2026): code/math intent no longer routes to VT-3B.
+# These genuine code/math prompts now stay on the 4B (which applies its own
+# codegen/brain role_config for the job). VT-3B is retired from routing.
+def test_route_escribe_funcion_python_routes_4b():
+    """'escribe una función en Python' — code intent now runs on 4B."""
+    assert brain._route("escribe una función en Python", None, None) == "4b"
 
 
-def test_route_resuelve_integral_routes_vt3b():
-    """'resuelve la integral de x^2' is explicit math intent → vt3b."""
-    assert brain._route("resuelve la integral de x^2", None, None) == "vt3b"
+def test_route_resuelve_integral_routes_4b():
+    """'resuelve la integral de x^2' — math intent now runs on 4B."""
+    assert brain._route("resuelve la integral de x^2", None, None) == "4b"
 
 
-def test_route_depura_stacktrace_routes_vt3b():
-    """'depura este stacktrace' is explicit debug request → vt3b."""
-    assert brain._route("depura este stacktrace", None, None) == "vt3b"
+def test_route_depura_stacktrace_routes_4b():
+    """'depura este stacktrace' — debug intent now runs on 4B."""
+    assert brain._route("depura este stacktrace", None, None) == "4b"
 
 
-def test_route_refactoriza_funcion_routes_vt3b():
-    """'refactoriza esta función' is code refactor intent → vt3b."""
-    assert brain._route("refactoriza esta función", None, None) == "vt3b"
+def test_route_refactoriza_funcion_routes_4b():
+    """'refactoriza esta función' — refactor intent now runs on 4B."""
+    assert brain._route("refactoriza esta función", None, None) == "4b"
 
 
 def test_strip_think_well_formed():

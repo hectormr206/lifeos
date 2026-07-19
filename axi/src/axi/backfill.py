@@ -69,9 +69,31 @@ def main(argv: list[str] | None = None) -> None:
         "--node-limit", type=int, default=_DEFAULT_NODE_LIMIT,
         help="Max total new nodes across all domains (default: unbounded).",
     )
+    parser.add_argument(
+        "--subject-links", action="store_true",
+        help="Instead of the domain backfill, repair EXISTING family-subject "
+             "fact nodes (e.g. 255/256): add fact --involves--> person edges "
+             "for nodes that carry data.subject but were written before "
+             "involves-linking existed. Deliberate, human-run repair.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="With --subject-links: report what WOULD be linked, write nothing.",
+    )
     args = parser.parse_args(argv)
 
     setup_logging()
+
+    if args.subject_links:
+        from axi import identity  # noqa: PLC0415
+        linked = identity.backfill_subject_person_links(dry_run=args.dry_run)
+        verb = "would link" if args.dry_run else "linked"
+        log.info("backfill: subject-links complete — %s %d node(s)", verb, linked)
+        print(f"  subject-links: {verb} {linked} node(s)")
+        if not args.dry_run:
+            store.checkpoint()
+        store.close()
+        return
 
     log.info(
         "backfill: starting (days=%s, node_limit=%s)",

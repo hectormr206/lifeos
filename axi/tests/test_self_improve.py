@@ -827,6 +827,23 @@ def test_director_generate_disables_thinking_and_reads_content():
     assert seen["body"]["chat_template_kwargs"]["enable_thinking"] is False
 
 
+def test_director_generate_uses_gemma4_26b_devplan_sampling():
+    """Director now runs the gemma-4-26B-A4B unit; its payload must use that
+    model's measured devplan config: temp 0.2 / top_p 0.9 / top_k 20, no think."""
+    from axi import self_improve as si
+    seen = {}
+
+    def fake_post(url, body):
+        seen["body"] = body
+        return {"choices": [{"message": {"content": "un goal"}}]}
+
+    si.director_generate("sys", "usr", http_post=fake_post, port=8093)
+    assert seen["body"]["temperature"] == 0.2
+    assert seen["body"]["top_p"] == 0.9
+    assert seen["body"]["top_k"] == 20
+    assert seen["body"]["chat_template_kwargs"]["enable_thinking"] is False
+
+
 def test_director_generate_falls_back_to_reasoning_content():
     from axi import self_improve as si
 

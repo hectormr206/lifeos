@@ -49,7 +49,7 @@ def _build_router_system() -> str:
 def classify_domain(text: str, brain_ask: Callable) -> str:
     """Return a registered domain key, 'uncertain', or 'general'. Never raises."""
     try:
-        raw = brain_ask(text, system=_build_router_system(), think=False, max_tokens=8)
+        raw = brain_ask(text, system=_build_router_system(), think=False, max_tokens=8, task="domain")
     except Exception as exc:  # noqa: BLE001
         log.warning("router classify failed: %s", exc)
         return "general"

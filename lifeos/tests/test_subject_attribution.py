@@ -237,6 +237,55 @@ def test_parse_exercise_unmarked_unchanged() -> None:
     assert ei.subject is None
 
 
+# ─── 3b. detect_query_subject: free-form query classification ──────────
+
+
+def test_detect_query_subject_mid_sentence_family() -> None:
+    """Family-relation markers ANYWHERE in a free-form query are detected —
+    the anchored detect_subject missed these mid-sentence phrasings."""
+    from lifeos._common.subject import detect_query_subject
+    assert detect_query_subject("¿cómo estaba mi esposa ayer?") == "esposa"
+    assert detect_query_subject(
+        "¿cuál es la presión de mi esposa esta semana?") == "esposa"
+    assert detect_query_subject("dame la glucosa de mi esposa") == "esposa"
+
+
+def test_detect_query_subject_canonicalizes_and_en() -> None:
+    from lifeos._common.subject import detect_query_subject
+    assert detect_query_subject("la presión de mi mujer hoy") == "esposa"
+    assert detect_query_subject("how did my wife sleep") == "esposa"
+
+
+def test_detect_query_subject_self_queries_return_none() -> None:
+    """A self query with no relation word must NOT opt into family data."""
+    from lifeos._common.subject import detect_query_subject
+    assert detect_query_subject("¿cómo está mi presión?") is None
+    assert detect_query_subject("resumen de salud") is None
+    assert detect_query_subject("mi espalda me duele") is None
+    assert detect_query_subject("") is None
+
+
+# ─── 3c. search(): subject filtering (was leaking family data) ─────────
+
+
+def test_search_defaults_to_self_only() -> None:
+    from lifeos.health import entries
+    entries.create(kind="vital", title="presión mía", when=_now())
+    entries.create(kind="vital", title="presión de esposa", when=_now(),
+                   subject="esposa")
+    hits = entries.search("presión")
+    assert [r.title for r in hits] == ["presión mía"]
+
+
+def test_search_includes_family_when_subject_named() -> None:
+    from lifeos.health import entries
+    entries.create(kind="vital", title="presión mía", when=_now())
+    entries.create(kind="vital", title="presión de esposa", when=_now(),
+                   subject="esposa")
+    hits = entries.search("presión", subject="esposa")
+    assert [r.title for r in hits] == ["presión de esposa"]
+
+
 # ─── 4. Stats isolation: digest + adaptive hour ────────────────────────
 
 

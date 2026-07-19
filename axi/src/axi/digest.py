@@ -59,9 +59,14 @@ def _count_meetings(c, start_ts: float, end_ts: float) -> int:
 
 
 def _facts_today(c, start_ts: float, end_ts: float, limit: int = 10) -> list[dict[str, Any]]:
+    # Subject attribution: the daily digest is the USER's OWN summary, so
+    # family-subject facts (data carries a "subject" key) are excluded. The SQL
+    # LIKE keeps the LIMIT honest; the parsed-data check below is the precise
+    # gate (a non-empty data.subject → belongs to a family member, skip).
     rows = c.execute(
         "SELECT id, label, domain, data, created_at FROM nodes "
         "WHERE kind = 'fact' AND created_at >= ? AND created_at <= ? "
+        "AND (data IS NULL OR data NOT LIKE '%\"subject\"%') "
         "ORDER BY created_at ASC LIMIT ?",
         (start_ts, end_ts, limit),
     ).fetchall()
@@ -71,6 +76,9 @@ def _facts_today(c, start_ts: float, end_ts: float, limit: int = 10) -> list[dic
             data = json.loads(r["data"] or "{}")
         except json.JSONDecodeError:
             data = {}
+        subject = data.get("subject")
+        if isinstance(subject, str) and subject.strip():
+            continue  # family member's fact — not part of the user's own digest
         out.append({
             "id": r["id"],
             "label": r["label"],
@@ -135,7 +143,7 @@ def _maybe_brain_summary(
         f"Hechos relevantes: {facts_str}."
     )
     try:
-        text = brain_ask(prompt, max_tokens=200, timeout=30.0)
+        text = brain_ask(prompt, max_tokens=200, timeout=30.0, task="narration")
     except Exception as e:  # noqa: BLE001
         log.warning("digest brain call failed: %s", e)
         return None

@@ -1,0 +1,15 @@
+// code_review v2 DRAFTS — SUBTLER planted bugs (NOT production).
+// Saturation: 11/16 finalists >=0.95 on v1 (bugs were textbook: sql-injection,
+// mutable-default, zero-division). These raise difficulty with bugs that pass a
+// casual read: 1-based pagination off-by-one, naive-vs-aware datetime, float
+// equality, shallow copy of nested structure, over-broad bare except; plus ONE
+// clean bait that mimics the v1 off-by-one family (false-positive trap).
+// Schema IDENTICAL to live set. Buggy: {id,lang,snippet,bug,clean:false,must_contain:[[alts]]}
+// Clean: {id,lang,snippet,clean:true,must_not_contain:[kw]}. Scoring: run_codereview_role().
+// Fewer synonym alternatives per group than v1 => higher bar. Target top model ~0.80-0.90.
+{"id": "cr-v2-01", "lang": "python", "bug": "off-by-one-1based-pagination", "clean": false, "v2_draft": true, "snippet": "def paginate(items, page_num, per_page):\n    # page_num is 1-based: page 1 is the first page\n    start = page_num * per_page\n    return items[start:start + per_page]\n", "must_contain": [["off-by-one", "off by one", "page_num - 1", "(page_num-1)", "1-based", "primera pagina", "skips the first"]]}
+{"id": "cr-v2-02", "lang": "python", "bug": "naive-vs-aware-datetime", "clean": false, "v2_draft": true, "snippet": "from datetime import datetime\n\ndef is_expired(token_ts_utc):\n    # token_ts_utc is a timezone-AWARE UTC datetime\n    return token_ts_utc < datetime.now()\n", "must_contain": [["naive", "aware", "timezone", "tz-aware", "utcnow", "now() is local", "offset-naive"]]}
+{"id": "cr-v2-03", "lang": "python", "bug": "float-equality", "clean": false, "v2_draft": true, "snippet": "def fully_paid(installments, price):\n    # installments is a list of float payments\n    return sum(installments) == price\n", "must_contain": [["float", "punto flotante", "isclose", "tolerance", "tolerancia", "precision", "rounding"]]}
+{"id": "cr-v2-04", "lang": "python", "bug": "shallow-copy-nested", "clean": false, "v2_draft": true, "snippet": "def clone_grid(grid):\n    # grid is a list of lists; caller mutates the clone independently\n    return list(grid)\n", "must_contain": [["shallow", "superficial", "deepcopy", "deep copy", "copia profunda", "shared", "inner lists", "listas internas"]]}
+{"id": "cr-v2-05", "lang": "python", "bug": "bare-except-too-broad", "clean": false, "v2_draft": true, "snippet": "def to_int(value, default=0):\n    try:\n        return int(value)\n    except:\n        return default\n", "must_contain": [["bare except", "except:", "too broad", "demasiado amplio", "except Exception", "keyboardinterrupt", "systemexit"]]}
+{"id": "cr-v2-06", "lang": "python", "clean": true, "v2_draft": true, "snippet": "def last_n(items, n):\n    \"\"\"Return the last n items (empty list if n <= 0).\"\"\"\n    if n <= 0:\n        return []\n    return items[-n:]\n", "must_not_contain": ["off-by-one", "off by one", "n+1", "n-1", "fuera de rango", "index error", "indexerror", "out of range"]}

@@ -18,6 +18,7 @@ false-positive-prone (any capitalized sentence start). Precision-first.
 
 Public:
     detect_subject(text) → SubjectMatch | None
+    detect_query_subject(query) → str | None
 """
 
 from __future__ import annotations
@@ -78,12 +79,50 @@ _TRAILING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Query-oriented: a possessive family marker ANYWHERE in a free-form question
+# ("¿cómo estaba mi esposa ayer?", "la presión de mi esposa"). Unanchored, so
+# it catches mid-sentence markers the start/end-anchored regexes above miss.
+# The required "mi|my" possessive is the false-positive guard: a self query
+# with no relation word ("mi presión", "resumen de salud") never matches.
+_QUERY_RE = re.compile(
+    rf"\b(?:mi|my)\s+(?P<rel>{_RELATION_ALT})\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SubjectMatch:
     subject: str                     # canonical relation label ("esposa")
     remainder: str                   # text with the marker stripped
     remainder_no_verb: str | None    # leading form with the verb ALSO stripped
+
+
+# Canonical ES relation label → English relation word, for confirmation copy
+# in English installs ("your wife"). Spanish uses the canonical label directly.
+_EN_RELATION: dict[str, str] = {
+    "esposa": "wife", "esposo": "husband",
+    "mamá": "mom", "papá": "dad",
+    "hijo": "son", "hija": "daughter",
+    "hermano": "brother", "hermana": "sister",
+    "abuelo": "grandpa", "abuela": "grandma",
+    "suegro": "father-in-law", "suegra": "mother-in-law",
+    "tío": "uncle", "tía": "aunt",
+    "primo": "cousin", "prima": "cousin",
+    "novio": "boyfriend", "novia": "girlfriend",
+}
+
+
+def subject_possessive(subject: str, *, en: bool = False) -> str:
+    """Possessive phrasing for a family subject, for chat confirmations.
+
+    ``subject_possessive("esposa")`` → ``"tu esposa"``;
+    ``subject_possessive("esposa", en=True)`` → ``"your wife"``. Unknown labels
+    are passed through as-is ("tu <label>" / "your <label>").
+    """
+    rel = (subject or "").strip()
+    if en:
+        return f"your {_EN_RELATION.get(rel.lower(), rel)}"
+    return f"tu {rel}"
 
 
 def _canon(rel: str) -> str:
@@ -127,3 +166,18 @@ def detect_subject(text: str) -> SubjectMatch | None:
                 remainder_no_verb=None,
             )
     return None
+
+
+def detect_query_subject(query: str) -> str | None:
+    """Detect the family subject a free-form *query* is about.
+
+    Unlike ``detect_subject`` (which strips a start/end marker from a stored
+    entry), this scans the whole query for a possessive family marker
+    ("mi esposa", "my wife") in any position and returns the canonical
+    relation label ("esposa"), or None when the query is about the user
+    themself. Used to decide the recall/search subject; None → self.
+    """
+    if not query or not isinstance(query, str):
+        return None
+    m = _QUERY_RE.search(query)
+    return _canon(m.group("rel")) if m else None

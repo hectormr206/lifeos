@@ -19,7 +19,7 @@ class _Entry:
 def _brain(*, router_returns, extract=None, query_answer="ok"):
     """Fake brain: the router call (system mentions 'enrutador') returns the
     domain key; think=True is the query call; otherwise the domain extractor."""
-    def _ask(text, *, system=None, think=False, max_tokens=0):
+    def _ask(text, *, system=None, think=False, max_tokens=0, task=None):
         if system and "enrutador" in system:
             return router_returns
         if think:

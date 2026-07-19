@@ -544,6 +544,24 @@ def _relation_terms(relation: str) -> set[str]:
     return {rn}
 
 
+def _resolve_relation_person(relation: str, hub: int, conn) -> int | None:
+    """Return the person node the user relates to via *relation*, or None.
+
+    Scans the hub's outgoing typed edges to person nodes and matches the edge
+    kind against the (synonym-expanded) relation terms. Accent/case-insensitive.
+    """
+    terms = _relation_terms(relation)
+    for r in conn.execute(
+        "SELECT e.kind AS rel, e.to_id AS to_id FROM edges e "
+        "JOIN nodes n ON n.id = e.to_id "
+        "WHERE e.from_id = ? AND n.kind = 'person'",
+        (hub,),
+    ).fetchall():
+        if _norm(r["rel"] or "").replace(" ", "_") in terms:
+            return r["to_id"]
+    return None
+
+
 def link_fact_to_involved_person(fact_id: int, relation: str, conn=None) -> None:
     """Link a family-subject fact to the person it is about, via the hub's
     typed relation edges: given subject "esposa" and hub --esposa--> Ana,
@@ -566,18 +584,8 @@ def link_fact_to_involved_person(fact_id: int, relation: str, conn=None) -> None
             log.info("involves-link: no user hub — leaving subject %r data-only",
                      relation)
             return
-        terms = _relation_terms(relation)
         c = conn or store._connect()  # noqa: SLF001
-        person_id = None
-        for r in c.execute(
-            "SELECT e.kind AS rel, e.to_id AS to_id FROM edges e "
-            "JOIN nodes n ON n.id = e.to_id "
-            "WHERE e.from_id = ? AND n.kind = 'person'",
-            (hub,),
-        ).fetchall():
-            if _norm(r["rel"] or "").replace(" ", "_") in terms:
-                person_id = r["to_id"]
-                break
+        person_id = _resolve_relation_person(relation, hub, c)
         if person_id is None or person_id == fact_id:
             log.info(
                 "involves-link: relation %r not found on hub — subject stays "
@@ -624,3 +632,67 @@ def link_fact_to_user(fact_id: int, conn=None) -> None:
             store.add_edge(hub, fact_id, "about")
     except Exception as e:  # noqa: BLE001
         log.debug("link_fact_to_user failed: %s", e)
+
+
+def backfill_subject_person_links(*, limit: int | None = None, dry_run: bool = False) -> int:
+    """Repair EXISTING family-subject fact nodes that predate involves-linking.
+
+    Scans every fact node whose data carries a non-empty ``subject`` and, when
+    the hub has a matching typed relation edge (hub --esposa--> Ana) and the
+    fact has no ``involves`` edge yet, adds fact --involves--> person. This is
+    the deliberate, human-run repair for nodes such as 255/256 that were written
+    before ``link_fact_to_involved_person`` existed.
+
+    NOT auto-run: call it explicitly (``identity.backfill_subject_person_links()``
+    or the CLI ``python -m axi.backfill --subject-links``). Idempotent — a fact
+    already linked is skipped. Never destructive: only adds edges, never mutates
+    or deletes node data.
+
+    Args:
+        limit:   Optional cap on the number of edges created (or, in dry-run,
+                 counted) in a single run.
+        dry_run: When True, resolve and COUNT what would be linked but write
+                 nothing — for a safe preview before the real run.
+
+    Returns:
+        Number of ``involves`` edges created (or, in dry-run, that WOULD be
+        created).
+    """
+    try:
+        c = store._connect()  # noqa: SLF001
+        hub = ensure_user_hub()
+        if not hub:
+            log.warning("backfill_subject_person_links: no user hub — nothing to link")
+            return 0
+        rows = c.execute(
+            "SELECT id, data FROM nodes WHERE kind='fact' AND data LIKE '%\"subject\"%'"
+        ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        log.warning("backfill_subject_person_links: scan failed: %s", e)
+        return 0
+
+    linked = 0
+    for r in rows:
+        if limit is not None and linked >= limit:
+            break
+        fact_id = r["id"]
+        try:
+            data = json.loads(r["data"] or "{}")
+        except (ValueError, TypeError):
+            continue
+        subject = data.get("subject")
+        if not (isinstance(subject, str) and subject.strip()):
+            continue
+        person_id = _resolve_relation_person(subject.strip(), hub, c)
+        if person_id is None or person_id == fact_id:
+            continue
+        exists = c.execute(
+            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='involves' LIMIT 1",
+            (fact_id, person_id),
+        ).fetchone()
+        if exists:
+            continue
+        linked += 1
+        if not dry_run:
+            store.add_edge(fact_id, person_id, "involves")
+    return linked

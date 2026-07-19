@@ -114,6 +114,11 @@
         <div class="flex-1 min-w-0">
           <div class="flex items-baseline gap-2 flex-wrap">
             <span class="text-sm font-medium" x-text="r.title"></span>
+            <template x-if="r.subject">
+              <span class="text-xs px-1.5 py-0.5 rounded font-medium"
+                    style="background:rgba(236,72,153,0.15);color:#ec4899"
+                    x-text="'👤 ' + r.subject"></span>
+            </template>
             <template x-if="r.source !== 'manual'">
               <span class="text-xs px-1.5 py-0.5 panel2 rounded muted"
                     x-text="r.source"></span>

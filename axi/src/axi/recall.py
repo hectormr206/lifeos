@@ -7,8 +7,10 @@ for injection into the brain system prompt.
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import re
+import unicodedata
 from zoneinfo import ZoneInfo
 
 from axi.locale_data import MONTHS_ES, MONTHS_EN
@@ -108,6 +110,84 @@ _PERSONAL_RECALL_PATTERN = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+
+# ---------------------------------------------------------------------------
+# Subject attribution (SELF by default, family opt-in)
+# ---------------------------------------------------------------------------
+
+
+def _norm_subject(s: str) -> str:
+    """Accent-stripped, lowercased form for case/accent-insensitive compare."""
+    s = unicodedata.normalize("NFKD", (s or "").strip().lower())
+    return "".join(ch for ch in s if not unicodedata.combining(ch))
+
+
+def _fact_subject(fact: dict) -> str | None:
+    """The family-subject label carried by a fact node's data, or None.
+
+    None means the fact belongs to the USER themself (no subject key). Only a
+    non-empty string subject counts; missing/blank data → None (self).
+    """
+    data = fact.get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data or "{}")
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    subject = data.get("subject")
+    if isinstance(subject, str) and subject.strip():
+        return subject.strip()
+    return None
+
+
+def _resolve_query_subject(query: str, subject: str) -> str:
+    """Resolve the effective recall subject.
+
+    ``subject`` may be:
+      - "auto" (default): SELF unless the query explicitly names a family
+        member ("la presión de mi esposa" → "esposa"). This is what makes
+        family recall OPT-IN — the user's own facts are the default, and a
+        family member surfaces only when the query is about them.
+      - "self": force the user's own facts only.
+      - "all": no filtering (user + every family member).
+      - "<relation>" (e.g. "esposa"): that family member only.
+
+    Never raises; falls back to "self" on any detection error.
+    """
+    if subject and subject != "auto":
+        return subject
+    try:
+        from lifeos._common.subject import detect_query_subject  # noqa: PLC0415
+        rel = detect_query_subject(query or "")
+        return rel if rel is not None else "self"
+    except Exception:  # noqa: BLE001
+        return "self"
+
+
+# Domains that actually attribute readings to a family subject. Only facts
+# from these are subject-filtered when the query names a specific member; a
+# fact from any other domain (e.g. a "personal" relationship/identity fact
+# like "Esposa: Ana") carries no subject concept and stays general context.
+_SUBJECT_DOMAINS = {"health", "exercise"}
+
+
+def _subject_allowed(fact: dict, want: str) -> bool:
+    """True when *fact* should surface under the effective subject *want*."""
+    if want == "all":
+        return True
+    fs = _fact_subject(fact)
+    if want == "self" or not want:
+        return fs is None
+    # Specific family member: that person's tagged readings (subject is
+    # canonical), plus untagged facts from non-subject domains — an identity
+    # query ("quién es mi esposa") must still surface the relationship fact,
+    # which is stored without a data.subject.
+    if fs is not None:
+        return _norm_subject(fs) == _norm_subject(want)
+    return fact.get("domain") not in _SUBJECT_DOMAINS
 
 
 def looks_like_personal_recall(text: str) -> bool:
@@ -227,6 +307,7 @@ def build_recall_block(
     timeout: float = _RECALL_EMBED_TIMEOUT,
     conn=None,
     escalate_distance: float | None = None,
+    subject: str = "auto",
 ) -> str:
     """Build a compact memory block from semantically similar graph nodes.
 
@@ -262,6 +343,11 @@ def build_recall_block(
             nodes at this wider gate. No second embed call is made.
             Pass ``None`` (default) to disable escalation — behavior is identical
             to the current implementation.
+        subject: Subject-attribution filter. "auto" (default) surfaces the user's
+            OWN facts unless the query explicitly names a family member; "self"
+            forces own-only; "all" disables filtering; a relation label (e.g.
+            "esposa") restricts to that family member. Health/exercise family
+            facts carry data.subject; the user's own facts carry none.
 
     Returns ``""`` when there are no relevant memories or on any error.
     NEVER raises.
@@ -278,6 +364,7 @@ def build_recall_block(
             timeout=timeout,
             conn=conn,
             escalate_distance=escalate_distance,
+            subject=subject,
         )
     except Exception:  # noqa: BLE001
         log.debug("build_recall_block: unexpected error", exc_info=True)
@@ -300,10 +387,15 @@ def _build_recall_block(
     timeout: float,
     conn,
     escalate_distance: float | None = None,
+    subject: str = "auto",
 ) -> str:
     from axi import config, store
 
     _is_en = bool(lang and lang.split("-")[0].lower() == "en")
+
+    # Resolve the effective subject: SELF by default, family opt-in when the
+    # query explicitly names a member (or the caller forces "all"/"<relation>").
+    _want_subject = _resolve_query_subject(query, subject)
 
     _personal = looks_like_personal_recall(query)
     _fts = _fts_terms(query)  # content keywords for the lexical (FTS) lane
@@ -340,6 +432,12 @@ def _build_recall_block(
     nodate_facts: list[tuple[float, str]] = []
 
     def _add_fact(fact: dict) -> None:
+        # Subject attribution: drop facts that don't belong to the effective
+        # subject (SELF by default) so a family member's readings never mix into
+        # the user's own health recall. Single choke point — every recall lane
+        # (semantic, same-day, FTS, recency) funnels through here.
+        if not _subject_allowed(fact, _want_subject):
+            return
         label = (fact.get("label") or "").strip()
         if not label:
             return
@@ -368,7 +466,9 @@ def _build_recall_block(
         # The node itself + its same-day neighbors (BOTH edge directions).
         _add_fact(node)
         nid = node.get("id")
-        if nid is not None:
+        # Only traverse the typed relations of subject-allowed nodes, so a
+        # filtered-out family fact's 'involves' edge never leaks into RELATIONS.
+        if nid is not None and _subject_allowed(node, _want_subject):
             matched_ids.add(nid)
         for neighbor in store.same_day_neighbors(node["id"], conn=conn):
             _add_fact(neighbor)
@@ -383,7 +483,7 @@ def _build_recall_block(
                 r = dict(row)
                 if r.get("kind") == "conversation":
                     continue
-                if r.get("id") is not None:
+                if r.get("id") is not None and _subject_allowed(r, _want_subject):
                     matched_ids.add(r["id"])
                 _add_fact(r)
         except Exception:  # noqa: BLE001 — FTS can choke on odd tokens

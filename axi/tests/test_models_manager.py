@@ -646,3 +646,43 @@ class _patch_argv:
     def __exit__(self, *_):
         import sys
         sys.argv = self._orig
+
+
+# ─── per-task role_configs snapshot (from the model audit) ────────────────
+
+def test_role_configs_for_qwen35_4b_from_audit():
+    """qwen35-4b's measured role_configs load from the real audit jsonl."""
+    rc = models_manager.role_configs_for("qwen35-4b")
+    assert isinstance(rc, dict) and rc, "expected non-empty role_configs"
+    # conversation is the free-chat fallback role and must be present.
+    assert "conversation" in rc
+    assert "sampling" in rc["conversation"]
+
+
+def test_role_configs_for_unknown_entry_is_empty():
+    assert models_manager.role_configs_for("does-not-exist-9000") == {}
+
+
+def test_audit_label_mapping():
+    # Most ids map to themselves; the two divergent ones are remapped.
+    assert models_manager._audit_label("qwen35-4b") == "qwen35-4b"
+    assert models_manager._audit_label("gemma4-e2b-it") == "gemma4-e2b"
+    assert models_manager._audit_label("qwen36-35b-a3b") == "qwen36-35b"
+
+
+def test_write_active_snapshots_role_configs(isolated_state):
+    """Activating qwen35-4b writes its role_configs into active_model.json so
+    the brain can route each internal job to its best measured config."""
+    entry = models_catalog.by_id("qwen35-4b")
+    models_manager.write_active(entry)
+    data = json.loads(models_manager.active_model_path().read_text())
+    assert "role_configs" in data
+    assert "conversation" in data["role_configs"]
+
+
+def test_role_configs_snapshot_read_back_via_read_active(isolated_state):
+    entry = models_catalog.by_id("qwen35-4b")
+    models_manager.write_active(entry)
+    active = models_manager.read_active()
+    assert isinstance(active.get("role_configs"), dict)
+    assert active["role_configs"]  # non-empty

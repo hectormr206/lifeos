@@ -333,6 +333,7 @@ def run_agentic_briefing(
             timeout=timeout,
             max_tool_rounds=5,
             final_synthesis_prompt=_FINAL_SYNTHESIS_PROMPT,
+            task="agentic",
         )
     except Exception as e:  # noqa: BLE001
         log.exception("agentic briefing failed for prompt %r", action_prompt)

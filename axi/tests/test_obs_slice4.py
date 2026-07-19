@@ -200,12 +200,14 @@ def test_brain_ask_impl_emits_vt_fallback_warning(monkeypatch):
     monkeypatch.setattr(events_mod, "log_warning", lambda source, msg, data=None: warning_calls.append((source, msg, data)))
     monkeypatch.setattr(events_mod, "log_info", lambda *a, **kw: None)
 
-    # Force VT routing by using a VT-triggering prompt
+    # Force VT routing. VT-3B is retired from _route (Part C, July 2026), so we
+    # patch _route directly to exercise the still-present VT-down fallback +
+    # warning-event branch in _ask_impl.
+    monkeypatch.setattr(brain_mod, "_route", lambda *a, **kw: "vt3b")
     monkeypatch.setattr(brain_mod, "is_vt_alive", lambda *a, **kw: False)
     fake_data = {"choices": [{"message": {"content": "result"}, "finish_reason": "stop"}]}
     monkeypatch.setattr(brain_mod, "_post_chat_completion", lambda *a, **kw: fake_data)
 
-    # "calcular" triggers VT routing
     brain_mod._ask_impl("calcular el factorial de 5", system="sys", max_tokens=100, timeout=5.0)
 
     fallback_events = [c for c in warning_calls if c[0] == "brain.fallback"]

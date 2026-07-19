@@ -1177,6 +1177,7 @@ class Daemon:
                     max_tokens=ask_max_tokens,
                     tool_choice="auto",
                     lang=_lang,
+                    task="toolcall",
                 )
             else:
                 answer = self.brain_ask(
@@ -1186,6 +1187,7 @@ class Daemon:
                     history=history,
                     max_tokens=ask_max_tokens,
                     lang=_lang,
+                    task="vision",
                 )
             log.info("wakeword answer: %s", answer)
             # memory.add fires fact extraction in the background itself.

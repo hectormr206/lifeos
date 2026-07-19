@@ -1,0 +1,14 @@
+// vision_quality v2 DRAFTS — HARDER questions on the SAME deterministic PNGs
+// (NOT production). Saturation: 9/16 finalists >=0.95 on v1 (single-attribute
+// "what color / what shape" naming). These reuse the EXISTING vision_assets so
+// they are runnable with no new PIL generation, but demand reasoning instead of
+// naming: negation/absence, side/vertex counting, letter counting (OCR+count),
+// curve-vs-corner discrimination, cardinality > 1. Schema IDENTICAL to live set.
+// GOTCHA: to push further you must add NEW cluttered/multi-object assets via
+// ensure_vision_assets() in model_audit.py (image paths are read from GOLDEN_DIR).
+// Requires --mmproj. Target top model ~0.80-0.90.
+{"id": "vq-v2-01", "v2_draft": true, "image": "vision_assets/red_square.png", "question": "¿Aparece algún círculo en la imagen? Responde solo sí o no.", "must_contain": [["no"]], "note": "negation/absence: only a red square is present -> 'no'. Harder than naming the color."}
+{"id": "vq-v2-02", "v2_draft": true, "image": "vision_assets/green_triangle.png", "question": "¿Cuántos lados tiene la figura de la imagen? Responde solo el número.", "must_contain": [["3", "tres"]], "note": "geometric reasoning: a triangle has 3 sides"}
+{"id": "vq-v2-03", "v2_draft": true, "image": "vision_assets/text_hola.png", "question": "¿Cuántas letras tiene la palabra escrita en la imagen?", "must_contain": [["4", "cuatro"]], "note": "OCR + count: 'hola' has 4 letters (v1 only asked to read the word)"}
+{"id": "vq-v2-04", "v2_draft": true, "image": "vision_assets/blue_circle.png", "question": "¿El contorno de la figura tiene esquinas o es totalmente curvo? Responde en una palabra.", "must_contain": [["curv", "redond", "sin esquinas"]], "note": "attribute reasoning over shape geometry, not naming"}
+{"id": "vq-v2-05", "v2_draft": true, "image": "vision_assets/two_shapes.png", "question": "¿Hay una sola figura o hay más de una? Responde brevemente.", "must_contain": [["mas de una", "dos", "varias", "2"]], "note": "cardinality discrimination (>1) framed as a one-or-more question"}

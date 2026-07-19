@@ -352,7 +352,7 @@ def handle_message(
         # extract_system may be dynamic (callable(now)) so a domain can inject the
         # current date — e.g. Calendario resolving "el viernes" to a real date.
         system = spec.extract_system(now) if callable(spec.extract_system) else spec.extract_system
-        raw = brain_ask(clean, system=system, think=False, max_tokens=256)
+        raw = brain_ask(clean, system=system, think=False, max_tokens=256, task="domain")
         if not isinstance(raw, str):
             raw = str(raw)
         try:
