@@ -692,6 +692,32 @@ api_versioning.install_v1_alias_middleware(app)
 app.include_router(api_v1.router)
 
 
+# ────────────────────── federation node manifest ──────────────────────
+#
+# GET /api/v1/node/manifest — the read-only node self-description a peer on
+# the (VPN) mesh reads to learn "who are you and which models do you offer?"
+# (roadmap Part 2 §2.3 model advertisement). First federation slice: this
+# advertises MODEL/NODE METADATA ONLY (ids/family/quant/ctx/ports) — never
+# model weights, never secrets, and it NEVER reads the personal graph store.
+#
+# v0 is intentionally READ-ONLY and UNAUTHENTICATED at the middleware layer.
+# The `authorize` hook below is a deliberate SEAM: real mutual peer auth
+# (signed node tokens / pinned pubkeys) is a follow-up gated by the pending
+# "mesh root-of-trust" decision (node keypairs vs owner passphrase, roadmap
+# §2.2 / §4.3). Swap `federation.default_authorize` when that lands.
+
+
+@app.get("/api/v1/node/manifest")
+def node_manifest(request: Request):
+    """Advertise this node's identity + local model catalog over the mesh."""
+    from axi import federation
+
+    client_host = request.client.host if request.client else None
+    if not federation.default_authorize(client_host):
+        raise HTTPException(status_code=403, detail="not authorized on this mesh")
+    return federation.node_manifest()
+
+
 # ────────────────────── bearer auth middleware (M0-3) ──────────────────
 #
 # Per-device bearer auth for /api/v1 (design D5). Installed AFTER the v1
