@@ -41,6 +41,7 @@ dependencies = [
     # Ships its own SQLCipher build, so no system sqlcipher package is needed.
     # Also a transitive of lifeos, but axi imports it directly now.
     "sqlcipher3-wheels>=0.5",
+    "cryptography>=44",
     # sqlite-vec: vector similarity extension for SQLCipher (semantic memory, Slice 1).
     # PoC 0.1 confirmed it loads into a sqlcipher3 connection via enable_load_extension.
     # Installed ad-hoc during PoC; now formalized as a declared dependency so uv sync
