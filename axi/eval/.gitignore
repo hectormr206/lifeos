@@ -3,3 +3,9 @@
 *.log
 eval_results.json
 __pycache__/
+
+# ...but DO commit the synthetic (fictional) sample corpus so a fresh public
+# clone can run the benchmark out of the box. The real corpus is generated
+# locally from memory.db via build_corpus.py and stays gitignored above.
+!eval_docs.sample.jsonl
+!eval_corpus.sample.jsonl

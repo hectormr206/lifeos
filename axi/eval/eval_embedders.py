@@ -25,9 +25,27 @@ from typing import Any
 import requests
 
 EVAL_DIR = Path(__file__).parent
+# Real corpus (generated locally from memory.db via build_corpus.py) is
+# gitignored for privacy. If it is absent — e.g. a fresh public clone — fall
+# back to the committed synthetic sample corpus so the benchmark still runs.
 CORPUS_PATH = EVAL_DIR / "eval_corpus.jsonl"
 DOCS_PATH = EVAL_DIR / "eval_docs.jsonl"
+CORPUS_SAMPLE_PATH = EVAL_DIR / "eval_corpus.sample.jsonl"
+DOCS_SAMPLE_PATH = EVAL_DIR / "eval_docs.sample.jsonl"
 RESULTS_PATH = EVAL_DIR / "eval_results.json"
+
+
+def _resolve_corpus_paths() -> tuple[Path, Path, bool]:
+    """Prefer the real corpus; fall back to the synthetic sample if it is missing.
+
+    Returns (corpus_path, docs_path, using_sample).
+    """
+    if CORPUS_PATH.exists() and DOCS_PATH.exists():
+        return CORPUS_PATH, DOCS_PATH, False
+    if CORPUS_SAMPLE_PATH.exists() and DOCS_SAMPLE_PATH.exists():
+        return CORPUS_SAMPLE_PATH, DOCS_SAMPLE_PATH, True
+    # Neither present — surface the real path in the error for clarity.
+    return CORPUS_PATH, DOCS_PATH, False
 
 EMBED_PORT = 8099
 EMBED_HOST = "127.0.0.1"
@@ -59,14 +77,19 @@ MODELS = [
 
 # ── data loading ──────────────────────────────────────────────────────────────
 
-def load_corpus() -> list[dict]:
-    with open(CORPUS_PATH, encoding="utf-8") as f:
+def _read_jsonl(path: Path) -> list[dict]:
+    with open(path, encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def load_corpus() -> list[dict]:
+    corpus_path, _, _ = _resolve_corpus_paths()
+    return _read_jsonl(corpus_path)
 
 
 def load_docs() -> list[dict]:
-    with open(DOCS_PATH, encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
+    _, docs_path, _ = _resolve_corpus_paths()
+    return _read_jsonl(docs_path)
 
 
 # ── llama-server management ───────────────────────────────────────────────────
@@ -394,6 +417,10 @@ def write_config(winner_id: str) -> Path:
 
 def main() -> None:
     print("Loading eval corpus …")
+    _, _, using_sample = _resolve_corpus_paths()
+    if using_sample:
+        print("  NOTE: real corpus not found — using SYNTHETIC sample corpus "
+              "(eval_*.sample.jsonl). Run build_corpus.py to generate the real one.")
     corpus = load_corpus()
     docs = load_docs()
     print(f"  {len(corpus)} queries, {len(docs)} docs")

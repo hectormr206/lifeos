@@ -1,0 +1,22 @@
+{"query_id": "q001", "query": "presión arterial 118 sobre 76 lectura saludable", "relevant_id": "conv_1", "strategy": "A-conv-keyword"}
+{"query_id": "q002", "query": "pastillas tensión don Genaro comprar recordatorio", "relevant_id": "conv_2", "strategy": "A-conv-keyword"}
+{"query_id": "q003", "query": "gasto súper despensa presupuesto mes", "relevant_id": "conv_3", "strategy": "A-conv-keyword"}
+{"query_id": "q004", "query": "aniversario Sofía septiembre recordar", "relevant_id": "conv_4", "strategy": "A-conv-keyword"}
+{"query_id": "q005", "query": "correr cinco kilómetros mejor tiempo ritmo", "relevant_id": "conv_5", "strategy": "A-conv-keyword"}
+{"query_id": "q006", "query": "fondo de emergencia aporte meta diciembre", "relevant_id": "conv_7", "strategy": "A-conv-keyword"}
+{"query_id": "q007", "query": "reporte trimestral entrega finanzas revisar", "relevant_id": "seg_1", "strategy": "A-seg-keyword"}
+{"query_id": "q008", "query": "presupuesto marketing aprobar adicional cierre", "relevant_id": "seg_2", "strategy": "A-seg-keyword"}
+{"query_id": "q009", "query": "análisis de sangre colesterol repetir tres meses", "relevant_id": "seg_6", "strategy": "A-seg-keyword"}
+{"query_id": "q010", "query": "gimnasio mensualidad subió cambiarse cercano", "relevant_id": "seg_5", "strategy": "A-seg-keyword"}
+{"query_id": "q011", "query": "¿cómo va mi salud cardiovascular últimamente?", "relevant_id": "conv_1", "strategy": "semantic-paraphrase"}
+{"query_id": "q012", "query": "necesito ahorrar para imprevistos", "relevant_id": "conv_7", "strategy": "semantic-paraphrase"}
+{"query_id": "q013", "query": "cuándo es la fecha especial con mi pareja", "relevant_id": "conv_4", "strategy": "semantic-paraphrase"}
+{"query_id": "q014", "query": "me lastimé una articulación al caminar", "relevant_id": "conv_6", "strategy": "semantic-paraphrase"}
+{"query_id": "q015", "query": "no estoy durmiendo bien y me siento cansado", "relevant_id": "conv_10", "strategy": "semantic-paraphrase"}
+{"query_id": "q016", "query": "quiero relajarme un rato cada día", "relevant_id": "conv_13", "strategy": "semantic-paraphrase"}
+{"query_id": "q017", "query": "alguien me debe dinero de una salida", "relevant_id": "conv_12", "strategy": "semantic-paraphrase"}
+{"query_id": "q018", "query": "planear la fiesta de cumpleaños de mi madre", "relevant_id": "conv_9", "strategy": "semantic-paraphrase"}
+{"query_id": "q019", "query": "cómo repartir los gastos de una comida en familia", "relevant_id": "seg_7", "strategy": "cross-domain"}
+{"query_id": "q020", "query": "actividad física en grupo el fin de semana", "relevant_id": "seg_9", "strategy": "cross-domain"}
+{"query_id": "q021", "query": "reunión familiar anual en casa de la abuela", "relevant_id": "seg_4", "strategy": "cross-domain"}
+{"query_id": "q022", "query": "pago a proveedor retrasado por el banco", "relevant_id": "seg_10", "strategy": "cross-domain"}

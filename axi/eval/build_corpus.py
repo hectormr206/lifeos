@@ -1,5 +1,11 @@
 """Build eval corpus from real Axi data in memory.db.
 
+The produced files are PERSONAL data and are gitignored. The repo instead ships a
+committed SYNTHETIC (fictional) sample corpus — eval_docs.sample.jsonl /
+eval_corpus.sample.jsonl — which eval_embedders.py falls back to automatically
+when these real files are absent (e.g. a fresh public clone). Run this script
+locally to regenerate the real corpus from your own memory.db.
+
 Produces:
   eval_corpus.jsonl  — (query_id, query, relevant_id) pairs
   eval_docs.jsonl    — (id, text, source) documents
