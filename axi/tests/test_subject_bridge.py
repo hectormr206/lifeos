@@ -164,8 +164,8 @@ def test_health_fast_path_passes_subject_end_to_end(monkeypatch) -> None:
     assert kwargs.get("subject") == "esposa"
     assert kwargs.get("kind") == "vital"
     assert kwargs.get("data") == {
-        "type": "blood_pressure", "systolic": 96, "diastolic": 82,
-        "pulse_bpm": 56, "unit": "mmHg",
+        "type": "blood_pressure", "systolic": 121, "diastolic": 79,
+        "pulse_bpm": 61, "unit": "mmHg",
     }
 
 

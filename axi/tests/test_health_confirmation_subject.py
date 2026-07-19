@@ -55,7 +55,7 @@ def test_family_confirmation_names_subject_and_full_reading(monkeypatch) -> None
     assert r.status_code == 200
     answer = r.json()["answer"]
     assert "tu esposa" in answer, answer
-    assert "121/79" in answer and "56" in answer, answer
+    assert "121/79" in answer and "61" in answer, answer
 
 
 def test_self_confirmation_keeps_self_phrasing(monkeypatch) -> None:

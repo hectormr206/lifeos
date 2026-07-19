@@ -2200,7 +2200,7 @@ def _fts_prefix_query(q: str) -> str:
 
     Splitting on \\w+ drops FTS operators/punctuation (no syntax errors), and
     quoting each token neutralizes reserved words (AND/OR/NEAR). The trailing
-    `*` makes every token a prefix match so "celi" finds "Ana". Empty when the
+    `*` makes every token a prefix match so "ana" finds "Ana Ríos". Empty when the
     query has no word characters.
     """
     tokens = re.findall(r"\w+", q, flags=re.UNICODE)
@@ -2393,7 +2393,7 @@ def graph_search(q: str = "", limit: int = 20) -> list[dict[str, Any]]:
     Strategy (two complementary passes, deduped by id, entity-ranked server-side):
       1. FTS5 (store.search_nodes_fts) — fast, indexed, accent-insensitive
          (the nodes_fts table is tokenized `remove_diacritics 2`). Each query
-         word is turned into a quoted prefix ("celi"* ), so it matches token
+         word is turned into a quoted prefix ("ana"* ), so it matches token
          PREFIXES on both labels and aliases (aliases live in the indexed
          data_text). It does NOT match mid-word substrings.
       2. Normalized LIKE fallback — an in-memory accent/case-normalized substring

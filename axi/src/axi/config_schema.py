@@ -681,7 +681,7 @@ FIELDS: tuple[ConfigField, ...] = (
         "entity_coref_llm", "boolean", True,
         "If true (default), medium-confidence entity coreference (a novel name "
         "variant or typo that fuzzy-matches an existing entity) is confirmed by a "
-        "quick LLM check before merging, so 'Ana Garcia'/'Anita' resolve to the "
+        "quick LLM check before merging, so 'Ana Rios'/'Ani' resolve to the "
         "same node without falsely merging distinct people. Strong fuzzy matches "
         "merge without the LLM; set false to disable the LLM tiebreaker.",
     ),

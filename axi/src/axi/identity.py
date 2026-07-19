@@ -204,8 +204,8 @@ def _norm_tokens(name: str) -> list[str]:
 def _coref_score(a: str, b: str) -> float:
     """0..1 likeness between two entity names (token overlap + edit ratio).
     Boosted to ~0.95 when one token-set is a subset of the other AND they share
-    the first token AND ≥2 tokens overlap (e.g. 'Ana García' vs 'Ana García
-    Mateo') — a strong same-entity signal. Accent-insensitive."""
+    the first token AND ≥2 tokens overlap (e.g. 'Ana Ríos' vs 'Ana Ríos
+    López') — a strong same-entity signal. Accent-insensitive."""
     ta, tb = _norm_tokens(a), _norm_tokens(b)
     if not ta or not tb:
         return 0.0
@@ -286,7 +286,7 @@ def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
             if nlow in names:
                 return r["id"]  # exact name / known-alias hit
             candidates.append((r, names))
-        # Coreference: resolve a NOVEL variant ("Ana Garcia" sin acento, "Anita",
+        # Coreference: resolve a NOVEL variant ("Ana Rios" sin acento, "Ani",
         # a typo, a partial name) to an existing entity instead of duplicating it —
         # strong fuzzy auto-merges, medium confidence asks the LLM.
         match = _resolve_coreference(name, kind, candidates)

@@ -93,8 +93,8 @@ def test_extract_links_facts_to_entities(monkeypatch):
 
 def test_coref_score_strong_for_name_subset_and_accents():
     from axi.identity import _coref_score
-    assert _coref_score("Ana García", "Ana Ríos") >= 0.9
-    assert _coref_score("Ana Garcia", "Ana Ríos") >= 0.9  # accent-insensitive
+    assert _coref_score("Ana Ríos", "Ana Ríos López") >= 0.9
+    assert _coref_score("Ana Rios", "Ana Ríos López") >= 0.9  # accent-insensitive
 
 
 def test_coref_score_low_for_different_people():
@@ -104,9 +104,9 @@ def test_coref_score_low_for_different_people():
 
 def test_resolve_coreference_strong_merges():
     from axi.identity import _resolve_coreference
-    row = {"id": 5, "label": "Ana Ríos"}
-    cands = [(row, {"ana ríos"})]
-    assert _resolve_coreference("Ana García", "person", cands) is row  # >=0.9, no LLM
+    row = {"id": 5, "label": "Ana Ríos López"}
+    cands = [(row, {"ana ríos lópez"})]
+    assert _resolve_coreference("Ana Ríos", "person", cands) is row  # >=0.9, no LLM
 
 
 def test_resolve_coreference_no_merge_for_distinct():

@@ -247,7 +247,7 @@ def test_merge_folds_duplicate_into_canonical(client):
     import json
     from axi import store
 
-    canonical = store.add_node("person", "Ana García", domain="relationships")
+    canonical = store.add_node("person", "Ana Ríos", domain="relationships")
     dup = store.add_node("person", "Ani", domain="relationships")
     other = store.add_node("person", "Rodrigo", domain="relationships")
     # The edge lives on the DUPLICATE; after merge it must hang off the survivor.
@@ -500,7 +500,7 @@ def test_graph_full_exposes_node_aliases(client):
 
     with_aliases = store.add_node(
         "person", "Ana Ríos",
-        data={"aliases": ["Ani", "Ana Garcia"]}, domain="relationships",
+        data={"aliases": ["Ani", "Ana Rios"]}, domain="relationships",
     )
     without = store.add_node("person", "Rodrigo", domain="relationships")
 
@@ -508,7 +508,7 @@ def test_graph_full_exposes_node_aliases(client):
     assert resp.status_code == 200
     by_id = {n["id"]: n for n in resp.json()["nodes"]}
 
-    assert by_id[with_aliases]["aliases"] == ["Ani", "Ana Garcia"]
+    assert by_id[with_aliases]["aliases"] == ["Ani", "Ana Rios"]
     # No aliases key in data → empty list, never missing/None.
     assert by_id[without]["aliases"] == []
 
@@ -577,12 +577,12 @@ def test_graph_search_result_shape_includes_aliases(client):
 
     pid = store.add_node(
         "person", "Ana Ríos",
-        data={"aliases": ["Ani", "Ana Garcia"]}, domain="relationships",
+        data={"aliases": ["Ani", "Ana Rios"]}, domain="relationships",
     )
     rows = client.get("/api/graph/search", params={"q": "ana"}).json()
     hit = next(n for n in rows if n["id"] == pid)
     assert set(hit.keys()) == {"id", "label", "kind", "domain", "aliases"}
-    assert hit["aliases"] == ["Ani", "Ana Garcia"]
+    assert hit["aliases"] == ["Ani", "Ana Rios"]
     assert hit["domain"] == "relationships"
 
 
