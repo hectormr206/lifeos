@@ -5,7 +5,7 @@
 ![status](https://img.shields.io/badge/status-alpha-ffaa33)
 ![python](https://img.shields.io/badge/python-3.12-3776ab)
 ![tests](https://img.shields.io/badge/tests-3548-22cc55)
-![license](https://img.shields.io/badge/license-MIT-22cc55)
+![license](https://img.shields.io/badge/license-AGPL--3.0-22cc55)
 
 Think of it as a platform and its agent:
 
@@ -24,7 +24,7 @@ Personal AI assistants today are cloud services: your most intimate data — wha
 
 - **Local-first** — the LLM, speech-to-text, text-to-speech, and OCR all run on-device.
 - **Privacy by default** — audio, conversations, meetings, and your life-companion records all stay on your disk, and both data stores (the assistant's memory and the life domains) are encrypted at rest with SQLCipher.
-- **Yours to inspect** — open source (MIT), no hidden services, no accounts.
+- **Yours to inspect** — open source (AGPL-3.0-or-later), no hidden services, no accounts.
 
 This is the through-line of the project and it has never changed (see [The pivot](#project-status--the-pivot) for how the *implementation* evolved).
 
@@ -170,4 +170,6 @@ lifeos/
 
 ## License
 
-MIT © 2026 Héctor Martínez Reséndiz — see [axi/LICENSE](axi/LICENSE).
+AGPL-3.0-or-later © 2026 Héctor Martínez Reséndiz — see [LICENSE](LICENSE).
+
+Running LifeOS over a network (e.g. the multi-device mesh) makes it a "modified/conveyed work" under AGPL §13: if you distribute or offer it as a network service, you must offer users the corresponding source. Held under strong copyleft on purpose — the core stays free and stays open.
