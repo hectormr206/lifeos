@@ -77,7 +77,7 @@ AXI_PYTHON = REPO_ROOT / "axi" / ".venv" / "bin" / "python"
 JUDGE_PORT = 8080
 JUDGE_ARGV = [
     "/usr/bin/llama-server",
-    "-m", "/home/hectormr/LifeOS/models/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf",
+    "-m", os.path.expanduser("~/LifeOS/models/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf"),
     "-ngl", "0", "--jinja", "-c", "16384",
     "--host", "127.0.0.1", "--port", str(JUDGE_PORT),
     "-t", "6", "--no-mmap", "-np", "1",

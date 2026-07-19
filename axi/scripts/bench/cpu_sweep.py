@@ -43,7 +43,7 @@ GOLDEN_SET_PATH = Path(__file__).resolve().parents[3] / "lifeos" / "src" / "life
 BENCH_PORT = 18080  # NEVER 8080 or 8090
 
 # ── model catalog ──────────────────────────────────────────────────────────
-MODELS_DIR = Path("/home/hectormr/LifeOS/models")
+MODELS_DIR = (Path.home() / "LifeOS/models")
 
 # ctx from catalog; sane default 8192 for anything not listed
 CANDIDATE_MODELS = [

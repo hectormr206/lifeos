@@ -8,7 +8,7 @@ No process is spawned, no network is hit, no heavy model is loaded. Covers:
   - the server-argv builder (--server-bin honoured as argv[0])
 
 Run:
-  cd /home/hectormr/LifeOS/lifeos/axi && \
+  cd ~/LifeOS/lifeos/axi && \
       .venv/bin/python -m pytest scripts/bench/test_bench_model.py -q
 """
 from __future__ import annotations
@@ -45,7 +45,7 @@ def test_final_score_weights_are_070_030():
 # ── server-argv builder (the key new capability: --server-bin) ───────────────
 
 def test_build_server_argv_honours_server_bin_as_argv0():
-    fork = "/home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server"
+    fork = str(Path.home() / "LifeOS/PrismML-llama.cpp/build/bin/llama-server")
     argv = bm.build_server_argv(
         server_bin=fork, gguf="/models/m.gguf", ngl=0, cpu_moe=False,
         ctx=32768, port=18080,
@@ -199,7 +199,7 @@ def test_parser_defaults():
 
 
 def test_parser_server_bin_and_roles_and_cpu_moe():
-    fork = "/home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server"
+    fork = str(Path.home() / "LifeOS/PrismML-llama.cpp/build/bin/llama-server")
     args = bm.build_parser().parse_args([
         "--gguf", "/m.gguf", "--label", "prism",
         "--server-bin", fork, "--roles", "speed,extraction",

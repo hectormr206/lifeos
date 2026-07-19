@@ -1,6 +1,6 @@
 """Tests for lifeos.autonomous.routine — the routine-learning module.
 
-Invocation (from repo root): cd /home/hectormr/LifeOS/lifeos/axi && .venv/bin/python -m pytest ../lifeos/tests/test_autonomous_routine.py
+Invocation (from repo root): cd ~/LifeOS/lifeos/axi && .venv/bin/python -m pytest ../lifeos/tests/test_autonomous_routine.py
 
 Strict TDD: every test was written RED first (stubs raise NotImplementedError),
 then the implementation was added to turn it GREEN.

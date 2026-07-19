@@ -22,8 +22,8 @@ Type=simple
 # CPU-only: -ngl 0 belt-and-suspenders (the binary has no GPU backend anyway).
 # --threads 20: P+E cores; the nightly run is at 3am when the box is idle.
 # --ctx-size 4096: goal-gen prompt is ~1k tokens; keeps the RAM/KV cache small.
-ExecStart=/home/hectormr/LifeOS/llama-cpu-src/build/bin/llama-server \
-  -m /home/hectormr/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
+ExecStart=%h/LifeOS/llama-cpu-src/build/bin/llama-server \
+  -m %h/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
   --port 8093 --host 127.0.0.1 --threads 20 --ctx-size 4096 --no-webui -ngl 0
 Restart=no
 TimeoutStartSec=180

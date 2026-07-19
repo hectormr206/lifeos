@@ -45,7 +45,7 @@ GOLDEN_SET_PATH = (
 BENCH_PORT = 18080  # candidate servers — NEVER 8080 or 8090
 JUDGE_PORT = 8080   # read-only: prod 35B Qwen — never restart/stop
 
-MODELS_DIR = Path("/home/hectormr/LifeOS/models")
+MODELS_DIR = (Path.home() / "LifeOS/models")
 
 # Candidate set (vision-capable only; matches cpu_sweep.py CANDIDATE_MODELS)
 CANDIDATE_MODELS = [

@@ -23,7 +23,7 @@ Roles (any subset via --roles):
 
 The KEY new capability over the older hardcoded scripts is --server-bin: point
 it at a fork build such as
-  /home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server
+  ~/LifeOS/PrismML-llama.cpp/build/bin/llama-server
 
 Safety: the candidate ALWAYS runs on its own --port (default 18080, never
 8080/8090/8081), spawned with start_new_session=True and killed by process
@@ -33,9 +33,9 @@ Sample usage
 ------------
   # Benchmark a fork-built model, all three roles, CPU-only:
   .venv/bin/python scripts/bench/bench_model.py \
-      --gguf /home/hectormr/LifeOS/models/prism-7b/prism-7b-Q4_K_M.gguf \
+      --gguf ~/LifeOS/models/prism-7b/prism-7b-Q4_K_M.gguf \
       --label prism-7b-q4 \
-      --server-bin /home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server \
+      --server-bin ~/LifeOS/PrismML-llama.cpp/build/bin/llama-server \
       --ngl 0 --ctx 32768 --port 18080 --n-runs 10
 
   # Only speed + extraction, offloaded to GPU, extra passthrough flags:
@@ -64,7 +64,7 @@ from typing import Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = SCRIPT_DIR / "results"
 REGISTRY_PATH = RESULTS_DIR / "model_registry.jsonl"
-REPO_ROOT = SCRIPT_DIR.parents[2]            # /home/hectormr/LifeOS/lifeos
+REPO_ROOT = SCRIPT_DIR.parents[2]            # ~/LifeOS/lifeos
 LIFEOS_SRC = REPO_ROOT / "lifeos" / "src"    # importable lifeos package root
 
 # Make the sibling bench scripts importable so we REUSE (never copy) scorers.

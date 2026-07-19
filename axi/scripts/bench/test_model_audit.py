@@ -14,7 +14,7 @@ No model is loaded, no server is spawned, no network is hit. Impure paths
   - port guard, parsers, cosine
 
 Run:
-  cd /home/hectormr/LifeOS/lifeos/axi && \
+  cd ~/LifeOS/lifeos/axi && \
       .venv/bin/python -m pytest scripts/bench/test_bench_model.py \
                                  scripts/bench/test_model_audit.py -q
 """

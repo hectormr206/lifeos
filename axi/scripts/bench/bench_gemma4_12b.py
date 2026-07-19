@@ -45,8 +45,8 @@ BENCH_PORT = 18080
 JUDGE_PORT = 8080
 
 MODEL_ID = "gemma4-12b-it"
-GGUF_PATH = Path("/home/hectormr/LifeOS/models/gemma4-12b-it/gemma-4-12b-it-Q4_K_M.gguf")
-MMPROJ_PATH = Path("/home/hectormr/LifeOS/models/gemma4-12b-it/mmproj-BF16.gguf")
+GGUF_PATH = (Path.home() / "LifeOS/models/gemma4-12b-it/gemma-4-12b-it-Q4_K_M.gguf")
+MMPROJ_PATH = (Path.home() / "LifeOS/models/gemma4-12b-it/mmproj-BF16.gguf")
 CTX = 32768
 
 # ── system prompts ────────────────────────────────────────────────────────────

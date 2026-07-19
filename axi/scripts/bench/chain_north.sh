@@ -6,8 +6,8 @@ until ! systemctl --user is-active axi-audit-closing.service >/dev/null 2>&1; do
 done
 sleep 20  # let the closing restore settle
 systemd-run --user --unit=axi-audit-north --collect \
-  --property=WorkingDirectory=/home/hectormr/LifeOS/lifeos/axi \
-  /home/hectormr/LifeOS/lifeos/lifeos/.venv/bin/python \
-  /home/hectormr/LifeOS/lifeos/axi/scripts/bench/audit_batches.py run \
-  --plan /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/north_plan.json
+  --property=WorkingDirectory=$HOME/LifeOS/lifeos/axi \
+  $HOME/LifeOS/lifeos/lifeos/.venv/bin/python \
+  $HOME/LifeOS/lifeos/axi/scripts/bench/audit_batches.py run \
+  --plan $HOME/LifeOS/lifeos/axi/scripts/bench/results/north_plan.json
 echo "NORTH_LAUNCHED"

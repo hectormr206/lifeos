@@ -5,7 +5,7 @@ Appends JSON rows to gpu_vram_tier_20260609T120000Z.jsonl.
 """
 import json, subprocess, time, requests, datetime, statistics, os, sys
 
-RESULTS_FILE = "/home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/gpu_vram_tier_20260609T120000Z.jsonl"
+RESULTS_FILE = os.path.expanduser("~/LifeOS/lifeos/axi/scripts/bench/results/gpu_vram_tier_20260609T120000Z.jsonl")
 PORT = 18080
 BASE_URL = f"http://127.0.0.1:{PORT}"
 
@@ -187,8 +187,8 @@ def make_cmd(argv, model_id, config_str, ngl, cpu_moe, ctx):
 group1 = [
     make_cmd(
         argv=[
-            "llama-server", "-m", "/home/hectormr/LifeOS/models/gemma4-e2b-it/gemma-4-E2B-it-Q4_K_M.gguf",
-            "--mmproj", "/home/hectormr/LifeOS/models/gemma4-e2b-it/mmproj-BF16.gguf",
+            "llama-server", "-m", os.path.expanduser("~/LifeOS/models/gemma4-e2b-it/gemma-4-E2B-it-Q4_K_M.gguf"),
+            "--mmproj", os.path.expanduser("~/LifeOS/models/gemma4-e2b-it/mmproj-BF16.gguf"),
             "--port", str(PORT), "-ngl", "999", "--ctx-size", "32768",
             "--reasoning", "off", "-a", "bench", "--log-disable",
         ],
@@ -197,8 +197,8 @@ group1 = [
     ),
     make_cmd(
         argv=[
-            "llama-server", "-m", "/home/hectormr/LifeOS/models/gemma4-e4b-it/gemma-4-E4B-it-Q4_K_M.gguf",
-            "--mmproj", "/home/hectormr/LifeOS/models/gemma4-e4b-it/mmproj-BF16.gguf",
+            "llama-server", "-m", os.path.expanduser("~/LifeOS/models/gemma4-e4b-it/gemma-4-E4B-it-Q4_K_M.gguf"),
+            "--mmproj", os.path.expanduser("~/LifeOS/models/gemma4-e4b-it/mmproj-BF16.gguf"),
             "--port", str(PORT), "-ngl", "999", "--ctx-size", "32768",
             "--reasoning", "off", "-a", "bench", "--log-disable",
         ],
@@ -207,8 +207,8 @@ group1 = [
     ),
     make_cmd(
         argv=[
-            "llama-server", "-m", "/home/hectormr/LifeOS/models/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf",
-            "--mmproj", "/home/hectormr/LifeOS/models/qwen35-4b/mmproj-F16.gguf",
+            "llama-server", "-m", os.path.expanduser("~/LifeOS/models/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf"),
+            "--mmproj", os.path.expanduser("~/LifeOS/models/qwen35-4b/mmproj-F16.gguf"),
             "--port", str(PORT), "-ngl", "999", "--ctx-size", "32768",
             "-a", "bench", "--log-disable",
         ],
@@ -296,8 +296,8 @@ def qwen35_cmd(ngl):
     return make_cmd(
         argv=[
             "llama-server",
-            "-m", "/home/hectormr/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf",
-            "--mmproj", "/home/hectormr/LifeOS/models/Qwen3.6-35B-A3B/mmproj-BF16.gguf",
+            "-m", os.path.expanduser("~/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf"),
+            "--mmproj", os.path.expanduser("~/LifeOS/models/Qwen3.6-35B-A3B/mmproj-BF16.gguf"),
             "--port", str(PORT), "-ngl", str(ngl), "--cpu-moe",
             "--ctx-size", "32768", "--reasoning", "off", "-a", "bench", "--log-disable",
         ],
@@ -311,8 +311,8 @@ def gemma26b_cmd(ngl):
     return make_cmd(
         argv=[
             "llama-server",
-            "-m", "/home/hectormr/LifeOS/models/gemma4-26b-a4b-it/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
-            "--mmproj", "/home/hectormr/LifeOS/models/gemma4-26b-a4b-it/mmproj-BF16.gguf",
+            "-m", os.path.expanduser("~/LifeOS/models/gemma4-26b-a4b-it/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"),
+            "--mmproj", os.path.expanduser("~/LifeOS/models/gemma4-26b-a4b-it/mmproj-BF16.gguf"),
             "--port", str(PORT), "-ngl", str(ngl), "--cpu-moe",
             "--ctx-size", "32768", "--reasoning", "off", "-a", "bench", "--log-disable",
         ],
@@ -322,11 +322,11 @@ def gemma26b_cmd(ngl):
 
 
 # First verify the gemma26b model file exists
-gemma26b_gguf = "/home/hectormr/LifeOS/models/gemma4-26b-a4b-it/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+gemma26b_gguf = os.path.expanduser("~/LifeOS/models/gemma4-26b-a4b-it/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf")
 if not os.path.exists(gemma26b_gguf):
     # Try to find actual gguf name
     import glob
-    matches = glob.glob("/home/hectormr/LifeOS/models/gemma4-26b-a4b-it/*.gguf")
+    matches = glob.glob(os.path.expanduser("~/LifeOS/models/gemma4-26b-a4b-it/*.gguf"))
     print(f"Gemma26b files: {matches}")
     gemma26b_gguf = [m for m in matches if "mmproj" not in m][0] if matches else None
 

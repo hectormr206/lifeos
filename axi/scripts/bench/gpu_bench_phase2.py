@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Optional
 
 BENCH_PORT = 18080
-RESULTS_DIR = Path("/home/hectormr/LifeOS/lifeos/axi/scripts/bench/results")
-MODELS_DIR = Path("/home/hectormr/LifeOS/models")
+RESULTS_DIR = (Path.home() / "LifeOS/lifeos/axi/scripts/bench/results")
+MODELS_DIR = (Path.home() / "LifeOS/models")
 RANKING_MD = RESULTS_DIR / "RANKING.md"
 
 SYSTEM_PROMPT = (

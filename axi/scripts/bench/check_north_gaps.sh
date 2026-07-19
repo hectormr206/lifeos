@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Wait for North's definitive-era row to land, then audit it for gaps/zeros.
-R=/home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_audit.jsonl
-PY=/home/hectormr/LifeOS/lifeos/axi/.venv/bin/python
+R=$HOME/LifeOS/lifeos/axi/scripts/bench/results/model_audit.jsonl
+PY=$HOME/LifeOS/lifeos/axi/.venv/bin/python
 until $PY -c "
 import json,sys
 rows=[json.loads(l) for l in open('$R') if l.strip()]
 ok=any(x['label']=='north-mini-code' and x.get('tier')=='vram12' and (x.get('recipe') or {}).get('role_configs') and 'toolstress' in (x.get('roles') or {}) for x in rows)
 sys.exit(0 if ok else 1)" 2>/dev/null; do sleep 60; done
 $PY - <<'PYEOF'
-import json
-rows=[json.loads(l) for l in open('/home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_audit.jsonl') if l.strip()]
+import json, os
+rows=[json.loads(l) for l in open(os.path.expanduser('~/LifeOS/lifeos/axi/scripts/bench/results/model_audit.jsonl')) if l.strip()]
 r=[x for x in rows if x['label']=='north-mini-code' and x.get('tier')=='vram12' and (x.get('recipe') or {}).get('role_configs')][-1]
 roles=r['roles']
 q=['brain','extraction','domain','toolcall','vision','codereview','codegen','conversation','recordsqa','narration','longsum','parsejson','agentic','proactive','visionclass','devplan','toolstress']

@@ -38,7 +38,7 @@ GOLDEN_SET_PATH = (
 )
 
 BENCH_PORT = 18080  # NEVER 8080 or 8090
-MODELS_DIR = Path("/home/hectormr/LifeOS/models")
+MODELS_DIR = (Path.home() / "LifeOS/models")
 
 # ── model under test ───────────────────────────────────────────────────────────
 PROD_BRAIN_CFG = {

@@ -342,7 +342,7 @@ These need Héctor's input or a design decision before implementation starts:
 5. **Confirmación de ingestión automática**: cuando Axi auto-clasifica "me duele la garganta" como `health/symptom`, ¿lo guarda silencioso y te muestra un "confirmá" al final del día, o te pregunta en el momento? Yo voto: **silencioso + daily-review push a las 21:00** para no romper el flow.
    - **✅ RESOLVED con matiz aceptado por Héctor**: silent persistence + brief ack inline (`dashboard.py:2275-2277`) + insights digest cron @ 21:00 (P6.1). Difiere del PRD original (no es una "lista plana de confirmá X, confirmá Y") — el digest entrega **patrones detectados**, cumpliendo el espíritu (silent + review diario) con más valor. Si en uso real falta capacidad de corregir clasificaciones, abrir follow-up nuevo.
 6. **Repo layout**: ¿el nuevo código vive en `lifeos/lifeos/` (nuevo paquete hermano de `axi/`) o como sub-módulo dentro de `axi/`? Yo voto: **paquete hermano `lifeos/`** — la visión es que axi es el agente, y lifeos es el sistema de vida del que axi es la cara conversacional. Ya está implícito en la metáfora del repo.
-   - **✅ RESOLVED**: paquete hermano en `/home/hectormr/LifeOS/lifeos/{axi,lifeos}/`. Restructura completada en memorias #148-#150. Hoy axi declara lifeos como path-dep editable en su pyproject (ver memoria #195).
+   - **✅ RESOLVED**: paquete hermano en `~/LifeOS/lifeos/{axi,lifeos}/`. Restructura completada en memorias #148-#150. Hoy axi declara lifeos como path-dep editable en su pyproject (ver memoria #195).
 
 ---
 

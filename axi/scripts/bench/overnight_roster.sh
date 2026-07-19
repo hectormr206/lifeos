@@ -9,11 +9,11 @@
 #
 # Deliberately NOT `set -e`: one model failing must never kill the night.
 set -u
-REPO=/home/hectormr/LifeOS/lifeos
+REPO=$HOME/LifeOS/lifeos
 PY=$REPO/lifeos/.venv/bin/python
 AUDIT="$REPO/axi/scripts/bench/model_audit.py"
-M=/home/hectormr/LifeOS/models
-FORK=/home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server
+M=$HOME/LifeOS/models
+FORK=$HOME/LifeOS/PrismML-llama.cpp/build/bin/llama-server
 LOGDIR=$REPO/axi/scripts/bench/results/overnight-$(date +%Y%m%d)
 mkdir -p "$LOGDIR"
 cd "$REPO/axi"

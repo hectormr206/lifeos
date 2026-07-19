@@ -36,7 +36,7 @@ EMBED_BASE_URL = f"http://{EMBED_HOST}:{EMBED_PORT}"
 MODELS = [
     {
         "id": "qwen3-embedding-4b",
-        "gguf_path": "/home/hectormr/LifeOS/models/qwen3-embedding-4b/Qwen3-Embedding-4B-Q4_K_M.gguf",
+        "gguf_path": os.path.expanduser("~/LifeOS/models/qwen3-embedding-4b/Qwen3-Embedding-4B-Q4_K_M.gguf"),
         "backend": "llama.cpp_gguf",
         "pooling": "last",
         # Qwen3 instruction format for queries; no prefix for docs
@@ -46,7 +46,7 @@ MODELS = [
     },
     {
         "id": "bge-m3",
-        "gguf_path": "/home/hectormr/LifeOS/models/bge-m3/bge-m3-Q4_K_M.gguf",
+        "gguf_path": os.path.expanduser("~/LifeOS/models/bge-m3/bge-m3-Q4_K_M.gguf"),
         "backend": "llama.cpp_gguf",
         "pooling": "cls",
         # BGE-M3 is multilingual; no instruction prefix needed
@@ -355,7 +355,7 @@ def decide_winner(results: list[dict]) -> dict:
 CONFIG_SHAPES = {
     "qwen3-embedding-4b": {
         "id": "qwen3-embedding-4b",
-        "gguf_path": "/home/hectormr/LifeOS/models/qwen3-embedding-4b/Qwen3-Embedding-4B-Q4_K_M.gguf",
+        "gguf_path": os.path.expanduser("~/LifeOS/models/qwen3-embedding-4b/Qwen3-Embedding-4B-Q4_K_M.gguf"),
         "ctx": 512,
         "ngl": 0,
         "port": 8091,
@@ -367,7 +367,7 @@ CONFIG_SHAPES = {
     },
     "bge-m3": {
         "id": "bge-m3",
-        "gguf_path": "/home/hectormr/LifeOS/models/bge-m3/bge-m3-Q4_K_M.gguf",
+        "gguf_path": os.path.expanduser("~/LifeOS/models/bge-m3/bge-m3-Q4_K_M.gguf"),
         "ctx": 512,
         "ngl": 0,
         "port": 8091,
@@ -381,7 +381,7 @@ CONFIG_SHAPES = {
 
 
 def write_config(winner_id: str) -> Path:
-    config_dir = Path("/home/hectormr/LifeOS/lifeos/axi/config")
+    config_dir = Path.home() / "LifeOS/lifeos/axi/config"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "active_embed_model.json"
     cfg = CONFIG_SHAPES[winner_id]

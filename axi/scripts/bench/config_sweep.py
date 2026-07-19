@@ -1,4 +1,4 @@
-#!/usr/bin/env /home/hectormr/LifeOS/lifeos/axi/.venv/bin/python
+#!/usr/bin/env python3
 """config_sweep.py — Parameterized llama-server config-tuning perf harness.
 
 Finds the best llama-server flags for 3 models by sweeping named configurations.
@@ -83,7 +83,7 @@ from typing import Optional
 # ── paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = SCRIPT_DIR / "results"
-MODELS_DIR = Path("/home/hectormr/LifeOS/models")
+MODELS_DIR = (Path.home() / "LifeOS/models")
 
 BENCH_PORT = 18080  # NEVER 8080 (prod) or 8090 (nano)
 

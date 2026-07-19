@@ -958,7 +958,7 @@ def test_resolve_coder_config_dir_rejects_colon():
         _resolve_coder_config_dir("/tmp/evil:/etc")
 
 
-@pytest.mark.parametrize("bad", ["/", "~", "/home/hectormr", "/tmp/evil"])
+@pytest.mark.parametrize("bad", ["/", "~", str(Path.home()), "/tmp/evil"])
 def test_resolve_coder_config_dir_rejects_outside_root(bad):
     """Any path resolving outside the safe root is rejected (would over-mount)."""
     from axi.dev_director import _resolve_coder_config_dir
@@ -1040,7 +1040,7 @@ def test_run_claude_rejects_config_dir_outside_safe_root():
         if key == "dev_agent_image":
             return "localhost/axi-coder:latest"
         if key == "dev_director_claude_config_dir":
-            return "/home/hectormr"  # whole home — would mount everything RW
+            return str(Path.home())  # whole home — would mount everything RW
         return default
 
     with patch("axi.dev_director.subprocess.run", side_effect=fake_subprocess_run), \

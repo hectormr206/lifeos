@@ -94,7 +94,7 @@ Sample usage
 ------------
   # Fresh full audit (tune + full suite) on the 12GB GPU tier:
   .venv/bin/python scripts/bench/model_audit.py \
-      --gguf /home/hectormr/LifeOS/models/foo/foo-Q4_K_M.gguf \
+      --gguf ~/LifeOS/models/foo/foo-Q4_K_M.gguf \
       --label foo-q4 --tiers vram12 --thinking-modes none,off,on
 
   # Re-audit at the saved peak recipe (skip tuning):

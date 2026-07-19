@@ -6,10 +6,10 @@
 # re-tuning). Assumes Axi is already restored (runs post-driver): it uses
 # quiet-mode + stand-in judge again, then restores again.
 set -u
-REPO=/home/hectormr/LifeOS/lifeos
+REPO=$HOME/LifeOS/lifeos
 PY=$REPO/lifeos/.venv/bin/python
 AUDIT="$REPO/axi/scripts/bench/model_audit.py"
-M=/home/hectormr/LifeOS/models
+M=$HOME/LifeOS/models
 LOGDIR=$REPO/axi/scripts/bench/results/overnight-$(date +%Y%m%d)-addendum
 mkdir -p "$LOGDIR"
 cd "$REPO/axi"
