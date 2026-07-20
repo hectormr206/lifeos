@@ -743,6 +743,57 @@ def mesh_catalog(request: Request):
     return federation.mesh_catalog()
 
 
+# ────────────────────── federation remote inference ───────────────────
+#
+# POST /api/v1/infer — one node runs inference on THIS node's local model
+# (roadmap Part 2 §2.3(b) remote inference), gated by the owner-passphrase root
+# of trust (`mesh_trust`). Unlike the read-only manifest/catalog above, this is
+# authenticated and security-sensitive, so the VPN is NOT the trust boundary
+# here: every request carries a SIGNED payload + membership cert and is verified
+# against this node's mesh root before anything runs.
+#
+# All of the real logic (auth via `mesh_trust.verify_request`, replay defense —
+# timestamp window + nonce cache — and SSRF-safe target resolution against ONLY
+# the roles this node serves) lives in the injectable `axi.mesh_infer` helper so
+# it is unit-tested without a real mesh or a real llama-server. Remote inference
+# is context-in / tokens-out only: we never persist the prompt.
+
+
+@app.post("/api/v1/infer")
+async def remote_infer(request: Request):
+    """Authenticate a signed peer request, then forward it to the local model."""
+    from axi import mesh_infer, mesh_trust
+
+    raw = await request.body()
+    if len(raw) > mesh_infer.MAX_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="request too large")
+    try:
+        req = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="malformed JSON body")
+    if not isinstance(req, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+
+    try:
+        # Pass the providers LAZILY (the functions, not their results): they read
+        # root.json + active-model configs off disk, so they must run only AFTER
+        # the cheap envelope/auth gates inside handle_request pass — never for
+        # unauthenticated garbage (pre-auth I/O amplification guard). `_inflight`
+        # enforces the per-node concurrency cap (429 above it).
+        return mesh_infer.handle_request(
+            req,
+            root_pubkey_hex=mesh_infer.node_root_pubkey,
+            served=mesh_infer.served_roles,
+            nonce_cache=mesh_infer._nonce_cache(),
+            inflight=mesh_infer._inflight(),
+        )
+    except mesh_infer.InferError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except mesh_trust.MeshNotInitialized:
+        # No mesh root on this node yet -> nothing can be authenticated.
+        raise HTTPException(status_code=503, detail="mesh not initialized on this node")
+
+
 # ────────────────────── bearer auth middleware (M0-3) ──────────────────
 #
 # Per-device bearer auth for /api/v1 (design D5). Installed AFTER the v1

@@ -74,7 +74,12 @@ SCRYPT_P = 1
 _KEK_LEN = 32  # AES-256
 _SALT_LEN = 16
 _NONCE_LEN = 12  # 96-bit GCM nonce
-_DEFAULT_TTL_SECONDS = 365 * 24 * 3600  # 1 year membership cert
+_DEFAULT_TTL_SECONDS = 90 * 24 * 3600  # 90-day membership cert
+# NOTE: expiry is currently the ONLY way a membership cert stops being honoured
+# — there is no revocation list yet (see verify_membership + roadmap §5 R13).
+# The TTL was shortened from 1 year to 90 days as a partial mitigation so a
+# leaked/compromised node key self-heals sooner. Real revocation is a pending
+# follow-up.
 _SCHEMA_VERSION = 1
 
 # argon2id params (used only when argon2-cffi is available).
@@ -409,6 +414,13 @@ def verify_membership(
         # (2) root signature over the canonical cert.
         _pub_from_hex(root_pubkey_hex).verify(sig, _canonical(cert))
         # (4) expiry.
+        # TODO(revocation): membership is honoured until the cert EXPIRES —
+        # there is no revocation list, so a compromised/decommissioned node
+        # cannot be kicked before its cert lapses. Inference-proxy access
+        # (`mesh_infer`) currently relies on expiry ONLY. Real revocation
+        # (signed revocation list / short-lived certs + renewal) is a pending
+        # follow-up tracked in roadmap §5 R13; the 90-day TTL is a partial
+        # stopgap. Add the revocation check HERE when it lands.
         ts = now if now is not None else time.time()
         if ts >= float(cert["expires_at"]):
             return False

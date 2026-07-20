@@ -638,6 +638,7 @@ streamable demo.
 | R10 | Sync protocol grows unbounded log | Medium | Snapshots + compaction; per-node last-seen vectors; tombstone GC. |
 | R11 | Offline outbox (client→server LWW) coexisting with event-log sync causes double-apply | Medium | Make outbox writes emit events idempotently (event_id dedupe); retire outbox-as-sync once phone is a full node, keep it only as local write buffer. |
 | R12 | iOS background limits kill on-device models mid-turn | Medium | Foreground-only decode; checkpoint partial turns; resume on foreground; prefer Foundation Models on iOS where it survives jetsam better. |
+| R13 | Membership cert revocation (follow-up): a compromised/decommissioned node keeps mesh (incl. remote-inference `/api/v1/infer`) access until its cert EXPIRES — there is no revocation list yet | Medium | Partial stopgap shipped: cert TTL cut from 1 year to 90 days so a leaked node key self-heals sooner (`mesh_trust._DEFAULT_TTL_SECONDS`). Full fix (signed revocation list and/or short-lived certs + renewal) is a pending follow-up; hook point marked at `mesh_trust.verify_membership` expiry check. |
 
 ---
 

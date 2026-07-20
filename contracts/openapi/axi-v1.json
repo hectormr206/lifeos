@@ -113,6 +113,23 @@
         "summary": "Capabilities"
       }
     },
+    "/api/v1/infer": {
+      "post": {
+        "description": "Authenticate a signed peer request, then forward it to the local model.",
+        "operationId": "remote_infer_api_v1_infer_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Remote Infer"
+      }
+    },
     "/api/v1/mesh/catalog": {
       "get": {
         "description": "Aggregate this node + configured peers into one unified model catalog.",
