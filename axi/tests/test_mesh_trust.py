@@ -46,6 +46,26 @@ def test_enroll_and_verify_membership_true(tmp_path):
     assert mesh_trust.verify_membership(cert, info["root_pubkey"]) is True
 
 
+def test_local_membership_certificate_is_owner_only(tmp_path):
+    token = "synthetic-membership-token"
+    mesh_trust.save_membership_certificate(token, base_dir=tmp_path)
+    path = mesh_trust.mesh_dir(tmp_path) / "membership_cert"
+    assert mesh_trust.load_membership_certificate(tmp_path) == token
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_local_identity_fails_closed_when_key_or_certificate_missing(tmp_path):
+    mesh_trust.new_node_keypair(tmp_path, store=True)
+    with pytest.raises(mesh_trust.MeshNotInitialized, match="membership certificate"):
+        mesh_trust.load_local_identity(tmp_path)
+
+    other = tmp_path / "certificate-only"
+    mesh_trust.save_membership_certificate("certificate", base_dir=other)
+    with pytest.raises(mesh_trust.MeshNotInitialized, match="node keypair"):
+        mesh_trust.load_local_identity(other)
+
+
 def test_sign_and_verify_request_true(tmp_path):
     info = mesh_trust.init_mesh(PASS, base_dir=tmp_path)
     node_priv, node_pub = mesh_trust.new_node_keypair()

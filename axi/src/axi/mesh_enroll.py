@@ -52,6 +52,15 @@ def _run(
         return 0
 
     # Enrollment path.
+    if args.save_local:
+        try:
+            _private, local_public = mesh_trust.load_node_keypair(base_dir)
+        except mesh_trust.MeshNotInitialized as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if local_public != args.node_pubkey:
+            print("error: node public key does not match the local keypair", file=sys.stderr)
+            return 1
     passphrase = prompt("Owner passphrase: ")
     try:
         token = mesh_trust.enroll_node(
@@ -67,6 +76,8 @@ def _run(
     except mesh_trust.MeshTrustError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if args.save_local:
+        mesh_trust.save_membership_certificate(token, base_dir=base_dir)
     out(token)
     return 0
 
@@ -93,6 +104,10 @@ def main(
     parser.add_argument(
         "--ttl-seconds", type=int, default=mesh_trust._DEFAULT_TTL_SECONDS,
         help="membership cert lifetime in seconds (default: 1 year)",
+    )
+    parser.add_argument(
+        "--save-local", action="store_true",
+        help="persist the issued certificate for this local node",
     )
     parser.add_argument(
         "--base-dir", default=None,

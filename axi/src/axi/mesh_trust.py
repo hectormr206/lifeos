@@ -251,9 +251,43 @@ def load_node_keypair(
 ) -> tuple[str, str]:
     """Load a previously stored node keypair as ``(priv_hex, pub_hex)``."""
     d = mesh_dir(base_dir)
-    priv_hex = (d / "node_key").read_text(encoding="ascii").strip()
-    pub_hex = (d / "node_pub").read_text(encoding="ascii").strip()
+    try:
+        priv_hex = (d / "node_key").read_text(encoding="ascii").strip()
+        pub_hex = (d / "node_pub").read_text(encoding="ascii").strip()
+    except FileNotFoundError as exc:
+        raise MeshNotInitialized("local node keypair is missing") from exc
     return priv_hex, pub_hex
+
+
+def save_membership_certificate(
+    cert_token: str, *, base_dir: str | os.PathLike[str] | None = None
+) -> None:
+    """Persist this node's membership certificate as owner-only mesh state."""
+    _write_secure(mesh_dir(base_dir) / "membership_cert", cert_token.encode("ascii"))
+
+
+def load_membership_certificate(
+    base_dir: str | os.PathLike[str] | None = None,
+) -> str:
+    try:
+        return (mesh_dir(base_dir) / "membership_cert").read_text(encoding="ascii").strip()
+    except FileNotFoundError as exc:
+        raise MeshNotInitialized("local membership certificate is missing") from exc
+
+
+def load_local_identity(
+    base_dir: str | os.PathLike[str] | None = None,
+) -> tuple[str, str]:
+    """Load the private node key and certificate, failing closed if incomplete."""
+    private, public = load_node_keypair(base_dir)
+    cert = load_membership_certificate(base_dir)
+    try:
+        cert_public = _decode_token(cert)[0]["node_pubkey"]
+    except Exception as exc:  # malformed local state is not a usable identity
+        raise MeshNotInitialized("local membership certificate is invalid") from exc
+    if cert_public != public:
+        raise MeshNotInitialized("local membership certificate does not match node key")
+    return private, cert
 
 
 # ─────────────────────────── mesh init ───────────────────────────
