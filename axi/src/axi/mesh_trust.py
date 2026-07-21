@@ -36,6 +36,60 @@ Storage: all key material lives under ``$XDG_STATE_HOME/axi/mesh/`` (i.e.
 ``~/.local/state/axi/mesh/``), mode 0700 dir / 0600 files, NEVER in the repo and
 NEVER touching ``memory.db`` / the personal graph store. Paths are injectable
 (``base_dir=``) so tests use ``tmp_path``.
+
+Owner passphrase validation flow
+---------------------------------
+The passphrase is required in **exactly two places** and NOWHERE else.  Any
+future extension of the crypto core must preserve these invariants or risk
+silently weakening the trust model:
+
+1. **Init** — :func:`init_mesh`:
+
+   * Empty passphrase → :class:`MeshTrustError` raised immediately (no disk
+     activity).
+   * A fresh random ``salt`` is generated and a KEK is derived from the
+     passphrase + salt via :func:`_derive_kek` (argon2id when available,
+     Scrypt otherwise).
+   * The Ed25519 root private key is encrypted at rest with ``AESGCM(kek)``
+     and a fresh random nonce.
+   * The plaintext root key and the passphrase are **never written to disk**.
+   * On success ``root.json`` contains: ``{kdf params+salt, nonce+ciphertext,
+     root_pubkey, mesh_id}``.
+
+2. **Enrollment** — :func:`enroll_node`:
+
+   * Calls :func:`_unlock_root_private_raw`, which re-derives the KEK from
+     the stored salt/params and attempts ``AESGCM.decrypt``.
+   * Wrong passphrase → AESGCM authentication tag fails **atomically** (no
+     partial plaintext is produced) → :class:`WrongPassphrase` raised.
+   * Correct passphrase → root private key returned in memory only, used
+     to sign the membership cert, then discarded.
+
+**Passphrase is NOT involved in**:
+
+* :func:`verify_membership` — verifies the root Ed25519 signature over the
+  canonical cert bytes; the root *public* key suffices (read from
+  ``root.json`` or passed by the caller).
+* :func:`verify_request` — verifies membership cert validity then the
+  node-key signature over the request payload; no passphrase, no KEK.
+* :func:`sign_request` / :func:`build_signed_payload` — pure node-key
+  operations; the node private key is separate from the root key.
+
+**Extension rules**:
+
+* Never pass the passphrase (or the KEK) to a function that does not need to
+  decrypt the root private key — keep the blast radius of a compromised call
+  site minimal.
+* Never log or serialise the passphrase, the KEK, or the plaintext root
+  private key.
+* If you add a new passphrase-gated operation, call :func:`_unlock_root_private_raw`
+  directly rather than duplicating the KDF+decrypt logic.
+* The AESGCM tag check is the sole passphrase validation gate; there is no
+  stored hash to compare against.  Adding a secondary check (e.g. HMAC over
+  a sentinel) would weaken the fail-closed guarantee — don't.
+* Revocation (not yet implemented, see roadmap §5 R13) will need to be added
+  as an additional check inside :func:`verify_membership`, not as a separate
+  passphrase operation.
 """
 from __future__ import annotations
 
@@ -306,6 +360,9 @@ def init_mesh(
     Returns ``{"mesh_id", "root_pubkey"}``. Idempotent-guard: refuses to
     overwrite an existing ``root.json``.
     """
+    # Passphrase validation — Step 1a (see module docstring, "Owner passphrase
+    # validation flow"): reject empty passphrase BEFORE any disk I/O so callers
+    # never silently create a mesh with a trivially-guessable empty KEK.
     if not passphrase:
         raise MeshTrustError("passphrase must be non-empty")
 
@@ -317,10 +374,17 @@ def init_mesh(
     root_priv_raw = root_priv.private_bytes_raw()
     root_pub_raw = root_priv.public_key().public_bytes_raw()
 
+    # Step 1b: derive KEK from passphrase + a fresh random salt.
+    # Only the salt + KDF params are written to disk — the passphrase itself is
+    # NEVER stored.  Do not add a secondary passphrase hash or sentinel here; the
+    # AESGCM tag in Step 1c is the sole validation gate (see "Extension rules").
     salt = secrets.token_bytes(_SALT_LEN)
     kdf_params = _fresh_kdf_params()
     kek = _derive_kek(passphrase, salt, kdf_params)
 
+    # Step 1c: seal the root private key at rest.  After this line the plaintext
+    # root_priv_raw and the kek are no longer referenced — they go out of scope
+    # and are never written anywhere.
     nonce = secrets.token_bytes(_NONCE_LEN)
     ciphertext = AESGCM(kek).encrypt(nonce, root_priv_raw, None)
 
@@ -352,11 +416,19 @@ def _unlock_root_private_raw(
     mismatch) — atomically, before any plaintext is produced.
     """
     doc = _load_root_doc(base_dir)
+    # Step 2a: re-derive the KEK from the stored salt + KDF params.
+    # The stored root.json contains NO passphrase copy — only the salt needed
+    # to reproduce the derivation.  A different passphrase yields a different
+    # KEK, which then fails the AESGCM tag check below.
     salt = _b64d(doc["kdf"]["salt"])
     kek = _derive_kek(passphrase, salt, doc["kdf"])
     nonce = _b64d(doc["root_enc"]["nonce"])
     ciphertext = _b64d(doc["root_enc"]["ciphertext"])
     try:
+        # Step 2b: AESGCM tag is the SOLE passphrase-correctness gate.
+        # Failure is atomic — no partial plaintext is produced before the
+        # authentication tag is checked.  Do NOT add a secondary check (e.g.
+        # compare an HMAC sentinel) — that would weaken the fail-closed guarantee.
         return AESGCM(kek).decrypt(nonce, ciphertext, None)
     except InvalidTag as exc:
         raise WrongPassphrase("wrong passphrase: cannot unlock mesh root") from exc
