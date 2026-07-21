@@ -743,6 +743,45 @@ def mesh_catalog(request: Request):
     return federation.mesh_catalog()
 
 
+@app.get("/api/chat/mesh/models")
+def dashboard_mesh_models():
+    """Return browser-safe, currently selectable peer models."""
+    from axi import federation, mesh_client
+
+    return mesh_client.selectable_models(federation.mesh_catalog(include_self=False))
+
+
+def _remote_answer(data: dict[str, Any]) -> str:
+    try:
+        answer = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="peer returned no plain-text answer") from exc
+    if not isinstance(answer, str):
+        raise HTTPException(status_code=502, detail="peer returned no plain-text answer")
+    return answer
+
+
+@app.post("/api/chat/mesh/relay")
+async def dashboard_mesh_relay(request: Request):
+    """Relay general plain-text chat without accepting browser routing data."""
+    from axi import mesh_client
+
+    body = await request.json()
+    allowed = {"node_id", "role", "id", "content"}
+    if not isinstance(body, dict) or set(body) != allowed:
+        raise HTTPException(status_code=400, detail="unsupported fields in peer request")
+    if not all(isinstance(body[key], str) and body[key].strip() for key in allowed):
+        raise HTTPException(status_code=400, detail="peer request fields must be non-empty strings")
+    try:
+        result = mesh_client.infer_peer(
+            node_id=body["node_id"], role=body["role"],
+            model_id=body["id"], content=body["content"],
+        )
+    except mesh_client.MeshClientError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return {"answer": _remote_answer(result), "peer": True}
+
+
 # ────────────────────── federation remote inference ───────────────────
 #
 # POST /api/v1/infer — one node runs inference on THIS node's local model

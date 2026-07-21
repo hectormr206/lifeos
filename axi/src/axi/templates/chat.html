@@ -36,7 +36,16 @@
             style="color: var(--blue); border-color: var(--blue);"
             x-text="'⏳ sincronizando ' + queuedCount"></span>
     </div>
-    <div class="muted text-xs">
+    <div class="muted text-xs flex items-center gap-2">
+      {% if not domain %}
+      <label for="chat-model">Modelo</label>
+      <select id="chat-model" x-model="selectedModel" class="panel2 rounded px-2 py-1">
+        <option value="local">Local · Axi</option>
+        <template x-for="(model, index) in peerModels" :key="model.node_id + model.role + model.id">
+      <option :value="'peer:' + index" x-text="model.hostname + ' · ' + model.id"></option>
+        </template>
+      </select>
+      {% endif %}
       <span x-show="lastLatencyMs !== null" x-cloak>
         última respuesta: <span x-text="lastLatencyMs"></span> ms
       </span>
@@ -116,6 +125,7 @@
           <template x-if="m.role === 'axi'">
             <div>
               <div class="md" x-html="renderMarkdown(m.text)"></div>
+              <span x-show="m.peer" class="muted text-xs">Respuesta de nodo federado</span>
               <!-- Disambiguation: domain option buttons (hidden once chosen). -->
               <template x-if="m.clarify && !m.clarify.resolved">
                 <div class="flex flex-wrap gap-2 mt-3">
@@ -449,6 +459,8 @@ function chatApp() {
     // Domain scope: '' = general assistant chat; 'health' = Salud chat that
     // POSTs to /api/health/chat (register + query + off-topic, health-only).
     domain: '{{ domain }}',
+    selectedModel: 'local',
+    peerModels: [],
 
     // Multimodal state
     attachments: [],       // staged attachments [{id, kind, mime, name, url, b64?}]
@@ -481,8 +493,14 @@ function chatApp() {
         // ON and every future conversation gets routed to nano instead of brain.
         // Logging mode is a deliberate per-session opt-in gesture.
       } catch (e) { /* private mode etc. */ }
-      await this.loadHistory();
-      // CRITICAL: restore any pending/error items from IDB queue as
+          if (!this.domain) {
+            try {
+              const models = await fetch('/api/chat/mesh/models');
+              if (models.ok) this.peerModels = await models.json();
+            } catch (e) { /* local chat remains available */ }
+          }
+          await this.loadHistory();
+          // CRITICAL: restore any pending/error items from IDB queue as
       // bubbles. If the user closed the app while messages were queued
       // (or sync failed), they reappear here. Never silently lose data.
       await this._restoreQueueBubbles();
@@ -1065,9 +1083,13 @@ function chatApp() {
       // The first image's bytes also feed the vision model in the general chat
       // this same turn (storage is separate from "let Axi see it now").
       const firstImageB64 = (atts.find(a => a.kind === 'image') || {}).b64 || null;
-      if (!text && atts.length === 0) return;
-      if (this.pending) return;
-      this.error = null;
+          if (!text && atts.length === 0) return;
+          if (this.pending) return;
+          this.error = null;
+          if (!this.domain && this.selectedModel !== 'local' && atts.length) {
+            this.error = 'Los modelos federados solo aceptan texto plano.';
+            return;
+          }
       const tempId = 'p' + Date.now();
       // Push optimistic user bubble, carrying the attachments so they render
       // immediately (history also returns them, so they persist after reload).
@@ -1113,18 +1135,23 @@ function chatApp() {
       try {
         // Any domain chat targets the generic domain endpoint (one engine for
         // all domains); the general chat uses /api/chat/ask.
-        const endpoint = this.domain ? ('/api/chat/domain/' + this.domain) : '/api/chat/ask';
-        const payload = this.domain
-          ? { text, location: location || undefined, attachment_ids: attachmentIds }
-          : {
-              text,
-              image_b64: firstImageB64 || null,
-              attachment_ids: attachmentIds,
-              speak: this.speakOn,
-              location: location || undefined,
-              client_ts: new Date().toISOString(),
-              logging_mode: this.loggingMode,
-            };
+            const peer = !this.domain && this.selectedModel.startsWith('peer:')
+              ? this.peerModels[Number(this.selectedModel.slice(5))] : null;
+            const endpoint = this.domain ? ('/api/chat/domain/' + this.domain)
+              : peer ? '/api/chat/mesh/relay' : '/api/chat/ask';
+            const payload = this.domain
+              ? { text, location: location || undefined, attachment_ids: attachmentIds }
+              : peer
+                ? { node_id: peer.node_id, role: peer.role, id: peer.id, content: text }
+                : {
+                    text,
+                    image_b64: firstImageB64 || null,
+                    attachment_ids: attachmentIds,
+                    speak: this.speakOn,
+                    location: location || undefined,
+                    client_ts: new Date().toISOString(),
+                    logging_mode: this.loggingMode,
+                  };
         const r = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1148,6 +1175,7 @@ function chatApp() {
           text: data.answer,
           convId: convId,
           audio_b64: data.audio_b64 || null,
+          peer: data.peer === true,
           // Disambiguation: Axi wasn't sure where to save this. Render the
           // domain option buttons; clicking one re-processes via that domain.
           clarify: data.mode === 'clarify'
