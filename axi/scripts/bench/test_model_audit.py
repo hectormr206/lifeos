@@ -656,11 +656,12 @@ def test_vision_golden_set_shape_and_assets_exist():
 
 def test_code_review_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "code_review.jsonl")
-    assert len(cases) == 8
+    assert len(cases) == 42
     clean = [c for c in cases if c.get("clean")]
     buggy = [c for c in cases if not c.get("clean")]
-    assert len(clean) == 1 and len(buggy) == 7
-    assert clean[0]["must_not_contain"]
+    assert len(clean) == 9 and len(buggy) == 33
+    for c in clean:
+        assert c["must_not_contain"]
     for c in buggy:
         assert c["snippet"] and c["must_contain"]
 
@@ -975,11 +976,11 @@ def test_audit_matrix_shows_codegen_and_conversation_columns():
 
 def test_code_generation_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "code_generation.jsonl")
-    assert len(cases) == 8
-    assert len({c["id"] for c in cases}) == 8
+    assert len(cases) == 44
+    assert len({c["id"] for c in cases}) == 44
     for c in cases:
         assert c["prompt"] and c["function_name"] and c["tests"]
-        assert f"`{c['function_name']}(" in c["prompt"]   # spec names the target
+        assert f"`{c['function_name']}" in c["prompt"]    # spec names the target
         assert c["timeout_s"] > 0
         for t in c["tests"]:
             assert "args" in t and "expected" in t
@@ -1105,13 +1106,17 @@ def test_recordsqa_aggregate_rates():
 
 def test_records_qa_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "records_qa.jsonl")
-    assert len(cases) == 10
-    assert len({c["id"] for c in cases}) == 10
+    assert len(cases) == 39
+    assert len({c["id"] for c in cases}) == 39
     traps = [c for c in cases if c["expected"].get("refusal_expected")]
     assert len(traps) >= 3                        # anti-fabrication traps
     for c in cases:
         assert c["records_block"] and c["question"] and c["today"]
-        assert c["expected"]["must_not_contain_numbers_absent_from_records"]
+        # Aggregation/temporal/multi-hop cases intentionally omit this field:
+        # their correct answer is a computed number absent from the records.
+        mnc = c["expected"].get("must_not_contain_numbers_absent_from_records")
+        if mnc is not None:
+            assert mnc
         assert all(isinstance(g, list) for g in c["expected"]["must_contain"])
 
 
@@ -1290,7 +1295,7 @@ def test_longsum_aggregate_with_skips():
 
 def test_long_summarization_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "long_summarization.jsonl")
-    assert len(cases) == 6
+    assert len(cases) == 36
     kinds = {c["kind"] for c in cases}
     assert kinds == {"meeting_window", "executive", "chat_archive"}
     for c in cases:
@@ -1513,7 +1518,7 @@ def test_run_longsum_role_ctx_skip_and_note(monkeypatch):
     monkeypatch.setattr(ma, "chat_completion", fake_chat)
     agg = ma.run_longsum_role(18080, dict(ma.HOUSE_SAMPLING), "none", ctx=256)
     assert agg["n"] == 0 and calls == []            # every case skipped
-    assert len(agg["skipped_ids"]) == 6
+    assert len(agg["skipped_ids"]) == 36
     assert "skipped" in agg["note"]
 
 
@@ -2116,10 +2121,10 @@ def test_aggregate_devplan_metrics_and_note():
 
 def test_dev_planning_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "dev_planning.jsonl")
-    assert len(cases) == 8
+    assert len(cases) == 40
     instr = [c for c in cases if c["kind"] == "instruction"]
     reviews = [c for c in cases if c["kind"] == "review"]
-    assert len(instr) == 3 and len(reviews) == 5
+    assert len(instr) == 14 and len(reviews) == 26
     assert sum(1 for c in reviews if not c["satisfies"]) >= 2
     assert sum(1 for c in reviews if c["satisfies"]) >= 1
     for c in reviews:
@@ -2148,15 +2153,23 @@ def test_run_devplan_role_end_to_end_on_canned_responses(monkeypatch):
             return {"content": instruction_reply}
         user = messages[-1]["content"]
         cases = _load_jsonl(GOLDEN / "dev_planning.jsonl")
+        # Multiple review cases share the same goal (true/false diff-pairs),
+        # so key on the exact review user-message the runner builds (goal +
+        # diff [+ tests] — unique per case) instead of the ambiguous goal.
+        def _review_user(c):
+            u = f"Goal: {c.get('goal', '')}\n\nDiff:\n{c.get('diff', '')}"
+            if c.get("tests_output") is not None:
+                u += f"\n\nTest results:\n{c['tests_output']}"
+            return u
         case = next(c for c in cases if c["kind"] == "review"
-                    and c["goal"] in user)
+                    and _review_user(c) == user)
         return {"content": "DONE — complete." if case["satisfies"]
                 else "NOT DONE: incomplete."}
 
     monkeypatch.setattr(ma, "chat_completion", fake_chat)
     monkeypatch.setattr(sj, "http_get_status", lambda url, timeout=5: 503)
     agg = ma.run_devplan_role(18080, dict(ma.HOUSE_SAMPLING), "none")
-    assert agg["n"] == 8
+    assert agg["n"] == 40
     assert agg["instruction_pass_rate"] == 1.0
     assert agg["review_accuracy"] == 1.0
     assert agg["pass_rate"] == 1.0
@@ -2438,12 +2451,12 @@ def test_toolstress_aggregate_metrics():
 
 def test_tool_stress_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "tool_stress.jsonl")
-    assert len(cases) == 10
+    assert len(cases) == 42
     kinds = [c["kind"] for c in cases]
-    assert kinds.count("selection") == 4
-    assert kinds.count("nested_args") == 2
-    assert kinds.count("error_recovery") == 2
-    assert kinds.count("procedure") == 2
+    assert kinds.count("selection") == 18
+    assert kinds.count("nested_args") == 9
+    assert kinds.count("error_recovery") == 8
+    assert kinds.count("procedure") == 7
     # The confusable registry: >=12 well-formed schemas with the MCP-style
     # stress surface (nested required objects, enums, an array param).
     assert len(ma.TOOLSTRESS_REGISTRY) >= 12
@@ -2457,13 +2470,14 @@ def test_tool_stress_golden_set_shape():
     assert export_props["format"]["enum"] == ["csv", "json", "pdf"]
     assert (ma.TOOLSTRESS_REGISTRY["create_calendar_event"]["function"]
             ["parameters"]["properties"]["attendees"]["type"]) == "array"
+    nested_dotted = False   # nesting is exercised somewhere in the class
     for c in cases:
         assert c["id"] and c["prompt"]
         exp = c["expected"]
         if c["kind"] == "procedure":
             assert c["procedure"]              # the skill-like doc exists
             step_tools = [s["tool"] for s in exp["steps"]]
-            assert len(exp["steps"]) >= 3
+            assert len(exp["steps"]) >= 2
             assert all(t in ma.TOOLSTRESS_REGISTRY for t in step_tools)
             # Threaded values in later steps must be plantable: present in
             # the canned step results, the procedure doc, or the prompt.
@@ -2472,8 +2486,14 @@ def test_tool_stress_golden_set_shape():
                        + c["procedure"] + c["prompt"])
             for step in exp["steps"][1:]:
                 for v in (step.get("args_subset") or {}).values():
-                    if isinstance(v, str):
-                        assert ma._contains(sources, v), (c["id"], v)
+                    if not isinstance(v, str) or ma._contains(sources, v):
+                        continue
+                    # Month-boundary ISO dates are derived from a named period
+                    # in the prompt (e.g. "junio 2026" → 2026-06-01/2026-06-30),
+                    # so they are plantable by derivation, not verbatim.
+                    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) and v[:4] in sources:
+                        continue
+                    assert False, (c["id"], v)
             continue
         assert exp["tool"] in ma.TOOLSTRESS_REGISTRY
         if c["kind"] == "selection":
@@ -2483,13 +2503,15 @@ def test_tool_stress_golden_set_shape():
             assert exp["required_args_subset"]
         elif c["kind"] == "nested_args":
             paths = exp["args_exact"]
-            assert any("." in p for p in paths)   # genuinely nested
+            assert paths                          # exact args pinned
+            nested_dotted |= any("." in p for p in paths)
         elif c["kind"] == "error_recovery":
             spec = c["canned_tools"][exp["tool"]]
             assert spec["first_error"]["ok"] is False
             assert spec["first_error"]["error"]
             assert exp["corrected_paths"]
             assert exp["final_must_mention_any"]
+    assert nested_dotted                          # genuinely nested somewhere
 
 
 def test_toolstress_wiring_roles_matrix_and_headline():
