@@ -42,6 +42,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import model_audit as ma  # VALID_ROLES — single source of role names
 
 RESULTS_DIR = SCRIPT_DIR / "results"
+RECIPES_PATH = RESULTS_DIR / "model_recipes.json"
 DEFAULT_ROSTER_PATH = SCRIPT_DIR / "roster.json"
 REPO_ROOT = SCRIPT_DIR.parents[2]                    # …/LifeOS/lifeos
 LIFEOS_PYTHON = REPO_ROOT / "lifeos" / ".venv" / "bin" / "python"
@@ -68,8 +69,34 @@ def _order_key(label: str) -> int:
 
 # ── the pure, testable core ──────────────────────────────────────────────────
 
+def filter_roster(roster, only=None, exclude=None) -> list[dict]:
+    """Return the roster entries kept by ``--only`` / ``--exclude`` labels.
+
+    ``only`` (when given) keeps just those labels; ``exclude`` drops labels.
+    ``only`` is applied before ``exclude``. Order is preserved. Default (both
+    ``None``) returns the roster unchanged. Raises ValueError for any label in
+    ``only`` that is absent from the roster (a typo would otherwise silently
+    score nothing).
+    """
+    kept = list(roster)
+    if only:
+        only = list(only)
+        known = {e["label"] for e in kept}
+        missing = [lbl for lbl in only if lbl not in known]
+        if missing:
+            raise ValueError(f"--only label(s) not in roster: {missing} — "
+                             f"known: {sorted(known)}")
+        keep = set(only)
+        kept = [e for e in kept if e["label"] in keep]
+    if exclude:
+        drop = set(exclude)
+        kept = [e for e in kept if e["label"] not in drop]
+    return kept
+
+
 def build_reaudit_plan(roster, roles, *, use_recipe=True,
-                       tiers=("vram12",), thinking_modes=("none",)) -> dict:
+                       tiers=("vram12",), thinking_modes=("none",),
+                       recipes=None) -> dict:
     """Roster + requested roles → an audit_batches.py plan dict.
 
     - one job per roster model on ``roles`` (fastest-first, qwen36-27b last);
@@ -78,6 +105,13 @@ def build_reaudit_plan(roster, roles, *, use_recipe=True,
     - ``moe``/``server_bin``/``extra_flags``/``mmproj`` carried through when set;
     - ``use_recipe=True`` (default) = FAST re-score at the saved recipe;
       ``False`` = full tune-to-peak.
+    - ``recipes`` (a ``{label: {tier: recipe}}`` dict, e.g. from
+      ``model_audit.load_recipes``): only consulted on the FAST path
+      (``use_recipe=True``). Any targeted model missing a saved recipe for a
+      requested tier is OMITTED from the plan and a WARNING is printed to
+      stderr — so the fast run never errors at bench time on an un-onboarded
+      model. ``None`` (default) skips the pre-check entirely; a ``--tune`` plan
+      (``use_recipe=False``) also skips it since tuning creates the recipe.
 
     Raises ValueError on an empty role list or any unknown role.
     """
@@ -91,8 +125,18 @@ def build_reaudit_plan(roster, roles, *, use_recipe=True,
 
     tiers = list(tiers)
     thinking_modes = list(thinking_modes)
+    check_recipes = bool(use_recipe) and recipes is not None
     jobs: list[dict] = []
     for entry in sorted(roster, key=lambda e: _order_key(e["label"])):
+        if check_recipes:
+            missing_tiers = [t for t in tiers
+                             if ma.get_recipe(recipes, entry["label"], t) is None]
+            if missing_tiers:
+                print(f"WARNING: {entry['label']}/{','.join(missing_tiers)} "
+                      f"has no saved recipe — onboard it first with "
+                      f"onboard_model.py (omitted from this fast plan).",
+                      file=sys.stderr)
+                continue
         has_mmproj = bool(entry.get("mmproj"))
         job_roles = [r for r in roles if not (r == "vision" and not has_mmproj)]
         if not job_roles:
@@ -140,10 +184,10 @@ def warn_missing_paths(roster) -> None:
                       f"on disk: {p}", file=sys.stderr)
 
 
-def launch_command(out_path: Path) -> str:
+def launch_command(out_path: Path, unit: str = "axi-reaudit") -> str:
     """The exact systemd-run command that runs the generated plan."""
     return (
-        "systemd-run --user --unit=axi-reaudit --collect \\\n"
+        f"systemd-run --user --unit={unit} --collect \\\n"
         f"  --property=WorkingDirectory={REPO_ROOT / 'axi'} \\\n"
         f"  {LIFEOS_PYTHON} \\\n"
         f"  {AUDIT_BATCHES} run \\\n"
@@ -163,6 +207,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "codereview,codegen,vision")
     p.add_argument("--roster", default=str(DEFAULT_ROSTER_PATH),
                    help=f"roster JSON (default: {DEFAULT_ROSTER_PATH})")
+    p.add_argument("--only", default=None,
+                   help="comma list of roster labels to include (default: all)")
+    p.add_argument("--exclude", default=None,
+                   help="comma list of roster labels to drop (default: none)")
+    p.add_argument("--recipes", default=str(RECIPES_PATH),
+                   help=f"recipe registry JSON for the FAST-path pre-check "
+                        f"(default: {RECIPES_PATH})")
     p.add_argument("--out", default=None,
                    help="output plan path (default: "
                         "results/reaudit_<YYYYMMDD-HHMM>.json)")
@@ -186,10 +237,20 @@ def main(argv=None) -> int:
                      if t.strip())
 
     roster = load_roster(Path(args.roster))
+    only = [s.strip() for s in args.only.split(",") if s.strip()] \
+        if args.only else None
+    exclude = [s.strip() for s in args.exclude.split(",") if s.strip()] \
+        if args.exclude else None
+    roster = filter_roster(roster, only=only, exclude=exclude)
     warn_missing_paths(roster)
 
-    plan = build_reaudit_plan(roster, roles, use_recipe=not args.tune,
-                              tiers=tiers, thinking_modes=thinking)
+    use_recipe = not args.tune
+    # FAST path: pre-check saved recipes so the bench never errors on an
+    # un-onboarded model. --tune skips it (tuning creates the recipe).
+    recipes = ma.load_recipes(Path(args.recipes)) if use_recipe else None
+    plan = build_reaudit_plan(roster, roles, use_recipe=use_recipe,
+                              tiers=tiers, thinking_modes=thinking,
+                              recipes=recipes)
 
     if args.out:
         out_path = Path(args.out)

@@ -128,3 +128,94 @@ def test_qwen36_27b_ordered_last():
     plan = gr.build_reaudit_plan(FAKE_ROSTER, ROLES)
     labels = [j["label"] for j in plan["jobs"]]
     assert labels[-1] == "qwen36-27b"
+
+
+# ── (f) --only / --exclude roster filtering (pure) ───────────────────────────
+
+def test_filter_roster_only_keeps_named():
+    kept = gr.filter_roster(FAKE_ROSTER, only=["tiny-mm", "big-moe"])
+    assert [e["label"] for e in kept] == ["tiny-mm", "big-moe"]
+
+
+def test_filter_roster_exclude_drops_named():
+    kept = gr.filter_roster(FAKE_ROSTER, exclude=["qwen36-27b"])
+    assert [e["label"] for e in kept] == ["tiny-mm", "coder-nomm", "big-moe"]
+
+
+def test_filter_roster_default_is_all():
+    kept = gr.filter_roster(FAKE_ROSTER)
+    assert kept == FAKE_ROSTER
+
+
+def test_filter_roster_only_then_exclude():
+    kept = gr.filter_roster(FAKE_ROSTER, only=["tiny-mm", "big-moe"],
+                            exclude=["big-moe"])
+    assert [e["label"] for e in kept] == ["tiny-mm"]
+
+
+def test_filter_roster_unknown_only_raises():
+    with pytest.raises(ValueError):
+        gr.filter_roster(FAKE_ROSTER, only=["nope"])
+
+
+def test_only_filter_flows_through_plan():
+    roster = gr.filter_roster(FAKE_ROSTER, only=["tiny-mm"])
+    plan = gr.build_reaudit_plan(roster, ROLES)
+    assert [j["label"] for j in plan["jobs"]] == ["tiny-mm"]
+
+
+# ── (g) recipe pre-check guardrail ───────────────────────────────────────────
+
+FAKE_RECIPES = {
+    "tiny-mm": {"vram12": {"launch": {}}},
+    "big-moe": {"vram12": {"launch": {}}},
+    "qwen36-27b": {"vram12": {"launch": {}}},
+    # coder-nomm: no recipe on purpose
+}
+
+
+def test_fast_plan_omits_and_warns_for_missing_recipe(capsys):
+    plan = gr.build_reaudit_plan(FAKE_ROSTER, ROLES, recipes=FAKE_RECIPES)
+    labels = {j["label"] for j in plan["jobs"]}
+    # coder-nomm has no recipe → omitted; the others stay
+    assert "coder-nomm" not in labels
+    assert labels == {"tiny-mm", "big-moe", "qwen36-27b"}
+    err = capsys.readouterr().err
+    assert "coder-nomm" in err
+    assert "vram12" in err
+    assert "onboard_model.py" in err
+
+
+def test_fast_plan_includes_models_with_recipe(capsys):
+    plan = gr.build_reaudit_plan(
+        FAKE_ROSTER, ROLES,
+        recipes={"tiny-mm": {"vram12": {"launch": {}}},
+                 "coder-nomm": {"vram12": {"launch": {}}},
+                 "big-moe": {"vram12": {"launch": {}}},
+                 "qwen36-27b": {"vram12": {"launch": {}}}})
+    assert {j["label"] for j in plan["jobs"]} == {
+        "tiny-mm", "coder-nomm", "big-moe", "qwen36-27b"}
+    assert capsys.readouterr().err == ""
+
+
+def test_missing_recipe_for_one_of_several_tiers_omits(capsys):
+    # tiny-mm has vram12 but not cpu → omitted when both requested
+    plan = gr.build_reaudit_plan(
+        FAKE_ROSTER, ROLES, tiers=("vram12", "cpu"), recipes=FAKE_RECIPES)
+    assert "tiny-mm" not in {j["label"] for j in plan["jobs"]}
+    assert "cpu" in capsys.readouterr().err
+
+
+def test_tune_plan_ignores_recipe_precheck(capsys):
+    plan = gr.build_reaudit_plan(
+        FAKE_ROSTER, ROLES, use_recipe=False, recipes=FAKE_RECIPES)
+    # --tune: everything included regardless of recipe presence
+    assert {j["label"] for j in plan["jobs"]} == {
+        "tiny-mm", "coder-nomm", "big-moe", "qwen36-27b"}
+    assert capsys.readouterr().err == ""
+
+
+def test_no_recipes_arg_skips_precheck():
+    # default recipes=None → no check even on the fast path (back-compat)
+    plan = gr.build_reaudit_plan(FAKE_ROSTER, ROLES)
+    assert len(plan["jobs"]) == 4
