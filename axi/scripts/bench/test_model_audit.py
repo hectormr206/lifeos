@@ -665,7 +665,7 @@ def test_tool_calling_golden_set_shape():
 
 def test_vision_golden_set_shape_and_assets_exist():
     cases = _load_jsonl(GOLDEN / "vision_quality.jsonl")
-    assert len(cases) == 8
+    assert len(cases) == 42
     for c in cases:
         assert (GOLDEN / c["image"]).exists(), f"missing asset for {c['id']}"
         assert c["question"]

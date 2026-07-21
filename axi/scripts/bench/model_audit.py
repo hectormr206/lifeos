@@ -5040,15 +5040,28 @@ def ensure_vision_assets(assets_dir: Path = VISION_ASSETS_DIR) -> list[Path]:
     and a 3-bar chart — trivially verifiable answers for a real VLM.
     """
     expected = [
+        # ── v1 originals (single-attribute naming) ──────────────────────────
         "red_square.png", "blue_circle.png", "green_triangle.png",
         "black_cross.png", "yellow_bg.png", "text_hola.png",
         "two_shapes.png", "bar_chart.png",
+        # ── multi-object / spatial scenes ───────────────────────────────────
+        "scene_three.png", "scene_five.png", "scene_overlap.png",
+        "scene_four.png",
+        # ── simulated device displays (digit reading) ──────────────────────
+        "panel_bp.png", "panel_glucose.png", "panel_weight.png",
+        "panel_temp.png", "panel_clock.png", "panel_steps.png",
+        # ── synthetic receipts ──────────────────────────────────────────────
+        "receipt_super.png", "receipt_cafe.png",
+        # ── richer charts (matplotlib) ──────────────────────────────────────
+        "bar5.png", "line_up.png", "line_down.png", "pie_dominant.png",
+        # ── multi-line / mixed OCR ──────────────────────────────────────────
+        "ocr_note.png", "ocr_code.png", "ocr_phrase.png", "ocr_room.png",
     ]
     existing = [assets_dir / n for n in expected]
     if all(p.exists() for p in existing):
         return existing
 
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
 
     assets_dir.mkdir(parents=True, exist_ok=True)
     made: list[Path] = []
@@ -5103,7 +5116,136 @@ def ensure_vision_assets(assets_dir: Path = VISION_ASSETS_DIR) -> list[Path]:
         d.rectangle([32, 112, 224, 144], fill=(0, 0, 0))
 
     build("black_cross.png", paint_cross)
+
+    # ── multi-object / spatial scenes ───────────────────────────────────────
+    red, blue, green, purple = (
+        (220, 20, 20), (20, 60, 220), (20, 160, 40), (150, 40, 170))
+
+    def paint_scene_three(d, im) -> None:
+        # left→right: red square, blue circle, green triangle.
+        d.rectangle([20, 96, 80, 160], fill=red)
+        d.ellipse([98, 96, 158, 160], fill=blue)
+        d.polygon([(208, 96), (178, 160), (238, 160)], fill=green)
+
+    build("scene_three.png", paint_scene_three)
+
+    def paint_scene_five(d, im) -> None:
+        for cx in (40, 88, 136, 184, 232):
+            d.ellipse([cx - 18, 110, cx + 18, 146], fill=blue)
+
+    build("scene_five.png", paint_scene_five)
+
+    def paint_scene_overlap(d, im) -> None:
+        # two clearly overlapping circles.
+        d.ellipse([80, 90, 170, 180], fill=red)
+        d.ellipse([130, 90, 220, 180], fill=blue)
+
+    build("scene_overlap.png", paint_scene_overlap)
+
+    def paint_scene_four(d, im) -> None:
+        # exactly two circles + one square + one triangle = 4 shapes.
+        d.ellipse([30, 30, 90, 90], fill=red)
+        d.ellipse([160, 30, 220, 90], fill=blue)
+        d.rectangle([30, 160, 90, 220], fill=green)
+        d.polygon([(160, 160), (130, 220), (190, 220)], fill=purple)
+
+    build("scene_four.png", paint_scene_four)
+
+    # ── simulated device displays (large digits on white) ──────────────────
+    def panel(name: str, text: str, wh=(340, 130), fontsize=64) -> None:
+        path = assets_dir / name
+        if path.exists():
+            return
+        img = Image.new("RGB", wh, (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        font = ImageFont.load_default(size=fontsize)
+        bbox = d.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        d.text(((wh[0] - tw) / 2 - bbox[0], (wh[1] - th) / 2 - bbox[1]),
+               text, fill=(0, 0, 0), font=font)
+        img.save(path, format="PNG")
+        made.append(path)
+
+    panel("panel_bp.png", "120/80")
+    panel("panel_glucose.png", "95 mg/dL", fontsize=52)
+    panel("panel_weight.png", "72.4 kg", fontsize=56)
+    panel("panel_temp.png", "36.6 C", fontsize=60)
+    panel("panel_clock.png", "14:35")
+    panel("panel_steps.png", "8000 pasos", fontsize=48)
+
+    # ── synthetic receipts (left-aligned text table) ────────────────────────
+    def receipt(name: str, lines: list[str], fontsize=30) -> None:
+        path = assets_dir / name
+        if path.exists():
+            return
+        w, h = 360, 28 + 36 * len(lines)
+        img = Image.new("RGB", (w, h), (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        font = ImageFont.load_default(size=fontsize)
+        y = 14
+        for line in lines:
+            d.text((16, y), line, fill=(0, 0, 0), font=font)
+            y += 36
+        img.save(path, format="PNG")
+        made.append(path)
+
+    receipt("receipt_super.png",
+            ["TIENDA LA ESQUINA", "Leche     25", "Pan       18",
+             "Huevos    40", "TOTAL     83"])
+    receipt("receipt_cafe.png",
+            ["CAFE CENTRAL", "Cafe      45", "Pastel    60", "Jugo      35",
+             "Agua      20", "TOTAL    160"])
+
+    # ── multi-line / mixed OCR ──────────────────────────────────────────────
+    receipt("ocr_note.png", ["COMPRAR", "LECHE"], fontsize=48)
+    panel("ocr_code.png", "ABC123")
+    panel("ocr_phrase.png", "BUENOS DIAS", fontsize=48)
+    panel("ocr_room.png", "SALA 5B")
+
+    # ── richer charts (matplotlib, deterministic fixed data) ────────────────
+    _build_chart_assets(assets_dir, made)
+
     return made
+
+
+def _build_chart_assets(assets_dir: Path, made: list[Path]) -> None:
+    """Deterministic matplotlib charts for the vision golden set.
+
+    Fixed data, no timestamps/random state, Agg backend, PNG date metadata
+    stripped so regeneration reproduces identical bytes. Imported lazily and
+    only when its callers already decided assets must be generated.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    def save(name: str, draw) -> None:
+        path = assets_dir / name
+        if path.exists():
+            return
+        fig, ax = plt.subplots(figsize=(4, 3), dpi=80)
+        draw(ax)
+        fig.savefig(path, format="PNG", metadata={"Software": None})
+        plt.close(fig)
+        made.append(path)
+
+    def bars(ax) -> None:  # 5 bars, tallest=8, shortest=2
+        ax.bar([1, 2, 3, 4, 5], [3, 7, 2, 8, 5], color="#3060c0")
+        ax.set_ylim(0, 10)
+
+    def line_up(ax) -> None:
+        ax.plot([0, 1, 2, 3, 4], [1, 2, 3, 4, 5], marker="o", color="#208010")
+
+    def line_down(ax) -> None:
+        ax.plot([0, 1, 2, 3, 4], [5, 4, 3, 2, 1], marker="o", color="#c02020")
+
+    def pie(ax) -> None:  # dominant slice is red
+        ax.pie([70, 15, 15], colors=["#d02020", "#2060d0", "#20a040"])
+
+    save("bar5.png", bars)
+    save("line_up.png", line_up)
+    save("line_down.png", line_down)
+    save("pie_dominant.png", pie)
 
 
 def ensure_posture_assets(assets_dir: Path = VISION_ASSETS_DIR) -> list[Path]:

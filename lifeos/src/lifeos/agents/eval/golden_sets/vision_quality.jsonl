@@ -1,10 +1,13 @@
-// Golden set for vision quality eval — v1
+// Golden set for vision quality eval — v1 + hardened synthetic expansion.
 // Format: {"id", "image": relative path under golden_sets/, "question": str (Spanish),
 //          "must_contain": [[alt1, alt2, ...], ...]} — every group must be satisfied by
 //          at least ONE alternative (case- and accent-insensitive substring match).
-// Assets are tiny deterministic PNGs generated with PIL by
+// Assets are tiny DETERMINISTIC PNGs generated with PIL + matplotlib by
 // axi/scripts/bench/model_audit.py ensure_vision_assets() — regenerate anytime.
+// These are SYNTHETIC panels/shapes/charts (digit-, shape- and chart-reading);
+// they do NOT test real-world photo robustness (glare, blur, perspective).
 // Requires launching the candidate with --mmproj; role is skipped (with a note) otherwise.
+// ── v1 originals: single-attribute naming ────────────────────────────────────
 {"id": "vq01", "image": "vision_assets/red_square.png", "question": "¿De qué color es el cuadrado en la imagen? Responde solo el color.", "must_contain": [["rojo", "red"]]}
 {"id": "vq02", "image": "vision_assets/blue_circle.png", "question": "¿Qué figura geométrica aparece en la imagen y de qué color es?", "must_contain": [["circulo", "circle", "redond"], ["azul", "blue"]]}
 {"id": "vq03", "image": "vision_assets/green_triangle.png", "question": "¿De qué color es el triángulo?", "must_contain": [["verde", "green"]]}
@@ -13,3 +16,43 @@
 {"id": "vq06", "image": "vision_assets/two_shapes.png", "question": "¿Cuántas figuras hay en la imagen? Responde solo el número.", "must_contain": [["dos", "2"]]}
 {"id": "vq07", "image": "vision_assets/yellow_bg.png", "question": "¿De qué color es el fondo de esta imagen?", "must_contain": [["amarillo", "yellow"]]}
 {"id": "vq08", "image": "vision_assets/black_cross.png", "question": "Describe brevemente el símbolo negro que aparece sobre el fondo blanco.", "must_contain": [["cruz", "cross", "equis", "x", "mas", "plus"]]}
+// ── promoted v2: reasoning over the existing PNGs (negation, counting) ────────
+{"id": "vq09", "image": "vision_assets/red_square.png", "question": "¿Aparece algún círculo en la imagen? Responde solo sí o no.", "must_contain": [["no", "ningun", "cero"]], "note": "negation/absence: only a red square is present"}
+{"id": "vq10", "image": "vision_assets/green_triangle.png", "question": "¿Cuántos lados tiene la figura de la imagen? Responde solo el número.", "must_contain": [["3", "tres"]], "note": "a triangle has 3 sides"}
+{"id": "vq11", "image": "vision_assets/text_hola.png", "question": "¿Cuántas letras tiene la palabra escrita en la imagen?", "must_contain": [["4", "cuatro"]], "note": "OCR + count: 'hola' has 4 letters"}
+{"id": "vq12", "image": "vision_assets/blue_circle.png", "question": "¿El contorno de la figura tiene esquinas o es totalmente curvo? Responde en una palabra.", "must_contain": [["curv", "redond", "sin esquinas"]], "note": "geometry attribute over a circle"}
+{"id": "vq13", "image": "vision_assets/two_shapes.png", "question": "¿Hay una sola figura o hay más de una? Responde brevemente.", "must_contain": [["mas de una", "dos", "varias", "2"]], "note": "cardinality discrimination (>1)"}
+// ── multi-object / spatial scenes ────────────────────────────────────────────
+{"id": "vq20", "image": "vision_assets/scene_three.png", "question": "¿Cuántas figuras hay en la imagen? Responde solo el número.", "must_contain": [["tres", "3"]]}
+{"id": "vq21", "image": "vision_assets/scene_three.png", "question": "¿Qué figura está más a la izquierda? Responde solo el nombre de la figura.", "must_contain": [["cuadrado", "square", "cuadro"]]}
+{"id": "vq22", "image": "vision_assets/scene_three.png", "question": "¿De qué color es la figura que está más a la derecha?", "must_contain": [["verde", "green"]]}
+{"id": "vq23", "image": "vision_assets/scene_five.png", "question": "¿Cuántos círculos hay en la imagen? Responde solo el número.", "must_contain": [["cinco", "5"]]}
+{"id": "vq24", "image": "vision_assets/scene_overlap.png", "question": "¿Cuántas figuras hay en la imagen? Responde solo el número.", "must_contain": [["dos", "2"]]}
+{"id": "vq25", "image": "vision_assets/scene_overlap.png", "question": "¿Las dos figuras se superponen o están separadas? Responde brevemente.", "must_contain": [["superpon", "encim", "traslap", "overlap", "juntas", "tocan"]]}
+{"id": "vq26", "image": "vision_assets/scene_four.png", "question": "¿Cuántas figuras hay en total en la imagen? Responde solo el número.", "must_contain": [["cuatro", "4"]]}
+// ── simulated device displays: read the digits ───────────────────────────────
+{"id": "vq30", "image": "vision_assets/panel_bp.png", "question": "La pantalla muestra una presión arterial. ¿Qué valores aparecen?", "must_contain": [["120"], ["80"]]}
+{"id": "vq31", "image": "vision_assets/panel_glucose.png", "question": "¿Qué valor de glucosa muestra la pantalla? Responde solo el número.", "must_contain": [["95"]]}
+{"id": "vq32", "image": "vision_assets/panel_weight.png", "question": "¿Qué peso muestra la báscula en la pantalla?", "must_contain": [["72.4", "72,4", "72"]]}
+{"id": "vq33", "image": "vision_assets/panel_temp.png", "question": "¿Qué temperatura muestra la pantalla? Responde solo el número.", "must_contain": [["36.6", "36,6", "36"]]}
+{"id": "vq34", "image": "vision_assets/panel_clock.png", "question": "¿Qué hora marca el reloj digital?", "must_contain": [["14"], ["35"]]}
+{"id": "vq35", "image": "vision_assets/panel_steps.png", "question": "¿Cuántos pasos muestra la pantalla? Responde solo el número.", "must_contain": [["8000", "8,000", "8.000"]]}
+// ── synthetic receipts ───────────────────────────────────────────────────────
+{"id": "vq40", "image": "vision_assets/receipt_super.png", "question": "¿Cuál es el total del recibo? Responde solo el número.", "must_contain": [["83"]]}
+{"id": "vq41", "image": "vision_assets/receipt_super.png", "question": "¿Cuántos artículos (líneas de producto, sin contar el total) tiene el recibo? Responde solo el número.", "must_contain": [["3", "tres"]]}
+{"id": "vq42", "image": "vision_assets/receipt_super.png", "question": "¿En qué tienda se hizo la compra?", "must_contain": [["esquina", "la esquina"]]}
+{"id": "vq43", "image": "vision_assets/receipt_cafe.png", "question": "¿Cuál es el total del recibo? Responde solo el número.", "must_contain": [["160"]]}
+{"id": "vq44", "image": "vision_assets/receipt_cafe.png", "question": "¿Cuántos artículos (líneas de producto, sin contar el total) tiene el recibo? Responde solo el número.", "must_contain": [["4", "cuatro"]]}
+{"id": "vq45", "image": "vision_assets/receipt_cafe.png", "question": "¿Cómo se llama el café o la tienda del recibo?", "must_contain": [["central", "cafe central"]]}
+// ── richer charts (matplotlib) ───────────────────────────────────────────────
+{"id": "vq50", "image": "vision_assets/bar5.png", "question": "¿Cuántas barras tiene la gráfica? Responde solo el número.", "must_contain": [["cinco", "5"]]}
+{"id": "vq51", "image": "vision_assets/bar5.png", "question": "¿Cuál es la altura (valor del eje Y) de la barra más alta? Responde solo el número.", "must_contain": [["8", "ocho"]]}
+{"id": "vq52", "image": "vision_assets/bar5.png", "question": "¿Cuál es la altura (valor del eje Y) de la barra más baja? Responde solo el número.", "must_contain": [["2", "dos"]]}
+{"id": "vq53", "image": "vision_assets/line_up.png", "question": "¿La tendencia de la línea es ascendente o descendente? Responde en una palabra.", "must_contain": [["ascend", "sube", "subida", "crece", "increment", "arriba", "up", "rising"]]}
+{"id": "vq54", "image": "vision_assets/line_down.png", "question": "¿La tendencia de la línea es ascendente o descendente? Responde en una palabra.", "must_contain": [["descend", "baja", "bajada", "decrec", "disminu", "abajo", "down", "falling"]]}
+{"id": "vq55", "image": "vision_assets/pie_dominant.png", "question": "¿De qué color es la rebanada más grande de la gráfica de pastel?", "must_contain": [["rojo", "red"]]}
+// ── multi-line / mixed OCR ───────────────────────────────────────────────────
+{"id": "vq60", "image": "vision_assets/ocr_note.png", "question": "Lee el texto de la nota de dos líneas que aparece en la imagen.", "must_contain": [["comprar"], ["leche"]]}
+{"id": "vq61", "image": "vision_assets/ocr_code.png", "question": "¿Qué código alfanumérico aparece en la imagen?", "must_contain": [["abc"], ["123"]]}
+{"id": "vq62", "image": "vision_assets/ocr_phrase.png", "question": "¿Qué frase está escrita en la imagen?", "must_contain": [["buenos"], ["dias"]]}
+{"id": "vq63", "image": "vision_assets/ocr_room.png", "question": "¿Qué número o identificador de sala aparece en la imagen?", "must_contain": [["5b", "5 b", "5"]]}
