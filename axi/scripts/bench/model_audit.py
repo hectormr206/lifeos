@@ -845,8 +845,23 @@ def load_recipes(path: Path) -> dict:
 
 
 def save_recipe(path: Path, label: str, tier: str, recipe: dict) -> dict:
-    """Upsert one label+tier recipe; other labels/tiers are preserved."""
+    """Upsert one label+tier recipe; other labels/tiers are preserved.
+
+    Tier-level fields (launch, sampling, thinking, scores, timestamp_utc) come
+    from THIS run — save_recipe is only reached after a fresh Stage A for the
+    tier, so the incoming launch config is authoritative and overwrites the
+    prior one. Per-role tunings (``role_configs``) are MERGED per role: roles
+    tuned in this run are updated, roles tuned in prior runs but absent here
+    (e.g. an efficient ``--roles routing`` re-audit) are preserved.
+    """
     recipes = load_recipes(path)
+    prior = (recipes.get(label) or {}).get(tier) or {}
+    prior_roles = prior.get("role_configs") or {}
+    if prior_roles:
+        recipe = dict(recipe)
+        merged_roles = dict(prior_roles)
+        merged_roles.update(recipe.get("role_configs") or {})
+        recipe["role_configs"] = merged_roles
     recipes.setdefault(label, {})[tier] = recipe
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(recipes, ensure_ascii=False, indent=2) + "\n",

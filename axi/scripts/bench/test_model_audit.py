@@ -269,6 +269,41 @@ def test_recipe_roundtrip_and_upsert(tmp_path):
     assert ma.get_recipe(recipes, "bar", "vram12")["scores"]["stage_b_det"] == 0.9
 
 
+def test_save_recipe_merges_role_configs_per_role(tmp_path):
+    # A subset --roles re-audit must NOT wipe roles tuned in prior runs.
+    path = tmp_path / "recipes.json"
+    seed = _recipe(0.8)
+    seed["role_configs"] = {
+        "routing":  {"sampling": {"temperature": 0.1}, "thinking": "off",
+                     "subset_score": 0.70, "variants_tried": 3},
+        "toolcall": {"sampling": {"temperature": 0.2}, "thinking": "off",
+                     "subset_score": 0.60, "variants_tried": 3},
+        "vision":   {"sampling": {"temperature": 0.3}, "thinking": "on",
+                     "subset_score": 0.50, "variants_tried": 3},
+    }
+    ma.save_recipe(path, "foo", "vram12", seed)
+
+    # Re-audit only role "toolcall" (fresh Stage A, single-role role_configs).
+    subset = _recipe(0.9)
+    subset["role_configs"] = {
+        "toolcall": {"sampling": {"temperature": 0.99}, "thinking": "on",
+                     "subset_score": 0.95, "variants_tried": 5},
+    }
+    ma.save_recipe(path, "foo", "vram12", subset)
+
+    merged = ma.get_recipe(ma.load_recipes(path), "foo", "vram12")
+    rc = merged["role_configs"]
+    # Roles absent from this run are PRESERVED unchanged...
+    assert set(rc) == {"routing", "toolcall", "vision"}
+    assert rc["routing"]["subset_score"] == 0.70
+    assert rc["vision"]["subset_score"] == 0.50
+    # ...the tuned role is UPDATED with the new run's values...
+    assert rc["toolcall"]["subset_score"] == 0.95
+    assert rc["toolcall"]["sampling"] == {"temperature": 0.99}
+    # ...and tier-level fields (Stage A re-ran) are refreshed.
+    assert merged["scores"]["stage_b_det"] == 0.9
+
+
 def test_load_recipes_tolerates_corrupt_file(tmp_path):
     path = tmp_path / "recipes.json"
     path.write_text("{not json")
