@@ -345,7 +345,7 @@ VALID_ROLES = ("speed", "brain", "extraction", "domain", "toolcall",
                "vision", "codereview", "embed", "codegen", "conversation",
                "recordsqa", "narration", "longsum", "parsejson",
                "agentic", "proactive", "visionclass", "devplan",
-               "toolstress", "devbench", "ctxprobe")
+               "toolstress", "devbench", "ctxprobe", "routing")
 
 FAST_SUBSET_SIZE = 12
 FAST_SUBSET_STRIDE = 3
@@ -401,6 +401,54 @@ TOOL_SCHEMAS: dict[str, dict] = {
                              "description": "How many days back to summarize."},
                 },
                 "required": ["days"],
+            },
+        },
+    },
+    # ── routing role: the three REAL tools Axi's brain exposes ───────────────
+    # web_fetch: verbatim from axi/src/axi/web_tools.py:94 (web_fetch_tool_def).
+    "web_fetch": {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": (
+                "Lee el contenido ACTUAL de una URL específica (la portada o "
+                "página que el usuario pidió). Usala cuando el pedido trae un "
+                "enlace concreto, en vez de web_search."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL http(s) a leer."},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    # recall_memory: verbatim from axi/src/axi/dashboard.py:944 (_RECALL_MEMORY_TOOL).
+    "recall_memory": {
+        "type": "function",
+        "function": {
+            "name": "recall_memory",
+            "description": (
+                "Busca en la memoria personal del usuario (su gráfico de vida) para recuperar "
+                "hechos datados que él mismo registró: salud, sueño, presión arterial, glucosa, "
+                "peso, gastos, eventos, actividad física, u otros datos de vida. "
+                "Úsala cuando el usuario pregunta sobre SUS PROPIOS registros pasados y necesitas "
+                "hechos con fechas exactas para responder con precisión. "
+                "Reformula la pregunta del usuario en términos de búsqueda concisos: por ejemplo, "
+                "si pregunta '¿qué presión tenía cuando dormí mal?' llama a recall_memory con "
+                "query='presión dormí pocas horas'. "
+                "Devuelve hechos datados de la memoria personal del usuario."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Términos de búsqueda concisos para encontrar los recuerdos relevantes.",
+                    },
+                },
+                "required": ["query"],
             },
         },
     },
@@ -3071,6 +3119,7 @@ ROLE_HEADLINE_KEYS: dict[str, tuple[str, ...]] = {
     "extraction": ("case_pass_rate",),
     "domain": ("overall_accuracy",),
     "toolcall": ("score",),
+    "routing": ("score",),
     "vision": ("pass_rate",),
     "codereview": ("score",),
     "codegen": ("pass_rate",),
@@ -3533,8 +3582,9 @@ def make_role_case_scorer(role: str, port: int, mmproj: Optional[str] = None,
             return 1.0 if ok else 0.0
         return cases, score
 
-    if role == "toolcall":
-        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "tool_calling.jsonl")
+    if role in ("toolcall", "routing"):
+        golden = "tool_calling.jsonl" if role == "toolcall" else "tool_routing.jsonl"
+        cases = cpu_sweep.load_golden_set(GOLDEN_DIR / golden)
 
         def score(case, sampling, thinking):
             tools = [TOOL_SCHEMAS[name] for name in case.get("tools", [])
@@ -3967,6 +4017,32 @@ def run_toolcall_role(port: int, sampling: dict, thinking: str) -> dict:
         _tick("toolcall", len(per_case), len(cases))
     agg = aggregate_toolcall(per_case)
     print(f"  [toolcall] tool={agg['correct_tool_rate']:.0%} "
+          f"args={agg['arg_accuracy']:.0%} false-call={agg['false_call_rate']:.0%}",
+          flush=True)
+    return agg
+
+
+def run_routing_role(port: int, sampling: dict, thinking: str) -> dict:
+    """tool_routing.jsonl through /v1/chat/completions with OpenAI tools.
+
+    Sibling of run_toolcall_role: same scorer/aggregator, but the golden set
+    exercises tool ROUTING across Axi's three real tools (web_search /
+    web_fetch / recall_memory) plus null negatives (false-call traps).
+    """
+    import cpu_sweep
+    cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "tool_routing.jsonl")
+    print(f"  [routing] {len(cases)} cases", flush=True)
+    per_case: list[dict] = []
+    for case in cases:
+        tools = [TOOL_SCHEMAS[name] for name in case.get("tools", [])
+                 if name in TOOL_SCHEMAS]
+        msg = chat_completion(port, case["messages"], sampling=sampling,
+                              thinking=thinking, max_tokens=256, tools=tools,
+                              seed=case_seed(case.get("id")))
+        per_case.append(score_toolcall_case(case, msg))
+        _tick("routing", len(per_case), len(cases))
+    agg = aggregate_toolcall(per_case)
+    print(f"  [routing] tool={agg['correct_tool_rate']:.0%} "
           f"args={agg['arg_accuracy']:.0%} false-call={agg['false_call_rate']:.0%}",
           flush=True)
     return agg
@@ -4746,6 +4822,9 @@ def run_stage_c(args, recipe: dict, roles: list[str],
             elif role == "toolcall":
                 results["toolcall"] = run_toolcall_role(args.port, sampling,
                                                         thinking)
+            elif role == "routing":
+                results["routing"] = run_routing_role(args.port, sampling,
+                                                       thinking)
             elif role == "vision":
                 results["vision"] = run_vision_role(args.port, args.mmproj,
                                                     sampling, thinking)
