@@ -895,6 +895,39 @@ def _contains(text: str, needle: str) -> bool:
     return _norm(needle) in _norm(text)
 
 
+# Negation / praise cues that turn a bug keyword into a NON-flag (e.g.
+# "no hay injection", "seguro contra race", "libre de leaks"). Matched with
+# word boundaries in the window PRECEDING a keyword occurrence. The detector is
+# deliberately generous: over-detecting a negation only makes the false-positive
+# check more lenient (never false-fails a legitimate clean answer), while
+# under-detecting is what we must avoid.
+_CR_NEGATORS_RE = re.compile(
+    r"\b(no|sin|ningun\w*|not|never|nunca|free|libre|safe|segur\w*|"
+    r"protegid\w*|prevent\w*|previen\w*|evita\w*|avoid\w*|"
+    r"n't|without|no hay|sin riesgo|no risk)\b")
+_CR_NEG_WINDOW = 32   # chars of preceding context scanned for a negation cue
+
+
+def _codereview_flags_bug(text: str, keyword: str) -> bool:
+    """Does ``text`` ASSERT the bug named by ``keyword`` (vs merely negate or
+    praise it)? True iff at least one occurrence of the keyword has no negation
+    cue in its immediately preceding window. Praise like "no injection risk" or
+    "seguro contra injection" is therefore NOT counted as flagging a bug."""
+    ntext = _norm(text)
+    nkw = _norm(keyword)
+    if not nkw:
+        return False
+    start = 0
+    while True:
+        idx = ntext.find(nkw, start)
+        if idx < 0:
+            return False
+        window = ntext[max(0, idx - _CR_NEG_WINDOW):idx]
+        if not _CR_NEGATORS_RE.search(window):
+            return True
+        start = idx + len(nkw)
+
+
 def score_toolcall_case(case: dict, message: Optional[dict]) -> dict:
     """Score one tool-calling response message against a golden case.
 
@@ -964,10 +997,14 @@ def score_vision_case(case: dict, response_text: str) -> dict:
 def score_codereview_case(case: dict, response_text: str) -> dict:
     """Buggy: all must_contain groups hit. Clean: 'SIN BUGS' or no planted keyword."""
     if case.get("clean"):
-        claims_clean = _contains(response_text, CLEAN_OK_TOKEN)
+        # False-positive check: a clean case fails if the model ASSERTS a
+        # specific planted bug (a must_not_contain keyword in non-negated
+        # context). Stamping "SIN BUGS" no longer rescues an invented flag —
+        # otherwise a model could pass every clean case by hallucinating a bug
+        # and appending the verdict token.
         hits = [kw for kw in (case.get("must_not_contain") or [])
-                if _contains(response_text, kw)]
-        passed = claims_clean or not hits
+                if _codereview_flags_bug(response_text, kw)]
+        passed = not hits
         return {"id": case.get("id"), "clean": True, "passed": passed,
                 "false_positive": not passed, "keyword_hits": hits}
     missing = [group for group in (case.get("must_contain") or [])
@@ -1310,7 +1347,14 @@ def build_recordsqa_system(case: dict) -> str:
 
 
 def score_recordsqa_case(case: dict, reply: str) -> dict:
-    """must_contain any-of groups + fabricated-number detector + refusal check."""
+    """must_contain any-of groups + fabricated-number detector + refusal check
+    + OPTIONAL distractor exclusion.
+
+    ``expected.must_not_contain`` (optional; absent = no-op) lists in-records
+    DISTRACTOR values a correct SPECIFIC answer must NOT include — e.g. for
+    "¿mi última presión?" the older readings. It closes the regurgitation
+    leniency: dumping the whole records_block satisfies every must_contain
+    substring with no fabricated numbers, yet is not a real lookup answer."""
     expected = case.get("expected") or {}
     text = reply or ""
     missing = [group for group in (expected.get("must_contain") or [])
@@ -1319,13 +1363,16 @@ def score_recordsqa_case(case: dict, reply: str) -> dict:
     if expected.get("must_not_contain_numbers_absent_from_records"):
         source = f"{case.get('records_block', '')}\n{case.get('question', '')}"
         fabricated = fabricated_numbers(text, source)
+    forbidden_hits = [kw for kw in (expected.get("must_not_contain") or [])
+                      if _contains(text, kw)]
     refusal_ok = True
     if expected.get("refusal_expected"):
         refusal_ok = any(_contains(text, m) for m in RECORDSQA_REFUSAL_MARKERS)
     return {"id": case.get("id"),
-            "passed": not missing and not fabricated and refusal_ok,
+            "passed": (not missing and not fabricated and refusal_ok
+                       and not forbidden_hits),
             "missing": missing, "fabricated": fabricated,
-            "refusal_ok": refusal_ok}
+            "forbidden_hits": forbidden_hits, "refusal_ok": refusal_ok}
 
 
 def aggregate_recordsqa(per_case: list[dict]) -> dict:
@@ -2255,7 +2302,15 @@ def score_toolstress_case(case: dict, loop_result: dict) -> dict:
     - procedure: the call log contains the expected steps as an ORDERED
       subsequence, each step's args_subset matching — threaded values (ids /
       ranges returned by earlier canned steps) are checked by exact planted
-      values in later steps' args_subset.
+      values in later steps' args_subset. Any call to a tool OUTSIDE the
+      procedure's step set also fails the case (no free interleaved junk).
+    - no_call: the correct behaviour is to make ZERO tool calls (pure
+      chit-chat, a request answerable from general knowledge, or one that
+      needs clarification first). PASS iff the call log is empty; ANY tool
+      call fails the case.
+
+    For nested_args and error_recovery a single call to the wrong-but-extra
+    tool (anything other than ``expected.tool``) also fails the case.
     """
     kind = case.get("kind")
     expected = case.get("expected") or {}
@@ -2267,6 +2322,7 @@ def score_toolstress_case(case: dict, loop_result: dict) -> dict:
                  "forced_wrapup": bool(loop_result.get("forced_wrapup"))}
     tool = expected.get("tool")
     tool_args = [c.get("args") or {} for c in calls if c.get("tool") == tool]
+    called_tools = {c.get("tool") for c in calls}
 
     if kind == "selection":
         forbidden_called = sorted(
@@ -2284,9 +2340,11 @@ def score_toolstress_case(case: dict, loop_result: dict) -> dict:
         best = min((toolstress_arg_mismatches(a, exact_paths, exact=True)
                     for a in tool_args),
                    key=len, default=sorted(exact_paths))
+        extra_tools = sorted(called_tools - {tool})
         args_ok = bool(tool_args) and not best
         out.update(tool_called=bool(tool_args), mismatched_paths=best,
-                   args_ok=args_ok, passed=args_ok and rounds_ok)
+                   extra_tools=extra_tools, args_ok=args_ok,
+                   passed=args_ok and not extra_tools and rounds_ok)
     elif kind == "error_recovery":
         corrected = expected.get("corrected_paths") or {}
         retried = len(tool_args) >= 2
@@ -2296,10 +2354,14 @@ def score_toolstress_case(case: dict, loop_result: dict) -> dict:
         terms = expected.get("final_must_mention_any") or []
         ack_ok = bool(text.strip()) and (
             not terms or any(_contains(text, t) for t in terms))
+        extra_tools = sorted(called_tools - {tool})
         out.update(retried=retried, recovery_ok=recovery_ok, ack_ok=ack_ok,
-                   passed=recovery_ok and ack_ok and rounds_ok)
+                   extra_tools=extra_tools,
+                   passed=(recovery_ok and ack_ok and not extra_tools
+                           and rounds_ok))
     elif kind == "procedure":
         steps = expected.get("steps") or []
+        step_tools = {s.get("tool") for s in steps}
         idx = 0
         for c in calls:
             if idx >= len(steps):
@@ -2309,10 +2371,16 @@ def score_toolstress_case(case: dict, loop_result: dict) -> dict:
                     and not toolstress_arg_mismatches(
                         c.get("args") or {}, step.get("args_subset") or {})):
                 idx += 1
+        extra_tools = sorted(called_tools - step_tools)
         procedure_ok = bool(steps) and idx == len(steps)
         out.update(steps_completed=idx, steps_total=len(steps),
-                   procedure_ok=procedure_ok,
-                   passed=procedure_ok and rounds_ok)
+                   procedure_ok=procedure_ok, extra_tools=extra_tools,
+                   passed=procedure_ok and not extra_tools and rounds_ok)
+    elif kind == "no_call":
+        unexpected_tools = sorted(called_tools)
+        no_call_ok = not calls
+        out.update(no_call_ok=no_call_ok, unexpected_tools=unexpected_tools,
+                   passed=no_call_ok and rounds_ok)
     else:
         out.update(passed=False, error=f"unknown kind {kind!r}")
     return out
@@ -2335,6 +2403,7 @@ def aggregate_toolstress(per_case: list[dict]) -> dict:
         "arg_exactness_rate": rate(by("nested_args")),
         "recovery_rate": rate(by("error_recovery")),
         "procedure_rate": rate(by("procedure")),
+        "abstention_rate": rate(by("no_call")),
         "failed_ids": [r.get("id") for r in per_case if not r.get("passed")],
     }
 
@@ -2851,6 +2920,18 @@ DEVPLAN_INSTRUCTION_KEYWORDS: dict[str, tuple[str, ...]] = {
 
 DEVPLAN_INSTRUCTION_MAX_CHARS = 1200
 
+# Minimum rubric-judge (prod 35B) weighted score an instruction must reach to
+# count as a pass — but ONLY when a judge score is actually present. Keyword
+# classes + length prove the instruction *names a target, describes behavior,
+# and demands tests*; they do not prove it is actionable, so pass_rate used to
+# saturate regardless of plan quality. 0.6 requires a clear majority of the
+# rubric's weight to be satisfied (weighted_rubric_score ∈ [0,1]) — high enough
+# to reject vacuous-but-well-formed plans, low enough not to punish a
+# competent instruction that misses one minor rubric criterion. When the judge
+# is skipped (score is None) the gate is a no-op, so judge-absent audits keep
+# their previous keyword+length semantics.
+DEVPLAN_JUDGE_MIN = 0.6
+
 _DEVPLAN_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
@@ -2859,17 +2940,26 @@ def _devplan_strip_think(text: str) -> str:
     return _DEVPLAN_THINK_RE.sub("", text or "").strip()
 
 
-def score_devplan_instruction(case: dict, reply: str) -> dict:
-    """Keyword-class + length scorer for a director instruction."""
+def score_devplan_instruction(case: dict, reply: str,
+                              judge_score: Optional[float] = None) -> dict:
+    """Keyword-class + length scorer for a director instruction.
+
+    ``judge_score`` (the case's actionability rubric weighted by the prod-35B
+    judge, ∈ [0,1]) additionally gates the pass when present: a well-formed but
+    non-actionable plan can clear the keyword classes and length yet score low
+    with the judge, and must then FAIL. When the judge is skipped the score is
+    None and the gate is a no-op, preserving keyword+length-only semantics."""
     text = _devplan_strip_think(reply)
     hits = {name: any(_contains(text, kw) for kw in kws)
             for name, kws in DEVPLAN_INSTRUCTION_KEYWORDS.items()}
     max_chars = case.get("max_chars", DEVPLAN_INSTRUCTION_MAX_CHARS)
     length_ok = 0 < len(text) <= max_chars
+    structural_ok = length_ok and all(hits.values())
+    judge_ok = judge_score is None or judge_score >= DEVPLAN_JUDGE_MIN
     return {"id": case.get("id"), "kind": "instruction",
             "keyword_hits": hits, "length_ok": length_ok,
-            "passed": length_ok and all(hits.values()),
-            "judge_score": None}
+            "passed": structural_ok and judge_ok,
+            "judge_score": judge_score}
 
 
 def devplan_review_verdict(reply: str) -> bool:
@@ -4410,7 +4500,7 @@ def run_toolstress_role(port: int, sampling: dict, thinking: str) -> dict:
     (agentic-role plumbing) with the full ~13-tool confusable registry offered
     every round, canned handlers (incl. planted first-call errors), <=6 tool
     rounds, forced wrap-up. Deterministic scoring per kind: selection /
-    nested_args / error_recovery / procedure."""
+    nested_args / error_recovery / procedure / no_call (abstention)."""
     import cpu_sweep
     cases = cpu_sweep.load_golden_set(GOLDEN_DIR / "tool_stress.jsonl")
     print(f"  [toolstress] {len(cases)} cases (max {TOOLSTRESS_MAX_ROUNDS} "
@@ -4441,7 +4531,8 @@ def run_toolstress_role(port: int, sampling: dict, thinking: str) -> dict:
           f"sel={agg['tool_selection_rate']:.0%} "
           f"args={agg['arg_exactness_rate']:.0%} "
           f"recov={agg['recovery_rate']:.0%} "
-          f"proc={agg['procedure_rate']:.0%}", flush=True)
+          f"proc={agg['procedure_rate']:.0%} "
+          f"noop={agg['abstention_rate']:.0%}", flush=True)
     return agg
 
 
@@ -4582,13 +4673,17 @@ def run_devplan_role(port: int, sampling: dict, thinking: str) -> dict:
                 sampling=sampling, thinking=thinking, max_tokens=600,
                 seed=case_seed(case.get("id")))
             text = _message_text(msg)
-            result = score_devplan_instruction(case, text)
+            # Judge FIRST so its score can gate `passed` inside the scorer
+            # (see DEVPLAN_JUDGE_MIN). Judge-absent → None → gate is a no-op.
+            judge_score = None
             if judge_healthy and case.get("rubric"):
-                result["judge_score"] = (judge_conversation_case(
+                judge_score = (judge_conversation_case(
                     devplan_judge_case(case), _devplan_strip_think(text))
                     .get("weighted_score", 0.0)
                     if text.strip() and not text.startswith("__ERROR__")
                     else 0.0)
+            result = score_devplan_instruction(case, text,
+                                                judge_score=judge_score)
         else:
             # Mirror dev_director._review's user-message shape exactly.
             review_user = (f"Goal: {case.get('goal', '')}\n\n"

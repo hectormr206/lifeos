@@ -480,9 +480,28 @@ def test_codereview_clean_snippet_pass_and_false_positive():
     fp = ma.score_codereview_case(case, "Veo un posible resource leak en la línea 2.")
     assert fp["passed"] is False and fp["false_positive"] is True
     assert fp["keyword_hits"] == ["leak"]
-    # explicit SIN BUGS verdict wins even if a keyword shows up in prose
+    # a NEGATED / praise mention of a keyword is not a flag → still passes
     negated = ma.score_codereview_case(case, "SIN BUGS. No hay injection posible.")
     assert negated["passed"] is True
+    assert negated["keyword_hits"] == []
+
+
+def test_codereview_clean_false_positive_beats_sin_bugs():
+    """A clean case must FAIL when the model asserts a specific (bogus) bug,
+    even if it also stamps the SIN BUGS verdict — the invented flag wins."""
+    case = {"id": "cr35", "clean": True,
+            "must_not_contain": ["injection", "race", "leak"]}
+    # invents a bug while also claiming clean → false positive, must fail
+    fp = ma.score_codereview_case(
+        case, "SIN BUGS. Aunque veo un posible SQL injection en la línea 3.")
+    assert fp["passed"] is False and fp["false_positive"] is True
+    assert fp["keyword_hits"] == ["injection"]
+    # praise phrasings around the keyword remain non-flags (no false-fail)
+    for praise in ("SIN BUGS, seguro contra injection.",
+                   "SIN BUGS. Está libre de race conditions.",
+                   "SIN BUGS. No veo ningún leak de recursos."):
+        r = ma.score_codereview_case(case, praise)
+        assert r["passed"] is True, praise
 
 
 def test_codereview_aggregate_detection_and_false_positive_rates():
@@ -1090,6 +1109,37 @@ def test_recordsqa_refusal_trap_pass_and_fail():
     bad = ma.score_recordsqa_case(trap, "Tu colesterol es 190 mg/dL.")
     assert not bad["passed"] and not bad["refusal_ok"]
     assert bad["fabricated"] == ["190"]
+
+
+def test_recordsqa_distractor_exclusion_optional():
+    """A lookup case may forbid in-records DISTRACTOR values (the non-answer
+    readings). A specific correct answer excludes them; regurgitating the whole
+    block trips the exclusion. Absent field = no-op (back-compat)."""
+    records = ("- [2026-07-14] presión 118/76, pulso 62\n"
+               "- [2026-07-12] presión 122/80, pulso 65\n"
+               "- [2026-07-09] presión 125/82, pulso 68")
+    case = {"id": "rq-x", "domain": "salud", "today": "2026-07-15",
+            "records_block": records,
+            "question": "¿Cuál fue mi última presión?",
+            "expected": {"must_contain": [["118"], ["76"]],
+                         "must_not_contain": ["122", "125"],
+                         "must_not_contain_numbers_absent_from_records": True}}
+    # specific correct answer — excludes the older readings → passes
+    good = ma.score_recordsqa_case(
+        case, "Tu última presión fue 118/76 el 14 de julio.")
+    assert good["passed"] and good["forbidden_hits"] == []
+    # regurgitating every reading trips the distractor exclusion → fails
+    dump = ma.score_recordsqa_case(
+        case, "Tus presiones: 118/76, 122/80 y 125/82.")
+    assert not dump["passed"] and dump["forbidden_hits"] == ["122", "125"]
+    assert dump["fabricated"] == []          # all numbers ARE in the records
+    # absent must_not_contain → exclusion is a no-op, dump would pass
+    case_noexcl = {**case, "expected": {
+        "must_contain": [["118"], ["76"]],
+        "must_not_contain_numbers_absent_from_records": True}}
+    noop = ma.score_recordsqa_case(
+        case_noexcl, "Tus presiones: 118/76, 122/80 y 125/82.")
+    assert noop["passed"] and noop["forbidden_hits"] == []
 
 
 def test_recordsqa_aggregate_rates():
@@ -2100,6 +2150,34 @@ def test_devplan_instruction_keyword_scorer():
     assert ma.score_devplan_instruction(case, "")["passed"] is False
 
 
+def test_devplan_instruction_judge_score_gates_pass():
+    """When a rubric judge score is present it must also clear the threshold —
+    a keyword+length-valid instruction with a weak judge score fails."""
+    case = {"id": "i1", "kind": "instruction", "goal": "g", "max_chars": 1200}
+    good = ("Modify the paginate() function in utils/pagination.py so the "
+            "last page must be returned when total is an exact multiple of "
+            "page size. Add a pytest regression test for that edge case.")
+    # judge absent (None) → gate does not tighten, keyword+length decides
+    absent = ma.score_devplan_instruction(case, good, judge_score=None)
+    assert absent["passed"] is True and absent["judge_score"] is None
+    # strong judge score → passes and is recorded
+    strong = ma.score_devplan_instruction(case, good, judge_score=0.9)
+    assert strong["passed"] is True and strong["judge_score"] == 0.9
+    # weak judge score → fails even though keyword classes + length are fine
+    weak = ma.score_devplan_instruction(case, good, judge_score=0.3)
+    assert weak["passed"] is False and weak["judge_score"] == 0.3
+    assert all(weak["keyword_hits"].values()) and weak["length_ok"]
+    # exactly at threshold passes; just below fails
+    assert ma.score_devplan_instruction(
+        case, good, judge_score=ma.DEVPLAN_JUDGE_MIN)["passed"] is True
+    assert ma.score_devplan_instruction(
+        case, good, judge_score=ma.DEVPLAN_JUDGE_MIN - 0.01)["passed"] is False
+    # a low judge score cannot rescue a keyword-invalid instruction
+    bad_kw = ma.score_devplan_instruction(
+        case, "Improve pagination so it works.", judge_score=0.95)
+    assert bad_kw["passed"] is False
+
+
 def test_aggregate_devplan_metrics_and_note():
     per = [
         {"id": "i1", "kind": "instruction", "passed": True, "judge_score": 0.8},
@@ -2431,6 +2509,100 @@ def test_toolstress_procedure_order_and_threading():
     assert not bad_thread["passed"] and bad_thread["steps_completed"] == 1
 
 
+def test_toolstress_no_call_abstain_vs_call():
+    """no_call kind: PASS iff the model emits ZERO tool calls (abstain /
+    ask-for-clarification); ANY call fails the case."""
+    case = {
+        "id": "ts-noop-x", "kind": "no_call",
+        "prompt": "Gracias, quedó perfecto. ¡Buen día!",
+        "expected": {},
+    }
+    # Abstained (no tool call, just a text reply) → pass.
+    abstained = ma.score_toolstress_case(case, _ts_loop_result(
+        [], text="¡De nada! Que tengas buen día."))
+    assert abstained["passed"] and abstained["no_call_ok"]
+    assert abstained["unexpected_tools"] == []
+    # Fired a tool anyway → fail, and the offending tool is reported.
+    called = ma.score_toolstress_case(case, _ts_loop_result(
+        [{"tool": "create_reminder",
+          "args": {"text": "x", "when_iso": "2026-07-16T08:00"}}]))
+    assert not called["passed"] and not called["no_call_ok"]
+    assert called["unexpected_tools"] == ["create_reminder"]
+
+
+def test_toolstress_extra_call_penalty():
+    """A model that ALSO fires a tool outside the expected set fails
+    nested_args / error_recovery / procedure — arbitrary wrong extra calls
+    are no longer free."""
+    # nested_args: right tool + args, but a stray extra tool → fail.
+    nest_case = {
+        "id": "ts-nest-x", "kind": "nested_args",
+        "prompt": "Exporta salud junio en CSV.",
+        "expected": {"tool": "export_data",
+                     "args_exact": {"format": "csv"}},
+    }
+    ok = ma.score_toolstress_case(nest_case, _ts_loop_result(
+        [{"tool": "export_data", "args": {"format": "csv"}}]))
+    assert ok["passed"] and ok["extra_tools"] == []
+    extra = ma.score_toolstress_case(nest_case, _ts_loop_result(
+        [{"tool": "export_data", "args": {"format": "csv"}},
+         {"tool": "send_message", "args": {"recipient": "x", "text": "y"}}]))
+    assert not extra["passed"] and extra["args_ok"]
+    assert extra["extra_tools"] == ["send_message"]
+
+    # error_recovery: correct retry but ALSO a wrong extra tool → fail.
+    err_case = {
+        "id": "ts-err-x2", "kind": "error_recovery",
+        "prompt": "Exporta finanzas julio en JSON.",
+        "expected": {"tool": "export_data",
+                     "corrected_paths": {"filters.date_range.from":
+                                         "2026-07-01"},
+                     "final_must_mention_any": ["listo"]},
+    }
+    bad = {"format": "json", "filters": {"domain": "finanzas"}}
+    good = {"format": "json",
+            "filters": {"domain": "finanzas",
+                        "date_range": {"from": "2026-07-01", "to": "x"}}}
+    clean = ma.score_toolstress_case(err_case, _ts_loop_result(
+        [{"tool": "export_data", "args": bad},
+         {"tool": "export_data", "args": good}], rounds=2))
+    assert clean["passed"] and clean["extra_tools"] == []
+    dirty = ma.score_toolstress_case(err_case, _ts_loop_result(
+        [{"tool": "export_data", "args": bad},
+         {"tool": "export_data", "args": good},
+         {"tool": "send_notification",
+          "args": {"message": "z", "channel": "push"}}], rounds=3))
+    assert not dirty["passed"] and dirty["recovery_ok"]
+    assert dirty["extra_tools"] == ["send_notification"]
+
+    # procedure: all steps done in order but a junk tool interleaved → fail.
+    proc_case = {
+        "id": "ts-proc-x2", "kind": "procedure",
+        "prompt": "Registra el gasto compartido con Diego.",
+        "procedure": "1) search_memory 2) create_expense 3) send_notification",
+        "expected": {"steps": [
+            {"tool": "search_memory", "args_subset": {"query": "diego"}},
+            {"tool": "create_expense", "args_subset": {"amount": 450}},
+            {"tool": "send_notification", "args_subset": {"channel": "push"}},
+        ]},
+    }
+    ordered = [
+        {"tool": "search_memory", "args": {"query": "diego"}},
+        {"tool": "create_expense", "args": {"amount": 450, "category": "c"}},
+        {"tool": "send_notification", "args": {"message": "m",
+                                               "channel": "push"}},
+    ]
+    good_proc = ma.score_toolstress_case(
+        proc_case, _ts_loop_result(ordered, rounds=3))
+    assert good_proc["passed"] and good_proc["extra_tools"] == []
+    junked = ma.score_toolstress_case(proc_case, _ts_loop_result(
+        [ordered[0],
+         {"tool": "search_web", "args": {"query": "junk"}},
+         ordered[1], ordered[2]], rounds=4))
+    assert not junked["passed"] and junked["procedure_ok"]
+    assert junked["extra_tools"] == ["search_web"]
+
+
 def test_toolstress_aggregate_metrics():
     per = [
         {"id": "s1", "kind": "selection", "passed": True},
@@ -2438,25 +2610,29 @@ def test_toolstress_aggregate_metrics():
         {"id": "n1", "kind": "nested_args", "passed": True},
         {"id": "e1", "kind": "error_recovery", "passed": False},
         {"id": "p1", "kind": "procedure", "passed": True},
+        {"id": "a1", "kind": "no_call", "passed": True},
+        {"id": "a2", "kind": "no_call", "passed": False},
     ]
     agg = ma.aggregate_toolstress(per)
-    assert agg["n"] == 5
-    assert agg["pass_rate"] == 0.6
+    assert agg["n"] == 7
+    assert agg["pass_rate"] == round(4 / 7, 4)
     assert agg["tool_selection_rate"] == 0.5
     assert agg["arg_exactness_rate"] == 1.0
     assert agg["recovery_rate"] == 0.0
     assert agg["procedure_rate"] == 1.0
-    assert agg["failed_ids"] == ["s2", "e1"]
+    assert agg["abstention_rate"] == 0.5
+    assert agg["failed_ids"] == ["s2", "e1", "a2"]
 
 
 def test_tool_stress_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "tool_stress.jsonl")
-    assert len(cases) == 42
+    assert len(cases) == 46
     kinds = [c["kind"] for c in cases]
     assert kinds.count("selection") == 18
     assert kinds.count("nested_args") == 9
     assert kinds.count("error_recovery") == 8
     assert kinds.count("procedure") == 7
+    assert kinds.count("no_call") == 4
     # The confusable registry: >=12 well-formed schemas with the MCP-style
     # stress surface (nested required objects, enums, an array param).
     assert len(ma.TOOLSTRESS_REGISTRY) >= 12
@@ -2494,6 +2670,10 @@ def test_tool_stress_golden_set_shape():
                     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) and v[:4] in sources:
                         continue
                     assert False, (c["id"], v)
+            continue
+        if c["kind"] == "no_call":
+            # Abstention cases pin NO tool: correct behaviour is zero calls.
+            assert "tool" not in exp
             continue
         assert exp["tool"] in ma.TOOLSTRESS_REGISTRY
         if c["kind"] == "selection":
