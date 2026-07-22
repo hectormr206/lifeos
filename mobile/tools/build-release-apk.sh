@@ -12,7 +12,11 @@ cd "$(dirname "$0")/.."          # -> mobile/
 MOBILE_DIR="$(pwd)"
 REPO_ROOT="$(dirname "$MOBILE_DIR")"
 
-flutter build apk --release
+# Auto-increment versionCode from the git commit count so every build is a
+# strictly newer version — this is what lets the OTA self-update detect it.
+BUILD_NUMBER="$(git -C "$REPO_ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
+echo "→ build-number (versionCode): $BUILD_NUMBER"
+flutter build apk --release --build-number="$BUILD_NUMBER"
 OUT="build/app/outputs/flutter-apk"
 TS="$(date +%Y%m%d-%H%M%S)"
 NEW_APK="$OUT/app-release-$TS.apk"
