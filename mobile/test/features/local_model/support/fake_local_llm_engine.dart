@@ -1,5 +1,6 @@
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/local_model/domain/local_model_preferences.dart';
+import 'package:lifeos/features/local_model/domain/notification_permission.dart';
 
 /// A fully in-memory [LocalLlmEngine] for tests — NO flutter_gemma, no
 /// download, no real inference. Records interactions and lets each behaviour
@@ -57,6 +58,49 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   @override
   Future<void> dispose() async {
     disposed = true;
+  }
+}
+
+/// In-memory [NotificationPermissionGateway] for tests — no permission_handler
+/// channel, no OS dialog. Scriptable request/status outcomes; counts requests +
+/// openSettings calls so the notifier's request/re-request/open-settings
+/// behaviour is unit-testable on the host.
+class FakeNotificationPermissionGateway implements NotificationPermissionGateway {
+  FakeNotificationPermissionGateway({
+    this.requestResult = NotificationPermission.granted,
+    NotificationPermission? statusResult,
+    this.openSettingsResult = true,
+  }) : statusResult = statusResult ?? requestResult;
+
+  /// What [request] returns; mutable so a test can flip it between calls.
+  NotificationPermission requestResult;
+
+  /// What [status] returns.
+  NotificationPermission statusResult;
+
+  /// What [openSettings] returns.
+  bool openSettingsResult;
+
+  int requestCount = 0;
+  int statusCount = 0;
+  int openSettingsCount = 0;
+
+  @override
+  Future<NotificationPermission> request() async {
+    requestCount++;
+    return requestResult;
+  }
+
+  @override
+  Future<NotificationPermission> status() async {
+    statusCount++;
+    return statusResult;
+  }
+
+  @override
+  Future<bool> openSettings() async {
+    openSettingsCount++;
+    return openSettingsResult;
   }
 }
 

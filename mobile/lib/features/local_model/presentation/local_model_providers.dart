@@ -1,8 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/flutter_gemma_llm_engine.dart';
+import '../data/permission_handler_notification_gateway.dart';
 import '../domain/local_llm_engine.dart';
 import '../domain/local_model_preferences.dart';
+import '../domain/notification_permission.dart';
 
 /// Immutable config for the on-device model (model URL + backend). Overridable
 /// in tests / to try the Pixel Tensor-G5 NPU build.
@@ -20,6 +22,13 @@ final localLlmEngineProvider = Provider<LocalLlmEngine>((ref) {
   ref.onDispose(engine.dispose);
   return engine;
 });
+
+/// Notification-permission gateway (Android 13+ POST_NOTIFICATIONS) used before
+/// a model download so `background_downloader` can post its progress
+/// notification. Overridden with a fake in tests.
+final notificationPermissionGatewayProvider = Provider<NotificationPermissionGateway>(
+  (ref) => const PermissionHandlerNotificationGateway(),
+);
 
 /// Local-only toggle persistence (shared_preferences). Overridden with a fake
 /// in tests.

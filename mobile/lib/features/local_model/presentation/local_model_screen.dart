@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../domain/notification_permission.dart';
 import 'local_model_notifier.dart';
 import 'local_model_providers.dart';
 
@@ -45,6 +46,7 @@ class LocalModelScreen extends ConsumerWidget {
           _StatusTile(manager: manager),
           const SizedBox(height: 16),
           _DownloadSection(manager: manager),
+          _NotificationPermissionNotice(manager: manager),
           if (manager.error != null) ...[
             const SizedBox(height: 16),
             Text(manager.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
@@ -104,12 +106,91 @@ class _DownloadSection extends ConsumerWidget {
     // so this button is shown again — relabel it as a retry so the user knows
     // the action is safe to repeat (the engine resets the stale task first).
     final hasError = manager.error != null;
-    return SizedBox(
-      width: double.infinity,
-      child: FilledButton.icon(
-        onPressed: () => ref.read(localModelManagerProvider.notifier).download(),
-        icon: Icon(hasError ? Icons.refresh : Icons.download_outlined),
-        label: Text(hasError ? 'Reintentar descarga' : 'Descargar modelo'),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FilledButton.icon(
+          onPressed: () => ref.read(localModelManagerProvider.notifier).download(),
+          icon: Icon(hasError ? Icons.refresh : Icons.download_outlined),
+          label: Text(hasError ? 'Reintentar descarga' : 'Descargar modelo'),
+        ),
+        const SizedBox(height: 8),
+        // Rationale shown BEFORE the request so the user understands why the
+        // notification prompt appears when they tap download.
+        Text(
+          'Activá las notificaciones para ver el progreso de la descarga.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+    );
+  }
+}
+
+/// Recovery UI shown after the user declines the notification permission.
+/// Notifications are only for the visible progress notification — the download
+/// works regardless — so the copy reassures rather than blocks, and offers the
+/// two Android recovery paths: re-tap download (soft denial re-prompts) or open
+/// Settings (permanent denial, the OS won't prompt again).
+class _NotificationPermissionNotice extends ConsumerWidget {
+  const _NotificationPermissionNotice({required this.manager});
+
+  final LocalModelManagerState manager;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final permission = manager.notificationPermission;
+    // Only relevant while the model is not yet installed and the user actually
+    // declined. granted / unsupported / null → nothing to show.
+    final isDenied = permission == NotificationPermission.denied ||
+        permission == NotificationPermission.permanentlyDenied;
+    if (manager.installed || !isDenied) return const SizedBox.shrink();
+
+    final scheme = Theme.of(context).colorScheme;
+    final permanent = permission == NotificationPermission.permanentlyDenied;
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.notifications_off_outlined, size: 20, color: scheme.onSurfaceVariant),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    permanent
+                        ? 'Las notificaciones están desactivadas, así que no verás el '
+                            'progreso en la barra de estado. La descarga funciona igual. '
+                            'Para verlo, activalas desde Ajustes.'
+                        : 'Sin notificaciones no verás el progreso en la barra de estado, '
+                            'pero la descarga funciona igual. Tocá "Descargar modelo" de '
+                            'nuevo para permitirlas.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+            if (permanent) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () =>
+                      ref.read(localModelManagerProvider.notifier).openNotificationSettings(),
+                  icon: const Icon(Icons.settings_outlined),
+                  label: const Text('Abrir ajustes'),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

@@ -61,20 +61,22 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   /// so a stale/failed task record can't be re-attached on retry.
   static const String _downloadGroup = 'smart_downloads';
 
-  /// Best-effort pre-download prep. Two device-only failure modes are cleared
-  /// here (both surfaced on a Pixel / Android 13+):
-  ///  1. POST_NOTIFICATIONS: background_downloader's foreground service posts a
-  ///     progress notification; without runtime permission the task fails at 0%.
-  ///  2. Stale failed task: a previously-failed download persists in
-  ///     background_downloader's DB; the next attempt RE-ATTACHES to it and it
-  ///     immediately re-fails ("Existing download failed: TaskStatus.failed").
-  ///     `reset()` cancels + clears the group so the retry starts clean.
+  /// Best-effort pre-download prep: clears a stale failed task so a retry starts
+  /// clean. A previously-failed download persists in background_downloader's DB;
+  /// the next attempt RE-ATTACHES to it and immediately re-fails ("Existing
+  /// download failed: TaskStatus.failed"). `reset()` cancels + clears the group.
+  ///
+  /// The Android 13+ POST_NOTIFICATIONS request is DELIBERATELY NOT here: it is
+  /// owned by [LocalModelManagerNotifier] so its outcome (granted / soft-denied
+  /// / permanently-denied) can drive the UI, and so the permission-denied
+  /// recovery flow is unit-testable. Notifications are recommended (progress
+  /// notification), never required — empirically the download completes without
+  /// them — so nothing here depends on that permission.
+  ///
   /// Wrapped so prep failures never block or crash the actual download attempt.
   Future<void> _prepareDownload() async {
     try {
-      final downloader = FileDownloader();
-      await downloader.permissions.request(PermissionType.notifications);
-      await downloader.reset(group: _downloadGroup);
+      await FileDownloader().reset(group: _downloadGroup);
     } catch (_) {
       // Prep is opportunistic; fall through to the install attempt regardless.
     }

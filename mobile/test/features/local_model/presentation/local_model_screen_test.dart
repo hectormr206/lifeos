@@ -5,17 +5,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/local_model/domain/notification_permission.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_screen.dart';
 
 import '../support/fake_local_llm_engine.dart';
 
-Future<void> _pump(WidgetTester tester, {required bool installed}) async {
+Future<void> _pump(
+  WidgetTester tester, {
+  required bool installed,
+  FakeLocalLlmEngine? engine,
+  FakeNotificationPermissionGateway? gateway,
+}) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: installed)),
+        localLlmEngineProvider.overrideWithValue(engine ?? FakeLocalLlmEngine(installed: installed)),
         localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences()),
+        notificationPermissionGatewayProvider
+            .overrideWithValue(gateway ?? FakeNotificationPermissionGateway()),
       ],
       child: const MaterialApp(home: LocalModelScreen()),
     ),
@@ -56,5 +64,55 @@ void main() {
     await tester.tap(find.byType(SwitchListTile));
     await tester.pumpAndSettle();
     expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value, isTrue);
+  });
+
+  testWidgets('shows the notification rationale next to the download button', (tester) async {
+    await _pump(tester, installed: false);
+
+    expect(
+      find.textContaining('Activá las notificaciones para ver el progreso'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('soft denial shows an informative notice and keeps the download button', (tester) async {
+    // Denied + download fails => stays not installed so the notice is visible.
+    await _pump(
+      tester,
+      installed: false,
+      engine: FakeLocalLlmEngine(downloadShouldFail: true),
+      gateway: FakeNotificationPermissionGateway(requestResult: NotificationPermission.denied),
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Descargar modelo'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('la descarga funciona igual'), findsOneWidget);
+    // Re-request affordance: the (retry) download button is still there.
+    expect(find.byType(FilledButton), findsOneWidget);
+    // No permanent-denial escape hatch on a soft denial.
+    expect(find.widgetWithText(TextButton, 'Abrir ajustes'), findsNothing);
+  });
+
+  testWidgets('permanent denial shows an "Abrir ajustes" button that deep-links', (tester) async {
+    final gateway =
+        FakeNotificationPermissionGateway(requestResult: NotificationPermission.permanentlyDenied);
+    await _pump(
+      tester,
+      installed: false,
+      engine: FakeLocalLlmEngine(downloadShouldFail: true),
+      gateway: gateway,
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Descargar modelo'));
+    await tester.pumpAndSettle();
+
+    final settingsButton = find.widgetWithText(TextButton, 'Abrir ajustes');
+    expect(settingsButton, findsOneWidget);
+    expect(find.textContaining('activalas desde Ajustes'), findsOneWidget);
+
+    await tester.tap(settingsButton);
+    await tester.pumpAndSettle();
+    expect(gateway.openSettingsCount, 1);
   });
 }

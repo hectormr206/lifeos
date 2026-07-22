@@ -95,6 +95,7 @@ dependencies:
   # package) is discontinued upstream; `flutter_markdown_plus` is its
   # actively-maintained drop-in continuation (same API, same widgets).
   flutter_markdown_plus: ^1.0.12
+  permission_handler: ^12.0.3
 
 dev_dependencies:
   flutter_test:
