@@ -1,12 +1,13 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/api/api_providers.dart';
 import '../data/apk_download_service.dart';
 import '../data/app_update_service.dart';
 import '../domain/apk_installer.dart';
 import '../domain/app_update_preferences.dart';
 import '../domain/app_version_info.dart';
 import '../domain/update_notifications.dart';
+import '../domain/update_source_config.dart';
 import '../domain/update_status.dart';
 
 /// The running build's version identity. Overridden with a fake in tests.
@@ -23,16 +24,26 @@ final updateNotificationsProvider =
 /// Hands a downloaded APK to the Android package installer. Faked in tests.
 final apkInstallerProvider = Provider<ApkInstaller>((ref) => const OpenFilexApkInstaller());
 
-/// Update-check service — reuses the shared authenticated [dioProvider] Dio,
-/// so `GET /api/app/manifest` carries the pairing bearer token automatically.
+/// The public update source (base URL + bundled access key). Built from the
+/// compile-time config (`--dart-define` overrides, else the placeholders in
+/// `update_source_config.dart`). Overridable in tests.
+final updateSourceConfigProvider =
+    Provider<UpdateSourceConfig>((ref) => const UpdateSourceConfig.fromEnvironment());
+
+/// Update-check service — uses a PLAIN Dio pointed at the PUBLIC update source
+/// (NOT the paired `dioProvider`), sending the bundled access key as the
+/// `X-LifeOS-Update-Key` header. No pairing, no bearer token.
 final appUpdateServiceProvider = Provider<AppUpdateService>((ref) {
-  return AppUpdateService(ref.watch(dioProvider), ref.watch(appVersionInfoProvider));
+  final config = ref.watch(updateSourceConfigProvider);
+  final dio = Dio(BaseOptions(baseUrl: config.baseUrl));
+  return AppUpdateService(dio, ref.watch(appVersionInfoProvider), config: config);
 });
 
-/// APK download + sha256 verification service (background_downloader + the
-/// stored bearer token). Faked in tests.
+/// APK download + sha256 verification service — downloads from the PUBLIC
+/// update source with the `X-LifeOS-Update-Key` header (no stored bearer
+/// token). Faked in tests.
 final apkDownloadServiceProvider = Provider<ApkDownloadService>((ref) {
-  return ApkDownloadService(ref.watch(tokenStoreProvider));
+  return ApkDownloadService(config: ref.watch(updateSourceConfigProvider));
 });
 
 /// Test seam: an initial [UpdateStatus] the notifier starts from (default

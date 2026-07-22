@@ -2,9 +2,10 @@ import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 
-import '../../../core/auth/token_store.dart';
 import '../domain/app_manifest.dart';
+import '../domain/update_source_config.dart';
 
 /// Raised when a downloaded APK fails verification and must be rejected.
 class ApkDownloadException implements Exception {
@@ -14,40 +15,54 @@ class ApkDownloadException implements Exception {
   String toString() => message;
 }
 
-/// Downloads the published APK from `GET /api/app/download` and verifies it
-/// before it is ever handed to the installer (self-hosted OTA update).
+/// Downloads the published APK from the PUBLIC update source
+/// (`GET <base>/download`) and verifies it before it is ever handed to the
+/// installer (self-hosted OTA update, WITHOUT pairing).
 ///
 /// The download goes through `background_downloader` (already a dependency)
 /// rather than Dio so it survives backgrounding and posts a progress
-/// notification — with the pairing Bearer token attached as an
-/// `Authorization` header (the same header `AuthInterceptor` adds to Dio
-/// requests). After the bytes land, the file's SHA-256 is checked against the
-/// manifest; a mismatch deletes the file and throws, so a corrupt/tampered APK
-/// can never reach the package installer.
+/// notification. Formerly it attached the pairing Bearer token from the
+/// [TokenStore]; it now attaches only the bundled access key as the
+/// [kUpdateAccessKeyHeader] header, so no pairing is required. After the bytes
+/// land, the file's SHA-256 is checked against the manifest; a mismatch
+/// deletes the file and throws, so a corrupt/tampered APK can never reach the
+/// package installer.
 class ApkDownloadService {
-  ApkDownloadService(this._tokenStore, {FileDownloader? downloader})
-      : _downloader = downloader ?? FileDownloader();
+  ApkDownloadService({
+    this._config = const UpdateSourceConfig.fromEnvironment(),
+    FileDownloader? downloader,
+  }) : _downloader = downloader ?? FileDownloader();
 
-  final TokenStore _tokenStore;
+  final UpdateSourceConfig _config;
   final FileDownloader _downloader;
 
   static const String _group = 'app_updates';
   static const String _filename = 'lifeos-update.apk';
 
+  /// Build the [DownloadTask] for [manifest]: `<base>/download` with the
+  /// access-key header. Exposed for testing the URL + header wiring without
+  /// touching the network.
+  @visibleForTesting
+  DownloadTask buildDownloadTask(AppManifest manifest) => DownloadTask(
+        url: _joinUrl(_config.baseUrl, '/download'),
+        headers: {kUpdateAccessKeyHeader: _config.accessKey},
+        filename: _filename,
+        group: _group,
+        baseDirectory: BaseDirectory.temporary,
+        directory: 'app_updates',
+        updates: Updates.statusAndProgress,
+      );
+
   /// Download + verify the APK described by [manifest]. Emits progress in
-  /// `0.0..1.0`; the final event is the absolute file path prefixed with
-  /// `file:` once verification passes. Throws [ApkDownloadException] on a
-  /// missing pairing, a failed download, or a sha256 mismatch.
-  ///
-  /// (Returns the verified path rather than a stream event to keep the caller
-  /// simple; progress is delivered via [onProgress].)
+  /// `0.0..1.0`; returns the verified absolute file path once verification
+  /// passes. Throws [ApkDownloadException] on an unconfigured source, a failed
+  /// download, or a sha256 mismatch.
   Future<String> downloadAndVerify(
     AppManifest manifest, {
     void Function(double progress)? onProgress,
   }) async {
-    final stored = await _tokenStore.load();
-    if (stored == null) {
-      throw ApkDownloadException('No hay conexión emparejada para descargar.');
+    if (!_config.isConfigured) {
+      throw ApkDownloadException('Origen de actualizaciones no configurado.');
     }
 
     // Clear any stale/failed task record for our group first (same defensive
@@ -56,16 +71,7 @@ class ApkDownloadService {
       await _downloader.reset(group: _group);
     } catch (_) {/* opportunistic */}
 
-    final url = _joinUrl(stored.engineUrl, '/api/app/download');
-    final task = DownloadTask(
-      url: url,
-      headers: {'Authorization': 'Bearer ${stored.token}'},
-      filename: _filename,
-      group: _group,
-      baseDirectory: BaseDirectory.temporary,
-      directory: 'app_updates',
-      updates: Updates.statusAndProgress,
-    );
+    final task = buildDownloadTask(manifest);
 
     final result = await _downloader.download(
       task,

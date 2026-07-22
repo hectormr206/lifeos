@@ -1,7 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../connection/domain/connection_status.dart';
-import '../../connection/presentation/connection_notifier.dart';
 import '../data/apk_download_service.dart';
 import '../domain/apk_installer.dart';
 import '../domain/app_update_preferences.dart';
@@ -246,11 +244,10 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
   }
 }
 
-/// Watched once by the root widget so a launch-time auto-check fires as soon
-/// as the device is (or becomes) paired — mirrors `outboxSyncTriggerProvider`.
+/// Watched once by the root widget so a launch-time auto-check fires on
+/// startup. The update source is now a PUBLIC URL (not the paired engine), so
+/// this runs regardless of pairing — `maybeAutoCheck` still honors the user's
+/// auto-check preference.
 final appUpdateLaunchCheckProvider = Provider<void>((ref) {
-  final connection = ref.watch(connectionNotifierProvider);
-  if (connection is ConnectionPaired) {
-    Future.microtask(() => ref.read(appUpdateNotifierProvider.notifier).maybeAutoCheck());
-  }
+  Future.microtask(() => ref.read(appUpdateNotifierProvider.notifier).maybeAutoCheck());
 });

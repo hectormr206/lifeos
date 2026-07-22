@@ -2,24 +2,32 @@ import 'package:dio/dio.dart';
 
 import '../domain/app_manifest.dart';
 import '../domain/app_version_info.dart';
+import '../domain/update_source_config.dart';
 import '../domain/update_status.dart';
 
-/// Talks to the paired engine's OTA endpoints and decides whether an update is
-/// available (self-hosted app update).
+/// Talks to the PUBLIC update source's OTA endpoints and decides whether an
+/// update is available (self-hosted app update, WITHOUT pairing).
 ///
-/// Reuses the app's shared authenticated [Dio] (`dioProvider`), which already
-/// carries the pairing Bearer token + the paired engine base URL + TLS pinning
-/// — so `GET /api/app/manifest` is authenticated exactly like every other
-/// `/api/*` call the app makes (see `HttpChatRepository`).
+/// Formerly this reused the paired engine's authenticated [Dio]
+/// (`dioProvider`) and hit `/api/app/manifest` with the pairing Bearer token.
+/// It now uses a PLAIN [Dio] pointed at [UpdateSourceConfig.baseUrl] and
+/// `GET <base>/manifest`, authenticating only with the bundled access key sent
+/// as the [kUpdateAccessKeyHeader] header — so the check works for ANY user
+/// with no pairing at all.
 ///
-/// Defensive by contract: updates only work while paired, so a missing engine,
-/// a 404 (nothing published), a network error, or a malformed manifest all
-/// resolve to [UpdateUnknown] — never a thrown exception.
+/// Defensive by contract: an unconfigured source (placeholders still in
+/// place), a 404 (nothing published), a network error, or a malformed
+/// manifest all resolve to [UpdateUnknown] — never a thrown exception.
 class AppUpdateService {
-  AppUpdateService(this._dio, this._versionInfo);
+  AppUpdateService(
+    this._dio,
+    this._versionInfo, {
+    this._config = const UpdateSourceConfig.fromEnvironment(),
+  });
 
   final Dio _dio;
   final AppVersionInfo _versionInfo;
+  final UpdateSourceConfig _config;
 
   /// GET the manifest and compare its `versionCode` against the running build.
   Future<UpdateStatus> checkForUpdate() async {
@@ -32,8 +40,17 @@ class AppUpdateService {
       return const UpdateUnknown('No se pudo leer la versión instalada.');
     }
 
+    // Placeholders not yet replaced (and no --dart-define override): don't hit
+    // a bogus host — quietly report "no update info" instead of a scary error.
+    if (!_config.isConfigured) {
+      return const UpdateUnknown('Actualizaciones no configuradas todavía.');
+    }
+
     try {
-      final response = await _dio.get<Map<String, Object?>>('/api/app/manifest');
+      final response = await _dio.get<Map<String, Object?>>(
+        '/manifest',
+        options: Options(headers: {kUpdateAccessKeyHeader: _config.accessKey}),
+      );
       final data = response.data;
       if (data == null) {
         return UpToDate(currentVersionName: currentName, currentVersionCode: currentCode);
@@ -44,13 +61,12 @@ class AppUpdateService {
       }
       return UpToDate(currentVersionName: currentName, currentVersionCode: currentCode);
     } on DioException catch (error) {
-      // No engine paired (empty base URL -> connection error), a 404 (nothing
-      // published), or any network failure: not an error the user should see,
-      // just "no update info right now".
+      // A 404 (nothing published) or any network failure: not an error the
+      // user should see, just "no update info right now".
       if (error.response?.statusCode == 404) {
-        return const UpdateUnknown('El motor no tiene ninguna actualización publicada.');
+        return const UpdateUnknown('No hay ninguna actualización publicada.');
       }
-      return const UpdateUnknown('Sin conexión con el motor.');
+      return const UpdateUnknown('No se pudo verificar si hay actualizaciones.');
     } on FormatException {
       return const UpdateUnknown('El manifiesto de actualización no es válido.');
     }
