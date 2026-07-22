@@ -54,7 +54,7 @@ void main() {
     expect(find.textContaining('1.4.0'), findsWidgets); // available version
     expect(find.textContaining('Mejoras de rendimiento'), findsOneWidget);
     expect(find.text('Buscar actualizaciones'), findsOneWidget);
-    expect(find.text('Descargar actualización'), findsOneWidget);
+    expect(find.text('Actualizar ahora'), findsOneWidget);
   });
 
   testWidgets('renders the three toggles reflecting persisted values', (tester) async {
@@ -74,8 +74,8 @@ void main() {
     expect(switches[1].value, isFalse); // notify
     expect(switches[2].value, isTrue); // auto-download
 
-    // No update available -> no download action.
-    expect(find.text('Descargar actualización'), findsNothing);
+    // No update available -> no update action.
+    expect(find.text('Actualizar ahora'), findsNothing);
   });
 
   testWidgets('toggling a switch persists via the notifier', (tester) async {

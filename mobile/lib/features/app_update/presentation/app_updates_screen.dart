@@ -117,8 +117,10 @@ class _UpdateActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final downloading = state.downloadProgress != null && state.downloadedApkPath == null;
     final ready = state.downloadedApkPath != null;
+    final pct = ((state.downloadProgress ?? 0) * 100).round();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -126,35 +128,40 @@ class _UpdateActions extends StatelessWidget {
         if (downloading) ...[
           LinearProgressIndicator(value: state.downloadProgress),
           const SizedBox(height: 8),
-          Text('Descargando… ${((state.downloadProgress ?? 0) * 100).round()}%'),
+          Text('Descargando… $pct%'),
+          const SizedBox(height: 12),
+        ],
+        // Missing "install unknown apps" grant: guide the user to enable it.
+        // Once granted and back in the app, the install continues on its own
+        // (see AppUpdateNotifier.onAppResumed) — no second tap needed.
+        if (state.installHintNeeded) ...[
+          Text(
+            'Activa "Instalar apps desconocidas" para completar la instalación. '
+            'En cuanto lo hagas, la instalación continúa automáticamente.',
+            style: TextStyle(color: scheme.error),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: notifier.openInstallSettings,
+            icon: const Icon(Icons.settings),
+            label: const Text('Abrir ajustes'),
+          ),
           const SizedBox(height: 8),
         ],
-        if (!ready)
+        // Idle: a single button runs the whole flow (download → auto-install).
+        if (!downloading && !ready && !state.installHintNeeded)
           FilledButton.icon(
-            onPressed: downloading ? null : notifier.downloadUpdate,
-            icon: const Icon(Icons.download_outlined),
-            label: const Text('Descargar actualización'),
+            onPressed: notifier.startUpdate,
+            icon: const Icon(Icons.system_update),
+            label: const Text('Actualizar ahora'),
           ),
-        if (ready) ...[
+        // APK already downloaded but installer not launched yet (retry path).
+        if (ready && !state.installHintNeeded)
           FilledButton.icon(
             onPressed: notifier.installUpdate,
             icon: const Icon(Icons.install_mobile),
             label: const Text('Instalar ahora'),
           ),
-          if (state.installHintNeeded) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Activa "Instalar apps desconocidas" para completar la instalación.',
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-            const SizedBox(height: 4),
-            OutlinedButton.icon(
-              onPressed: notifier.openInstallSettings,
-              icon: const Icon(Icons.settings),
-              label: const Text('Abrir ajustes'),
-            ),
-          ],
-        ],
       ],
     );
   }

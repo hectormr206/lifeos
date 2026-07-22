@@ -18,6 +18,7 @@ class AppUpdateUiState {
     this.downloadProgress,
     this.downloadedApkPath,
     this.installHintNeeded = false,
+    this.installPending = false,
     this.error,
   });
 
@@ -43,6 +44,12 @@ class AppUpdateUiState {
   /// The user must enable "install unknown apps" before the installer can run.
   final bool installHintNeeded;
 
+  /// An update flow is in progress and the installer still needs to fire once
+  /// the APK is ready (and the "install unknown apps" grant is present). Kept
+  /// so a resume — e.g. after the user grants the permission in OS settings —
+  /// can auto-continue the install without a second manual tap.
+  final bool installPending;
+
   /// A user-facing error (download/verify/install failure), or null.
   final String? error;
 
@@ -59,6 +66,8 @@ class AppUpdateUiState {
     String? downloadedApkPath,
     bool clearDownloadedApkPath = false,
     bool? installHintNeeded,
+    bool? installPending,
+    bool clearInstallPending = false,
     String? error,
     bool clearError = false,
   }) =>
@@ -73,6 +82,7 @@ class AppUpdateUiState {
         downloadedApkPath:
             clearDownloadedApkPath ? null : (downloadedApkPath ?? this.downloadedApkPath),
         installHintNeeded: installHintNeeded ?? this.installHintNeeded,
+        installPending: clearInstallPending ? false : (installPending ?? this.installPending),
         error: clearError ? null : (error ?? this.error),
       );
 }
@@ -110,9 +120,53 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
   /// Auto-check entry point used on launch: only runs when the user's
   /// auto-check preference is on.
   Future<void> maybeAutoCheck() async {
+    if (state.checking) return;
     final settings = await _safeLoadSettings();
     if (!settings.autoCheck) return;
     await check(auto: true);
+  }
+
+  /// Called when the app returns to the foreground (from the root
+  /// [WidgetsBindingObserver]). Two jobs, in order:
+  ///  1. If an install was left pending because "install unknown apps" was off,
+  ///     re-check the grant and auto-continue the install now that the user may
+  ///     have enabled it — no second manual tap (fixes the grant dead-end).
+  ///  2. Re-run the update check so an update published while the app was open
+  ///     is detected on resume, not only on a cold start.
+  Future<void> onAppResumed() async {
+    await _resumeInstallIfPending();
+    await maybeAutoCheck();
+  }
+
+  Future<void> _resumeInstallIfPending() async {
+    if (!state.installPending || state.downloadedApkPath == null) return;
+    final installer = ref.read(apkInstallerProvider);
+    bool granted;
+    try {
+      granted = await installer.canInstallPackages();
+    } catch (_) {
+      granted = false;
+    }
+    if (!granted) return;
+    state = state.copyWith(installHintNeeded: false);
+    await _tryInstall();
+  }
+
+  /// One-tap update entry point (the target flow). Downloads + verifies the
+  /// APK with visible progress, then launches the system installer. If the
+  /// "install unknown apps" grant is missing it requests it and leaves the flow
+  /// pending so [onAppResumed] auto-continues once the user grants it.
+  Future<void> startUpdate() async {
+    final status = state.status;
+    if (status is! UpdateAvailable) return;
+    state = state.copyWith(installPending: true, clearError: true);
+    // Download first unless a verified APK is already on disk; progress is
+    // surfaced the whole time via [downloadUpdate].
+    if (state.downloadedApkPath == null) {
+      await downloadUpdate();
+      if (state.downloadedApkPath == null) return; // download failed → error set
+    }
+    await _tryInstall();
   }
 
   /// Run an update check. [auto] distinguishes a launch/background check from
@@ -184,26 +238,48 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
     }
   }
 
+  /// Manual/retry entry point for the "Instalar ahora" button — fires the
+  /// installer on the already-downloaded APK.
+  Future<void> installUpdate() => _tryInstall();
+
   /// Launch the system package installer on the downloaded APK. If "install
-  /// unknown apps" is denied, flip [AppUpdateUiState.installHintNeeded] so the
-  /// UI can guide the user to enable it (rather than silently failing).
-  Future<void> installUpdate() async {
+  /// unknown apps" is denied, request the grant and keep the flow pending
+  /// ([installHintNeeded] guides the UI meanwhile) so [onAppResumed] can
+  /// auto-continue once it is granted — rather than silently failing or
+  /// forcing a second manual tap.
+  Future<void> _tryInstall() async {
     final path = state.downloadedApkPath;
     if (path == null) return;
     final installer = ref.read(apkInstallerProvider);
+    if (!await installer.canInstallPackages()) {
+      state = state.copyWith(installHintNeeded: true, installPending: true);
+      // Opens the OS "install unknown apps" toggle; backgrounds the app. The
+      // resume path re-checks the grant and continues automatically.
+      await installer.requestInstallPermission();
+      return;
+    }
     final outcome = await installer.install(path);
     switch (outcome) {
       case InstallOutcome.launched:
-        state = state.copyWith(installHintNeeded: false, clearError: true);
+        state = state.copyWith(
+          installHintNeeded: false,
+          clearInstallPending: true,
+          clearError: true,
+        );
       case InstallOutcome.unknownSourcesDenied:
-        state = state.copyWith(installHintNeeded: true);
+        state = state.copyWith(installHintNeeded: true, installPending: true);
+        await installer.requestInstallPermission();
       case InstallOutcome.fileNotFound:
         state = state.copyWith(
           error: 'El archivo descargado ya no está disponible.',
           clearDownloadedApkPath: true,
+          clearInstallPending: true,
         );
       case InstallOutcome.failed:
-        state = state.copyWith(error: 'No se pudo abrir el instalador.');
+        state = state.copyWith(
+          error: 'No se pudo abrir el instalador.',
+          clearInstallPending: true,
+        );
     }
   }
 

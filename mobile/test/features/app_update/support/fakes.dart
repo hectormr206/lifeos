@@ -46,8 +46,15 @@ class FakeAppUpdatePreferences implements AppUpdatePreferences {
 /// Records "showUpdateAvailable" calls.
 class FakeUpdateNotifications implements UpdateNotifications {
   final List<String> shown = [];
+  void Function()? tapHandler;
+  bool launchedByTapResult = false;
+
   @override
   Future<void> showUpdateAvailable(String versionName) async => shown.add(versionName);
+  @override
+  Future<void> registerTapHandler(void Function() onTapUpdate) async => tapHandler = onTapUpdate;
+  @override
+  Future<bool> launchedByTap() async => launchedByTapResult;
 }
 
 /// Scriptable [ApkInstaller].

@@ -34,7 +34,13 @@ class UpdateAvailableBanner extends ConsumerWidget {
           style: TextStyle(color: scheme.onPrimaryContainer),
         ),
         trailing: Icon(Icons.chevron_right, color: scheme.onPrimaryContainer),
-        onTap: () => context.push('/settings/updates'),
+        onTap: () {
+          // One tap: kick off the whole update flow (download → auto-install)
+          // and open the Actualizaciones screen so the download progress is
+          // visible — no separate "Descargar" then "Instalar" round-trips.
+          ref.read(appUpdateNotifierProvider.notifier).startUpdate();
+          context.push('/settings/updates');
+        },
       ),
     );
   }

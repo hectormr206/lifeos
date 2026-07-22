@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'core/outbox/sync_service.dart';
 import 'features/app_update/presentation/app_update_notifier.dart';
+import 'features/app_update/presentation/app_update_providers.dart';
 import 'features/app_update/presentation/app_updates_screen.dart';
 import 'features/body/presentation/body_screen.dart';
 import 'features/briefings/presentation/briefings_screen.dart';
@@ -136,11 +137,62 @@ final goRouterProvider = Provider<GoRouter>((ref) {
 /// Root widget (design D1 foundation). Wrapped in a [ProviderScope] by
 /// [main] — this widget itself stays framework-agnostic so widget tests can
 /// pump it directly inside their own [ProviderScope].
-class LifeOSApp extends ConsumerWidget {
+class LifeOSApp extends ConsumerStatefulWidget {
   const LifeOSApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<LifeOSApp> createState() => _LifeOSAppState();
+}
+
+class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Self-hosted OTA update: wire the system update-notification tap to the
+    // Actualizaciones screen. Done after the first frame so the router is
+    // ready, and covers both a tap while running and a cold-start launch.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _wireUpdateNotificationTap());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Future<void> _wireUpdateNotificationTap() async {
+    final notifications = ref.read(updateNotificationsProvider);
+    try {
+      // App backgrounded then tapped: route on the tap callback.
+      await notifications.registerTapHandler(_openUpdatesScreen);
+      // App was fully killed then relaunched by the tap: route on startup.
+      if (await notifications.launchedByTap()) _openUpdatesScreen();
+    } catch (_) {
+      // Notifications are best-effort — never block app startup.
+    }
+  }
+
+  /// Navigate to the Actualizaciones screen — the same route the in-app update
+  /// banner uses, so a notification tap lands on the "Actualizar ahora" action.
+  void _openUpdatesScreen() {
+    if (!mounted) return;
+    ref.read(goRouterProvider).push('/settings/updates');
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
+    // Self-hosted OTA update: on returning to the foreground, re-check for an
+    // update (so one published while the app was open is detected without a
+    // cold start) and auto-continue a pending install once the user has
+    // granted "install unknown apps".
+    if (lifecycle == AppLifecycleState.resumed) {
+      ref.read(appUpdateNotifierProvider.notifier).onAppResumed();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final router = ref.watch(goRouterProvider);
     // M3 slice 2: arms the offline write outbox's drain triggers (once on
     // app start, and again on every reconnect) for the app's lifetime.

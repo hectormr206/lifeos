@@ -8,6 +8,16 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 abstract class UpdateNotifications {
   /// Show "Nueva versión de LifeOS disponible" for [versionName].
   Future<void> showUpdateAvailable(String versionName);
+
+  /// Register the callback fired when the user taps the update notification
+  /// while the app is running (foreground or backgrounded). Initializes the
+  /// plugin with the tap handler so a tap deep-links to the updates screen
+  /// instead of merely opening the app on its last route.
+  Future<void> registerTapHandler(void Function() onTapUpdate);
+
+  /// Whether the app was launched from a killed state by tapping the update
+  /// notification — so the caller can route to the updates screen on startup.
+  Future<bool> launchedByTap();
 }
 
 /// Production [UpdateNotifications] backed by `flutter_local_notifications`.
@@ -23,18 +33,51 @@ class FlutterLocalUpdateNotifications implements UpdateNotifications {
 
   final FlutterLocalNotificationsPlugin _plugin;
   bool _initialized = false;
+  void Function()? _onTapUpdate;
 
   static const int _notificationId = 4210;
   static const String _channelId = 'lifeos_app_updates';
   static const String _channelName = 'Actualizaciones de la app';
+
+  /// Payload attached to the notification so a tap can be distinguished from
+  /// any future notification kind and routed to the updates screen.
+  static const String _payload = 'app_update';
 
   Future<void> _ensureInitialized() async {
     if (_initialized) return;
     const settings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     );
-    await _plugin.initialize(settings: settings);
+    await _plugin.initialize(
+      settings: settings,
+      onDidReceiveNotificationResponse: (response) {
+        if (response.payload == _payload) _onTapUpdate?.call();
+      },
+    );
     _initialized = true;
+  }
+
+  @override
+  Future<void> registerTapHandler(void Function() onTapUpdate) async {
+    _onTapUpdate = onTapUpdate;
+    try {
+      // Initialize eagerly so a tap while the app is alive is handled even
+      // before any notification has been shown this session.
+      await _ensureInitialized();
+    } catch (_) {
+      // No channel (test) — the handler is still stored for a later init.
+    }
+  }
+
+  @override
+  Future<bool> launchedByTap() async {
+    try {
+      final details = await _plugin.getNotificationAppLaunchDetails();
+      return (details?.didNotificationLaunchApp ?? false) &&
+          details?.notificationResponse?.payload == _payload;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -55,6 +98,7 @@ class FlutterLocalUpdateNotifications implements UpdateNotifications {
         title: 'Nueva versión de LifeOS disponible',
         body: 'Versión $versionName lista para instalar. Toca para actualizar.',
         notificationDetails: details,
+        payload: _payload,
       );
     } catch (_) {
       // No channel (test) / denied permission — never let a notification
