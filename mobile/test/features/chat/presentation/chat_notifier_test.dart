@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
+import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 
 class _FakeChatRepository implements ChatRepository {
   _FakeChatRepository({List<ChatMessage>? history, this.sendResult, this.sendDelay})
@@ -152,6 +153,71 @@ void main() {
       expect(repo.imageCalls, 1);
       expect(repo.lastImageBytes, bytes);
       expect(repo.lastImageCaption, 'mira');
+    });
+
+    test('user message advances sending -> sent -> delivered (WhatsApp ticks)', () async {
+      final delay = Completer<void>();
+      final reply = ChatMessage(id: 'r', role: ChatRole.axi, text: 'ok', timestamp: DateTime.now());
+      final repo = _FakeChatRepository(sendResult: reply, sendDelay: delay);
+      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      final future = notifier.sendMessage('hola');
+      // Synchronously after the optimistic append, before the microtask yield.
+      expect(container.read(chatNotifierProvider).messages.last.status, ChatMessageStatus.sending);
+
+      // Let the microtask run and the request dispatch (repo parked on delay).
+      await Future<void>.delayed(Duration.zero);
+      expect(container.read(chatNotifierProvider).messages.last.status, ChatMessageStatus.sent);
+
+      delay.complete();
+      await future;
+      // The user message is delivered; the reply is appended after it.
+      final messages = container.read(chatNotifierProvider).messages;
+      expect(messages[0].status, ChatMessageStatus.delivered);
+      expect(messages[1].role, ChatRole.axi);
+    });
+
+    test('a send failure leaves the user message at "sent" (single tick), no phantom reply', () async {
+      final repo = _FakeChatRepository(sendResult: ChatException('boom'));
+      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      await notifier.sendMessage('hola');
+
+      final state = container.read(chatNotifierProvider);
+      expect(state.messages.single.status, ChatMessageStatus.sent);
+      expect(state.error, isNotNull);
+    });
+
+    test('an on-device Axi reply keeps its GenerationMetrics in state', () async {
+      const metrics = GenerationMetrics(
+        totalMs: 2000,
+        tokensOut: 40,
+        backend: LocalLlmBackend.gpu,
+        modelId: 'gemma-4-E2B-it.litertlm',
+        ttftMs: 150,
+      );
+      final reply = ChatMessage(
+        id: 'r',
+        role: ChatRole.axi,
+        text: 'listo',
+        timestamp: DateTime.now(),
+        metrics: metrics,
+      );
+      final repo = _FakeChatRepository(sendResult: reply);
+      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      await notifier.sendMessage('hola');
+
+      expect(container.read(chatNotifierProvider).messages[1].metrics, metrics);
     });
 
     test('addVoiceNote appends a local voice bubble flagged transcription-pending, no send', () async {

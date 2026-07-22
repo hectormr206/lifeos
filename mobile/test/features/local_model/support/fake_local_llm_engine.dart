@@ -18,10 +18,24 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     this.deleteShouldFail = false,
     String Function(String prompt)? reply,
     String Function(String prompt)? imageReply,
+    GenerationMetrics? metrics,
+    GenerationMetrics? imageMetrics,
   })  : _installed = installed,
         downloadProgress = downloadProgress ?? const [0.25, 0.5, 1.0],
         reply = reply ?? ((prompt) => 'eco: $prompt'),
-        imageReply = imageReply ?? ((prompt) => 'veo la imagen: $prompt');
+        imageReply = imageReply ?? ((prompt) => 'veo la imagen: $prompt'),
+        metrics = metrics ?? defaultMetrics,
+        imageMetrics = imageMetrics ?? metrics ?? defaultMetrics;
+
+  /// Canned metrics returned by [generate] unless a test injects its own — a
+  /// realistic-looking GPU generation so the chat UI has numbers to render.
+  static const GenerationMetrics defaultMetrics = GenerationMetrics(
+    totalMs: 1200,
+    tokensOut: 24,
+    backend: LocalLlmBackend.gpu,
+    modelId: 'gemma-4-E2B-it.litertlm',
+    ttftMs: 150,
+  );
 
   bool _installed;
   final List<double> downloadProgress;
@@ -31,6 +45,10 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   final bool deleteShouldFail;
   final String Function(String prompt) reply;
   final String Function(String prompt) imageReply;
+
+  /// Metrics [generate] / [generateWithImage] attach to their result.
+  final GenerationMetrics metrics;
+  final GenerationMetrics imageMetrics;
 
   int loadCount = 0;
   int generateCount = 0;
@@ -64,20 +82,20 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   }
 
   @override
-  Future<String> generate(String prompt) async {
+  Future<GenerationResult> generate(String prompt) async {
     generateCount++;
     prompts.add(prompt);
     if (generateShouldFail) throw Exception('generate boom');
-    return reply(prompt);
+    return GenerationResult(text: reply(prompt), metrics: metrics);
   }
 
   @override
-  Future<String> generateWithImage(String prompt, Uint8List imageBytes) async {
+  Future<GenerationResult> generateWithImage(String prompt, Uint8List imageBytes) async {
     generateWithImageCount++;
     imagePrompts.add(prompt);
     lastImageBytes = imageBytes;
     if (generateWithImageShouldFail) throw Exception('vision boom');
-    return imageReply(prompt);
+    return GenerationResult(text: imageReply(prompt), metrics: imageMetrics);
   }
 
   @override

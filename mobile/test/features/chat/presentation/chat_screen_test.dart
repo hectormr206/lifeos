@@ -18,6 +18,7 @@ import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
 import 'package:lifeos/features/chat/presentation/chat_providers.dart';
 import 'package:lifeos/features/chat/presentation/chat_screen.dart';
 import 'package:lifeos/features/local_model/data/on_device_chat_repository.dart';
+import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
 import '../support/fake_chat_gateways.dart';
@@ -172,6 +173,77 @@ void main() {
     await tester.tap(find.byIcon(Icons.play_circle));
     await tester.pump();
     expect(player.played, [recorder.path]);
+  });
+
+  testWidgets('outgoing user messages render WhatsApp ticks by delivery status', (tester) async {
+    final ts = DateTime.now();
+    final repo = _FakeChatRepository(
+      history: [
+        ChatMessage(id: 'a', role: ChatRole.user, text: 'uno', timestamp: ts, status: ChatMessageStatus.sent),
+        ChatMessage(id: 'b', role: ChatRole.user, text: 'dos', timestamp: ts, status: ChatMessageStatus.delivered),
+      ],
+    );
+
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())));
+
+    // Single ✓ for sent, double ✓✓ for delivered.
+    expect(find.byIcon(Icons.done), findsOneWidget);
+    expect(find.byIcon(Icons.done_all), findsOneWidget);
+  });
+
+  testWidgets('an on-device Axi reply shows the compact metrics line and a stats modal', (tester) async {
+    // A real OnDeviceChatRepository over a fake engine so the reply carries
+    // GenerationMetrics end-to-end (fake numbers — real inference is Pixel-only).
+    final engine = FakeLocalLlmEngine(
+      installed: true,
+      reply: (_) => 'Respuesta de Axi',
+      metrics: const GenerationMetrics(
+        totalMs: 2000,
+        tokensOut: 40,
+        backend: LocalLlmBackend.gpu,
+        modelId: 'gemma-4-E2B-it.litertlm',
+        ttftMs: 150,
+      ),
+    );
+    final repo = OnDeviceChatRepository(engine);
+
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())));
+
+    await tester.enterText(find.byType(TextField), 'hola');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pumpAndSettle();
+
+    // Compact always-visible line: 40 tokens / 2.0 s → 20 tok/s.
+    expect(find.textContaining('20 tok/s'), findsOneWidget);
+    expect(find.byIcon(Icons.bar_chart), findsOneWidget);
+
+    // The stats button opens a modal with the full breakdown.
+    await tester.tap(find.byIcon(Icons.bar_chart));
+    await tester.pumpAndSettle();
+    expect(find.text('Métricas de la respuesta'), findsOneWidget);
+    expect(find.text('150 ms'), findsOneWidget); // TTFT
+    expect(find.text('GPU'), findsOneWidget); // backend
+    expect(find.text('gemma-4-E2B-it.litertlm'), findsOneWidget); // model
+
+    // And it closes.
+    await tester.tap(find.text('Cerrar'));
+    await tester.pumpAndSettle();
+    expect(find.text('Métricas de la respuesta'), findsNothing);
+  });
+
+  testWidgets('a reply without metrics shows no metrics line', (tester) async {
+    // Plain (HTTP-style) repository: its reply carries no GenerationMetrics.
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: const MaterialApp(home: ChatScreen())));
+
+    await tester.enterText(find.byType(TextField), 'hola');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Respuesta de Axi'), findsOneWidget);
+    expect(find.byIcon(Icons.bar_chart), findsNothing);
+    expect(find.textContaining('tok/s'), findsNothing);
   });
 
   testWidgets('Responder por voz toggle is disabled but the preference persists', (tester) async {

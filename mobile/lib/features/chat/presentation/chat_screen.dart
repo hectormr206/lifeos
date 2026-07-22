@@ -5,6 +5,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/pending_sync_banner.dart';
+import '../../local_model/domain/generation_metrics.dart';
 import '../domain/chat_message.dart';
 import '../domain/image_picker_gateway.dart';
 import 'chat_notifier.dart';
@@ -420,10 +421,26 @@ class _MessageBubble extends StatelessWidget {
           children: [
             _content(context, onBubble, scheme),
             const SizedBox(height: 2),
-            Text(
-              _formatTime(message.timestamp),
-              style: TextStyle(fontSize: 11, color: onBubble.withValues(alpha: 0.7)),
+            // Meta line: timestamp + (for a sent user message) WhatsApp ticks.
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _formatTime(message.timestamp),
+                  style: TextStyle(fontSize: 11, color: onBubble.withValues(alpha: 0.7)),
+                ),
+                if (isUser && message.status != null) ...[
+                  const SizedBox(width: 4),
+                  _StatusTicks(status: message.status!, color: onBubble),
+                ],
+              ],
             ),
+            // Per-response metrics (on-device Axi replies only): a compact
+            // always-visible line + a discreet button to the full-stats modal.
+            if (!isUser && message.metrics != null) ...[
+              const SizedBox(height: 2),
+              _MetricsLine(metrics: message.metrics!, color: onBubble, scheme: scheme),
+            ],
           ],
         ),
       ),
@@ -469,6 +486,153 @@ class _MessageBubble extends StatelessWidget {
     }
   }
 }
+
+/// WhatsApp-style delivery ticks shown in an outgoing message's meta line:
+/// a clock while sending, a single ✓ once handed to the engine, and a double
+/// ✓✓ once Axi's reply arrives. Small, muted, and branded (the double tick
+/// gets the accent colour, like WhatsApp's read state).
+class _StatusTicks extends StatelessWidget {
+  const _StatusTicks({required this.status, required this.color});
+
+  final ChatMessageStatus status;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    switch (status) {
+      case ChatMessageStatus.sending:
+        return Icon(Icons.schedule, size: 13, color: color.withValues(alpha: 0.6));
+      case ChatMessageStatus.sent:
+        return Icon(Icons.done, size: 15, color: color.withValues(alpha: 0.7));
+      case ChatMessageStatus.delivered:
+        return Icon(Icons.done_all, size: 15, color: scheme.primary);
+    }
+  }
+}
+
+/// The compact, always-visible metrics line under an on-device Axi bubble —
+/// e.g. "⚡ 18 tok/s · 2.3 s" — plus a discreet button that opens the full
+/// stats modal. Only the 1–2 most relevant numbers show here; the rest live in
+/// the modal so the bubble stays clean.
+class _MetricsLine extends StatelessWidget {
+  const _MetricsLine({required this.metrics, required this.color, required this.scheme});
+
+  final GenerationMetrics metrics;
+  final Color color;
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = color.withValues(alpha: 0.7);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.bolt, size: 13, color: muted),
+        const SizedBox(width: 2),
+        Text(
+          '${metrics.tokensPerSec.round()} tok/s · ${_formatSeconds(metrics.totalMs)}',
+          style: TextStyle(fontSize: 11, color: muted),
+        ),
+        const SizedBox(width: 2),
+        InkResponse(
+          radius: 16,
+          onTap: () => _showMetricsSheet(context, metrics),
+          child: Padding(
+            padding: const EdgeInsets.all(3),
+            child: Icon(Icons.bar_chart, size: 15, color: scheme.primary),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Opens a closable bottom-sheet with ALL of the response's stats. Shown when
+/// the user taps the 📊 button next to the compact metrics line.
+Future<void> _showMetricsSheet(BuildContext context, GenerationMetrics m) {
+  return showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    // Let the sheet grow to its content height (and scroll on short screens)
+    // so the close button is never pushed off-screen.
+    isScrollControlled: true,
+    builder: (sheetContext) {
+      final scheme = Theme.of(sheetContext).colorScheme;
+      return SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.insights, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Text('Métricas de la respuesta',
+                      style: Theme.of(sheetContext).textTheme.titleMedium),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _MetricRow(label: 'Velocidad', value: '${m.tokensPerSec.round()} tok/s'),
+              _MetricRow(
+                label: 'Tokens generados',
+                value: '${m.tokensOut}${m.tokensApproximate ? ' (aprox.)' : ''}',
+              ),
+              _MetricRow(label: 'Tiempo total', value: '${m.totalMs} ms (${_formatSeconds(m.totalMs)})'),
+              _MetricRow(
+                label: 'Primer token (TTFT)',
+                value: m.ttftMs != null ? '${m.ttftMs} ms' : 'No disponible',
+              ),
+              _MetricRow(label: 'Backend', value: m.backend.name.toUpperCase()),
+              _MetricRow(label: 'Modelo', value: m.modelId),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.of(sheetContext).pop(),
+                  child: const Text('Cerrar'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// One label/value row inside the metrics modal.
+class _MetricRow extends StatelessWidget {
+  const _MetricRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 150,
+            child: Text(label, style: TextStyle(color: scheme.onSurfaceVariant)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatSeconds(int ms) => '${(ms / 1000).toStringAsFixed(1)} s';
 
 /// A playable voice-note bubble (WhatsApp-style): a play/pause button, a
 /// waveform placeholder, the clip length, and — until STT lands — a

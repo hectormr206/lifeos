@@ -1,7 +1,20 @@
 import 'dart:typed_data';
 
+import '../../local_model/domain/generation_metrics.dart';
+
 /// Who authored a [ChatMessage] (spec mobile-chat, M1 slice 2).
 enum ChatRole { user, axi }
+
+/// Delivery state of an OUTGOING (user) message, rendered as WhatsApp-style
+/// checkmarks in the bubble's meta line:
+///   * [sending]   — optimistically shown, request not yet dispatched (a clock).
+///   * [sent]      — handed to the engine/repository (single ✓).
+///   * [delivered] — Axi's reply came back (double ✓✓).
+///
+/// Only user messages that are actually sent carry a status; history-loaded and
+/// Axi messages leave it null (no checkmark), and voice notes — never sent to
+/// Axi this slice — also leave it null.
+enum ChatMessageStatus { sending, sent, delivered }
 
 /// What kind of content a [ChatMessage] carries (WhatsApp/Telegram-style chat).
 ///
@@ -30,6 +43,8 @@ class ChatMessage {
     this.audioPath,
     this.audioDuration,
     this.transcriptionPending = false,
+    this.status,
+    this.metrics,
   });
 
   final String id;
@@ -58,8 +73,32 @@ class ChatMessage {
   /// than faking a transcription.
   final bool transcriptionPending;
 
+  /// Delivery status for an outgoing user message (WhatsApp checkmarks); null
+  /// for Axi/history/voice messages that show no checkmark.
+  final ChatMessageStatus? status;
+
+  /// Per-response performance metrics for an on-device Axi reply; null for user
+  /// messages and for HTTP replies (server round-trips carry no local metrics).
+  final GenerationMetrics? metrics;
+
   bool get isImage => kind == ChatMessageKind.image;
   bool get isVoice => kind == ChatMessageKind.voice;
+
+  /// Returns a copy with the given fields replaced. Used to advance a user
+  /// message's [status] (sending → sent → delivered) without rebuilding it.
+  ChatMessage copyWith({ChatMessageStatus? status, GenerationMetrics? metrics}) => ChatMessage(
+        id: id,
+        role: role,
+        text: text,
+        timestamp: timestamp,
+        kind: kind,
+        imageBytes: imageBytes,
+        audioPath: audioPath,
+        audioDuration: audioDuration,
+        transcriptionPending: transcriptionPending,
+        status: status ?? this.status,
+        metrics: metrics ?? this.metrics,
+      );
 
   @override
   bool operator ==(Object other) =>
@@ -72,7 +111,9 @@ class ChatMessage {
       _sameBytes(other.imageBytes, imageBytes) &&
       other.audioPath == audioPath &&
       other.audioDuration == audioDuration &&
-      other.transcriptionPending == transcriptionPending;
+      other.transcriptionPending == transcriptionPending &&
+      other.status == status &&
+      other.metrics == metrics;
 
   @override
   int get hashCode => Object.hash(
@@ -85,6 +126,8 @@ class ChatMessage {
         audioPath,
         audioDuration,
         transcriptionPending,
+        status,
+        metrics,
       );
 
   static bool _sameBytes(Uint8List? a, Uint8List? b) {

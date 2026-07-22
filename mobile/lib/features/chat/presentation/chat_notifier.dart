@@ -79,19 +79,39 @@ class ChatNotifier extends Notifier<ChatUiState> {
       role: ChatRole.user,
       text: trimmed,
       timestamp: DateTime.now(),
+      status: ChatMessageStatus.sending,
     );
-    // Optimistic append: the user message is visible immediately, before the
-    // repository call resolves.
+    // Optimistic append: the user message is visible immediately (as "sending",
+    // a clock), before the repository call resolves.
     state = state.copyWith(messages: [...state.messages, userMessage], sending: true, error: null);
+    // Yield one microtask so the "sending" tick renders a frame before we hand
+    // off — otherwise the on-device path (no network) flips straight to "sent".
+    await Future<void>.microtask(() {});
     try {
-      final reply = await ref.read(chatRepositoryProvider).sendMessage(trimmed);
+      final replyFuture = ref.read(chatRepositoryProvider).sendMessage(trimmed);
+      // Handed to the engine/repository → single ✓.
+      _setStatus(userMessage.id, ChatMessageStatus.sent);
+      final reply = await replyFuture;
+      // Axi's reply came back → double ✓✓, then append the reply.
+      _setStatus(userMessage.id, ChatMessageStatus.delivered);
       state = state.copyWith(messages: [...state.messages, reply], sending: false);
     } on ChatException catch (error) {
-      // Keep the already-appended user message; do not add a phantom reply.
+      // Keep the already-appended user message (left at "sent"); do not add a
+      // phantom reply.
       state = state.copyWith(sending: false, error: error.message);
     } catch (error) {
       state = state.copyWith(sending: false, error: 'No se pudo enviar el mensaje: $error');
     }
+  }
+
+  /// Advances an outgoing user message's delivery [status] in place (WhatsApp
+  /// checkmarks) without disturbing the rest of the conversation.
+  void _setStatus(String id, ChatMessageStatus status) {
+    state = state.copyWith(
+      messages: [
+        for (final m in state.messages) if (m.id == id) m.copyWith(status: status) else m,
+      ],
+    );
   }
 
   /// Sends an attached [imageBytes] (optional [caption]) to Axi. The image is
@@ -107,10 +127,15 @@ class ChatNotifier extends Notifier<ChatUiState> {
       timestamp: DateTime.now(),
       kind: ChatMessageKind.image,
       imageBytes: imageBytes,
+      status: ChatMessageStatus.sending,
     );
     state = state.copyWith(messages: [...state.messages, userMessage], sending: true, error: null);
+    await Future<void>.microtask(() {});
     try {
-      final reply = await ref.read(chatRepositoryProvider).sendImageMessage(trimmed, imageBytes);
+      final replyFuture = ref.read(chatRepositoryProvider).sendImageMessage(trimmed, imageBytes);
+      _setStatus(userMessage.id, ChatMessageStatus.sent);
+      final reply = await replyFuture;
+      _setStatus(userMessage.id, ChatMessageStatus.delivered);
       state = state.copyWith(messages: [...state.messages, reply], sending: false);
     } on ChatException catch (error) {
       state = state.copyWith(sending: false, error: error.message);

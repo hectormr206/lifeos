@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/local_model/data/on_device_chat_repository.dart';
+import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 
 import '../support/fake_local_llm_engine.dart';
 
@@ -22,6 +23,37 @@ void main() {
     expect(message.role, ChatRole.axi);
     expect(message.text, 'respuesta a "hola"');
     expect(engine.prompts, ['hola']);
+  });
+
+  test('sendMessage attaches the engine GenerationMetrics to the axi message', () async {
+    const metrics = GenerationMetrics(
+      totalMs: 900,
+      tokensOut: 30,
+      backend: LocalLlmBackend.gpu,
+      modelId: 'gemma-4-E2B-it.litertlm',
+      ttftMs: 120,
+    );
+    final engine = FakeLocalLlmEngine(metrics: metrics);
+    final repo = OnDeviceChatRepository(engine);
+
+    final message = await repo.sendMessage('hola');
+
+    expect(message.metrics, metrics);
+  });
+
+  test('sendImageMessage attaches the engine GenerationMetrics to the axi message', () async {
+    const metrics = GenerationMetrics(
+      totalMs: 3400,
+      tokensOut: 12,
+      backend: LocalLlmBackend.cpu,
+      modelId: 'gemma-4-E2B-it.litertlm',
+    );
+    final engine = FakeLocalLlmEngine(imageMetrics: metrics);
+    final repo = OnDeviceChatRepository(engine);
+
+    final message = await repo.sendImageMessage('qué es', Uint8List.fromList([1, 2]));
+
+    expect(message.metrics, metrics);
   });
 
   test('lazily loads the model exactly once across multiple sends', () async {

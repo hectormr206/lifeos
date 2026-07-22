@@ -12,6 +12,10 @@ library;
 
 import 'dart:typed_data';
 
+import 'generation_metrics.dart';
+
+export 'generation_metrics.dart';
+
 /// Hardware backend the on-device model runs on. Maps 1:1 to flutter_gemma's
 /// `PreferredBackend` inside [FlutterGemmaLlmEngine]; kept as our own enum so
 /// the domain layer never imports the plugin.
@@ -75,8 +79,9 @@ abstract class LocalLlmEngine {
   Future<void> load({LocalLlmBackend? backend});
 
   /// Runs one non-streaming completion for [prompt] and returns the reply
-  /// text. SLICE 1 is single-turn (no retained conversation history).
-  Future<String> generate(String prompt);
+  /// text together with its [GenerationMetrics] (tokens/s, latency, backend).
+  /// SLICE 1 is single-turn (no retained conversation history).
+  Future<GenerationResult> generate(String prompt);
 
   /// Runs one non-streaming multimodal completion for [prompt] together with
   /// an attached [imageBytes] (a JPEG/PNG). Requires the loaded model variant
@@ -86,7 +91,7 @@ abstract class LocalLlmEngine {
   ///
   /// Real vision inference is arm64/Pixel-only (gemma-4-E2B multimodal build);
   /// the x86_64 emulator can exercise only the attach/UI flow, not inference.
-  Future<String> generateWithImage(String prompt, Uint8List imageBytes);
+  Future<GenerationResult> generateWithImage(String prompt, Uint8List imageBytes);
 
   /// Releases the loaded model + native handles. Safe to call when not
   /// loaded.

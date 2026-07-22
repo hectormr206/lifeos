@@ -47,6 +47,11 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   Future<void>? _initFuture;
   InferenceModel? _model;
 
+  /// The backend the model was actually loaded on (used for metrics). Set on
+  /// [load]; falls back to the configured default when metrics are built before
+  /// an explicit backend override.
+  LocalLlmBackend? _loadedBackend;
+
   /// One-shot, idempotent plugin init (restores the previously-active model
   /// identity so [load] can find already-installed weights across launches).
   Future<void> _ensureInitialized() => _initFuture ??= _initializer();
@@ -111,14 +116,15 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   @override
   Future<void> load({LocalLlmBackend? backend}) async {
     await _ensureInitialized();
+    _loadedBackend = backend ?? _config.backend;
     _model ??= await FlutterGemma.getActiveModel(
       maxTokens: _config.maxTokens,
-      preferredBackend: _toPreferredBackend(backend ?? _config.backend),
+      preferredBackend: _toPreferredBackend(_loadedBackend!),
     );
   }
 
   @override
-  Future<String> generate(String prompt) async {
+  Future<GenerationResult> generate(String prompt) async {
     final model = _model;
     if (model == null) {
       throw StateError('Local model not loaded. Call load() before generate().');
@@ -126,22 +132,28 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     // SLICE 1 is single-turn: a fresh chat per message keeps context bounded
     // and matches "no local conversation persistence". TODO(roadmap): retain
     // history + stream tokens in a later slice.
+    final stopwatch = Stopwatch()..start();
     final chat = await model.createChat(
       maxOutputTokens: _config.maxOutputTokens,
       modelType: ModelType.gemma4,
     );
     await chat.addQueryChunk(Message.text(text: prompt, isUser: true));
     final response = await chat.generateChatResponse();
-    return switch (response) {
+    stopwatch.stop();
+    final text = switch (response) {
       TextResponse(:final token) => token,
       // Tools are not enabled this slice, so only TextResponse is expected;
       // anything else degrades to empty rather than crashing the chat.
       _ => '',
     };
+    return GenerationResult(
+      text: text,
+      metrics: _metricsFor(chat, text, stopwatch.elapsedMilliseconds),
+    );
   }
 
   @override
-  Future<String> generateWithImage(String prompt, Uint8List imageBytes) async {
+  Future<GenerationResult> generateWithImage(String prompt, Uint8List imageBytes) async {
     final model = _model;
     if (model == null) {
       throw StateError('Local model not loaded. Call load() before generateWithImage().');
@@ -153,6 +165,7 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     // text-only build, the native session rejects the vision request and
     // throws — which OnDeviceChatRepository turns into a clear user message
     // rather than silently dropping the photo.
+    final stopwatch = Stopwatch()..start();
     final chat = await model.createChat(
       maxOutputTokens: _config.maxOutputTokens,
       modelType: ModelType.gemma4,
@@ -162,10 +175,55 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       Message.withImage(text: prompt, imageBytes: imageBytes, isUser: true),
     );
     final response = await chat.generateChatResponse();
-    return switch (response) {
+    stopwatch.stop();
+    final text = switch (response) {
       TextResponse(:final token) => token,
       _ => '',
     };
+    return GenerationResult(
+      text: text,
+      metrics: _metricsFor(chat, text, stopwatch.elapsedMilliseconds),
+    );
+  }
+
+  /// Builds [GenerationMetrics] for a completed generation. [totalMs] is the
+  /// real wall-clock time. Token count + TTFT come from flutter_gemma's native
+  /// `SessionMetrics` (accurate on the FFI/LiteRT-LM path); if the runtime
+  /// reports no output tokens we fall back to a ~4-chars/token estimate and
+  /// flag it approximate rather than fabricate a precise-looking number.
+  GenerationMetrics _metricsFor(InferenceChat chat, String text, int totalMs) {
+    var tokensOut = _estimateTokens(text);
+    var approximate = true;
+    int? ttftMs;
+    try {
+      final native = chat.session.getSessionMetrics();
+      if (native.outputTokens > 0) {
+        tokensOut = native.outputTokens;
+        approximate = false;
+      }
+      final ttft = native.timeToFirstTokenMs;
+      if (ttft != null && ttft > 0) ttftMs = ttft.round();
+    } catch (_) {
+      // Runtime did not expose metrics (non-FFI / not loaded) — keep the
+      // heuristic estimate; never invent a token count or TTFT.
+    }
+    return GenerationMetrics(
+      totalMs: totalMs,
+      tokensOut: tokensOut,
+      backend: _loadedBackend ?? _config.backend,
+      modelId: _config.modelId,
+      ttftMs: ttftMs,
+      tokensApproximate: approximate,
+    );
+  }
+
+  /// Rough token estimate for when the runtime reports no native count:
+  /// ~4 characters per token (industry rule-of-thumb). Marked approximate by
+  /// the caller so the UI never presents it as exact.
+  static int _estimateTokens(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return 0;
+    return (trimmed.length / 4).ceil();
   }
 
   @override

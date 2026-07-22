@@ -36,12 +36,15 @@ class OnDeviceChatRepository implements ChatRepository {
   Future<ChatMessage> sendMessage(String text) => _serialize(() async {
         try {
           await (_loadFuture ??= _engine.load());
-          final reply = await _engine.generate(text);
+          final result = await _engine.generate(text);
           return ChatMessage(
             id: 'local-${DateTime.now().microsecondsSinceEpoch}',
             role: ChatRole.axi,
-            text: reply,
+            text: result.text,
             timestamp: DateTime.now(),
+            // Per-response metrics ride along so the chat UI can show tokens/s +
+            // latency under the bubble and full stats in a modal.
+            metrics: result.metrics,
           );
         } catch (error) {
           // Reset so a later attempt can retry loading after a transient
@@ -58,12 +61,13 @@ class OnDeviceChatRepository implements ChatRepository {
           // Routes to the on-device model's VISION path. If the installed
           // variant is text-only, the engine throws and we surface a clear
           // Spanish message rather than silently dropping the photo.
-          final reply = await _engine.generateWithImage(text, imageBytes);
+          final result = await _engine.generateWithImage(text, imageBytes);
           return ChatMessage(
             id: 'local-${DateTime.now().microsecondsSinceEpoch}',
             role: ChatRole.axi,
-            text: reply,
+            text: result.text,
             timestamp: DateTime.now(),
+            metrics: result.metrics,
           );
         } catch (error) {
           _loadFuture = null;
