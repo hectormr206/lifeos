@@ -191,6 +191,117 @@ void main() {
     expect(player.played, [recorder.path]);
   });
 
+  testWidgets('sliding away before release cancels the recording (no bubble, temp discarded)', (tester) async {
+    final recorder = FakeAudioRecorderGateway();
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          audioRecorderGatewayProvider.overrideWithValue(recorder),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final start = tester.getCenter(find.byIcon(Icons.mic));
+    final gesture = await tester.startGesture(start);
+    await tester.pump(const Duration(milliseconds: 400)); // hold fires → recording
+    await tester.pump();
+    // Slide well past the cancel threshold, then release.
+    await gesture.moveTo(start - const Offset(160, 0));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    await tester.pump();
+
+    expect(recorder.startCount, 1);
+    expect(recorder.cancelCount, 1);
+    expect(recorder.stopCount, 0);
+    expect(find.text('Transcripción pendiente (STT)'), findsNothing);
+  });
+
+  testWidgets('pointer-cancel always ends the recording (regression: no stuck recording)', (tester) async {
+    final recorder = FakeAudioRecorderGateway();
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          audioRecorderGatewayProvider.overrideWithValue(recorder),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final gesture = await tester.startGesture(tester.getCenter(find.byIcon(Icons.mic)));
+    await tester.pump(const Duration(milliseconds: 400)); // hold fires → recording
+    await tester.pump();
+    // The gesture is stolen (scroll/rebuild/system) → pointer-cancel.
+    await gesture.cancel();
+    await tester.pump();
+    await tester.pump();
+
+    // Recording is torn down (discarded), never left hanging.
+    expect(recorder.startCount, 1);
+    expect(recorder.cancelCount, 1);
+    expect(recorder.stopCount, 0);
+    expect(find.text('Transcripción pendiente (STT)'), findsNothing);
+  });
+
+  testWidgets('a quick tap on the mic records nothing and shows the hold hint', (tester) async {
+    final recorder = FakeAudioRecorderGateway();
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          audioRecorderGatewayProvider.overrideWithValue(recorder),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    // Down then up before the 300ms hold threshold → tap, not a recording.
+    final gesture = await tester.startGesture(tester.getCenter(find.byIcon(Icons.mic)));
+    await tester.pump(const Duration(milliseconds: 100));
+    await gesture.up();
+    await tester.pump();
+
+    expect(recorder.startCount, 0);
+    expect(recorder.stopCount, 0);
+    expect(find.text('Mantén presionado para grabar una nota de voz'), findsOneWidget);
+  });
+
+  testWidgets('denied mic permission shows a neutral message and does not hang', (tester) async {
+    final recorder = FakeAudioRecorderGateway(permission: false);
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          audioRecorderGatewayProvider.overrideWithValue(recorder),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final gesture = await tester.startGesture(tester.getCenter(find.byIcon(Icons.mic)));
+    await tester.pump(const Duration(milliseconds: 400)); // hold fires → permission check fails
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+
+    expect(recorder.startCount, 0);
+    expect(find.textContaining('Permiso de micrófono denegado'), findsOneWidget);
+    // Never entered the recording UI.
+    expect(find.text('Desliza para cancelar'), findsNothing);
+  });
+
   testWidgets('outgoing user messages render WhatsApp ticks by delivery status', (tester) async {
     final ts = DateTime.now();
     final repo = _FakeChatRepository(

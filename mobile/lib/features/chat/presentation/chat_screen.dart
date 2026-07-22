@@ -39,12 +39,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final List<Uint8List> _pendingImages = [];
 
   // Press-and-hold voice recording state.
+  //
+  // The gesture is driven by a [Listener] (raw pointer events) rather than a
+  // long-press [GestureDetector]: pointer-up AND pointer-cancel BOTH end the
+  // recording, so the arena stealing the gesture (a parent scroll, a rebuild,
+  // the OS) can never strand us in a stuck "recording forever" state.
   bool _recording = false;
   bool _willCancel = false;
+  bool _pointerDown = false;
   Duration _elapsed = Duration.zero;
   DateTime? _recordStart;
+  Offset? _pointerDownPos;
   Timer? _recordTimer;
-  Future<String>? _startFuture;
+  // Short hold before recording actually starts, so a stray tap only shows the
+  // hint instead of firing a zero-length note.
+  Timer? _holdTimer;
+  Future<String?>? _startFuture;
+  // When the finger lifts while [start] is still in flight, this remembers
+  // whether that release meant "send" (false) or "cancel" (true).
+  bool _releaseCancel = false;
 
   @override
   void initState() {
@@ -59,6 +72,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _textController.dispose();
     _scrollController.dispose();
     _recordTimer?.cancel();
+    _holdTimer?.cancel();
     super.dispose();
   }
 
@@ -159,21 +173,95 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  // ── Press-and-hold voice recording ───────────────────────────────────────
+  // ── Press-and-hold voice recording (raw pointer events) ──────────────────
+  //
+  // Flow: pointer-down arms a short hold timer; if the finger is still down
+  // when it fires, recording starts. Pointer-up sends (or cancels, if slid
+  // away); pointer-cancel always discards. Every path clears the recording
+  // state, so there is never a stuck recording — that was the reported bug.
+
+  void _onMicPointerDown(PointerDownEvent event) {
+    if (_recording || _holdTimer != null) return;
+    _pointerDown = true;
+    _pointerDownPos = event.position;
+    _willCancel = false;
+    _releaseCancel = false;
+    // Require a brief hold so an accidental tap doesn't fire a recording.
+    _holdTimer = Timer(const Duration(milliseconds: 300), () {
+      _holdTimer = null;
+      if (_pointerDown) _startRecording();
+    });
+  }
+
+  void _onMicPointerMove(PointerMoveEvent event) {
+    if (!_recording || _pointerDownPos == null) return;
+    // Slide left past a threshold to arm cancel (WhatsApp affordance).
+    final dx = event.position.dx - _pointerDownPos!.dx;
+    final willCancel = dx < -80;
+    if (willCancel != _willCancel) setState(() => _willCancel = willCancel);
+  }
+
+  void _onMicPointerUp(PointerUpEvent event) {
+    _pointerDown = false;
+    if (_holdTimer != null) {
+      // Released before the hold threshold → it was a tap, not a recording.
+      _holdTimer!.cancel();
+      _holdTimer = null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Mantén presionado para grabar una nota de voz')),
+      );
+      return;
+    }
+    if (_recording) {
+      _finishRecording(cancel: _willCancel);
+    } else {
+      // Start is still in flight — remember the intent; _startRecording finishes.
+      _releaseCancel = _willCancel;
+    }
+  }
+
+  void _onMicPointerCancel(PointerCancelEvent event) {
+    // The gesture was stolen (scroll, rebuild, system). This MUST also end the
+    // recording — discard whatever was captured rather than strand the user.
+    _pointerDown = false;
+    if (_holdTimer != null) {
+      _holdTimer!.cancel();
+      _holdTimer = null;
+      return;
+    }
+    if (_recording) {
+      _finishRecording(cancel: true);
+    } else {
+      _releaseCancel = true;
+    }
+  }
 
   Future<void> _startRecording() async {
     final recorder = ref.read(audioRecorderGatewayProvider);
     final granted = await recorder.hasPermission();
     if (!granted) {
+      _pointerDown = false;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Permiso de micrófono denegado.')),
+        const SnackBar(
+          content: Text('Permiso de micrófono denegado. Actívalo en Ajustes para grabar notas de voz.'),
+        ),
       );
       return;
     }
     _startFuture = recorder.start();
     await _startFuture;
-    if (!mounted) return;
+    if (!mounted) {
+      // Screen went away mid-start: release the mic so it never stays hot.
+      await recorder.cancel();
+      return;
+    }
+    if (!_pointerDown) {
+      // The finger already lifted (or the gesture was cancelled) while start
+      // resolved — honor that release now, never enter a stuck recording.
+      await _finalizeRecorder(cancel: _releaseCancel, duration: Duration.zero);
+      return;
+    }
     setState(() {
       _recording = true;
       _willCancel = false;
@@ -186,21 +274,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
-  void _onRecordDrag(LongPressMoveUpdateDetails details) {
-    if (!_recording) return;
-    // Slide left past a threshold to arm cancel (WhatsApp affordance).
-    final willCancel = details.offsetFromOrigin.dx < -80;
-    if (willCancel != _willCancel) setState(() => _willCancel = willCancel);
-  }
-
-  Future<void> _stopRecording() async {
+  Future<void> _finishRecording({required bool cancel}) async {
     _recordTimer?.cancel();
     _recordTimer = null;
-    final recorder = ref.read(audioRecorderGatewayProvider);
-    // A very fast press can end before start() resolved — wait it out.
+    // A very fast release can arrive before start() resolved — wait it out.
     await _startFuture;
     final duration = _recordStart != null ? DateTime.now().difference(_recordStart!) : Duration.zero;
-    final cancelled = _willCancel;
     if (mounted) {
       setState(() {
         _recording = false;
@@ -209,7 +288,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _elapsed = Duration.zero;
       });
     }
-    if (cancelled) {
+    await _finalizeRecorder(cancel: cancel, duration: duration);
+  }
+
+  /// Stops the recorder and either drops a voice-note bubble or discards the
+  /// take. Single exit point for the mic — [_finishRecording] and the
+  /// released-during-start path both funnel through here.
+  Future<void> _finalizeRecorder({required bool cancel, required Duration duration}) async {
+    _startFuture = null;
+    final recorder = ref.read(audioRecorderGatewayProvider);
+    if (cancel) {
       await recorder.cancel();
       return;
     }
@@ -311,20 +399,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             child: _recording ? _recordingIndicator(context) : _textFieldFor(scheme),
           ),
           const SizedBox(width: 4),
-          // Press-and-hold to record a voice note (WhatsApp-style). A plain
-          // GestureDetector (not an IconButton) owns the gesture arena so the
-          // long-press recognizer wins cleanly (no Tooltip long-press to
-          // compete); a plain tap just hints how to use it.
-          GestureDetector(
+          // Press-and-hold to record a voice note (WhatsApp-style). A raw
+          // [Listener] (not a long-press GestureDetector) so pointer-up AND
+          // pointer-cancel both reliably end the recording — the gesture can
+          // never be stranded "recording forever" the way onLongPressEnd could
+          // when the arena stole the pointer.
+          Listener(
             behavior: HitTestBehavior.opaque,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Mantén presionado para grabar una nota de voz')),
-              );
-            },
-            onLongPressStart: (_) => _startRecording(),
-            onLongPressMoveUpdate: _onRecordDrag,
-            onLongPressEnd: (_) => _stopRecording(),
+            onPointerDown: _onMicPointerDown,
+            onPointerMove: _onMicPointerMove,
+            onPointerUp: _onMicPointerUp,
+            onPointerCancel: _onMicPointerCancel,
             child: Padding(
               padding: const EdgeInsets.all(8),
               child: Icon(Icons.mic, color: _recording ? scheme.error : scheme.primary),

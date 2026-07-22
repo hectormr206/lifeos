@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
@@ -9,6 +11,8 @@ class RecordAudioRecorderGateway implements AudioRecorderGateway {
   RecordAudioRecorderGateway([AudioRecorder? recorder]) : _recorder = recorder ?? AudioRecorder();
 
   final AudioRecorder _recorder;
+  // The file the current take is being written to, so [cancel] can delete it.
+  String? _currentPath;
 
   @override
   Future<bool> hasPermission() => _recorder.hasPermission();
@@ -21,17 +25,30 @@ class RecordAudioRecorderGateway implements AudioRecorderGateway {
       const RecordConfig(encoder: AudioEncoder.aacLc),
       path: path,
     );
+    _currentPath = path;
     return path;
   }
 
   @override
-  Future<String?> stop() => _recorder.stop();
+  Future<String?> stop() async {
+    final path = await _recorder.stop();
+    _currentPath = null;
+    return path;
+  }
 
   @override
   Future<void> cancel() async {
-    // The temp file is left for the OS to reclaim; a discarded note never
-    // reaches the UI, so there is no path to clean up eagerly.
-    await _recorder.stop();
+    // Slide-to-cancel: stop the recorder and delete the temp file so a
+    // discarded note leaves nothing behind.
+    final path = await _recorder.stop() ?? _currentPath;
+    _currentPath = null;
+    if (path == null) return;
+    try {
+      final file = File(path);
+      if (file.existsSync()) await file.delete();
+    } on FileSystemException {
+      // Best-effort cleanup; the OS reclaims temp files anyway.
+    }
   }
 
   @override
