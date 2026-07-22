@@ -25,3 +25,6 @@ docs/funding/
 
 # openapi-generator-cli config written at repo root by npx during client gen
 /openapitools.json
+
+# OTA publish secrets (never commit)
+mobile/tools/ota-publish.env
