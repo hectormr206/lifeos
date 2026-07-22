@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:lifeos/features/chat/domain/audio_player_gateway.dart';
 import 'package:lifeos/features/chat/domain/audio_recorder_gateway.dart';
 import 'package:lifeos/features/chat/domain/image_picker_gateway.dart';
+import 'package:lifeos/features/chat/domain/text_to_speech_gateway.dart';
 import 'package:lifeos/features/chat/domain/voice_reply_preferences.dart';
 
 /// In-memory [ImagePickerGateway] — no plugin channel, no OS picker. Returns
@@ -88,6 +89,30 @@ class FakeAudioPlayerGateway implements AudioPlayerGateway {
 
   @override
   Future<void> dispose() async => _controller.close();
+}
+
+/// In-memory [TextToSpeechGateway] — no real TTS engine. Records spoken text
+/// and stop calls, and can simulate an utterance finishing on its own via
+/// [complete] so the speak ↔ stop toggle is host-testable.
+class FakeTextToSpeechGateway implements TextToSpeechGateway {
+  final List<String> spoken = [];
+  int stopCount = 0;
+  final _completions = StreamController<void>.broadcast();
+
+  @override
+  Future<void> speak(String text) async => spoken.add(text);
+
+  @override
+  Future<void> stop() async => stopCount++;
+
+  /// Test hook: simulate the current utterance finishing naturally.
+  void complete() => _completions.add(null);
+
+  @override
+  Stream<void> get completions => _completions.stream;
+
+  @override
+  Future<void> dispose() async => _completions.close();
 }
 
 /// In-memory [VoiceReplyPreferences] — no shared_preferences channel.

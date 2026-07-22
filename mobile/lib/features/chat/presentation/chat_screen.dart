@@ -59,11 +59,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // whether that release meant "send" (false) or "cancel" (true).
   bool _releaseCancel = false;
 
+  // Captured in initState so dispose() can stop speech without touching `ref`
+  // after the widget is unmounted (unsafe in Riverpod 3).
+  late final SpeechController _speech;
+
   @override
   void initState() {
     super.initState();
     // Rebuild the trailing button (mic ↔ send) as the user types.
     _textController.addListener(_onTextChanged);
+    _speech = ref.read(speechControllerProvider.notifier);
   }
 
   @override
@@ -73,6 +78,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _scrollController.dispose();
     _recordTimer?.cancel();
     _holdTimer?.cancel();
+    // Stop any "Axi habla" playback so speech never continues after the user
+    // leaves the chat. Fire-and-forget: dispose can't await.
+    _speech.stop();
     super.dispose();
   }
 
@@ -614,6 +622,18 @@ class _MessageBubble extends StatelessWidget {
                   const SizedBox(width: 4),
                   _StatusTicks(status: message.status!, color: onBubble),
                 ],
+                // "Axi habla": read this reply aloud. Only on Axi text replies
+                // that actually have words to speak.
+                if (!isUser &&
+                    message.kind == ChatMessageKind.text &&
+                    message.text.trim().isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _SpeakButton(
+                    messageId: message.id,
+                    text: message.text,
+                    color: onBubble,
+                  ),
+                ],
               ],
             ),
             // Per-response metrics (on-device Axi replies only): a compact
@@ -718,6 +738,37 @@ class _StatusTicks extends StatelessWidget {
       case ChatMessageStatus.delivered:
         return Icon(Icons.done_all, size: 15, color: scheme.primary);
     }
+  }
+}
+
+/// The "Axi habla" speak-aloud control shown in an Axi text bubble's meta line.
+/// Tapping it reads the reply out loud (system TTS, Spanish); tapping again —
+/// or starting another message — stops it. Watches [speechControllerProvider]
+/// so the icon reflects whether THIS message is the one currently speaking.
+class _SpeakButton extends ConsumerWidget {
+  const _SpeakButton({required this.messageId, required this.text, required this.color});
+
+  final String messageId;
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final speakingId = ref.watch(speechControllerProvider);
+    final isSpeaking = speakingId == messageId;
+    return InkResponse(
+      radius: 16,
+      onTap: () => ref.read(speechControllerProvider.notifier).toggle(messageId, text),
+      child: Padding(
+        padding: const EdgeInsets.all(3),
+        child: Icon(
+          isSpeaking ? Icons.stop_circle : Icons.volume_up,
+          size: 15,
+          color: color.withValues(alpha: 0.7),
+          semanticLabel: isSpeaking ? 'Detener lectura' : 'Escuchar respuesta',
+        ),
+      ),
+    );
   }
 }
 

@@ -115,6 +115,13 @@ dependencies:
   record: ^7.1.1
   audioplayers: ^6.8.1
 
+  # "Axi habla" (speak-aloud): reads an assistant reply out loud using the
+  # device's built-in OS text-to-speech voices. This is the INTERIM engine —
+  # it lives behind TextToSpeechGateway (features/chat/domain) so a future
+  # slice can swap system TTS for a higher-quality on-device engine (Piper)
+  # without touching the UI. Configured for Spanish (es-MX → es-ES → es).
+  flutter_tts: ^4.2.5
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

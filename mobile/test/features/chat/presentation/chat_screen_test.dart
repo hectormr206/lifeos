@@ -397,6 +397,132 @@ void main() {
     expect(find.text('Próximamente (voz on-device)'), findsOneWidget);
   });
 
+  testWidgets('only Axi text replies get a speak-aloud button', (tester) async {
+    final ts = DateTime.now();
+    final repo = _FakeChatRepository(
+      history: [
+        ChatMessage(id: '1-user', role: ChatRole.user, text: 'hola', timestamp: ts),
+        ChatMessage(id: '1-axi', role: ChatRole.axi, text: 'hola, ¿qué tal?', timestamp: ts),
+      ],
+    );
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(repo),
+          textToSpeechGatewayProvider.overrideWithValue(FakeTextToSpeechGateway()),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    // Exactly one speaker button — on the single Axi reply, not the user bubble.
+    expect(find.byIcon(Icons.volume_up), findsOneWidget);
+  });
+
+  testWidgets('tapping the speaker reads the reply aloud, tapping again stops', (tester) async {
+    final ts = DateTime.now();
+    final tts = FakeTextToSpeechGateway();
+    final repo = _FakeChatRepository(
+      history: [
+        ChatMessage(id: '1-axi', role: ChatRole.axi, text: 'hola, ¿qué tal?', timestamp: ts),
+      ],
+    );
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(repo),
+          textToSpeechGatewayProvider.overrideWithValue(tts),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    // Tap speak → the reply text is sent to the TTS engine and the icon flips
+    // to a stop control.
+    await tester.tap(find.byIcon(Icons.volume_up));
+    await tester.pump();
+    expect(tts.spoken, ['hola, ¿qué tal?']);
+    expect(find.byIcon(Icons.stop_circle), findsOneWidget);
+    expect(find.byIcon(Icons.volume_up), findsNothing);
+
+    // Tap again → stops, icon reverts.
+    await tester.tap(find.byIcon(Icons.stop_circle));
+    await tester.pump();
+    expect(tts.stopCount, 1);
+    expect(find.byIcon(Icons.volume_up), findsOneWidget);
+    expect(find.byIcon(Icons.stop_circle), findsNothing);
+  });
+
+  testWidgets('speech finishing on its own reverts the speaker button', (tester) async {
+    final ts = DateTime.now();
+    final tts = FakeTextToSpeechGateway();
+    final repo = _FakeChatRepository(
+      history: [
+        ChatMessage(id: '1-axi', role: ChatRole.axi, text: 'hola, ¿qué tal?', timestamp: ts),
+      ],
+    );
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(repo),
+          textToSpeechGatewayProvider.overrideWithValue(tts),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    await tester.tap(find.byIcon(Icons.volume_up));
+    await tester.pump();
+    expect(find.byIcon(Icons.stop_circle), findsOneWidget);
+
+    // The engine reports the utterance finished on its own.
+    tts.complete();
+    await tester.pump();
+    expect(find.byIcon(Icons.volume_up), findsOneWidget);
+    expect(find.byIcon(Icons.stop_circle), findsNothing);
+  });
+
+  testWidgets('starting a second reply stops the first (only one speaks)', (tester) async {
+    final ts = DateTime.now();
+    final tts = FakeTextToSpeechGateway();
+    final repo = _FakeChatRepository(
+      history: [
+        ChatMessage(id: 'a-axi', role: ChatRole.axi, text: 'primero', timestamp: ts),
+        ChatMessage(id: 'b-axi', role: ChatRole.axi, text: 'segundo', timestamp: ts),
+      ],
+    );
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(repo),
+          textToSpeechGatewayProvider.overrideWithValue(tts),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final speakers = find.byIcon(Icons.volume_up);
+    expect(speakers, findsNWidgets(2));
+
+    // Speak the first, then the second: only the second is now speaking and the
+    // engine received both utterances (the switch stops-then-speaks internally).
+    await tester.tap(speakers.first);
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.volume_up)); // the remaining (second) one
+    await tester.pump();
+
+    expect(tts.spoken, ['primero', 'segundo']);
+    expect(find.byIcon(Icons.stop_circle), findsOneWidget); // exactly one active
+  });
+
   testWidgets('voice-reply preference is hydrated and persisted through the notifier', (tester) async {
     final prefs = FakeVoiceReplyPreferences(enabled: true);
     final container = ProviderContainer(overrides: [

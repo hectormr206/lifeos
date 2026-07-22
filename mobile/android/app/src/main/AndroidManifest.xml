@@ -70,5 +70,12 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- "Axi habla" (flutter_tts): on Android 11+ package visibility is
+             restricted, so the app cannot see the system TTS engine (and
+             isLanguageAvailable / setLanguage for Spanish silently fails)
+             unless the TTS service intent is declared here. -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
     </queries>
 </manifest>
