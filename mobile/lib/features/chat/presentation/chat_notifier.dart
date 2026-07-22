@@ -2,16 +2,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
 import '../../../core/outbox/outbox.dart';
+import '../../local_model/data/on_device_chat_repository.dart';
+import '../../local_model/presentation/local_model_providers.dart';
 import '../data/chat_repository.dart';
 import '../domain/chat_message.dart';
 
-/// Real [ChatRepository] used app-wide; overridden with a fake in tests.
-/// Wired with the offline write outbox + pending-sync reporter (M3 slice 2).
-final chatRepositoryProvider = Provider<ChatRepository>((ref) => HttpChatRepository(
-      ref.watch(dioProvider),
-      outbox: ref.watch(outboxProvider),
-      pendingSync: ref.watch(pendingSyncCountProvider.notifier),
-    ));
+/// The [ChatRepository] used app-wide; overridden with a fake in tests.
+///
+/// Roadmap SLICE 1: when the on-device toggle ([localModelEnabledProvider]) is
+/// ON, chat is served entirely on-device by [OnDeviceChatRepository]; otherwise
+/// the normal [HttpChatRepository] talks to the paired engine (wired with the
+/// offline write outbox + pending-sync reporter, M3 slice 2). Flipping the
+/// toggle rebuilds this provider, so the active chat screen swaps backends live.
+final chatRepositoryProvider = Provider<ChatRepository>((ref) {
+  if (ref.watch(localModelEnabledProvider)) {
+    return OnDeviceChatRepository(ref.watch(localLlmEngineProvider));
+  }
+  return HttpChatRepository(
+    ref.watch(dioProvider),
+    outbox: ref.watch(outboxProvider),
+    pendingSync: ref.watch(pendingSyncCountProvider.notifier),
+  );
+});
 
 /// The chat conversation's UI state (spec mobile-chat).
 class ChatUiState {

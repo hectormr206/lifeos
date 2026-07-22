@@ -17,6 +17,8 @@ import 'features/graph/presentation/graph_browser_screen.dart';
 import 'features/graph/presentation/graph_node_screen.dart';
 import 'features/home/presentation/home_screen.dart';
 import 'features/insights/presentation/insights_screen.dart';
+import 'features/local_model/presentation/local_model_providers.dart';
+import 'features/local_model/presentation/local_model_screen.dart';
 import 'features/meetings/presentation/meeting_detail_screen.dart';
 import 'features/meetings/presentation/meetings_screen.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
@@ -71,7 +73,14 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           loc.startsWith('/graph') ||
           loc.startsWith('/meetings');
       if (needsPairing && ref.read(connectionNotifierProvider) is! ConnectionPaired) {
-        return '/settings/connection';
+        // Roadmap SLICE 1 (safe, additive): the on-device chat mode needs no
+        // pairing, so let `/chat` through when local-model mode is ON even on
+        // an unpaired device. Behavior is UNCHANGED when the toggle is OFF
+        // (the normal paired flow) and for every other gated route.
+        final localChatAllowed = loc == '/chat' && ref.read(localModelEnabledProvider);
+        if (!localChatAllowed) {
+          return '/settings/connection';
+        }
       }
       return null;
     },
@@ -90,6 +99,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/briefings', builder: (context, state) => const BriefingsScreen()),
       GoRoute(path: '/digest', builder: (context, state) => const DigestScreen()),
       GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
+      // Roadmap SLICE 1: on-device model manager. Deliberately NOT gated
+      // behind pairing (the exact-match `loc == '/settings'` check above never
+      // matches this sub-path) so it is reachable offline/unpaired.
+      GoRoute(path: '/settings/local-model', builder: (context, state) => const LocalModelScreen()),
       GoRoute(path: '/graph', builder: (context, state) => const GraphBrowserScreen()),
       GoRoute(
         path: '/graph/:id',

@@ -32,6 +32,13 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Roadmap SLICE 1 (flutter_gemma on-device LLM): ship only the 64-bit
+        // ARM ABI. The litert-lm runtime is arm64-v8a; this keeps the APK from
+        // bundling unsupported ABIs.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     signingConfigs {

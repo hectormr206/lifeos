@@ -50,6 +50,28 @@ dependencies:
   flutter_secure_storage: ^10.3.1
   go_router: ^17.3.0
 
+  # On-device LLM (roadmap SLICE 1): runs gemma-4-E2B fully offline behind the
+  # existing chat UI. Unified FlutterGemma.* API (v1.3.x), wrapped behind
+  # LocalLlmEngine (features/local_model/domain) so the flow is unit-testable
+  # with a fake and the flutter_gemma dependency stays at the edge.
+  flutter_gemma: ^1.3.1
+
+  # Inference engine for flutter_gemma (roadmap SLICE 1): flutter_gemma's core
+  # registers NO engine by default — the `.litertlm` on-device runtime lives in
+  # this companion package. It must be registered once via
+  # `FlutterGemma.initialize(inferenceEngines: [LiteRtLmEngine()])` before any
+  # install/getActiveModel/createChat, or those throw a StateError at runtime.
+  # The native litert-lm library is fetched at build time (Native Assets,
+  # hook/build.dart) — no manual Android/iOS wiring. Pinned exact: the native
+  # ABI contract is version-coupled to this runtime. arm64-v8a only (see
+  # android/app/build.gradle.kts abiFilters).
+  flutter_gemma_litertlm: 1.1.0
+
+  # Local-only persistence for the "use local model" toggle (roadmap SLICE 1).
+  # Deliberately NOT flutter_secure_storage: this is a non-secret UI preference
+  # that must survive with no engine connection / no pairing.
+  shared_preferences: ^2.3.2
+
   # App support directory lookup for the offline read cache's file-backed
   # impl (M3 slice 1, core/cache/response_cache.dart's FileResponseCache).
   # Was already resolved transitively (via flutter_secure_storage); made

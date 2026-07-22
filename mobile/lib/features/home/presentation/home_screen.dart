@@ -56,6 +56,14 @@ class _UnpairedView extends StatelessWidget {
           onPressed: onConnect,
           child: const Text('Conectar con tu motor'),
         ),
+        const SizedBox(height: 12),
+        // Roadmap SLICE 1: on-device model works with no engine connection, so
+        // it is offered even while unpaired.
+        OutlinedButton.icon(
+          onPressed: () => context.push('/settings/local-model'),
+          icon: const Icon(Icons.offline_bolt_outlined),
+          label: const Text('Usar modelo local (sin conexión)'),
+        ),
       ],
     );
   }
@@ -143,6 +151,12 @@ class _ConnectedView extends ConsumerWidget {
           onPressed: () => context.push('/settings'),
           icon: const Icon(Icons.tune),
           label: const Text('Ajustes'),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/settings/local-model'),
+          icon: const Icon(Icons.offline_bolt_outlined),
+          label: const Text('Modelo local'),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(

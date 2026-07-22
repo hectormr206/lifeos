@@ -1,0 +1,54 @@
+import '../../chat/data/chat_repository.dart';
+import '../../chat/domain/chat_message.dart';
+import '../domain/local_llm_engine.dart';
+
+/// A [ChatRepository] that answers entirely on-device via a [LocalLlmEngine]
+/// (roadmap SLICE 1) instead of hitting the paired engine over HTTP — the
+/// offline path behind the existing chat UI.
+///
+/// SLICE 1 scope: text-only, non-streaming, single-turn. [loadHistory]
+/// returns `[]` (no local conversation persistence yet — TODO(roadmap)).
+class OnDeviceChatRepository implements ChatRepository {
+  OnDeviceChatRepository(this._engine);
+
+  final LocalLlmEngine _engine;
+
+  /// Serialises access to the engine: an on-device model has one native
+  /// context, so overlapping [sendMessage] calls (double-tap send, races)
+  /// must run one-at-a-time rather than corrupt shared state.
+  Future<void> _lock = Future<void>.value();
+
+  /// Lazily load the weights exactly once, guarded so concurrent first calls
+  /// don't double-load.
+  Future<void>? _loadFuture;
+
+  Future<T> _serialize<T>(Future<T> Function() task) {
+    final result = _lock.then((_) => task());
+    // Chain the lock on completion (success OR failure) so one failed call
+    // never wedges the queue.
+    _lock = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  @override
+  Future<ChatMessage> sendMessage(String text) => _serialize(() async {
+        try {
+          await (_loadFuture ??= _engine.load());
+          final reply = await _engine.generate(text);
+          return ChatMessage(
+            id: 'local-${DateTime.now().microsecondsSinceEpoch}',
+            role: ChatRole.axi,
+            text: reply,
+            timestamp: DateTime.now(),
+          );
+        } catch (error) {
+          // Reset so a later attempt can retry loading after a transient
+          // failure (e.g. model not installed yet).
+          _loadFuture = null;
+          throw ChatException('Axi (modelo local) no pudo responder: $error');
+        }
+      });
+
+  @override
+  Future<List<ChatMessage>> loadHistory() async => const <ChatMessage>[];
+}
