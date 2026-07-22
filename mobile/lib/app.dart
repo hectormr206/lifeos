@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/outbox/sync_service.dart';
+import 'features/app_update/presentation/app_update_notifier.dart';
+import 'features/app_update/presentation/app_updates_screen.dart';
 import 'features/body/presentation/body_screen.dart';
 import 'features/briefings/presentation/briefings_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
@@ -103,6 +105,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // behind pairing (the exact-match `loc == '/settings'` check above never
       // matches this sub-path) so it is reachable offline/unpaired.
       GoRoute(path: '/settings/local-model', builder: (context, state) => const LocalModelScreen()),
+      // Self-hosted OTA app update. Deliberately NOT gated behind pairing
+      // (same exact-match rationale as `/settings/local-model` above) so the
+      // updates screen always renders; a check just reports "sin conexión"
+      // when unpaired.
+      GoRoute(path: '/settings/updates', builder: (context, state) => const AppUpdatesScreen()),
       GoRoute(path: '/graph', builder: (context, state) => const GraphBrowserScreen()),
       GoRoute(
         path: '/graph/:id',
@@ -129,6 +136,9 @@ class LifeOSApp extends ConsumerWidget {
     // M3 slice 2: arms the offline write outbox's drain triggers (once on
     // app start, and again on every reconnect) for the app's lifetime.
     ref.watch(outboxSyncTriggerProvider);
+    // Self-hosted OTA update: fires a launch-time update check as soon as the
+    // device is (or becomes) paired, honoring the auto-check preference.
+    ref.watch(appUpdateLaunchCheckProvider);
     return MaterialApp.router(
       title: 'LifeOS',
       theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal)),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app_update/presentation/update_available_banner.dart';
 import '../../connection/domain/connection_status.dart';
 import '../../connection/presentation/connection_notifier.dart';
 import '../../local_model/presentation/local_model_notifier.dart';
@@ -97,6 +98,9 @@ class _ConnectedView extends ConsumerWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Self-hosted OTA update: shows only when an update is available;
+        // taps through to /settings/updates.
+        const SizedBox(width: 340, child: UpdateAvailableBanner()),
         Text('Conectado a $engineUrl'),
         const SizedBox(height: 8),
         reachable.when(
@@ -180,6 +184,12 @@ class _ConnectedView extends ConsumerWidget {
           onPressed: () => context.push('/meetings'),
           icon: const Icon(Icons.groups_outlined),
           label: const Text('Reuniones'),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/settings/updates'),
+          icon: const Icon(Icons.system_update),
+          label: const Text('Actualizaciones'),
         ),
       ],
     );
