@@ -3,6 +3,13 @@
 // keeps the user message + surfaces an error without a phantom reply,
 // and loadHistory populates the list. No live engine — ChatRepository is
 // faked.
+//
+// Send paths now `await WidgetsBinding.instance.endOfFrame` before handing off
+// to the (on-device, main-isolate-blocking) repository, so the "escribiendo…"
+// indicator can rasterize before the freeze. That means these tests must drive
+// a frame: they run under `testWidgets` and `tester.pump()` completes the
+// awaited frame. Tests that do not send (loadHistory, addVoiceNote) stay
+// frame-independent.
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -51,7 +58,7 @@ class _FakeChatRepository implements ChatRepository {
 
 void main() {
   group('ChatNotifier', () {
-    test('loadHistory populates the conversation on init', () async {
+    testWidgets('loadHistory populates the conversation on init', (tester) async {
       final ts = DateTime.utc(2026, 1, 1);
       final repo = _FakeChatRepository(
         history: [
@@ -71,7 +78,7 @@ void main() {
       expect(state.messages[1].text, 'hola!');
     });
 
-    test('sendMessage success appends the user message then Axi reply in order', () async {
+    testWidgets('sendMessage success appends the user message then Axi reply in order', (tester) async {
       final reply = ChatMessage(id: '2-axi', role: ChatRole.axi, text: 'te ayudo', timestamp: DateTime.now());
       final repo = _FakeChatRepository(sendResult: reply);
       final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
@@ -79,7 +86,9 @@ void main() {
       final notifier = container.read(chatNotifierProvider.notifier);
       await notifier.ready;
 
-      await notifier.sendMessage('ayuda');
+      final future = notifier.sendMessage('ayuda');
+      await tester.pump(); // complete the awaited frame so the send proceeds
+      await future;
 
       final state = container.read(chatNotifierProvider);
       expect(state.messages.length, 2);
@@ -91,7 +100,37 @@ void main() {
       expect(state.error, isNull);
     });
 
-    test('optimistic append: the user message is visible before the repository resolves', () async {
+    testWidgets('sendMessage awaits a real frame before the blocking repo call so the indicator can paint',
+        (tester) async {
+      // Frame-await fix: the on-device send runs a synchronous, isolate-blocking
+      // FFI call, so we must let the `sending: true` ("escribiendo…") frame
+      // rasterize FIRST. This asserts the gate directly: with no frame pumped
+      // yet, the reply future is pending, `sending` is already true, but the
+      // repository has NOT been called; only after a frame is pumped do we hand
+      // off. A mere microtask yield would not have provided that guarantee.
+      final delay = Completer<void>();
+      final reply = ChatMessage(id: 'frame-axi', role: ChatRole.axi, text: 'ok', timestamp: DateTime.now());
+      final repo = _FakeChatRepository(sendResult: reply, sendDelay: delay);
+      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      final future = notifier.sendMessage('hola');
+      // Still awaiting endOfFrame: state committed (indicator queued), no handoff.
+      expect(container.read(chatNotifierProvider).sending, isTrue);
+      expect(repo.sendCalls, 0);
+
+      await tester.pump(); // the "escribiendo…" frame rasterizes
+      expect(repo.sendCalls, 1); // only now do we hand off to the blocking call
+
+      delay.complete();
+      await future;
+      expect(container.read(chatNotifierProvider).sending, isFalse);
+    });
+
+    testWidgets('optimistic append: the user message is visible before the repository resolves',
+        (tester) async {
       final delay = Completer<void>();
       final reply = ChatMessage(id: '3-axi', role: ChatRole.axi, text: 'listo', timestamp: DateTime.now());
       final repo = _FakeChatRepository(sendResult: reply, sendDelay: delay);
@@ -101,8 +140,8 @@ void main() {
       await notifier.ready;
 
       final future = notifier.sendMessage('espera');
+      await tester.pump();
       // Before the repository resolves: user message already visible, sending true.
-      await Future<void>.delayed(Duration.zero);
       var state = container.read(chatNotifierProvider);
       expect(state.messages.length, 1);
       expect(state.messages[0].role, ChatRole.user);
@@ -115,14 +154,17 @@ void main() {
       expect(state.messages[1].role, ChatRole.axi);
     });
 
-    test('sendMessage failure keeps the user message and sets error, no phantom Axi reply', () async {
+    testWidgets('sendMessage failure keeps the user message and sets error, no phantom Axi reply',
+        (tester) async {
       final repo = _FakeChatRepository(sendResult: ChatException('Axi no responde'));
       final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
       addTearDown(container.dispose);
       final notifier = container.read(chatNotifierProvider.notifier);
       await notifier.ready;
 
-      await notifier.sendMessage('hola');
+      final future = notifier.sendMessage('hola');
+      await tester.pump();
+      await future;
 
       final state = container.read(chatNotifierProvider);
       expect(state.messages.length, 1);
@@ -132,7 +174,7 @@ void main() {
       expect(state.error, isNotNull);
     });
 
-    test('sendImages appends an image user bubble and routes to the repo vision path', () async {
+    testWidgets('sendImages appends an image user bubble and routes to the repo vision path', (tester) async {
       final reply = ChatMessage(id: '4-axi', role: ChatRole.axi, text: 'veo un gato', timestamp: DateTime.now());
       final repo = _FakeChatRepository(sendResult: reply);
       final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
@@ -141,7 +183,9 @@ void main() {
       await notifier.ready;
 
       final bytes = Uint8List.fromList([1, 2, 3, 4]);
-      await notifier.sendImages([bytes], caption: 'mira');
+      final future = notifier.sendImages([bytes], caption: 'mira');
+      await tester.pump();
+      await future;
 
       final state = container.read(chatNotifierProvider);
       expect(state.messages.length, 2);
@@ -155,7 +199,27 @@ void main() {
       expect(repo.lastImageCaption, 'mira');
     });
 
-    test('sendImages carries every attached photo in one message and turn', () async {
+    testWidgets('sendImages awaits a real frame before the blocking vision call', (tester) async {
+      final delay = Completer<void>();
+      final reply = ChatMessage(id: 'img-frame', role: ChatRole.axi, text: 'listo', timestamp: DateTime.now());
+      final repo = _FakeChatRepository(sendResult: reply, sendDelay: delay);
+      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      final future = notifier.sendImages([Uint8List.fromList([9])], caption: 'x');
+      expect(container.read(chatNotifierProvider).sending, isTrue);
+      expect(repo.imageCalls, 0);
+
+      await tester.pump();
+      expect(repo.imageCalls, 1);
+
+      delay.complete();
+      await future;
+    });
+
+    testWidgets('sendImages carries every attached photo in one message and turn', (tester) async {
       final reply = ChatMessage(id: '5-axi', role: ChatRole.axi, text: 'veo tres fotos', timestamp: DateTime.now());
       final repo = _FakeChatRepository(sendResult: reply);
       final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
@@ -168,7 +232,9 @@ void main() {
         Uint8List.fromList([2]),
         Uint8List.fromList([3]),
       ];
-      await notifier.sendImages(images, caption: 'compara');
+      final future = notifier.sendImages(images, caption: 'compara');
+      await tester.pump();
+      await future;
 
       final state = container.read(chatNotifierProvider);
       // ONE user bubble holding all three photos, then Axi's single reply.
@@ -179,7 +245,7 @@ void main() {
       expect(repo.lastImages, images);
     });
 
-    test('user message advances sending -> sent -> delivered (WhatsApp ticks)', () async {
+    testWidgets('user message advances sending -> sent -> delivered (WhatsApp ticks)', (tester) async {
       final delay = Completer<void>();
       final reply = ChatMessage(id: 'r', role: ChatRole.axi, text: 'ok', timestamp: DateTime.now());
       final repo = _FakeChatRepository(sendResult: reply, sendDelay: delay);
@@ -189,11 +255,11 @@ void main() {
       await notifier.ready;
 
       final future = notifier.sendMessage('hola');
-      // Synchronously after the optimistic append, before the microtask yield.
+      // Synchronously after the optimistic append, before the awaited frame.
       expect(container.read(chatNotifierProvider).messages.last.status, ChatMessageStatus.sending);
 
-      // Let the microtask run and the request dispatch (repo parked on delay).
-      await Future<void>.delayed(Duration.zero);
+      // Pump a frame so the send dispatches (repo parked on delay).
+      await tester.pump();
       expect(container.read(chatNotifierProvider).messages.last.status, ChatMessageStatus.sent);
 
       delay.complete();
@@ -204,21 +270,24 @@ void main() {
       expect(messages[1].role, ChatRole.axi);
     });
 
-    test('a send failure leaves the user message at "sent" (single tick), no phantom reply', () async {
+    testWidgets('a send failure leaves the user message at "sent" (single tick), no phantom reply',
+        (tester) async {
       final repo = _FakeChatRepository(sendResult: ChatException('boom'));
       final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
       addTearDown(container.dispose);
       final notifier = container.read(chatNotifierProvider.notifier);
       await notifier.ready;
 
-      await notifier.sendMessage('hola');
+      final future = notifier.sendMessage('hola');
+      await tester.pump();
+      await future;
 
       final state = container.read(chatNotifierProvider);
       expect(state.messages.single.status, ChatMessageStatus.sent);
       expect(state.error, isNotNull);
     });
 
-    test('an on-device Axi reply keeps its GenerationMetrics in state', () async {
+    testWidgets('an on-device Axi reply keeps its GenerationMetrics in state', (tester) async {
       const metrics = GenerationMetrics(
         totalMs: 2000,
         tokensOut: 40,
@@ -239,12 +308,14 @@ void main() {
       final notifier = container.read(chatNotifierProvider.notifier);
       await notifier.ready;
 
-      await notifier.sendMessage('hola');
+      final future = notifier.sendMessage('hola');
+      await tester.pump();
+      await future;
 
       expect(container.read(chatNotifierProvider).messages[1].metrics, metrics);
     });
 
-    test('addVoiceNote appends a local voice bubble flagged transcription-pending, no send', () async {
+    testWidgets('addVoiceNote appends a local voice bubble plus a canned Axi reply, no send', (tester) async {
       final repo = _FakeChatRepository();
       final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
       addTearDown(container.dispose);
@@ -254,14 +325,26 @@ void main() {
       notifier.addVoiceNote('/tmp/voice-1.m4a', const Duration(seconds: 5));
 
       final state = container.read(chatNotifierProvider);
-      expect(state.messages.length, 1);
+      // The voice bubble, then Axi's canned reply (STT not built yet).
+      expect(state.messages.length, 2);
       expect(state.messages[0].kind, ChatMessageKind.voice);
       expect(state.messages[0].audioPath, '/tmp/voice-1.m4a');
       expect(state.messages[0].audioDuration, const Duration(seconds: 5));
       expect(state.messages[0].transcriptionPending, isTrue);
-      // Deferred: a voice note is NOT sent to Axi (no fake transcription).
+
+      // The canned Axi reply is a normal text bubble (so the 🔊 speak button
+      // works on it too). No voseo.
+      final reply = state.messages[1];
+      expect(reply.role, ChatRole.axi);
+      expect(reply.kind, ChatMessageKind.text);
+      expect(reply.text, ChatNotifier.voiceNotePlaceholderReply);
+      expect(reply.text, contains('notas de voz'));
+
+      // Deferred: a voice note is NOT sent to Axi (no fake transcription, no LLM).
       expect(repo.sendCalls, 0);
       expect(repo.imageCalls, 0);
+      // No stuck "sending" state from a static reply.
+      expect(state.sending, isFalse);
     });
   });
 }

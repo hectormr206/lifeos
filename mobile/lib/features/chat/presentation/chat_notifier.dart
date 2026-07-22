@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
@@ -84,9 +85,12 @@ class ChatNotifier extends Notifier<ChatUiState> {
     // Optimistic append: the user message is visible immediately (as "sending",
     // a clock), before the repository call resolves.
     state = state.copyWith(messages: [...state.messages, userMessage], sending: true, error: null);
-    // Yield one microtask so the "sending" tick renders a frame before we hand
-    // off — otherwise the on-device path (no network) flips straight to "sent".
-    await Future<void>.microtask(() {});
+    // Wait for a real frame to rasterize before handing off. The on-device
+    // path runs a synchronous, main-isolate-blocking FFI call, so a mere
+    // microtask yield never lets the "escribiendo…" indicator (bound to
+    // `sending: true`) paint before the freeze. `endOfFrame` guarantees the
+    // indicator is on screen before generation blocks the isolate.
+    await WidgetsBinding.instance.endOfFrame;
     try {
       final replyFuture = ref.read(chatRepositoryProvider).sendMessage(trimmed);
       // Handed to the engine/repository → single ✓.
@@ -132,7 +136,9 @@ class ChatNotifier extends Notifier<ChatUiState> {
       status: ChatMessageStatus.sending,
     );
     state = state.copyWith(messages: [...state.messages, userMessage], sending: true, error: null);
-    await Future<void>.microtask(() {});
+    // See [sendMessage]: wait for a real frame so the "escribiendo…" indicator
+    // paints before the blocking on-device FFI generation freezes the isolate.
+    await WidgetsBinding.instance.endOfFrame;
     try {
       final replyFuture = ref.read(chatRepositoryProvider).sendImages(trimmed, images);
       _setStatus(userMessage.id, ChatMessageStatus.sent);
@@ -146,24 +152,42 @@ class ChatNotifier extends Notifier<ChatUiState> {
     }
   }
 
-  /// Appends a recorded voice note as a local user bubble (WhatsApp-style).
+  /// Neutral-Spanish canned reply Axi gives to a voice note until on-device STT
+  /// exists. Rendered as a normal Axi text bubble (so the 🔊 speak button works
+  /// on it too). No voseo.
+  static const String voiceNotePlaceholderReply =
+      'Todavía no puedo escuchar notas de voz — pronto agregaré transcripción. '
+      'Por ahora, escríbeme lo que necesitas. 🙏';
+
+  /// Appends a recorded voice note as a local user bubble (WhatsApp-style),
+  /// followed by a canned Axi reply.
   ///
   /// DEFERRED (STT slice): the note is NOT transcribed and NOT sent to Axi —
   /// it stays a playable local voice memo flagged [transcriptionPending] so
   /// the UI shows "Transcripción pendiente (STT)". We never fake a
   /// transcription; the real path (voice → text → Axi's memory graph) needs
-  /// the on-device STT model.
+  /// the on-device STT model. Until then, rather than leaving Axi silent (which
+  /// reads as broken), we append a static neutral-Spanish reply — WITHOUT
+  /// running the LLM (there is no transcribed text to process) — as a normal
+  /// Axi text bubble. No "sending" state is touched, so nothing gets stuck.
   void addVoiceNote(String audioPath, Duration duration) {
+    final now = DateTime.now();
     final note = ChatMessage(
-      id: 'local-voice-${DateTime.now().microsecondsSinceEpoch}',
+      id: 'local-voice-${now.microsecondsSinceEpoch}',
       role: ChatRole.user,
       text: '',
-      timestamp: DateTime.now(),
+      timestamp: now,
       kind: ChatMessageKind.voice,
       audioPath: audioPath,
       audioDuration: duration,
       transcriptionPending: true,
     );
-    state = state.copyWith(messages: [...state.messages, note]);
+    final reply = ChatMessage(
+      id: 'local-voice-reply-${now.microsecondsSinceEpoch}',
+      role: ChatRole.axi,
+      text: voiceNotePlaceholderReply,
+      timestamp: now,
+    );
+    state = state.copyWith(messages: [...state.messages, note, reply]);
   }
 }

@@ -150,6 +150,15 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     final chat = await model.createChat(
       maxOutputTokens: _config.maxOutputTokens,
       modelType: ModelType.gemma4,
+      // Gemma-recommended sampling. flutter_gemma's `createChat` defaults to
+      // `topK: 1` (pure greedy/argmax), which sends this model into degenerate
+      // repetition loops ("well well well…"), worst on the vision path. Passing
+      // Gemma's recommended sampling restores healthy, varied output. The seed
+      // is varied per call so the reply is not deterministic across turns.
+      temperature: 1.0,
+      topK: 64,
+      topP: 0.95,
+      randomSeed: DateTime.now().millisecondsSinceEpoch & 0x7fffffff,
     );
     await chat.addQueryChunk(Message.text(text: prompt, isUser: true));
     final response = await chat.generateChatResponse();
@@ -189,6 +198,14 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       maxOutputTokens: _config.maxOutputTokens,
       modelType: ModelType.gemma4,
       supportImage: true,
+      // Same Gemma-recommended sampling as the text path (see [generate]). The
+      // vision path is where the default `topK: 1` greedy loop was most severe,
+      // so this is what actually fixes the "well well well…" repetition on
+      // image replies. Seed varied per call for non-deterministic output.
+      temperature: 1.0,
+      topK: 64,
+      topP: 0.95,
+      randomSeed: DateTime.now().millisecondsSinceEpoch & 0x7fffffff,
     );
     await chat.addQueryChunk(
       Message.withImages(text: prompt, imageBytes: images, isUser: true),
