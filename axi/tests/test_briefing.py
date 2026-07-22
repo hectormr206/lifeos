@@ -9,6 +9,7 @@ are injected so no test hits the network or a real LLM.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 
 def test_parse_structured_json_with_items() -> None:
@@ -315,11 +316,58 @@ def test_prompt_forbids_inventing_urls_and_cites_links() -> None:
 
 
 def _fake_fetch(pages):
-    """Build an injectable web_fetch(url)->dict from {url: [(text, href), ...]}."""
+    """Build an injectable web_fetch(url)->dict from {url: [(text, href), ...]}.
+
+    Retained for the deterministic HTML-scraping helper tests
+    (`_extract_source_candidates`, `_is_probable_nav`) that still exercise the
+    v1 link-filter helpers. The v2 pipeline uses dated feeds (see
+    `_fake_http_get` below), not this.
+    """
     def fetch(url):
         links = [{"text": t, "url": u} for (t, u) in pages.get(url, [])]
         return {"ok": bool(links), "url": url, "text": "", "links": links}
     return fetch
+
+
+# ── boletín v2: dated-feed fixtures (RSS/Atom/Algolia) — zero network ─────────
+
+def _rss(items):
+    """Build RSS bytes from [(title, url, pubdate_or_None), ...]."""
+    body = ['<?xml version="1.0"?><rss version="2.0"><channel><title>F</title>']
+    for title, url, date in items:
+        body.append("<item>")
+        body.append(f"<title>{title}</title><link>{url}</link>")
+        if date:
+            body.append(f"<pubDate>{date}</pubDate>")
+        body.append("<description>d</description></item>")
+    body.append("</channel></rss>")
+    return "".join(body).encode()
+
+
+def _algolia(hits):
+    """Build Algolia search_by_date JSON bytes from [(title, url, created_at, id), ...]."""
+    return json.dumps({
+        "hits": [
+            {"title": t, "url": u, "created_at": c, "objectID": i}
+            for (t, u, c, i) in hits
+        ]
+    }).encode()
+
+
+def _fake_http_get(mapping):
+    """(url)->bytes transport backed by {url: bytes}; unknown url -> raises."""
+    def get(url):
+        if url not in mapping:
+            raise OSError(f"no fixture for {url}")
+        return mapping[url]
+    return get
+
+
+# A fixed "now" so freshness tests are deterministic regardless of wall-clock.
+_NOW = datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc)
+_TODAY_RFC = "Wed, 22 Jul 2026 09:00:00 +0000"       # today (UTC)
+_YESTERDAY_RFC = "Tue, 21 Jul 2026 09:00:00 +0000"   # yesterday
+_STALE_RFC = "Sat, 18 Jul 2026 09:00:00 +0000"       # 4 days ago
 
 
 def test_default_briefing_sources_cover_all_categories() -> None:
@@ -409,17 +457,19 @@ def test_cluster_fallback_shape_headline_top_more() -> None:
 def test_run_multi_source_briefing_deterministic_fallback_when_no_brain() -> None:
     from axi import briefing
 
-    pages = {
-        "https://hn.example/": [("A substantial tech headline about GPUs", "https://a.example/1")],
-        "https://mx.example/": [("Una noticia importante de México hoy", "https://b.example/2")],
+    mapping = {
+        "https://feedA/": _rss([("A substantial tech headline about GPUs",
+                                 "https://a.example/1", _TODAY_RFC)]),
+        "https://feedB/": _rss([("Una noticia importante de México hoy",
+                                 "https://b.example/2", _YESTERDAY_RFC)]),
     }
     sources = [
-        {"name": "HN", "url": "https://hn.example/", "category": "tech"},
-        {"name": "MX", "url": "https://mx.example/", "category": "mx"},
+        {"name": "A", "adapter": "feed", "url": "https://feedA/", "category": "tech"},
+        {"name": "B", "adapter": "feed", "url": "https://feedB/", "category": "mx"},
     ]
 
     out = briefing.run_multi_source_briefing(
-        sources, web_fetch=_fake_fetch(pages), ask_with_tools=None,
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=None, now=_NOW,
     )
 
     assert out["ok"] is True
@@ -431,6 +481,7 @@ def test_run_multi_source_briefing_deterministic_fallback_when_no_brain() -> Non
     real = {"https://a.example/1", "https://b.example/2"}
     for it in out["items"]:
         assert it["url"] in real
+    assert out["skipped_sources"] == []
 
 
 def test_run_multi_source_briefing_uses_brain_for_editorial_synthesis() -> None:
@@ -438,14 +489,14 @@ def test_run_multi_source_briefing_uses_brain_for_editorial_synthesis() -> None:
     (so it can never invent a URL); the why-lines surface on top items."""
     from axi import briefing
 
-    pages = {
-        "https://s.example/": [
-            ("First candidate headline about AI", "https://a.example/1"),
-            ("Second candidate headline about MX", "https://b.example/2"),
-            ("Third candidate headline about chips", "https://c.example/3"),
-        ],
+    mapping = {
+        "https://feedS/": _rss([
+            ("First candidate headline about AI", "https://a.example/1", _TODAY_RFC),
+            ("Second candidate headline about MX", "https://b.example/2", _TODAY_RFC),
+            ("Third candidate headline about chips", "https://c.example/3", _TODAY_RFC),
+        ]),
     }
-    sources = [{"name": "S", "url": "https://s.example/", "category": "tech"}]
+    sources = [{"name": "S", "adapter": "feed", "url": "https://feedS/", "category": "tech"}]
 
     def fake_ask(prompt, **kwargs):
         # brain references candidates by index, and gives a "por qué importa"
@@ -457,12 +508,14 @@ def test_run_multi_source_briefing_uses_brain_for_editorial_synthesis() -> None:
         })
 
     out = briefing.run_multi_source_briefing(
-        sources, web_fetch=_fake_fetch(pages), ask_with_tools=fake_ask,
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=fake_ask, now=_NOW,
     )
 
     assert out["ok"] is True
     assert out["headline"]["url"] == "https://c.example/3"  # index 2
-    assert out["summary"] == "Lo esencial de hoy."
+    # base summary is preserved; a freshness note is appended.
+    assert out["summary"].startswith("Lo esencial de hoy.")
+    assert "Frescura" in out["summary"]
     whys = [t["why"] for t in out["top"]]
     assert "Importa por la IA." in whys and "Importa para México." in whys
     # brain-referenced urls are the real fetched ones
@@ -472,14 +525,15 @@ def test_run_multi_source_briefing_uses_brain_for_editorial_synthesis() -> None:
 def test_run_multi_source_briefing_falls_back_when_brain_errors() -> None:
     from axi import briefing
 
-    pages = {"https://s.example/": [("A solid headline about something", "https://a.example/1")]}
-    sources = [{"name": "S", "url": "https://s.example/", "category": "tech"}]
+    mapping = {"https://feedS/": _rss([
+        ("A solid headline about something", "https://a.example/1", _TODAY_RFC)])}
+    sources = [{"name": "S", "adapter": "feed", "url": "https://feedS/", "category": "tech"}]
 
     def boom(*a, **k):
         raise RuntimeError("brain down")
 
     out = briefing.run_multi_source_briefing(
-        sources, web_fetch=_fake_fetch(pages), ask_with_tools=boom,
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=boom, now=_NOW,
     )
     # brain failure must NOT raise and must NOT lose the digest — fallback runs.
     assert out["ok"] is True
@@ -490,25 +544,27 @@ def test_run_multi_source_briefing_empty_sources_is_resilient() -> None:
     from axi import briefing
 
     out = briefing.run_multi_source_briefing(
-        [], web_fetch=_fake_fetch({}), ask_with_tools=None,
+        [], http_get=_fake_http_get({}), ask_with_tools=None, now=_NOW,
     )
     assert out["items"] == []
     assert out["headline"] is None
     assert out["title"]  # still a renderable card
     # no exception, graceful empty digest
     assert "ok" in out
+    assert out["skipped_sources"] == []
 
 
 def test_top_is_capped_at_five() -> None:
     from axi import briefing
 
-    pages = {"https://s.example/": [
-        (f"Headline number {i} with enough words", f"https://e.example/{i}") for i in range(20)
-    ]}
-    sources = [{"name": "S", "url": "https://s.example/", "category": "tech"}]
+    mapping = {"https://feedS/": _rss([
+        (f"Headline number {i} with enough words", f"https://e.example/{i}", _TODAY_RFC)
+        for i in range(20)
+    ])}
+    sources = [{"name": "S", "adapter": "feed", "url": "https://feedS/", "category": "tech"}]
 
     out = briefing.run_multi_source_briefing(
-        sources, web_fetch=_fake_fetch(pages), ask_with_tools=None,
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=None, now=_NOW,
     )
     assert len(out["top"]) <= 5
     assert out["more"]  # the rest are collapsed, not dropped
@@ -648,35 +704,140 @@ def test_brain_headline_extraction_returns_none_on_failure() -> None:
         today="2026-07-22") is None
 
 
-def test_run_multi_source_brain_extraction_excludes_junk_end_to_end() -> None:
-    """With a brain, per-source extraction reads the page and drops the junk
-    link even though naive scraping would have surfaced it."""
+# ── boletín v2: freshness filter + dated adapters ────────────────────────────
+#
+# v1 scraped source HOMEPAGES for anchor links with NO date, so weeks-old items
+# leaked through (the bug). v2 pulls DATED candidates from feeds/APIs and keeps
+# only today/yesterday; a source with zero fresh entries is SKIPPED.
+
+
+def test_is_fresh_keeps_today_and_yesterday_drops_older_and_undated() -> None:
+    from axi import briefing
+    from datetime import date, timedelta
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("America/Mexico_City")
+    today = date(2026, 7, 22)
+
+    def at(iso):
+        return briefing.datetime.fromisoformat(iso)
+
+    # today / yesterday (UTC) -> fresh
+    assert briefing._is_fresh(at("2026-07-22T15:00:00+00:00"), today=today, tz=tz)
+    assert briefing._is_fresh(at("2026-07-21T15:00:00+00:00"), today=today, tz=tz)
+    # 3 days ago -> not fresh
+    assert not briefing._is_fresh(at("2026-07-19T15:00:00+00:00"), today=today, tz=tz)
+    # undated -> not fresh (can't prove freshness)
+    assert not briefing._is_fresh(None, today=today, tz=tz)
+
+
+def test_is_fresh_timezone_boundary() -> None:
+    """A UTC timestamp early on the 22nd is still the 21st in Mexico_City
+    (UTC-6): freshness is measured in the USER's local day."""
+    from axi import briefing
+    from datetime import date
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("America/Mexico_City")
+    # 03:00Z on Jul 22 == 21:00 on Jul 21 local.
+    dt = briefing.datetime.fromisoformat("2026-07-22T03:00:00+00:00")
+    assert briefing._is_fresh(dt, today=date(2026, 7, 21), tz=tz)
+    assert briefing._is_fresh(dt, today=date(2026, 7, 22), tz=tz)  # today counts yesterday too
+    assert not briefing._is_fresh(dt, today=date(2026, 7, 24), tz=tz)
+
+
+def test_hn_algolia_candidates_maps_created_at_and_objectid() -> None:
     from axi import briefing
 
-    pages = {
-        "https://s.example/": [
-            ("Real story about a new open model", "https://s.example/model"),
-            ("Russia-Ukraine war", "https://s.example/hub/ru"),  # junk section
-        ],
-    }
-    sources = [{"name": "S", "url": "https://s.example/", "category": "tech"}]
+    payload = _algolia([
+        ("A story on the HN front page", "https://ext.example/story", "2026-07-22T10:00:00Z", "111"),
+        # Ask-HN post with no external url -> falls back to the HN item page.
+        ("Ask HN: something", "", "2026-07-22T11:00:00Z", "222"),
+    ])
+    http_get = _fake_http_get({briefing._HN_ALGOLIA_URL: payload})
 
-    def fake_ask(prompt, **kwargs):
-        if '"headlines"' in prompt:  # per-source extraction call
-            return json.dumps({"headlines": [
-                {"title": "Real story about a new open model", "link": 0},
-            ]})
-        # cross-source synthesis call
-        return json.dumps({"summary": "Hoy.", "headline": 0,
-                           "top": [], })
+    cands = briefing._hn_algolia_candidates(http_get=http_get, limit=30)
+
+    assert len(cands) == 2
+    assert cands[0]["url"] == "https://ext.example/story"
+    assert cands[0]["hn_id"] == "111"
+    assert cands[0]["source"] == "Hacker News" and cands[0]["category"] == "tech"
+    assert cands[0]["published"] == datetime(2026, 7, 22, 10, 0, tzinfo=timezone.utc)
+    # url fallback for text posts
+    assert cands[1]["url"] == "https://news.ycombinator.com/item?id=222"
+
+
+def test_hn_algolia_candidates_defensive_on_error() -> None:
+    from axi import briefing
+
+    def boom(url):
+        raise OSError("down")
+
+    assert briefing._hn_algolia_candidates(http_get=boom) == []
+
+
+def test_source_with_no_fresh_entries_is_skipped() -> None:
+    """A source whose feed has only STALE items is skipped and recorded in
+    skipped_sources — never surfaced as a (stale) headline."""
+    from axi import briefing
+
+    mapping = {
+        "https://fresh/": _rss([("Fresh story today about Linux", "https://f/1", _TODAY_RFC)]),
+        "https://stale/": _rss([("Old story from last week", "https://s/2", _STALE_RFC)]),
+        "https://undated/": _rss([("Story with no date at all", "https://u/3", None)]),
+    }
+    sources = [
+        {"name": "Fresh", "adapter": "feed", "url": "https://fresh/", "category": "linux"},
+        {"name": "Stale", "adapter": "feed", "url": "https://stale/", "category": "ia"},
+        {"name": "Undated", "adapter": "feed", "url": "https://undated/", "category": "mx"},
+    ]
 
     out = briefing.run_multi_source_briefing(
-        sources, web_fetch=_fake_fetch(pages), ask_with_tools=fake_ask,
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=None, now=_NOW,
     )
 
-    all_titles = [it["title"] for it in out["items"]]
-    assert "Real story about a new open model" in all_titles
-    assert "Russia-Ukraine war" not in all_titles
+    titles = [it["title"] for it in out["items"]]
+    assert "Fresh story today about Linux" in titles
+    assert "Old story from last week" not in titles
+    assert "Story with no date at all" not in titles
+    assert set(out["skipped_sources"]) == {"Stale", "Undated"}
+    assert out["sources_used"] == 1
+    assert "Frescura" in out["summary"]
+
+
+def test_end_to_end_mixed_feed_and_hn_algolia_fresh_and_stale() -> None:
+    """Full pipeline over a feed source + the HN Algolia adapter, mixing fresh
+    and stale items; only fresh survive and the HN objectID is carried through."""
+    from axi import briefing
+
+    mapping = {
+        "https://linux/": _rss([
+            ("Kernel update lands today with fixes", "https://k/today", _TODAY_RFC),
+            ("Ancient distro news from weeks ago", "https://k/old", _STALE_RFC),
+        ]),
+        briefing._HN_ALGOLIA_URL: _algolia([
+            ("Fresh HN discussion about GPUs", "https://hn/gpu", "2026-07-22T08:00:00Z", "900"),
+            ("Stale HN item nobody reads now", "https://hn/old", "2026-07-15T08:00:00Z", "901"),
+        ]),
+    }
+    sources = [
+        {"name": "MuyLinux", "adapter": "feed", "url": "https://linux/", "category": "linux"},
+        {"name": "Hacker News", "adapter": "hn_algolia", "url": "https://news.ycombinator.com/", "category": "tech"},
+    ]
+
+    out = briefing.run_multi_source_briefing(
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=None, now=_NOW,
+    )
+
+    urls = {it["url"] for it in out["items"]}
+    assert urls == {"https://k/today", "https://hn/gpu"}
+    assert out["skipped_sources"] == []
+    assert out["sources_used"] == 2
+    # HN objectID carried onto the item (future comments button)
+    hn_item = next(it for it in out["items"] if it["url"] == "https://hn/gpu")
+    assert hn_item["hn_id"] == "900"
+    # published date surfaced on items
+    assert all("published" in it for it in out["items"])
 
 
 def test_run_briefing_for_prompt_multi_source_wires_default_brain(monkeypatch) -> None:
@@ -699,6 +860,12 @@ def test_run_briefing_for_prompt_routes_multi_source(monkeypatch) -> None:
     """A reminder prompt with the multi-source marker routes to the curated
     pipeline; a plain agentic prompt keeps the single-URL agentic path."""
     from axi import briefing
+
+    # Pin the config flag OFF so routing depends only on the prompt marker
+    # (the live machine may have briefing_multi_source enabled).
+    from axi import config
+    monkeypatch.setattr(config, "get",
+                        lambda k, d=None: False if k == "briefing_multi_source" else d)
 
     calls = {"multi": 0, "agentic": 0}
     monkeypatch.setattr(briefing, "run_multi_source_briefing",

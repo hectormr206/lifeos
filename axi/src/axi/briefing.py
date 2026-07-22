@@ -18,9 +18,15 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger("axi.briefing")
+
+# Default timezone for freshness — the user's local day (today/yesterday) is
+# what "fresh" means, so feed timestamps (UTC) are converted here first.
+_DEFAULT_TZ = "America/Mexico_City"
 
 # Default card title when the model omits one (user-facing, Spanish).
 _DEFAULT_TITLE = "Boletín"
@@ -374,16 +380,29 @@ def run_agentic_briefing(
 # cluster / why-lines) may call the brain, with a deterministic fallback when
 # the brain is unavailable or misbehaves.
 
-# Default source set — all verified fetchable as HTML homepages. The list is
-# config-driven under the `briefing_sources` key (see `briefing_sources()`),
-# so it is swappable per install without touching code. Each source carries a
-# category tag (tech/ia/general/mx) used for clustering + diversity.
+# Default source set — DATED feeds/APIs (boletín v2). Each source declares an
+# ADAPTER: "feed" (RSS/Atom parsed by lifeos.web.feeds) or "hn_algolia" (the
+# Hacker News Algolia JSON API). This is the fix for the staleness bug: v1
+# scraped HTML HOMEPAGES for anchor links with NO date, so weeks-old items
+# surfaced. Now candidates come from dated feeds and are freshness-filtered to
+# today/yesterday only. The list is config-driven under `briefing_sources`
+# (see `briefing_sources()`), swappable per install without touching code.
+# Each source carries a category tag (linux/ia/mx/general/tech) for clustering.
+#
+# General-news slot: AP News has no feed, so it is dropped and replaced with
+# BBC Mundo's RSS (https://feeds.bbci.co.uk/mundo/rss.xml — live-verified,
+# dated, Spanish). HF *papers* has no feed either → the HF *blog* feed is used.
 DEFAULT_BRIEFING_SOURCES: list[dict[str, str]] = [
-    {"name": "Hacker News", "url": "https://news.ycombinator.com/", "category": "tech"},
-    {"name": "Simon Willison", "url": "https://simonwillison.net/", "category": "ia"},
-    {"name": "Hugging Face Papers", "url": "https://huggingface.co/papers", "category": "ia"},
-    {"name": "AP News", "url": "https://apnews.com/", "category": "general"},
-    {"name": "Expansión", "url": "https://expansion.mx/", "category": "mx"},
+    {"name": "MuyLinux", "adapter": "feed", "url": "https://www.muylinux.com/feed/", "category": "linux"},
+    {"name": "SoplosLinux", "adapter": "feed", "url": "https://soploslinux.com/feed/", "category": "linux"},
+    {"name": "Linux en Español", "adapter": "feed", "url": "https://www.xn--linuxenespaol-skb.com/feed/", "category": "linux"},
+    {"name": "LinuxAdictos", "adapter": "feed", "url": "https://www.linuxadictos.com/feed/", "category": "linux"},
+    {"name": "desdeLinux", "adapter": "feed", "url": "https://blog.desdelinux.net/feed/", "category": "linux"},
+    {"name": "Simon Willison", "adapter": "feed", "url": "https://simonwillison.net/atom/everything/", "category": "ia"},
+    {"name": "Hugging Face Blog", "adapter": "feed", "url": "https://huggingface.co/blog/feed.xml", "category": "ia"},
+    {"name": "Expansión", "adapter": "feed", "url": "https://expansion.mx/rss", "category": "mx"},
+    {"name": "BBC Mundo", "adapter": "feed", "url": "https://feeds.bbci.co.uk/mundo/rss.xml", "category": "general"},
+    {"name": "Hacker News", "adapter": "hn_algolia", "url": "https://news.ycombinator.com/", "category": "tech"},
 ]
 
 # Anchor text shorter than this is almost always chrome/nav ("login", "more",
@@ -528,11 +547,18 @@ def briefing_sources() -> list[dict[str, str]]:
             url = _safe_url(s.get("url"))
             if not url:
                 continue
-            clean.append({
+            entry: dict[str, str] = {
                 "name": str(s.get("name") or url).strip()[:_MAX_TITLE],
                 "url": url,
                 "category": str(s.get("category") or "general").strip()[:32] or "general",
-            })
+            }
+            # Preserve an explicit adapter when the config carries one; absent →
+            # the pipeline defaults to "feed". (Kept optional so a legacy config
+            # without adapters round-trips unchanged.)
+            adapter = str(s.get("adapter") or "").strip().lower()
+            if adapter:
+                entry["adapter"] = adapter
+            clean.append(entry)
         if clean:
             return clean
     return [dict(s) for s in DEFAULT_BRIEFING_SOURCES]
@@ -751,10 +777,15 @@ def _rank_candidates(cands: list[dict[str, str]]) -> list[dict[str, str]]:
     return ranked
 
 
-def _to_item(c: dict[str, str], why: str = "") -> dict[str, str]:
-    """Map a candidate to the /briefings item shape (title_es + url render)."""
+def _to_item(c: dict[str, Any], why: str = "") -> dict[str, str]:
+    """Map a candidate to the /briefings item shape (title_es + url render).
+
+    Feed/Algolia candidates carry a `published` datetime and (for HN) an
+    `hn_id`; both are surfaced on the item so the card can show the date and a
+    future "ver comentarios" button. `published` is rendered as an ISO string.
+    """
     title = str(c.get("title") or "")[:_MAX_TITLE]
-    return {
+    item: dict[str, str] = {
         "title": title,
         "title_es": title,
         "summary": str(why or "")[:_MAX_SUMMARY],
@@ -763,6 +794,13 @@ def _to_item(c: dict[str, str], why: str = "") -> dict[str, str]:
         "source": str(c.get("source") or "")[:_MAX_TITLE],
         "category": str(c.get("category") or "")[:32],
     }
+    published = c.get("published")
+    if isinstance(published, datetime):
+        item["published"] = published.isoformat()
+    hn_id = c.get("hn_id")
+    if hn_id:
+        item["hn_id"] = str(hn_id)[:64]
+    return item
 
 
 def _multi_source_markdown(
@@ -903,6 +941,107 @@ def _default_web_fetch(url: str) -> dict[str, Any]:
     return web_fetch_handler({"url": url})
 
 
+# ───────────────────────── freshness + dated adapters ───────────────────────
+#
+# Boletín v2: candidates come from DATED feeds/APIs and are filtered to fresh
+# only. A source that yields zero fresh entries is SKIPPED (recorded in
+# `skipped_sources` as "sin noticias recientes") rather than surfacing staleness.
+
+# Hacker News front page via the Algolia JSON API (dated: each hit has
+# `created_at` ISO + `objectID` kept for a future comments button).
+_HN_ALGOLIA_URL = (
+    "http://hn.algolia.com/api/v1/search_by_date?tags=front_page&hitsPerPage=30"
+)
+
+
+def _briefing_tz() -> ZoneInfo:
+    """The user's configured timezone (freshness is measured in local days)."""
+    tz_name = _DEFAULT_TZ
+    try:
+        from axi import config  # noqa: PLC0415
+
+        tz_name = str(config.get("timezone", tz_name)) or tz_name
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001
+        return ZoneInfo(_DEFAULT_TZ)
+
+
+def _is_fresh(dt: Any, *, today, tz: ZoneInfo) -> bool:
+    """True iff `dt`, converted to `tz`, falls on `today` or yesterday.
+
+    Undated candidates (`dt is None`) are NOT fresh: without a timestamp we
+    cannot prove recency, so they are discarded (that was the v1 bug — undated
+    items leaked through). `today` is a `datetime.date` in `tz`.
+    """
+    if not isinstance(dt, datetime):
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    try:
+        local = dt.astimezone(tz).date()
+    except (ValueError, OSError, OverflowError):
+        return False
+    return local == today or local == today - timedelta(days=1)
+
+
+def _hn_algolia_candidates(
+    *, http_get: Callable[[str], bytes] | None = None, limit: int = 30,
+) -> list[dict[str, Any]]:
+    """Dated Hacker News front-page candidates from the Algolia JSON API.
+
+    Each returned candidate carries the story `title`, real `url` (falling back
+    to the HN item page for text/Ask posts), `published` (from `created_at`),
+    `source`/`category`, and `hn_id` (the `objectID`, kept for a future
+    comments link). Never raises → `[]` on any error.
+    """
+    from lifeos.web import feeds  # noqa: PLC0415
+
+    getter = http_get or feeds._default_http_get
+    try:
+        body = getter(_HN_ALGOLIA_URL)
+        data = json.loads(body)
+    except Exception:  # noqa: BLE001 — network/JSON errors must not raise
+        log.debug("HN Algolia fetch/parse failed")
+        return []
+    if not isinstance(data, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for hit in (data.get("hits") or [])[:limit]:
+        if not isinstance(hit, dict):
+            continue
+        oid = str(hit.get("objectID") or "").strip()
+        title = str(hit.get("title") or "").strip()
+        if not title:
+            continue
+        url = _safe_url(hit.get("url"))
+        if not url and oid:
+            url = f"https://news.ycombinator.com/item?id={oid}"
+        if not url:
+            continue
+        out.append({
+            "title": title[:_MAX_TITLE],
+            "url": url,
+            "published": feeds.parse_feed_date(hit.get("created_at")),
+            "source": "Hacker News",
+            "category": "tech",
+            "hn_id": oid,
+        })
+    return out
+
+
+def _freshness_summary(
+    base: str, today_str: str, skipped: list[str],
+) -> str:
+    """Append the freshness note (and any skipped sources) to a card summary."""
+    parts = [base.strip(), f"Frescura: solo hoy/ayer ({today_str})."]
+    if skipped:
+        parts.append("Sin novedades recientes: " + ", ".join(skipped) + ".")
+    return " ".join(p for p in parts if p)[:_MAX_SUMMARY]
+
+
 def _default_ask(prompt: str, **kwargs: Any) -> str:
     """Default brain completion caller for the multi-source pipeline.
 
@@ -922,79 +1061,115 @@ _USE_DEFAULT_BRAIN = object()  # sentinel: "caller omitted ask → use real brai
 def run_multi_source_briefing(
     sources: list[dict[str, str]] | None = None,
     *,
-    web_fetch: Callable[[str], dict[str, Any]] | None = None,
+    http_get: Callable[[str], bytes] | None = None,
+    feed_fetch: Callable[..., list[Any]] | None = None,
     ask_with_tools: Callable[..., str] | None | object = _USE_DEFAULT_BRAIN,
     today: str | None = None,
-    max_per_source: int = 8,
+    now: datetime | None = None,
+    max_per_source: int = 18,
     max_top: int = 5,
     max_tokens: int = 4096,
     timeout: float = 180.0,
 ) -> dict[str, Any]:
-    """Build a digestible, clustered multi-source briefing. Never raises.
+    """Build a date-aware, freshness-filtered multi-source briefing. Never raises.
 
-    Fetches each source homepage deterministically, extracts + dedups candidate
-    headlines, then produces a `headline` / `top` (≤`max_top`, each with a
-    "por qué importa") / `more` digest. Editorial synthesis uses the injected
-    brain (`ask_with_tools`) when available, else a deterministic fallback.
+    Boletín v2: for each configured source, use its ADAPTER ("feed" → RSS/Atom
+    via lifeos.web.feeds, "hn_algolia" → the HN Algolia JSON API) to get DATED
+    candidates, keep only the fresh ones (today/yesterday in the user's tz), and
+    SKIP any source with zero fresh entries (recording it in `skipped_sources`).
+    The surviving dated candidates are deduped, then ranked/clustered into a
+    `headline` / `top` (≤`max_top`, each with a "por qué importa") / `more`
+    digest — via the injected brain when available, else a deterministic fallback.
+    Feed/Algolia URLs are REAL (never fabricated).
+
+    Injection seams (all tests use these — no network): `http_get(url)->bytes`
+    drives both feed parsing and the Algolia call; `feed_fetch` overrides the
+    feed parser; `now` pins the clock for freshness.
 
     Returns a dict with: title, summary, headline, top, more, items (flat
-    headline+top+more for the /briefings card), markdown, sources_used, ok.
+    headline+top+more for the /briefings card), markdown, sources_used,
+    skipped_sources, ok.
     """
+    from lifeos.web import feeds  # noqa: PLC0415
+
     srcs = sources if sources is not None else briefing_sources()
-    fetch = web_fetch or _default_web_fetch
-    today = today or _today_in_config_tz()
+    fetch_one = feed_fetch or feeds.fetch_feed
+    tz = _briefing_tz()
+    now_dt = now or datetime.now(tz)
+    today_date = now_dt.astimezone(tz).date()
+    today_str = today or today_date.isoformat()
     # Omitted → use the real brain (good production/smoke default). Explicit
     # None → deterministic-only (tests pin this). A callable is used as given.
     if ask_with_tools is _USE_DEFAULT_BRAIN:
         ask_with_tools = _default_ask
 
-    candidates: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
+    skipped_sources: list[str] = []
     sources_used = 0
     for src in srcs:
-        url = _safe_url(src.get("url"))
-        if not url:
-            continue
+        name = str(src.get("name") or "").strip()
+        adapter = str(src.get("adapter") or "feed").strip().lower()
+        category = str(src.get("category") or "general").strip() or "general"
         try:
-            result = fetch(url)
-        except Exception:  # noqa: BLE001
-            log.exception("multi-source fetch failed for %s", url)
+            if adapter == "hn_algolia":
+                raw_cands = _hn_algolia_candidates(
+                    http_get=http_get, limit=max_per_source)
+            else:
+                url = _safe_url(src.get("url"))
+                if not url:
+                    continue
+                entries = fetch_one(url, limit=max_per_source, http_get=http_get)
+                raw_cands = [
+                    {
+                        "title": str(getattr(e, "title", "") or "").strip()[:_MAX_TITLE],
+                        "url": _safe_url(getattr(e, "url", "")),
+                        "published": getattr(e, "published", None),
+                        "source": name,
+                        "category": category,
+                    }
+                    for e in entries
+                    if str(getattr(e, "title", "") or "").strip()
+                    and _safe_url(getattr(e, "url", ""))
+                ]
+        except Exception:  # noqa: BLE001 — one bad source must not sink the run
+            log.exception("multi-source adapter failed for %s", name or adapter)
+            if name:
+                skipped_sources.append(name)
             continue
-        if not isinstance(result, dict):
+        fresh = [
+            c for c in raw_cands
+            if _is_fresh(c.get("published"), today=today_date, tz=tz)
+        ]
+        if not fresh:
+            # Zero fresh entries → skip the source (do not surface staleness).
+            if name:
+                skipped_sources.append(name)
             continue
-        # Preferred: let the brain read the page TEXT and extract this source's
-        # REAL top headlines (mapped to real links). Fall back to the
-        # deterministic link filter when the brain is absent or fails.
-        got: list[dict[str, str]] | None = None
-        if ask_with_tools is not None:
-            got = _extract_headlines_with_brain(
-                result, src, ask_with_tools,
-                limit=max_per_source, today=today,
-            )
-        if got is None:
-            got = _extract_source_candidates(result, src, limit=max_per_source)
-        if got:
-            sources_used += 1
-        candidates.extend(got)
+        sources_used += 1
+        candidates.extend(fresh)
 
     candidates = _dedup_candidates(candidates)
 
     if not candidates:
+        summary = _freshness_summary(
+            "No encontré noticias frescas en las fuentes.", today_str, skipped_sources)
         return {
             "title": _MULTI_SOURCE_TITLE,
-            "summary": "No encontré noticias en las fuentes de hoy.",
+            "summary": summary,
             "headline": None,
             "top": [],
             "more": [],
             "items": [],
-            "markdown": "No encontré noticias en las fuentes de hoy.",
+            "markdown": "No encontré noticias frescas en las fuentes de hoy.",
             "sources_used": sources_used,
+            "skipped_sources": skipped_sources,
             "ok": True,
         }
 
     digest: dict[str, Any] | None = None
     if ask_with_tools is not None:
         digest = _synthesize_with_brain(
-            candidates, ask_with_tools, today=today, max_top=max_top,
+            candidates, ask_with_tools, today=today_str, max_top=max_top,
             max_tokens=max_tokens, timeout=timeout,
         )
     if digest is None:
@@ -1004,18 +1179,19 @@ def run_multi_source_briefing(
     top = digest["top"][:max_top]
     more = digest["more"]
     items = ([headline] if headline else []) + top + more
-    summary = digest.get("summary") or (
-        f"{len(items)} noticias de {sources_used} fuentes, curadas."
+    base_summary = digest.get("summary") or (
+        f"{len(items)} noticias frescas de {sources_used} fuentes, curadas."
     )
     return {
         "title": _MULTI_SOURCE_TITLE,
-        "summary": summary[:_MAX_SUMMARY],
+        "summary": _freshness_summary(base_summary, today_str, skipped_sources),
         "headline": headline,
         "top": top,
         "more": more,
         "items": items,
         "markdown": _multi_source_markdown(headline, top, more),
         "sources_used": sources_used,
+        "skipped_sources": skipped_sources,
         "ok": True,
     }
 

@@ -92,6 +92,12 @@ def test_dispatcher_runs_agentic_and_persists_and_pushes(
     monkeypatch.setattr(
         dashboard.briefing, "run_agentic_briefing", lambda *_a, **_k: fake_digest
     )
+    # Route by prompt only: pin the multi-source config flag OFF so this test is
+    # hermetic (the live machine may have briefing_multi_source enabled, which
+    # would otherwise route to the multi-source pipeline and bypass this mock).
+    from axi import config
+    monkeypatch.setattr(config, "get",
+                        lambda k, d=None: False if k == "briefing_multi_source" else d)
     pushes: list = []
     monkeypatch.setattr(
         dashboard.lifeos_push, "send_to_all",
