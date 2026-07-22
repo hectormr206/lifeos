@@ -1362,6 +1362,46 @@ def serve_root_ca() -> FileResponse:
     )
 
 
+# ────────────────────── OTA app-update (self-hosted) ──────────────────────
+#
+# Serve the latest sideloaded APK + its manifest so the Flutter app can
+# self-update (no Play Store). These are legacy /api/* routes reachable by the
+# paired app through the /api/v1/* alias, so they inherit the SAME strict
+# per-device bearer auth (BearerAuthMiddleware, design D5) as every other v1
+# route once api_auth_enabled=true — no new auth scheme. Both are defensive:
+# a missing dir/manifest is a clean 404, never a 500, and downloads can only
+# ever resolve a file INSIDE the app-updates dir (app_updates.resolve_apk_path).
+
+
+@app.get("/api/app/manifest")
+def api_app_manifest():
+    """Current OTA update manifest, or 404 when nothing is published."""
+    from axi import app_updates  # noqa: PLC0415 — lazy: keep dashboard import light
+
+    manifest = app_updates.load_manifest()
+    if manifest is None:
+        raise HTTPException(404, detail="no app update published")
+    return manifest
+
+
+@app.get("/api/app/download")
+def api_app_download() -> FileResponse:
+    """Stream the current published APK bytes (404 when none / file missing)."""
+    from axi import app_updates  # noqa: PLC0415 — lazy: keep dashboard import light
+
+    manifest = app_updates.load_manifest()
+    if manifest is None:
+        raise HTTPException(404, detail="no app update published")
+    apk_path = app_updates.resolve_apk_path(manifest.get("apkFilename", ""))
+    if apk_path is None:
+        raise HTTPException(404, detail="published APK not found")
+    return FileResponse(
+        path=apk_path,
+        media_type="application/vnd.android.package-archive",
+        filename=manifest["apkFilename"],
+    )
+
+
 @app.get("/api/organs")
 def api_organs():
     """Declarative organ registry — Axi's full body picture (read-only)."""
