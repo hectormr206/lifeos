@@ -878,3 +878,220 @@ def test_run_briefing_for_prompt_routes_multi_source(monkeypatch) -> None:
 
     assert calls["multi"] == 1
     assert calls["agentic"] == 1
+
+
+# ── boletín v2 · slice 3: Spanish translation (es-MX) of English sources ──────
+#
+# Sources already in Spanish (Linux×5, Expansión, BBC Mundo) are NOT re-translated.
+# English sources (Hacker News, Simon Willison, Hugging Face Blog) have their
+# title + summary translated to natural es-MX by the BRAIN in ONE batched call,
+# referenced by candidate INDEX (so it can never fabricate a candidate/URL). The
+# original `title` is preserved; a Spanish `title_es`/`summary_es` is added. If
+# the brain is unavailable the text is left intact and marked untranslated
+# (never a crash).
+
+
+def test_default_sources_mark_english_lang() -> None:
+    from axi import briefing
+
+    by_name = {s["name"]: s for s in briefing.DEFAULT_BRIEFING_SOURCES}
+    # English sources needing translation
+    for en in ("Hacker News", "Simon Willison", "Hugging Face Blog"):
+        assert by_name[en].get("lang") == "en", f"{en} must be tagged lang=en"
+    # Already-Spanish sources are NOT English
+    for es in ("MuyLinux", "Expansión", "BBC Mundo"):
+        assert by_name[es].get("lang", "es") != "en"
+
+
+def test_translate_candidates_by_index_no_fabrication() -> None:
+    from axi import briefing
+
+    cands = [
+        {"title": "English one", "summary": "An english summary", "lang": "en",
+         "source": "Hacker News", "category": "tech", "url": "https://e/1"},
+        {"title": "Noticia en español", "summary": "Resumen español", "lang": "es",
+         "source": "Expansión", "category": "mx", "url": "https://e/2"},
+        {"title": "English two", "summary": "Another english", "lang": "en",
+         "source": "Simon Willison", "category": "ia", "url": "https://e/3"},
+    ]
+    seen: dict = {}
+
+    def fake_ask(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return json.dumps({"translations": [
+            {"index": 0, "title_es": "Inglés uno", "summary_es": "Un resumen traducido"},
+            {"index": 2, "title_es": "Inglés dos", "summary_es": "Otro traducido"},
+            {"index": 99, "title_es": "FABRICADO", "summary_es": "no existe"},  # out of range
+        ]})
+
+    out = briefing._translate_candidates(cands, fake_ask, today="2026-07-22")
+
+    # English candidates translated; original title preserved
+    assert out[0]["title"] == "English one"
+    assert out[0]["title_es"] == "Inglés uno"
+    assert out[0]["summary_es"].startswith("Un resumen")
+    assert out[0].get("translated") is True
+    assert out[2]["title_es"] == "Inglés dos"
+    # Already-Spanish candidate is NOT sent for translation nor re-translated
+    assert "Noticia en español" not in seen["prompt"]
+    assert out[1].get("translated") is not True
+    assert "title_es" not in out[1]
+    # Out-of-range index is ignored (no fabricated 4th candidate)
+    assert len(out) == 3
+
+
+def test_translate_candidates_fallback_on_brain_failure() -> None:
+    from axi import briefing
+
+    cands = [{"title": "English headline", "summary": "S", "lang": "en",
+              "source": "Hacker News", "category": "tech", "url": "https://e/1"}]
+
+    def boom(*a, **k):
+        raise RuntimeError("brain down")
+
+    out = briefing._translate_candidates(cands, boom, today="2026-07-22")
+    # Original text intact, marked untranslated, no crash
+    assert out[0]["title"] == "English headline"
+    assert "title_es" not in out[0]
+    assert out[0].get("translated") is False
+
+
+def test_translate_candidates_no_english_is_noop() -> None:
+    from axi import briefing
+
+    cands = [{"title": "Noticia MX", "summary": "R", "lang": "es",
+              "source": "Expansión", "category": "mx", "url": "https://e/1"}]
+    called = {"n": 0}
+
+    def fake_ask(prompt, **kwargs):
+        called["n"] += 1
+        return "{}"
+
+    out = briefing._translate_candidates(cands, fake_ask, today="2026-07-22")
+    assert called["n"] == 0  # brain not called when nothing to translate
+    assert out == cands
+
+
+def test_multi_source_translates_english_sources_end_to_end() -> None:
+    """A live-shaped run: an English feed source is translated to es-MX and the
+    Spanish title surfaces on the headline + markdown; the Spanish source is
+    untouched. Translation and synthesis share the injected brain."""
+    from axi import briefing
+
+    mapping = {
+        "https://en/": _rss([("An English AI breakthrough today",
+                              "https://a.example/1", _TODAY_RFC)]),
+        "https://es/": _rss([("Una noticia mexicana de hoy",
+                              "https://b.example/2", _TODAY_RFC)]),
+    }
+    sources = [
+        {"name": "Simon Willison", "adapter": "feed", "url": "https://en/",
+         "category": "ia", "lang": "en"},
+        {"name": "Expansión", "adapter": "feed", "url": "https://es/",
+         "category": "mx", "lang": "es"},
+    ]
+    prompts: list[str] = []
+
+    def fake_ask(prompt, **kwargs):
+        prompts.append(prompt)
+        if "Traduce" in prompt:  # translation call
+            return json.dumps({"translations": [
+                {"index": 0, "title_es": "Un avance de IA en español",
+                 "summary_es": "Resumen traducido al español"}]})
+        # editorial synthesis call
+        return json.dumps({"summary": "Lo esencial de hoy.", "headline": 0,
+                           "top": [{"index": 1, "why": "Importa para México."}]})
+
+    out = briefing.run_multi_source_briefing(
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=fake_ask, now=_NOW,
+    )
+
+    # headline (the English source) now shows the Spanish title, original kept
+    assert out["headline"]["title_es"] == "Un avance de IA en español"
+    assert out["headline"]["title"] == "An English AI breakthrough today"
+    # Spanish source untouched (never mangled into translation)
+    assert any("Traduce" in p for p in prompts)
+    assert all("Una noticia mexicana de hoy" not in p for p in prompts
+               if "Traduce" in p)
+    # markdown surfaces the Spanish title, not the English one
+    assert "Un avance de IA en español" in out["markdown"]
+
+
+# ── boletín v2 · slice 4: clusters + higher count (organized, not overwhelming) ─
+#
+# The surfaced count rises to ~15-25 total, ORGANIZED by category. Output gains a
+# `clusters` = {category: [items]} map (tech/ia/general/mx/linux), each a handful
+# (~3-5) ordered by recency; empty categories omitted. Backward-compat: all prior
+# keys stay; `clusters` is additive. Markdown renders grouped `## Categoría`.
+
+
+def _rss_many(cat, n):
+    return _rss([(f"{cat} fresh headline number {i} of the day",
+                  f"https://{cat}.example/{i}", _TODAY_RFC) for i in range(n)])
+
+
+def _five_category_run():
+    from axi import briefing
+    cats = ("tech", "ia", "general", "mx", "linux")
+    mapping = {f"https://{c}/": _rss_many(c, 4) for c in cats}
+    sources = [{"name": c, "adapter": "feed", "url": f"https://{c}/",
+                "category": c, "lang": "es"} for c in cats]
+    return briefing.run_multi_source_briefing(
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=None, now=_NOW)
+
+
+def test_output_shape_backward_compat_plus_clusters() -> None:
+    out = _five_category_run()
+    for key in ("headline", "top", "more", "items", "markdown", "title",
+                "summary", "sources_used", "ok", "skipped_sources", "clusters"):
+        assert key in out, f"missing output key {key}"
+    assert isinstance(out["clusters"], dict)
+
+
+def test_count_reaches_target_when_enough_fresh_items() -> None:
+    out = _five_category_run()  # 5 categories × 4 fresh = 20 candidates
+    assert 15 <= len(out["items"]) <= 25
+
+
+def test_clusters_bucket_by_category_and_omit_empty() -> None:
+    out = _five_category_run()
+    clusters = out["clusters"]
+    assert set(clusters) == {"tech", "ia", "general", "mx", "linux"}
+    for cat, items in clusters.items():
+        assert items, f"empty cluster {cat} should have been omitted"
+        assert 1 <= len(items) <= 5
+        assert all(it["category"] == cat for it in items)
+
+
+def test_clusters_omit_categories_with_no_items() -> None:
+    from axi import briefing
+    mapping = {"https://tech/": _rss_many("tech", 3),
+               "https://mx/": _rss_many("mx", 3)}
+    sources = [{"name": "T", "adapter": "feed", "url": "https://tech/", "category": "tech"},
+               {"name": "M", "adapter": "feed", "url": "https://mx/", "category": "mx"}]
+    out = briefing.run_multi_source_briefing(
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=None, now=_NOW)
+    assert set(out["clusters"]) == {"tech", "mx"}
+    for absent in ("ia", "general", "linux"):
+        assert absent not in out["clusters"]
+
+
+def test_markdown_groups_by_category_sections() -> None:
+    out = _five_category_run()
+    md = out["markdown"]
+    # A grouped rendering: category section headers appear
+    assert "## Tecnología" in md or "## IA" in md
+    assert "## México" in md
+    assert "## Linux" in md
+    # headline still highlighted
+    assert "Lo más importante" in md
+
+
+def test_clusters_capped_per_category() -> None:
+    from axi import briefing
+    # one category with many fresh items -> cluster capped at 5
+    mapping = {"https://tech/": _rss_many("tech", 12)}
+    sources = [{"name": "T", "adapter": "feed", "url": "https://tech/", "category": "tech"}]
+    out = briefing.run_multi_source_briefing(
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=None, now=_NOW)
+    assert len(out["clusters"]["tech"]) <= 5

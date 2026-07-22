@@ -398,12 +398,31 @@ DEFAULT_BRIEFING_SOURCES: list[dict[str, str]] = [
     {"name": "Linux en Español", "adapter": "feed", "url": "https://www.xn--linuxenespaol-skb.com/feed/", "category": "linux"},
     {"name": "LinuxAdictos", "adapter": "feed", "url": "https://www.linuxadictos.com/feed/", "category": "linux"},
     {"name": "desdeLinux", "adapter": "feed", "url": "https://blog.desdelinux.net/feed/", "category": "linux"},
-    {"name": "Simon Willison", "adapter": "feed", "url": "https://simonwillison.net/atom/everything/", "category": "ia"},
-    {"name": "Hugging Face Blog", "adapter": "feed", "url": "https://huggingface.co/blog/feed.xml", "category": "ia"},
+    {"name": "Simon Willison", "adapter": "feed", "url": "https://simonwillison.net/atom/everything/", "category": "ia", "lang": "en"},
+    {"name": "Hugging Face Blog", "adapter": "feed", "url": "https://huggingface.co/blog/feed.xml", "category": "ia", "lang": "en"},
     {"name": "Expansión", "adapter": "feed", "url": "https://expansion.mx/rss", "category": "mx"},
     {"name": "BBC Mundo", "adapter": "feed", "url": "https://feeds.bbci.co.uk/mundo/rss.xml", "category": "general"},
-    {"name": "Hacker News", "adapter": "hn_algolia", "url": "https://news.ycombinator.com/", "category": "tech"},
+    {"name": "Hacker News", "adapter": "hn_algolia", "url": "https://news.ycombinator.com/", "category": "tech", "lang": "en"},
 ]
+
+# Category presentation for the grouped (clusters) view. Order = surfacing
+# priority; labels are the es-MX section titles the markdown renders.
+_CATEGORY_ORDER: tuple[str, ...] = ("tech", "ia", "general", "mx", "linux")
+_CATEGORY_LABELS: dict[str, str] = {
+    "tech": "Tecnología",
+    "ia": "IA",
+    "general": "Mundo",
+    "mx": "México",
+    "linux": "Linux",
+}
+# A digestible cluster shows a handful per category, not a raw dump.
+_MAX_PER_CLUSTER = 5
+# Total surfaced items are bounded so the card stays 15-25, not overwhelming.
+_MAX_TOTAL_ITEMS = 25
+
+# English sources whose title/summary must be translated to es-MX for the
+# reader. Used as a fallback signal when a candidate carries no explicit `lang`.
+_ENGLISH_SOURCES = frozenset({"Hacker News", "Simon Willison", "Hugging Face Blog"})
 
 # Anchor text shorter than this is almost always chrome/nav ("login", "more",
 # "comments", a lone site name) rather than a real headline.
@@ -558,6 +577,12 @@ def briefing_sources() -> list[dict[str, str]]:
             adapter = str(s.get("adapter") or "").strip().lower()
             if adapter:
                 entry["adapter"] = adapter
+            # Preserve an explicit source language ("en"/"es") so the
+            # translation step knows which sources to translate; absent → the
+            # pipeline defaults to Spanish (no translation).
+            lang = str(s.get("lang") or "").strip().lower()
+            if lang:
+                entry["lang"] = lang
             clean.append(entry)
         if clean:
             return clean
@@ -785,10 +810,19 @@ def _to_item(c: dict[str, Any], why: str = "") -> dict[str, str]:
     future "ver comentarios" button. `published` is rendered as an ISO string.
     """
     title = str(c.get("title") or "")[:_MAX_TITLE]
+    # Spanish title for the reader: the translated `title_es` when present
+    # (English sources), else the original (already-Spanish sources).
+    title_es = str(c.get("title_es") or title)[:_MAX_TITLE]
+    # Displayed summary: the editorial "por qué importa" line when the brain
+    # picked this item for `top`, else the (translated) feed summary so cluster
+    # items still carry a one-line description.
+    summary = str(
+        why or c.get("summary_es") or c.get("summary") or ""
+    )[:_MAX_SUMMARY]
     item: dict[str, str] = {
         "title": title,
-        "title_es": title,
-        "summary": str(why or "")[:_MAX_SUMMARY],
+        "title_es": title_es,
+        "summary": summary,
         "why": str(why or "")[:_MAX_SUMMARY],
         "url": _safe_url(c.get("url")),
         "source": str(c.get("source") or "")[:_MAX_TITLE],
@@ -803,35 +837,186 @@ def _to_item(c: dict[str, Any], why: str = "") -> dict[str, str]:
     return item
 
 
+def _is_english_candidate(c: dict[str, Any]) -> bool:
+    """True when a candidate's title/summary is English and needs translating.
+
+    Uses the explicit `lang` tag first (config/source-driven), falling back to a
+    known-English source name so a legacy source without `lang` still translates.
+    """
+    if str(c.get("lang") or "").strip().lower() == "en":
+        return True
+    return str(c.get("source") or "").strip() in _ENGLISH_SOURCES
+
+
+# A translator persona so the brain does NOT mistake the batched title list for
+# a live-news request (the default system prompt steers it toward web tools and
+# it refuses with "no tengo acceso a internet"). Translation needs no network.
+_TRANSLATION_SYSTEM = (
+    "Eres un traductor profesional inglés→español de México (es-MX). Tu única "
+    "tarea es TRADUCIR el texto que se te entrega. NO necesitas internet, NO "
+    "busques nada y NO pidas activar búsquedas: el texto ya está aquí. Conserva "
+    "nombres propios, marcas y términos técnicos. Responde ÚNICAMENTE con el "
+    "objeto JSON solicitado, sin texto adicional."
+)
+
+
+def _build_translation_prompt(
+    cands: list[dict[str, Any]], en_idx: list[int], today: str,
+) -> str:
+    """Batched es-MX translation prompt referencing candidates by INDEX.
+
+    Only English candidates are listed (already-Spanish ones are never sent).
+    The brain returns Spanish text keyed by the SAME index, so it cannot add,
+    drop, or reorder candidates — we map the translations straight back.
+    """
+    lines = [
+        f"Hoy es {today}. Traduce al español natural de México (es-MX) el "
+        "título y el resumen de CADA noticia numerada. Conserva nombres "
+        "propios y términos técnicos; NO agregues ni inventes noticias.",
+        "",
+    ]
+    for i in en_idx:
+        c = cands[i]
+        lines.append(f"[{i}] TÍTULO: {c.get('title', '')}")
+        summ = str(c.get("summary") or "").strip()
+        if summ:
+            lines.append(f"     RESUMEN: {summ}")
+    lines += [
+        "",
+        "Responde ÚNICAMENTE con JSON, refiriéndote SOLO por el número [i]:",
+        '{"translations": [{"index": <i>, "title_es": "<título en español>", '
+        '"summary_es": "<resumen en español, 1-2 líneas>"}]}',
+    ]
+    return "\n".join(lines)
+
+
+def _translate_candidates(
+    cands: list[dict[str, Any]],
+    ask: Callable[..., str],
+    *,
+    today: str,
+    max_tokens: int = 2048,
+    timeout: float = 120.0,
+) -> list[dict[str, Any]]:
+    """Translate English candidates' title + summary to es-MX via the brain.
+
+    ONE batched call keyed by candidate index (no fabrication: an unknown or
+    out-of-range index is ignored, and only English candidates are eligible).
+    Sets `title_es` + `summary_es` and `translated=True` on translated items.
+    Already-Spanish candidates are left untouched. On any brain failure the
+    English candidates are left intact and marked `translated=False` (the
+    displayed title then falls back to the original English) — never a crash.
+    """
+    en_idx = [i for i, c in enumerate(cands) if _is_english_candidate(c)]
+    if not en_idx:
+        return cands
+    prompt = _build_translation_prompt(cands, en_idx, today)
+    try:
+        raw = ask(prompt, max_tokens=max_tokens, timeout=timeout,
+                  task="translation", system=_TRANSLATION_SYSTEM)
+    except Exception:  # noqa: BLE001 — translation must never sink the briefing
+        log.exception("multi-source translation failed")
+        raw = ""
+    obj = None if _is_brain_failure(raw) else _extract_json(raw)
+    translations = obj.get("translations") if isinstance(obj, dict) else None
+    eligible = set(en_idx)
+    if isinstance(translations, list):
+        for entry in translations:
+            if not isinstance(entry, dict):
+                continue
+            idx = entry.get("index")
+            # Guard: only real, eligible English indices (never fabricated).
+            if isinstance(idx, bool) or not isinstance(idx, int) or idx not in eligible:
+                continue
+            title_es = str(entry.get("title_es") or "").strip()[:_MAX_TITLE]
+            summary_es = str(entry.get("summary_es") or "").strip()[:_MAX_SUMMARY]
+            if title_es:
+                cands[idx]["title_es"] = title_es
+            if summary_es:
+                cands[idx]["summary_es"] = summary_es
+            if title_es or summary_es:
+                cands[idx]["translated"] = True
+    # Mark any English candidate the brain did not translate as untranslated so
+    # the fallback (original text) is explicit rather than silent.
+    for i in en_idx:
+        cands[i].setdefault("translated", False)
+    return cands
+
+
+def _cluster_date(it: dict[str, Any]) -> str:
+    """Recency sort key: the ISO `published` string (lexical = chronological)."""
+    return str(it.get("published") or "")
+
+
+def _build_clusters(
+    items: list[dict[str, str]], *, per_cat: int = _MAX_PER_CLUSTER,
+) -> dict[str, list[dict[str, str]]]:
+    """Group surfaced items into a `{category: [items]}` digest, by recency.
+
+    Known categories come first (in `_CATEGORY_ORDER`), then any others. Each
+    category keeps at most `per_cat` items, newest first. Empty categories are
+    omitted so the card renders only non-empty sections.
+    """
+    from collections import OrderedDict  # noqa: PLC0415
+
+    buckets: "OrderedDict[str, list[dict[str, str]]]" = OrderedDict()
+    for it in items:
+        buckets.setdefault(str(it.get("category") or "general"), []).append(it)
+    ordered = [c for c in _CATEGORY_ORDER if c in buckets]
+    ordered += [c for c in buckets if c not in _CATEGORY_ORDER]
+    clusters: dict[str, list[dict[str, str]]] = {}
+    for cat in ordered:
+        ranked = sorted(buckets[cat], key=_cluster_date, reverse=True)[:per_cat]
+        if ranked:
+            clusters[cat] = ranked
+    return clusters
+
+
+def _item_date_label(it: dict[str, Any]) -> str:
+    """The YYYY-MM-DD date part of an item's ISO `published`, or ''."""
+    return str(it.get("published") or "")[:10]
+
+
 def _multi_source_markdown(
     headline: dict[str, str] | None,
-    top: list[dict[str, str]],
-    more: list[dict[str, str]],
+    clusters: dict[str, list[dict[str, str]]],
 ) -> str:
+    """Render a grouped card: one highlighted headline, then a section per
+    non-empty category cluster (Spanish title + one-line summary + link +
+    source + date). This is what /briefings shows, so the structure is visible
+    without any template change.
+    """
     lines: list[str] = [f"## {_MULTI_SOURCE_TITLE}", ""]
     if headline:
-        t, u = headline.get("title", ""), headline.get("url", "")
-        src = headline.get("source", "")
-        lines.append(f"**Lo más importante:** [{t}]({u})" if u else f"**Lo más importante:** {t}")
-        if src:
-            lines.append(f"  _{src}_")
+        t = headline.get("title_es") or headline.get("title", "")
+        u = headline.get("url", "")
+        lines.append(
+            f"**Lo más importante:** [{t}]({u})" if u
+            else f"**Lo más importante:** {t}")
+        why = headline.get("why") or headline.get("summary")
+        if why:
+            lines.append(f"  {why}")
+        meta = " · ".join(p for p in (headline.get("source", ""),
+                                      _item_date_label(headline)) if p)
+        if meta:
+            lines.append(f"  _{meta}_")
         lines.append("")
-    if top:
-        lines.append("### Vale tu tiempo")
-        for it in top:
-            t, u, src = it.get("title", ""), it.get("url", ""), it.get("source", "")
+    for cat, items in clusters.items():
+        if not items:
+            continue
+        lines.append(f"## {_CATEGORY_LABELS.get(cat, cat.capitalize())}")
+        for it in items:
+            t = it.get("title_es") or it.get("title", "")
+            u = it.get("url", "")
             head = f"[{t}]({u})" if u else t
-            lines.append(f"- {head} — _{src}_")
-            why = it.get("why") or it.get("summary")
-            if why:
-                lines.append(f"  - {why}")
+            lines.append(f"- {head}")
+            summ = it.get("summary") or it.get("why")
+            meta = " · ".join(p for p in (it.get("source", ""),
+                                          _item_date_label(it)) if p)
+            detail = " — ".join(p for p in (summ, f"_{meta}_" if meta else "") if p)
+            if detail:
+                lines.append(f"  - {detail}")
         lines.append("")
-    if more:
-        lines.append("### Más")
-        for it in more:
-            t, u, src = it.get("title", ""), it.get("url", ""), it.get("source", "")
-            head = f"[{t}]({u})" if u else t
-            lines.append(f"- {head} — _{src}_")
     return "\n".join(lines).strip()
 
 
@@ -1068,6 +1253,7 @@ def run_multi_source_briefing(
     now: datetime | None = None,
     max_per_source: int = 18,
     max_top: int = 5,
+    max_items: int = _MAX_TOTAL_ITEMS,
     max_tokens: int = 4096,
     timeout: float = 180.0,
 ) -> dict[str, Any]:
@@ -1086,9 +1272,15 @@ def run_multi_source_briefing(
     drives both feed parsing and the Algolia call; `feed_fetch` overrides the
     feed parser; `now` pins the clock for freshness.
 
+    English sources (lang="en": Hacker News, Simon Willison, HF blog) have their
+    title + summary translated to es-MX in ONE batched brain call (by candidate
+    index — no fabrication) before synthesis; already-Spanish sources are left
+    intact, and a brain failure leaves the English text untouched.
+
     Returns a dict with: title, summary, headline, top, more, items (flat
-    headline+top+more for the /briefings card), markdown, sources_used,
-    skipped_sources, ok.
+    headline+top+more, capped at `max_items`), clusters ({category: [items]}
+    grouped view, each ≤`_MAX_PER_CLUSTER`, empty categories omitted), markdown
+    (grouped by category), sources_used, skipped_sources, ok.
     """
     from lifeos.web import feeds  # noqa: PLC0415
 
@@ -1110,6 +1302,9 @@ def run_multi_source_briefing(
         name = str(src.get("name") or "").strip()
         adapter = str(src.get("adapter") or "feed").strip().lower()
         category = str(src.get("category") or "general").strip() or "general"
+        # Source language drives the translation step: "en" sources are
+        # translated to es-MX; absent → Spanish (no translation).
+        lang = str(src.get("lang") or "es").strip().lower() or "es"
         try:
             if adapter == "hn_algolia":
                 raw_cands = _hn_algolia_candidates(
@@ -1126,6 +1321,7 @@ def run_multi_source_briefing(
                         "published": getattr(e, "published", None),
                         "source": name,
                         "category": category,
+                        "summary": str(getattr(e, "summary", "") or "").strip()[:_MAX_SUMMARY],
                     }
                     for e in entries
                     if str(getattr(e, "title", "") or "").strip()
@@ -1136,6 +1332,11 @@ def run_multi_source_briefing(
             if name:
                 skipped_sources.append(name)
             continue
+        # Tag language + ensure a summary field on every candidate (HN has none)
+        # so the translation step and cluster rendering have a uniform shape.
+        for c in raw_cands:
+            c.setdefault("lang", lang)
+            c.setdefault("summary", "")
         fresh = [
             c for c in raw_cands
             if _is_fresh(c.get("published"), today=today_date, tz=tz)
@@ -1160,11 +1361,21 @@ def run_multi_source_briefing(
             "top": [],
             "more": [],
             "items": [],
+            "clusters": {},
             "markdown": "No encontré noticias frescas en las fuentes de hoy.",
             "sources_used": sources_used,
             "skipped_sources": skipped_sources,
             "ok": True,
         }
+
+    # Spanish (es-MX) for the reader: translate English sources' title + summary
+    # in ONE batched brain call before synthesis. Deterministic-only runs
+    # (ask=None) skip this and keep the original text (marked untranslated).
+    if ask_with_tools is not None:
+        candidates = _translate_candidates(
+            candidates, ask_with_tools, today=today_str,
+            max_tokens=max_tokens, timeout=timeout,
+        )
 
     digest: dict[str, Any] | None = None
     if ask_with_tools is not None:
@@ -1177,8 +1388,17 @@ def run_multi_source_briefing(
 
     headline = digest["headline"]
     top = digest["top"][:max_top]
-    more = digest["more"]
+    # Interleave the tail by category BEFORE capping so trimming removes each
+    # category's tail evenly instead of dropping whole (source-order-last)
+    # categories like Hacker News / BBC Mundo.
+    more = _rank_candidates(digest["more"])
+    # Bound the total surfaced items to keep the card 15-25, not overwhelming:
+    # the headline + top are always kept; the tail (`more`) is trimmed.
+    keep_more = max(0, max_items - (1 if headline else 0) - len(top))
+    more = more[:keep_more]
     items = ([headline] if headline else []) + top + more
+    # Organized-by-category view (headline excluded — it is shown once on top).
+    clusters = _build_clusters(top + more, per_cat=_MAX_PER_CLUSTER)
     base_summary = digest.get("summary") or (
         f"{len(items)} noticias frescas de {sources_used} fuentes, curadas."
     )
@@ -1189,7 +1409,8 @@ def run_multi_source_briefing(
         "top": top,
         "more": more,
         "items": items,
-        "markdown": _multi_source_markdown(headline, top, more),
+        "clusters": clusters,
+        "markdown": _multi_source_markdown(headline, clusters),
         "sources_used": sources_used,
         "skipped_sources": skipped_sources,
         "ok": True,
