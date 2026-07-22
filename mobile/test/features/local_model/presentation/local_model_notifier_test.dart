@@ -117,6 +117,57 @@ void main() {
         NotificationPermission.granted);
   });
 
+  test('deleteModel flips installed→false and clears deleting', () async {
+    final engine = FakeLocalLlmEngine(installed: true);
+    final container = _container(engine);
+    final notifier = container.read(localModelManagerProvider.notifier);
+    await notifier.ready;
+    expect(container.read(localModelManagerProvider).installed, isTrue);
+
+    await notifier.deleteModel();
+
+    final state = container.read(localModelManagerProvider);
+    expect(state.installed, isFalse);
+    expect(state.deleting, isFalse);
+    expect(state.error, isNull);
+    expect(engine.deleteCount, 1);
+  });
+
+  test('deleteModel failure surfaces an error and keeps installed', () async {
+    final engine = FakeLocalLlmEngine(installed: true, deleteShouldFail: true);
+    final container = _container(engine);
+    final notifier = container.read(localModelManagerProvider.notifier);
+    await notifier.ready;
+
+    await notifier.deleteModel();
+
+    final state = container.read(localModelManagerProvider);
+    expect(state.deleting, isFalse);
+    expect(state.installed, isTrue, reason: 'a failed delete leaves the weights in place');
+    expect(state.error, isNotNull);
+  });
+
+  test('after deleteModel the local-mode toggle can no longer be on (gating)', () async {
+    final engine = FakeLocalLlmEngine(installed: true);
+    final container = ProviderContainer(overrides: [
+      localLlmEngineProvider.overrideWithValue(engine),
+      notificationPermissionGatewayProvider
+          .overrideWithValue(FakeNotificationPermissionGateway()),
+    ]);
+    addTearDown(container.dispose);
+
+    // Enable local mode (allowed because the model is installed).
+    await container.read(localModelEnabledProvider.notifier).setEnabled(true);
+    expect(container.read(localModelEnabledProvider), isTrue);
+
+    final notifier = container.read(localModelManagerProvider.notifier);
+    await notifier.ready;
+    await notifier.deleteModel();
+
+    // With the weights gone, local mode is forced back OFF.
+    expect(container.read(localModelEnabledProvider), isFalse);
+  });
+
   test('permanently denied is recorded and openNotificationSettings deep-links', () async {
     final gateway =
         FakeNotificationPermissionGateway(requestResult: NotificationPermission.permanentlyDenied);

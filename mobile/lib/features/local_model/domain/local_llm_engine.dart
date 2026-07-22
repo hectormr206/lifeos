@@ -79,4 +79,10 @@ abstract class LocalLlmEngine {
   /// Releases the loaded model + native handles. Safe to call when not
   /// loaded.
   Future<void> dispose();
+
+  /// Deletes the installed weights from disk, freeing the ~2.6GB they occupy,
+  /// so the model can be re-downloaded later. Implementations MUST unload any
+  /// loaded model first (release the native handle) so the file is not locked.
+  /// Safe to call when nothing is installed.
+  Future<void> deleteModel();
 }

@@ -11,11 +11,16 @@ import 'package:lifeos/core/api/api_providers.dart';
 import 'package:lifeos/core/auth/token_store.dart';
 import 'package:lifeos/features/home/presentation/home_providers.dart';
 import 'package:lifeos/features/home/presentation/home_screen.dart';
+import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 
+import '../../../features/local_model/support/fake_local_llm_engine.dart';
 import '../../../support/fake_token_store.dart';
 
 GoRouter _routerToHome() => GoRouter(
-      routes: [GoRoute(path: '/', builder: (context, state) => const HomeScreen())],
+      routes: [
+        GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
+        GoRoute(path: '/chat', builder: (context, state) => const Scaffold(body: Text('CHAT'))),
+      ],
     );
 
 void main() {
@@ -242,5 +247,64 @@ void main() {
     await tester.pump();
 
     expect(find.text('Reuniones'), findsOneWidget);
+  });
+
+  testWidgets('unpaired + model NOT installed: shows the "Usar modelo local" button, not the chat one',
+      (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          tokenStoreProvider.overrideWithValue(FakeTokenStore()),
+          localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: false)),
+          localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences()),
+        ],
+        child: MaterialApp.router(routerConfig: _routerToHome()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Usar modelo local (sin conexión)'), findsOneWidget);
+    expect(find.text('Chatear con Axi (sin conexión)'), findsNothing);
+  });
+
+  testWidgets('unpaired + model installed: shows the "Chatear con Axi (sin conexión)" button',
+      (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          tokenStoreProvider.overrideWithValue(FakeTokenStore()),
+          localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: true)),
+          localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences()),
+        ],
+        child: MaterialApp.router(routerConfig: _routerToHome()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Chatear con Axi (sin conexión)'), findsOneWidget);
+  });
+
+  testWidgets('tapping "Chatear con Axi (sin conexión)" enables local mode and routes to /chat',
+      (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          tokenStoreProvider.overrideWithValue(FakeTokenStore()),
+          localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: true)),
+          localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences()),
+        ],
+        child: MaterialApp.router(routerConfig: _routerToHome()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Chatear con Axi (sin conexión)'));
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.text('CHAT')),
+    );
+    expect(container.read(localModelEnabledProvider), isTrue);
+    expect(find.text('CHAT'), findsOneWidget);
   });
 }

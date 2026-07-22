@@ -12,6 +12,7 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     List<double>? downloadProgress,
     this.downloadShouldFail = false,
     this.generateShouldFail = false,
+    this.deleteShouldFail = false,
     String Function(String prompt)? reply,
   })  : _installed = installed,
         downloadProgress = downloadProgress ?? const [0.25, 0.5, 1.0],
@@ -21,10 +22,12 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   final List<double> downloadProgress;
   final bool downloadShouldFail;
   final bool generateShouldFail;
+  final bool deleteShouldFail;
   final String Function(String prompt) reply;
 
   int loadCount = 0;
   int generateCount = 0;
+  int deleteCount = 0;
   final List<String> prompts = [];
   bool disposed = false;
   LocalLlmBackend? loadedBackend;
@@ -53,6 +56,15 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     prompts.add(prompt);
     if (generateShouldFail) throw Exception('generate boom');
     return reply(prompt);
+  }
+
+  @override
+  Future<void> deleteModel() async {
+    deleteCount++;
+    // Real engine unloads before deleting; mirror that so tests can assert it.
+    disposed = true;
+    if (deleteShouldFail) throw Exception('delete boom');
+    _installed = false;
   }
 
   @override

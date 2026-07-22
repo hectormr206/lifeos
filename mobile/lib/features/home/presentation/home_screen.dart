@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../connection/domain/connection_status.dart';
 import '../../connection/presentation/connection_notifier.dart';
+import '../../local_model/presentation/local_model_notifier.dart';
+import '../../local_model/presentation/local_model_providers.dart';
 import 'home_providers.dart';
 
 /// Foundation home screen (design D1 / M0->M1 bridge; spec
@@ -40,13 +42,18 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-class _UnpairedView extends StatelessWidget {
+class _UnpairedView extends ConsumerWidget {
   const _UnpairedView({required this.onConnect});
 
   final VoidCallback onConnect;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Roadmap SLICE 1: the on-device model needs no engine connection. Once the
+    // weights are installed we offer a one-tap route straight into the offline
+    // chat; until then we route to the model manager to download first.
+    final localModelInstalled = ref.watch(localModelManagerProvider).installed;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -57,13 +64,23 @@ class _UnpairedView extends StatelessWidget {
           child: const Text('Conectar con tu motor'),
         ),
         const SizedBox(height: 12),
-        // Roadmap SLICE 1: on-device model works with no engine connection, so
-        // it is offered even while unpaired.
-        OutlinedButton.icon(
-          onPressed: () => context.push('/settings/local-model'),
-          icon: const Icon(Icons.offline_bolt_outlined),
-          label: const Text('Usar modelo local (sin conexión)'),
-        ),
+        if (localModelInstalled)
+          // Primary offline path: ensure local mode is on, then open the chat.
+          FilledButton.icon(
+            onPressed: () async {
+              await ref.read(localModelEnabledProvider.notifier).setEnabled(true);
+              if (context.mounted) context.push('/chat');
+            },
+            icon: const Icon(Icons.offline_bolt),
+            label: const Text('Chatear con Axi (sin conexión)'),
+          )
+        else
+          // No weights yet → send the user to the manager to download first.
+          OutlinedButton.icon(
+            onPressed: () => context.push('/settings/local-model'),
+            icon: const Icon(Icons.offline_bolt_outlined),
+            label: const Text('Usar modelo local (sin conexión)'),
+          ),
       ],
     );
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../domain/notification_permission.dart';
 import 'local_model_notifier.dart';
@@ -46,6 +47,7 @@ class LocalModelScreen extends ConsumerWidget {
           _StatusTile(manager: manager),
           const SizedBox(height: 16),
           _DownloadSection(manager: manager),
+          _InstalledActions(manager: manager, enabled: enabled),
           _NotificationPermissionNotice(manager: manager),
           if (manager.error != null) ...[
             const SizedBox(height: 16),
@@ -123,6 +125,79 @@ class _DownloadSection extends ConsumerWidget {
         ),
       ],
     );
+  }
+}
+
+/// Actions available once the weights are installed (roadmap SLICE 1): a
+/// one-tap shortcut into the offline chat (only when the toggle is already ON,
+/// so it never bypasses the enable gate) and a "delete model" affordance that
+/// frees the ~2.6GB back to the user. While a deletion is in flight the whole
+/// section collapses to a spinner so the buttons can't be double-tapped.
+class _InstalledActions extends ConsumerWidget {
+  const _InstalledActions({required this.manager, required this.enabled});
+
+  final LocalModelManagerState manager;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!manager.installed) return const SizedBox.shrink();
+    if (manager.deleting) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 16),
+        child: Row(
+          children: [
+            SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(width: 12),
+            Text('Eliminando el modelo…'),
+          ],
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (enabled) ...[
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: () => context.push('/chat'),
+            icon: const Icon(Icons.chat_bubble_outline),
+            label: const Text('Ir al chat'),
+          ),
+        ],
+        const SizedBox(height: 16),
+        OutlinedButton.icon(
+          onPressed: () => _confirmDelete(context, ref),
+          icon: const Icon(Icons.delete_outline),
+          label: const Text('Eliminar modelo'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('¿Eliminar el modelo?'),
+        content: const Text(
+          'Se liberarán ~2.6 GB. Podrás volver a descargarlo cuando quieras.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed ?? false) {
+      await ref.read(localModelManagerProvider.notifier).deleteModel();
+    }
   }
 }
 

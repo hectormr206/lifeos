@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lifeos/features/local_model/domain/notification_permission.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_screen.dart';
@@ -14,18 +15,25 @@ import '../support/fake_local_llm_engine.dart';
 Future<void> _pump(
   WidgetTester tester, {
   required bool installed,
+  bool enabled = false,
   FakeLocalLlmEngine? engine,
   FakeNotificationPermissionGateway? gateway,
 }) async {
+  final router = GoRouter(
+    routes: [
+      GoRoute(path: '/', builder: (context, state) => const LocalModelScreen()),
+      GoRoute(path: '/chat', builder: (context, state) => const Scaffold(body: Text('CHAT'))),
+    ],
+  );
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         localLlmEngineProvider.overrideWithValue(engine ?? FakeLocalLlmEngine(installed: installed)),
-        localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences()),
+        localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences(enabled: enabled)),
         notificationPermissionGatewayProvider
             .overrideWithValue(gateway ?? FakeNotificationPermissionGateway()),
       ],
-      child: const MaterialApp(home: LocalModelScreen()),
+      child: MaterialApp.router(routerConfig: router),
     ),
   );
   await tester.pumpAndSettle();
@@ -114,5 +122,86 @@ void main() {
     await tester.tap(settingsButton);
     await tester.pumpAndSettle();
     expect(gateway.openSettingsCount, 1);
+  });
+
+  testWidgets('shows "Eliminar modelo" when the model is installed', (tester) async {
+    await _pump(tester, installed: true);
+    expect(find.widgetWithText(OutlinedButton, 'Eliminar modelo'), findsOneWidget);
+  });
+
+  testWidgets('hides "Eliminar modelo" when the model is not installed', (tester) async {
+    await _pump(tester, installed: false);
+    expect(find.widgetWithText(OutlinedButton, 'Eliminar modelo'), findsNothing);
+  });
+
+  testWidgets('hides "Ir al chat" when installed but the toggle is off', (tester) async {
+    await _pump(tester, installed: true, enabled: false);
+    expect(find.widgetWithText(FilledButton, 'Ir al chat'), findsNothing);
+  });
+
+  testWidgets('shows "Ir al chat" when installed and the toggle is on', (tester) async {
+    await _pump(tester, installed: true, enabled: true);
+    expect(find.widgetWithText(FilledButton, 'Ir al chat'), findsOneWidget);
+  });
+
+  testWidgets('"Ir al chat" navigates to the chat screen', (tester) async {
+    await _pump(tester, installed: true, enabled: true);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Ir al chat'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('CHAT'), findsOneWidget);
+  });
+
+  testWidgets('"Eliminar modelo" opens a confirm dialog with the freed-space copy', (tester) async {
+    await _pump(tester, installed: true);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Eliminar modelo'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Se liberarán ~2.6 GB'), findsOneWidget);
+    expect(find.textContaining('Podrás volver a descargarlo'), findsOneWidget);
+  });
+
+  testWidgets('confirming deletion removes the model and restores the download button', (tester) async {
+    final engine = FakeLocalLlmEngine(installed: true);
+    await _pump(tester, installed: true, engine: engine);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Eliminar modelo'));
+    await tester.pumpAndSettle();
+    // Confirm in the dialog.
+    await tester.tap(find.widgetWithText(FilledButton, 'Eliminar'));
+    await tester.pumpAndSettle();
+
+    expect(engine.deleteCount, 1);
+    expect(find.text('Modelo no descargado'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Descargar modelo'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Eliminar modelo'), findsNothing);
+  });
+
+  testWidgets('cancelling the delete dialog keeps the model installed', (tester) async {
+    final engine = FakeLocalLlmEngine(installed: true);
+    await _pump(tester, installed: true, engine: engine);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Eliminar modelo'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Cancelar'));
+    await tester.pumpAndSettle();
+
+    expect(engine.deleteCount, 0);
+    expect(find.text('Modelo instalado'), findsOneWidget);
+  });
+
+  testWidgets('a delete failure surfaces an error and keeps the model', (tester) async {
+    final engine = FakeLocalLlmEngine(installed: true, deleteShouldFail: true);
+    await _pump(tester, installed: true, engine: engine);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Eliminar modelo'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Eliminar'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('No se pudo eliminar'), findsOneWidget);
+    expect(find.text('Modelo instalado'), findsOneWidget);
   });
 }

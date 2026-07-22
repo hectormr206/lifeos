@@ -146,6 +146,19 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     await model?.close();
   }
 
+  @override
+  Future<void> deleteModel() async {
+    await _ensureInitialized();
+    // Release any loaded native handle first so the weights file is not locked
+    // when we remove it (uninstall would otherwise race a live inference model).
+    await dispose();
+    // Real API (verified against flutter_gemma 1.3.1): removes the model
+    // metadata AND the on-disk file (unless it is an external/protected
+    // FileSource, which our network install never is). This is the exact
+    // counterpart to `installModel` / `isModelInstalled`.
+    await FlutterGemma.uninstallModel(_config.modelId);
+  }
+
   PreferredBackend _toPreferredBackend(LocalLlmBackend backend) => switch (backend) {
         LocalLlmBackend.cpu => PreferredBackend.cpu,
         LocalLlmBackend.gpu => PreferredBackend.gpu,

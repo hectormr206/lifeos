@@ -10,6 +10,7 @@ class LocalModelManagerState {
     this.installed = false,
     this.checking = true,
     this.downloading = false,
+    this.deleting = false,
     this.progress = 0.0,
     this.error,
     this.notificationPermission,
@@ -23,6 +24,9 @@ class LocalModelManagerState {
 
   /// A download is currently in flight.
   final bool downloading;
+
+  /// A deletion (freeing the on-disk weights) is currently in flight.
+  final bool deleting;
 
   /// Download progress in `0.0..1.0` (meaningful only while [downloading]).
   final double progress;
@@ -41,6 +45,7 @@ class LocalModelManagerState {
     bool? installed,
     bool? checking,
     bool? downloading,
+    bool? deleting,
     double? progress,
     String? error,
     NotificationPermission? notificationPermission,
@@ -49,6 +54,7 @@ class LocalModelManagerState {
         installed: installed ?? this.installed,
         checking: checking ?? this.checking,
         downloading: downloading ?? this.downloading,
+        deleting: deleting ?? this.deleting,
         progress: progress ?? this.progress,
         error: error,
         // Preserve once known — a progress tick must not wipe the recorded
@@ -101,6 +107,27 @@ class LocalModelManagerNotifier extends Notifier<LocalModelManagerState> {
       state = state.copyWith(downloading: false, installed: true, progress: 1);
     } catch (error) {
       state = state.copyWith(downloading: false, error: 'La descarga falló: $error');
+    }
+  }
+
+  /// Deletes the installed weights (freeing ~2.6GB) so the model can be
+  /// re-downloaded later. On success [installed] flips to `false`; the on-device
+  /// toggle is then forced OFF (and persisted) because local mode is impossible
+  /// without weights — the same invariant the startup reconciliation enforces,
+  /// applied immediately so the current session can't sit in an "enabled but no
+  /// model" state. Delete failures surface an error and leave the weights in
+  /// place; the screen never crashes.
+  Future<void> deleteModel() async {
+    if (state.deleting || state.downloading) return;
+    state = state.copyWith(deleting: true, error: null);
+    try {
+      await ref.read(localLlmEngineProvider).deleteModel();
+      state = state.copyWith(deleting: false, installed: false);
+      // Force local mode off now that the weights are gone (idempotent if it
+      // was already off). Uses the enabled-notifier so the choice is persisted.
+      await ref.read(localModelEnabledProvider.notifier).setEnabled(false);
+    } catch (error) {
+      state = state.copyWith(deleting: false, error: 'No se pudo eliminar el modelo: $error');
     }
   }
 
