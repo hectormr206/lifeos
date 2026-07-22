@@ -173,7 +173,7 @@ class _AboutTile extends ConsumerWidget {
             ),
           ),
           title: const Text('LifeOS'),
-          subtitle: Text('$version · Axi, tu copiloto local'),
+          subtitle: Text('$version · Axi, siempre con vos ⚡'),
         );
       },
     );
