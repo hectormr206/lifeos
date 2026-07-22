@@ -5071,6 +5071,11 @@ def ensure_vision_assets(assets_dir: Path = VISION_ASSETS_DIR) -> list[Path]:
         "bar5.png", "line_up.png", "line_down.png", "pie_dominant.png",
         # ── multi-line / mixed OCR ──────────────────────────────────────────
         "ocr_note.png", "ocr_code.png", "ocr_phrase.png", "ocr_room.png",
+        # ── v2 HARDENING: crowded counting, color+shape, vertical spatial,
+        #    distractor panels, finer charts, tougher OCR ────────────────────
+        "scene_seven.png", "shapes_mixed.png", "grid_vertical.png",
+        "panel_vitals.png", "receipt_price.png", "ocr_plate.png",
+        "bar7.png", "line_peak.png", "pie_close.png",
     ]
     existing = [assets_dir / n for n in expected]
     if all(p.exists() for p in existing):
@@ -5217,6 +5222,44 @@ def ensure_vision_assets(assets_dir: Path = VISION_ASSETS_DIR) -> list[Path]:
     panel("ocr_phrase.png", "BUENOS DIAS", fontsize=48)
     panel("ocr_room.png", "SALA 5B")
 
+    # ── v2 HARDENING assets: harder perception / reasoning ──────────────────
+    def paint_scene_seven(d, im) -> None:
+        # 7 shapes total (4 circles top row + square + triangle + circle).
+        for cx in (40, 96, 152, 208):
+            d.ellipse([cx - 16, 40, cx + 16, 72], fill=blue)
+        d.rectangle([40, 150, 80, 190], fill=red)
+        d.polygon([(128, 150), (104, 190), (152, 190)], fill=green)
+        d.ellipse([190, 150, 226, 186], fill=purple)
+
+    build("scene_seven.png", paint_scene_seven)
+
+    def paint_shapes_mixed(d, im) -> None:
+        # 3 red circles + 2 blue circles + 1 green square (color+shape counting).
+        for cx in (48, 128, 208):
+            d.ellipse([cx - 22, 30, cx + 22, 74], fill=red)
+        for cx in (88, 168):
+            d.ellipse([cx - 22, 110, cx + 22, 154], fill=blue)
+        d.rectangle([108, 190, 148, 230], fill=green)
+
+    build("shapes_mixed.png", paint_shapes_mixed)
+
+    def paint_grid_vertical(d, im) -> None:
+        # vertically stacked: top red square, middle blue circle, bottom green triangle.
+        d.rectangle([100, 20, 156, 76], fill=red)
+        d.ellipse([100, 100, 156, 156], fill=blue)
+        d.polygon([(128, 180), (96, 236), (160, 236)], fill=green)
+
+    build("grid_vertical.png", paint_grid_vertical)
+
+    # distractor panel (two labelled vitals — must pick the RIGHT number).
+    receipt("panel_vitals.png", ["PA 118/76", "PULSO 68"], fontsize=44)
+    # receipt where the priciest item requires comparing numbers (reasoning).
+    receipt("receipt_price.png",
+            ["ABARROTES", "Arroz     22", "Aceite    58", "Sal        9",
+             "Atun      34", "TOTAL    123"])
+    # tougher alphanumeric OCR (letters+digits, hyphen).
+    panel("ocr_plate.png", "R4-K92")
+
     # ── richer charts (matplotlib, deterministic fixed data) ────────────────
     _build_chart_assets(assets_dir, made)
 
@@ -5257,10 +5300,23 @@ def _build_chart_assets(assets_dir: Path, made: list[Path]) -> None:
     def pie(ax) -> None:  # dominant slice is red
         ax.pie([70, 15, 15], colors=["#d02020", "#2060d0", "#20a040"])
 
+    def bars7(ax) -> None:  # 7 bars, tallest=9, requires reading a specific value
+        ax.bar([1, 2, 3, 4, 5, 6, 7], [4, 9, 2, 7, 5, 3, 6], color="#3060c0")
+        ax.set_ylim(0, 10)
+
+    def line_peak(ax) -> None:  # rises then falls (non-monotonic trend reasoning)
+        ax.plot([0, 1, 2, 3, 4, 5], [1, 3, 6, 8, 5, 2], marker="o", color="#8040a0")
+
+    def pie_close(ax) -> None:  # near-equal slices; largest (40) is BLUE
+        ax.pie([40, 33, 27], colors=["#2060d0", "#20a040", "#d02020"])
+
     save("bar5.png", bars)
     save("line_up.png", line_up)
     save("line_down.png", line_down)
     save("pie_dominant.png", pie)
+    save("bar7.png", bars7)
+    save("line_peak.png", line_peak)
+    save("pie_close.png", pie_close)
 
 
 def ensure_posture_assets(assets_dir: Path = VISION_ASSETS_DIR) -> list[Path]:

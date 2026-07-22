@@ -700,7 +700,7 @@ def test_tool_calling_golden_set_shape():
 
 def test_vision_golden_set_shape_and_assets_exist():
     cases = _load_jsonl(GOLDEN / "vision_quality.jsonl")
-    assert len(cases) == 42
+    assert len(cases) == 58
     for c in cases:
         assert (GOLDEN / c["image"]).exists(), f"missing asset for {c['id']}"
         assert c["question"]
@@ -1030,8 +1030,8 @@ def test_audit_matrix_shows_codegen_and_conversation_columns():
 
 def test_code_generation_golden_set_shape():
     cases = _load_jsonl(GOLDEN / "code_generation.jsonl")
-    assert len(cases) == 44
-    assert len({c["id"] for c in cases}) == 44
+    assert len(cases) == 60
+    assert len({c["id"] for c in cases}) == 60
     for c in cases:
         assert c["prompt"] and c["function_name"] and c["tests"]
         assert f"`{c['function_name']}" in c["prompt"]    # spec names the target
