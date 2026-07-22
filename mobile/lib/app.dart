@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -145,6 +147,12 @@ class LifeOSApp extends ConsumerStatefulWidget {
 }
 
 class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserver {
+  /// Self-hosted OTA update: periodic foreground update check so an update
+  /// published while the user keeps LifeOS open (never backgrounding it) still
+  /// surfaces the in-app banner — the resume check alone missed that case.
+  Timer? _foregroundUpdateTimer;
+  static const Duration _foregroundCheckInterval = Duration(minutes: 5);
+
   @override
   void initState() {
     super.initState();
@@ -153,12 +161,29 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // Actualizaciones screen. Done after the first frame so the router is
     // ready, and covers both a tap while running and a cold-start launch.
     WidgetsBinding.instance.addPostFrameCallback((_) => _wireUpdateNotificationTap());
+    _startForegroundUpdatePolling();
   }
 
   @override
   void dispose() {
+    _stopForegroundUpdatePolling();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  void _startForegroundUpdatePolling() {
+    _foregroundUpdateTimer?.cancel();
+    // maybeAutoCheck() already honors the auto-check preference and its own
+    // in-flight guard, so this tick is cheap and never overlaps a live check.
+    _foregroundUpdateTimer = Timer.periodic(
+      _foregroundCheckInterval,
+      (_) => ref.read(appUpdateNotifierProvider.notifier).maybeAutoCheck(),
+    );
+  }
+
+  void _stopForegroundUpdatePolling() {
+    _foregroundUpdateTimer?.cancel();
+    _foregroundUpdateTimer = null;
   }
 
   Future<void> _wireUpdateNotificationTap() async {
@@ -186,8 +211,19 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // update (so one published while the app was open is detected without a
     // cold start) and auto-continue a pending install once the user has
     // granted "install unknown apps".
-    if (lifecycle == AppLifecycleState.resumed) {
-      ref.read(appUpdateNotifierProvider.notifier).onAppResumed();
+    switch (lifecycle) {
+      case AppLifecycleState.resumed:
+        ref.read(appUpdateNotifierProvider.notifier).onAppResumed();
+        // Resume the periodic foreground check (also fires an immediate check
+        // via onAppResumed above).
+        _startForegroundUpdatePolling();
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        // Backgrounded/killed: stop polling so no checks run off-screen.
+        _stopForegroundUpdatePolling();
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+        break;
     }
   }
 

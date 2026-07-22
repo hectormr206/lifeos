@@ -36,7 +36,12 @@ class FlutterLocalUpdateNotifications implements UpdateNotifications {
   void Function()? _onTapUpdate;
 
   static const int _notificationId = 4210;
-  static const String _channelId = 'lifeos_app_updates';
+  // Bumped from 'lifeos_app_updates' to '..._v2': on Android 8+ a channel's
+  // importance is cached at creation and cannot be raised by code, so the old
+  // default-importance channel would keep suppressing the heads-up pop-up on
+  // devices that already ran an earlier build. A fresh id lets the new
+  // HIGH-importance channel take effect.
+  static const String _channelId = 'lifeos_app_updates_v2';
   static const String _channelName = 'Actualizaciones de la app';
 
   /// Payload attached to the notification so a tap can be distinguished from
@@ -89,14 +94,16 @@ class FlutterLocalUpdateNotifications implements UpdateNotifications {
           _channelId,
           _channelName,
           channelDescription: 'Avisos cuando hay una nueva versión de LifeOS.',
-          importance: Importance.defaultImportance,
-          priority: Priority.defaultPriority,
+          // HIGH importance + priority so Android shows a floating heads-up
+          // (slide-down) notification, not just a status-bar icon.
+          importance: Importance.high,
+          priority: Priority.high,
         ),
       );
       await _plugin.show(
         id: _notificationId,
-        title: 'Nueva versión de LifeOS disponible',
-        body: 'Versión $versionName lista para instalar. Toca para actualizar.',
+        title: 'Actualización disponible',
+        body: 'Versión $versionName lista — toca para actualizar LifeOS.',
         notificationDetails: details,
         payload: _payload,
       );
