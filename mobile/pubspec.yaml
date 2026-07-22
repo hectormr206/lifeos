@@ -67,6 +67,13 @@ dependencies:
   # android/app/build.gradle.kts abiFilters).
   flutter_gemma_litertlm: 1.1.0
 
+  # The downloader flutter_gemma uses for the model fetch. Already resolved
+  # transitively via flutter_gemma; made direct so we can, before each download:
+  #   * request POST_NOTIFICATIONS (Android 13+ foreground-service notification),
+  #   * reset() the 'smart_downloads' group to clear a stale/failed task record
+  #     (the "Existing download failed: TaskStatus.failed" re-attach loop).
+  background_downloader: ^9.5.6
+
   # Local-only persistence for the "use local model" toggle (roadmap SLICE 1).
   # Deliberately NOT flutter_secure_storage: this is a non-secret UI preference
   # that must survive with no engine connection / no pairing.

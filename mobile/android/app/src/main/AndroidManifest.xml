@@ -1,7 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for ALL network access (the ~2.6GB model download). Flutter's
+         template only injects INTERNET into the debug/profile manifests, so a
+         signed RELEASE build has NO network unless it is declared here — this is
+         why the release APK's model download failed at 0% on device. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Roadmap SLICE 1 (on-device gemma-4-E2B via flutter_gemma): the large
          model download runs as a foreground data-sync service. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- Android 13+ (Pixel): background_downloader's foreground service posts a
+         progress notification; without runtime POST_NOTIFICATIONS the download
+         task fails at 0%. Declared here + requested at runtime before download. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="lifeos"
         android:name="${applicationName}"

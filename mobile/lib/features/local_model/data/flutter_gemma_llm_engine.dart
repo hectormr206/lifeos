@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_gemma_litertlm/flutter_gemma_litertlm.dart';
 
@@ -55,12 +56,37 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     return FlutterGemma.isModelInstalled(_config.modelId);
   }
 
+  /// The `background_downloader` task group flutter_gemma runs ALL model
+  /// downloads under (its `SmartDownloader.downloadGroup`). We reset THIS group
+  /// so a stale/failed task record can't be re-attached on retry.
+  static const String _downloadGroup = 'smart_downloads';
+
+  /// Best-effort pre-download prep. Two device-only failure modes are cleared
+  /// here (both surfaced on a Pixel / Android 13+):
+  ///  1. POST_NOTIFICATIONS: background_downloader's foreground service posts a
+  ///     progress notification; without runtime permission the task fails at 0%.
+  ///  2. Stale failed task: a previously-failed download persists in
+  ///     background_downloader's DB; the next attempt RE-ATTACHES to it and it
+  ///     immediately re-fails ("Existing download failed: TaskStatus.failed").
+  ///     `reset()` cancels + clears the group so the retry starts clean.
+  /// Wrapped so prep failures never block or crash the actual download attempt.
+  Future<void> _prepareDownload() async {
+    try {
+      final downloader = FileDownloader();
+      await downloader.permissions.request(PermissionType.notifications);
+      await downloader.reset(group: _downloadGroup);
+    } catch (_) {
+      // Prep is opportunistic; fall through to the install attempt regardless.
+    }
+  }
+
   @override
   Stream<double> downloadModel() {
     final controller = StreamController<double>();
     unawaited(() async {
       try {
         await _ensureInitialized();
+        await _prepareDownload();
         await FlutterGemma.installModel(
           modelType: ModelType.gemma4,
           fileType: ModelFileType.litertlm,

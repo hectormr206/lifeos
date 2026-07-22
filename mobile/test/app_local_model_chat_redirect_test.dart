@@ -15,7 +15,9 @@ import 'support/fake_token_store.dart';
 ProviderContainer _unpairedContainer() {
   final container = ProviderContainer(overrides: [
     tokenStoreProvider.overrideWithValue(FakeTokenStore()),
-    localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine()),
+    // Installed so local mode can actually be enabled (the toggle + notifier
+    // now gate turning it on until the weights are present).
+    localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: true)),
     localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences()),
   ]);
   addTearDown(container.dispose);

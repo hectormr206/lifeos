@@ -35,8 +35,11 @@ void main() {
     expect(container.read(localModelEnabledProvider), isFalse);
   });
 
-  test('hydrates the toggle from persistence after build', () async {
-    final container = _container(prefs: FakeLocalModelPreferences(enabled: true));
+  test('hydrates the toggle from persistence after build (model installed)', () async {
+    final container = _container(
+      prefs: FakeLocalModelPreferences(enabled: true),
+      engine: FakeLocalLlmEngine(installed: true),
+    );
     // Synchronous default first…
     expect(container.read(localModelEnabledProvider), isFalse);
     // …then flips once the async load resolves.
@@ -44,14 +47,40 @@ void main() {
     expect(container.read(localModelEnabledProvider), isTrue);
   });
 
-  test('setEnabled updates state and persists', () async {
+  test('startup reconciliation forces enabled=false when the model is NOT installed', () async {
+    final prefs = FakeLocalModelPreferences(enabled: true);
+    final container = _container(
+      prefs: prefs,
+      engine: FakeLocalLlmEngine(installed: false),
+    );
+
+    await container.read(localModelEnabledProvider.notifier).unawaitedLoad();
+
+    // Persisted `true` must not survive a missing model — reconciled to false…
+    expect(container.read(localModelEnabledProvider), isFalse);
+    // …and the corrected value is persisted so the crash loop can't recur.
+    expect(await prefs.isEnabled(), isFalse);
+  });
+
+  test('setEnabled(true) persists when the model is installed', () async {
     final prefs = FakeLocalModelPreferences();
-    final container = _container(prefs: prefs);
+    final container = _container(prefs: prefs, engine: FakeLocalLlmEngine(installed: true));
 
     await container.read(localModelEnabledProvider.notifier).setEnabled(true);
 
     expect(container.read(localModelEnabledProvider), isTrue);
     expect(prefs.writes, 1);
+  });
+
+  test('setEnabled(true) is REFUSED (stays off) when the model is not installed', () async {
+    final prefs = FakeLocalModelPreferences();
+    final container = _container(prefs: prefs, engine: FakeLocalLlmEngine(installed: false));
+
+    await container.read(localModelEnabledProvider.notifier).setEnabled(true);
+
+    // Can't enable local mode without weights — the guard keeps it off.
+    expect(container.read(localModelEnabledProvider), isFalse);
+    expect(await prefs.isEnabled(), isFalse);
   });
 
   test('chatRepositoryProvider is HttpChatRepository when the toggle is off', () {
@@ -60,7 +89,10 @@ void main() {
   });
 
   test('chatRepositoryProvider swaps to OnDeviceChatRepository when the toggle flips on', () async {
-    final container = _container(prefs: FakeLocalModelPreferences());
+    final container = _container(
+      prefs: FakeLocalModelPreferences(),
+      engine: FakeLocalLlmEngine(installed: true),
+    );
     expect(container.read(chatRepositoryProvider), isA<HttpChatRepository>());
 
     await container.read(localModelEnabledProvider.notifier).setEnabled(true);

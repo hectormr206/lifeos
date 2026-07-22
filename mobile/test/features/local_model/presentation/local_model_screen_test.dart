@@ -39,8 +39,18 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Descargar modelo'), findsNothing);
   });
 
-  testWidgets('tapping the toggle turns on local mode', (tester) async {
+  testWidgets('toggle is DISABLED with a helper hint when the model is absent', (tester) async {
     await _pump(tester, installed: false);
+
+    final tile = tester.widget<SwitchListTile>(find.byType(SwitchListTile));
+    // A null onChanged means the switch is greyed out / non-interactive.
+    expect(tile.onChanged, isNull);
+    expect(tile.value, isFalse);
+    expect(find.text('Descargá el modelo primero.'), findsOneWidget);
+  });
+
+  testWidgets('tapping the toggle turns on local mode when the model is installed', (tester) async {
+    await _pump(tester, installed: true);
 
     expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value, isFalse);
     await tester.tap(find.byType(SwitchListTile));
