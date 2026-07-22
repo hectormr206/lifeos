@@ -2,7 +2,7 @@ import 'local_llm_engine.dart' show LocalLlmBackend;
 
 /// Per-response performance metrics for ONE on-device generation
 /// (roadmap SLICE 1 observability). Produced by [LocalLlmEngine.generate] /
-/// `generateWithImage` and attached to the Axi [ChatMessage] so the chat UI can
+/// `generateWithImages` and attached to the Axi [ChatMessage] so the chat UI can
 /// show tokens/s + latency under the bubble and full stats in a modal.
 ///
 /// HONESTY CONTRACT — what is measured vs estimated:
@@ -75,7 +75,7 @@ class GenerationMetrics {
 }
 
 /// The result of one on-device generation: the reply [text] plus its
-/// [metrics]. Returned by [LocalLlmEngine.generate] / `generateWithImage` so a
+/// [metrics]. Returned by [LocalLlmEngine.generate] / `generateWithImages` so a
 /// caller gets both the answer and how fast it was produced in one value.
 class GenerationResult {
   const GenerationResult({required this.text, required this.metrics});

@@ -41,7 +41,7 @@ void main() {
     expect(message.metrics, metrics);
   });
 
-  test('sendImageMessage attaches the engine GenerationMetrics to the axi message', () async {
+  test('sendImages attaches the engine GenerationMetrics to the axi message', () async {
     const metrics = GenerationMetrics(
       totalMs: 3400,
       tokensOut: 12,
@@ -51,7 +51,7 @@ void main() {
     final engine = FakeLocalLlmEngine(imageMetrics: metrics);
     final repo = OnDeviceChatRepository(engine);
 
-    final message = await repo.sendImageMessage('qué es', Uint8List.fromList([1, 2]));
+    final message = await repo.sendImages('qué es', [Uint8List.fromList([1, 2])]);
 
     expect(message.metrics, metrics);
   });
@@ -88,26 +88,30 @@ void main() {
     expect(await repo.loadHistory(), isEmpty);
   });
 
-  test('sendImageMessage routes to the engine VISION path with the image bytes', () async {
+  test('sendImages routes to the engine VISION path with every image', () async {
     final engine = FakeLocalLlmEngine(imageReply: (p) => 'describo: "$p"');
     final repo = OnDeviceChatRepository(engine);
-    final bytes = Uint8List.fromList([9, 8, 7, 6]);
+    final images = [
+      Uint8List.fromList([9, 8, 7, 6]),
+      Uint8List.fromList([5, 4, 3, 2]),
+    ];
 
-    final message = await repo.sendImageMessage('qué es esto', bytes);
+    final message = await repo.sendImages('qué es esto', images);
 
     expect(message.role, ChatRole.axi);
     expect(message.text, 'describo: "qué es esto"');
-    expect(engine.generateWithImageCount, 1);
+    expect(engine.generateWithImagesCount, 1);
     expect(engine.generateCount, 0); // NOT the text path
-    expect(engine.lastImageBytes, bytes);
+    expect(engine.lastImages, images);
+    expect(engine.lastImageBytes, images.first);
   });
 
-  test('sendImageMessage surfaces a vision failure as a clear ChatException', () async {
-    final engine = FakeLocalLlmEngine(generateWithImageShouldFail: true);
+  test('sendImages surfaces a vision failure as a clear ChatException', () async {
+    final engine = FakeLocalLlmEngine(generateWithImagesShouldFail: true);
     final repo = OnDeviceChatRepository(engine);
 
     await expectLater(
-      repo.sendImageMessage('x', Uint8List.fromList([1])),
+      repo.sendImages('x', [Uint8List.fromList([1])]),
       throwsA(isA<ChatException>()),
     );
   });

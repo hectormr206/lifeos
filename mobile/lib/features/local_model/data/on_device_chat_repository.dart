@@ -55,13 +55,14 @@ class OnDeviceChatRepository implements ChatRepository {
       });
 
   @override
-  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes) => _serialize(() async {
+  Future<ChatMessage> sendImages(String text, List<Uint8List> images) => _serialize(() async {
         try {
           await (_loadFuture ??= _engine.load());
-          // Routes to the on-device model's VISION path. If the installed
-          // variant is text-only, the engine throws and we surface a clear
-          // Spanish message rather than silently dropping the photo.
-          final result = await _engine.generateWithImage(text, imageBytes);
+          // Routes to the on-device model's VISION path (all photos in one
+          // turn). If the installed variant is text-only, the engine throws and
+          // we surface a clear Spanish message rather than silently dropping the
+          // photos.
+          final result = await _engine.generateWithImages(text, images);
           return ChatMessage(
             id: 'local-${DateTime.now().microsecondsSinceEpoch}',
             role: ChatRole.axi,

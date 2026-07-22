@@ -36,11 +36,14 @@ abstract class ChatRepository {
   /// follow-up) and returns Axi's reply as a [ChatMessage].
   Future<ChatMessage> sendMessage(String text);
 
-  /// Sends [text] together with an attached [imageBytes] (a JPEG/PNG photo)
-  /// and returns Axi's reply. On-device this routes to the model's VISION
-  /// path (`generateWithImage`); over HTTP it fills the engine's existing
-  /// `image_b64` field. [text] may be empty (image with no caption).
-  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes);
+  /// Sends [text] together with one or more attached [images] (JPEG/PNG photos)
+  /// in a single turn and returns Axi's reply. On-device this routes to the
+  /// model's VISION path (`generateWithImages`), which packs every photo into
+  /// one query. Over HTTP the paired engine's `api_chat_ask` contract exposes a
+  /// single `image_b64` field, so only the FIRST image is uploaded (documented
+  /// backend limit). [text] may be empty (images with no caption); [images]
+  /// must not be empty.
+  Future<ChatMessage> sendImages(String text, List<Uint8List> images);
 
   /// Loads prior turns from `GET /api/v1/chat/history`, oldest first, each
   /// turn split into its user + axi [ChatMessage] pair.
@@ -86,12 +89,14 @@ class HttpChatRepository implements ChatRepository {
   }
 
   @override
-  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes) async {
+  Future<ChatMessage> sendImages(String text, List<Uint8List> images) async {
     // Reuses api_chat_ask's existing {text, image_b64, ...} contract
-    // (dashboard.py:4039): the photo goes up as base64 in `image_b64`.
+    // (dashboard.py:4039): the photo goes up as base64 in `image_b64`. That
+    // field is single-image, so on the HTTP/paired-engine path we upload the
+    // first photo only (the on-device path is where full multi-image runs).
     final requestBody = {
       'text': text,
-      'image_b64': base64Encode(imageBytes),
+      'image_b64': images.isEmpty ? null : base64Encode(images.first),
       'speak': false,
       'logging_mode': false,
     };

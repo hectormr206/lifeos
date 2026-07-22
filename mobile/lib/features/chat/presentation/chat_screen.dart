@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -6,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/pending_sync_banner.dart';
 import '../../local_model/domain/generation_metrics.dart';
+import '../../local_model/domain/local_llm_engine.dart' show LocalModelConfig;
 import '../domain/chat_message.dart';
 import '../domain/image_picker_gateway.dart';
 import 'chat_notifier.dart';
@@ -30,6 +32,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   String? _lastShownError;
+
+  // Photos the user has attached but not yet sent. They accumulate here as
+  // removable thumbnails in the compose area (WhatsApp-style) until the user
+  // adds a caption and hits send, when text + all photos go in one message.
+  final List<Uint8List> _pendingImages = [];
 
   // Press-and-hold voice recording state.
   bool _recording = false;
@@ -59,8 +66,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   bool get _hasText => _textController.text.trim().isNotEmpty;
 
+  bool get _hasPendingImages => _pendingImages.isNotEmpty;
+
+  /// Send is enabled when there is text OR at least one attached photo (a photo
+  /// can be sent with an empty caption).
+  bool get _canSend => _hasText || _hasPendingImages;
+
   void _send() {
     final text = _textController.text;
+    if (_hasPendingImages) {
+      // Text + every attached photo go together in one turn.
+      final images = List<Uint8List>.from(_pendingImages);
+      ref.read(chatNotifierProvider.notifier).sendImages(images, caption: text);
+      setState(_pendingImages.clear);
+      _textController.clear();
+      return;
+    }
     if (text.trim().isEmpty) return;
     ref.read(chatNotifierProvider.notifier).sendMessage(text);
     _textController.clear();
@@ -105,18 +126,37 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _attachFrom(PhotoSource source) async {
+    if (_pendingImages.length >= LocalModelConfig.maxImagesPerMessage) {
+      _showAttachLimitReached();
+      return;
+    }
     try {
       final bytes = await ref.read(imagePickerGatewayProvider).pickImage(source);
       if (bytes == null) return; // user cancelled
-      final caption = _textController.text;
-      _textController.clear();
-      await ref.read(chatNotifierProvider.notifier).sendImageMessage(bytes, caption: caption);
+      if (!mounted) return;
+      // Accumulate as a removable thumbnail — do NOT send yet. The user can add
+      // more, remove any, type a caption, then send text + all photos together.
+      setState(() => _pendingImages.add(bytes));
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo adjuntar la imagen: $error')),
       );
     }
+  }
+
+  void _removePendingImage(int index) {
+    setState(() => _pendingImages.removeAt(index));
+  }
+
+  void _showAttachLimitReached() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Puedes adjuntar hasta ${LocalModelConfig.maxImagesPerMessage} imágenes por mensaje.',
+        ),
+      ),
+    );
   }
 
   // ── Press-and-hold voice recording ───────────────────────────────────────
@@ -236,7 +276,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
           if (chat.sending) const _TypingIndicator(),
-          SafeArea(child: _buildInputBar(context, chat.sending)),
+          SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_hasPendingImages) _pendingImagesStrip(context),
+                _buildInputBar(context, chat.sending),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -286,7 +334,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             icon: const Icon(Icons.send),
             tooltip: 'Enviar',
             color: scheme.primary,
-            onPressed: (sending || _recording || !_hasText) ? null : _send,
+            onPressed: (sending || _recording || !_canSend) ? null : _send,
           ),
         ],
       ),
@@ -310,6 +358,54 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ),
       );
+
+  /// A horizontal strip of the attached-but-unsent photos, each a thumbnail
+  /// with an "×" to remove it before sending (WhatsApp-style compose preview).
+  Widget _pendingImagesStrip(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      height: 84,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: _pendingImages.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.memory(
+                  _pendingImages[index],
+                  width: 72,
+                  height: 72,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              Positioned(
+                top: -6,
+                right: -6,
+                child: GestureDetector(
+                  onTap: () => _removePendingImage(index),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: scheme.surface,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: scheme.outlineVariant),
+                    ),
+                    padding: const EdgeInsets.all(2),
+                    child: Icon(Icons.close, size: 16, color: scheme.onSurface),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 
   Widget _recordingIndicator(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -454,15 +550,7 @@ class _MessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (message.imageBytes != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Image.memory(
-                  message.imageBytes!,
-                  width: 220,
-                  fit: BoxFit.cover,
-                ),
-              ),
+            if (message.images.isNotEmpty) _ImageGrid(images: message.images),
             if (message.text.isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(message.text, style: TextStyle(color: onBubble)),
@@ -484,6 +572,43 @@ class _MessageBubble extends StatelessWidget {
                 ),
               );
     }
+  }
+}
+
+/// Renders a sent message's attached photos WhatsApp-style: a single photo
+/// fills the bubble width; two or more lay out as a compact square grid.
+class _ImageGrid extends StatelessWidget {
+  const _ImageGrid({required this.images});
+
+  final List<Uint8List> images;
+
+  @override
+  Widget build(BuildContext context) {
+    if (images.length == 1) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Image.memory(images.first, width: 220, fit: BoxFit.cover),
+      );
+    }
+    final columns = images.length == 2 ? 2 : 3;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 232),
+      child: GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        itemCount: images.length,
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: columns,
+          crossAxisSpacing: 3,
+          mainAxisSpacing: 3,
+        ),
+        itemBuilder: (context, index) => ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.memory(images[index], fit: BoxFit.cover),
+        ),
+      ),
+    );
   }
 }
 

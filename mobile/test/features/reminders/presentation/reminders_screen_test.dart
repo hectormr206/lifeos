@@ -54,7 +54,7 @@ class _FakeChatRepository implements ChatRepository {
   Future<List<ChatMessage>> loadHistory() async => const [];
 
   @override
-  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes) =>
+  Future<ChatMessage> sendImages(String text, List<Uint8List> images) =>
       throw UnimplementedError();
 
   @override

@@ -36,6 +36,14 @@ class LocalModelConfig {
     this.maxOutputTokens = 512,
   });
 
+  /// Max photos the model accepts per turn. flutter_gemma's native `.litertlm`
+  /// FFI path supports several images in a single query (accumulated into one
+  /// turn), but only up to the `maxNumImages` the model was created with — and
+  /// vision must be enabled at model-creation time. Mirrors flutter_gemma's own
+  /// example default of 4; used both when loading the model (as `maxNumImages`)
+  /// and to cap the compose-area attach UI so the two never disagree.
+  static const int maxImagesPerMessage = 4;
+
   /// gemma-4-E2B-it litert-lm, GPU-friendly build (2.59GB, apache-2.0, no
   /// HuggingFace token required).
   static const String defaultModelUrl =
@@ -84,14 +92,15 @@ abstract class LocalLlmEngine {
   Future<GenerationResult> generate(String prompt);
 
   /// Runs one non-streaming multimodal completion for [prompt] together with
-  /// an attached [imageBytes] (a JPEG/PNG). Requires the loaded model variant
-  /// to support vision; implementations that cannot run vision (or whose
-  /// installed weights are text-only) MUST throw so the caller can degrade
-  /// gracefully with a clear message rather than silently dropping the image.
+  /// one or more attached [images] (JPEG/PNG), all sent within a single turn.
+  /// Requires the loaded model variant to support vision; implementations that
+  /// cannot run vision (or whose installed weights are text-only) MUST throw so
+  /// the caller can degrade gracefully with a clear message rather than silently
+  /// dropping the photos. [images] must not be empty.
   ///
   /// Real vision inference is arm64/Pixel-only (gemma-4-E2B multimodal build);
   /// the x86_64 emulator can exercise only the attach/UI flow, not inference.
-  Future<GenerationResult> generateWithImage(String prompt, Uint8List imageBytes);
+  Future<GenerationResult> generateWithImages(String prompt, List<Uint8List> images);
 
   /// Releases the loaded model + native handles. Safe to call when not
   /// loaded.

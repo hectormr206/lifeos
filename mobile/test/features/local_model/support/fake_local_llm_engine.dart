@@ -14,7 +14,7 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     List<double>? downloadProgress,
     this.downloadShouldFail = false,
     this.generateShouldFail = false,
-    this.generateWithImageShouldFail = false,
+    this.generateWithImagesShouldFail = false,
     this.deleteShouldFail = false,
     String Function(String prompt)? reply,
     String Function(String prompt)? imageReply,
@@ -41,25 +41,28 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   final List<double> downloadProgress;
   final bool downloadShouldFail;
   final bool generateShouldFail;
-  final bool generateWithImageShouldFail;
+  final bool generateWithImagesShouldFail;
   final bool deleteShouldFail;
   final String Function(String prompt) reply;
   final String Function(String prompt) imageReply;
 
-  /// Metrics [generate] / [generateWithImage] attach to their result.
+  /// Metrics [generate] / [generateWithImages] attach to their result.
   final GenerationMetrics metrics;
   final GenerationMetrics imageMetrics;
 
   int loadCount = 0;
   int generateCount = 0;
-  int generateWithImageCount = 0;
+  int generateWithImagesCount = 0;
   int deleteCount = 0;
   final List<String> prompts = [];
   final List<String> imagePrompts = [];
 
-  /// Records the bytes of the last image handed to [generateWithImage], so a
-  /// test can assert the VISION path actually received the attachment.
+  /// Records the images handed to [generateWithImages], so a test can assert the
+  /// VISION path actually received the attachments. [lastImageBytes] is the
+  /// first of the last batch (single-image convenience); [lastImages] is the
+  /// whole batch.
   Uint8List? lastImageBytes;
+  List<Uint8List>? lastImages;
   bool disposed = false;
   LocalLlmBackend? loadedBackend;
 
@@ -90,11 +93,12 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   }
 
   @override
-  Future<GenerationResult> generateWithImage(String prompt, Uint8List imageBytes) async {
-    generateWithImageCount++;
+  Future<GenerationResult> generateWithImages(String prompt, List<Uint8List> images) async {
+    generateWithImagesCount++;
     imagePrompts.add(prompt);
-    lastImageBytes = imageBytes;
-    if (generateWithImageShouldFail) throw Exception('vision boom');
+    lastImages = images;
+    lastImageBytes = images.isEmpty ? null : images.first;
+    if (generateWithImagesShouldFail) throw Exception('vision boom');
     return GenerationResult(text: imageReply(prompt), metrics: imageMetrics);
   }
 

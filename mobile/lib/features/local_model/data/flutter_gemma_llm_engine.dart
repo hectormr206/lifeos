@@ -117,9 +117,23 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   Future<void> load({LocalLlmBackend? backend}) async {
     await _ensureInitialized();
     _loadedBackend = backend ?? _config.backend;
+    // VISION FIX (root cause): the native session's vision modality has to be
+    // enabled when the InferenceModel is CREATED, not later at chat time.
+    // flutter_gemma's `getActiveModel` builds the model with
+    // `enableVision: supportImage` + `maxNumImages` (see
+    // flutter_gemma_litertlm's litert_lm_engine.dart:
+    // `maxNumImages: config.supportImage ? (config.maxNumImages ?? 1) : 0`).
+    // Loading it text-only (the old call) meant a later
+    // `createChat(supportImage: true)` asked the native session for a modality
+    // the model never had — it rejected the image and we surfaced "no soporte
+    // visión". gemma-4-E2B DOES support vision, so we load it vision-capable.
+    // Text-only `generate()` still works: it just creates a text-only chat on
+    // the same vision-capable model.
     _model ??= await FlutterGemma.getActiveModel(
       maxTokens: _config.maxTokens,
       preferredBackend: _toPreferredBackend(_loadedBackend!),
+      supportImage: true,
+      maxNumImages: LocalModelConfig.maxImagesPerMessage,
     );
   }
 
@@ -153,18 +167,23 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   }
 
   @override
-  Future<GenerationResult> generateWithImage(String prompt, Uint8List imageBytes) async {
+  Future<GenerationResult> generateWithImages(String prompt, List<Uint8List> images) async {
     final model = _model;
     if (model == null) {
-      throw StateError('Local model not loaded. Call load() before generateWithImage().');
+      throw StateError('Local model not loaded. Call load() before generateWithImages().');
     }
-    // VISION path (verified against flutter_gemma 1.3.1): a chat created with
-    // `supportImage: true` enables the native vision modality
-    // (enableVisionModality). The image rides on the query via
-    // `Message.withImage(text:, imageBytes:)`. If the installed weights are a
-    // text-only build, the native session rejects the vision request and
-    // throws — which OnDeviceChatRepository turns into a clear user message
-    // rather than silently dropping the photo.
+    if (images.isEmpty) {
+      throw ArgumentError('generateWithImages requires at least one image.');
+    }
+    // VISION path (verified against flutter_gemma 1.3.1): the model was loaded
+    // vision-capable in [load] (supportImage/maxNumImages), so a chat created
+    // with `supportImage: true` matches its native modality. All photos ride on
+    // ONE query via `Message.withImages(text:, imageBytes:)` — flutter_gemma's
+    // FFI session accumulates them into a single turn (up to the model's
+    // `maxNumImages`). If the installed weights were somehow text-only, the
+    // native session rejects the request and throws — which
+    // OnDeviceChatRepository turns into a clear user message rather than
+    // silently dropping the photos.
     final stopwatch = Stopwatch()..start();
     final chat = await model.createChat(
       maxOutputTokens: _config.maxOutputTokens,
@@ -172,7 +191,7 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       supportImage: true,
     );
     await chat.addQueryChunk(
-      Message.withImage(text: prompt, imageBytes: imageBytes, isUser: true),
+      Message.withImages(text: prompt, imageBytes: images, isUser: true),
     );
     final response = await chat.generateChatResponse();
     stopwatch.stop();

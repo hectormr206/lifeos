@@ -19,8 +19,9 @@ enum ChatMessageStatus { sending, sent, delivered }
 /// What kind of content a [ChatMessage] carries (WhatsApp/Telegram-style chat).
 ///
 ///   * [text]  — a plain / markdown text turn (the original slice-2 message).
-///   * [image] — an attached photo (camera/gallery). Its bytes live in
-///     [ChatMessage.imageBytes]; [ChatMessage.text] is the optional caption.
+///   * [image] — one or more attached photos (camera/gallery). Their bytes live
+///     in [ChatMessage.images] (WhatsApp-style multi-attach); [ChatMessage.text]
+///     is the optional caption sent together with them in one turn.
 ///   * [voice] — a recorded voice note. The playable file is at
 ///     [ChatMessage.audioPath] with [ChatMessage.audioDuration]. STT is a
 ///     future slice, so a sent voice note may carry [transcriptionPending].
@@ -39,7 +40,7 @@ class ChatMessage {
     required this.text,
     required this.timestamp,
     this.kind = ChatMessageKind.text,
-    this.imageBytes,
+    this.images = const [],
     this.audioPath,
     this.audioDuration,
     this.transcriptionPending = false,
@@ -59,8 +60,14 @@ class ChatMessage {
   /// The kind of content this message carries.
   final ChatMessageKind kind;
 
-  /// Raw bytes of an attached image ([ChatMessageKind.image] only).
-  final Uint8List? imageBytes;
+  /// Raw bytes of the attached photos ([ChatMessageKind.image] only), in the
+  /// order the user added them. Empty for non-image messages. A single-image
+  /// message is just a one-element list.
+  final List<Uint8List> images;
+
+  /// Convenience accessor for the first attached image (or null when there are
+  /// none) — kept so single-image call sites read naturally.
+  Uint8List? get imageBytes => images.isEmpty ? null : images.first;
 
   /// On-disk path of a recorded voice note ([ChatMessageKind.voice] only).
   final String? audioPath;
@@ -92,7 +99,7 @@ class ChatMessage {
         text: text,
         timestamp: timestamp,
         kind: kind,
-        imageBytes: imageBytes,
+        images: images,
         audioPath: audioPath,
         audioDuration: audioDuration,
         transcriptionPending: transcriptionPending,
@@ -108,7 +115,7 @@ class ChatMessage {
       other.text == text &&
       other.timestamp == timestamp &&
       other.kind == kind &&
-      _sameBytes(other.imageBytes, imageBytes) &&
+      _sameImages(other.images, images) &&
       other.audioPath == audioPath &&
       other.audioDuration == audioDuration &&
       other.transcriptionPending == transcriptionPending &&
@@ -122,7 +129,7 @@ class ChatMessage {
         text,
         timestamp,
         kind,
-        imageBytes?.length,
+        Object.hashAll(images.map((b) => b.length)),
         audioPath,
         audioDuration,
         transcriptionPending,
@@ -130,9 +137,17 @@ class ChatMessage {
         metrics,
       );
 
-  static bool _sameBytes(Uint8List? a, Uint8List? b) {
+  static bool _sameImages(List<Uint8List> a, List<Uint8List> b) {
     if (identical(a, b)) return true;
-    if (a == null || b == null) return false;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!_sameBytes(a[i], b[i])) return false;
+    }
+    return true;
+  }
+
+  static bool _sameBytes(Uint8List a, Uint8List b) {
+    if (identical(a, b)) return true;
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;

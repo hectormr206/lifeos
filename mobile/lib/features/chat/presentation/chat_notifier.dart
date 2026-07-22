@@ -114,11 +114,13 @@ class ChatNotifier extends Notifier<ChatUiState> {
     );
   }
 
-  /// Sends an attached [imageBytes] (optional [caption]) to Axi. The image is
-  /// shown as a user bubble immediately (optimistic), then routed to the
-  /// repository's VISION path (`sendImageMessage`) — on-device this reaches
-  /// the model's `generateWithImage`.
-  Future<void> sendImageMessage(Uint8List imageBytes, {String caption = ''}) async {
+  /// Sends one or more attached [images] (optional [caption]) to Axi in a
+  /// single turn. The photos are shown as one user bubble immediately
+  /// (optimistic), then routed to the repository's VISION path (`sendImages`) —
+  /// on-device this reaches the model's `generateWithImages`. No-op if [images]
+  /// is empty.
+  Future<void> sendImages(List<Uint8List> images, {String caption = ''}) async {
+    if (images.isEmpty) return;
     final trimmed = caption.trim();
     final userMessage = ChatMessage(
       id: 'local-${DateTime.now().microsecondsSinceEpoch}',
@@ -126,13 +128,13 @@ class ChatNotifier extends Notifier<ChatUiState> {
       text: trimmed,
       timestamp: DateTime.now(),
       kind: ChatMessageKind.image,
-      imageBytes: imageBytes,
+      images: images,
       status: ChatMessageStatus.sending,
     );
     state = state.copyWith(messages: [...state.messages, userMessage], sending: true, error: null);
     await Future<void>.microtask(() {});
     try {
-      final replyFuture = ref.read(chatRepositoryProvider).sendImageMessage(trimmed, imageBytes);
+      final replyFuture = ref.read(chatRepositoryProvider).sendImages(trimmed, images);
       _setStatus(userMessage.id, ChatMessageStatus.sent);
       final reply = await replyFuture;
       _setStatus(userMessage.id, ChatMessageStatus.delivered);

@@ -22,7 +22,7 @@ class _FakeChatRepository implements ChatRepository {
   final Completer<void>? sendDelay;
   int sendCalls = 0;
   int imageCalls = 0;
-  Uint8List? lastImageBytes;
+  List<Uint8List>? lastImages;
   String? lastImageCaption;
 
   @override
@@ -38,10 +38,10 @@ class _FakeChatRepository implements ChatRepository {
   }
 
   @override
-  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes) async {
+  Future<ChatMessage> sendImages(String text, List<Uint8List> images) async {
     imageCalls++;
     lastImageCaption = text;
-    lastImageBytes = imageBytes;
+    lastImages = images;
     if (sendDelay != null) await sendDelay!.future;
     final result = sendResult;
     if (result is Exception) throw result;
@@ -132,7 +132,7 @@ void main() {
       expect(state.error, isNotNull);
     });
 
-    test('sendImageMessage appends an image user bubble and routes to the repo vision path', () async {
+    test('sendImages appends an image user bubble and routes to the repo vision path', () async {
       final reply = ChatMessage(id: '4-axi', role: ChatRole.axi, text: 'veo un gato', timestamp: DateTime.now());
       final repo = _FakeChatRepository(sendResult: reply);
       final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
@@ -141,7 +141,7 @@ void main() {
       await notifier.ready;
 
       final bytes = Uint8List.fromList([1, 2, 3, 4]);
-      await notifier.sendImageMessage(bytes, caption: 'mira');
+      await notifier.sendImages([bytes], caption: 'mira');
 
       final state = container.read(chatNotifierProvider);
       expect(state.messages.length, 2);
@@ -151,8 +151,32 @@ void main() {
       expect(state.messages[0].text, 'mira');
       expect(state.messages[1].text, 'veo un gato');
       expect(repo.imageCalls, 1);
-      expect(repo.lastImageBytes, bytes);
+      expect(repo.lastImages, [bytes]);
       expect(repo.lastImageCaption, 'mira');
+    });
+
+    test('sendImages carries every attached photo in one message and turn', () async {
+      final reply = ChatMessage(id: '5-axi', role: ChatRole.axi, text: 'veo tres fotos', timestamp: DateTime.now());
+      final repo = _FakeChatRepository(sendResult: reply);
+      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      final images = [
+        Uint8List.fromList([1]),
+        Uint8List.fromList([2]),
+        Uint8List.fromList([3]),
+      ];
+      await notifier.sendImages(images, caption: 'compara');
+
+      final state = container.read(chatNotifierProvider);
+      // ONE user bubble holding all three photos, then Axi's single reply.
+      expect(state.messages.length, 2);
+      expect(state.messages[0].kind, ChatMessageKind.image);
+      expect(state.messages[0].images, images);
+      expect(repo.imageCalls, 1);
+      expect(repo.lastImages, images);
     });
 
     test('user message advances sending -> sent -> delivered (WhatsApp ticks)', () async {

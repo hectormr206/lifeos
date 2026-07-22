@@ -68,7 +68,8 @@ void main() {
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
 
-    expect(find.text('Versión 1.0.0 (10)'), findsOneWidget);
+    // Subtitle is "Versión 1.0.0 (10) · <tagline>" — match the version prefix.
+    expect(find.textContaining('Versión 1.0.0 (10)'), findsOneWidget);
   });
 
   testWidgets('appearance selector changes and persists ThemeMode', (tester) async {
