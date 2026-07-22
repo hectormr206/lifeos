@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../../chat/data/chat_repository.dart';
 import '../../chat/domain/chat_message.dart';
 import '../domain/local_llm_engine.dart';
@@ -46,6 +48,29 @@ class OnDeviceChatRepository implements ChatRepository {
           // failure (e.g. model not installed yet).
           _loadFuture = null;
           throw ChatException('Axi (modelo local) no pudo responder: $error');
+        }
+      });
+
+  @override
+  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes) => _serialize(() async {
+        try {
+          await (_loadFuture ??= _engine.load());
+          // Routes to the on-device model's VISION path. If the installed
+          // variant is text-only, the engine throws and we surface a clear
+          // Spanish message rather than silently dropping the photo.
+          final reply = await _engine.generateWithImage(text, imageBytes);
+          return ChatMessage(
+            id: 'local-${DateTime.now().microsecondsSinceEpoch}',
+            role: ChatRole.axi,
+            text: reply,
+            timestamp: DateTime.now(),
+          );
+        } catch (error) {
+          _loadFuture = null;
+          throw ChatException(
+            'Axi (modelo local) no pudo analizar la imagen. '
+            'Puede que este modelo no soporte visión en este dispositivo. ($error)',
+          );
         }
       });
 

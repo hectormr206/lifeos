@@ -5,6 +5,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
+import 'dart:typed_data';
+
 import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
 import 'package:lifeos/features/domains/data/domain_repository.dart';
@@ -48,6 +50,10 @@ class _FakeChatRepository implements ChatRepository {
 
   @override
   Future<List<ChatMessage>> loadHistory() async => const [];
+
+  @override
+  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes) =>
+      throw UnimplementedError();
 
   @override
   Future<ChatMessage> sendMessage(String text) async {

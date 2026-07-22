@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/local_model/domain/local_model_preferences.dart';
 import 'package:lifeos/features/local_model/domain/notification_permission.dart';
@@ -12,23 +14,34 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     List<double>? downloadProgress,
     this.downloadShouldFail = false,
     this.generateShouldFail = false,
+    this.generateWithImageShouldFail = false,
     this.deleteShouldFail = false,
     String Function(String prompt)? reply,
+    String Function(String prompt)? imageReply,
   })  : _installed = installed,
         downloadProgress = downloadProgress ?? const [0.25, 0.5, 1.0],
-        reply = reply ?? ((prompt) => 'eco: $prompt');
+        reply = reply ?? ((prompt) => 'eco: $prompt'),
+        imageReply = imageReply ?? ((prompt) => 'veo la imagen: $prompt');
 
   bool _installed;
   final List<double> downloadProgress;
   final bool downloadShouldFail;
   final bool generateShouldFail;
+  final bool generateWithImageShouldFail;
   final bool deleteShouldFail;
   final String Function(String prompt) reply;
+  final String Function(String prompt) imageReply;
 
   int loadCount = 0;
   int generateCount = 0;
+  int generateWithImageCount = 0;
   int deleteCount = 0;
   final List<String> prompts = [];
+  final List<String> imagePrompts = [];
+
+  /// Records the bytes of the last image handed to [generateWithImage], so a
+  /// test can assert the VISION path actually received the attachment.
+  Uint8List? lastImageBytes;
   bool disposed = false;
   LocalLlmBackend? loadedBackend;
 
@@ -56,6 +69,15 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     prompts.add(prompt);
     if (generateShouldFail) throw Exception('generate boom');
     return reply(prompt);
+  }
+
+  @override
+  Future<String> generateWithImage(String prompt, Uint8List imageBytes) async {
+    generateWithImageCount++;
+    imagePrompts.add(prompt);
+    lastImageBytes = imageBytes;
+    if (generateWithImageShouldFail) throw Exception('vision boom');
+    return imageReply(prompt);
   }
 
   @override

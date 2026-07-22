@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
@@ -135,6 +136,34 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       TextResponse(:final token) => token,
       // Tools are not enabled this slice, so only TextResponse is expected;
       // anything else degrades to empty rather than crashing the chat.
+      _ => '',
+    };
+  }
+
+  @override
+  Future<String> generateWithImage(String prompt, Uint8List imageBytes) async {
+    final model = _model;
+    if (model == null) {
+      throw StateError('Local model not loaded. Call load() before generateWithImage().');
+    }
+    // VISION path (verified against flutter_gemma 1.3.1): a chat created with
+    // `supportImage: true` enables the native vision modality
+    // (enableVisionModality). The image rides on the query via
+    // `Message.withImage(text:, imageBytes:)`. If the installed weights are a
+    // text-only build, the native session rejects the vision request and
+    // throws — which OnDeviceChatRepository turns into a clear user message
+    // rather than silently dropping the photo.
+    final chat = await model.createChat(
+      maxOutputTokens: _config.maxOutputTokens,
+      modelType: ModelType.gemma4,
+      supportImage: true,
+    );
+    await chat.addQueryChunk(
+      Message.withImage(text: prompt, imageBytes: imageBytes, isUser: true),
+    );
+    final response = await chat.generateChatResponse();
+    return switch (response) {
+      TextResponse(:final token) => token,
       _ => '',
     };
   }

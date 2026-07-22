@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../../../core/outbox/outbox.dart';
@@ -33,6 +36,12 @@ abstract class ChatRepository {
   /// follow-up) and returns Axi's reply as a [ChatMessage].
   Future<ChatMessage> sendMessage(String text);
 
+  /// Sends [text] together with an attached [imageBytes] (a JPEG/PNG photo)
+  /// and returns Axi's reply. On-device this routes to the model's VISION
+  /// path (`generateWithImage`); over HTTP it fills the engine's existing
+  /// `image_b64` field. [text] may be empty (image with no caption).
+  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes);
+
   /// Loads prior turns from `GET /api/v1/chat/history`, oldest first, each
   /// turn split into its user + axi [ChatMessage] pair.
   Future<List<ChatMessage>> loadHistory();
@@ -62,6 +71,35 @@ class HttpChatRepository implements ChatRepository {
       // engine) queues this exact call for later replay via SyncService
       // instead of failing the user's action — a definite 4xx/5xx still
       // surfaces as a real ChatException below.
+      if (isNetworkFailure(error)) {
+        await _outbox.enqueue(
+          httpMethod: 'POST',
+          path: '/api/v1/chat/ask',
+          jsonBody: requestBody,
+          kind: 'chat_ask',
+        );
+        await _reportPendingCount();
+        return _queuedReply();
+      }
+      throw ChatException(_messageFor(error), statusCode: error.response?.statusCode);
+    }
+  }
+
+  @override
+  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes) async {
+    // Reuses api_chat_ask's existing {text, image_b64, ...} contract
+    // (dashboard.py:4039): the photo goes up as base64 in `image_b64`.
+    final requestBody = {
+      'text': text,
+      'image_b64': base64Encode(imageBytes),
+      'speak': false,
+      'logging_mode': false,
+    };
+    try {
+      final response = await _dio.post<Map<String, Object?>>('/api/v1/chat/ask', data: requestBody);
+      final body = response.data ?? const <String, Object?>{};
+      return _parseAskResponse(body);
+    } on DioException catch (error) {
       if (isNetworkFailure(error)) {
         await _outbox.enqueue(
           httpMethod: 'POST',

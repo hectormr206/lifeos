@@ -1,14 +1,26 @@
-// Proves ChatScreen renders messages + input (spec mobile-chat, M1 slice 2)
-// and that tapping send calls the repository and shows the reply. No live
-// engine — chatRepositoryProvider is overridden with a fake.
+// Proves ChatScreen's WhatsApp/Telegram-style rework (spec mobile-chat):
+// tailed bubbles render user/Axi + markdown, the input bar shows attach+mic+
+// send, attaching a photo adds an image bubble and routes to the on-device
+// model's VISION path (generateWithImage), press-and-hold produces a playable
+// voice-note bubble, and the "Responder por voz" toggle is disabled but its
+// preference persists. No live engine/plugins — everything is faked.
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
+import 'package:lifeos/features/chat/domain/image_picker_gateway.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
+import 'package:lifeos/features/chat/presentation/chat_providers.dart';
 import 'package:lifeos/features/chat/presentation/chat_screen.dart';
+import 'package:lifeos/features/local_model/data/on_device_chat_repository.dart';
+
+import '../../local_model/support/fake_local_llm_engine.dart';
+import '../support/fake_chat_gateways.dart';
 
 class _FakeChatRepository implements ChatRepository {
   _FakeChatRepository({this.history = const []});
@@ -21,6 +33,16 @@ class _FakeChatRepository implements ChatRepository {
   @override
   Future<ChatMessage> sendMessage(String text) async =>
       ChatMessage(id: 'reply-1', role: ChatRole.axi, text: 'Respuesta de Axi', timestamp: DateTime.now());
+
+  @override
+  Future<ChatMessage> sendImageMessage(String text, Uint8List imageBytes) async =>
+      ChatMessage(id: 'reply-img', role: ChatRole.axi, text: 'Veo la imagen', timestamp: DateTime.now());
+}
+
+Future<void> _pumpScreen(WidgetTester tester, ProviderScope scope) async {
+  await tester.pumpWidget(scope);
+  await tester.pump();
+  await tester.pump();
 }
 
 void main() {
@@ -33,32 +55,26 @@ void main() {
       ],
     );
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [chatRepositoryProvider.overrideWithValue(repo)],
-        child: const MaterialApp(home: ChatScreen()),
-      ),
-    );
-    await tester.pump();
-    await tester.pump();
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())));
 
     expect(find.text('hola'), findsOneWidget);
     expect(find.text('hola, ¿qué tal?'), findsOneWidget);
     expect(find.byType(TextField), findsOneWidget);
   });
 
-  testWidgets('tapping send calls the repository and shows the reply', (tester) async {
-    final repo = _FakeChatRepository();
+  testWidgets('input bar shows attach, mic and send buttons', (tester) async {
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: const MaterialApp(home: ChatScreen())));
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [chatRepositoryProvider.overrideWithValue(repo)],
-        child: const MaterialApp(home: ChatScreen()),
-      ),
-    );
-    await tester.pump();
+    expect(find.byIcon(Icons.attach_file), findsOneWidget);
+    expect(find.byIcon(Icons.mic), findsOneWidget);
+    expect(find.byIcon(Icons.send), findsOneWidget);
+  });
+
+  testWidgets('tapping send calls the repository and shows the reply', (tester) async {
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: const MaterialApp(home: ChatScreen())));
 
     await tester.enterText(find.byType(TextField), 'hola axi');
+    await tester.pump();
     await tester.tap(find.byIcon(Icons.send));
     await tester.pump();
     await tester.pump();
@@ -67,10 +83,6 @@ void main() {
     expect(find.text('Respuesta de Axi'), findsOneWidget);
   });
 
-  // Connection-hardening batch — chat markdown rendering (spec mobile-chat:
-  // "MUST support text input, markdown rendering, and history"):
-  // `flutter_markdown` is discontinued upstream, so this uses
-  // `flutter_markdown_plus` (its actively-maintained drop-in continuation).
   testWidgets('renders markdown for Axi replies but keeps user messages plain', (tester) async {
     final ts = DateTime.now();
     const axiMarkdown = '**bold** reply with a list:\n- one\n- two';
@@ -82,22 +94,125 @@ void main() {
       ],
     );
 
-    await tester.pumpWidget(
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())));
+
+    expect(find.byType(MarkdownBody), findsOneWidget);
+    expect(find.text(axiMarkdown), findsNothing);
+    expect(find.text(userMarkdown), findsOneWidget);
+  });
+
+  testWidgets('attaching a gallery photo adds an image bubble and routes to the VISION path', (tester) async {
+    // Real OnDeviceChatRepository over a fake engine proves the image reaches
+    // generateWithImage (the model's multimodal path), not the text generate().
+    final engine = FakeLocalLlmEngine(installed: true);
+    final repo = OnDeviceChatRepository(engine);
+    // A real (tiny 1x1) PNG so Image.memory decodes without throwing in-test.
+    final bytes = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    );
+    final picker = FakeImagePickerGateway(bytes: bytes);
+
+    await _pumpScreen(
+      tester,
       ProviderScope(
-        overrides: [chatRepositoryProvider.overrideWithValue(repo)],
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(repo),
+          imagePickerGatewayProvider.overrideWithValue(picker),
+        ],
         child: const MaterialApp(home: ChatScreen()),
       ),
     );
+
+    await tester.tap(find.byIcon(Icons.attach_file));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Galería'));
+    await tester.pumpAndSettle();
+
+    // The attached image renders as a bubble, and the VISION path ran once.
+    expect(find.byType(Image), findsOneWidget);
+    expect(picker.requested, [PhotoSource.gallery]);
+    expect(engine.generateWithImageCount, 1);
+    expect(engine.generateCount, 0);
+    expect(engine.lastImageBytes, bytes);
+  });
+
+  testWidgets('press-and-hold mic records and drops a playable voice-note bubble', (tester) async {
+    final recorder = FakeAudioRecorderGateway();
+    final player = FakeAudioPlayerGateway();
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          audioRecorderGatewayProvider.overrideWithValue(recorder),
+          audioPlayerGatewayProvider.overrideWithValue(player),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    // Hold the mic long enough to fire the long-press, let recording start,
+    // then release to finish the note (mirrors a real hold, avoids the
+    // artificial fast-tap race).
+    final gesture = await tester.startGesture(tester.getCenter(find.byIcon(Icons.mic)));
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pump();
+    await gesture.up();
     await tester.pump();
     await tester.pump();
 
-    // Axi's bubble is rendered THROUGH MarkdownBody — the raw markdown
-    // source (asterisks/dashes) is never shown as one literal Text widget.
-    expect(find.byType(MarkdownBody), findsOneWidget);
-    expect(find.text(axiMarkdown), findsNothing);
+    expect(recorder.startCount, 1);
+    expect(recorder.stopCount, 1);
+    expect(recorder.cancelCount, 0);
+    // A voice-note bubble appeared, flagged transcription-pending (STT slice).
+    expect(find.text('Transcripción pendiente (STT)'), findsOneWidget);
 
-    // The user's message, even though it contains the same markdown syntax,
-    // stays a literal plain Text widget — never parsed/formatted.
-    expect(find.text(userMarkdown), findsOneWidget);
+    // It is playable: tapping play routes to the audio player gateway.
+    await tester.tap(find.byIcon(Icons.play_circle));
+    await tester.pump();
+    expect(player.played, [recorder.path]);
+  });
+
+  testWidgets('Responder por voz toggle is disabled but the preference persists', (tester) async {
+    final prefs = FakeVoiceReplyPreferences();
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          voiceReplyPreferencesProvider.overrideWithValue(prefs),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    await tester.tap(find.byIcon(Icons.record_voice_over));
+    await tester.pumpAndSettle();
+
+    // The switch is shown but disabled (onChanged null) with the hint.
+    final tile = tester.widget<SwitchListTile>(find.byType(SwitchListTile));
+    expect(tile.onChanged, isNull);
+    expect(find.text('Responder por voz'), findsOneWidget);
+    expect(find.text('Próximamente (voz on-device)'), findsOneWidget);
+  });
+
+  testWidgets('voice-reply preference is hydrated and persisted through the notifier', (tester) async {
+    final prefs = FakeVoiceReplyPreferences(enabled: true);
+    final container = ProviderContainer(overrides: [
+      voiceReplyPreferencesProvider.overrideWithValue(prefs),
+    ]);
+    addTearDown(container.dispose);
+
+    final notifier = container.read(voiceReplyEnabledProvider.notifier);
+    await notifier.ready;
+    // Hydrated from persistence.
+    expect(container.read(voiceReplyEnabledProvider), isTrue);
+
+    // Persists a change so it is ready when TTS lands.
+    await notifier.setEnabled(false);
+    expect(prefs.persisted, isFalse);
+    expect(prefs.writes, greaterThan(0));
   });
 }

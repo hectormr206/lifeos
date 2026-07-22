@@ -10,6 +10,8 @@
 ///     without touching callers.
 library;
 
+import 'dart:typed_data';
+
 /// Hardware backend the on-device model runs on. Maps 1:1 to flutter_gemma's
 /// `PreferredBackend` inside [FlutterGemmaLlmEngine]; kept as our own enum so
 /// the domain layer never imports the plugin.
@@ -75,6 +77,16 @@ abstract class LocalLlmEngine {
   /// Runs one non-streaming completion for [prompt] and returns the reply
   /// text. SLICE 1 is single-turn (no retained conversation history).
   Future<String> generate(String prompt);
+
+  /// Runs one non-streaming multimodal completion for [prompt] together with
+  /// an attached [imageBytes] (a JPEG/PNG). Requires the loaded model variant
+  /// to support vision; implementations that cannot run vision (or whose
+  /// installed weights are text-only) MUST throw so the caller can degrade
+  /// gracefully with a clear message rather than silently dropping the image.
+  ///
+  /// Real vision inference is arm64/Pixel-only (gemma-4-E2B multimodal build);
+  /// the x86_64 emulator can exercise only the attach/UI flow, not inference.
+  Future<String> generateWithImage(String prompt, Uint8List imageBytes);
 
   /// Releases the loaded model + native handles. Safe to call when not
   /// loaded.

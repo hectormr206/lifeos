@@ -1,0 +1,110 @@
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:lifeos/features/chat/domain/audio_player_gateway.dart';
+import 'package:lifeos/features/chat/domain/audio_recorder_gateway.dart';
+import 'package:lifeos/features/chat/domain/image_picker_gateway.dart';
+import 'package:lifeos/features/chat/domain/voice_reply_preferences.dart';
+
+/// In-memory [ImagePickerGateway] — no plugin channel, no OS picker. Returns
+/// scripted [bytes] and records the requested [PhotoSource].
+class FakeImagePickerGateway implements ImagePickerGateway {
+  FakeImagePickerGateway({this.bytes});
+
+  Uint8List? bytes;
+  final List<PhotoSource> requested = [];
+
+  @override
+  Future<Uint8List?> pickImage(PhotoSource source) async {
+    requested.add(source);
+    return bytes;
+  }
+}
+
+/// In-memory [AudioRecorderGateway] — no microphone. Scriptable permission,
+/// counts start/stop/cancel so the press-and-hold flow is host-testable.
+class FakeAudioRecorderGateway implements AudioRecorderGateway {
+  FakeAudioRecorderGateway({this.permission = true, this.path = '/tmp/fake-voice.m4a'});
+
+  bool permission;
+  String path;
+
+  int startCount = 0;
+  int stopCount = 0;
+  int cancelCount = 0;
+  bool _recording = false;
+
+  @override
+  Future<bool> hasPermission() async => permission;
+
+  @override
+  Future<String> start() async {
+    startCount++;
+    _recording = true;
+    return path;
+  }
+
+  @override
+  Future<String?> stop() async {
+    stopCount++;
+    _recording = false;
+    return path;
+  }
+
+  @override
+  Future<void> cancel() async {
+    cancelCount++;
+    _recording = false;
+  }
+
+  @override
+  Future<bool> isRecording() async => _recording;
+}
+
+/// In-memory [AudioPlayerGateway] — no audio output. Records played paths and
+/// drives the [playingStream] so a bubble's play/pause toggle is testable.
+class FakeAudioPlayerGateway implements AudioPlayerGateway {
+  final List<String> played = [];
+  final _controller = StreamController<bool>.broadcast();
+  int pauseCount = 0;
+
+  @override
+  Future<void> play(String path) async {
+    played.add(path);
+    _controller.add(true);
+  }
+
+  @override
+  Future<void> pause() async {
+    pauseCount++;
+    _controller.add(false);
+  }
+
+  @override
+  Future<void> stop() async => _controller.add(false);
+
+  @override
+  Stream<bool> get playingStream => _controller.stream;
+
+  @override
+  Future<void> dispose() async => _controller.close();
+}
+
+/// In-memory [VoiceReplyPreferences] — no shared_preferences channel.
+class FakeVoiceReplyPreferences implements VoiceReplyPreferences {
+  FakeVoiceReplyPreferences({bool enabled = false}) : _enabled = enabled;
+
+  bool _enabled;
+  int writes = 0;
+
+  bool get persisted => _enabled;
+
+  @override
+  Future<bool> isEnabled() async => _enabled;
+
+  @override
+  Future<void> setEnabled(bool value) async {
+    _enabled = value;
+    writes++;
+  }
+}

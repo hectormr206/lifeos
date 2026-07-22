@@ -111,6 +111,9 @@ dependencies:
   package_info_plus: ^10.2.1
   flutter_local_notifications: ^22.1.0
   open_filex: ^4.7.0
+  image_picker: ^1.2.3
+  record: ^7.1.1
+  audioplayers: ^6.8.1
 
 dev_dependencies:
   flutter_test:

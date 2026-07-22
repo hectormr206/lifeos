@@ -3,6 +3,8 @@
 // inference: it lazily loads the model once, returns the engine's reply as an
 // axi ChatMessage, keeps loadHistory empty (no local persistence this slice),
 // serialises concurrent sends, and surfaces engine failures as ChatException.
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
@@ -52,6 +54,30 @@ void main() {
   test('loadHistory is empty (no local conversation persistence in slice 1)', () async {
     final repo = OnDeviceChatRepository(FakeLocalLlmEngine());
     expect(await repo.loadHistory(), isEmpty);
+  });
+
+  test('sendImageMessage routes to the engine VISION path with the image bytes', () async {
+    final engine = FakeLocalLlmEngine(imageReply: (p) => 'describo: "$p"');
+    final repo = OnDeviceChatRepository(engine);
+    final bytes = Uint8List.fromList([9, 8, 7, 6]);
+
+    final message = await repo.sendImageMessage('qué es esto', bytes);
+
+    expect(message.role, ChatRole.axi);
+    expect(message.text, 'describo: "qué es esto"');
+    expect(engine.generateWithImageCount, 1);
+    expect(engine.generateCount, 0); // NOT the text path
+    expect(engine.lastImageBytes, bytes);
+  });
+
+  test('sendImageMessage surfaces a vision failure as a clear ChatException', () async {
+    final engine = FakeLocalLlmEngine(generateWithImageShouldFail: true);
+    final repo = OnDeviceChatRepository(engine);
+
+    await expectLater(
+      repo.sendImageMessage('x', Uint8List.fromList([1])),
+      throwsA(isA<ChatException>()),
+    );
   });
 
   test('wraps engine failures in a ChatException and allows retry', () async {

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
@@ -90,5 +92,51 @@ class ChatNotifier extends Notifier<ChatUiState> {
     } catch (error) {
       state = state.copyWith(sending: false, error: 'No se pudo enviar el mensaje: $error');
     }
+  }
+
+  /// Sends an attached [imageBytes] (optional [caption]) to Axi. The image is
+  /// shown as a user bubble immediately (optimistic), then routed to the
+  /// repository's VISION path (`sendImageMessage`) — on-device this reaches
+  /// the model's `generateWithImage`.
+  Future<void> sendImageMessage(Uint8List imageBytes, {String caption = ''}) async {
+    final trimmed = caption.trim();
+    final userMessage = ChatMessage(
+      id: 'local-${DateTime.now().microsecondsSinceEpoch}',
+      role: ChatRole.user,
+      text: trimmed,
+      timestamp: DateTime.now(),
+      kind: ChatMessageKind.image,
+      imageBytes: imageBytes,
+    );
+    state = state.copyWith(messages: [...state.messages, userMessage], sending: true, error: null);
+    try {
+      final reply = await ref.read(chatRepositoryProvider).sendImageMessage(trimmed, imageBytes);
+      state = state.copyWith(messages: [...state.messages, reply], sending: false);
+    } on ChatException catch (error) {
+      state = state.copyWith(sending: false, error: error.message);
+    } catch (error) {
+      state = state.copyWith(sending: false, error: 'No se pudo enviar la imagen: $error');
+    }
+  }
+
+  /// Appends a recorded voice note as a local user bubble (WhatsApp-style).
+  ///
+  /// DEFERRED (STT slice): the note is NOT transcribed and NOT sent to Axi —
+  /// it stays a playable local voice memo flagged [transcriptionPending] so
+  /// the UI shows "Transcripción pendiente (STT)". We never fake a
+  /// transcription; the real path (voice → text → Axi's memory graph) needs
+  /// the on-device STT model.
+  void addVoiceNote(String audioPath, Duration duration) {
+    final note = ChatMessage(
+      id: 'local-voice-${DateTime.now().microsecondsSinceEpoch}',
+      role: ChatRole.user,
+      text: '',
+      timestamp: DateTime.now(),
+      kind: ChatMessageKind.voice,
+      audioPath: audioPath,
+      audioDuration: duration,
+      transcriptionPending: true,
+    );
+    state = state.copyWith(messages: [...state.messages, note]);
   }
 }
