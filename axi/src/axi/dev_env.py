@@ -401,8 +401,31 @@ def _trigger_local_install(repo: str) -> bool:
     """
     import shlex  # noqa: PLC0415
     from axi import config  # noqa: PLC0415
+    from axi import redeploy  # noqa: PLC0415
 
-    services = str(config.get("dev_env_deploy_restart_services", "axi-dashboard axi-voice"))
+    # Restart the FULL code-serving set (dashboard, whisper, voice, tray,
+    # heartbeat) so a landed deploy never leaves a sibling service running stale
+    # code — the exact failure the 2026-07-19 dashboard incident exposed. We
+    # enforce a FLOOR: the canonical set (redeploy.REDEPLOY_SERVICES, the single
+    # source of truth) is always restarted, unioned with any extra services a
+    # user configured — a persisted/narrowed config can never drop a
+    # code-serving service back into the stale-code trap. Matching is
+    # suffix-insensitive so "axi-voice" and "axi-voice.service" don't duplicate.
+    # This only restarts already-pushed code after an authorized deploy — it
+    # does NOT touch the self-improve dev gate.
+    def _base(name: str) -> str:
+        return name[:-len(".service")] if name.endswith(".service") else name
+
+    configured = str(config.get("dev_env_deploy_restart_services", "")).split()
+    canonical = redeploy.restart_plan()
+    seen: set[str] = set()
+    units: list[str] = []
+    for name in [*canonical, *configured]:
+        key = _base(name)
+        if key not in seen:
+            seen.add(key)
+            units.append(name)
+    services = " ".join(units)
     script = (
         f"cd {shlex.quote(repo)} && "
         f"git diff --quiet && git diff --cached --quiet && "  # clean tree only

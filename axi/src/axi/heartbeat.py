@@ -9,6 +9,7 @@ Usage (direct / systemd):
 """
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import os
 import socket
@@ -196,6 +197,190 @@ def record_revival(svc: str, now: float) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Staleness guard — Layer 2: detect & restart services running code older than
+# the current git HEAD (the "days pass and nobody redeployed" safety net).
+#
+# Services are editable installs: they import from the repo `src/`, so the FILES
+# are always current, but the running PROCESS keeps executing the code it
+# imported at start. This guard aligns the running processes to HEAD *only* —
+# the authorized, committed code. It NEVER checks out, merges, or deploys the
+# self-improve dev-env worktree or any un-merged branch; self-improvement keeps
+# developing untouched. Only already-authorized (HEAD) code is enforced to run.
+# ---------------------------------------------------------------------------
+
+# Repo root (…/lifeos): heartbeat.py lives at axi/src/axi/heartbeat.py.
+_REPO_ROOT: Path = Path(__file__).resolve().parents[3]
+# Pathspec (relative to repo root) that scopes "latest code change" to the axi
+# source tree, so doc-only / golden-set / mobile commits don't force needless
+# production restarts.
+_SRC_PATHSPEC: str = "axi/src/axi"
+
+# Code-serving services the freshness guard enforces, in safe order. These run
+# `python -m axi.*` from the editable venv, so a HEAD advance can leave them
+# stale. Excludes the heartbeat itself (cannot cleanly self-restart mid-cycle;
+# covered by Layer 1 `axi-redeploy` + systemd watchdog) and the llama-* brains
+# (native binaries, not axi imports).
+STALE_GUARDED_SERVICES: list[str] = [
+    "axi-dashboard.service",
+    "axi-whisper.service",
+    "axi-voice.service",
+    "axi-tray.service",
+]
+
+# Services whose restart could interrupt live work: only restart them when idle.
+STALE_BUSY_SENSITIVE: set[str] = {"axi-voice.service", "axi-whisper.service"}
+
+
+def is_stale(service: str, *, active_enter_ts: float | None,
+             head_commit_ts: float) -> bool:
+    """Return True iff `service` is running code older than the latest src change.
+
+    Pure. True only when the service's process started strictly BEFORE the most
+    recent HEAD commit that touched the axi source tree. An unknown start time
+    (None) is treated as NOT provably stale (do not restart on uncertainty).
+    """
+    if active_enter_ts is None:
+        return False
+    return active_enter_ts < head_commit_ts
+
+
+def stale_restart_decision(service: str, *, stale: bool, game_active: bool,
+                           under_cap: bool, voice_busy: bool) -> str:
+    """Pure policy: decide what to do about a (possibly) stale service.
+
+    Returns one of:
+        "skip_fresh"   — not stale, nothing to do
+        "skip_game"    — game/offline mode active, never restart
+        "skip_capped"  — rate cap exhausted (thrash guard)
+        "defer_busy"   — busy-sensitive service is busy → retry next cycle
+        "restart"      — safe to restart now
+    """
+    if not stale:
+        return "skip_fresh"
+    if game_active:
+        return "skip_game"
+    if not under_cap:
+        return "skip_capped"
+    if service in STALE_BUSY_SENSITIVE and voice_busy:
+        return "defer_busy"
+    return "restart"
+
+
+def _parse_systemd_ts(text: str) -> float | None:
+    """Parse a systemd ActiveEnterTimestamp string to a local epoch float.
+
+    Format emitted by `systemctl show --value`:  "Wed 2026-07-22 07:15:02 CST".
+    The timezone token is dropped and the datetime parsed as local time (the
+    HEAD commit time is likewise a local-clock epoch), so the comparison is
+    apples-to-apples on the same machine. Empty/unparseable → None.
+    """
+    if not text or not text.strip():
+        return None
+    parts = text.split()
+    if len(parts) < 3:
+        return None
+    try:
+        dt = _dt.datetime.strptime(f"{parts[1]} {parts[2]}", "%Y-%m-%d %H:%M:%S")
+        return time.mktime(dt.timetuple())
+    except (ValueError, OverflowError):
+        return None
+
+
+def head_src_commit_ts() -> float | None:
+    """Return the committer epoch of the newest HEAD commit touching axi src.
+
+    Scoped to `_SRC_PATHSPEC` so unrelated commits (docs, goldens, mobile) do
+    not trigger restarts. Reads HEAD only — never a branch or worktree. Any
+    failure (not a repo, git missing, empty history) → None (fail-safe: skip).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(_REPO_ROOT), "log", "-1", "--format=%ct",
+             "--", _SRC_PATHSPEC],
+            capture_output=True, text=True, timeout=SYSTEMCTL_TIMEOUT,
+        )
+        raw = result.stdout.strip()
+        return float(raw) if raw else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def service_active_enter_ts(svc: str) -> float | None:
+    """Return the epoch at which `svc` entered the active state, or None.
+
+    Uses `systemctl --user show -p ActiveEnterTimestamp --value`. None when the
+    service was never active or the timestamp can't be parsed.
+    """
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "show", "-p", "ActiveEnterTimestamp",
+             "--value", svc],
+            capture_output=True, text=True, timeout=SYSTEMCTL_TIMEOUT,
+        )
+        return _parse_systemd_ts(result.stdout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def is_voice_busy() -> bool:
+    """Best-effort: True iff the voice daemon must not be interrupted right now.
+
+    The daemon's in-memory conversation state is not readable cross-process, so
+    the guard relies on the one durable, cross-process busy signal we have — an
+    in-progress meeting (recording/processing) via the store. That call is
+    itself fail-safe (returns True on DB error). On any other uncertainty we
+    also default to True: never interrupt a possible conversation.
+    """
+    try:
+        from axi import store as _store
+        return bool(_store.meeting_in_progress())
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def restart_service(svc: str) -> None:
+    """Restart an already-updated service so it picks up fresh HEAD code."""
+    subprocess.run(
+        ["systemctl", "--user", "restart", svc],
+        timeout=SYSTEMCTL_TIMEOUT,
+    )
+
+
+def _enforce_freshness(now: float) -> None:
+    """Restart any guarded service running code older than HEAD (bounded, safe).
+
+    Best-effort and side-effect-isolated: called from run_cycle inside a
+    try/except so a git/systemctl hiccup can never stop the watchdog beats.
+    """
+    head_ts = head_src_commit_ts()
+    if head_ts is None:
+        return  # can't determine HEAD src time → do nothing (fail-safe)
+    game = game_mode_active()
+    voice_busy: bool | None = None  # computed lazily, once, only if needed
+    for svc in STALE_GUARDED_SERVICES:
+        aet = service_active_enter_ts(svc)
+        stale = is_stale(svc, active_enter_ts=aet, head_commit_ts=head_ts)
+        if svc in STALE_BUSY_SENSITIVE and voice_busy is None:
+            voice_busy = is_voice_busy()
+        decision = stale_restart_decision(
+            svc, stale=stale, game_active=game,
+            under_cap=under_cap(svc, now),
+            voice_busy=bool(voice_busy),
+        )
+        if decision == "restart":
+            _obs_lifecycle("warning", "heartbeat", "stale_restart",
+                           service=svc, reason="stale_code")
+            restart_service(svc)
+            record_revival(svc, now)
+        elif decision == "defer_busy":
+            _obs_lifecycle("info", "heartbeat", "stale_defer",
+                           service=svc, reason="voice_busy")
+        else:
+            _safe_debug("heartbeat freshness pass service=%s decision=%s",
+                        svc, decision)
+
+
+# ---------------------------------------------------------------------------
 # Side-effect actions
 # ---------------------------------------------------------------------------
 
@@ -271,6 +456,15 @@ def run_cycle(now: float | None = None):
     from axi import store as _store
 
     now = time.time() if now is None else now
+
+    # Layer 2 — staleness guard: align running processes to HEAD before the
+    # failed-service sweep. Isolated in try/except so a git/systemctl failure
+    # here can NEVER stop the per-service yields (and thus the watchdog beats).
+    try:
+        _enforce_freshness(now)
+    except Exception:  # noqa: BLE001
+        _safe_debug("heartbeat freshness enforcement failed (non-fatal)")
+
     game = game_mode_active()
     for svc in watched_services(game):
         if not is_failed(svc):

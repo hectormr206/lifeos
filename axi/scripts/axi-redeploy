@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# axi-redeploy — restart the code-serving Axi user services so they pick up
+# already-merged code (Layer 1 of the stale-code prevention).
+#
+# The self-improve deploy updates repo files, but the services are editable
+# installs: the running PROCESS keeps executing the code it imported at start
+# until restarted. This script restarts them, in a safe order, and NOTHING else:
+#   - NO git operations
+#   - NO deploy
+#   - NO database access
+# It only restarts services whose code is already on disk.
+#
+# Usage:
+#   axi-redeploy            # restart the code-serving services, in order
+#   axi-redeploy --dry-run  # print what it WOULD restart, touch nothing
+#
+# All logic lives in the unit-tested axi.redeploy module; this is a thin wrapper.
+set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AXI_PYTHON="$SCRIPT_DIR/../.venv/bin/python"
+
+if [ ! -x "$AXI_PYTHON" ]; then
+    echo "[axi-redeploy] ERROR: venv python not found at '$AXI_PYTHON'" >&2
+    exit 1
+fi
+
+exec "$AXI_PYTHON" -m axi.redeploy "$@"

@@ -15,6 +15,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from axi import redeploy as _redeploy
+
 log = logging.getLogger("axi.config_schema")
 
 
@@ -920,9 +922,11 @@ FIELDS: tuple[ConfigField, ...] = (
         "touched. Set false to keep Deploy GitHub-only and install by hand.",
     ),
     ConfigField(
-        "dev_env_deploy_restart_services", "string", "axi-dashboard axi-voice",
+        "dev_env_deploy_restart_services", "string", _redeploy.restart_arg_string(),
         "Space-separated systemd --user services restarted by Deploy's local "
-        "install step so the new code is picked up.",
+        "install step so the new code is picked up. Defaults to the full "
+        "code-serving set (canonical source: axi.redeploy.REDEPLOY_SERVICES) so "
+        "a landed deploy never leaves a sibling service running stale code.",
     ),
     ConfigField(
         "dev_self_improve_enabled", "boolean", False,

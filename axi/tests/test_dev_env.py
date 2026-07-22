@@ -448,6 +448,11 @@ def test_deploy_env_auto_installs_locally(env_dir, tmp_path, monkeypatch):
     script = " ".join(install[-1])
     assert "git pull --ff-only" in script and "systemctl --user restart" in script
     assert "git diff --quiet" in script  # guarded: clean tree only
+    # Layer 1 wiring: a landed deploy restarts the FULL code-serving set so no
+    # sibling service is left running stale code (2026-07-19 dashboard incident).
+    from axi import redeploy
+    for svc in redeploy.REDEPLOY_SERVICES:
+        assert svc in script, f"deploy restart script must include {svc}"
 
 
 def test_deploy_env_auto_install_can_be_disabled(env_dir, tmp_path, monkeypatch):
