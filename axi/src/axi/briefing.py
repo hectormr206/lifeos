@@ -361,6 +361,692 @@ def run_agentic_briefing(
     return parse_briefing_result(raw)
 
 
+# ─────────────────────── multi-source curated briefing ──────────────────────
+#
+# A DIGESTIBLE briefing built from SEVERAL source homepages instead of one
+# agentic prompt. The pipeline is: fetch each source homepage (web_fetch —
+# HTML only; RSS/XML feeds return empty from lifeos.web.fetch.read) → extract
+# candidate headlines from the page's REAL anchor links → dedup across sources
+# (same/similar title or same URL) → rank + cluster into a digestible shape:
+# one `headline`, up to 5 `top` items each with a "por qué importa" line, and
+# the rest collapsed into `more`. The FETCH + dedup are DETERMINISTIC (so the
+# pipeline is testable and not flaky); only the editorial synthesis (rank /
+# cluster / why-lines) may call the brain, with a deterministic fallback when
+# the brain is unavailable or misbehaves.
+
+# Default source set — all verified fetchable as HTML homepages. The list is
+# config-driven under the `briefing_sources` key (see `briefing_sources()`),
+# so it is swappable per install without touching code. Each source carries a
+# category tag (tech/ia/general/mx) used for clustering + diversity.
+DEFAULT_BRIEFING_SOURCES: list[dict[str, str]] = [
+    {"name": "Hacker News", "url": "https://news.ycombinator.com/", "category": "tech"},
+    {"name": "Simon Willison", "url": "https://simonwillison.net/", "category": "ia"},
+    {"name": "Hugging Face Papers", "url": "https://huggingface.co/papers", "category": "ia"},
+    {"name": "AP News", "url": "https://apnews.com/", "category": "general"},
+    {"name": "Expansión", "url": "https://expansion.mx/", "category": "mx"},
+]
+
+# Anchor text shorter than this is almost always chrome/nav ("login", "more",
+# "comments", a lone site name) rather than a real headline.
+_MIN_HEADLINE_LEN = 15
+# Common link-aggregator navigation/chrome to drop even if long enough.
+_NAV_STOPWORDS = frozenset({
+    "login", "logout", "sign in", "sign up", "submit", "comments", "reply",
+    "past", "more", "next", "prev", "previous", "hide", "flag", "favorite",
+    "context", "parent", "new", "show", "ask", "jobs", "threads", "settings",
+    "subscribe", "newsletter", "menu", "search", "home", "about", "contact",
+})
+
+# Section/hub/nav LABELS whose whole anchor text is a section name, not a
+# headline. Matched by EXACT (lowercased) equality only, so a real headline
+# that merely contains one of these words ("Russia-Ukraine war enters new
+# phase…") is kept. Seeded from the real-network smoke run (AP hubs, Expansión
+# nav) plus the usual news-section vocabulary in ES and EN.
+_SECTION_LABELS = frozenset({
+    "últimas noticias", "ultimas noticias", "lo último", "lo ultimo",
+    "más leídas", "mas leidas", "más noticias", "mas noticias",
+    "ver más", "ver mas", "ver todo", "ver todas las noticias",
+    "todas las noticias", "portada", "inicio", "secciones",
+    "world", "world news", "u.s.", "u.s. news", "us news", "politics",
+    "business", "sports", "sport", "science", "health", "technology",
+    "tecnología", "tecnologia", "entertainment", "opinion", "opinión",
+    "climate", "oddities", "russia-ukraine war", "israel-hamas war",
+    "mercados", "empresas", "economía", "economia", "negocios",
+    "internacional", "nacional", "deportes", "cultura", "elecciones",
+    "trending", "más", "mas",
+})
+
+# Structural path segments that mark a section/tag/hub/feed URL rather than an
+# article. Only STRUCTURAL words (never localized section slugs like
+# "empresas", which are the FIRST segment of real Expansión article URLs), so
+# multi-segment article paths survive.
+_SECTION_PATH_SEGMENTS = frozenset({
+    "tag", "tags", "tagged", "hub", "hubs", "section", "sections",
+    "category", "categories", "topic", "topics", "author", "authors",
+    "label", "labels", "feed", "feeds", "rss", "search", "page",
+})
+
+# A tag link rendered as "slug 400" / "pelican-riding-a-bicycle 128": a single
+# hyphenated slug token followed by a bare count. Requires a hyphen so real
+# short headlines ("Windows 11") never match.
+_TAG_COUNT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+\s+\d{1,5}$", re.IGNORECASE)
+
+# Known section SLUGS: when a URL path is a SINGLE segment equal to one of
+# these, it is a section landing page ("/world", "/empresas"), not an article.
+# A real article's single-segment slug ("/gpu", "/some-story-headline") is not
+# in this dictionary set, so it survives; multi-segment section-prefixed
+# article paths ("/empresas/2026/07/22/slug") also survive (len(segs) > 1).
+_SECTION_SLUGS = frozenset({
+    "world", "world-news", "us", "us-news", "u-s", "u-s-news", "politics",
+    "business", "sports", "sport", "science", "health", "technology", "tech",
+    "entertainment", "opinion", "opinions", "climate", "oddities", "lifestyle",
+    "mercados", "empresas", "economia", "negocios", "internacional", "nacional",
+    "deportes", "cultura", "elecciones", "ultimas-noticias", "ultimas",
+    "lo-ultimo", "trending", "portada", "secciones", "live", "video", "videos",
+    "photos", "fotos", "podcasts", "newsletters", "opinión",
+    # product/nav landings seen on aggregators (Hugging Face, etc.)
+    "pro", "pricing", "enterprise", "docs", "support", "quizzes",
+    "inference-endpoints", "finanzas-personales", "revistas-digitales",
+})
+
+
+def _is_probable_nav(title: str, url: str) -> bool:
+    """True when a (title, url) pair is a section/nav/tag/hub link, not a story.
+
+    Deterministic, per-site-agnostic heuristics distilled from the real smoke
+    run: exact section labels, tag-with-count anchor text, structural URL path
+    segments (/tags/, /hub/, …), and bare single-segment section paths. Kept
+    conservative (exact-match labels, hyphen-required tag pattern) so genuine
+    headlines are not dropped.
+    """
+    from urllib.parse import urlsplit  # noqa: PLC0415
+
+    t = str(title or "").strip()
+    low = t.lower()
+    if not t or low in _NAV_STOPWORDS or low in _SECTION_LABELS:
+        return True
+    if _TAG_COUNT_RE.match(t):
+        return True
+    try:
+        segs = [s for s in urlsplit(str(url or "")).path.split("/") if s]
+    except Exception:  # noqa: BLE001
+        segs = []
+    if any(s.lower() in _SECTION_PATH_SEGMENTS for s in segs):
+        return True
+    if len(segs) == 1 and segs[0].lower() in _SECTION_SLUGS:
+        return True
+    # A single-segment path whose ONLY query is tracking (utm_*) is a
+    # "recommended section" nav link, not an article (real articles carry a
+    # dated/id multi-segment path). Catches Expansión's utm section links.
+    try:
+        split = urlsplit(str(url or ""))
+        query = split.query.lower()
+    except Exception:  # noqa: BLE001
+        query = ""
+    if len(segs) == 1 and query and "utm_" in query and "?" not in segs[0]:
+        params = [p.split("=", 1)[0] for p in query.split("&") if p]
+        if params and all(p.startswith("utm_") for p in params):
+            return True
+    return False
+
+_MULTI_SOURCE_TITLE = "Boletín multi-fuente"
+
+# A reminder prompt carrying one of these markers selects the multi-source
+# pipeline (distinct from the single-URL agentic path).
+_MULTI_SOURCE_MARKER = re.compile(
+    r"multi[\s-]?fuente|multifuente|varias fuentes|bolet[ií]n curado|multi[\s-]?source",
+    re.IGNORECASE,
+)
+
+
+def is_multi_source_request(text: str) -> bool:
+    """True when `text` explicitly asks for the multi-source curated briefing."""
+    if not text or not isinstance(text, str):
+        return False
+    return bool(_MULTI_SOURCE_MARKER.search(text))
+
+
+def briefing_sources() -> list[dict[str, str]]:
+    """Return the configured source list, or the built-in default.
+
+    Config-driven under the `briefing_sources` key (a list of
+    {name, url, category} dicts). The strict config schema only models scalar
+    fields, so this key rides along as a preserved unmanaged value; when absent
+    or malformed we fall back to `DEFAULT_BRIEFING_SOURCES`.
+    """
+    try:
+        from axi import config  # noqa: PLC0415
+
+        raw = config.get("briefing_sources", None)
+    except Exception:  # noqa: BLE001
+        raw = None
+    if isinstance(raw, list) and raw:
+        clean: list[dict[str, str]] = []
+        for s in raw:
+            if not isinstance(s, dict):
+                continue
+            url = _safe_url(s.get("url"))
+            if not url:
+                continue
+            clean.append({
+                "name": str(s.get("name") or url).strip()[:_MAX_TITLE],
+                "url": url,
+                "category": str(s.get("category") or "general").strip()[:32] or "general",
+            })
+        if clean:
+            return clean
+    return [dict(s) for s in DEFAULT_BRIEFING_SOURCES]
+
+
+def _norm_url(url: str) -> str:
+    """Normalize a URL for dedup: drop scheme/www, fragment, trailing slash."""
+    u = str(url or "").strip().lower()
+    u = re.sub(r"^https?://", "", u)
+    u = u.split("#", 1)[0]
+    if u.startswith("www."):
+        u = u[4:]
+    return u.rstrip("/")
+
+
+def _norm_title(title: str) -> str:
+    """Normalize a title for similarity dedup: lowercase, alnum + spaces only."""
+    t = str(title or "").lower()
+    t = re.sub(r"[^0-9a-záéíóúñü ]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _extract_source_candidates(
+    fetch_result: dict[str, Any], source: dict[str, str], limit: int,
+) -> list[dict[str, str]]:
+    """Turn one source's web_fetch result into tagged headline candidates.
+
+    Reads the REAL anchor links (`links: [{text, url}]`) the fetch returned —
+    never invents URLs. Drops nav/chrome and links whose text is too short to
+    be a headline; dedups within the source by URL; caps at `limit`.
+    """
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    name = str(source.get("name") or "").strip()
+    category = str(source.get("category") or "general").strip() or "general"
+    for link in (fetch_result.get("links") or []):
+        if not isinstance(link, dict):
+            continue
+        title = str(link.get("text") or "").strip()
+        url = _safe_url(link.get("url"))
+        if not url or not title:
+            continue
+        if len(title) < _MIN_HEADLINE_LEN:
+            continue
+        if _is_probable_nav(title, url):
+            continue
+        key = _norm_url(url)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "title": title[:_MAX_TITLE],
+            "url": url,
+            "source": name,
+            "category": category,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _build_extraction_prompt(
+    text: str, links: list[dict[str, str]], source: dict[str, str],
+    limit: int, today: str,
+) -> str:
+    """Prompt the brain to extract a source's REAL top headlines from its page.
+
+    The brain reads the page TEXT (what a human sees) and picks the genuine
+    article headlines currently featured, mapping EACH to the INDEX of a real
+    link from the numbered list. It never writes a URL, so it cannot fabricate
+    one — we resolve indices back to the real fetched links.
+    """
+    name = str(source.get("name") or "")
+    lines = [
+        f"Hoy es {today}. Estás leyendo la portada de «{name}».",
+        "",
+        "TEXTO DE LA PÁGINA (lo que ve un humano):",
+        (text or "").strip()[:2400] or "(sin texto extraído)",
+        "",
+        "ENLACES REALES de la página (índice: texto -> url):",
+    ]
+    for i, ln in enumerate(links):
+        lines.append(f"[{i}] {ln.get('text', '')} -> {ln.get('url', '')}")
+    lines += [
+        "",
+        f"Extrae los {limit} TITULARES DE ARTÍCULO más importantes que la "
+        "portada destaca AHORA. IGNORA navegación, secciones, categorías, "
+        "etiquetas (tags), hubs, 'Últimas Noticias', login y anuncios: NO son "
+        "titulares. Para cada titular, da su texto tal como es noticia y el "
+        "ÍNDICE [i] del enlace real que le corresponde (o null si ninguno "
+        "encaja). NO inventes URLs ni titulares que no estén en la página.",
+        "Responde ÚNICAMENTE con JSON:",
+        '{"headlines": [{"title": "<titular>", "link": <índice o null>}]}',
+    ]
+    return "\n".join(lines)
+
+
+def _extract_headlines_with_brain(
+    fetch_result: dict[str, Any],
+    source: dict[str, str],
+    ask: Callable[..., str],
+    *,
+    limit: int,
+    today: str,
+    max_tokens: int = 1024,
+    timeout: float = 90.0,
+) -> list[dict[str, str]] | None:
+    """Have the brain read one source's page and return its REAL top headlines.
+
+    Returns tagged candidates (title from the brain's read of the page TEXT,
+    URL resolved from the page's REAL links by index — never fabricated; an
+    unresolved/nav index falls back to the source base URL). Returns ``None``
+    when the brain is unavailable or its response carries no ``headlines`` list,
+    so the caller can fall back to the deterministic extractor.
+    """
+    links = [
+        ln for ln in (fetch_result.get("links") or [])
+        if isinstance(ln, dict) and _safe_url(ln.get("url"))
+    ]
+    base = _safe_url(source.get("url"))
+    name = str(source.get("name") or "").strip()
+    category = str(source.get("category") or "general").strip() or "general"
+    prompt = _build_extraction_prompt(
+        str(fetch_result.get("text") or ""), links, source, limit, today)
+    try:
+        raw = ask(prompt, max_tokens=max_tokens, timeout=timeout, task="extraction")
+    except Exception:  # noqa: BLE001
+        log.exception("multi-source brain extraction failed for %s", name)
+        return None
+    if _is_brain_failure(raw):
+        return None
+    obj = _extract_json(raw)
+    if not isinstance(obj, dict) or not isinstance(obj.get("headlines"), list):
+        return None
+
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for h in obj["headlines"]:
+        if len(out) >= limit:
+            break
+        if not isinstance(h, dict):
+            continue
+        title = str(h.get("title") or "").strip()
+        if len(title) < _MIN_HEADLINE_LEN:
+            continue
+        idx = h.get("link")
+        url = base
+        if not isinstance(idx, bool) and isinstance(idx, int) and 0 <= idx < len(links):
+            cand_url = _safe_url(links[idx].get("url"))
+            # Only accept the mapped link when it is not itself a nav/section
+            # link; otherwise keep the headline on the source's base URL.
+            if cand_url and not _is_probable_nav(links[idx].get("text", ""), cand_url):
+                url = cand_url
+        if not url:
+            continue
+        # Final guard: even a brain-picked item is dropped if it is clearly a
+        # section/nav/tag link (the brain occasionally lists chrome on sparse
+        # pages like paper/product aggregators).
+        if _is_probable_nav(title, url):
+            continue
+        key = _norm_title(title)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        out.append({
+            "title": title[:_MAX_TITLE],
+            "url": url,
+            "source": name,
+            "category": category,
+        })
+    return out
+
+
+def _dedup_candidates(cands: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Drop cross-source duplicates: same normalized URL OR same/similar title.
+
+    Keeps the first occurrence (source order is the initial priority).
+    """
+    out: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    for c in cands:
+        nu = _norm_url(c.get("url", ""))
+        nt = _norm_title(c.get("title", ""))
+        if (nu and nu in seen_urls) or (nt and nt in seen_titles):
+            continue
+        if nu:
+            seen_urls.add(nu)
+        if nt:
+            seen_titles.add(nt)
+        out.append(c)
+    return out
+
+
+def _rank_candidates(cands: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Deterministic diversity ranking: round-robin across categories.
+
+    Interleaving by category (preserving within-category order) keeps the
+    surfaced items from being dominated by a single high-volume source, which
+    is what makes the fallback digest feel curated rather than a raw dump.
+    """
+    from collections import OrderedDict  # noqa: PLC0415
+
+    buckets: "OrderedDict[str, list[dict[str, str]]]" = OrderedDict()
+    for c in cands:
+        buckets.setdefault(c.get("category") or "general", []).append(c)
+    ranked: list[dict[str, str]] = []
+    queues = list(buckets.values())
+    while queues:
+        for q in list(queues):
+            if q:
+                ranked.append(q.pop(0))
+            if not q:
+                queues.remove(q)
+    return ranked
+
+
+def _to_item(c: dict[str, str], why: str = "") -> dict[str, str]:
+    """Map a candidate to the /briefings item shape (title_es + url render)."""
+    title = str(c.get("title") or "")[:_MAX_TITLE]
+    return {
+        "title": title,
+        "title_es": title,
+        "summary": str(why or "")[:_MAX_SUMMARY],
+        "why": str(why or "")[:_MAX_SUMMARY],
+        "url": _safe_url(c.get("url")),
+        "source": str(c.get("source") or "")[:_MAX_TITLE],
+        "category": str(c.get("category") or "")[:32],
+    }
+
+
+def _multi_source_markdown(
+    headline: dict[str, str] | None,
+    top: list[dict[str, str]],
+    more: list[dict[str, str]],
+) -> str:
+    lines: list[str] = [f"## {_MULTI_SOURCE_TITLE}", ""]
+    if headline:
+        t, u = headline.get("title", ""), headline.get("url", "")
+        src = headline.get("source", "")
+        lines.append(f"**Lo más importante:** [{t}]({u})" if u else f"**Lo más importante:** {t}")
+        if src:
+            lines.append(f"  _{src}_")
+        lines.append("")
+    if top:
+        lines.append("### Vale tu tiempo")
+        for it in top:
+            t, u, src = it.get("title", ""), it.get("url", ""), it.get("source", "")
+            head = f"[{t}]({u})" if u else t
+            lines.append(f"- {head} — _{src}_")
+            why = it.get("why") or it.get("summary")
+            if why:
+                lines.append(f"  - {why}")
+        lines.append("")
+    if more:
+        lines.append("### Más")
+        for it in more:
+            t, u, src = it.get("title", ""), it.get("url", ""), it.get("source", "")
+            head = f"[{t}]({u})" if u else t
+            lines.append(f"- {head} — _{src}_")
+    return "\n".join(lines).strip()
+
+
+def _cluster_fallback(cands: list[dict[str, str]], max_top: int) -> dict[str, Any]:
+    """Deterministic digest (no brain): rank by category diversity, then slice.
+
+    headline = most important (first ranked); top = next `max_top`; the rest
+    collapse into `more`. Every candidate is surfaced exactly once.
+    """
+    ranked = _rank_candidates(cands)
+    headline = _to_item(ranked[0]) if ranked else None
+    top = [_to_item(c) for c in ranked[1 : 1 + max_top]]
+    more = [_to_item(c) for c in ranked[1 + max_top :]]
+    return {"headline": headline, "top": top, "more": more, "summary": ""}
+
+
+def _build_synthesis_prompt(cands: list[dict[str, str]], today: str) -> str:
+    """Compact numbered candidate list for the brain, referenced by INDEX.
+
+    The brain never sees a place to write a URL — it picks candidates by index,
+    so it cannot invent links. We map indices back to the real fetched URLs.
+    """
+    lines = [
+        f"Hoy es {today}. Estas son las noticias candidatas de varias fuentes, "
+        "numeradas. Cúralas en un boletín digerible en español (es-MX).",
+        "",
+    ]
+    for i, c in enumerate(cands):
+        lines.append(f"[{i}] ({c.get('category')}/{c.get('source')}) {c.get('title')}")
+    lines += [
+        "",
+        "Elige la ÚNICA noticia más importante del día (headline) y de 4 a 5 que "
+        "'valgan tu tiempo' (top), agrupando por tema y evitando repetir. Para "
+        "cada una del top escribe una línea corta de 'por qué importa'. NO "
+        "inventes noticias ni URLs: refiérete SOLO por el número [i].",
+        "Responde ÚNICAMENTE con JSON:",
+        '{"summary": "<resumen general breve>", "headline": <indice>, '
+        '"top": [{"index": <indice>, "why": "<por qué importa, 1 línea>"}]}',
+    ]
+    return "\n".join(lines)
+
+
+def _synthesize_with_brain(
+    cands: list[dict[str, str]],
+    ask: Callable[..., str],
+    *,
+    today: str,
+    max_top: int,
+    max_tokens: int,
+    timeout: float,
+) -> dict[str, Any] | None:
+    """Editorial synthesis via the brain: rank/cluster/why by candidate index.
+
+    Returns the digest dict, or None on any failure so the caller falls back to
+    the deterministic clustering. Indices are mapped back to real candidates —
+    an out-of-range or duplicate index is ignored, never fabricated.
+    """
+    prompt = _build_synthesis_prompt(cands, today)
+    try:
+        raw = ask(prompt, max_tokens=max_tokens, timeout=timeout, task="agentic")
+    except Exception:  # noqa: BLE001
+        log.exception("multi-source brain synthesis failed")
+        return None
+    if _is_brain_failure(raw):
+        return None
+    obj = _extract_json(raw)
+    if not isinstance(obj, dict):
+        return None
+
+    def _pick(idx: Any) -> dict[str, str] | None:
+        if isinstance(idx, bool) or not isinstance(idx, int):
+            return None
+        return cands[idx] if 0 <= idx < len(cands) else None
+
+    used: set[int] = set()
+    headline = None
+    h_idx = obj.get("headline")
+    hc = _pick(h_idx)
+    if hc is not None:
+        headline = _to_item(hc)
+        used.add(int(h_idx))
+    top: list[dict[str, str]] = []
+    for entry in (obj.get("top") or []):
+        if len(top) >= max_top:
+            break
+        if not isinstance(entry, dict):
+            continue
+        idx = entry.get("index")
+        c = _pick(idx)
+        if c is None or int(idx) in used:
+            continue
+        used.add(int(idx))
+        top.append(_to_item(c, why=str(entry.get("why") or "")))
+    if headline is None and top:
+        # Promote the first top item to headline so the shape stays valid.
+        headline = top.pop(0)
+    if headline is None:
+        return None
+    more = [_to_item(c) for i, c in enumerate(cands) if i not in used]
+    summary = str(obj.get("summary") or "").strip()[:_MAX_SUMMARY]
+    return {"headline": headline, "top": top, "more": more, "summary": summary}
+
+
+def _default_web_fetch(url: str) -> dict[str, Any]:
+    from axi.web_tools import web_fetch_handler  # noqa: PLC0415
+
+    return web_fetch_handler({"url": url})
+
+
+def _default_ask(prompt: str, **kwargs: Any) -> str:
+    """Default brain completion caller for the multi-source pipeline.
+
+    Both per-source headline extraction and cross-source editorial synthesis
+    call the brain as a plain completion (no tools) — the real page links are
+    handed in the prompt and referenced by index, so the model never needs a
+    web tool and cannot fabricate a URL.
+    """
+    from axi import brain  # noqa: PLC0415
+
+    return brain.ask(prompt, **kwargs)
+
+
+_USE_DEFAULT_BRAIN = object()  # sentinel: "caller omitted ask → use real brain"
+
+
+def run_multi_source_briefing(
+    sources: list[dict[str, str]] | None = None,
+    *,
+    web_fetch: Callable[[str], dict[str, Any]] | None = None,
+    ask_with_tools: Callable[..., str] | None | object = _USE_DEFAULT_BRAIN,
+    today: str | None = None,
+    max_per_source: int = 8,
+    max_top: int = 5,
+    max_tokens: int = 4096,
+    timeout: float = 180.0,
+) -> dict[str, Any]:
+    """Build a digestible, clustered multi-source briefing. Never raises.
+
+    Fetches each source homepage deterministically, extracts + dedups candidate
+    headlines, then produces a `headline` / `top` (≤`max_top`, each with a
+    "por qué importa") / `more` digest. Editorial synthesis uses the injected
+    brain (`ask_with_tools`) when available, else a deterministic fallback.
+
+    Returns a dict with: title, summary, headline, top, more, items (flat
+    headline+top+more for the /briefings card), markdown, sources_used, ok.
+    """
+    srcs = sources if sources is not None else briefing_sources()
+    fetch = web_fetch or _default_web_fetch
+    today = today or _today_in_config_tz()
+    # Omitted → use the real brain (good production/smoke default). Explicit
+    # None → deterministic-only (tests pin this). A callable is used as given.
+    if ask_with_tools is _USE_DEFAULT_BRAIN:
+        ask_with_tools = _default_ask
+
+    candidates: list[dict[str, str]] = []
+    sources_used = 0
+    for src in srcs:
+        url = _safe_url(src.get("url"))
+        if not url:
+            continue
+        try:
+            result = fetch(url)
+        except Exception:  # noqa: BLE001
+            log.exception("multi-source fetch failed for %s", url)
+            continue
+        if not isinstance(result, dict):
+            continue
+        # Preferred: let the brain read the page TEXT and extract this source's
+        # REAL top headlines (mapped to real links). Fall back to the
+        # deterministic link filter when the brain is absent or fails.
+        got: list[dict[str, str]] | None = None
+        if ask_with_tools is not None:
+            got = _extract_headlines_with_brain(
+                result, src, ask_with_tools,
+                limit=max_per_source, today=today,
+            )
+        if got is None:
+            got = _extract_source_candidates(result, src, limit=max_per_source)
+        if got:
+            sources_used += 1
+        candidates.extend(got)
+
+    candidates = _dedup_candidates(candidates)
+
+    if not candidates:
+        return {
+            "title": _MULTI_SOURCE_TITLE,
+            "summary": "No encontré noticias en las fuentes de hoy.",
+            "headline": None,
+            "top": [],
+            "more": [],
+            "items": [],
+            "markdown": "No encontré noticias en las fuentes de hoy.",
+            "sources_used": sources_used,
+            "ok": True,
+        }
+
+    digest: dict[str, Any] | None = None
+    if ask_with_tools is not None:
+        digest = _synthesize_with_brain(
+            candidates, ask_with_tools, today=today, max_top=max_top,
+            max_tokens=max_tokens, timeout=timeout,
+        )
+    if digest is None:
+        digest = _cluster_fallback(candidates, max_top=max_top)
+
+    headline = digest["headline"]
+    top = digest["top"][:max_top]
+    more = digest["more"]
+    items = ([headline] if headline else []) + top + more
+    summary = digest.get("summary") or (
+        f"{len(items)} noticias de {sources_used} fuentes, curadas."
+    )
+    return {
+        "title": _MULTI_SOURCE_TITLE,
+        "summary": summary[:_MAX_SUMMARY],
+        "headline": headline,
+        "top": top,
+        "more": more,
+        "items": items,
+        "markdown": _multi_source_markdown(headline, top, more),
+        "sources_used": sources_used,
+        "ok": True,
+    }
+
+
+def run_briefing_for_prompt(
+    action_prompt: str,
+    *,
+    today: str | None = None,
+) -> dict[str, Any]:
+    """Route a reminder's prompt to the right briefing engine.
+
+    Multi-source when the prompt carries a multi-source marker OR the
+    `briefing_multi_source` config flag is on; otherwise the single-URL
+    agentic path. Keeps the existing agentic path working unchanged.
+    """
+    multi = is_multi_source_request(action_prompt)
+    if not multi:
+        try:
+            from axi import config  # noqa: PLC0415
+
+            multi = bool(config.get("briefing_multi_source", False))
+        except Exception:  # noqa: BLE001
+            multi = False
+    if multi:
+        # Wire the real brain so per-source extraction + editorial synthesis
+        # actually run in production (the smoke run showed they silently did
+        # not when no brain was injected).
+        return run_multi_source_briefing(today=today, ask_with_tools=_default_ask)
+    return run_agentic_briefing(action_prompt, today=today)
+
+
 def _is_brain_failure(raw: str) -> bool:
     """True when the brain returned a tool-calling failure sentinel.
 

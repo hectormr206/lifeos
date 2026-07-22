@@ -993,6 +993,18 @@ FIELDS: tuple[ConfigField, ...] = (
         "oplog table/HLC/hash-chain logic lands in M3, so flipping this flag "
         "before then has zero observable effect (see `axi.oplog.emit`).",
     ),
+    # ─────── briefing: multi-source curated digest ───────
+    ConfigField(
+        "briefing_multi_source", "boolean", False,
+        "If true, agentic briefing reminders default to the MULTI-SOURCE "
+        "curated pipeline (fetch several source homepages, dedup, rank, "
+        "cluster into a digestible headline + top + more) instead of the "
+        "single-prompt agentic path. A reminder prompt containing a "
+        "multi-source marker (e.g. 'multifuente') selects it regardless. "
+        "The source list itself lives in the unmanaged `briefing_sources` "
+        "config key (a list of {name,url,category}); when absent the built-in "
+        "DEFAULT_BRIEFING_SOURCES is used. Live (no restart).",
+    ),
 )
 
 

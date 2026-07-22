@@ -5938,7 +5938,7 @@ def _dispatch_agentic_briefing(rem: lifeos_reminders.Reminder) -> None:
     url = f"/briefings#{rem.id}"
     tag = f"briefing:{rem.id}"
     try:
-        digest = briefing.run_agentic_briefing(rem.action_prompt or rem.message)
+        digest = briefing.run_briefing_for_prompt(rem.action_prompt or rem.message)
     except Exception as e:  # noqa: BLE001 — engine is defensive, this is belt-and-suspenders
         log.exception("agentic briefing engine raised for reminder %s", rem.id)
         digest = {
