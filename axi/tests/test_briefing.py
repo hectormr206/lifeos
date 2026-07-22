@@ -1095,3 +1095,91 @@ def test_clusters_capped_per_category() -> None:
     out = briefing.run_multi_source_briefing(
         sources, http_get=_fake_http_get(mapping), ask_with_tools=None, now=_NOW)
     assert len(out["clusters"]["tech"]) <= 5
+
+
+# ── link-validity (boletín v2 final slice) ───────────────────────────────────
+#
+# Broken links are dropped BEFORE surfacing, but ONLY for non-authoritative
+# (brain-extracted) candidates — feed/Algolia URLs are authoritative and are
+# never probed (saves requests). The reachability rule treats status <400 or
+# {403,405,429} as reachable (keep), {404,410} or a connection error (probe
+# returns -1) as broken (drop), and any UNEXPECTED error in the probe itself
+# as fail-open (keep — never lose news over a flaky checker).
+
+def test_link_is_reachable_keeps_ok_statuses() -> None:
+    from axi import briefing
+    for status in (200, 204, 301, 302, 399, 403, 405, 429):
+        assert briefing._link_is_reachable(
+            "https://x.example", lambda u, s=status: s) is True, status
+
+
+def test_link_is_reachable_drops_broken_statuses_and_conn_error() -> None:
+    from axi import briefing
+    for status in (404, 410, -1):
+        assert briefing._link_is_reachable(
+            "https://x.example", lambda u, s=status: s) is False, status
+
+
+def test_link_is_reachable_fail_open_on_checker_error() -> None:
+    from axi import briefing
+
+    def boom(u):
+        raise RuntimeError("probe blew up")
+
+    assert briefing._link_is_reachable("https://x.example", boom) is True
+
+
+def test_validate_candidate_links_skips_authoritative_feed_urls() -> None:
+    from axi import briefing
+    calls: list = []
+
+    def probe(u):
+        calls.append(u)
+        return 404  # would drop, but must never be called for feed/hn origins
+
+    cands = [
+        {"url": "https://feed.example/a", "origin": "feed"},
+        {"url": "https://hn.example/b", "origin": "hn_algolia"},
+    ]
+    out = briefing._validate_candidate_links(cands, probe)
+    assert out == cands
+    assert calls == []
+
+
+def test_validate_candidate_links_drops_broken_non_feed_link() -> None:
+    from axi import briefing
+    cands = [
+        {"url": "https://brain.example/dead", "origin": "brain"},
+        {"url": "https://brain.example/live", "origin": "brain"},
+    ]
+
+    def probe(u):
+        return 404 if u.endswith("dead") else 200
+
+    out = briefing._validate_candidate_links(cands, probe)
+    assert [c["url"] for c in out] == ["https://brain.example/live"]
+
+
+def test_multi_source_briefing_never_probes_authoritative_feed_urls() -> None:
+    from axi import briefing
+    mapping = {
+        "https://tech/": _rss([("Titular tech de hoy importante", "https://tech/a", _TODAY_RFC)]),
+        briefing._HN_ALGOLIA_URL: _algolia(
+            [("HN story fresca de hoy relevante", "https://hn/x", _TODAY_RFC, "111")]),
+    }
+    sources = [
+        {"name": "T", "adapter": "feed", "url": "https://tech/", "category": "tech"},
+        {"name": "Hacker News", "adapter": "hn_algolia", "url": "https://news.ycombinator.com/", "category": "tech"},
+    ]
+    called: list = []
+
+    def probe(u):
+        called.append(u)
+        return 404
+
+    out = briefing.run_multi_source_briefing(
+        sources, http_get=_fake_http_get(mapping), ask_with_tools=None,
+        now=_NOW, link_probe=probe,
+    )
+    assert called == []          # feed/Algolia URLs are authoritative — no probing
+    assert out["items"]          # and the fresh items still surface

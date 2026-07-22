@@ -56,14 +56,28 @@
         <template x-if="visibleItems(c).length > 0">
           <ul class="space-y-3">
             <template x-for="(it, idx) in visibleItems(c)" :key="idx">
-              <!-- Each item carries its own open/close state for the two expandable sections -->
+              <!-- Each item carries its own open/close state + on-demand summary caches -->
               <li class="text-sm border-l-2 pl-3 space-y-1"
                   style="border-color: var(--border)"
-                  x-data="{ showDetail: false, showHN: false }">
+                  x-data="briefingItem()">
 
-                <!-- Title in Spanish (falls back to original title, then URL) -->
-                <div class="font-medium" style="color: var(--teal)"
-                     x-text="it.title_es || it.title || it.url"></div>
+                <!-- Title in Spanish (falls back to original title, then URL).
+                     Links to the source when a url is present. -->
+                <template x-if="it.url">
+                  <a :href="it.url" target="_blank" rel="noopener noreferrer"
+                     class="font-medium hover:underline" style="color: var(--teal)"
+                     x-text="it.title_es || it.title || it.url"></a>
+                </template>
+                <template x-if="!it.url">
+                  <div class="font-medium" style="color: var(--teal)"
+                       x-text="it.title_es || it.title"></div>
+                </template>
+
+                <!-- Source + date -->
+                <template x-if="it.source || it.published">
+                  <div class="text-xs muted"
+                       x-text="[it.source, fmtDate(it.published)].filter(Boolean).join(' · ')"></div>
+                </template>
 
                 <!-- Concise summary -->
                 <template x-if="it.summary">
@@ -100,7 +114,7 @@
                   </template>
                 </div>
 
-                <!-- HN comments summary toggle -->
+                <!-- HN comments summary toggle (pre-computed, stored on the item) -->
                 <template x-if="it.hn_comments_summary">
                   <div>
                     <button @click="showHN = !showHN"
@@ -113,6 +127,38 @@
                          x-text="it.hn_comments_summary"></div>
                   </div>
                 </template>
+
+                <!-- On-demand summary buttons (fetched lazily, then cached) -->
+                <div class="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                  <!-- Full article summary — any item with a url -->
+                  <template x-if="it.url">
+                    <button @click="toggleArticle(it.url)"
+                            class="text-xs hover:underline" style="color: var(--teal)">
+                      <span x-text="art.open ? '▲ Ocultar resumen completo' : 'Ver resumen completo'"></span>
+                    </button>
+                  </template>
+                  <!-- HN comments summary — ONLY when the item is a HN story -->
+                  <template x-if="it.hn_id">
+                    <button @click="toggleComments(it.hn_id)"
+                            class="text-xs hover:underline" style="color: var(--amber)">
+                      <span x-text="hn.open ? '▲ Ocultar resumen de comentarios' : 'Ver resumen de comentarios'"></span>
+                    </button>
+                  </template>
+                </div>
+
+                <!-- Article summary panel -->
+                <div x-show="art.open" x-transition class="mt-1">
+                  <div x-show="art.loading" class="text-xs muted">Resumiendo…</div>
+                  <div x-show="art.err" class="text-xs" style="color: var(--pink)" x-text="art.err"></div>
+                  <div x-show="art.text" class="text-xs panel2 rounded p-2 leading-relaxed" x-text="art.text"></div>
+                </div>
+
+                <!-- Comments summary panel -->
+                <div x-show="hn.open" x-transition class="mt-1">
+                  <div x-show="hn.loading" class="text-xs muted">Resumiendo comentarios…</div>
+                  <div x-show="hn.err" class="text-xs" style="color: var(--pink)" x-text="hn.err"></div>
+                  <div x-show="hn.text" class="text-xs panel2 rounded p-2 leading-relaxed muted" x-text="hn.text"></div>
+                </div>
 
               </li>
             </template>
@@ -128,6 +174,56 @@
 </div>
 
 <script>
+// Per-item component: two expandable stored sections (detailed_summary,
+// hn_comments_summary) plus two ON-DEMAND summaries (article + HN comments)
+// that fetch lazily on first open and cache the result so re-clicks just toggle.
+function briefingItem() {
+  return {
+    showDetail: false,
+    showHN: false,
+    art: { open: false, loading: false, text: '', err: '' },
+    hn: { open: false, loading: false, text: '', err: '' },
+    fmtDate(iso) {
+      if (!iso) return '';
+      try {
+        return new Date(iso).toLocaleDateString('es-MX',
+          { day: 'numeric', month: 'short' });
+      } catch (e) { return String(iso).slice(0, 10); }
+    },
+    async _fetchSummary(state, url, payload) {
+      // Cached already → just toggle visibility, no refetch.
+      if (state.text) { state.open = !state.open; return; }
+      state.open = true;
+      if (state.loading) return;
+      state.loading = true; state.err = '';
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d && d.ok) {
+          state.text = d.summary || '';
+        } else {
+          state.err = (d && d.error) || 'No pude generar el resumen.';
+        }
+      } catch (e) {
+        state.err = 'Error de red.';
+      }
+      state.loading = false;
+    },
+    toggleArticle(url) {
+      if (this.art.text) { this.art.open = !this.art.open; return; }
+      this._fetchSummary(this.art, '/api/briefings/article-summary', { url });
+    },
+    toggleComments(hnId) {
+      if (this.hn.text) { this.hn.open = !this.hn.open; return; }
+      this._fetchSummary(this.hn, '/api/briefings/comments-summary', { hn_id: hnId });
+    },
+  };
+}
+
 function briefingsPage() {
   return {
     cards: [],

@@ -6044,6 +6044,210 @@ def api_briefings_list():
     return {"briefings": [_briefing_to_dict(r) for r in items]}
 
 
+# ── on-demand briefing summaries (article + HN comments) ─────────────────────
+#
+# Two POST endpoints expand a stored briefing item on demand: a full article
+# summary (fetch the page + brain, es-MX) and a summary of what people are
+# discussing in the item's Hacker News thread. Both are guarded against SSRF:
+# the url / hn_id MUST belong to a currently-stored briefing item, otherwise
+# 400. The brain caller is the same `brain.ask` the briefing engine uses.
+
+_ARTICLE_SUMMARY_SYSTEM = (
+    "Eres un asistente que resume artículos para un lector mexicano. Escribe "
+    "SIEMPRE en español natural de México (es-MX), claro y conciso. Resume el "
+    "contenido que se te entrega; NO inventes datos que no estén en el texto y "
+    "NO pidas acceso a internet: el texto ya está aquí."
+)
+
+_COMMENTS_SUMMARY_SYSTEM = (
+    "Eres un asistente que resume discusiones de Hacker News para un lector "
+    "mexicano. Escribe SIEMPRE en español de México (es-MX). Resume de qué está "
+    "hablando la gente: los puntos de acuerdo, los desacuerdos y las opiniones "
+    "más repetidas. NO inventes: resume solo lo que dicen los comentarios."
+)
+
+# Cap how many top-level comments and how much text we hand the brain, so a
+# huge thread cannot bloat the prompt.
+_MAX_HN_COMMENTS_FETCH = 30
+_HN_ITEM_API = "http://hn.algolia.com/api/v1/items/{}"
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _stored_briefing_items() -> list[dict]:
+    """Every item across all stored briefing results — the guard allow-list.
+
+    Both on-demand endpoints validate their input (a url / an hn_id) against
+    this set so we never fetch an arbitrary attacker-supplied URL (SSRF) nor an
+    arbitrary HN id. Defensive: a malformed meta row is skipped, never fatal.
+    """
+    out: list[dict] = []
+    try:
+        for r in lifeos_reminders.list_agentic():
+            if not r.last_result_meta:
+                continue
+            try:
+                meta = json.loads(r.last_result_meta)
+            except Exception:  # noqa: BLE001
+                continue
+            for it in (meta.get("items") or []):
+                if isinstance(it, dict):
+                    out.append(it)
+    except Exception:  # noqa: BLE001
+        log.exception("failed to scan stored briefing items")
+    return out
+
+
+def _briefing_url_allowed(url: str) -> bool:
+    """True iff `url` matches the `url` of some stored briefing item (SSRF guard)."""
+    if not url:
+        return False
+    return any(str(it.get("url") or "") == url for it in _stored_briefing_items())
+
+
+def _briefing_hn_id_known(hn_id: str) -> bool:
+    """True iff `hn_id` matches the `hn_id` of some stored briefing item (guard)."""
+    if not hn_id:
+        return False
+    return any(str(it.get("hn_id") or "") == hn_id for it in _stored_briefing_items())
+
+
+def _briefing_read_article(url: str) -> str:
+    """Fetch an article URL and return its extracted plain text ('' on failure).
+
+    Thin seam over lifeos.web.fetch.read (already wired in the running app);
+    tests monkeypatch this to avoid the network.
+    """
+    try:
+        from lifeos.web import fetch as _web_fetch  # noqa: PLC0415
+
+        page = _web_fetch.read(url)
+    except Exception:  # noqa: BLE001
+        log.exception("briefing article fetch failed for %s", url)
+        return ""
+    if page is not None and getattr(page, "ok", False):
+        return str(getattr(page, "text", "") or "")
+    return ""
+
+
+def _briefing_fetch_hn_item(hn_id: str) -> dict | None:
+    """Fetch an HN thread via the Algolia items API. Returns the JSON dict or None."""
+    try:
+        from lifeos.web import feeds  # noqa: PLC0415
+
+        body = feeds._default_http_get(_HN_ITEM_API.format(hn_id))
+        data = json.loads(body)
+    except Exception:  # noqa: BLE001
+        log.debug("HN item fetch failed for %s", hn_id)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _strip_html(text: str) -> str:
+    """Strip HTML tags and decode entities to plain text (collapsed whitespace)."""
+    import html as _html  # noqa: PLC0415
+
+    t = _HTML_TAG_RE.sub(" ", str(text or ""))
+    t = _html.unescape(t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+@app.post("/api/briefings/article-summary")
+async def api_briefing_article_summary(request: Request):
+    """Summarize a stored briefing article in es-MX. SSRF-guarded; never 500s.
+
+    Body: {"url": <a url present in some stored briefing item>}. Rejects any
+    other url with 400. On fetch/brain failure returns {ok:false, error:...}.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+    url = str((body or {}).get("url") or "").strip() if isinstance(body, dict) else ""
+    if not _briefing_url_allowed(url):
+        raise HTTPException(400, "url no reconocida")
+
+    def _work() -> dict:
+        text = _briefing_read_article(url)
+        if not text:
+            return {"ok": False, "error": "No pude leer el artículo."}
+        from axi import brain  # noqa: PLC0415
+
+        prompt = (
+            "Resume en español de México, en 4 a 6 oraciones claras, el "
+            "siguiente artículo. Ve al grano.\n\nARTÍCULO:\n" + text[:6000]
+        )
+        try:
+            summary = brain.ask(
+                prompt, system=_ARTICLE_SUMMARY_SYSTEM,
+                max_tokens=512, task="narration",
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("article summary brain call failed for %s", url)
+            return {"ok": False, "error": "No pude resumir el artículo."}
+        summary = str(summary or "").strip()
+        if not summary or briefing._is_brain_failure(summary):
+            return {"ok": False, "error": "No pude resumir el artículo."}
+        return {"ok": True, "summary": summary}
+
+    return await asyncio.to_thread(_work)
+
+
+@app.post("/api/briefings/comments-summary")
+async def api_briefing_comments_summary(request: Request):
+    """Summarize an HN thread's discussion in es-MX. Guarded; never 500s.
+
+    Body: {"hn_id": <an hn_id present in some stored briefing item>}. Rejects
+    an unknown hn_id with 400. Fetches the Algolia thread, strips HTML from the
+    top-level comments (capped), and summarizes what people are discussing. If
+    there are no comments returns {ok:false, error:"sin comentarios"}.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
+    hn_id = str((body or {}).get("hn_id") or "").strip() if isinstance(body, dict) else ""
+    if not _briefing_hn_id_known(hn_id):
+        raise HTTPException(400, "hn_id no reconocido")
+
+    def _work() -> dict:
+        data = _briefing_fetch_hn_item(hn_id)
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "sin comentarios"}
+        texts: list[str] = []
+        for ch in (data.get("children") or []):
+            if not isinstance(ch, dict):
+                continue
+            clean = _strip_html(ch.get("text") or "")
+            if clean:
+                texts.append(clean)
+            if len(texts) >= _MAX_HN_COMMENTS_FETCH:
+                break
+        if not texts:
+            return {"ok": False, "error": "sin comentarios"}
+        joined = "\n\n".join(t[:600] for t in texts)[:8000]
+        from axi import brain  # noqa: PLC0415
+
+        prompt = (
+            "Resume en español de México de qué está hablando la gente en estos "
+            "comentarios de Hacker News: los puntos principales, acuerdos y "
+            "desacuerdos. 4 a 6 oraciones.\n\nCOMENTARIOS:\n" + joined
+        )
+        try:
+            summary = brain.ask(
+                prompt, system=_COMMENTS_SUMMARY_SYSTEM,
+                max_tokens=512, task="narration",
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("comments summary brain call failed for %s", hn_id)
+            return {"ok": False, "error": "No pude resumir los comentarios."}
+        summary = str(summary or "").strip()
+        if not summary or briefing._is_brain_failure(summary):
+            return {"ok": False, "error": "No pude resumir los comentarios."}
+        return {"ok": True, "summary": summary}
+
+    return await asyncio.to_thread(_work)
+
+
 @app.get("/api/reminders")
 def api_reminders_list(status: str = "pending"):
     """List reminders. status='pending' (default) or 'recent' for last 30 days."""

@@ -1126,6 +1126,94 @@ def _default_web_fetch(url: str) -> dict[str, Any]:
     return web_fetch_handler({"url": url})
 
 
+# ─────────────────────────── link-validity check ────────────────────────────
+#
+# Broken links are dropped BEFORE surfacing, but ONLY for non-authoritative
+# (brain-extracted) candidates — feed/Algolia URLs are authoritative (the
+# adapter got them straight from a dated feed/API) so probing them just wastes
+# requests. The check is a cheap GET that reads only a few KB with a short
+# timeout, and is deliberately fail-open: a status <400 or a "reachable but
+# refusing" status (403/405/429) keeps the item; only a definitive 404/410 or a
+# connection error drops it; ANY unexpected error in the probe itself keeps the
+# item (never lose news over a flaky checker).
+
+# Origins whose URLs came straight from a dated feed/API — authoritative, so
+# they are never probed.
+_AUTHORITATIVE_ORIGINS = frozenset({"feed", "hn_algolia"})
+
+# Definitive "this URL is gone" statuses → drop the item.
+_BROKEN_STATUSES = frozenset({404, 410})
+# "Reachable but refusing a bare probe" → keep (the link works in a browser).
+_REACHABLE_REFUSING_STATUSES = frozenset({403, 405, 429})
+
+
+def _default_link_probe(url: str, *, timeout: float = 4.0) -> int:
+    """Lightweight reachability GET: return the HTTP status, or -1 on conn error.
+
+    Reads only a few KB then closes — we only care whether the URL resolves,
+    not its body. An HTTP error status (404/403/…) is returned as its code; a
+    transport-level failure (DNS, refused, timeout, reset) returns -1 so the
+    caller can treat it as "broken" distinctly from a real HTTP status.
+    """
+    import urllib.error  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    req = urllib.request.Request(
+        url, method="GET",
+        headers={"User-Agent": "Mozilla/5.0 (compatible; AxiBriefing/1.0)"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read(2048)  # a few KB is enough to confirm the body streams
+            return int(getattr(resp, "status", 0) or 200)
+    except urllib.error.HTTPError as e:  # a real HTTP status (404, 403, …)
+        return int(getattr(e, "code", 0) or 0)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return -1  # transport-level failure → connection error
+
+
+def _link_is_reachable(url: str, probe: Callable[[str], int]) -> bool:
+    """True = keep the item. False = drop it (proven broken).
+
+    `probe(url)->int` returns an HTTP status (or -1 for a connection error).
+    Rule: status <400 OR in {403,405,429} → reachable (keep); {404,410} or a
+    connection error (-1) → broken (drop); anything else defaults to keep.
+    Fail-open: if the probe itself raises, keep the item.
+    """
+    try:
+        status = int(probe(url))
+    except Exception:  # noqa: BLE001 — a flaky checker must never lose news
+        return True
+    if status in _REACHABLE_REFUSING_STATUSES:
+        return True
+    if status < 0 or status in _BROKEN_STATUSES:
+        return False
+    if status < 400:
+        return True
+    # Any other status (e.g. a transient 5xx) is not a definitive "gone" → keep.
+    return True
+
+
+def _validate_candidate_links(
+    cands: list[dict[str, Any]], probe: Callable[[str], int],
+) -> list[dict[str, Any]]:
+    """Drop candidates with a broken link — skipping authoritative feed origins.
+
+    Feed/Algolia candidates (`origin` in `_AUTHORITATIVE_ORIGINS`) are trusted
+    as-is and never probed. Everything else (brain-extracted links) is checked
+    with `probe`; broken ones are dropped, the rest kept.
+    """
+    out: list[dict[str, Any]] = []
+    for c in cands:
+        origin = str(c.get("origin") or "").strip().lower()
+        if origin in _AUTHORITATIVE_ORIGINS:
+            out.append(c)
+            continue
+        if _link_is_reachable(str(c.get("url") or ""), probe):
+            out.append(c)
+    return out
+
+
 # ───────────────────────── freshness + dated adapters ───────────────────────
 #
 # Boletín v2: candidates come from DATED feeds/APIs and are filtered to fresh
@@ -1249,6 +1337,7 @@ def run_multi_source_briefing(
     http_get: Callable[[str], bytes] | None = None,
     feed_fetch: Callable[..., list[Any]] | None = None,
     ask_with_tools: Callable[..., str] | None | object = _USE_DEFAULT_BRAIN,
+    link_probe: Callable[[str], int] | None = None,
     today: str | None = None,
     now: datetime | None = None,
     max_per_source: int = 18,
@@ -1334,9 +1423,13 @@ def run_multi_source_briefing(
             continue
         # Tag language + ensure a summary field on every candidate (HN has none)
         # so the translation step and cluster rendering have a uniform shape.
+        # `origin` records provenance so the link-validity check can SKIP
+        # authoritative feed/Algolia URLs (only brain-extracted links are probed).
+        origin = "hn_algolia" if adapter == "hn_algolia" else "feed"
         for c in raw_cands:
             c.setdefault("lang", lang)
             c.setdefault("summary", "")
+            c.setdefault("origin", origin)
         fresh = [
             c for c in raw_cands
             if _is_fresh(c.get("published"), today=today_date, tz=tz)
@@ -1350,6 +1443,12 @@ def run_multi_source_briefing(
         candidates.extend(fresh)
 
     candidates = _dedup_candidates(candidates)
+
+    # Drop broken links before surfacing — but only for non-authoritative
+    # (brain-extracted) URLs; feed/Algolia URLs are trusted and never probed.
+    # Fail-open by contract (see `_link_is_reachable`), so this never loses news.
+    candidates = _validate_candidate_links(
+        candidates, link_probe or _default_link_probe)
 
     if not candidates:
         summary = _freshness_summary(

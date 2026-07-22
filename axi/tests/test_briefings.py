@@ -249,3 +249,152 @@ def test_chat_creates_agentic_reminder(client, fake_scheduler, monkeypatch):
     assert rem.action_kind == "agentic"
     assert "noticias" in rem.action_prompt
     assert rem.recurrence == "0 8 * * *"
+
+
+# ── on-demand summary endpoints (boletín v2 final slice) ─────────────────────
+#
+# Two POST endpoints let the reader expand a stored briefing item on demand:
+# an article summary (fetch + brain, es-MX) and an HN comments summary. Both
+# are SSRF/guard-protected: the url / hn_id must belong to a STORED briefing
+# item, else 400. Fetch/brain/HTTP are injected — no network, no real LLM.
+
+def _seed_briefing_item(item: dict) -> str:
+    """Create an agentic reminder carrying `item` in its stored result meta."""
+    from lifeos import reminders
+    ag = reminders.create(
+        when=datetime.now(timezone.utc) + timedelta(hours=1),
+        message="noticias", recurrence="0 8 * * *",
+        action_kind="agentic", action_prompt="tráeme noticias",
+    )
+    reminders.set_last_result(
+        ag.id, result="## body",
+        meta=json.dumps({"title": "T", "summary": "S", "items": [item]}),
+    )
+    return ag.id
+
+
+# article-summary ------------------------------------------------------------
+
+def test_article_summary_rejects_url_not_in_any_stored_item(client):
+    _seed_briefing_item({"title": "i", "url": "https://good.example/a"})
+    r = client.post("/api/briefings/article-summary",
+                    json={"url": "https://evil.example/ssrf"})
+    assert r.status_code == 400
+
+
+def test_article_summary_accepts_stored_url_and_summarizes_es(client, monkeypatch):
+    from axi import brain, dashboard
+    _seed_briefing_item({"title": "i", "url": "https://good.example/a"})
+    monkeypatch.setattr(dashboard, "_briefing_read_article",
+                        lambda url: "Full english article body about GPUs.")
+    seen: dict = {}
+
+    def _fake_ask(p, **k):
+        seen["prompt"] = p
+        return "Resumen en español del artículo."
+
+    monkeypatch.setattr(brain, "ask", _fake_ask)
+    r = client.post("/api/briefings/article-summary",
+                    json={"url": "https://good.example/a"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["summary"] == "Resumen en español del artículo."
+    assert "GPUs" in seen["prompt"]  # article text was handed to the brain
+
+
+def test_article_summary_graceful_when_fetch_fails(client, monkeypatch):
+    from axi import brain, dashboard
+    _seed_briefing_item({"title": "i", "url": "https://good.example/a"})
+    monkeypatch.setattr(dashboard, "_briefing_read_article", lambda url: "")
+    monkeypatch.setattr(brain, "ask",
+                        lambda *a, **k: pytest.fail("brain called despite empty fetch"))
+    r = client.post("/api/briefings/article-summary",
+                    json={"url": "https://good.example/a"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body.get("error")
+
+
+def test_article_summary_graceful_when_brain_raises(client, monkeypatch):
+    from axi import brain, dashboard
+    _seed_briefing_item({"title": "i", "url": "https://good.example/a"})
+    monkeypatch.setattr(dashboard, "_briefing_read_article", lambda url: "body text")
+
+    def boom(*a, **k):
+        raise RuntimeError("brain down")
+
+    monkeypatch.setattr(brain, "ask", boom)
+    r = client.post("/api/briefings/article-summary",
+                    json={"url": "https://good.example/a"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+
+
+# comments-summary -----------------------------------------------------------
+
+def test_comments_summary_rejects_unknown_hn_id(client):
+    _seed_briefing_item({"title": "i", "url": "https://x.example", "hn_id": "111"})
+    r = client.post("/api/briefings/comments-summary", json={"hn_id": "999"})
+    assert r.status_code == 400
+
+
+def test_comments_summary_strips_html_and_summarizes_es(client, monkeypatch):
+    from axi import brain, dashboard
+    _seed_briefing_item({"title": "i", "url": "https://x.example", "hn_id": "111"})
+    fake_item = {
+        "children": [
+            {"text": "<p>I <i>love</i> this &amp; agree</p>", "author": "a"},
+            {"text": "Second <a href='x'>comment</a> here", "author": "b"},
+        ]
+    }
+    monkeypatch.setattr(dashboard, "_briefing_fetch_hn_item", lambda hid: fake_item)
+    seen: dict = {}
+
+    def _fake_ask(p, **k):
+        seen["prompt"] = p
+        return "La gente debate sobre GPUs."
+
+    monkeypatch.setattr(brain, "ask", _fake_ask)
+    r = client.post("/api/briefings/comments-summary", json={"hn_id": "111"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["summary"] == "La gente debate sobre GPUs."
+    # HTML tags were stripped before hitting the brain; entities decoded.
+    assert "<" not in seen["prompt"]
+    assert "love" in seen["prompt"] and "agree" in seen["prompt"]
+
+
+def test_comments_summary_no_comments_returns_sin_comentarios(client, monkeypatch):
+    from axi import brain, dashboard
+    _seed_briefing_item({"title": "i", "url": "https://x.example", "hn_id": "111"})
+    monkeypatch.setattr(dashboard, "_briefing_fetch_hn_item", lambda hid: {"children": []})
+    monkeypatch.setattr(brain, "ask",
+                        lambda *a, **k: pytest.fail("brain called with no comments"))
+    r = client.post("/api/briefings/comments-summary", json={"hn_id": "111"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"] == "sin comentarios"
+
+
+def test_comments_summary_graceful_when_fetch_fails(client, monkeypatch):
+    from axi import dashboard
+    _seed_briefing_item({"title": "i", "url": "https://x.example", "hn_id": "111"})
+    monkeypatch.setattr(dashboard, "_briefing_fetch_hn_item", lambda hid: None)
+    r = client.post("/api/briefings/comments-summary", json={"hn_id": "111"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+
+
+# template renders the on-demand buttons -------------------------------------
+
+def test_briefings_template_has_on_demand_summary_buttons(client):
+    r = client.get("/briefings")
+    assert r.status_code == 200
+    assert "Ver resumen completo" in r.text
+    assert "Ver resumen de comentarios" in r.text
+    assert "/api/briefings/article-summary" in r.text
+    assert "/api/briefings/comments-summary" in r.text
