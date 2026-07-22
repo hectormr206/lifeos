@@ -14,7 +14,7 @@ import 'package:lifeos/core/api/api_providers.dart';
 import 'support/fake_token_store.dart';
 
 void main() {
-  testWidgets('LifeOSApp boots to the home screen showing the unpaired connect CTA', (tester) async {
+  testWidgets('LifeOSApp boots to the home screen (app-shell: no connect CTA)', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
@@ -24,6 +24,8 @@ void main() {
     await tester.pump();
 
     expect(find.text('LifeOS'), findsWidgets);
-    expect(find.text('Conectar con tu motor'), findsOneWidget);
+    // App-shell slice: the "Conectar con tu motor" CTA was removed from home.
+    expect(find.text('Conectar con tu motor'), findsNothing);
+    expect(find.text('Aún no está conectado a ningún motor.'), findsOneWidget);
   });
 }

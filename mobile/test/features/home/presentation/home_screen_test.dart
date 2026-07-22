@@ -24,7 +24,7 @@ GoRouter _routerToHome() => GoRouter(
     );
 
 void main() {
-  testWidgets('shows the connect CTA when unpaired', (tester) async {
+  testWidgets('app-shell: no "Conectar con tu motor" CTA when unpaired', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
@@ -33,7 +33,9 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Conectar con tu motor'), findsOneWidget);
+    // App-shell slice: pairing was removed from the home UI.
+    expect(find.text('Conectar con tu motor'), findsNothing);
+    expect(find.text('Aún no está conectado a ningún motor.'), findsOneWidget);
   });
 
   testWidgets('shows the connected view with a reachable indicator when paired', (tester) async {

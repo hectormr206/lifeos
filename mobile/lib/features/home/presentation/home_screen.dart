@@ -26,8 +26,8 @@ class HomeScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
-            tooltip: 'Conexión',
-            onPressed: () => context.push('/settings/connection'),
+            tooltip: 'Ajustes',
+            onPressed: () => context.push('/settings'),
           ),
         ],
       ),
@@ -35,7 +35,7 @@ class HomeScreen extends ConsumerWidget {
         child: SingleChildScrollView(
           child: switch (connection) {
             ConnectionPaired(engineUrl: final engineUrl) => _ConnectedView(engineUrl: engineUrl),
-            _ => _UnpairedView(onConnect: () => context.push('/settings/connection')),
+            _ => const _UnpairedView(),
           },
         ),
       ),
@@ -44,15 +44,18 @@ class HomeScreen extends ConsumerWidget {
 }
 
 class _UnpairedView extends ConsumerWidget {
-  const _UnpairedView({required this.onConnect});
-
-  final VoidCallback onConnect;
+  const _UnpairedView();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Roadmap SLICE 1: the on-device model needs no engine connection. Once the
     // weights are installed we offer a one-tap route straight into the offline
     // chat; until then we route to the model manager to download first.
+    //
+    // App-shell slice: the "Conectar con tu motor" CTA was removed from the
+    // home UI — engine pairing is now reached only from Ajustes (and stays
+    // wired under the hood for the OTA self-update). The offline local-model
+    // path below is the sole home CTA when unpaired.
     final localModelInstalled = ref.watch(localModelManagerProvider).installed;
 
     return Column(
@@ -60,11 +63,6 @@ class _UnpairedView extends ConsumerWidget {
       children: [
         const Text('Aún no está conectado a ningún motor.'),
         const SizedBox(height: 16),
-        ElevatedButton(
-          onPressed: onConnect,
-          child: const Text('Conectar con tu motor'),
-        ),
-        const SizedBox(height: 12),
         if (localModelInstalled)
           // Primary offline path: ensure local mode is on, then open the chat.
           FilledButton.icon(

@@ -126,6 +126,21 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+  # Generates the Android launcher icons (all mipmap densities + adaptive
+  # icon) from the Axi axolotl mark. App-shell slice. Run with:
+  #   dart run flutter_launcher_icons
+  flutter_launcher_icons: ^0.14.4
+
+# App-shell slice: Android launcher icon generated from the Axi mark. The
+# adaptive foreground uses the maskable variant (safe-zone padded) over a
+# clean white background; the legacy/monochrome icon uses the full mark.
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/branding/axi-512.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/branding/axi-512-maskable.png"
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
@@ -136,6 +151,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # App-shell slice: the Axi mark, shown in Settings > Acerca de.
+  assets:
+    - assets/branding/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

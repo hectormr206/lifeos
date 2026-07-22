@@ -24,7 +24,10 @@ import 'features/local_model/presentation/local_model_screen.dart';
 import 'features/meetings/presentation/meeting_detail_screen.dart';
 import 'features/meetings/presentation/meetings_screen.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
+import 'features/settings/presentation/settings_hub_screen.dart';
 import 'features/settings/presentation/settings_screen.dart';
+import 'theme/lifeos_theme.dart';
+import 'theme/theme_providers.dart';
 
 /// App shell routing (M1 slice 1). Design D1 did not pin a router package;
 /// `go_router` is the de-facto Flutter-recommended choice and is what this
@@ -47,11 +50,12 @@ import 'features/settings/presentation/settings_screen.dart';
 /// way — read-only surfaces that mirror the laptop dashboard's Boletines
 /// panel and daily digest card.
 ///
-/// Settings slice: `/settings` (the engine config editor, laptop `/config`
-/// parity) is gated behind pairing the same way. Deliberately a DIFFERENT
-/// path from the pre-existing `/settings/connection` (pairing setup) — the
-/// exact-match `loc == '/settings'` check below never matches
-/// `/settings/connection`, so both routes coexist without conflict.
+/// App-shell slice: `/settings` is the offline-reachable Settings hub
+/// (appearance/model/updates/about) and is NOT pairing-gated. The engine
+/// config editor (laptop `/config` parity) relocated to `/settings/engine`,
+/// which IS gated behind pairing via the exact-match `loc == '/settings/engine'`
+/// check below. `/settings/connection` (pairing setup) stays a distinct,
+/// ungated route, so all three coexist without conflict.
 ///
 /// Graph browser slice: `/graph` (search) and `/graph/:id` (node detail —
 /// laptop `/brain3d` parity, minus the 3D) are gated behind pairing the
@@ -71,7 +75,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           loc == '/insights' ||
           loc == '/briefings' ||
           loc == '/digest' ||
-          loc == '/settings' ||
+          loc == '/settings/engine' ||
           loc.startsWith('/graph') ||
           loc.startsWith('/meetings');
       if (needsPairing && ref.read(connectionNotifierProvider) is! ConnectionPaired) {
@@ -100,15 +104,20 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/insights', builder: (context, state) => const InsightsScreen()),
       GoRoute(path: '/briefings', builder: (context, state) => const BriefingsScreen()),
       GoRoute(path: '/digest', builder: (context, state) => const DigestScreen()),
-      GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
-      // Roadmap SLICE 1: on-device model manager. Deliberately NOT gated
-      // behind pairing (the exact-match `loc == '/settings'` check above never
-      // matches this sub-path) so it is reachable offline/unpaired.
+      // App-shell slice: `/settings` is now the offline-reachable Settings hub
+      // (appearance, model, updates, about). Deliberately NOT pairing-gated (the
+      // exact-match `loc == '/settings'` was removed from the gate above) so the
+      // light/dark toggle + "Acerca de" work with no engine connection.
+      GoRoute(path: '/settings', builder: (context, state) => const SettingsHubScreen()),
+      // The engine config editor (laptop `/config` parity) relocated here from
+      // `/settings`; still gated behind pairing via `loc == '/settings/engine'`.
+      GoRoute(path: '/settings/engine', builder: (context, state) => const SettingsScreen()),
+      // Roadmap SLICE 1: on-device model manager. Not pairing-gated (no gate
+      // entry matches this sub-path) so it is reachable offline/unpaired.
       GoRoute(path: '/settings/local-model', builder: (context, state) => const LocalModelScreen()),
-      // Self-hosted OTA app update. Deliberately NOT gated behind pairing
-      // (same exact-match rationale as `/settings/local-model` above) so the
-      // updates screen always renders; a check just reports "sin conexión"
-      // when unpaired.
+      // Self-hosted OTA app update. Not pairing-gated (same rationale as
+      // `/settings/local-model` above) so the updates screen always renders;
+      // a check just reports "sin conexión" when unpaired.
       GoRoute(path: '/settings/updates', builder: (context, state) => const AppUpdatesScreen()),
       GoRoute(path: '/graph', builder: (context, state) => const GraphBrowserScreen()),
       GoRoute(
@@ -141,7 +150,9 @@ class LifeOSApp extends ConsumerWidget {
     ref.watch(appUpdateLaunchCheckProvider);
     return MaterialApp.router(
       title: 'LifeOS',
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal)),
+      theme: lifeosLightTheme,
+      darkTheme: lifeosDarkTheme,
+      themeMode: ref.watch(themeModeProvider),
       routerConfig: router,
     );
   }

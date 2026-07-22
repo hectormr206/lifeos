@@ -23,7 +23,7 @@
          on the system dialog (unavoidable for a sideloaded app). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
-        android:label="lifeos"
+        android:label="LifeOS"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <!-- Roadmap SLICE 1: OpenCL / vendor GPU libs used by flutter_gemma's

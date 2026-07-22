@@ -1,8 +1,8 @@
-// Proves /settings (the engine config editor, laptop /config parity) is
-// gated behind pairing (spec mobile-app-shell), same pattern as /chat,
-// /domains, /body, /reminders, /insights, /briefings, /digest. NOTE: this is
-// distinct from the pre-existing `/settings/connection` route (pairing
-// setup) — `/settings` is the config-editing screen added this batch.
+// App-shell slice routing:
+//   * `/settings` is the offline-reachable Settings HUB (appearance, model,
+//     updates, about) — NOT pairing-gated.
+//   * `/settings/engine` is the engine config editor (laptop /config parity),
+//     relocated from `/settings` and still pairing-gated.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/app.dart';
@@ -23,7 +23,7 @@ class _FakeSettingsRepository implements SettingsRepository {
 }
 
 void main() {
-  testWidgets('unpaired: navigating to /settings redirects to the connection screen', (tester) async {
+  testWidgets('unpaired: /settings renders the hub (not gated)', (tester) async {
     final container = ProviderContainer(overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())]);
     addTearDown(container.dispose);
     await tester.pumpWidget(UncontrolledProviderScope(container: container, child: const LifeOSApp()));
@@ -32,10 +32,24 @@ void main() {
     container.read(goRouterProvider).go('/settings');
     await tester.pumpAndSettle();
 
+    // Hub is reachable offline: shows the appearance section, no redirect.
+    expect(find.text('Apariencia'), findsOneWidget);
+    expect(find.text('Conexión'), findsNothing);
+  });
+
+  testWidgets('unpaired: /settings/engine redirects to the connection screen', (tester) async {
+    final container = ProviderContainer(overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())]);
+    addTearDown(container.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(container: container, child: const LifeOSApp()));
+    await tester.pump();
+
+    container.read(goRouterProvider).go('/settings/engine');
+    await tester.pumpAndSettle();
+
     expect(find.text('Conexión'), findsOneWidget);
   });
 
-  testWidgets('paired: navigating to /settings renders the settings screen', (tester) async {
+  testWidgets('paired: /settings/engine renders the engine config editor', (tester) async {
     final store = FakeTokenStore(
       const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
     );
@@ -48,9 +62,10 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    container.read(goRouterProvider).go('/settings');
+    container.read(goRouterProvider).go('/settings/engine');
     await tester.pumpAndSettle();
 
-    expect(find.text('Ajustes'), findsOneWidget);
+    // The config editor (empty fake schema) — distinct from the hub.
+    expect(find.text('No hay campos de configuración disponibles.'), findsOneWidget);
   });
 }
