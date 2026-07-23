@@ -87,13 +87,12 @@ class _UnpairedView extends ConsumerWidget {
             icon: const Icon(Icons.offline_bolt_outlined),
             label: Text(l10n.homeUseLocalModel),
           ),
-        const SizedBox(height: 12),
-        // "Mi vida" is fully on-device, so it is reachable even unpaired.
-        OutlinedButton.icon(
-          onPressed: () => context.push('/mi-vida'),
-          icon: const Icon(Icons.auto_stories_outlined),
-          label: Text(l10n.homeMyLife),
-        ),
+        const SizedBox(height: 24),
+        // On-device-first: the SAME full grouped menu the paired view shows, so
+        // every route (records, Axi, notices, system) is reachable at startup —
+        // not just chat + Mi vida.
+        const _HomeSections(),
+        const SizedBox(height: 24),
       ],
     );
   }
@@ -145,105 +144,119 @@ class _ConnectedView extends ConsumerWidget {
           label: Text(l10n.homeTalkToAxi),
         ),
         const SizedBox(height: 24),
-        // Everything below is grouped into labeled sections so that viewing
-        // records ("Tus registros") is obvious and prominent, and the
-        // system/plumbing entries sink to the bottom. Constrained to the same
-        // 340-wide column as the update banner for a tidy vertical rhythm.
-        SizedBox(
-          width: 340,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 1) Your records — the most prominent group.
-              _SectionHeader(label: l10n.homeSectionRecords),
-              // "Mi vida" is the primary records entry: a filled tonal card
-              // with a subtitle so it clearly stands out from the rest.
-              _RecordCard(
-                icon: Icons.auto_stories_outlined,
-                title: l10n.homeMyLife,
-                subtitle: l10n.homeMyLifeSubtitle,
-                onTap: () => context.push('/mi-vida'),
-                prominent: true,
-              ),
-              const SizedBox(height: 8),
-              // Per-domain entry point: browse/add records by category.
-              _RecordCard(
-                icon: Icons.dashboard_outlined,
-                title: l10n.homeMyData,
-                subtitle: l10n.homeMyDataSubtitle,
-                onTap: () => context.push('/domains'),
-              ),
-
-              // 2) Axi — the living agent surfaces.
-              _SectionHeader(label: l10n.homeSectionAxi),
-              _NavButton(
-                icon: Icons.favorite_border,
-                label: l10n.homeHowIsAxi,
-                onPressed: () => context.push('/body'),
-              ),
-              const SizedBox(height: 12),
-              _NavButton(
-                icon: Icons.hub_outlined,
-                label: l10n.homeBrain,
-                onPressed: () => context.push('/graph'),
-              ),
-              const SizedBox(height: 12),
-              _NavButton(
-                icon: Icons.groups_outlined,
-                label: l10n.homeMeetings,
-                onPressed: () => context.push('/meetings'),
-              ),
-
-              // 3) Notices & summaries.
-              _SectionHeader(label: l10n.homeSectionNotices),
-              _NavButton(
-                icon: Icons.notifications_outlined,
-                label: l10n.homeReminders,
-                onPressed: () => context.push('/reminders'),
-              ),
-              const SizedBox(height: 12),
-              _NavButton(
-                icon: Icons.insights_outlined,
-                label: l10n.homeSummary,
-                onPressed: () => context.push('/insights'),
-              ),
-              const SizedBox(height: 12),
-              _NavButton(
-                icon: Icons.campaign_outlined,
-                label: l10n.homeBulletins,
-                onPressed: () => context.push('/briefings'),
-              ),
-              const SizedBox(height: 12),
-              _NavButton(
-                icon: Icons.today_outlined,
-                label: l10n.homeTodaySummary,
-                onPressed: () => context.push('/digest'),
-              ),
-
-              // 4) Settings & system — least prominent, at the bottom.
-              _SectionHeader(label: l10n.homeSectionSystem),
-              _NavButton(
-                icon: Icons.tune,
-                label: l10n.homeSettings,
-                onPressed: () => context.push('/settings'),
-              ),
-              const SizedBox(height: 12),
-              _NavButton(
-                icon: Icons.offline_bolt_outlined,
-                label: l10n.homeLocalModel,
-                onPressed: () => context.push('/settings/local-model'),
-              ),
-              const SizedBox(height: 12),
-              _NavButton(
-                icon: Icons.system_update,
-                label: l10n.homeUpdates,
-                onPressed: () => context.push('/settings/updates'),
-              ),
-            ],
-          ),
-        ),
+        // Shared grouped menu (records / Axi / notices / system) — identical to
+        // the on-device home so the two views can never drift apart again.
+        const _HomeSections(),
         const SizedBox(height: 24),
       ],
+    );
+  }
+}
+
+/// The full grouped navigation menu shared by BOTH the on-device (unpaired) and
+/// paired home views, so every route is reachable in either state and the two
+/// can never drift apart. Everything is grouped into labeled sections so that
+/// viewing records ("Tus registros") is obvious and prominent, and the
+/// system/plumbing entries sink to the bottom. Constrained to a 340-wide column
+/// for a tidy vertical rhythm consistent with the rest of the home.
+class _HomeSections extends StatelessWidget {
+  const _HomeSections();
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return SizedBox(
+      width: 340,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1) Your records — the most prominent group.
+          _SectionHeader(label: l10n.homeSectionRecords),
+          // "Mi vida" is the primary records entry: a filled tonal card
+          // with a subtitle so it clearly stands out from the rest.
+          _RecordCard(
+            icon: Icons.auto_stories_outlined,
+            title: l10n.homeMyLife,
+            subtitle: l10n.homeMyLifeSubtitle,
+            onTap: () => context.push('/mi-vida'),
+            prominent: true,
+          ),
+          const SizedBox(height: 8),
+          // Per-domain entry point: browse/add records by category.
+          _RecordCard(
+            icon: Icons.dashboard_outlined,
+            title: l10n.homeMyData,
+            subtitle: l10n.homeMyDataSubtitle,
+            onTap: () => context.push('/domains'),
+          ),
+
+          // 2) Axi — the living agent surfaces.
+          _SectionHeader(label: l10n.homeSectionAxi),
+          _NavButton(
+            icon: Icons.favorite_border,
+            label: l10n.homeHowIsAxi,
+            onPressed: () => context.push('/body'),
+          ),
+          const SizedBox(height: 12),
+          _NavButton(
+            icon: Icons.hub_outlined,
+            label: l10n.homeBrain,
+            onPressed: () => context.push('/graph'),
+          ),
+          const SizedBox(height: 12),
+          _NavButton(
+            icon: Icons.groups_outlined,
+            label: l10n.homeMeetings,
+            onPressed: () => context.push('/meetings'),
+          ),
+
+          // 3) Notices & summaries.
+          _SectionHeader(label: l10n.homeSectionNotices),
+          _NavButton(
+            icon: Icons.notifications_outlined,
+            label: l10n.homeReminders,
+            onPressed: () => context.push('/reminders'),
+          ),
+          const SizedBox(height: 12),
+          _NavButton(
+            icon: Icons.insights_outlined,
+            label: l10n.homeSummary,
+            onPressed: () => context.push('/insights'),
+          ),
+          const SizedBox(height: 12),
+          _NavButton(
+            icon: Icons.campaign_outlined,
+            label: l10n.homeBulletins,
+            onPressed: () => context.push('/briefings'),
+          ),
+          const SizedBox(height: 12),
+          _NavButton(
+            icon: Icons.today_outlined,
+            label: l10n.homeTodaySummary,
+            onPressed: () => context.push('/digest'),
+          ),
+
+          // 4) Settings & system — least prominent, at the bottom.
+          _SectionHeader(label: l10n.homeSectionSystem),
+          _NavButton(
+            icon: Icons.tune,
+            label: l10n.homeSettings,
+            onPressed: () => context.push('/settings'),
+          ),
+          const SizedBox(height: 12),
+          _NavButton(
+            icon: Icons.offline_bolt_outlined,
+            label: l10n.homeLocalModel,
+            onPressed: () => context.push('/settings/local-model'),
+          ),
+          const SizedBox(height: 12),
+          _NavButton(
+            icon: Icons.system_update,
+            label: l10n.homeUpdates,
+            onPressed: () => context.push('/settings/updates'),
+          ),
+        ],
+      ),
     );
   }
 }

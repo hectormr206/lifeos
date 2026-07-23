@@ -23,6 +23,8 @@ GoRouter _routerToHome() => GoRouter(
         GoRoute(path: '/chat', builder: (context, state) => const Scaffold(body: Text('CHAT'))),
         GoRoute(path: '/mi-vida', builder: (context, state) => const Scaffold(body: Text('MI VIDA'))),
         GoRoute(path: '/domains', builder: (context, state) => const Scaffold(body: Text('DOMAINS'))),
+        GoRoute(path: '/reminders', builder: (context, state) => const Scaffold(body: Text('REMINDERS'))),
+        GoRoute(path: '/settings', builder: (context, state) => const Scaffold(body: Text('SETTINGS'))),
       ],
     );
 
@@ -104,7 +106,8 @@ void main() {
     expect(find.text('Hablar con Axi'), findsOneWidget);
   });
 
-  testWidgets('hides the record entries ("Mi vida" / "Registrar por categoría") when unpaired',
+  testWidgets(
+      'on-device (unpaired): shows the full grouped menu — four section headers + both record entries',
       (tester) async {
     await tester.pumpWidget(
       ProviderScope(
@@ -114,12 +117,19 @@ void main() {
     );
     await tester.pump();
 
-    // The renamed per-category entry only appears in the paired view.
-    expect(find.text('Registrar por categoría'), findsNothing);
-    // Old label is gone entirely.
+    // All four section headers render on the on-device home now.
+    expect(find.text('Tus registros'), findsOneWidget);
+    expect(find.text('Axi'), findsOneWidget);
+    expect(find.text('Avisos y resúmenes'), findsOneWidget);
+    expect(find.text('Ajustes y sistema'), findsOneWidget);
+
+    // Both record entries with their subtitles.
+    expect(find.text('Mi vida'), findsOneWidget);
+    expect(find.text('Todo lo que registras, por persona'), findsOneWidget);
+    expect(find.text('Registrar por categoría'), findsOneWidget);
+    expect(find.text('Salud, finanzas, ejercicio, relaciones…'), findsOneWidget);
+    // The old flat label is gone.
     expect(find.text('Mis datos'), findsNothing);
-    // "Tus registros" section header is part of the connected view only.
-    expect(find.text('Tus registros'), findsNothing);
   });
 
   testWidgets('shows the grouped "Tus registros" section with both record entries when paired',
@@ -202,7 +212,8 @@ void main() {
     expect(find.text('DOMAINS'), findsOneWidget);
   });
 
-  testWidgets('hides the "visible soul" CTAs (body/reminders/insights) when unpaired', (tester) async {
+  testWidgets('on-device (unpaired): shows the "visible soul" CTAs (body/reminders/insights)',
+      (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
@@ -211,9 +222,9 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('¿Cómo está Axi?'), findsNothing);
-    expect(find.text('Recordatorios'), findsNothing);
-    expect(find.text('Resumen'), findsNothing);
+    expect(find.text('¿Cómo está Axi?'), findsOneWidget);
+    expect(find.text('Recordatorios'), findsOneWidget);
+    expect(find.text('Resumen'), findsOneWidget);
   });
 
   testWidgets('shows the "visible soul" CTAs (body/reminders/insights) when paired', (tester) async {
@@ -237,7 +248,8 @@ void main() {
     expect(find.text('Resumen'), findsOneWidget);
   });
 
-  testWidgets('hides the "Axi intelligence" CTAs (boletines/digest) when unpaired', (tester) async {
+  testWidgets('on-device (unpaired): shows the "Axi intelligence" CTAs (boletines/digest)',
+      (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
@@ -246,8 +258,8 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Boletines'), findsNothing);
-    expect(find.text('Resumen de hoy'), findsNothing);
+    expect(find.text('Boletines'), findsOneWidget);
+    expect(find.text('Resumen de hoy'), findsOneWidget);
   });
 
   testWidgets('shows the "Axi intelligence" CTAs (boletines/digest) when paired', (tester) async {
@@ -270,7 +282,7 @@ void main() {
     expect(find.text('Resumen de hoy'), findsOneWidget);
   });
 
-  testWidgets('hides the "Ajustes" CTA when unpaired', (tester) async {
+  testWidgets('on-device (unpaired): shows the "Ajustes" CTA', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
@@ -279,7 +291,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Ajustes'), findsNothing);
+    expect(find.text('Ajustes'), findsOneWidget);
   });
 
   testWidgets('shows the "Ajustes" CTA when paired', (tester) async {
@@ -301,7 +313,7 @@ void main() {
     expect(find.text('Ajustes'), findsOneWidget);
   });
 
-  testWidgets('hides the "Reuniones" CTA when unpaired', (tester) async {
+  testWidgets('on-device (unpaired): shows the "Reuniones" CTA', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
@@ -310,7 +322,34 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Reuniones'), findsNothing);
+    expect(find.text('Reuniones'), findsOneWidget);
+  });
+
+  testWidgets('on-device (unpaired): key routes are reachable from the grouped menu',
+      (tester) async {
+    // "Mi vida" (records), "Registrar por categoría" (/domains),
+    // "Recordatorios" (/reminders) and "Ajustes" (/settings) all navigate.
+    for (final entry in const [
+      ('Mi vida', 'MI VIDA'),
+      ('Registrar por categoría', 'DOMAINS'),
+      ('Recordatorios', 'REMINDERS'),
+      ('Ajustes', 'SETTINGS'),
+    ]) {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
+          child: _localized(_routerToHome()),
+        ),
+      );
+      await tester.pump();
+
+      await tester.ensureVisible(find.text(entry.$1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(entry.$1));
+      await tester.pumpAndSettle();
+
+      expect(find.text(entry.$2), findsOneWidget, reason: 'route for ${entry.$1}');
+    }
   });
 
   testWidgets('shows the "Reuniones" CTA when paired', (tester) async {
