@@ -81,19 +81,24 @@ void main() {
   final now = DateTime(2026, 7, 22, 9);
   final today = DateTime(2026, 7, 22, 6);
 
-  test('generates a grouped briefing WITHOUT loading the model or summarizing', () async {
+  test('groups sources and never summarizes; same-language sources need no model', () async {
     final engine = FakeLocalLlmEngine(installed: true);
     final fetcher = FakeSourceFetcher(bodies: {
       'https://a.com/rss': _datedRss('Fuente A', 'Noticia A1', today),
       'https://b.com/rss': _datedRss('Fuente B', 'Noticia B1', today),
-      hnFrontPageUrl: _hnFrontPage(today),
+      hnFrontPageUrl: '{"hits":[]}',
     });
     final prefs = FakeMorningBriefingPreferences(
       initialSources: ['https://a.com/rss', 'https://b.com/rss'],
     );
     final notifications = FakeBriefingNotifications();
     final container = _container(
-        engine: engine, fetcher: fetcher, prefs: prefs, notifications: notifications, now: now);
+        engine: engine,
+        fetcher: fetcher,
+        prefs: prefs,
+        notifications: notifications,
+        now: now,
+        languageCode: 'es');
     final notifier = container.read(morningBriefingNotifierProvider.notifier);
     await notifier.ready;
 
@@ -101,11 +106,11 @@ void main() {
 
     final state = container.read(morningBriefingNotifierProvider);
     expect(state.phase, BriefingPhase.done);
-    expect(engine.loadCount, 0, reason: 'generation must NOT load the model');
+    // Sources already in Spanish are detected as same-language → no model work.
+    expect(engine.loadCount, 0, reason: 'Spanish sources need no translation');
     expect(engine.generateCount, 0, reason: 'generation must NOT summarize');
-    // Fuente A, Fuente B and Hacker News each contribute one group.
     expect(state.briefing!.groups.map((g) => g.sourceName),
-        containsAll(['Fuente A', 'Fuente B', 'Hacker News']));
+        containsAll(['Fuente A', 'Fuente B']));
     expect(prefs.saveCount, 1, reason: 'briefing persisted');
     expect(notifications.shown, 1, reason: 'local notification posted');
   });
@@ -195,7 +200,12 @@ void main() {
     });
     final prefs = FakeMorningBriefingPreferences(initialSources: ['https://a.com/rss']);
     final container = _container(
-        engine: engine, fetcher: fetcher, prefs: prefs, notifications: FakeBriefingNotifications(), now: now);
+        engine: engine,
+        fetcher: fetcher,
+        prefs: prefs,
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es');
     final notifier = container.read(morningBriefingNotifierProvider.notifier);
     await notifier.ready;
     await notifier.generate();
@@ -248,11 +258,13 @@ void main() {
     final updated =
         container.read(morningBriefingNotifierProvider).briefing!.articleForKey(hnArticle.key)!;
     expect(updated.commentsSummary, 'Resumen de comentarios');
-    expect(engine.generateSampling.single, (0.2, 20, 0.9));
+    // Generation eagerly translates the (English) HN headline first; the LONGSUM
+    // sampling is the LAST call (the on-demand comments summary).
+    expect(engine.generateSampling.last, (0.2, 20, 0.9));
   });
 
-  group('lazy per-source title translation', () {
-    test('translates a foreign source once, caches it, re-expand is a no-op', () async {
+  group('eager per-source title translation (at generation)', () {
+    test('translates EVERY source up front, caches on the article + persists', () async {
       // Fake engine returns the batched numbered translation for the 2 titles.
       final engine = FakeLocalLlmEngine(
         installed: true,
@@ -281,30 +293,30 @@ void main() {
       );
       final notifier = container.read(morningBriefingNotifierProvider.notifier);
       await notifier.ready;
-      await notifier.generate();
 
-      await notifier.translateSource('English Source');
+      // No expand needed: generation translates all sources.
+      await notifier.generate();
 
       final group = container
           .read(morningBriefingNotifierProvider)
           .briefing!
           .groups
           .firstWhere((g) => g.sourceName == 'English Source');
-      expect(engine.loadCount, 1, reason: 'model loaded on demand for translation');
+      expect(engine.loadCount, 1, reason: 'model loaded once for translation');
       expect(engine.generateCount, 1, reason: 'ONE batched call for the whole source');
       expect(engine.generateSampling.single, (0.3, 20, 0.9), reason: 'light translation sampling');
       expect(group.articles[0].displayTitle, 'El futuro de la IA');
       expect(group.articles[0].translatedTitle, 'El futuro de la IA');
       expect(group.articles[0].displayDescription, 'Un vistazo al futuro');
       expect(group.articles[1].displayTitle, 'Nuevo lanzamiento de Rust');
-      expect(prefs.saveCount, greaterThan(1), reason: 'translations persisted to cache');
 
-      // Re-expand: cached → no extra model call.
-      await notifier.translateSource('English Source');
-      expect(engine.generateCount, 1, reason: 'cached translation is not regenerated');
+      // Persisted WITH the translation cached (survives reload).
+      expect(prefs.saveCount, 1);
+      final reloaded = await prefs.lastBriefing();
+      expect(reloaded!.articles.first.translatedTitle, 'El futuro de la IA');
     });
 
-    test('skips translating a source already in the target language', () async {
+    test('skips a source already in the target language (no model call)', () async {
       final engine = FakeLocalLlmEngine(installed: true);
       final fetcher = FakeSourceFetcher(bodies: {
         'https://es.com/rss': _datedRss('Fuente Española', 'La economía de España crece hoy', today),
@@ -322,8 +334,6 @@ void main() {
       await notifier.ready;
       await notifier.generate();
 
-      await notifier.translateSource('Fuente Española');
-
       expect(engine.loadCount, 0, reason: 'same-language source is NOT translated');
       expect(engine.generateCount, 0);
       final group = container
@@ -334,20 +344,24 @@ void main() {
       expect(group.articles.first.displayTitle, 'La economía de España crece hoy');
     });
 
-    test('falls back to the feed-native title when translation fails', () async {
-      final engine = FakeLocalLlmEngine(installed: true, generateShouldFail: true);
+    test('per-source failure keeps that source native; the rest still translate', () async {
+      // The engine THROWS for the source whose prompt mentions "Explode" and
+      // succeeds for the other — proving per-source failure isolation.
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        reply: (p) =>
+            p.contains('Explode') ? throw Exception('boom') : '1. El futuro de la IA',
+      );
       final fetcher = FakeSourceFetcher(bodies: {
-        'https://en.com/rss': _englishRss(
-          'English Source',
-          [('The Future of AI', 'A look at the future')],
-          today,
-        ),
+        'https://x.com/rss': _englishRss('Broken Source', [('Explode Now', 'boom desc')], today),
+        'https://y.com/rss': _englishRss('Good Source', [('The Future of AI', 'A look')], today),
         hnFrontPageUrl: '{"hits":[]}',
       });
       final container = _container(
         engine: engine,
         fetcher: fetcher,
-        prefs: FakeMorningBriefingPreferences(initialSources: ['https://en.com/rss']),
+        prefs: FakeMorningBriefingPreferences(
+            initialSources: ['https://x.com/rss', 'https://y.com/rss']),
         notifications: FakeBriefingNotifications(),
         now: now,
         languageCode: 'es',
@@ -356,19 +370,43 @@ void main() {
       await notifier.ready;
       await notifier.generate();
 
-      await notifier.translateSource('English Source');
+      final state = container.read(morningBriefingNotifierProvider);
+      expect(state.phase, BriefingPhase.done, reason: 'briefing still completes');
+      final broken = state.briefing!.groups.firstWhere((g) => g.sourceName == 'Broken Source');
+      final good = state.briefing!.groups.firstWhere((g) => g.sourceName == 'Good Source');
+      expect(broken.articles.first.translatedTitle, isNull);
+      expect(broken.articles.first.displayTitle, 'Explode Now', reason: 'native fallback, never blank');
+      expect(good.articles.first.displayTitle, 'El futuro de la IA', reason: 'the rest still translate');
+    });
 
-      final article = container
-          .read(morningBriefingNotifierProvider)
-          .briefing!
-          .groups
-          .firstWhere((g) => g.sourceName == 'English Source')
-          .articles
-          .first;
-      expect(article.translatedTitle, isNull);
-      expect(article.displayTitle, 'The Future of AI', reason: 'never blank — native fallback');
-      expect(container.read(morningBriefingNotifierProvider).isTranslatingSource('English Source'),
-          isFalse);
+    test('cleans raw/escaped HTML out of a description BEFORE translation', () async {
+      // A messy feed (like Simon Willison\'s) that ships escaped HTML in
+      // <description>. The text reaching the model must be plain — no tags —
+      // otherwise the source stays untranslated (the reported bug).
+      final engine = FakeLocalLlmEngine(installed: true, reply: (_) => '1. Titular traducido');
+      final messyRss = '<rss version="2.0"><channel><title>Messy Source</title>'
+          '<item><title>The Future of AI</title>'
+          '<link>https://messy.com/1</link>'
+          '<description>&lt;p&gt;Hello &lt;b&gt;world&lt;/b&gt;&lt;/p&gt;</description>'
+          '<pubDate>${_toRfc822(today.toUtc())}</pubDate></item></channel></rss>';
+      final container = _container(
+        engine: engine,
+        fetcher: FakeSourceFetcher(
+            bodies: {'https://messy.com/rss': messyRss, hnFrontPageUrl: '{"hits":[]}'}),
+        prefs: FakeMorningBriefingPreferences(initialSources: ['https://messy.com/rss']),
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+
+      expect(engine.prompts, isNotEmpty, reason: 'the messy source WAS translated');
+      final prompt = engine.prompts.single;
+      expect(prompt, contains('Hello world'), reason: 'description cleaned to plain text');
+      expect(prompt, isNot(contains('<')), reason: 'no raw tags reach the model');
+      expect(prompt, isNot(contains('&lt;')), reason: 'no escaped tags reach the model');
     });
   });
 

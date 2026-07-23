@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/clock/clock.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../local_model/domain/local_llm_engine.dart';
+import '../../local_model/domain/on_device_translator.dart';
 import '../../local_model/presentation/local_model_providers.dart';
 import '../data/source_content_extractor.dart';
 import '../domain/briefing_assembler.dart';
@@ -53,8 +54,6 @@ class MorningBriefingState {
     this.summarizingComments = const {},
     this.articleErrors = const {},
     this.commentErrors = const {},
-    this.translatingSources = const {},
-    this.translatedSources = const {},
   });
 
   /// Configured news-source URLs (the user adds/removes these).
@@ -86,20 +85,10 @@ class MorningBriefingState {
   /// Per-article on-demand comments-summary error messages.
   final Map<String, String> commentErrors;
 
-  /// Source names whose titles/briefs are being batch-translated right now (the
-  /// accordion shows a subtle "Traduciendo…" state while this is set).
-  final Set<String> translatingSources;
-
-  /// Source names already handled by the lazy translator (translated, skipped
-  /// as same-language, or failed-and-fell-back) — so a re-expand never re-runs
-  /// the model. Reset on every fresh [generate].
-  final Set<String> translatedSources;
-
   bool get isGenerating => phase == BriefingPhase.fetching;
 
   bool isSummarizingArticle(String key) => summarizingArticles.contains(key);
   bool isSummarizingComments(String key) => summarizingComments.contains(key);
-  bool isTranslatingSource(String name) => translatingSources.contains(name);
 
   MorningBriefingState copyWith({
     List<String>? sources,
@@ -112,8 +101,6 @@ class MorningBriefingState {
     Set<String>? summarizingComments,
     Map<String, String>? articleErrors,
     Map<String, String>? commentErrors,
-    Set<String>? translatingSources,
-    Set<String>? translatedSources,
   }) =>
       MorningBriefingState(
         sources: sources ?? this.sources,
@@ -126,8 +113,6 @@ class MorningBriefingState {
         summarizingComments: summarizingComments ?? this.summarizingComments,
         articleErrors: articleErrors ?? this.articleErrors,
         commentErrors: commentErrors ?? this.commentErrors,
-        translatingSources: translatingSources ?? this.translatingSources,
-        translatedSources: translatedSources ?? this.translatedSources,
       );
 }
 
@@ -301,15 +286,21 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     state = state.copyWith(phase: BriefingPhase.fetching, progressLabel: 'Leyendo Hacker News…');
     harvests.add(await _harvestHackerNews(fetcher, extractor));
 
-    final briefing = assembler.assemble(harvests, now: now, generatedAt: now);
+    final assembled = assembler.assemble(harvests, now: now, generatedAt: now);
 
-    if (briefing.isEmpty) {
+    if (assembled.isEmpty) {
       state = state.copyWith(
         phase: BriefingPhase.error,
         error: 'No hay noticias frescas hoy en tus fuentes. Vuelve a intentarlo más tarde.',
       );
       return;
     }
+
+    // Eager, cached translation: render EVERY source into the app language now
+    // (in the background scheduler / "Generar ahora" wait), so the reader never
+    // taps to translate. Best-effort + per-source isolation — a failing source
+    // keeps its original text and the briefing still completes with the rest.
+    final briefing = await _translateAll(assembled, extractor);
 
     state = state.copyWith(
       briefing: briefing,
@@ -320,8 +311,6 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       summarizingComments: const {},
       articleErrors: const {},
       commentErrors: const {},
-      translatingSources: const {},
-      translatedSources: const {},
     );
 
     try {
@@ -449,97 +438,97 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   }
 
   // ---------------------------------------------------------------------------
-  // Lazy per-source title/brief translation (on first accordion expand)
+  // Eager per-source title/brief translation (at generation, cached)
   // ---------------------------------------------------------------------------
 
-  /// Translates one source's titles (+ briefs) into the app language with ONE
-  /// batched on-device call, caching the results on the articles. Called when a
-  /// source's accordion expands for the first time. No-op when already
-  /// translating/handled, when the source's items already look like the target
-  /// language (cheap detection → skipped), or when a prior run already cached a
-  /// translation (instant re-expand, incl. across sessions). On any failure the
-  /// feed-native title is kept (never blank) and the source is marked handled.
-  Future<void> translateSource(String sourceName) async {
-    final briefing = state.briefing;
-    if (briefing == null) return;
-    if (state.isTranslatingSource(sourceName)) return;
-    if (state.translatedSources.contains(sourceName)) return;
-
-    final articles = briefing.articles.where((a) => a.sourceName == sourceName).toList();
-    if (articles.isEmpty) {
-      _markSourceHandled(sourceName);
-      return;
-    }
-    // A cached translation from a prior run (this session or a reloaded cache)
-    // makes the re-expand instant — nothing to do.
-    if (articles.any((a) => (a.translatedTitle ?? '').isNotEmpty)) {
-      _markSourceHandled(sourceName);
-      return;
-    }
-    // Cheap same-language detection: skip translating feeds already in the
-    // target language.
-    final sample = articles.map((a) => '${a.title} ${a.description}').join('\n');
-    if (_looksTargetLanguage(sample, _languageCode)) {
-      _markSourceHandled(sourceName);
-      return;
-    }
-
-    state = state.copyWith(
-      phase: state.phase,
-      briefing: state.briefing,
-      translatingSources: {...state.translatingSources, sourceName},
-    );
+  /// Translates EVERY source's titles + briefs into the app language up front,
+  /// so the reader never has to tap to translate. Sources are translated one at
+  /// a time (one batched model call each) with PER-SOURCE isolation: a source
+  /// that fails, or already looks like the target language, keeps its original
+  /// text while the rest are still translated. Never throws — a catastrophic
+  /// failure degrades the whole briefing to its original (untranslated) text.
+  Future<OnDeviceBriefing> _translateAll(
+    OnDeviceBriefing assembled,
+    SourceContentExtractor extractor,
+  ) async {
     try {
-      await ref.read(localLlmEngineProvider).load();
-      final result = await ref.read(localLlmEngineProvider).generate(
-            _translatePrompt(articles),
-            temperature: translateTemperature,
-            topK: translateTopK,
-            topP: translateTopP,
-          );
-      final parsed = _parseTranslation(result.text);
-      var updated = state.briefing ?? briefing;
-      for (var i = 0; i < articles.length; i++) {
-        final current = updated.articleForKey(articles[i].key);
-        if (current == null) continue;
-        final entry = parsed[i + 1];
-        if (entry == null) continue;
-        final t = entry.$1.trim();
-        final d = entry.$2?.trim() ?? '';
-        if (t.isEmpty) continue; // keep native title on a missing line
-        updated = updated.replaceArticle(
-          current.key,
-          current.copyWith(
-            translatedTitle: t,
-            // Only translate a brief the item actually has.
-            translatedDescription: current.description.isNotEmpty && d.isNotEmpty ? d : null,
-          ),
+      final translator = OnDeviceTranslator(ref.read(localLlmEngineProvider));
+      final code = _languageCode;
+      final sourceNames =
+          assembled.groups.map((g) => g.sourceName).toList(growable: false);
+      var briefing = assembled;
+      for (var i = 0; i < sourceNames.length; i++) {
+        state = state.copyWith(
+          phase: BriefingPhase.fetching,
+          progressLabel: 'Traduciendo noticias ${i + 1} de ${sourceNames.length}…',
         );
+        briefing = await _translateSource(briefing, sourceNames[i], translator, extractor, code);
       }
-      state = state.copyWith(
-        phase: state.phase,
-        briefing: updated,
-        translatingSources: {...state.translatingSources}..remove(sourceName),
-        translatedSources: {...state.translatedSources, sourceName},
-      );
-      _persistBriefing(updated);
+      return briefing;
     } catch (_) {
-      // Fallback: keep the feed-native titles, mark handled so we don't loop.
-      state = state.copyWith(
-        phase: state.phase,
-        briefing: state.briefing,
-        translatingSources: {...state.translatingSources}..remove(sourceName),
-        translatedSources: {...state.translatedSources, sourceName},
-      );
+      // Any unexpected failure: keep the assembled (original-language) briefing.
+      return assembled;
     }
   }
 
-  void _markSourceHandled(String sourceName) {
-    state = state.copyWith(
-      phase: state.phase,
-      briefing: state.briefing,
-      translatedSources: {...state.translatedSources, sourceName},
+  /// Translates one source's articles inside [briefing], returning an updated
+  /// briefing. Cheap same-language sources are skipped (no model call). Each
+  /// description is re-cleaned of raw/escaped HTML before it reaches the model
+  /// (messy feeds like Simon Willison's ship escaped tags in `<description>`),
+  /// so the model gets plain text and translates reliably. Any per-slot miss
+  /// keeps that article's original text (never blank, never dropped).
+  Future<OnDeviceBriefing> _translateSource(
+    OnDeviceBriefing briefing,
+    String sourceName,
+    OnDeviceTranslator translator,
+    SourceContentExtractor extractor,
+    String code,
+  ) async {
+    final articles = briefing.articles.where((a) => a.sourceName == sourceName).toList();
+    if (articles.isEmpty) return briefing;
+
+    // Cheap same-language detection: skip feeds already in the target language.
+    final sample = articles.map((a) => '${a.title} ${a.description}').join('\n');
+    if (_looksTargetLanguage(sample, code)) return briefing;
+
+    // Pack each article as `title ||| cleanBrief` (brief omitted when empty),
+    // cleaning the brief of any raw/escaped HTML first.
+    final inputs = <String>[];
+    final cleaned = <String>[];
+    for (final a in articles) {
+      final brief = extractor.cleanBrief(a.description);
+      cleaned.add(brief);
+      inputs.add(brief.isNotEmpty ? '${a.title} ||| $brief' : a.title);
+    }
+
+    final translated = await translator.translate(
+      inputs,
+      languageCode: code,
+      temperature: translateTemperature,
+      topK: translateTopK,
+      topP: translateTopP,
     );
+
+    var updated = briefing;
+    for (var i = 0; i < articles.length; i++) {
+      final line = translated[i];
+      if (line == null) continue; // keep native text for this slot
+      final parts = line.split('|||');
+      final t = parts[0].trim();
+      if (t.isEmpty) continue; // never blank a title
+      final d = parts.length > 1 ? parts.sublist(1).join('|||').trim() : '';
+      final current = updated.articleForKey(articles[i].key);
+      if (current == null) continue;
+      updated = updated.replaceArticle(
+        current.key,
+        current.copyWith(
+          translatedTitle: t,
+          // Only carry a translated brief when the item actually had one.
+          translatedDescription: cleaned[i].isNotEmpty && d.isNotEmpty ? d : null,
+        ),
+      );
+    }
+    return updated;
   }
 
   /// Cheap language guess for the same-language skip. Returns true when [text]
@@ -569,44 +558,6 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     'the', 'of', 'and', 'to', 'in', 'for', 'is', 'on', 'with', 'that', 'it', 'as', 'are', 'at',
     'by', 'an', 'be', 'this', 'from', 'or', 'was', 'how', 'why', 'new', 'your',
   };
-
-  /// Builds the batched translation prompt: a numbered list of `title ||| brief`
-  /// (the ` ||| brief` omitted when the item has no brief), asking the model to
-  /// preserve the numbering + separator so [_parseTranslation] can map results
-  /// back to items.
-  String _translatePrompt(List<BriefingArticle> articles) {
-    final target = _languageCode == 'en' ? 'English' : 'neutral Spanish';
-    final buffer = StringBuffer();
-    for (var i = 0; i < articles.length; i++) {
-      final a = articles[i];
-      final line = a.description.isNotEmpty ? '${a.title} ||| ${a.description}' : a.title;
-      buffer.writeln('${i + 1}. $line');
-    }
-    return 'Translate each of the following news headlines to $target. '
-        'Keep the exact same numbering (one item per line) and, when a line contains '
-        'the " ||| " separator, translate BOTH sides and keep the " ||| " between them. '
-        'Translate only the text, do not add anything.\n\n$buffer';
-  }
-
-  /// Parses the model's numbered response into `{index: (title, brief?)}`. Lines
-  /// that do not match the `N. …` shape are ignored so a chatty model never
-  /// corrupts the mapping (missing items fall back to the feed-native title).
-  static Map<int, (String, String?)> _parseTranslation(String out) {
-    final map = <int, (String, String?)>{};
-    final lineNo = RegExp(r'^\s*(\d+)[.)]\s*(.*)$');
-    for (final raw in out.split('\n')) {
-      final m = lineNo.firstMatch(raw.trim());
-      if (m == null) continue;
-      final idx = int.parse(m.group(1)!);
-      final rest = m.group(2)!.trim();
-      if (rest.isEmpty) continue;
-      final parts = rest.split('|||');
-      final title = parts[0].trim();
-      final brief = parts.length > 1 ? parts.sublist(1).join('|||').trim() : null;
-      map[idx] = (title, brief);
-    }
-    return map;
-  }
 
   // --- per-item state transitions -------------------------------------------
 

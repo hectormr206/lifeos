@@ -81,4 +81,20 @@ void main() {
     expect(OnDeviceBriefing.decode('not json'), isNull);
     expect(OnDeviceBriefing.decode('[1,2,3]'), isNull);
   });
+
+  test('loads an OLD persisted briefing that has NO translated field (falls back)', () {
+    // A briefing cached before eager translation existed: articles carry no
+    // translatedTitle/translatedDescription. It must still decode, with the
+    // translation null and displayTitle falling back to the feed-native title.
+    const legacy = '{"articles":[{"sourceName":"Fuente","title":"Titular original",'
+        '"url":"https://x.com","description":"Detalle original"}],'
+        '"skippedSources":[],"generatedAt":"2026-07-20T08:30:00.000"}';
+    final briefing = OnDeviceBriefing.decode(legacy);
+    expect(briefing, isNotNull);
+    final article = briefing!.articles.single;
+    expect(article.translatedTitle, isNull);
+    expect(article.translatedDescription, isNull);
+    expect(article.displayTitle, 'Titular original');
+    expect(article.displayDescription, 'Detalle original');
+  });
 }

@@ -47,10 +47,33 @@ OnDeviceBriefing _briefing() => OnDeviceBriefing(
       ],
     );
 
-Widget _app() => ProviderScope(
+/// A briefing whose first article carries an eager translation and whose second
+/// does not — to prove translated-by-default rendering with native fallback.
+OnDeviceBriefing _translatedBriefing() => OnDeviceBriefing(
+      generatedAt: DateTime(2026, 7, 22, 8),
+      articles: const [
+        BriefingArticle(
+          sourceName: 'English Source',
+          title: 'The Future of AI',
+          url: 'https://en.com/1',
+          description: 'A look at the future',
+          translatedTitle: 'El futuro de la IA',
+          translatedDescription: 'Un vistazo al futuro',
+        ),
+        BriefingArticle(
+          sourceName: 'English Source',
+          title: 'Untranslated Headline',
+          url: 'https://en.com/2',
+          description: 'Some brief',
+          // No translation → falls back to the native English text.
+        ),
+      ],
+    );
+
+Widget _app([OnDeviceBriefing? briefing]) => ProviderScope(
       overrides: [
         morningBriefingPreferencesProvider.overrideWithValue(
-          FakeMorningBriefingPreferences(initialBriefing: _briefing()),
+          FakeMorningBriefingPreferences(initialBriefing: briefing ?? _briefing()),
         ),
         localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: true)),
         sourceFetcherProvider.overrideWithValue(FakeSourceFetcher()),
@@ -100,6 +123,21 @@ void main() {
     // Expanded: the source's cards are revealed.
     expect(find.text('Primera noticia de hoy'), findsOneWidget);
     expect(find.text('Segunda de la mañana'), findsOneWidget);
+  });
+
+  testWidgets('renders the translation by default, falling back to native text', (tester) async {
+    await tester.pumpWidget(_app(_translatedBriefing()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('English Source (2)'));
+    await tester.pumpAndSettle();
+
+    // First article: shows the cached Spanish translation, not the English title.
+    expect(find.text('El futuro de la IA'), findsOneWidget);
+    expect(find.text('Un vistazo al futuro'), findsOneWidget);
+    expect(find.text('The Future of AI'), findsNothing);
+    // Second article: no translation → falls back to the native English text.
+    expect(find.text('Untranslated Headline'), findsOneWidget);
   });
 
   testWidgets('an item with no brief shows the subtle hint (not an empty box)', (tester) async {

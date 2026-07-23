@@ -218,9 +218,9 @@ class _BriefingHeader extends StatelessWidget {
 }
 
 /// A per-source COLLAPSIBLE section: a header showing `Source (count)`,
-/// COLLAPSED by default, that reveals the source's item cards when tapped. On
-/// its FIRST expansion it kicks off the lazy per-source title/brief translation
-/// (a subtle "Traduciendo…" row shows while that batched model call runs).
+/// COLLAPSED by default, that reveals the source's item cards when tapped. The
+/// titles/briefs are ALREADY translated (eagerly, at generation time) so the
+/// cards render in the app language immediately — no tap-to-translate.
 class _SourceSection extends StatelessWidget {
   const _SourceSection({
     super.key,
@@ -236,8 +236,6 @@ class _SourceSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final l10n = AppLocalizations.of(context);
-    final translating = state.isTranslatingSource(group.sourceName);
     return Card(
       margin: const EdgeInsets.only(top: 8, bottom: 4),
       clipBehavior: Clip.antiAlias,
@@ -253,26 +251,8 @@ class _SourceSection extends StatelessWidget {
             '${group.sourceName} (${group.articles.length})',
             style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
-          onExpansionChanged: (expanded) {
-            if (expanded) notifier.translateSource(group.sourceName);
-          },
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
           children: [
-            if (translating)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(l10n.briefingTranslating, style: theme.textTheme.bodySmall),
-                  ],
-                ),
-              ),
             for (final article in group.articles)
               _ArticleCard(
                 key: ValueKey(article.key),
