@@ -38,10 +38,16 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 ///     2. Bump this constant.
 ///     3. Add a vN→vN+1 data-survival test.
 ///   See `MIGRATIONS.md` next to this file for the full protocol.
-const int kLocalGraphSchemaVersion = 2;
+const int kLocalGraphSchemaVersion = 3;
 
 const String kNodesTable = 'nodes';
 const String kEdgesTable = 'edges';
+
+/// Vector sidecar table (added in v3 — see `kGraphMigrations`). Holds one
+/// on-device embedding per (node, model) for brute-force cosine RAG recall
+/// (roadmap SLICE B1). It is NOT part of the frozen v1 base — the CREATE TABLE
+/// lives in the v3 migration step so existing devices gain it additively.
+const String kVecNodesTable = 'vec_nodes';
 
 const String _createNodesTable = '''
 CREATE TABLE IF NOT EXISTS $kNodesTable (

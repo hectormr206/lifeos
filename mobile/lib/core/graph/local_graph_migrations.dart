@@ -98,6 +98,18 @@ class GraphMigration {
 /// NULL = "unranked" for all pre-existing rows) plus `updated_at` indexes on
 /// both tables to make future sync delta-scans cheap. Purely additive: every
 /// v1 node, edge, and relationship is preserved untouched.
+///
+/// ── v3 ───────────────────────────────────────────────────────────────────
+/// Adds the `vec_nodes` sidecar table: one on-device embedding per
+/// (node_uuid, model) for brute-force cosine RAG recall (roadmap SLICE B1).
+/// `vec` is a float32 little-endian BLOB; `model`+`dim` are stored on EVERY row
+/// so recall can filter to a single model and NEVER compare vectors across
+/// models (caveat R8). Purely additive — a brand-new table plus its index; no
+/// existing node/edge/relationship row is touched, so every v2 graph survives.
+///
+/// SYNC CAVEAT (R8): vectors are LOCAL-ONLY. Sync must transfer node *text*
+/// (label/data) but NEVER these vector rows — each device re-embeds locally
+/// with its own model so vectors are never mixed across models/devices.
 const List<GraphMigration> kGraphMigrations = <GraphMigration>[
   GraphMigration(
     version: 2,
@@ -107,6 +119,23 @@ const List<GraphMigration> kGraphMigrations = <GraphMigration>[
       'ALTER TABLE $kNodesTable ADD COLUMN salience REAL',
       'CREATE INDEX IF NOT EXISTS idx_nodes_updated ON $kNodesTable(updated_at)',
       'CREATE INDEX IF NOT EXISTS idx_edges_updated ON $kEdgesTable(updated_at)',
+    ],
+  ),
+  GraphMigration(
+    version: 3,
+    description:
+        'Add vec_nodes(node_uuid, model, dim, vec BLOB) sidecar + model index '
+        'for on-device RAG recall. Vectors are local-only, never synced.',
+    statements: <String>[
+      'CREATE TABLE IF NOT EXISTS $kVecNodesTable ('
+          '  node_uuid TEXT    NOT NULL,'
+          '  model     TEXT    NOT NULL,'
+          '  dim       INTEGER NOT NULL,'
+          '  vec       BLOB    NOT NULL,'
+          '  PRIMARY KEY (node_uuid, model)'
+          ')',
+      'CREATE INDEX IF NOT EXISTS idx_vec_nodes_model '
+          'ON $kVecNodesTable(model)',
     ],
   ),
 ];

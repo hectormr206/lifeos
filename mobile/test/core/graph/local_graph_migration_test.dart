@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/graph/local_graph_migrations.dart';
@@ -138,7 +139,7 @@ void main() {
       final db = await openGuarded(path);
       addTearDown(() => db.close());
       expect(await db.getVersion(), kLocalGraphSchemaVersion);
-      expect(kLocalGraphSchemaVersion, 2);
+      expect(kLocalGraphSchemaVersion, greaterThanOrEqualTo(2));
 
       // (c) Assert every pre-existing row + relationship survived intact.
       final store = SqfliteLocalGraphStore(db);
@@ -221,6 +222,86 @@ void main() {
       addTearDown(() => db.close());
       expect(await db.getVersion(), kLocalGraphSchemaVersion);
       expect(await File('$path$kGraphBackupSuffix').exists(), isFalse);
+    });
+  });
+
+  group('v2 → v3 migration preserves ALL data and adds vec_nodes', () {
+    // Build the v2 schema (frozen v1 base + the v2 migration) so we can
+    // manufacture "a device that installed the v2 app".
+    Future<void> buildV2Schema(Database db) async {
+      await applyLocalGraphSchema(db);
+      await runGraphMigrations(db, 1, 2);
+    }
+
+    test('every v2 node, edge, relationship + salience survives; vec_nodes works',
+        () async {
+      final path = dbPath();
+
+      // (a) Create a v2 DB with real seeded rows, including a v2-only salience.
+      await seedOldDatabase(path, 2, buildV2Schema);
+
+      final seedDb = await databaseFactoryFfi.openDatabase(
+        path,
+        options: OpenDatabaseOptions(singleInstance: false),
+      );
+      final seedStore = SqfliteLocalGraphStore(seedDb);
+      final hector = await seedStore.createNode(
+        kind: 'person',
+        label: 'Héctor',
+        data: {'role': 'user', 'n': 1},
+        domain: 'home',
+      );
+      final meeting =
+          await seedStore.createNode(kind: 'event', label: 'Standup');
+      final edge = await seedStore.createEdge(
+        srcUuid: hector.uuid,
+        dstUuid: meeting.uuid,
+        relation: 'attended',
+        data: {'weight': 3},
+      );
+      // Set the v2-only salience column on a row to prove it survives v3.
+      await seedDb.update('nodes', {'salience': 0.42},
+          where: 'uuid = ?', whereArgs: [hector.uuid]);
+      final doomed = await seedStore.createNode(kind: 'fact', label: 'old');
+      await seedStore.softDeleteNode(doomed.uuid);
+      await seedDb.close();
+
+      // (b) Open through the REAL migration path to the current version (v3).
+      final db = await openGuarded(path);
+      addTearDown(() => db.close());
+      expect(await db.getVersion(), kLocalGraphSchemaVersion);
+      expect(kLocalGraphSchemaVersion, greaterThanOrEqualTo(3));
+
+      // (c) Every pre-existing row + relationship survived intact.
+      final store = SqfliteLocalGraphStore(db);
+      final h = await store.getNodeByUuid(hector.uuid);
+      expect(h, isNotNull);
+      expect(h!.label, 'Héctor');
+      expect(h.data['role'], 'user');
+      expect(h.localId, hector.localId); // rowids preserved
+      final edges = await store.edgesForNode(hector.uuid);
+      expect(edges.single.uuid, edge.uuid);
+      expect(edges.single.data['weight'], 3);
+      // v2 salience value preserved byte-for-byte across the v3 upgrade.
+      final salRow = await db.query('nodes',
+          columns: ['salience'], where: 'uuid = ?', whereArgs: [hector.uuid]);
+      expect(salRow.single['salience'], 0.42);
+      // Tombstone preserved.
+      expect(await store.getNodeByUuid(doomed.uuid), isNull);
+
+      // (d) New v3 vec_nodes table exists and is immediately usable: index the
+      // surviving node's vector and recall it back.
+      await store.upsertNodeVector(
+          hector.uuid, 'm@3', 3, Float32List.fromList([1, 0, 0]));
+      final hits =
+          await store.recall(Float32List.fromList([1, 0, 0]), k: 1, model: 'm@3');
+      expect(hits.single.uuid, hector.uuid);
+
+      // (e) The v3 index exists.
+      final idx = await db.query('sqlite_master',
+          columns: ['name'], where: "type = 'index'");
+      final names = idx.map((r) => r['name']).toSet();
+      expect(names, contains('idx_vec_nodes_model'));
     });
   });
 

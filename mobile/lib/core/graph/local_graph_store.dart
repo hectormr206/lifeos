@@ -1,3 +1,6 @@
+import 'dart:math' as math;
+import 'dart:typed_data';
+
 import 'package:sqflite_sqlcipher/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
@@ -81,6 +84,47 @@ abstract class LocalGraphStore {
   /// Lexical substring search over node `label` + `data`, newest-created
   /// first. A stand-in until the FTS5 slice (B1); a blank query returns `[]`.
   Future<List<GraphNodeRecord>> searchNodes(String query, {int limit = 20, bool includeDeleted = false});
+
+  // ── Vector recall (roadmap SLICE B1) ──────────────────────────────────────
+  //
+  // The vector side of the store. The store does the storage + math only; the
+  // EMBEDDING step lives OUTSIDE (the caller/`RagService` embeds the text and
+  // hands raw vectors in/out). Vectors are LOCAL-ONLY: sync transfers node text
+  // (label/data) but NEVER these vectors — each device re-embeds locally, so
+  // vectors from different models/devices are never mixed (caveat R8).
+
+  /// Store (insert-or-replace) the embedding for [nodeUuid] under [model].
+  ///
+  /// [dim] is the vector length and [vec] its float32 values (stored as a
+  /// little-endian BLOB). One row per (node, model): re-upserting the same pair
+  /// overwrites. [model] + [dim] are persisted on the row so [recall] can filter
+  /// to a single model and NEVER compare across models (caveat R8).
+  Future<void> upsertNodeVector(
+    String nodeUuid,
+    String model,
+    int dim,
+    Float32List vec,
+  );
+
+  /// Remove every stored vector for [nodeUuid] (all models). Call when a node is
+  /// deleted or re-indexed. Vectors are hard-deleted (never tombstoned): they are
+  /// local-only and never synced, and [recall] already hides tombstoned nodes.
+  Future<void> deleteNodeVector(String nodeUuid);
+
+  /// Brute-force cosine top-[k] recall over the LIVE (`deleted_at IS NULL`)
+  /// vectors of one [model]. Returns the matching nodes, most-similar first.
+  ///
+  /// The cosine math runs in Dart over every candidate row (fine at on-device
+  /// scale; an ANN index is a later slice). [model] filters to a single model —
+  /// pass it explicitly. If [model] is null and the store holds vectors from
+  /// more than one model, this throws (never silently compares across models —
+  /// caveat R8). Rows whose stored `dim` differs from [queryVec]'s length are
+  /// skipped as incomparable.
+  Future<List<GraphNodeRecord>> recall(
+    Float32List queryVec, {
+    int k = 5,
+    String? model,
+  });
 }
 
 /// sqflite-backed [LocalGraphStore]. Works identically against an on-device
@@ -312,6 +356,126 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
     return rows.map(GraphNodeRecord.fromRow).toList();
   }
 
+  @override
+  Future<void> upsertNodeVector(
+    String nodeUuid,
+    String model,
+    int dim,
+    Float32List vec,
+  ) async {
+    await _db.insert(
+      kVecNodesTable,
+      <String, Object?>{
+        'node_uuid': nodeUuid,
+        'model': model,
+        'dim': dim,
+        'vec': _encodeVector(vec, dim),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<void> deleteNodeVector(String nodeUuid) async {
+    await _db.delete(
+      kVecNodesTable,
+      where: 'node_uuid = ?',
+      whereArgs: [nodeUuid],
+    );
+  }
+
+  @override
+  Future<List<GraphNodeRecord>> recall(
+    Float32List queryVec, {
+    int k = 5,
+    String? model,
+  }) async {
+    if (k <= 0) return const [];
+    // Join to nodes so we (a) skip tombstoned nodes and (b) hydrate full records
+    // in one round-trip. Extra vec columns are aliased so they never collide
+    // with node columns; GraphNodeRecord.fromRow ignores them.
+    final where = StringBuffer('n.deleted_at IS NULL');
+    final args = <Object?>[];
+    if (model != null) {
+      where.write(' AND v.model = ?');
+      args.add(model);
+    }
+    final rows = await _db.rawQuery(
+      'SELECT n.*, v.vec AS __vec, v.dim AS __dim, v.model AS __model '
+      'FROM $kVecNodesTable v '
+      'JOIN $kNodesTable n ON n.uuid = v.node_uuid '
+      'WHERE $where',
+      args,
+    );
+    if (rows.isEmpty) return const [];
+
+    // Caveat R8: never compare across models. Without an explicit filter, all
+    // candidates must belong to ONE model, else it is a misuse.
+    if (model == null) {
+      final models = rows.map((r) => r['__model']).toSet();
+      if (models.length > 1) {
+        throw ArgumentError(
+          'recall() spans multiple embedding models ($models). Pass `model:` to '
+          'pick one — vectors from different models are not comparable (R8).',
+        );
+      }
+    }
+
+    final scored = <_ScoredRow>[];
+    for (final row in rows) {
+      final dim = (row['__dim'] as num).toInt();
+      if (dim != queryVec.length) continue; // incomparable dimensionality
+      final vec = _decodeVector(row['__vec'] as Uint8List, dim);
+      scored.add(_ScoredRow(_cosine(queryVec, vec), row));
+    }
+    scored.sort((a, b) => b.score.compareTo(a.score));
+    return scored
+        .take(k)
+        .map((s) => GraphNodeRecord.fromRow(s.row))
+        .toList();
+  }
+
+  /// Encode [vec] (its first [dim] values) as a little-endian float32 BLOB.
+  static Uint8List _encodeVector(Float32List vec, int dim) {
+    final n = dim <= vec.length ? dim : vec.length;
+    final bytes = Uint8List(n * 4);
+    final view = ByteData.view(bytes.buffer);
+    for (var i = 0; i < n; i++) {
+      view.setFloat32(i * 4, vec[i], Endian.little);
+    }
+    return bytes;
+  }
+
+  /// Decode a little-endian float32 BLOB of [dim] values back to a Float32List.
+  static Float32List _decodeVector(Uint8List bytes, int dim) {
+    final view = ByteData.view(
+      bytes.buffer,
+      bytes.offsetInBytes,
+      bytes.lengthInBytes,
+    );
+    final n = dim * 4 <= bytes.lengthInBytes ? dim : bytes.lengthInBytes ~/ 4;
+    final out = Float32List(n);
+    for (var i = 0; i < n; i++) {
+      out[i] = view.getFloat32(i * 4, Endian.little);
+    }
+    return out;
+  }
+
+  /// Cosine similarity in `[-1, 1]`; 0 for a zero-magnitude vector.
+  static double _cosine(Float32List a, Float32List b) {
+    final n = a.length < b.length ? a.length : b.length;
+    var dot = 0.0;
+    var na = 0.0;
+    var nb = 0.0;
+    for (var i = 0; i < n; i++) {
+      dot += a[i] * b[i];
+      na += a[i] * a[i];
+      nb += b[i] * b[i];
+    }
+    if (na == 0 || nb == 0) return 0;
+    return dot / (math.sqrt(na) * math.sqrt(nb));
+  }
+
   Future<GraphEdgeRecord?> _edgeByUuid(String uuid, {bool includeDeleted = false}) async {
     final rows = await _db.query(
       kEdgesTable,
@@ -328,4 +492,11 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
       .replaceAll('\\', '\\\\')
       .replaceAll('%', '\\%')
       .replaceAll('_', '\\_');
+}
+
+/// A candidate node row paired with its cosine score, for in-Dart ranking.
+class _ScoredRow {
+  const _ScoredRow(this.score, this.row);
+  final double score;
+  final Map<String, Object?> row;
 }
