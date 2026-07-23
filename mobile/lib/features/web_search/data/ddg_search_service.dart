@@ -1,17 +1,10 @@
 import '../../morning_briefing/domain/source_fetcher.dart';
+import '../domain/web_search_backend.dart';
 
-/// A single search hit parsed from a DuckDuckGo-lite results page: the human
-/// title of the link and the REAL target URL (already un-wrapped from DDG's
-/// `duckduckgo.com/l/?uddg=` redirect).
-class DdgResult {
-  const DdgResult({required this.title, required this.url});
-
-  final String title;
-  final String url;
-
-  @override
-  String toString() => 'DdgResult($title, $url)';
-}
+// Re-export the shared link model so existing importers of this file (the
+// pipeline, tests) keep resolving [DdgResult] without touching their imports —
+// its home is now `domain/web_search_backend.dart`.
+export '../domain/web_search_backend.dart' show DdgResult;
 
 /// Pure, dependency-free reader for the DuckDuckGo-lite results HTML.
 ///
@@ -89,16 +82,19 @@ class DdgResultParser {
   }
 }
 
-/// Queries DuckDuckGo-lite for a plain-text search string and returns the top
-/// real result links. LOCAL-FIRST: the phone hits `lite.duckduckgo.com`
-/// DIRECTLY — no self-hosted server, no SearXNG. Nothing of the user's data
-/// leaves; only public results come in.
+/// The DuckDuckGo web-search backend: queries DuckDuckGo-lite for a plain-text
+/// string and returns the top real result links.
+///
+/// LOCAL-FIRST & PUBLIC: the phone hits `lite.duckduckgo.com` DIRECTLY — no
+/// self-hosted server, no account. Nothing of the user's data leaves; only
+/// public results come in. Best-effort by nature (DDG-lite is an unofficial,
+/// scrape-shaped surface).
 ///
 /// Reuses the morning-briefing [SourceFetcher] (a FRESH, unpaired `dio` with
 /// bounded timeouts + a plain UA), so the DDG request never inherits the paired
 /// engine base URL, auth, or TLS pinning.
-class DdgSearchService {
-  DdgSearchService({required SourceFetcher fetcher, DdgResultParser? parser})
+class DuckDuckGoBackend implements WebSearchBackend {
+  DuckDuckGoBackend({required SourceFetcher fetcher, DdgResultParser? parser})
       : _fetcher = fetcher,
         _parser = parser ?? const DdgResultParser();
 
@@ -113,8 +109,14 @@ class DdgSearchService {
 
   /// Runs the search and returns the parsed top results. Throws (via the
   /// fetcher) on any transport/status failure so the pipeline can fail soft.
+  @override
   Future<List<DdgResult>> search(String query) async {
     final html = await _fetcher.fetch(queryUrl(query));
     return _parser.parse(html);
   }
 }
+
+/// Backward-compatible alias for the pre-abstraction name. The DDG backend used
+/// to be the ONLY search service; existing callers/tests that still say
+/// `DdgSearchService(...)` / `DdgSearchService.queryUrl(...)` keep working.
+typedef DdgSearchService = DuckDuckGoBackend;

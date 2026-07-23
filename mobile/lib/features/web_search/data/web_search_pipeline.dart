@@ -1,6 +1,6 @@
 import '../../morning_briefing/data/source_content_extractor.dart';
 import '../../morning_briefing/domain/source_fetcher.dart';
-import 'ddg_search_service.dart';
+import '../domain/web_search_backend.dart';
 
 /// One cited source in a web-search answer: its title and canonical URL. Fed to
 /// the model as part of the context block AND surfaced to the user as a
@@ -42,15 +42,16 @@ class WebSearchResult {
 
 /// The on-device web-search pipeline (roadmap slice B4).
 ///
-/// query → DuckDuckGo-lite → top result URLs → fetch the top few pages →
-/// extract readable text (the existing, length-capped
-/// [SourceContentExtractor]) → assemble a compact context block + a sources
-/// list. Every network hop reuses the SAME morning-briefing [SourceFetcher]
-/// (fresh unpaired `dio`, bounded timeouts, plain UA, fail-soft). Fully local:
-/// the phone queries the public web directly; no user data leaves the device.
+/// query → [WebSearchBackend] (DuckDuckGo or the user's SearXNG) → top result
+/// URLs → fetch the top few pages → extract readable text (the existing,
+/// length-capped [SourceContentExtractor]) → assemble a compact context block +
+/// a sources list. Every network hop reuses the SAME morning-briefing
+/// [SourceFetcher] (fresh unpaired `dio`, bounded timeouts, plain UA,
+/// fail-soft). The backend is chosen by the user in Settings; the rest of the
+/// pipeline is backend-agnostic.
 class WebSearchPipeline {
   WebSearchPipeline({
-    required DdgSearchService search,
+    required WebSearchBackend search,
     required SourceFetcher fetcher,
     SourceContentExtractor? extractor,
     this.maxPages = 3,
@@ -68,7 +69,7 @@ class WebSearchPipeline {
   /// prompt small for the on-device model).
   final int maxPages;
 
-  final DdgSearchService _search;
+  final WebSearchBackend _search;
   final SourceFetcher _fetcher;
   final SourceContentExtractor _extractor;
 

@@ -64,6 +64,13 @@ class SettingsHubScreen extends ConsumerWidget {
             onTap: () => context.push('/settings/briefing'),
           ),
           ListTile(
+            leading: const Icon(Icons.travel_explore_outlined),
+            title: Text(l10n.webSearchNavTitle),
+            subtitle: Text(l10n.webSearchNavSubtitle),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/web-search'),
+          ),
+          ListTile(
             leading: const Icon(Icons.system_update),
             title: Text(l10n.updatesNavTitle),
             subtitle: Text(l10n.updatesNavSubtitle),

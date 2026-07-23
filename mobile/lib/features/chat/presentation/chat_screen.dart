@@ -15,6 +15,8 @@ import '../../local_model/presentation/required_models.dart';
 import '../../local_model/presentation/required_models_manager.dart';
 import '../../stt/domain/stt_model.dart';
 import '../../stt/presentation/stt_providers.dart';
+import '../../web_search/domain/web_search_settings.dart';
+import '../../web_search/presentation/web_search_providers.dart';
 import '../domain/chat_message.dart';
 import '../domain/image_picker_gateway.dart';
 import 'chat_notifier.dart';
@@ -557,16 +559,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     // lights up (primary colour) while on. Stays available even while busy —
     // it only changes the mode for the following send.
     final webSearchOn = ref.watch(webSearchEnabledProvider);
+    // The globe is only shown when a real search provider is selected: with
+    // "Ninguna" (WebSearchProvider.none) web search is fully off — the button is
+    // hidden and the enabled flag is forced false, so zero outbound search
+    // requests are possible. Chosen in Settings → Búsqueda web.
+    final searchAvailable =
+        ref.watch(webSearchSettingsProvider).provider != WebSearchProvider.none;
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          IconButton(
-            icon: Icon(Icons.public, color: webSearchOn ? scheme.primary : null),
-            tooltip: AppLocalizations.of(context).chatWebSearchTooltip,
-            onPressed: () => ref.read(webSearchEnabledProvider.notifier).toggle(),
-          ),
+          if (searchAvailable)
+            IconButton(
+              icon: Icon(Icons.public, color: webSearchOn ? scheme.primary : null),
+              tooltip: AppLocalizations.of(context).chatWebSearchTooltip,
+              onPressed: () => ref.read(webSearchEnabledProvider.notifier).toggle(),
+            ),
           IconButton(
             icon: const Icon(Icons.attach_file),
             tooltip: AppLocalizations.of(context).chatAttachTooltip,

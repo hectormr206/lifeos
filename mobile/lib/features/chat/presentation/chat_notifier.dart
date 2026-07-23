@@ -17,6 +17,7 @@ import '../../reminders/presentation/local_reminders_providers.dart';
 import '../../local_model/presentation/local_model_providers.dart';
 import '../../stt/presentation/stt_providers.dart';
 import '../../web_search/data/search_augmented_chat_repository.dart';
+import '../../web_search/domain/web_search_settings.dart';
 import '../../web_search/presentation/web_search_providers.dart';
 import '../data/chat_history_repository.dart';
 import '../data/chat_repository.dart';
@@ -60,7 +61,12 @@ final chatRepositoryProvider = Provider<ChatRepository>((ref) {
   // wrapper — the long-lived on-device engine (its own provider) is untouched,
   // so no weights reload. `read` for the sources label so a language change is
   // honoured at send-time without rebuilding.
-  if (ref.watch(webSearchEnabledProvider)) {
+  // The user-selected provider can disable search entirely: when it is
+  // `none`, the augmentation is skipped regardless of a stale-enabled toggle
+  // (the globe button is also hidden + forced off upstream), so no outbound
+  // search request is ever made.
+  final searchProvider = ref.watch(webSearchSettingsProvider).provider;
+  if (searchProvider != WebSearchProvider.none && ref.watch(webSearchEnabledProvider)) {
     return SearchAugmentedChatRepository(
       inner: base,
       pipeline: ref.watch(webSearchPipelineProvider),

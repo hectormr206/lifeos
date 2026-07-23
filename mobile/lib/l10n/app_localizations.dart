@@ -224,6 +224,96 @@ abstract class AppLocalizations {
   /// **'Generate a morning briefing on device'**
   String get briefingNavSubtitle;
 
+  /// No description provided for @webSearchNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Web search'**
+  String get webSearchNavTitle;
+
+  /// No description provided for @webSearchNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose your search provider'**
+  String get webSearchNavSubtitle;
+
+  /// No description provided for @webSearchSettingsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Web search'**
+  String get webSearchSettingsTitle;
+
+  /// No description provided for @webSearchSettingsIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose how the chat searches the web when the globe is on.'**
+  String get webSearchSettingsIntro;
+
+  /// No description provided for @webSearchProviderDuckduckgo.
+  ///
+  /// In en, this message translates to:
+  /// **'DuckDuckGo'**
+  String get webSearchProviderDuckduckgo;
+
+  /// No description provided for @webSearchProviderDuckduckgoDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Public, no setup, best-effort. Only your query leaves the device.'**
+  String get webSearchProviderDuckduckgoDesc;
+
+  /// No description provided for @webSearchProviderSearxng.
+  ///
+  /// In en, this message translates to:
+  /// **'Your own SearXNG'**
+  String get webSearchProviderSearxng;
+
+  /// No description provided for @webSearchProviderSearxngDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'A SearXNG instance you host. Private: the query goes to a server you control.'**
+  String get webSearchProviderSearxngDesc;
+
+  /// No description provided for @webSearchProviderNone.
+  ///
+  /// In en, this message translates to:
+  /// **'None'**
+  String get webSearchProviderNone;
+
+  /// No description provided for @webSearchProviderNoneDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Web search off. No outbound search request is ever made.'**
+  String get webSearchProviderNoneDesc;
+
+  /// No description provided for @webSearchSearxngUrlLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Your SearXNG instance URL'**
+  String get webSearchSearxngUrlLabel;
+
+  /// No description provided for @webSearchTestConnection.
+  ///
+  /// In en, this message translates to:
+  /// **'Test connection'**
+  String get webSearchTestConnection;
+
+  /// No description provided for @webSearchTesting.
+  ///
+  /// In en, this message translates to:
+  /// **'Testing…'**
+  String get webSearchTesting;
+
+  /// No description provided for @webSearchTestSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection successful'**
+  String get webSearchTestSuccess;
+
+  /// No description provided for @webSearchTestFailure.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not connect'**
+  String get webSearchTestFailure;
+
   /// No description provided for @updatesNavTitle.
   ///
   /// In en, this message translates to:

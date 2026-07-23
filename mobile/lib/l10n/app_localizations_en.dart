@@ -72,6 +72,55 @@ class AppLocalizationsEn extends AppLocalizations {
   String get briefingNavSubtitle => 'Generate a morning briefing on device';
 
   @override
+  String get webSearchNavTitle => 'Web search';
+
+  @override
+  String get webSearchNavSubtitle => 'Choose your search provider';
+
+  @override
+  String get webSearchSettingsTitle => 'Web search';
+
+  @override
+  String get webSearchSettingsIntro =>
+      'Choose how the chat searches the web when the globe is on.';
+
+  @override
+  String get webSearchProviderDuckduckgo => 'DuckDuckGo';
+
+  @override
+  String get webSearchProviderDuckduckgoDesc =>
+      'Public, no setup, best-effort. Only your query leaves the device.';
+
+  @override
+  String get webSearchProviderSearxng => 'Your own SearXNG';
+
+  @override
+  String get webSearchProviderSearxngDesc =>
+      'A SearXNG instance you host. Private: the query goes to a server you control.';
+
+  @override
+  String get webSearchProviderNone => 'None';
+
+  @override
+  String get webSearchProviderNoneDesc =>
+      'Web search off. No outbound search request is ever made.';
+
+  @override
+  String get webSearchSearxngUrlLabel => 'Your SearXNG instance URL';
+
+  @override
+  String get webSearchTestConnection => 'Test connection';
+
+  @override
+  String get webSearchTesting => 'Testing…';
+
+  @override
+  String get webSearchTestSuccess => 'Connection successful';
+
+  @override
+  String get webSearchTestFailure => 'Could not connect';
+
+  @override
   String get updatesNavTitle => 'Updates';
 
   @override
