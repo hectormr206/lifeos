@@ -1,24 +1,60 @@
+// TODO(i18n): hardcoded neutral Spanish pending the i18n sweep (this screen
+// predates the ARB slice and was never localized).
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/offline_banner.dart';
 import '../../../core/widgets/pending_sync_banner.dart';
 import '../domain/reminder.dart';
+import 'local_reminders_tab.dart';
 import 'reminders_notifier.dart';
 
-/// Pending reminders — the "visible soul" slice. Mirrors `DomainListScreen`'s
-/// list + NL quick-capture layout: a scrollable list of pending reminders,
-/// each with a "mark done" action (DELETE, the engine's only completion
-/// action — see `RemindersRepository.cancel`), plus a bottom bar reusing
-/// the chat endpoint for natural-language create.
-class RemindersScreen extends ConsumerStatefulWidget {
+/// Reminders — two coexisting surfaces (roadmap slice C2):
+///   * "En este teléfono": LOCAL reminders created, stored (graph store) and
+///     scheduled ON-DEVICE ([LocalRemindersTab]). Works unpaired/offline —
+///     this is why the `/reminders` route is no longer pairing-gated.
+///   * "Desde tu laptop": the original pairing-gated VIEWER of the engine's
+///     reminders ([EngineRemindersTab], the "visible soul" slice) — list +
+///     NL quick-capture via the chat endpoint, "mark done" via DELETE.
+///     Unpaired it simply shows its own connection error.
+class RemindersScreen extends StatelessWidget {
   const RemindersScreen({super.key});
 
   @override
-  ConsumerState<RemindersScreen> createState() => _RemindersScreenState();
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Recordatorios'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'En este teléfono', icon: Icon(Icons.smartphone)),
+              Tab(text: 'Desde tu laptop', icon: Icon(Icons.laptop_mac)),
+            ],
+          ),
+        ),
+        body: const TabBarView(
+          children: [LocalRemindersTab(), EngineRemindersTab()],
+        ),
+      ),
+    );
+  }
 }
 
-class _RemindersScreenState extends ConsumerState<RemindersScreen> {
+/// The engine-reminders VIEWER (unchanged behavior, now hosted as a tab).
+/// Mirrors `DomainListScreen`'s list + NL quick-capture layout: a scrollable
+/// list of pending reminders, each with a "mark done" action (DELETE, the
+/// engine's only completion action — see `RemindersRepository.cancel`), plus
+/// a bottom bar reusing the chat endpoint for natural-language create.
+class EngineRemindersTab extends ConsumerStatefulWidget {
+  const EngineRemindersTab({super.key});
+
+  @override
+  ConsumerState<EngineRemindersTab> createState() => _EngineRemindersTabState();
+}
+
+class _EngineRemindersTabState extends ConsumerState<EngineRemindersTab> {
   final _createController = TextEditingController();
   String? _lastShownCaptureError;
 
@@ -40,54 +76,60 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
     final state = ref.watch(remindersNotifierProvider);
 
     ref.listen(remindersNotifierProvider, (previous, next) {
-      if (next.captureError != null && next.captureError != _lastShownCaptureError) {
+      if (next.captureError != null &&
+          next.captureError != _lastShownCaptureError) {
         _lastShownCaptureError = next.captureError;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(next.captureError!)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(next.captureError!)));
       }
     });
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Recordatorios')),
-      body: Column(
-        children: [
-          const OfflineBanner(),
-          const PendingSyncBanner(),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: () => ref.read(remindersNotifierProvider.notifier).refresh(),
-              child: _buildBody(state),
-            ),
+    return Column(
+      children: [
+        const OfflineBanner(),
+        const PendingSyncBanner(),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: () =>
+                ref.read(remindersNotifierProvider.notifier).refresh(),
+            child: _buildBody(state),
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _createController,
-                      decoration: const InputDecoration(
-                        hintText: 'Recuérdame… ej. "llamar al doctor mañana a las 3"',
-                        border: OutlineInputBorder(),
-                      ),
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _create(),
+        ),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _createController,
+                    decoration: const InputDecoration(
+                      hintText:
+                          'Recuérdame… ej. "llamar al doctor mañana a las 3"',
+                      border: OutlineInputBorder(),
                     ),
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _create(),
                   ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: state.capturing
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.add),
-                    tooltip: 'Crear recordatorio',
-                    onPressed: state.capturing ? null : _create,
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: state.capturing
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.add),
+                  tooltip: 'Crear recordatorio',
+                  onPressed: state.capturing ? null : _create,
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -103,7 +145,8 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
             Text(state.error!),
             const SizedBox(height: 16),
             OutlinedButton(
-              onPressed: () => ref.read(remindersNotifierProvider.notifier).refresh(),
+              onPressed: () =>
+                  ref.read(remindersNotifierProvider.notifier).refresh(),
               child: const Text('Reintentar'),
             ),
           ],
@@ -111,14 +154,18 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
       );
     }
     if (state.reminders.isEmpty) {
-      return const _ScrollableCenter(child: Text('No tienes recordatorios pendientes.'));
+      return const _ScrollableCenter(
+        child: Text('No tienes recordatorios pendientes.'),
+      );
     }
     return ListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
       itemCount: state.reminders.length,
       itemBuilder: (context, index) => _ReminderTile(
         reminder: state.reminders[index],
-        onDone: () => ref.read(remindersNotifierProvider.notifier).markDone(state.reminders[index].id),
+        onDone: () => ref
+            .read(remindersNotifierProvider.notifier)
+            .markDone(state.reminders[index].id),
       ),
     );
   }

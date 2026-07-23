@@ -108,5 +108,8 @@
   "briefingEmptyBody": "Toca \"Generar boletín ahora\" y Axi leerá tus fuentes y las resumirá en el dispositivo.",
   "briefingHeaderTitle": "Boletín matutino",
   "briefingGeneratedAt": "Generado el {datetime}",
-  "briefingLinkCopied": "Enlace copiado al portapapeles"
+  "briefingLinkCopied": "Enlace copiado al portapapeles",
+  "briefingScheduleTitle": "Boletín automático",
+  "briefingScheduleSubtitle": "Genera el boletín cada día a la hora elegida. Si la app está cerrada, recibirás un aviso para generarlo con un toque.",
+  "briefingScheduleTimeLabel": "Hora del boletín"
 }

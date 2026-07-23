@@ -27,6 +27,7 @@ ProviderContainer _container({
   required FakeSourceFetcher fetcher,
   required FakeMorningBriefingPreferences prefs,
   required FakeBriefingNotifications notifications,
+  FakeBriefingScheduler? scheduler,
 }) {
   final container = ProviderContainer(
     overrides: [
@@ -34,6 +35,7 @@ ProviderContainer _container({
       sourceFetcherProvider.overrideWithValue(fetcher),
       morningBriefingPreferencesProvider.overrideWithValue(prefs),
       briefingNotificationsProvider.overrideWithValue(notifications),
+      briefingSchedulerProvider.overrideWithValue(scheduler ?? FakeBriefingScheduler()),
     ],
   );
   addTearDown(container.dispose);

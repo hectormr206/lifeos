@@ -6,10 +6,14 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
+import '../../../core/clock/clock.dart';
 import '../../../core/graph/graph_providers.dart';
 import '../../../core/outbox/outbox.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../local_model/data/on_device_chat_repository.dart';
+import '../../reminders/domain/local_reminder.dart';
+import '../../reminders/domain/reminder_parser.dart';
+import '../../reminders/presentation/local_reminders_providers.dart';
 import '../../local_model/presentation/local_model_providers.dart';
 import '../../stt/presentation/stt_providers.dart';
 import '../../web_search/data/search_augmented_chat_repository.dart';
@@ -238,6 +242,16 @@ class ChatNotifier extends Notifier<ChatUiState> {
     // "escribiendo…" indicator up until the whole queue drains.
     state = state.copyWith(messages: [...state.messages, userMessage], sending: true, error: null);
     _persist(userMessage);
+    // Roadmap slice C2 — deterministic reminder intent (laptop parity: the
+    // engine also resolves "recuérdame…" with its regex parser BEFORE the
+    // LLM). Guarded twice so normal messages are untouched: the parser's
+    // trigger must match AND the time must fully resolve; anything else
+    // (including a store failure inside the handler) takes the normal model
+    // path below.
+    final reminderIntent = _tryParseReminderIntent(trimmed);
+    if (reminderIntent != null) {
+      return _handleReminderIntent(trimmed, userMessage, reminderIntent);
+    }
     return _enqueue(_OutgoingRequest(
       userMessageId: userMessage.id,
       run: () => ref.read(chatRepositoryProvider).sendMessage(trimmed),
@@ -250,6 +264,82 @@ class ChatNotifier extends Notifier<ChatUiState> {
           ? (reply) => _recordTurn(trimmed, reply.text)
           : null,
     ));
+  }
+
+  /// Parse [text] as a fully-resolved reminder request against the device
+  /// clock (`clockProvider` seam). Returns null unless BOTH the reminder
+  /// trigger matched and a due instant was resolved — a trigger without a
+  /// parseable time falls through to the model, which can ask for one.
+  ParsedReminder? _tryParseReminderIntent(String text) {
+    try {
+      final parsed = parseReminder(text, now: ref.read(clockProvider).now());
+      if (parsed == null || parsed.dueAt == null) return null;
+      return parsed;
+    } catch (_) {
+      // A parser bug must never break normal chat.
+      return null;
+    }
+  }
+
+  /// Create the LOCAL reminder and answer with a DETERMINISTIC confirmation —
+  /// no LLM call (laptop parity: creation is regex + store, not the brain).
+  /// If the local store/scheduler is unavailable, degrade to the normal model
+  /// flow with the ORIGINAL text so the message is never lost.
+  Future<void> _handleReminderIntent(
+    String original,
+    ChatMessage userMessage,
+    ParsedReminder parsed,
+  ) async {
+    LocalReminder created;
+    try {
+      final service = await ref.read(localRemindersServiceProvider.future);
+      created = await service.create(
+        text: parsed.text.isEmpty ? original : parsed.text,
+        dueAt: parsed.dueAt!,
+        recurrence: parsed.recurrence,
+      );
+    } catch (_) {
+      // Store not ready (no keystore / plain test) → normal model flow.
+      if (_disposed) return;
+      await _enqueue(_OutgoingRequest(
+        userMessageId: userMessage.id,
+        run: () => ref.read(chatRepositoryProvider).sendMessage(original),
+        errorPrefix: 'No se pudo enviar el mensaje',
+        onReply: ref.read(localModelEnabledProvider)
+            ? (reply) => _recordTurn(original, reply.text)
+            : null,
+      ));
+      return;
+    }
+    if (_disposed) return;
+    _setStatus(userMessage.id, ChatMessageStatus.delivered);
+    final reply = ChatMessage(
+      id: 'local-reminder-${DateTime.now().microsecondsSinceEpoch}',
+      role: ChatRole.axi,
+      text: _reminderConfirmText(created),
+      timestamp: DateTime.now(),
+    );
+    state = state.copyWith(messages: [...state.messages, reply], sending: false);
+    _persist(reply);
+  }
+
+  /// Deterministic confirmation bubble ("Listo, te recuerdo …"). Neutral
+  /// Spanish by default; English when the app language is English — same
+  /// send-time language read the web-search sources label uses.
+  String _reminderConfirmText(LocalReminder reminder) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    final due = reminder.dueAt;
+    final time = '${two(due.hour)}:${two(due.minute)}';
+    final date = '${two(due.day)}/${two(due.month)}/${due.year}';
+    final english = ref.read(appLanguageCodeProvider) == 'en';
+    if (reminder.recurrence == ReminderRecurrence.daily) {
+      return english
+          ? 'Done — I will remind you "${reminder.text}" every day at $time. ⏰'
+          : 'Listo, te recuerdo "${reminder.text}" todos los días a las $time. ⏰';
+    }
+    return english
+        ? 'Done — I will remind you "${reminder.text}" on $date at $time. ⏰'
+        : 'Listo, te recuerdo "${reminder.text}" el $date a las $time. ⏰';
   }
 
   /// Fire-and-forget memory write-back for one completed text turn. NEVER

@@ -30,12 +30,15 @@ import 'features/local_model/presentation/local_model_providers.dart';
 import 'features/local_model/presentation/local_model_screen.dart';
 import 'features/meetings/presentation/meeting_detail_screen.dart';
 import 'features/meetings/presentation/meetings_screen.dart';
+import 'features/morning_briefing/presentation/morning_briefing_notifier.dart';
 import 'features/morning_briefing/presentation/morning_briefing_providers.dart';
 import 'features/morning_briefing/presentation/morning_briefing_screen.dart';
 import 'features/morning_briefing/presentation/morning_briefing_sources_screen.dart';
 import 'features/permissions/presentation/permissions_onboarding_screen.dart';
 import 'features/permissions/presentation/permissions_providers.dart';
 import 'features/permissions/presentation/permissions_screen.dart';
+import 'features/reminders/data/reminder_notifications.dart';
+import 'features/reminders/presentation/local_reminders_providers.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
 import 'features/settings/presentation/settings_hub_screen.dart';
 import 'features/settings/presentation/settings_screen.dart';
@@ -101,10 +104,13 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       if (gate == OnboardingGate.done && loc == '/onboarding') {
         return '/';
       }
+      // Roadmap slice C2: `/reminders` is no longer pairing-gated — its
+      // LOCAL tab (on-device store + scheduling) must work unpaired, same
+      // rationale as `/settings/graph`. The engine-viewer tab inside the
+      // screen degrades to its own connection error when unpaired.
       final needsPairing = loc == '/chat' ||
           loc.startsWith('/domains') ||
           loc == '/body' ||
-          loc == '/reminders' ||
           loc == '/insights' ||
           loc == '/briefings' ||
           loc == '/digest' ||
@@ -218,6 +224,14 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // Separate channel + payload from the update notification above; does not
     // touch the app-update wiring.
     WidgetsBinding.instance.addPostFrameCallback((_) => _wireBriefingNotificationTap());
+    // Scheduled ("Boletín automático") briefing: wire the daily reminder tap
+    // and the launch-time auto-run (generate today's briefing if the schedule
+    // says one is due and none exists yet).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _wireScheduledBriefing());
+    // Local reminders (C2): a reminder-notification tap — warm or cold-start —
+    // opens the Recordatorios screen. Own payload ('reminder'); coexists with
+    // the update/briefing handlers via the shared payload registry.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _wireReminderNotificationTap());
     _startForegroundUpdatePolling();
   }
 
@@ -279,6 +293,52 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     ref.read(goRouterProvider).push('/settings/briefing');
   }
 
+  /// Local reminders (C2): a reminder-notification tap opens the
+  /// Recordatorios screen — warm taps via the payload registry, cold-start
+  /// launches via the launch payload.
+  Future<void> _wireReminderNotificationTap() async {
+    final scheduler = ref.read(reminderSchedulerProvider);
+    if (scheduler is! NotificationReminderScheduler) return;
+    try {
+      await scheduler.registerTapHandler(_openRemindersScreen);
+      if (await scheduler.launchedByTap()) _openRemindersScreen();
+    } catch (_) {
+      // Notifications are best-effort — never block app startup.
+    }
+  }
+
+  void _openRemindersScreen() {
+    if (!mounted) return;
+    ref.read(goRouterProvider).push('/reminders');
+  }
+
+  /// Scheduled briefing (Phase 2): tapping the "Tu boletín está listo para
+  /// generarse" reminder — while running OR from a killed-state launch — opens
+  /// the Boletín screen and auto-runs the generation. Even without a tap, app
+  /// startup checks whether a scheduled run is due (missed-hour catch-up); the
+  /// already-generated-today guard lives in the notifier.
+  Future<void> _wireScheduledBriefing() async {
+    final scheduler = ref.read(briefingSchedulerProvider);
+    try {
+      await scheduler.registerTapHandler(_onScheduledBriefingTap);
+      if (await scheduler.launchedByTap()) {
+        _onScheduledBriefingTap();
+      } else {
+        // Normal launch: catch up on a due run (also re-arms the triggers).
+        await ref.read(morningBriefingNotifierProvider.notifier).maybeAutoGenerate();
+      }
+    } catch (_) {
+      // Scheduling is best-effort — never block app startup.
+    }
+  }
+
+  void _onScheduledBriefingTap() {
+    if (!mounted) return;
+    ref.read(goRouterProvider).push('/settings/briefing');
+    // Fire-and-forget: the Boletín screen shows the progress while it runs.
+    unawaited(ref.read(morningBriefingNotifierProvider.notifier).maybeAutoGenerate());
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
     // Self-hosted OTA update: on returning to the foreground, re-check for an
@@ -291,6 +351,9 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
         // Resume the periodic foreground check (also fires an immediate check
         // via onAppResumed above).
         _startForegroundUpdatePolling();
+        // Scheduled briefing: a warm-resume past the scheduled hour catches up
+        // (no-op when disabled, not due, or already generated today).
+        unawaited(ref.read(morningBriefingNotifierProvider.notifier).maybeAutoGenerate());
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
         // Backgrounded/killed: stop polling so no checks run off-screen.

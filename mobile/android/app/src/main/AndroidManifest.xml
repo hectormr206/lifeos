@@ -22,6 +22,17 @@
          this the installer intent is blocked. The user still taps "Instalar"
          on the system dialog (unavoidable for a sideloaded app). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Scheduled local notifications (flutter_local_notifications
+         zonedSchedule): the "Boletín automático" daily trigger (and local
+         reminders) fire at the chosen hour via AlarmManager.
+           * SCHEDULE_EXACT_ALARM: exact alarms on Android 12+ (user-revocable
+             special access; the code falls back to an inexact alarm when
+             denied, e.g. Android 14+ defaults).
+           * RECEIVE_BOOT_COMPLETED + the boot receiver: re-register pending
+             scheduled notifications after a reboot (otherwise a restart
+             silently drops the alarm). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <application
         android:label="LifeOS"
         android:name="${applicationName}"
@@ -54,6 +65,20 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- flutter_local_notifications scheduled-notification receivers
+             (plugin-documented setup; the plugin's own manifest does NOT
+             declare them): the first delivers the AlarmManager broadcast that
+             posts the scheduled notification, the second re-registers pending
+             schedules after reboot/app-update. -->
+        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

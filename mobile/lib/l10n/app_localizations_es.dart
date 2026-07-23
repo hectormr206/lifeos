@@ -336,4 +336,14 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get briefingLinkCopied => 'Enlace copiado al portapapeles';
+
+  @override
+  String get briefingScheduleTitle => 'Boletín automático';
+
+  @override
+  String get briefingScheduleSubtitle =>
+      'Genera el boletín cada día a la hora elegida. Si la app está cerrada, recibirás un aviso para generarlo con un toque.';
+
+  @override
+  String get briefingScheduleTimeLabel => 'Hora del boletín';
 }

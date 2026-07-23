@@ -1,4 +1,6 @@
 import 'package:lifeos/features/morning_briefing/domain/briefing_notifications.dart';
+import 'package:lifeos/features/morning_briefing/domain/briefing_schedule.dart';
+import 'package:lifeos/features/morning_briefing/domain/briefing_scheduler.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing_preferences.dart';
 import 'package:lifeos/features/morning_briefing/domain/source_fetcher.dart';
@@ -41,16 +43,46 @@ class FakeBriefingNotifications implements BriefingNotifications {
   Future<bool> launchedByTap() async => launched;
 }
 
+/// In-memory [BriefingScheduler]: records scheduled/cancelled reminders + the
+/// tap handler. No flutter_local_notifications channel, no alarms.
+class FakeBriefingScheduler implements BriefingScheduler {
+  final List<DateTime> scheduled = [];
+  int cancelCount = 0;
+  void Function()? handler;
+  bool launched = false;
+
+  /// The most recently scheduled reminder instant, or null.
+  DateTime? get lastScheduled => scheduled.isEmpty ? null : scheduled.last;
+
+  @override
+  Future<void> scheduleReminder(DateTime when) async => scheduled.add(when);
+
+  @override
+  Future<void> cancelReminder() async => cancelCount++;
+
+  @override
+  Future<void> registerTapHandler(void Function() onTap) async => handler = onTap;
+
+  @override
+  Future<bool> launchedByTap() async => launched;
+}
+
 /// In-memory [MorningBriefingPreferences]: no shared_preferences channel.
 class FakeMorningBriefingPreferences implements MorningBriefingPreferences {
-  FakeMorningBriefingPreferences({List<String>? initialSources, OnDeviceBriefing? initialBriefing})
-      : _sources = initialSources ?? const [],
-        _lastBriefing = initialBriefing;
+  FakeMorningBriefingPreferences({
+    List<String>? initialSources,
+    OnDeviceBriefing? initialBriefing,
+    BriefingSchedule? initialSchedule,
+  })  : _sources = initialSources ?? const [],
+        _lastBriefing = initialBriefing,
+        _schedule = initialSchedule ?? const BriefingSchedule();
 
   List<String> _sources;
   OnDeviceBriefing? _lastBriefing;
+  BriefingSchedule _schedule;
   int saveCount = 0;
   int setSourcesCount = 0;
+  int saveScheduleCount = 0;
 
   @override
   Future<List<String>> sources() async => List<String>.from(_sources);
@@ -68,5 +100,14 @@ class FakeMorningBriefingPreferences implements MorningBriefingPreferences {
   Future<void> saveLastBriefing(OnDeviceBriefing briefing) async {
     _lastBriefing = briefing;
     saveCount++;
+  }
+
+  @override
+  Future<BriefingSchedule> schedule() async => _schedule;
+
+  @override
+  Future<void> saveSchedule(BriefingSchedule schedule) async {
+    _schedule = schedule;
+    saveScheduleCount++;
   }
 }

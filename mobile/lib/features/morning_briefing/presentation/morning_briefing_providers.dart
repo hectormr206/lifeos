@@ -1,8 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/dio_source_fetcher.dart';
+import '../data/local_briefing_scheduler.dart';
 import '../data/source_content_extractor.dart';
 import '../domain/briefing_notifications.dart';
+import '../domain/briefing_scheduler.dart';
 import '../domain/morning_briefing_preferences.dart';
 import '../domain/source_fetcher.dart';
 
@@ -24,3 +26,8 @@ final sourceContentExtractorProvider =
 /// `lifeos_briefing` channel). Overridden with a fake in tests.
 final briefingNotificationsProvider =
     Provider<BriefingNotifications>((ref) => FlutterLocalBriefingNotifications());
+
+/// OS-level trigger for the "Boletín automático" schedule (exact/inexact
+/// AlarmManager alarm posting the "toca aquí" reminder when the process is
+/// dead at the scheduled hour). Overridden with a fake in tests.
+final briefingSchedulerProvider = Provider<BriefingScheduler>((ref) => LocalBriefingScheduler());

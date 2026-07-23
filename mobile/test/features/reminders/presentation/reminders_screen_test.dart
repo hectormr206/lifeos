@@ -1,7 +1,9 @@
-// Proves RemindersScreen renders the upcoming/pending list, the NL
-// quick-create bar (reusing the chat endpoint), and a "mark done" action
-// per reminder that calls the repository's cancel(). No live engine — both
-// repositories faked.
+// Proves the ENGINE-VIEWER half of RemindersScreen (now the "Desde tu
+// laptop" tab — roadmap slice C2 added a LOCAL tab next to it): renders the
+// upcoming/pending list, the NL quick-create bar (reusing the chat
+// endpoint), and a "mark done" action per reminder that calls the
+// repository's cancel(). No live engine — both repositories faked. The
+// LOCAL tab has its own suite (local_reminders_notifier_test.dart).
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -65,6 +67,17 @@ class _FakeChatRepository implements ChatRepository {
   }
 }
 
+/// Switches to the "Desde tu laptop" tab (the engine viewer under test here)
+/// and pumps past the tab animation so the LOCAL tab's page is disposed —
+/// finders then only see the engine tab's widgets.
+Future<void> openEngineTab(WidgetTester tester) async {
+  await tester.pump();
+  await tester.tap(find.text('Desde tu laptop'));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 350));
+  await tester.pump();
+}
+
 void main() {
   testWidgets('renders pending reminders with their message', (tester) async {
     final reminder =
@@ -77,8 +90,7 @@ void main() {
         child: const MaterialApp(home: RemindersScreen()),
       ),
     );
-    await tester.pump();
-    await tester.pump();
+    await openEngineTab(tester);
 
     expect(find.text('Llamar al doctor'), findsOneWidget);
   });
@@ -92,8 +104,7 @@ void main() {
         child: const MaterialApp(home: RemindersScreen()),
       ),
     );
-    await tester.pump();
-    await tester.pump();
+    await openEngineTab(tester);
 
     expect(find.text('No tienes recordatorios pendientes.'), findsOneWidget);
   });
@@ -107,8 +118,7 @@ void main() {
         child: const MaterialApp(home: RemindersScreen()),
       ),
     );
-    await tester.pump();
-    await tester.pump();
+    await openEngineTab(tester);
 
     expect(find.text('boom'), findsOneWidget);
     expect(find.text('Reintentar'), findsOneWidget);
@@ -127,8 +137,7 @@ void main() {
         child: const MaterialApp(home: RemindersScreen()),
       ),
     );
-    await tester.pump();
-    await tester.pump();
+    await openEngineTab(tester);
     expect(repo.listCalls, 1);
 
     await tester.enterText(find.byType(TextField), 'recuérdame llamar al doctor mañana a las 3');
@@ -152,8 +161,7 @@ void main() {
         child: const MaterialApp(home: RemindersScreen()),
       ),
     );
-    await tester.pump();
-    await tester.pump();
+    await openEngineTab(tester);
     expect(repo.listCalls, 1);
 
     await tester.tap(find.byIcon(Icons.check_circle_outline));
@@ -179,8 +187,7 @@ void main() {
         child: const MaterialApp(home: RemindersScreen()),
       ),
     );
-    await tester.pump();
-    await tester.pump();
+    await openEngineTab(tester);
 
     expect(find.byIcon(Icons.cloud_off), findsOneWidget);
     expect(find.textContaining('Sin conexión'), findsOneWidget);

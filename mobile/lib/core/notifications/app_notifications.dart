@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
 
 /// Single owner of the app's [FlutterLocalNotificationsPlugin].
 ///
@@ -114,6 +116,87 @@ class AppNotifications {
     } catch (_) {
       // No channel (test) / denied permission — never let a notification
       // failure break the caller's flow.
+    }
+  }
+
+  /// One-time load of the `timezone` package's zone database, needed before
+  /// any [tz.TZDateTime] can be built. Process-wide (the tz package keeps a
+  /// global database), guarded so repeated schedules don't re-parse it.
+  static bool _timeZonesReady = false;
+  static void _ensureTimeZones() {
+    if (_timeZonesReady) return;
+    tzdata.initializeTimeZones();
+    _timeZonesReady = true;
+  }
+
+  /// Schedule a heads-up notification for the absolute instant [scheduledAt]
+  /// (LOCAL reminders, roadmap slice C2). Same channel/payload contract as
+  /// [show]; re-scheduling with the same [id] replaces the previous schedule.
+  ///
+  /// The instant is scheduled as a UTC `TZDateTime` — an absolute point in
+  /// time, so no device IANA-zone lookup (= no extra plugin dep) is needed.
+  /// With [repeatDailyAtTime] the plugin repeats at the same UTC wall time
+  /// every day (`DateTimeComponents.time`), which is the same LOCAL time on
+  /// every fixed-offset zone (Mexico has no DST). A future timezone slice can
+  /// swap in a real local `tz.Location` behind this one method.
+  ///
+  /// `AndroidScheduleMode.inexactAllowWhileIdle` is used deliberately: it
+  /// needs NO `SCHEDULE_EXACT_ALARM` manifest permission (no native file
+  /// changes) and minute-level precision is plenty for a personal reminder.
+  Future<void> zonedSchedule({
+    required int id,
+    required String channelId,
+    required String channelName,
+    required String channelDescription,
+    required String title,
+    required String body,
+    required String payload,
+    required DateTime scheduledAt,
+    bool repeatDailyAtTime = false,
+  }) async {
+    try {
+      await _ensureInitialized();
+      _ensureTimeZones();
+      final when = tz.TZDateTime.from(scheduledAt.toUtc(), tz.UTC);
+      // A past one-shot would throw in the plugin; the caller decides how to
+      // surface overdue reminders, so just skip scheduling. A daily repeat is
+      // fine: DateTimeComponents.time matches the NEXT occurrence.
+      if (!repeatDailyAtTime && !when.isAfter(tz.TZDateTime.now(tz.UTC))) {
+        return;
+      }
+      final details = NotificationDetails(
+        android: AndroidNotificationDetails(
+          channelId,
+          channelName,
+          channelDescription: channelDescription,
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+      );
+      await _plugin.zonedSchedule(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDate: when,
+        notificationDetails: details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        matchDateTimeComponents: repeatDailyAtTime ? DateTimeComponents.time : null,
+        payload: payload,
+      );
+    } catch (_) {
+      // No channel (test) / denied permission — scheduling is best-effort and
+      // never breaks the caller's flow (same contract as [show]).
+    }
+  }
+
+  /// Cancel a previously scheduled notification by its [id]. Safe to call for
+  /// ids that were never scheduled; failures are swallowed like everywhere
+  /// else in this component.
+  Future<void> cancelScheduled(int id) async {
+    try {
+      await _plugin.cancel(id: id);
+    } catch (_) {
+      // Best-effort.
     }
   }
 }

@@ -2,6 +2,7 @@
 // first run, persists a custom source list, and round-trips the last briefing
 // through JSON — using shared_preferences' in-memory mock (no platform channel).
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/morning_briefing/domain/briefing_schedule.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing_preferences.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -51,6 +52,24 @@ void main() {
     expect(loaded.items.single.sourceTitle, 'Fuente');
     expect(loaded.items.single.summary, 'Resumen');
     expect(loaded.generatedAt, DateTime(2026, 7, 20, 8, 30));
+  });
+
+  test('defaults the schedule to disabled at 8:00 when nothing is stored', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = SharedPrefsMorningBriefingPreferences();
+    expect(await prefs.schedule(), const BriefingSchedule(enabled: false, hour: 8, minute: 0));
+  });
+
+  test('round-trips the "Boletín automático" schedule', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = SharedPrefsMorningBriefingPreferences();
+
+    await prefs.saveSchedule(const BriefingSchedule(enabled: true, hour: 7, minute: 30));
+    expect(await prefs.schedule(), const BriefingSchedule(enabled: true, hour: 7, minute: 30));
+
+    // Disabling keeps the chosen hour for when it is re-enabled.
+    await prefs.saveSchedule(const BriefingSchedule(enabled: false, hour: 7, minute: 30));
+    expect(await prefs.schedule(), const BriefingSchedule(enabled: false, hour: 7, minute: 30));
   });
 
   test('decode returns null on malformed JSON', () {

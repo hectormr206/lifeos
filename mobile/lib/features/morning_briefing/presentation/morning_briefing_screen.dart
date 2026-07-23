@@ -38,6 +38,7 @@ class MorningBriefingScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
         children: [
+          _ScheduleCard(state: state, notifier: notifier),
           if (state.isGenerating)
             _ProgressCard(label: state.progressLabel ?? l10n.briefingGenerating)
           else if (state.phase == BriefingPhase.error && state.error != null)
@@ -62,6 +63,52 @@ class MorningBriefingScreen extends ConsumerWidget {
         label: Text(state.isGenerating ? l10n.briefingGenerating : l10n.briefingGenerateNow),
       ),
     );
+  }
+}
+
+/// "Boletín automático" setting: a daily-schedule switch plus the hour picker
+/// (default 8:00). Persisted through the notifier so the OS reminder and the
+/// in-app trigger re-arm immediately on every change.
+class _ScheduleCard extends StatelessWidget {
+  const _ScheduleCard({required this.state, required this.notifier});
+
+  final MorningBriefingState state;
+  final MorningBriefingNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final schedule = state.schedule;
+    final time = TimeOfDay(hour: schedule.hour, minute: schedule.minute);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        children: [
+          SwitchListTile(
+            title: Text(l10n.briefingScheduleTitle),
+            subtitle: Text(l10n.briefingScheduleSubtitle),
+            value: schedule.enabled,
+            onChanged: (enabled) => notifier.setScheduleEnabled(enabled),
+          ),
+          if (schedule.enabled)
+            ListTile(
+              leading: const Icon(Icons.schedule, color: LifeOSColors.teal),
+              title: Text(l10n.briefingScheduleTimeLabel),
+              trailing: Text(
+                time.format(context),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              onTap: () => _pickTime(context, time),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickTime(BuildContext context, TimeOfDay current) async {
+    final picked = await showTimePicker(context: context, initialTime: current);
+    if (picked == null) return;
+    await notifier.setScheduleTime(picked.hour, picked.minute);
   }
 }
 

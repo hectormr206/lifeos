@@ -709,6 +709,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Link copied to clipboard'**
   String get briefingLinkCopied;
+
+  /// No description provided for @briefingScheduleTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic briefing'**
+  String get briefingScheduleTitle;
+
+  /// No description provided for @briefingScheduleSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Generates the briefing every day at the chosen time. If the app is closed, you will get a notification to generate it with one tap.'**
+  String get briefingScheduleSubtitle;
+
+  /// No description provided for @briefingScheduleTimeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Briefing time'**
+  String get briefingScheduleTimeLabel;
 }
 
 class _AppLocalizationsDelegate

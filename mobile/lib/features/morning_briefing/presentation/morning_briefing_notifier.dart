@@ -1,9 +1,13 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/locale_providers.dart';
 import '../../local_model/domain/local_llm_engine.dart';
 import '../../local_model/presentation/local_model_providers.dart';
 import '../data/source_content_extractor.dart';
+import '../domain/briefing_schedule.dart';
 import '../domain/morning_briefing.dart';
 import '../domain/source_fetcher.dart';
 import 'morning_briefing_providers.dart';
@@ -36,6 +40,7 @@ class MorningBriefingState {
   const MorningBriefingState({
     this.sources = const [],
     this.briefing,
+    this.schedule = const BriefingSchedule(),
     this.phase = BriefingPhase.idle,
     this.progressLabel,
     this.error,
@@ -43,6 +48,9 @@ class MorningBriefingState {
 
   /// Configured news-source URLs (the user adds/removes these).
   final List<String> sources;
+
+  /// The "Boletín automático" setting (daily trigger + hour).
+  final BriefingSchedule schedule;
 
   /// The last briefing produced (persisted so it survives navigation).
   final OnDeviceBriefing? briefing;
@@ -64,6 +72,7 @@ class MorningBriefingState {
   MorningBriefingState copyWith({
     List<String>? sources,
     OnDeviceBriefing? briefing,
+    BriefingSchedule? schedule,
     BriefingPhase? phase,
     String? progressLabel,
     String? error,
@@ -71,6 +80,7 @@ class MorningBriefingState {
       MorningBriefingState(
         sources: sources ?? this.sources,
         briefing: briefing ?? this.briefing,
+        schedule: schedule ?? this.schedule,
         phase: phase ?? this.phase,
         progressLabel: progressLabel,
         error: error,
@@ -90,6 +100,15 @@ class MorningBriefingState {
 class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   Future<void>? _bootstrapFuture;
 
+  /// In-process daily trigger: while the app process is alive at the scheduled
+  /// hour, this timer runs [generate] directly (fully autonomous, no tap).
+  Timer? _autoRunTimer;
+
+  /// Injectable clock so the schedule/auto-run logic is testable with a frozen
+  /// "now" (production always uses the real clock).
+  @visibleForTesting
+  DateTime Function() clock = DateTime.now;
+
   /// Lets tests await the initial hydration deterministically (mirrors the
   /// `ready` seam on the other notifiers).
   Future<void> get ready => _bootstrapFuture ?? Future<void>.value();
@@ -105,6 +124,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
 
   @override
   MorningBriefingState build() {
+    ref.onDispose(() => _autoRunTimer?.cancel());
     _bootstrapFuture = _hydrate();
     return const MorningBriefingState();
   }
@@ -114,11 +134,14 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       final prefs = ref.read(morningBriefingPreferencesProvider);
       final sources = await prefs.sources();
       final last = await prefs.lastBriefing();
-      state = state.copyWith(sources: sources, briefing: last);
+      final schedule = await prefs.schedule();
+      state = state.copyWith(sources: sources, briefing: last, schedule: schedule);
     } catch (_) {
       // Persistence unavailable (e.g. no platform channel in a widget test) —
       // keep the safe empty default rather than crashing.
     }
+    // Arm/refresh the OS reminder + in-app timer for the hydrated schedule.
+    await _armTriggers();
   }
 
   /// Adds [url] to the configured sources (trimmed, de-duplicated) and persists.
@@ -144,6 +167,79 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     } catch (_) {
       // Best-effort persistence; in-memory state still reflects the choice.
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // "Boletín automático" (scheduled autonomous run)
+  // ---------------------------------------------------------------------------
+
+  /// Turns the daily automatic briefing on/off, persists, and re-arms (or
+  /// cancels) the OS reminder + in-app timer.
+  Future<void> setScheduleEnabled(bool enabled) =>
+      _updateSchedule(state.schedule.copyWith(enabled: enabled));
+
+  /// Changes the daily hour/minute, persists, and re-arms the triggers.
+  Future<void> setScheduleTime(int hour, int minute) =>
+      _updateSchedule(state.schedule.copyWith(hour: hour, minute: minute));
+
+  Future<void> _updateSchedule(BriefingSchedule schedule) async {
+    state = state.copyWith(schedule: schedule);
+    try {
+      await ref.read(morningBriefingPreferencesProvider).saveSchedule(schedule);
+    } catch (_) {
+      // Best-effort persistence; in-memory state still reflects the choice.
+    }
+    await _armTriggers();
+  }
+
+  /// (Re)arms BOTH triggers for the current schedule:
+  ///   - the OS-scheduled reminder notification (fires even if the process is
+  ///     dead — tapping it launches the app, which auto-runs), and
+  ///   - an in-app [Timer] so a WARM process generates directly at the hour,
+  ///     no tap needed.
+  /// Disabled schedule → both are cancelled. One-shot by design: every app
+  /// start / resume / run re-arms for the NEXT occurrence, which naturally
+  /// skips a day whose briefing already exists.
+  Future<void> _armTriggers() async {
+    _autoRunTimer?.cancel();
+    _autoRunTimer = null;
+    final scheduler = ref.read(briefingSchedulerProvider);
+    final schedule = state.schedule;
+    if (!schedule.enabled) {
+      await scheduler.cancelReminder();
+      return;
+    }
+    final now = clock();
+    final next = schedule.nextRun(now, lastGeneratedAt: state.briefing?.generatedAt);
+    await scheduler.scheduleReminder(next);
+    _autoRunTimer = Timer(next.difference(now), _onAutoRunTimer);
+  }
+
+  Future<void> _onAutoRunTimer() async {
+    // The process is warm at the scheduled hour — run autonomously. The OS
+    // reminder fired at the same instant; maybeAutoGenerate cancels it so the
+    // user is not asked to tap for a briefing that is being generated.
+    await maybeAutoGenerate();
+  }
+
+  /// Entry point for every trigger path (app launch, resume, reminder tap,
+  /// in-app timer): runs [generate] IF the schedule says a run is due now AND
+  /// today's briefing does not exist yet (the already-generated-today guard
+  /// lives in [BriefingSchedule.shouldRunNow]). Always re-arms the triggers
+  /// for the next occurrence afterwards.
+  Future<void> maybeAutoGenerate() async {
+    await ready;
+    if (state.isGenerating) return;
+    final due = state.schedule.shouldRunNow(
+      clock(),
+      lastGeneratedAt: state.briefing?.generatedAt,
+    );
+    if (due) {
+      // Remove a pending/posted "toca aquí" reminder — we are generating now.
+      await ref.read(briefingSchedulerProvider).cancelReminder();
+      await generate();
+    }
+    await _armTriggers();
   }
 
   /// Runs the whole pipeline. No-op while already generating.
@@ -199,7 +295,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     state = state.copyWith(phase: BriefingPhase.summarizing, progressLabel: 'Redactando la introducción…');
     final intro = await _writeIntro(items, engine: engine);
 
-    final briefing = OnDeviceBriefing(intro: intro, items: items, generatedAt: DateTime.now());
+    final briefing = OnDeviceBriefing(intro: intro, items: items, generatedAt: clock());
     state = state.copyWith(briefing: briefing, phase: BriefingPhase.done, progressLabel: null);
 
     // Persist + notify (best-effort; neither is allowed to break the run).
@@ -212,6 +308,14 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       await ref.read(briefingNotificationsProvider).showBriefingReady();
     } catch (_) {
       // Notification is best-effort; the briefing is already on screen.
+    }
+    // Re-arm the scheduled triggers with the fresh generatedAt so a manual run
+    // BEFORE the scheduled hour moves today's reminder to tomorrow (idempotent
+    // when the caller was maybeAutoGenerate, which re-arms too).
+    try {
+      await _armTriggers();
+    } catch (_) {
+      // Scheduling is best-effort; the briefing run itself already succeeded.
     }
   }
 

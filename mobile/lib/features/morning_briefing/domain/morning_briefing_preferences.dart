@@ -1,5 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'briefing_schedule.dart';
 import 'morning_briefing.dart';
 
 /// Starting news sources (RSS/Atom feeds), seeded from the laptop LifeOS
@@ -45,6 +46,12 @@ abstract class MorningBriefingPreferences {
   Future<OnDeviceBriefing?> lastBriefing();
 
   Future<void> saveLastBriefing(OnDeviceBriefing briefing);
+
+  /// The "Boletín automático" schedule (disabled + 8:00 until the user
+  /// enables it).
+  Future<BriefingSchedule> schedule();
+
+  Future<void> saveSchedule(BriefingSchedule schedule);
 }
 
 /// [MorningBriefingPreferences] backed by `shared_preferences`.
@@ -53,6 +60,9 @@ class SharedPrefsMorningBriefingPreferences implements MorningBriefingPreference
 
   static const String sourcesKey = 'morning_briefing_sources';
   static const String lastBriefingKey = 'morning_briefing_last';
+  static const String scheduleEnabledKey = 'morning_briefing_schedule_enabled';
+  static const String scheduleHourKey = 'morning_briefing_schedule_hour';
+  static const String scheduleMinuteKey = 'morning_briefing_schedule_minute';
 
   SharedPreferences? _prefs;
 
@@ -79,4 +89,22 @@ class SharedPrefsMorningBriefingPreferences implements MorningBriefingPreference
   @override
   Future<void> saveLastBriefing(OnDeviceBriefing briefing) async =>
       (await _instance).setString(lastBriefingKey, briefing.encode());
+
+  @override
+  Future<BriefingSchedule> schedule() async {
+    final p = await _instance;
+    return BriefingSchedule(
+      enabled: p.getBool(scheduleEnabledKey) ?? false,
+      hour: p.getInt(scheduleHourKey) ?? BriefingSchedule.defaultHour,
+      minute: p.getInt(scheduleMinuteKey) ?? BriefingSchedule.defaultMinute,
+    );
+  }
+
+  @override
+  Future<void> saveSchedule(BriefingSchedule schedule) async {
+    final p = await _instance;
+    await p.setBool(scheduleEnabledKey, schedule.enabled);
+    await p.setInt(scheduleHourKey, schedule.hour);
+    await p.setInt(scheduleMinuteKey, schedule.minute);
+  }
 }

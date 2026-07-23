@@ -126,5 +126,8 @@
   "@briefingGeneratedAt": {
     "placeholders": { "datetime": { "type": "String" } }
   },
-  "briefingLinkCopied": "Link copied to clipboard"
+  "briefingLinkCopied": "Link copied to clipboard",
+  "briefingScheduleTitle": "Automatic briefing",
+  "briefingScheduleSubtitle": "Generates the briefing every day at the chosen time. If the app is closed, you will get a notification to generate it with one tap.",
+  "briefingScheduleTimeLabel": "Briefing time"
 }

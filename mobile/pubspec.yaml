@@ -130,6 +130,12 @@ dependencies:
   #     "Instalar" on the system dialog (unavoidable for a sideloaded app).
   package_info_plus: ^10.2.1
   flutter_local_notifications: ^22.1.0
+  # LOCAL reminders (roadmap slice C2): `zonedSchedule` takes a
+  # `tz.TZDateTime`, so the app must import `package:timezone` directly.
+  # It was ALREADY in the dependency tree (transitive of
+  # flutter_local_notifications, pinned 0.11.1 in the lock) — this line only
+  # promotes it to a direct dependency; no new package is resolved.
+  timezone: ^0.11.1
   open_filex: ^4.7.0
   image_picker: ^1.2.3
   record: ^7.1.1
