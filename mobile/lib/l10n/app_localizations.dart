@@ -746,6 +746,12 @@ abstract class AppLocalizations {
   /// **'Delete message'**
   String get chatDeleteMessage;
 
+  /// Shown under the delete action when deleting a user message also deletes the Axi reply that answered it.
+  ///
+  /// In en, this message translates to:
+  /// **'Your message and Axi\'s reply will be deleted.'**
+  String get chatDeleteMessagePairNote;
+
   /// No description provided for @chatDeleteConversation.
   ///
   /// In en, this message translates to:

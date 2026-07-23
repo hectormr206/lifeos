@@ -158,6 +158,68 @@ void main() {
     expect(history.messages[1].text, 'claro');
   });
 
+  // ── Pair deletion: a user message takes Axi's answer with it ─────────────
+  // Deleting a USER turn must also delete the NEXT message when it is Axi's
+  // reply (a reply without its question has no context); deleting an Axi
+  // reply alone, or a user turn followed by ANOTHER user turn (queued sends),
+  // deletes exactly one bubble. Both the visible state and the store shrink.
+
+  ChatMessage msg(String id, ChatRole role, String text) =>
+      ChatMessage(id: id, role: role, text: text, timestamp: DateTime.utc(2026, 1, 1));
+
+  testWidgets('deleting a user message also deletes the Axi reply that follows it', (tester) async {
+    history.messages.addAll([
+      msg('u1', ChatRole.user, 'hola'),
+      msg('a1', ChatRole.axi, 'hola!'),
+      msg('u2', ChatRole.user, 'otra cosa'),
+    ]);
+    final container = makeContainer(_FakeChatRepository());
+    final notifier = container.read(chatNotifierProvider.notifier);
+    await notifier.ready;
+    await notifier.persistedReady;
+
+    final user = container.read(chatNotifierProvider).messages.first;
+    await notifier.deleteMessage(user);
+
+    expect(container.read(chatNotifierProvider).messages.map((m) => m.id), ['u2']);
+    expect(history.messages.map((m) => m.id), ['u2']);
+  });
+
+  testWidgets('deleting an Axi reply removes only the reply', (tester) async {
+    history.messages.addAll([
+      msg('u1', ChatRole.user, 'hola'),
+      msg('a1', ChatRole.axi, 'hola!'),
+    ]);
+    final container = makeContainer(_FakeChatRepository());
+    final notifier = container.read(chatNotifierProvider.notifier);
+    await notifier.ready;
+    await notifier.persistedReady;
+
+    final reply = container.read(chatNotifierProvider).messages.last;
+    await notifier.deleteMessage(reply);
+
+    expect(container.read(chatNotifierProvider).messages.map((m) => m.id), ['u1']);
+    expect(history.messages.map((m) => m.id), ['u1']);
+  });
+
+  testWidgets('deleting a user message followed by ANOTHER user message removes only itself', (tester) async {
+    history.messages.addAll([
+      msg('u1', ChatRole.user, 'primero'),
+      msg('u2', ChatRole.user, 'segundo (en cola)'),
+      msg('a1', ChatRole.axi, 'respuesta al segundo'),
+    ]);
+    final container = makeContainer(_FakeChatRepository());
+    final notifier = container.read(chatNotifierProvider.notifier);
+    await notifier.ready;
+    await notifier.persistedReady;
+
+    final first = container.read(chatNotifierProvider).messages.first;
+    await notifier.deleteMessage(first);
+
+    expect(container.read(chatNotifierProvider).messages.map((m) => m.id), ['u2', 'a1']);
+    expect(history.messages.map((m) => m.id), ['u2', 'a1']);
+  });
+
   testWidgets('clearHistory empties both the visible conversation and the store', (tester) async {
     history.messages.add(
       ChatMessage(id: 'u1', role: ChatRole.user, text: 'viejo', timestamp: DateTime.utc(2026, 1, 1)));

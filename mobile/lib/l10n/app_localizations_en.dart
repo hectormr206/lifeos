@@ -354,6 +354,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatDeleteMessage => 'Delete message';
 
   @override
+  String get chatDeleteMessagePairNote =>
+      'Your message and Axi\'s reply will be deleted.';
+
+  @override
   String get chatDeleteConversation => 'Delete conversation';
 
   @override

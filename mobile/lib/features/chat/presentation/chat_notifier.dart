@@ -375,23 +375,45 @@ class ChatNotifier extends Notifier<ChatUiState> {
     }());
   }
 
-  /// Deletes ONE message: its bubble immediately, then (best-effort) its
-  /// persisted node, vectors, voice clip, and provenance-stamped derived
-  /// facts via [ChatHistoryRepository.deleteMessage].
+  /// The Axi reply that would be deleted TOGETHER with [message] (pairing
+  /// rule): when [message] is a USER turn, its reply is the NEXT message in
+  /// the transcript IF that next message is Axi's — the FIFO appends user
+  /// msg → reply, so replies always directly follow their user turn. Null
+  /// when [message] is Axi's, is the last bubble, or the next bubble is
+  /// another user message (e.g. queued sends still awaiting their replies).
+  ChatMessage? pairedReplyOf(ChatMessage message) {
+    if (message.role != ChatRole.user) return null;
+    final messages = state.messages;
+    final index = messages.indexWhere((m) => m.id == message.id);
+    if (index < 0 || index + 1 >= messages.length) return null;
+    final next = messages[index + 1];
+    return next.role == ChatRole.axi ? next : null;
+  }
+
+  /// Deletes [message] — and, when it is a USER turn, ALSO the Axi reply that
+  /// answered it ([pairedReplyOf]): a reply without its question would keep a
+  /// bubble with no context for why Axi said that. Deleting an Axi reply alone
+  /// leaves the user message intact (context flows forward). Both bubbles drop
+  /// immediately; then (best-effort) each one's persisted node, vectors, voice
+  /// clip, and provenance-stamped derived facts cascade via
+  /// [ChatHistoryRepository.deleteMessage].
   Future<void> deleteMessage(ChatMessage message) async {
     if (_disposed) return;
+    final reply = pairedReplyOf(message);
+    final doomedIds = {message.id, if (reply != null) reply.id};
     state = state.copyWith(
       messages: [
         for (final m in state.messages)
-          if (m.id != message.id) m,
+          if (!doomedIds.contains(m.id)) m,
       ],
     );
     final repo = await _history();
     if (repo == null) return;
     try {
       await repo.deleteMessage(message);
+      if (reply != null) await repo.deleteMessage(reply);
     } catch (_) {
-      // Best-effort: the bubble is already gone; persistence degrades.
+      // Best-effort: the bubbles are already gone; persistence degrades.
     }
   }
 

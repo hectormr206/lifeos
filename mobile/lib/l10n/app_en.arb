@@ -69,6 +69,19 @@
   "homeMeetings": "Meetings",
   "homeUpdates": "Updates",
 
+  "axiAvatarLabel": "Axi — living agent. Tap an organ to explore it.",
+  "axiOrganComingSoon": "Coming soon on your phone",
+  "brain3dTitle": "3D Brain",
+  "brain3dEmpty": "No memories in the local graph yet. Chat with Axi and its brain will grow.",
+  "brain3dSummary": "{nodes} nodes · {edges} links in the local graph",
+  "@brain3dSummary": {
+    "placeholders": {
+      "nodes": { "type": "int" },
+      "edges": { "type": "int" }
+    }
+  },
+  "memoryOpenBrain3d": "See 3D Brain",
+
   "chatTitle": "Axi",
   "chatVoiceReplyTooltip": "Reply by voice",
   "chatVoiceReplyTitle": "Reply by voice",
@@ -134,6 +147,10 @@
   "briefingScheduleTimeLabel": "Briefing time",
 
   "chatDeleteMessage": "Delete message",
+  "chatDeleteMessagePairNote": "Your message and Axi's reply will be deleted.",
+  "@chatDeleteMessagePairNote": {
+    "description": "Shown under the delete action when deleting a user message also deletes the Axi reply that answered it."
+  },
   "chatDeleteConversation": "Delete conversation",
   "chatDeleteConversationTitle": "Delete conversation?",
   "chatDeleteConversationBody": "This deletes the messages, the memories Axi derived from this conversation, and its voice notes on this device.",

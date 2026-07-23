@@ -362,7 +362,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
 
   /// Long-press affordance: a bottom sheet with "Eliminar mensaje". Tapping
   /// it deletes the bubble + its persisted node/vectors/derived facts/clip.
+  /// Deleting a USER message also deletes the Axi reply that answered it
+  /// (pairing rule in [ChatNotifier.deleteMessage]) — the subtitle warns
+  /// about that whenever a paired reply exists.
   Future<void> _showMessageActions(ChatMessage message) async {
+    final deletesPairedReply =
+        ref.read(chatNotifierProvider.notifier).pairedReplyOf(message) != null;
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) => SafeArea(
@@ -372,6 +377,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
             ListTile(
               leading: const Icon(Icons.delete_outline),
               title: Text(AppLocalizations.of(sheetContext).chatDeleteMessage),
+              subtitle: deletesPairedReply
+                  ? Text(AppLocalizations.of(sheetContext).chatDeleteMessagePairNote)
+                  : null,
               onTap: () {
                 Navigator.of(sheetContext).pop();
                 ref.read(chatNotifierProvider.notifier).deleteMessage(message);

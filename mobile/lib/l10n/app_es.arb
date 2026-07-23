@@ -60,6 +60,13 @@
   "homeMeetings": "Reuniones",
   "homeUpdates": "Actualizaciones",
 
+  "axiAvatarLabel": "Axi — agente vivo. Toca un órgano para explorarlo.",
+  "axiOrganComingSoon": "Próximamente en tu teléfono",
+  "brain3dTitle": "Cerebro 3D",
+  "brain3dEmpty": "Aún no hay recuerdos en el grafo local. Conversa con Axi y su cerebro crecerá.",
+  "brain3dSummary": "{nodes} nodos · {edges} enlaces en el grafo local",
+  "memoryOpenBrain3d": "Ver Cerebro 3D",
+
   "chatTitle": "Axi",
   "chatVoiceReplyTooltip": "Responder por voz",
   "chatVoiceReplyTitle": "Responder por voz",
@@ -116,6 +123,7 @@
   "briefingScheduleTimeLabel": "Hora del boletín",
 
   "chatDeleteMessage": "Eliminar mensaje",
+  "chatDeleteMessagePairNote": "Se eliminará tu mensaje y la respuesta de Axi.",
   "chatDeleteConversation": "Eliminar conversación",
   "chatDeleteConversationTitle": "¿Eliminar la conversación?",
   "chatDeleteConversationBody": "Se eliminarán los mensajes, los recuerdos que Axi derivó de esta conversación y sus notas de voz en este dispositivo.",
