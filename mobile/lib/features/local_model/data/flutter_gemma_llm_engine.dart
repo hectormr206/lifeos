@@ -20,6 +20,79 @@ Future<void> _registerLiteRtLmEngine() => FlutterGemma.initialize(
 /// real, on-device path (roadmap SLICE 1). Everything plugin-specific is
 /// confined here; the rest of the app only ever sees [LocalLlmEngine].
 ///
+/// ─── INFERENCE ENGINE LIFECYCLE ───────────────────────────────────────────
+///
+/// The engine progresses through three phases, each keyed on a private field:
+///
+///   1. INIT   — [_initFuture] is null on construction. The first call to any
+///               public method invokes [_ensureInitialized], which sets
+///               [_initFuture] and runs [_initializer] exactly once. After
+///               this, flutter_gemma's native channel is ready and the
+///               `.litertlm` inference engine is registered. Subsequent calls
+///               skip init by re-awaiting the already-resolved future.
+///
+///   2. LOADED — [load] creates a native [InferenceModel] (allocated on the
+///               device accelerator or CPU) and stores it in [_model]. The
+///               `_model ??=` guard prevents a redundant second allocation if
+///               [load] is called more than once without an intervening
+///               [dispose]. Multiple [generate] / [generateWithImages] calls
+///               reuse the SAME [_model] handle for their lifetime.
+///
+///   3. CLOSED — [dispose] transitions back to the un-loaded state:
+///               [_model] is set to null BEFORE `model.close()` is awaited.
+///               This ordering is intentional: if [close] throws (e.g. the
+///               native runtime is already torn down), the Dart reference is
+///               gone, so a subsequent [load] always obtains a fresh handle
+///               instead of re-using a potentially corrupt one.
+///
+/// ─── MEMORY MANAGEMENT & OTA UPDATE SAFETY ────────────────────────────────
+///
+/// The native LiteRT-LM runtime memory-maps model weights directly from the
+/// on-disk `.litertlm` file. As long as [_model] is non-null, the file is
+/// held open by the OS's virtual-memory subsystem — on Android this means
+/// the kernel keeps the inode pinned across unlink calls. Replacing the file
+/// while the model is loaded therefore has two risks:
+///
+///   a. DATA CORRUPTION — writing new weights into a file that is actively
+///      being read by LiteRT-LM's decode loop can produce undefined results.
+///
+///   b. STORAGE LEAK — on Android, unlinking (uninstalling) the model file
+///      while it is still memory-mapped leaves the inode live until all
+///      descriptors are closed; the ~2.6 GB can silently remain allocated
+///      until the process exits.
+///
+/// Both risks are closed by [installModelFromFile] and [deleteModel] calling
+/// [dispose] BEFORE touching the file:
+///
+///   OTA UPDATE SEQUENCE:
+///     [installModelFromFile](newPath)
+///       └─ [dispose]()          ← closes the native handle; frees the mmap
+///       └─ FlutterGemma.installModel(...).fromFile(newPath).install()
+///          (registers the external path; does NOT copy the file)
+///       └─ caller must call [load]() again to serve new requests
+///
+///   DELETE SEQUENCE:
+///     [deleteModel]()
+///       └─ [dispose]()          ← same guard; file unlocked before uninstall
+///       └─ FlutterGemma.uninstallModel(...)
+///          (removes metadata + in-library files; OTA-external paths need an
+///           additional BrainModelUpdateGateway.deleteLocalFile call)
+///
+/// Callers must not hold an open [InferenceChat] across either sequence;
+/// [InferenceChat] is derived from [_model] and becomes invalid after
+/// [model.close()]. The single-turn design of [generate] / [generateWithImages]
+/// (fresh chat per call, not persisted) ensures no chat leaks across an OTA.
+///
+/// ─── INFERENCE ENGINE REGISTRATION ────────────────────────────────────────
+///
+/// flutter_gemma cores register NO inference engine by default — the
+/// `.litertlm` runtime lives in the separate `flutter_gemma_litertlm` package.
+/// The default [initializer] ([_registerLiteRtLmEngine]) registers it via
+/// `FlutterGemma.initialize(inferenceEngines: [LiteRtLmEngine()])`; without it
+/// [load]/[generate] throw a "add the engine package" StateError at runtime.
+/// The [initializer] stays a swappable seam so tests inject a fake with no
+/// plugin channel. `_ensureInitialized` guarantees this runs exactly once.
+///
 /// Flow (verified against flutter_gemma 1.3.1 sources):
 ///   install: `FlutterGemma.installModel(modelType: gemma4, fileType:
 ///     litertlm).fromNetwork(url).withProgress(cb).install()`
@@ -28,15 +101,6 @@ Future<void> _registerLiteRtLmEngine() => FlutterGemma.initialize(
 ///     → generateChatResponse()` (returns a `ModelResponse`; the text lives in
 ///     `TextResponse.token`)
 ///   dispose: `model.close()`
-///
-/// INFERENCE ENGINE REGISTRATION: flutter_gemma cores register NO inference
-/// engine by default — the `.litertlm` runtime lives in the separate
-/// `flutter_gemma_litertlm` package. The default [initializer]
-/// ([_registerLiteRtLmEngine]) registers it via
-/// `FlutterGemma.initialize(inferenceEngines: [LiteRtLmEngine()])`; without it
-/// [load]/[generate] throw a "add the engine package" StateError at runtime.
-/// The [initializer] stays a swappable seam so tests inject a fake with no
-/// plugin channel. `_ensureInitialized` guarantees this runs exactly once.
 class FlutterGemmaLlmEngine implements LocalLlmEngine {
   FlutterGemmaLlmEngine(this._config, {Future<void> Function()? initializer})
       : _initializer = initializer ?? _registerLiteRtLmEngine;
@@ -226,6 +290,13 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     return (trimmed.length / 4).ceil();
   }
 
+  /// Releases the native [InferenceModel] handle and resets [_model] to null.
+  ///
+  /// The field is nulled BEFORE [model.close()] is awaited so that a throw
+  /// inside [close] leaves the engine in a clean un-loaded state rather than
+  /// holding a stale (potentially corrupt) reference. This ordering is the
+  /// invariant that makes OTA-update and delete sequences safe: any caller
+  /// that subsequently calls [load] will always receive a fresh handle.
   @override
   Future<void> dispose() async {
     final model = _model;
