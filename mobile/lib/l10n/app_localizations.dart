@@ -428,6 +428,36 @@ abstract class AppLocalizations {
   /// **'Updates'**
   String get homeUpdates;
 
+  /// No description provided for @axiAvatarLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Axi — living agent. Tap an organ to explore it.'**
+  String get axiAvatarLabel;
+
+  /// No description provided for @axiOrganComingSoon.
+  ///
+  /// In en, this message translates to:
+  /// **'Coming soon on your phone'**
+  String get axiOrganComingSoon;
+
+  /// No description provided for @brain3dTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'3D Brain'**
+  String get brain3dTitle;
+
+  /// No description provided for @brain3dEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No memories in the local graph yet. Chat with Axi and its brain will grow.'**
+  String get brain3dEmpty;
+
+  /// No description provided for @brain3dSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'{nodes} nodes · {edges} links in the local graph'**
+  String brain3dSummary(int nodes, int edges);
+
   /// No description provided for @chatTitle.
   ///
   /// In en, this message translates to:

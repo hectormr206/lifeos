@@ -65,7 +65,6 @@
   "brain3dTitle": "Cerebro 3D",
   "brain3dEmpty": "Aún no hay recuerdos en el grafo local. Conversa con Axi y su cerebro crecerá.",
   "brain3dSummary": "{nodes} nodos · {edges} enlaces en el grafo local",
-  "memoryOpenBrain3d": "Ver Cerebro 3D",
 
   "chatTitle": "Axi",
   "chatVoiceReplyTooltip": "Responder por voz",

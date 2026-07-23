@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../app_update/presentation/update_available_banner.dart';
+import '../../axi_body/presentation/axi_body_widget.dart';
 import '../../connection/domain/connection_status.dart';
 import '../../connection/presentation/connection_notifier.dart';
 import '../../local_model/presentation/local_model_notifier.dart';
@@ -64,6 +65,10 @@ class _UnpairedView extends ConsumerWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Axi's animated body — alive even before pairing (organ taps that
+        // need the engine degrade gracefully on their target screens).
+        const AxiBodyWidget(),
+        const SizedBox(height: 8),
         Text(l10n.homeNotConnected),
         const SizedBox(height: 16),
         if (localModelInstalled)
@@ -103,6 +108,11 @@ class _ConnectedView extends ConsumerWidget {
         // Self-hosted OTA update: shows only when an update is available;
         // taps through to /settings/updates.
         const SizedBox(width: 340, child: UpdateAvailableBanner()),
+        // Axi's animated body — the soul of the laptop dashboard, ported.
+        // Tap an organ: brain -> Cerebro 3D, memory -> Mi memoria,
+        // heart/lungs -> estado, eyes/ears/mouth -> chat.
+        const AxiBodyWidget(),
+        const SizedBox(height: 8),
         Text(l10n.homeConnectedTo(engineUrl)),
         const SizedBox(height: 8),
         reachable.when(

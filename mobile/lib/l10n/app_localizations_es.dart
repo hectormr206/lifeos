@@ -181,6 +181,25 @@ class AppLocalizationsEs extends AppLocalizations {
   String get homeUpdates => 'Actualizaciones';
 
   @override
+  String get axiAvatarLabel =>
+      'Axi — agente vivo. Toca un órgano para explorarlo.';
+
+  @override
+  String get axiOrganComingSoon => 'Próximamente en tu teléfono';
+
+  @override
+  String get brain3dTitle => 'Cerebro 3D';
+
+  @override
+  String get brain3dEmpty =>
+      'Aún no hay recuerdos en el grafo local. Conversa con Axi y su cerebro crecerá.';
+
+  @override
+  String brain3dSummary(int nodes, int edges) {
+    return '$nodes nodos · $edges enlaces en el grafo local';
+  }
+
+  @override
   String get chatTitle => 'Axi';
 
   @override

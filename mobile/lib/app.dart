@@ -23,6 +23,7 @@ import 'features/digest/presentation/digest_screen.dart';
 import 'features/domains/domain/domain_descriptor.dart';
 import 'features/domains/presentation/domain_list_screen.dart';
 import 'features/domains/presentation/domains_hub_screen.dart';
+import 'features/brain3d/presentation/brain3d_screen.dart';
 import 'features/graph/presentation/graph_browser_screen.dart';
 import 'features/graph/presentation/graph_node_screen.dart';
 import 'features/graph/presentation/local_graph_browser_screen.dart';
@@ -188,6 +189,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/graph/:uuid',
         builder: (context, state) => LocalGraphNodeScreen(nodeUuid: state.pathParameters['uuid']!),
       ),
+      // Cerebro 3D — interactive 3D view of the ON-DEVICE memory graph
+      // (mobile parity of the laptop's /brain3d). Reached from the brain of
+      // Axi's animated body on the home screen and from "Mi memoria".
+      GoRoute(path: '/brain3d', builder: (context, state) => const Brain3dScreen()),
       GoRoute(path: '/graph', builder: (context, state) => const GraphBrowserScreen()),
       GoRoute(
         path: '/graph/:id',

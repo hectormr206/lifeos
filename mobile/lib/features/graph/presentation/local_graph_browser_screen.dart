@@ -39,7 +39,17 @@ class _LocalGraphBrowserScreenState
     final activeKind = async.value?.kind;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Mi memoria')),
+      appBar: AppBar(
+        title: const Text('Mi memoria'),
+        actions: [
+          // Cerebro 3D of the same on-device graph this screen lists.
+          IconButton(
+            icon: const Icon(Icons.hub_outlined),
+            tooltip: 'Ver Cerebro 3D',
+            onPressed: () => context.push('/brain3d'),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(

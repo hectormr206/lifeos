@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<!--
+  Cerebro 3D — mobile port of the laptop's /brain3d view
+  (axi/src/axi/templates/brain3d.html), rendered against the ON-DEVICE graph.
+
+  Same vendored 3d-force-graph bundle (three.js included — fully offline),
+  same DOMAIN_COLOR palette and node/link styling as the laptop. Differences:
+    * Data does NOT come from /api/graph/full: Flutter injects the local
+      graph via `axiLoadGraph(data, lang)` after the page loads.
+    * The node detail panel is a compact in-page bottom card (tap a node);
+      camera orbit/pinch-zoom come native from 3d-force-graph touch controls.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#0b0e13;
+               font-family: system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
+  #graph { position:absolute; inset:0; }
+  #empty {
+    position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    color:#8b949e; font-size:14px; text-align:center; padding:0 2rem;
+  }
+  #legend {
+    position:absolute; top:8px; left:8px; right:8px; z-index:10;
+    display:flex; flex-wrap:wrap; gap:4px 10px; pointer-events:none;
+  }
+  .lg { display:flex; align-items:center; gap:4px; color:#8b949e; font-size:10px; }
+  .lg i { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  #counts { position:absolute; bottom:8px; left:10px; color:#586069; font-size:10px; z-index:10; }
+  #panel {
+    position:absolute; left:8px; right:8px; bottom:24px; z-index:20; display:none;
+    background:#161b22ee; border:1px solid #30363d; border-radius:10px;
+    padding:10px 12px; color:#e6edf3;
+  }
+  #panel .label { font-size:14px; font-weight:600; margin-right:1.5rem; word-break:break-word; }
+  #panel .meta { margin-top:4px; font-size:11px; color:#8b949e; }
+  #panel .chip { display:inline-block; padding:1px 8px; border-radius:99px; font-size:10px;
+                 color:#0b0e13; font-weight:600; margin-right:6px; }
+  #panel #close { position:absolute; top:6px; right:10px; color:#8b949e; font-size:16px;
+                  background:none; border:none; padding:2px 6px; }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+<div id="empty"></div>
+<div id="legend"></div>
+<div id="counts"></div>
+<div id="panel">
+  <button id="close" onclick="hidePanel()">✕</button>
+  <div class="label" id="p-label"></div>
+  <div class="meta" id="p-meta"></div>
+</div>
+
+<script src="3d-force-graph.min.js"></script>
+<script>
+// Palette copied from the laptop's brain3d.html — one consistent brain.
+const DOMAIN_COLOR = {
+  relationships: '#FF6B9D',
+  health:        '#22cc55',
+  finance:       '#ffaa33',
+  conversation:  '#33aaff',
+  fact:          '#00D4AA',
+  event:         '#ee55ff',
+  meeting:       '#ff8844',
+  exercise:      '#44ddff',
+  learning:      '#bbff44',
+  spirituality:  '#ff44aa',
+  person:        '#FF6B9D',
+  reminder:      '#ffaa33',
+  default:       '#888888',
+};
+
+// Neutral-Spanish / English labels (subset of the laptop's LABELS map).
+const LABELS = {
+  es: { relationships:'Relaciones', health:'Salud', finance:'Finanzas',
+        conversation:'Conversación', fact:'Hecho', event:'Evento',
+        meeting:'Reunión', exercise:'Ejercicio', learning:'Aprendizaje',
+        spirituality:'Espiritualidad', person:'Persona', reminder:'Recordatorio',
+        default:'General', nodes:'nodos', links:'enlaces',
+        empty:'Aún no hay recuerdos en el grafo local.' },
+  en: { relationships:'Relationships', health:'Health', finance:'Finance',
+        conversation:'Conversation', fact:'Fact', event:'Event',
+        meeting:'Meeting', exercise:'Exercise', learning:'Learning',
+        spirituality:'Spirituality', person:'Person', reminder:'Reminder',
+        default:'General', nodes:'nodes', links:'links',
+        empty:'No memories in the local graph yet.' },
+};
+let L = LABELS.es;
+let LANG = 'es';
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function tLabel(k) { return L[k] || k || L.default; }
+function colorOf(n) {
+  return DOMAIN_COLOR[n.domain] || DOMAIN_COLOR[n.kind] || DOMAIN_COLOR.default;
+}
+
+let graph = null;
+
+function hidePanel() { document.getElementById('panel').style.display = 'none'; }
+
+function showPanel(n) {
+  const color = colorOf(n);
+  document.getElementById('p-label').textContent = n.label || '—';
+  let meta = '<span class="chip" style="background:' + color + '">' + escHtml(tLabel(n.kind)) + '</span>';
+  if (n.domain && n.domain !== n.kind) {
+    meta += '<span class="chip" style="background:#8b949e">' + escHtml(tLabel(n.domain)) + '</span>';
+  }
+  const epoch = n.occurred_at || n.created_at;
+  if (epoch) {
+    try {
+      meta += ' ' + new Date(epoch * 1000).toLocaleDateString(LANG === 'en' ? 'en-US' : 'es-MX');
+    } catch (e) { /* decorative */ }
+  }
+  document.getElementById('p-meta').innerHTML = meta;
+  document.getElementById('panel').style.display = 'block';
+  if (window.Brain3d && window.Brain3d.postMessage) {
+    window.Brain3d.postMessage(JSON.stringify({ event: 'node', id: n.id }));
+  }
+}
+
+function renderLegend(nodes) {
+  const seen = new Set();
+  for (const n of nodes) {
+    if (n.domain && DOMAIN_COLOR[n.domain]) seen.add(n.domain);
+    else if (n.kind && DOMAIN_COLOR[n.kind]) seen.add(n.kind);
+  }
+  document.getElementById('legend').innerHTML = [...seen].map(k =>
+    '<span class="lg"><i style="background:' + DOMAIN_COLOR[k] + '"></i>' + escHtml(tLabel(k)) + '</span>'
+  ).join('');
+}
+
+// Entry point — Flutter calls this with the local graph payload:
+// { nodes: [{id,label,kind,domain,created_at,occurred_at}],
+//   edges: [{source,target,kind}], truncated: bool }
+function axiLoadGraph(data, lang) {
+  LANG = (lang || 'es').startsWith('en') ? 'en' : 'es';
+  L = LABELS[LANG];
+
+  const nodes = (data.nodes || []).map(n => ({ ...n, color: colorOf(n) }));
+  const links = (data.edges || []).map(e => ({
+    source: e.source, target: e.target, kind: e.kind,
+    color: e.kind === 'similar-to' ? '#3a5a6a' : '#5a7a4a',
+  }));
+
+  document.getElementById('counts').textContent =
+    nodes.length + ' ' + L.nodes + ' · ' + links.length + ' ' + L.links + (data.truncated ? ' (500 max)' : '');
+
+  if (nodes.length === 0) {
+    const empty = document.getElementById('empty');
+    empty.textContent = L.empty;
+    empty.style.display = 'flex';
+    return;
+  }
+  renderLegend(nodes);
+
+  const container = document.getElementById('graph');
+  graph = ForceGraph3D()(container)
+    .backgroundColor('#0b0e13')
+    .showNavInfo(false)
+    .nodeLabel(n => '<div style="background:#1a1f2b;color:#e6edf3;padding:4px 8px;border-radius:4px;font-size:12px;max-width:200px">' + escHtml(n.label) + '</div>')
+    .nodeColor(n => n.color)
+    .nodeOpacity(0.9)
+    .nodeVal(n => (n.kind === 'person' || n.kind === 'event') ? 4 : 2)
+    .linkColor(l => l.color)
+    .linkOpacity(0.5)
+    .linkWidth(0.6)
+    .graphData({ nodes, links })
+    .onNodeClick(n => showPanel(n))
+    .onBackgroundClick(() => hidePanel());
+
+  // Keep the canvas synced to the container (rotation / resizes).
+  const syncSize = () => {
+    if (graph) graph.width(container.clientWidth).height(container.clientHeight);
+  };
+  syncSize();
+  if (window.ResizeObserver) new ResizeObserver(syncSize).observe(container);
+  else window.addEventListener('resize', syncSize);
+}
+</script>
+</body>
+</html>

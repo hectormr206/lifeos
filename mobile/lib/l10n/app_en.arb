@@ -80,7 +80,6 @@
       "edges": { "type": "int" }
     }
   },
-  "memoryOpenBrain3d": "See 3D Brain",
 
   "chatTitle": "Axi",
   "chatVoiceReplyTooltip": "Reply by voice",
