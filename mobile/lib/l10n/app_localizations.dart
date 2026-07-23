@@ -602,6 +602,36 @@ abstract class AppLocalizations {
   /// **'Transcription pending (STT)'**
   String get chatTranscriptionPending;
 
+  /// No description provided for @sttTranscribing.
+  ///
+  /// In en, this message translates to:
+  /// **'Transcribing…'**
+  String get sttTranscribing;
+
+  /// No description provided for @sttDownloadVoiceModel.
+  ///
+  /// In en, this message translates to:
+  /// **'Download voice model'**
+  String get sttDownloadVoiceModel;
+
+  /// No description provided for @sttDownloadingVoiceModel.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading voice model… {percent}%'**
+  String sttDownloadingVoiceModel(Object percent);
+
+  /// No description provided for @sttVoiceModelReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice model ready'**
+  String get sttVoiceModelReady;
+
+  /// No description provided for @sttVoiceModelFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t download the voice model. Tap to retry.'**
+  String get sttVoiceModelFailed;
+
   /// No description provided for @briefingTitle.
   ///
   /// In en, this message translates to:

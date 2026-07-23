@@ -1,12 +1,24 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import '../domain/audio_recorder_gateway.dart';
 
-/// [AudioRecorderGateway] backed by the real `record` package. Records AAC/m4a
-/// voice notes into the app's temp directory, one file per recording.
+/// [AudioRecorderGateway] backed by the real `record` package.
+///
+/// Roadmap slice B2 (on-device STT): voice notes are now recorded as
+/// **16 kHz mono PCM16 WAV** ([sttRecordConfig]) instead of AAC/m4a. This is
+/// exactly the format the offline sherpa-onnx Whisper recognizer expects — its
+/// `readWave` parses a RIFF/WAV header and requires 16 kHz mono — so a recorded
+/// note can be transcribed on-device with no resample/transcode step.
+///
+/// `AudioEncoder.wav` (NOT `AudioEncoder.pcm16bits`) is used on purpose: the
+/// `record` package's `pcm16bits` encoder writes HEADERLESS raw PCM, which
+/// `readWave` cannot parse; `AudioEncoder.wav` writes the same PCM16 samples
+/// wrapped in a WAV container (with the RIFF header), which both sherpa-onnx
+/// AND the audioplayers playback path read directly. One file per recording.
 class RecordAudioRecorderGateway implements AudioRecorderGateway {
   RecordAudioRecorderGateway([AudioRecorder? recorder]) : _recorder = recorder ?? AudioRecorder();
 
@@ -14,17 +26,24 @@ class RecordAudioRecorderGateway implements AudioRecorderGateway {
   // The file the current take is being written to, so [cancel] can delete it.
   String? _currentPath;
 
+  /// The 16 kHz mono PCM16 WAV capture config. Exposed for testing so the
+  /// format contract (what the STT recognizer needs) is asserted without a
+  /// microphone or platform channel.
+  @visibleForTesting
+  static const RecordConfig sttRecordConfig = RecordConfig(
+    encoder: AudioEncoder.wav,
+    sampleRate: 16000,
+    numChannels: 1,
+  );
+
   @override
   Future<bool> hasPermission() => _recorder.hasPermission();
 
   @override
   Future<String> start() async {
     final dir = await getTemporaryDirectory();
-    final path = '${dir.path}/voice-${DateTime.now().microsecondsSinceEpoch}.m4a';
-    await _recorder.start(
-      const RecordConfig(encoder: AudioEncoder.aacLc),
-      path: path,
-    );
+    final path = '${dir.path}/voice-${DateTime.now().microsecondsSinceEpoch}.wav';
+    await _recorder.start(sttRecordConfig, path: path);
     _currentPath = path;
     return path;
   }

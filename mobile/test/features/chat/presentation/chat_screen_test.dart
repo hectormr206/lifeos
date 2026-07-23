@@ -23,7 +23,11 @@ import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
+import 'package:lifeos/features/stt/domain/stt_model.dart';
+import 'package:lifeos/features/stt/presentation/stt_providers.dart';
+
 import '../../local_model/support/fake_local_llm_engine.dart';
+import '../../stt/support/fake_stt.dart';
 import '../support/fake_chat_gateways.dart';
 
 /// The chat screen wrapped in a Spanish-localized MaterialApp so its localized
@@ -41,6 +45,17 @@ const _chatApp = MaterialApp(
 class _EnabledLocalModeNotifier extends LocalModelEnabledNotifier {
   @override
   bool build() => true;
+}
+
+/// Pins the STT download notifier to a fixed status (no async hydration probe)
+/// so each banner state renders deterministically in a widget test.
+class _FixedSttStatusNotifier extends SttModelDownloadNotifier {
+  _FixedSttStatusNotifier(this._fixed);
+
+  final SttModelStatus _fixed;
+
+  @override
+  SttModelStatus build() => _fixed;
 }
 
 class _FakeChatRepository implements ChatRepository {
@@ -183,6 +198,11 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
+          // Deterministic on-device STT in widget tests: model "not downloaded"
+          // so a finalized voice note degrades to the canned fallback reply
+          // (no real sherpa recognizer / background downloader is constructed).
+          sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+          speechToTextProvider.overrideWithValue(FakeSpeechToText()),
           audioPlayerGatewayProvider.overrideWithValue(player),
         ],
         child: _chatApp,
@@ -220,6 +240,11 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
+          // Deterministic on-device STT in widget tests: model "not downloaded"
+          // so a finalized voice note degrades to the canned fallback reply
+          // (no real sherpa recognizer / background downloader is constructed).
+          sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+          speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
         child: _chatApp,
       ),
@@ -256,6 +281,11 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
+          // Deterministic on-device STT in widget tests: model "not downloaded"
+          // so a finalized voice note degrades to the canned fallback reply
+          // (no real sherpa recognizer / background downloader is constructed).
+          sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+          speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
         child: _chatApp,
       ),
@@ -287,6 +317,11 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
+          // Deterministic on-device STT in widget tests: model "not downloaded"
+          // so a finalized voice note degrades to the canned fallback reply
+          // (no real sherpa recognizer / background downloader is constructed).
+          sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+          speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
         child: _chatApp,
       ),
@@ -320,6 +355,11 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
+          // Deterministic on-device STT in widget tests: model "not downloaded"
+          // so a finalized voice note degrades to the canned fallback reply
+          // (no real sherpa recognizer / background downloader is constructed).
+          sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+          speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
         child: _chatApp,
       ),
@@ -350,6 +390,11 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
+          // Deterministic on-device STT in widget tests: model "not downloaded"
+          // so a finalized voice note degrades to the canned fallback reply
+          // (no real sherpa recognizer / background downloader is constructed).
+          sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+          speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
         child: _chatApp,
       ),
@@ -375,6 +420,11 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
+          // Deterministic on-device STT in widget tests: model "not downloaded"
+          // so a finalized voice note degrades to the canned fallback reply
+          // (no real sherpa recognizer / background downloader is constructed).
+          sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+          speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
         child: _chatApp,
       ),
@@ -686,6 +736,10 @@ void main() {
           chatRepositoryProvider.overrideWithValue(repo),
           localLlmEngineProvider.overrideWithValue(engine),
           localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
+          // Local mode ON also mounts the STT banner — keep the real
+          // background-downloader gateway out of the test.
+          sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+          speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
         child: _chatApp,
       ),
@@ -721,6 +775,10 @@ void main() {
           chatRepositoryProvider.overrideWithValue(repo),
           localLlmEngineProvider.overrideWithValue(engine),
           localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
+          // Local mode ON also mounts the STT banner — keep the real
+          // background-downloader gateway out of the test.
+          sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+          speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
         child: _chatApp,
       ),
@@ -739,5 +797,68 @@ void main() {
     expect(find.textContaining('No se pudo cargar el modelo'), findsNothing);
     final sendWhenReady = tester.widget<IconButton>(find.widgetWithIcon(IconButton, Icons.send));
     expect(sendWhenReady.onPressed, isNull, reason: 'no text typed yet, but the model is ready');
+  });
+
+  testWidgets('STT voice-model banner: absent offers the download, downloading shows percent, failed retries on tap',
+      (tester) async {
+    // B2 follow-up: with local mode ON and the ~80 MB voice model absent, a
+    // compact banner near the input bar offers the download; while downloading
+    // it shows localized percent progress; on failure it retries on tap.
+    final engine = FakeLocalLlmEngine(installed: true);
+    final gateway = FakeSttModelGateway(installed: null);
+    final baseOverrides = [
+      chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+      localLlmEngineProvider.overrideWithValue(engine),
+      localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
+      sttModelGatewayProvider.overrideWithValue(gateway),
+      speechToTextProvider.overrideWithValue(FakeSpeechToText()),
+    ];
+
+    // ABSENT → the download affordance is shown; tapping it downloads (the
+    // fake gateway succeeds) and the banner disappears (Ready shows nothing).
+    await _pumpScreen(tester, ProviderScope(overrides: baseOverrides, child: _chatApp));
+    await tester.pumpAndSettle();
+    expect(find.text('Descargar modelo de voz'), findsOneWidget);
+
+    await tester.tap(find.text('Descargar modelo de voz'));
+    await tester.pumpAndSettle();
+    expect(gateway.downloadCalls, 1);
+    expect(find.text('Descargar modelo de voz'), findsNothing);
+    expect(find.textContaining('Descargando modelo de voz'), findsNothing);
+
+    // DOWNLOADING (pinned at 42%) → progress text + determinate spinner.
+    // Tear the previous scope down first: a ProviderScope element cannot
+    // change its number of overrides in place.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        ...baseOverrides,
+        sttModelDownloadProvider
+            .overrideWith(() => _FixedSttStatusNotifier(const SttModelDownloading(0.42))),
+      ],
+      child: _chatApp,
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Descargando modelo de voz… 42%'), findsOneWidget);
+
+    // FAILED → the localized tap-to-retry message; tapping re-runs the
+    // download (fake succeeds) and the banner clears.
+    gateway.installed = null;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        ...baseOverrides,
+        sttModelDownloadProvider
+            .overrideWith(() => _FixedSttStatusNotifier(const SttModelFailed('boom'))),
+      ],
+      child: _chatApp,
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('No se pudo descargar el modelo de voz. Toca para reintentar.'), findsOneWidget);
+
+    await tester.tap(find.text('No se pudo descargar el modelo de voz. Toca para reintentar.'));
+    await tester.pumpAndSettle();
+    expect(gateway.downloadCalls, 2);
+    expect(find.textContaining('No se pudo descargar'), findsNothing);
   });
 }

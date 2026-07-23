@@ -10,6 +10,9 @@ import '../../../l10n/app_localizations.dart';
 import '../../local_model/domain/generation_metrics.dart';
 import '../../local_model/domain/local_llm_engine.dart' show LocalModelConfig;
 import '../../local_model/presentation/local_model_load_notifier.dart';
+import '../../local_model/presentation/local_model_providers.dart';
+import '../../stt/domain/stt_model.dart';
+import '../../stt/presentation/stt_providers.dart';
 import '../domain/chat_message.dart';
 import '../domain/image_picker_gateway.dart';
 import 'chat_notifier.dart';
@@ -413,6 +416,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
         children: [
           const PendingSyncBanner(),
           const _ModelLoadingBanner(),
+          const _SttModelBanner(),
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
@@ -696,6 +700,103 @@ class _ModelLoadingBanner extends ConsumerWidget {
     }
 
     return const SizedBox.shrink();
+  }
+}
+
+/// Compact banner surfacing the on-device voice (STT) model's download
+/// affordance (roadmap slice B2 follow-up), styled after [_ModelLoadingBanner]:
+/// - Absent → "Descargar modelo de voz", tap to start [ChatNotifier.downloadSttModel].
+/// - Downloading → spinner + localized percent.
+/// - Failed → error colours + tap-to-retry (the localized string says so).
+/// Renders nothing in cloud/HTTP mode (STT is on-device only — and not
+/// watching the provider there keeps the real downloader gateway out of
+/// widget tests that never override it) and once the model is Ready.
+class _SttModelBanner extends ConsumerWidget {
+  const _SttModelBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!ref.watch(localModelEnabledProvider)) return const SizedBox.shrink();
+    final status = ref.watch(sttModelDownloadProvider);
+    final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
+
+    switch (status) {
+      case SttModelAbsent():
+        return Material(
+          color: scheme.secondaryContainer,
+          child: InkWell(
+            onTap: () => ref.read(chatNotifierProvider.notifier).downloadSttModel(),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(Icons.download, size: 18, color: scheme.onSecondaryContainer),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      l10n.sttDownloadVoiceModel,
+                      style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      case SttModelDownloading(:final progress):
+        return Material(
+          color: scheme.secondaryContainer,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    // Indeterminate until the first progress event arrives.
+                    value: progress > 0 ? progress : null,
+                    color: scheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    l10n.sttDownloadingVoiceModel((progress * 100).round()),
+                    style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      case SttModelFailed():
+        return Material(
+          color: scheme.errorContainer,
+          child: InkWell(
+            onTap: () => ref.read(chatNotifierProvider.notifier).downloadSttModel(),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(Icons.error_outline, size: 18, color: scheme.onErrorContainer),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      l10n.sttVoiceModelFailed,
+                      style: TextStyle(color: scheme.onErrorContainer, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      case SttModelReady():
+        return const SizedBox.shrink();
+    }
   }
 }
 

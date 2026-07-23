@@ -272,6 +272,24 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatTranscriptionPending => 'Transcription pending (STT)';
 
   @override
+  String get sttTranscribing => 'Transcribing…';
+
+  @override
+  String get sttDownloadVoiceModel => 'Download voice model';
+
+  @override
+  String sttDownloadingVoiceModel(Object percent) {
+    return 'Downloading voice model… $percent%';
+  }
+
+  @override
+  String get sttVoiceModelReady => 'Voice model ready';
+
+  @override
+  String get sttVoiceModelFailed =>
+      'Couldn\'t download the voice model. Tap to retry.';
+
+  @override
   String get briefingTitle => 'Briefing';
 
   @override

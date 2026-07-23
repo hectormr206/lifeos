@@ -11,6 +11,7 @@ import '../../../core/outbox/outbox.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../local_model/data/on_device_chat_repository.dart';
 import '../../local_model/presentation/local_model_providers.dart';
+import '../../stt/presentation/stt_providers.dart';
 import '../../web_search/data/search_augmented_chat_repository.dart';
 import '../../web_search/presentation/web_search_providers.dart';
 import '../data/chat_history_repository.dart';
@@ -369,33 +370,44 @@ class ChatNotifier extends Notifier<ChatUiState> {
     }
   }
 
-  /// Neutral-Spanish canned reply Axi gives to a voice note until on-device STT
-  /// exists. Rendered as a normal Axi text bubble (so the 🔊 speak button works
-  /// on it too). No voseo.
+  /// Neutral-Spanish fallback Axi gives to a voice note when it CANNOT be
+  /// transcribed on-device (the ~80 MB voice model isn't downloaded yet, or the
+  /// transcription failed/was empty). Rendered as a normal Axi text bubble (so
+  /// the 🔊 speak button works on it too). No voseo. The reply invites the user
+  /// to download the model — the UI exposes the download affordance via
+  /// [downloadSttModel] / `sttModelDownloadProvider`.
   static const String voiceNotePlaceholderReply =
-      'Todavía no puedo escuchar notas de voz — pronto agregaré transcripción. '
-      'Por ahora, escríbeme lo que necesitas. 🙏';
+      'Todavía no puedo escuchar esta nota de voz: necesito descargar el modelo '
+      'de voz primero. Descárgalo para transcribir tus notas de voz, o '
+      'escríbeme lo que necesitas. 🙏';
+
+  /// Lets tests await the async voice-note processing ([_processVoiceNote])
+  /// deterministically, mirroring [ready].
+  Future<void>? _voiceProcessing;
+  Future<void> get voiceProcessed => _voiceProcessing ?? Future<void>.value();
 
   /// Appends a recorded voice note as a local user bubble (WhatsApp-style),
-  /// followed by a canned Axi reply.
+  /// then transcribes it ON-DEVICE and routes the transcript to Axi.
   ///
-  /// DEFERRED (STT slice): the note is NOT transcribed and NOT sent to Axi —
-  /// it stays a playable local voice memo flagged [transcriptionPending] so
-  /// the UI shows "Transcripción pendiente (STT)". We never fake a
-  /// transcription; the real path (voice → text → Axi's memory graph) needs
-  /// the on-device STT model. Until then, rather than leaving Axi silent (which
-  /// reads as broken), we append a static neutral-Spanish reply — WITHOUT
-  /// running the LLM (there is no transcribed text to process) — as a normal
-  /// Axi text bubble. No "sending" state is touched, so nothing gets stuck.
+  /// Roadmap slice B2 (on-device STT): the voice bubble is shown immediately
+  /// (flagged [transcriptionPending]); then [_processVoiceNote] runs the offline
+  /// Whisper recognizer over the WAV. On success the transcript is written onto
+  /// the voice bubble — which IS the user turn — and routed to the repository
+  /// through the same FIFO queue a typed message uses (memory write-back,
+  /// persistence, real LLM reply) WITHOUT appending a second user text bubble.
+  /// If the model isn't downloaded yet or transcription fails/comes back empty,
+  /// we DEGRADE GRACEFULLY to a static neutral-Spanish reply
+  /// ([voiceNotePlaceholderReply]) — the note is never lost and nothing hangs.
   ///
   /// [audioPath] may be null when a very short/empty take produced no file: the
-  /// bubble (and Axi's canned reply) STILL appear so the note never silently
+  /// bubble (and Axi's fallback reply) STILL appear so the note never silently
   /// vanishes — the voice bubble just has no playable clip. Only an intentional
   /// slide-to-cancel (handled in the UI) discards a take entirely.
   void addVoiceNote(String? audioPath, Duration duration) {
     final now = DateTime.now();
+    final noteId = 'local-voice-${now.microsecondsSinceEpoch}';
     final note = ChatMessage(
-      id: 'local-voice-${now.microsecondsSinceEpoch}',
+      id: noteId,
       role: ChatRole.user,
       text: '',
       timestamp: now,
@@ -404,18 +416,128 @@ class ChatNotifier extends Notifier<ChatUiState> {
       audioDuration: duration,
       transcriptionPending: true,
     );
+    state = state.copyWith(messages: [...state.messages, note]);
+    _voiceProcessing = _processVoiceNote(note);
+  }
+
+  /// Transcribes the voice [note] on-device and, on success, shows the
+  /// transcript on the voice bubble and sends it to Axi. Falls back to a
+  /// canned reply on any miss. NEVER throws — a failure just degrades.
+  ///
+  /// The bubble's persistence is deferred to this flow's TERMINAL branches so
+  /// it is stored exactly ONCE (the history store is append-only): with its
+  /// transcript when transcription succeeds, or still pending when the flow
+  /// degrades. Always by audio-path reference, never the bytes.
+  Future<void> _processVoiceNote(ChatMessage note) async {
+    final audioPath = note.audioPath;
+    // No clip (very short/empty take) → nothing to transcribe; fall back.
+    if (audioPath == null) {
+      _persist(note);
+      _appendVoiceFallback();
+      return;
+    }
+    // Authoritative readiness probe (not the download notifier's cached state,
+    // which may not have hydrated yet): is the model actually on disk?
+    final model = await ref.read(sttModelGatewayProvider).installedModel();
+    if (_disposed) {
+      _persist(note);
+      return;
+    }
+    if (model == null) {
+      // Not downloaded yet → graceful fallback; the reply invites a download.
+      _persist(note);
+      _appendVoiceFallback();
+      return;
+    }
+
+    String transcript;
+    try {
+      final languageCode = ref.read(appLanguageCodeProvider);
+      final raw = await ref.read(speechToTextProvider).transcribe(audioPath, languageCode: languageCode);
+      transcript = raw.trim();
+    } catch (_) {
+      // Recognizer failed to load / decode error → never hang, never lose the
+      // note: fall back to the canned reply.
+      _persist(note);
+      if (_disposed) return;
+      _appendVoiceFallback();
+      return;
+    }
+    if (_disposed) {
+      _persist(note);
+      return;
+    }
+    // Empty transcript (silence / unintelligible) → don't send an empty turn.
+    if (transcript.isEmpty) {
+      _persist(note);
+      _appendVoiceFallback();
+      return;
+    }
+
+    // Show what Axi heard on the voice bubble itself. The voice bubble IS the
+    // user turn — no second (text) user bubble is appended for the transcript.
+    final transcribed = _setVoiceTranscript(note.id, transcript);
+    if (transcribed != null) _persist(transcribed);
+    // Route the transcript through the SAME pipeline a typed message takes:
+    // the FIFO [_queue] (single on-device session, strictly serial), the
+    // active repository stack (C1 context preamble + B4 web-search decorator
+    // both live inside `chatRepositoryProvider.sendMessage`), delivery ticks
+    // on the voice bubble, C1 memory write-back, and persistence of the reply.
+    state = state.copyWith(sending: true, error: null);
+    await _enqueue(_OutgoingRequest(
+      userMessageId: note.id,
+      run: () => ref.read(chatRepositoryProvider).sendMessage(transcript),
+      errorPrefix: 'No se pudo enviar el mensaje',
+      onReply: ref.read(localModelEnabledProvider)
+          ? (reply) => _recordTurn(transcript, reply.text)
+          : null,
+    ));
+  }
+
+  /// Appends the neutral-Spanish fallback reply as a normal Axi text bubble.
+  void _appendVoiceFallback() {
+    if (_disposed) return;
     final reply = ChatMessage(
-      id: 'local-voice-reply-${now.microsecondsSinceEpoch}',
+      id: 'local-voice-reply-${DateTime.now().microsecondsSinceEpoch}',
       role: ChatRole.axi,
       text: voiceNotePlaceholderReply,
-      timestamp: now,
+      timestamp: DateTime.now(),
     );
-    state = state.copyWith(messages: [...state.messages, note, reply]);
-    // Persist both the voice bubble (by audio-path reference, never the audio
-    // bytes) and its canned Axi reply so they survive a restart.
-    _persist(note);
+    state = state.copyWith(messages: [...state.messages, reply]);
     _persist(reply);
   }
+
+  /// Writes [transcript] onto the voice bubble [noteId] and clears its
+  /// pending flag, leaving the audio clip + everything else intact. Returns
+  /// the updated bubble so the caller can persist exactly what is shown, or
+  /// null when the bubble is gone (history cleared mid-transcription).
+  ChatMessage? _setVoiceTranscript(String noteId, String transcript) {
+    ChatMessage? updated;
+    final messages = state.messages.map((m) {
+      if (m.id != noteId) return m;
+      return updated = ChatMessage(
+        id: m.id,
+        role: m.role,
+        text: transcript,
+        timestamp: m.timestamp,
+        kind: m.kind,
+        images: m.images,
+        audioPath: m.audioPath,
+        audioDuration: m.audioDuration,
+        transcriptionPending: false,
+        status: m.status,
+        metrics: m.metrics,
+      );
+    }).toList();
+    state = state.copyWith(messages: messages);
+    return updated;
+  }
+
+  /// Triggers the on-device voice-model download (the "clear affordance" for a
+  /// user who recorded a note before the ~80 MB model was fetched). Progress +
+  /// status live in `sttModelDownloadProvider`. Best-effort; never throws.
+  Future<void> downloadSttModel() =>
+      ref.read(sttModelDownloadProvider.notifier).download();
 }
 
 /// One queued outgoing generation (a text turn or an image turn). Holds the
@@ -438,8 +560,8 @@ class _OutgoingRequest {
   final String errorPrefix;
 
   /// Optional hook run once THIS request's reply is appended (SLICE C1 memory
-  /// write-back). Null for turns that should not be recorded (image/voice, or
-  /// when on-device mode is off).
+  /// write-back). Null for turns that should not be recorded (image turns, or
+  /// when on-device mode is off). Text turns AND transcribed voice turns set it.
   final void Function(ChatMessage reply)? onReply;
   final Completer<void> done = Completer<void>();
 }

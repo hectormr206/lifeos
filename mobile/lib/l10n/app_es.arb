@@ -89,6 +89,11 @@
   "metricBackend": "Backend",
   "metricModel": "Modelo",
   "chatTranscriptionPending": "Transcripción pendiente (STT)",
+  "sttTranscribing": "Transcribiendo…",
+  "sttDownloadVoiceModel": "Descargar modelo de voz",
+  "sttDownloadingVoiceModel": "Descargando modelo de voz… {percent}%",
+  "sttVoiceModelReady": "Modelo de voz listo",
+  "sttVoiceModelFailed": "No se pudo descargar el modelo de voz. Toca para reintentar.",
 
   "briefingTitle": "Boletín",
   "briefingSourcesTooltip": "Fuentes",

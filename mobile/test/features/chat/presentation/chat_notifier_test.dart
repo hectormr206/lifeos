@@ -19,6 +19,11 @@ import 'package:lifeos/features/chat/data/chat_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
+import 'package:lifeos/features/stt/domain/stt_model.dart';
+import 'package:lifeos/features/stt/presentation/stt_providers.dart';
+import 'package:lifeos/l10n/locale_providers.dart';
+
+import '../../stt/support/fake_stt.dart';
 
 class _FakeChatRepository implements ChatRepository {
   _FakeChatRepository({List<ChatMessage>? history, this.sendResult, this.sendDelay})
@@ -414,18 +419,157 @@ void main() {
       expect(repo.sendCalls, 2);
     });
 
-    testWidgets('addVoiceNote with a null path (short/empty take) STILL appends the bubble + reply',
+    // Overrides that put the on-device STT deps under test control: a fake
+    // recognizer + a scriptable model gateway + a pinned reply language.
+    sttOverrides({
+      required _FakeChatRepository repo,
+      required FakeSpeechToText stt,
+      required FakeSttModelGateway gateway,
+      String languageCode = 'es',
+    }) =>
+        [
+          chatRepositoryProvider.overrideWithValue(repo),
+          speechToTextProvider.overrideWithValue(stt),
+          sttModelGatewayProvider.overrideWithValue(gateway),
+          appLanguageCodeProvider.overrideWithValue(languageCode),
+        ];
+
+    testWidgets('a transcribed voice note shows the transcript on the bubble and routes it WITHOUT a second user bubble',
         (tester) async {
-      // FIX 2: a very short recording makes recorder.stop() return null. The
-      // note must not silently vanish — the voice bubble and canned Axi reply
-      // still appear; the clip is just absent.
+      final reply = ChatMessage(id: 'axi', role: ChatRole.axi, text: 'claro', timestamp: DateTime.now());
+      final repo = _FakeChatRepository(sendResult: reply);
+      // Whitespace around the transcript proves the flow trims it.
+      final stt = FakeSpeechToText(transcript: '  recuérdame comprar leche  ');
+      final gateway = FakeSttModelGateway(
+        installed: const SttModelPaths(encoder: 'e', decoder: 'd', tokens: 't'),
+      );
+      final container = ProviderContainer(
+        overrides: sttOverrides(repo: repo, stt: stt, gateway: gateway, languageCode: 'en'),
+      );
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      notifier.addVoiceNote('/tmp/voice-1.wav', const Duration(seconds: 4));
+      await tester.pumpAndSettle(); // resolve installedModel + transcribe + the send's frame
+      await notifier.voiceProcessed;
+
+      final state = container.read(chatNotifierProvider);
+      // The voice bubble now carries the transcript, keeps its clip, and is no
+      // longer pending.
+      final voice = state.messages.firstWhere((m) => m.kind == ChatMessageKind.voice);
+      expect(voice.text, 'recuérdame comprar leche');
+      expect(voice.transcriptionPending, isFalse);
+      expect(voice.audioPath, '/tmp/voice-1.wav');
+
+      // The app language selected the recognizer language.
+      expect(stt.lastLanguageCode, 'en');
+      expect(stt.lastWavPath, '/tmp/voice-1.wav');
+
+      // DEDUPE: the voice bubble IS the user turn. The transcript reached the
+      // repository (same FIFO drain a typed message uses) but did NOT create a
+      // second user text bubble — the transcript is only conversation history
+      // via the voice bubble itself. Axi's real reply is appended after it.
+      expect(repo.sendCalls, 1);
+      expect(state.messages.length, 2, reason: 'voice bubble + Axi reply, no duplicated user turn');
+      expect(state.messages.where((m) => m.role == ChatRole.user).single.kind, ChatMessageKind.voice);
+      // The voice bubble carries the delivery ticks for the transcript turn.
+      expect(voice.status, ChatMessageStatus.delivered);
+      expect(state.messages.last.role, ChatRole.axi);
+      expect(state.messages.last.text, 'claro');
+      expect(state.sending, isFalse);
+    });
+
+    testWidgets('an empty transcription falls back to the canned reply, no send', (tester) async {
       final repo = _FakeChatRepository();
-      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      final stt = FakeSpeechToText(transcript: '   '); // silence → empty after trim
+      final gateway = FakeSttModelGateway(
+        installed: const SttModelPaths(encoder: 'e', decoder: 'd', tokens: 't'),
+      );
+      final container =
+          ProviderContainer(overrides: sttOverrides(repo: repo, stt: stt, gateway: gateway));
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      notifier.addVoiceNote('/tmp/voice-2.wav', const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      await notifier.voiceProcessed;
+
+      final state = container.read(chatNotifierProvider);
+      expect(state.messages.length, 2); // voice bubble + fallback reply
+      expect(state.messages[0].kind, ChatMessageKind.voice);
+      expect(state.messages[0].transcriptionPending, isTrue); // stayed pending
+      expect(state.messages[1].text, ChatNotifier.voiceNotePlaceholderReply);
+      expect(repo.sendCalls, 0);
+      expect(state.sending, isFalse);
+    });
+
+    testWidgets('a failed transcription falls back to the canned reply, no send', (tester) async {
+      final repo = _FakeChatRepository();
+      final stt = FakeSpeechToText(error: Exception('decode failure'));
+      final gateway = FakeSttModelGateway(
+        installed: const SttModelPaths(encoder: 'e', decoder: 'd', tokens: 't'),
+      );
+      final container =
+          ProviderContainer(overrides: sttOverrides(repo: repo, stt: stt, gateway: gateway));
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      notifier.addVoiceNote('/tmp/voice-3.wav', const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      await notifier.voiceProcessed;
+
+      final state = container.read(chatNotifierProvider);
+      expect(state.messages.length, 2);
+      expect(state.messages[1].text, ChatNotifier.voiceNotePlaceholderReply);
+      expect(repo.sendCalls, 0);
+    });
+
+    testWidgets('when the voice model is not downloaded, it falls back without transcribing',
+        (tester) async {
+      final repo = _FakeChatRepository();
+      final stt = FakeSpeechToText(transcript: 'no debería usarse');
+      final gateway = FakeSttModelGateway(installed: null); // model absent
+      final container =
+          ProviderContainer(overrides: sttOverrides(repo: repo, stt: stt, gateway: gateway));
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      notifier.addVoiceNote('/tmp/voice-4.wav', const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+      await notifier.voiceProcessed;
+
+      final state = container.read(chatNotifierProvider);
+      expect(stt.calls, 0); // never attempted transcription
+      expect(repo.sendCalls, 0);
+      expect(state.messages.length, 2);
+      expect(state.messages[1].text, ChatNotifier.voiceNotePlaceholderReply);
+      // The fallback reply mentions downloading the voice model.
+      expect(state.messages[1].text, contains('modelo de voz'));
+    });
+
+    testWidgets('a null path (short/empty take) STILL appends the bubble + fallback reply',
+        (tester) async {
+      // A very short recording makes recorder.stop() return null. The note must
+      // not silently vanish — the voice bubble and fallback reply still appear;
+      // the clip is just absent, and nothing is transcribed.
+      final repo = _FakeChatRepository();
+      final stt = FakeSpeechToText(transcript: 'x');
+      final gateway = FakeSttModelGateway(
+        installed: const SttModelPaths(encoder: 'e', decoder: 'd', tokens: 't'),
+      );
+      final container =
+          ProviderContainer(overrides: sttOverrides(repo: repo, stt: stt, gateway: gateway));
       addTearDown(container.dispose);
       final notifier = container.read(chatNotifierProvider.notifier);
       await notifier.ready;
 
       notifier.addVoiceNote(null, Duration.zero);
+      await tester.pumpAndSettle();
+      await notifier.voiceProcessed;
 
       final state = container.read(chatNotifierProvider);
       expect(state.messages.length, 2);
@@ -433,38 +577,7 @@ void main() {
       expect(state.messages[0].audioPath, isNull);
       expect(state.messages[1].role, ChatRole.axi);
       expect(state.messages[1].text, ChatNotifier.voiceNotePlaceholderReply);
-      expect(state.sending, isFalse);
-    });
-
-    testWidgets('addVoiceNote appends a local voice bubble plus a canned Axi reply, no send', (tester) async {
-      final repo = _FakeChatRepository();
-      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
-      addTearDown(container.dispose);
-      final notifier = container.read(chatNotifierProvider.notifier);
-      await notifier.ready;
-
-      notifier.addVoiceNote('/tmp/voice-1.m4a', const Duration(seconds: 5));
-
-      final state = container.read(chatNotifierProvider);
-      // The voice bubble, then Axi's canned reply (STT not built yet).
-      expect(state.messages.length, 2);
-      expect(state.messages[0].kind, ChatMessageKind.voice);
-      expect(state.messages[0].audioPath, '/tmp/voice-1.m4a');
-      expect(state.messages[0].audioDuration, const Duration(seconds: 5));
-      expect(state.messages[0].transcriptionPending, isTrue);
-
-      // The canned Axi reply is a normal text bubble (so the 🔊 speak button
-      // works on it too). No voseo.
-      final reply = state.messages[1];
-      expect(reply.role, ChatRole.axi);
-      expect(reply.kind, ChatMessageKind.text);
-      expect(reply.text, ChatNotifier.voiceNotePlaceholderReply);
-      expect(reply.text, contains('notas de voz'));
-
-      // Deferred: a voice note is NOT sent to Axi (no fake transcription, no LLM).
-      expect(repo.sendCalls, 0);
-      expect(repo.imageCalls, 0);
-      // No stuck "sending" state from a static reply.
+      expect(stt.calls, 0);
       expect(state.sending, isFalse);
     });
   });

@@ -15,6 +15,10 @@ import 'package:lifeos/features/chat/data/chat_history_repository.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
+import 'package:lifeos/features/stt/domain/stt_model.dart';
+import 'package:lifeos/features/stt/presentation/stt_providers.dart';
+
+import '../../stt/support/fake_stt.dart';
 
 /// In-memory [ChatHistoryRepository] stand-in — records what the notifier
 /// persists so a test can assert save-on-change and seed hydrate-on-init.
@@ -57,6 +61,10 @@ void main() {
     final container = ProviderContainer(overrides: [
       chatRepositoryProvider.overrideWithValue(repo),
       chatHistoryRepositoryProvider.overrideWith((ref) async => history),
+      // Deterministic STT: the model is "not downloaded", so a voice note
+      // degrades to the canned fallback reply (no native recognizer in a test).
+      sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+      speechToTextProvider.overrideWithValue(FakeSpeechToText()),
     ]);
     addTearDown(container.dispose);
     return container;
@@ -97,13 +105,47 @@ void main() {
     final notifier = container.read(chatNotifierProvider.notifier);
     await notifier.ready;
 
-    notifier.addVoiceNote('/tmp/voice-1.m4a', const Duration(seconds: 3));
+    notifier.addVoiceNote('/tmp/voice-1.wav', const Duration(seconds: 3));
+    await notifier.voiceProcessed; // model-absent probe → fallback reply
     await tester.pump(); // flush persistence microtasks
 
     expect(history.messages, hasLength(2));
     expect(history.messages[0].kind, ChatMessageKind.voice);
-    expect(history.messages[0].audioPath, '/tmp/voice-1.m4a');
+    expect(history.messages[0].audioPath, '/tmp/voice-1.wav');
     expect(history.messages[1].text, ChatNotifier.voiceNotePlaceholderReply);
+  });
+
+  testWidgets('a transcribed voice note persists ONCE — with its transcript — plus the reply, no duplicate user turn',
+      (tester) async {
+    // B2 follow-up dedupe: the voice bubble IS the user turn. The store must
+    // end up with exactly two entries — the voice bubble already carrying its
+    // transcript (append-only store: persisting at record time AND after
+    // transcription would duplicate it) and Axi's reply. No text user bubble.
+    final reply = ChatMessage(id: 'a1', role: ChatRole.axi, text: 'claro', timestamp: DateTime.now());
+    final container = ProviderContainer(overrides: [
+      chatRepositoryProvider.overrideWithValue(_FakeChatRepository(sendResult: reply)),
+      chatHistoryRepositoryProvider.overrideWith((ref) async => history),
+      sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(
+        installed: const SttModelPaths(encoder: 'e', decoder: 'd', tokens: 't'),
+      )),
+      speechToTextProvider.overrideWithValue(FakeSpeechToText(transcript: 'compra leche')),
+    ]);
+    addTearDown(container.dispose);
+    final notifier = container.read(chatNotifierProvider.notifier);
+    await notifier.ready;
+
+    notifier.addVoiceNote('/tmp/voice-9.wav', const Duration(seconds: 2));
+    await tester.pumpAndSettle(); // probe + transcribe + the send's frame
+    await notifier.voiceProcessed;
+    await tester.pump(); // flush the fire-and-forget _persist microtasks
+
+    expect(history.messages, hasLength(2));
+    expect(history.messages[0].kind, ChatMessageKind.voice);
+    expect(history.messages[0].text, 'compra leche');
+    expect(history.messages[0].transcriptionPending, isFalse);
+    expect(history.messages[0].audioPath, '/tmp/voice-9.wav');
+    expect(history.messages[1].role, ChatRole.axi);
+    expect(history.messages[1].text, 'claro');
   });
 
   testWidgets('clearHistory empties both the visible conversation and the store', (tester) async {

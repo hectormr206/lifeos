@@ -139,6 +139,18 @@ dependencies:
   # rewrite. Already resolved transitively; made direct because we mint them.
   uuid: ^4.5.3
 
+  # On-device speech-to-text (roadmap slice B2): transcribes a recorded voice
+  # note fully offline with a Whisper base int8 multilingual model (ES+EN) via
+  # next-gen-Kaldi's sherpa-onnx runtime. The `sherpa_onnx` meta-package pulls
+  # the per-ABI native runtimes transitively (sherpa_onnx_android_arm64 +
+  # armeabi/x86/x86_64, plus ios/macos/linux/windows); only arm64-v8a is
+  # actually packaged into the APK (android/app/build.gradle.kts abiFilters).
+  # Wrapped behind SpeechToText (features/stt/domain) so the flow is
+  # unit-testable with a fake and the plugin stays at the edge. The ~80MB model
+  # itself is NOT bundled — it is downloaded on first use (see
+  # features/stt/data/stt_model_source_config.dart, kSttModelBaseUrl).
+  sherpa_onnx: ^1.13.4
+
   # "Axi habla" (speak-aloud): reads an assistant reply out loud using the
   # device's built-in OS text-to-speech voices. This is the INTERIM engine —
   # it lives behind TextToSpeechGateway (features/chat/domain) so a future

@@ -38,7 +38,8 @@ echo "→ Building release APK (versionCode $BUILD_NUMBER)…"
 flutter build apk --release \
   --build-number="$BUILD_NUMBER" \
   --dart-define=UPDATE_BASE_URL="$UPDATE_BASE_URL" \
-  --dart-define=UPDATE_ACCESS_KEY="$UPDATE_ACCESS_KEY"
+  --dart-define=UPDATE_ACCESS_KEY="$UPDATE_ACCESS_KEY" \
+  --dart-define=STT_MODEL_BASE_URL="${STT_MODEL_BASE_URL:-$UPDATE_BASE_URL/stt}"
 
 APK="$MOBILE_DIR/build/app/outputs/flutter-apk/app-release.apk"
 [[ -f "$APK" ]] || { echo "ERROR: no se generó $APK" >&2; exit 1; }

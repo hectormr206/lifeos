@@ -104,6 +104,11 @@
   "metricBackend": "Backend",
   "metricModel": "Model",
   "chatTranscriptionPending": "Transcription pending (STT)",
+  "sttTranscribing": "Transcribing…",
+  "sttDownloadVoiceModel": "Download voice model",
+  "sttDownloadingVoiceModel": "Downloading voice model… {percent}%",
+  "sttVoiceModelReady": "Voice model ready",
+  "sttVoiceModelFailed": "Couldn't download the voice model. Tap to retry.",
 
   "briefingTitle": "Briefing",
   "briefingSourcesTooltip": "Sources",
