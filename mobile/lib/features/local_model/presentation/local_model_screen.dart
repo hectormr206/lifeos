@@ -45,6 +45,7 @@ class LocalModelScreen extends ConsumerWidget {
           ),
           const Divider(),
           _StatusTile(manager: manager),
+          _UpdateAvailableBanner(manager: manager),
           const SizedBox(height: 16),
           _DownloadSection(manager: manager),
           _InstalledActions(manager: manager, enabled: enabled),
@@ -80,6 +81,78 @@ class _StatusTile extends StatelessWidget {
         color: manager.installed ? Colors.green : null,
       ),
       title: Text(manager.installed ? 'Modelo instalado' : 'Modelo no descargado'),
+    );
+  }
+}
+
+/// Gentle "hay un nuevo modelo disponible" prompt (brain-model OTA): shown
+/// only when the VPS manifest advertises a newer versionCode than the tracked
+/// install. NEVER auto-downloads the ~2.6GB — the user has to tap. While the
+/// update download runs, the shared progress UI in [_DownloadSection] takes
+/// over (downloading is checked there first), so the banner hides itself.
+class _UpdateAvailableBanner extends ConsumerWidget {
+  const _UpdateAvailableBanner({required this.manager});
+
+  final LocalModelManagerState manager;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!manager.updateAvailable || manager.downloading || manager.deleting) {
+      return const SizedBox.shrink();
+    }
+    final manifest = manager.manifest!;
+    final scheme = Theme.of(context).colorScheme;
+    final sizeGb = manifest.sizeBytes > 0
+        ? ' (~${(manifest.sizeBytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB)'
+        : '';
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: scheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.new_releases_outlined, size: 20, color: scheme.onSecondaryContainer),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Hay un nuevo modelo disponible',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleSmall
+                        ?.copyWith(color: scheme.onSecondaryContainer),
+                  ),
+                ),
+              ],
+            ),
+            if (manifest.notes.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                manifest.notes,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: scheme.onSecondaryContainer),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.icon(
+                onPressed: () => ref.read(localModelManagerProvider.notifier).download(),
+                icon: const Icon(Icons.system_update_alt_outlined),
+                label: Text('Actualizar modelo$sizeGb'),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

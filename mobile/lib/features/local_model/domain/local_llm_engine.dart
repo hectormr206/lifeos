@@ -100,7 +100,22 @@ abstract class LocalLlmEngine {
   /// Downloads + installs the weights, emitting fractional progress in
   /// `0.0..1.0` and completing (with a final `1.0`) once installed. Errors
   /// on the stream surface a failed/cancelled download.
+  ///
+  /// LEGACY fallback path: used only when the self-hosted brain-model OTA
+  /// source (`BRAIN_MODEL_BASE_URL`) is not configured. The OTA path instead
+  /// downloads + sha256-verifies the file itself and hands the local path to
+  /// [installModelFromFile].
   Stream<double> downloadModel();
+
+  /// Registers an ALREADY-DOWNLOADED, ALREADY-VERIFIED weights file at
+  /// [path] as the active model (the brain-model OTA install/swap step —
+  /// flutter_gemma's `installModel().fromFile()`). Any loaded model is
+  /// released first so an update can swap the file underneath.
+  ///
+  /// NOTE: a `fromFile` install registers the EXTERNAL path — flutter_gemma's
+  /// `uninstallModel` will NOT delete that file, so the OTA gateway owns the
+  /// file's lifecycle (`BrainModelUpdateGateway.deleteLocalFile`).
+  Future<void> installModelFromFile(String path);
 
   /// Loads the installed weights into memory, ready for [generate].
   /// [backend] overrides the engine's configured default for this load.

@@ -10,6 +10,7 @@ import 'package:lifeos/features/local_model/domain/notification_permission.dart'
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_screen.dart';
 
+import '../support/fake_brain_model_ota.dart';
 import '../support/fake_local_llm_engine.dart';
 
 Future<void> _pump(
@@ -18,6 +19,8 @@ Future<void> _pump(
   bool enabled = false,
   FakeLocalLlmEngine? engine,
   FakeNotificationPermissionGateway? gateway,
+  FakeBrainModelUpdateGateway? brainGateway,
+  FakeBrainModelVersionStore? versionStore,
 }) async {
   final router = GoRouter(
     routes: [
@@ -32,6 +35,14 @@ Future<void> _pump(
         localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences(enabled: enabled)),
         notificationPermissionGatewayProvider
             .overrideWithValue(gateway ?? FakeNotificationPermissionGateway()),
+        // In-memory OTA fakes: the real gateway/store would hit
+        // path_provider / shared_preferences platform channels in a widget
+        // test (unconfigured by default, but delete/bootstrap still touch
+        // them) and hang pumpAndSettle.
+        brainModelUpdateGatewayProvider
+            .overrideWithValue(brainGateway ?? FakeBrainModelUpdateGateway(configured: false)),
+        brainModelVersionStoreProvider
+            .overrideWithValue(versionStore ?? FakeBrainModelVersionStore()),
       ],
       child: MaterialApp.router(routerConfig: router),
     ),
@@ -122,6 +133,54 @@ void main() {
     await tester.tap(settingsButton);
     await tester.pumpAndSettle();
     expect(gateway.openSettingsCount, 1);
+  });
+
+  testWidgets('shows the "nuevo modelo disponible" banner when the manifest is newer', (tester) async {
+    await _pump(
+      tester,
+      installed: true,
+      brainGateway: FakeBrainModelUpdateGateway(
+        manifest: brainManifest(versionCode: 2, notes: 'Recipe re-tuned'),
+      ),
+      versionStore: FakeBrainModelVersionStore(),
+    );
+
+    expect(find.text('Hay un nuevo modelo disponible'), findsOneWidget);
+    expect(find.text('Recipe re-tuned'), findsOneWidget);
+    expect(find.textContaining('Actualizar modelo'), findsOneWidget);
+  });
+
+  testWidgets('no update banner when the installed model is current', (tester) async {
+    await _pump(
+      tester,
+      installed: true,
+      brainGateway: FakeBrainModelUpdateGateway(manifest: brainManifest(versionCode: 1)),
+      versionStore: FakeBrainModelVersionStore(),
+    );
+
+    expect(find.text('Hay un nuevo modelo disponible'), findsNothing);
+  });
+
+  testWidgets('tapping "Actualizar modelo" runs the update through the gateway', (tester) async {
+    final engine = FakeLocalLlmEngine(installed: true);
+    final brainGateway = FakeBrainModelUpdateGateway(manifest: brainManifest(versionCode: 2));
+    final versionStore = FakeBrainModelVersionStore();
+    await _pump(
+      tester,
+      installed: true,
+      engine: engine,
+      brainGateway: brainGateway,
+      versionStore: versionStore,
+    );
+    expect(find.text('Hay un nuevo modelo disponible'), findsOneWidget);
+
+    await tester.tap(find.textContaining('Actualizar modelo'));
+    await tester.pumpAndSettle();
+
+    expect(brainGateway.downloadCount, 1);
+    expect(engine.installedFromFilePaths, hasLength(1));
+    expect(versionStore.value?.versionCode, 2);
+    expect(find.text('Hay un nuevo modelo disponible'), findsNothing);
   });
 
   testWidgets('shows "Eliminar modelo" when the model is installed', (tester) async {

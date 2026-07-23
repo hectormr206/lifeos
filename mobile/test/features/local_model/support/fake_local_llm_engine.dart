@@ -98,6 +98,21 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     _installed = true;
   }
 
+  /// Paths handed to [installModelFromFile] (the brain-model OTA install/swap
+  /// step), so tests can assert the verified LOCAL file reached the engine.
+  final List<String> installedFromFilePaths = [];
+
+  /// When true, [installModelFromFile] throws so the OTA install-failure path
+  /// is testable.
+  bool installFromFileShouldFail = false;
+
+  @override
+  Future<void> installModelFromFile(String path) async {
+    installedFromFilePaths.add(path);
+    if (installFromFileShouldFail) throw Exception('install boom');
+    _installed = true;
+  }
+
   @override
   Future<void> load({LocalLlmBackend? backend}) async {
     loadCount++;

@@ -2,6 +2,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/flutter_gemma_llm_engine.dart';
 import '../data/permission_handler_notification_gateway.dart';
+import '../data/vps_brain_model_gateway.dart';
+import '../domain/brain_model_update_gateway.dart';
+import '../domain/brain_model_version_store.dart';
 import '../domain/local_llm_engine.dart';
 import '../domain/local_model_preferences.dart';
 import '../domain/notification_permission.dart';
@@ -34,6 +37,19 @@ final notificationPermissionGatewayProvider = Provider<NotificationPermissionGat
 /// in tests.
 final localModelPreferencesProvider =
     Provider<LocalModelPreferences>((ref) => SharedPrefsLocalModelPreferences());
+
+/// The self-hosted brain-model OTA source (VPS manifest + weights). Built from
+/// the compile-time config (`--dart-define=BRAIN_MODEL_BASE_URL` overrides,
+/// else the placeholder). Overridden with a fake in tests.
+final brainModelUpdateGatewayProvider = Provider<BrainModelUpdateGateway>(
+  (ref) => VpsBrainModelGateway(),
+);
+
+/// Tracked installed brain-model identity (shared_preferences) — what the
+/// server manifest's versionCode is compared against. Overridden with a fake
+/// in tests.
+final brainModelVersionStoreProvider =
+    Provider<BrainModelVersionStore>((ref) => SharedPrefsBrainModelVersionStore());
 
 /// Whether the app is in on-device (local model) chat mode.
 ///

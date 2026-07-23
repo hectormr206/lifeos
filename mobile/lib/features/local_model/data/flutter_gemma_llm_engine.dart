@@ -135,6 +135,22 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   }
 
   @override
+  Future<void> installModelFromFile(String path) async {
+    await _ensureInitialized();
+    // Release any loaded handle first: on an UPDATE the old weights may be
+    // memory-mapped by the native runtime; the fresh install must re-load.
+    await dispose();
+    // Real API (verified against flutter_gemma 1.3.1): `fromFile` registers
+    // the EXTERNAL path (no copy) and sets the model active. The file keeps
+    // the stable name `gemma-4-E2B-it.litertlm`, so `isModelInstalled`
+    // (keyed on the last path segment) keeps matching `_config.modelId`.
+    await FlutterGemma.installModel(
+      modelType: ModelType.gemma4,
+      fileType: ModelFileType.litertlm,
+    ).fromFile(path).install();
+  }
+
+  @override
   Future<void> load({LocalLlmBackend? backend}) async {
     await _ensureInitialized();
     _loadedBackend = backend ?? _config.backend;
@@ -327,9 +343,10 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     // when we remove it (uninstall would otherwise race a live inference model).
     await dispose();
     // Real API (verified against flutter_gemma 1.3.1): removes the model
-    // metadata AND the on-disk file (unless it is an external/protected
-    // FileSource, which our network install never is). This is the exact
-    // counterpart to `installModel` / `isModelInstalled`.
+    // metadata AND the on-disk file — but ONLY files inside flutter_gemma's
+    // own model dir. An OTA (`fromFile`) install registers an EXTERNAL path
+    // that uninstall leaves in place, so the manager notifier ALSO calls
+    // `BrainModelUpdateGateway.deleteLocalFile()` to actually free the ~2.6GB.
     await FlutterGemma.uninstallModel(_config.modelId);
   }
 
