@@ -2,11 +2,28 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'morning_briefing.dart';
 
-/// Sensible starting news sources (RSS feeds) the user can change or remove.
-/// Kept feed-first because the pipeline extracts feeds most reliably.
+/// Starting news sources (RSS/Atom feeds), seeded from the laptop LifeOS
+/// briefing config (axi/src/axi/briefing.py). The user can change or remove
+/// them. Kept feed-first because the pipeline extracts feeds most reliably;
+/// the laptop's Hacker News source is omitted (it uses a special HN-Algolia
+/// adapter the on-device pipeline doesn't have yet).
+///
+/// NOTE for distribution: curate a GLOBAL default set later — several of these
+/// are ES/MX-specific and new users (e.g. shared installs) may be elsewhere.
 const List<String> defaultBriefingSources = [
-  'https://www.eldiario.es/rss/',
+  // General / world (Spanish)
   'https://feeds.bbci.co.uk/mundo/rss.xml',
+  // Mexico
+  'https://expansion.mx/rss',
+  // AI (English)
+  'https://simonwillison.net/atom/everything/',
+  'https://huggingface.co/blog/feed.xml',
+  // Linux (Spanish)
+  'https://www.muylinux.com/feed/',
+  'https://soploslinux.com/feed/',
+  'https://www.linuxadictos.com/feed/',
+  'https://blog.desdelinux.net/feed/',
+  'https://www.xn--linuxenespaol-skb.com/feed/',
 ];
 
 /// Local-only persistence for the ON-DEVICE morning briefing: the user's list
