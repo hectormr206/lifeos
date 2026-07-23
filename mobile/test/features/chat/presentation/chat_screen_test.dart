@@ -21,6 +21,7 @@ import 'package:lifeos/features/chat/presentation/chat_screen.dart';
 import 'package:lifeos/features/local_model/data/on_device_chat_repository.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
+import 'package:lifeos/features/local_model/presentation/required_models.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
 import 'package:lifeos/features/stt/domain/stt_model.dart';
@@ -736,6 +737,10 @@ void main() {
           chatRepositoryProvider.overrideWithValue(repo),
           localLlmEngineProvider.overrideWithValue(engine),
           localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
+          // Readiness gate: pin all four models ready so the composer (not the
+          // "Preparando LifeOS" panel) renders — this test targets the RAM-load
+          // banner, not the readiness gate.
+          lifeOsModelsReadyProvider.overrideWithValue(true),
           // Local mode ON also mounts the STT banner — keep the real
           // background-downloader gateway out of the test.
           sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
@@ -775,6 +780,10 @@ void main() {
           chatRepositoryProvider.overrideWithValue(repo),
           localLlmEngineProvider.overrideWithValue(engine),
           localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
+          // Readiness gate: pin all four models ready so the composer (not the
+          // "Preparando LifeOS" panel) renders — this test targets the RAM-load
+          // banner, not the readiness gate.
+          lifeOsModelsReadyProvider.overrideWithValue(true),
           // Local mode ON also mounts the STT banner — keep the real
           // background-downloader gateway out of the test.
           sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
@@ -810,6 +819,9 @@ void main() {
       chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
       localLlmEngineProvider.overrideWithValue(engine),
       localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
+      // Readiness gate: pin all four models ready so the composer + STT banner
+      // render (this test targets the STT banner, not the readiness gate).
+      lifeOsModelsReadyProvider.overrideWithValue(true),
       sttModelGatewayProvider.overrideWithValue(gateway),
       speechToTextProvider.overrideWithValue(FakeSpeechToText()),
     ];

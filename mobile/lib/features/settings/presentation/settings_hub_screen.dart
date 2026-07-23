@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/language_preference.dart';
@@ -227,14 +228,28 @@ class _AppearanceTile extends StatelessWidget {
 Future<(String, int)> _loadVersion(AppVersionInfo info) async =>
     (await info.versionName(), await info.buildNumber());
 
-/// App identity + version (package_info_plus via [appVersionInfoProvider]).
+/// The LifeOS landing page opened from the "Acerca de" card.
+const String kLifeOsLandingUrl = 'https://lifeos.hectormr.com';
+
+/// App identity + version (package_info_plus via [appVersionInfoProvider]),
+/// the landing slogan, the author credit, and a tappable link to the landing
+/// page (opens in the external browser via url_launcher).
 class _AboutTile extends ConsumerWidget {
   const _AboutTile();
+
+  Future<void> _openLanding() async {
+    final uri = Uri.parse(kLifeOsLandingUrl);
+    // External browser (never an in-app webview) — the landing is a public
+    // marketing page, not app content. Best-effort: a launch failure is
+    // swallowed rather than crashing Settings.
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final info = ref.watch(appVersionInfoProvider);
     final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
     return FutureBuilder<(String, int)>(
       future: _loadVersion(info),
       builder: (context, snapshot) {
@@ -243,6 +258,7 @@ class _AboutTile extends ConsumerWidget {
           null => l10n.appVersionLoading,
         };
         return ListTile(
+          isThreeLine: true,
           leading: Container(
             width: 44,
             height: 44,
@@ -259,7 +275,35 @@ class _AboutTile extends ConsumerWidget {
             ),
           ),
           title: const Text('LifeOS'),
-          subtitle: Text('$version · ${l10n.appTagline}'),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(l10n.aboutSlogan),
+              Text(l10n.aboutAuthor),
+              Text(version),
+              const SizedBox(height: 2),
+              InkWell(
+                onTap: _openLanding,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.open_in_new, size: 14, color: scheme.primary),
+                      const SizedBox(width: 4),
+                      Text(
+                        l10n.aboutLandingLink,
+                        style: TextStyle(
+                          color: scheme.primary,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         );
       },
     );

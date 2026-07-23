@@ -11,6 +11,8 @@ import '../../local_model/domain/generation_metrics.dart';
 import '../../local_model/domain/local_llm_engine.dart' show LocalModelConfig;
 import '../../local_model/presentation/local_model_load_notifier.dart';
 import '../../local_model/presentation/local_model_providers.dart';
+import '../../local_model/presentation/required_models.dart';
+import '../../local_model/presentation/required_models_manager.dart';
 import '../../stt/domain/stt_model.dart';
 import '../../stt/presentation/stt_providers.dart';
 import '../domain/chat_message.dart';
@@ -445,6 +447,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     // generation never starts before the model is ready.
     final modelLoading = ref.watch(localModelLoadProvider).isLoading;
 
+    // Readiness gate (option B): in local mode the chat only unlocks once ALL
+    // four on-device models are installed. Until then the composer is replaced
+    // by a "Preparando LifeOS" panel so no feature is ever half-broken. The
+    // local-mode check short-circuits first, so cloud/HTTP mode never touches
+    // the readiness providers (and keeps the real gateways out of those tests).
+    final preparingLocalMode =
+        ref.watch(localModelEnabledProvider) && !ref.watch(lifeOsModelsReadyProvider);
+
     ref.listen(chatNotifierProvider, (previous, next) {
       if (next.error != null && next.error != _lastShownError) {
         _lastShownError = next.error;
@@ -486,7 +496,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
           ),
         ],
       ),
-      body: Column(
+      body: preparingLocalMode
+          ? const _PreparingLocalModelPanel()
+          : _chatBody(context, chat, modelLoading),
+    );
+  }
+
+  Widget _chatBody(BuildContext context, ChatUiState chat, bool modelLoading) {
+    return Column(
         children: [
           const PendingSyncBanner(),
           const _ModelLoadingBanner(),
@@ -518,8 +535,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   Widget _buildInputBar(BuildContext context, bool sending, bool modelLoading) {
@@ -879,6 +895,47 @@ class _SttModelBanner extends ConsumerWidget {
       case SttModelReady():
         return const SizedBox.shrink();
     }
+  }
+}
+
+/// Shown INSTEAD of the chat composer when local mode is on but not all four
+/// on-device models are installed yet (option B readiness gate). It surfaces
+/// the "Preparando LifeOS" message plus the unified model manager — which
+/// models are pending, the overall progress, and a "Descargar todo" /
+/// "continuar descarga" button — so the user can complete the setup without
+/// leaving the chat. Once all four land ready, the full chat unlocks.
+class _PreparingLocalModelPanel extends ConsumerWidget {
+  const _PreparingLocalModelPanel();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          const SizedBox(height: 8),
+          Icon(Icons.hourglass_top_outlined, size: 40, color: scheme.primary),
+          const SizedBox(height: 12),
+          Text(
+            l10n.chatPreparingTitle,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            l10n.chatPreparingBody,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 24),
+          // Reuse the same manager the "Modelo local" screen shows — one engine,
+          // per-model status + "Descargar todo" + overall progress + retry.
+          const RequiredModelsManager(),
+        ],
+      ),
+    );
   }
 }
 

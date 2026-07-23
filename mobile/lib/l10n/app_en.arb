@@ -45,9 +45,40 @@
   },
   "appVersionLoading": "Version…",
   "appTagline": "Axi, always with you ⚡",
+  "aboutSlogan": "Your life, your machine, not their cloud.",
+  "aboutAuthor": "Created by Héctor Martínez",
+  "aboutLandingLink": "lifeos.hectormr.com",
+
+  "requiredModelsSectionTitle": "Required models",
+  "requiredModelsSectionSubtitle": "LifeOS works fully offline once these four models are installed.",
+  "requiredModelsDownloadAll": "Download all",
+  "requiredModelsContinue": "Continue download",
+  "requiredModelsWifiNote": "We recommend connecting to Wi-Fi for the initial download (~2.9 GB).",
+  "requiredModelsOverall": "Getting LifeOS ready — {ready} of {total} · {percent}%",
+  "@requiredModelsOverall": {
+    "placeholders": {
+      "ready": { "type": "int" },
+      "total": { "type": "int" },
+      "percent": { "type": "int" }
+    }
+  },
+  "requiredModelStatusInstalled": "Installed",
+  "requiredModelStatusDownloading": "Downloading {percent}%",
+  "@requiredModelStatusDownloading": {
+    "placeholders": {
+      "percent": { "type": "int" }
+    }
+  },
+  "requiredModelStatusAvailable": "Available to download",
+  "requiredModelStatusError": "Download error",
+  "modelNameBrain": "Brain",
+  "modelNameStt": "Hearing (speech to text)",
+  "modelNameTts": "Voice (Piper)",
+  "modelNameEmbed": "Memory (embeddings)",
+  "chatPreparingTitle": "Getting LifeOS ready",
+  "chatPreparingBody": "Download the required models to chat offline.",
 
   "settingsTooltip": "Settings",
-  "homeNotConnected": "Not connected to any engine yet.",
   "homeChatOffline": "Chat with Axi (offline)",
   "homeUseLocalModel": "Use local model (offline)",
   "homeConnectedTo": "Connected to {url}",

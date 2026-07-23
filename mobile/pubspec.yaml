@@ -129,6 +129,9 @@ dependencies:
   #     (ACTION_VIEW on a FileProvider content:// URI) — the user taps
   #     "Instalar" on the system dialog (unavoidable for a sideloaded app).
   package_info_plus: ^10.2.1
+  # Opens the LifeOS landing page (https://lifeos.hectormr.com) from the
+  # "Acerca de" card in an external browser (LaunchMode.externalApplication).
+  url_launcher: ^6.3.0
   flutter_local_notifications: ^22.1.0
   # LOCAL reminders (roadmap slice C2): `zonedSchedule` takes a
   # `tz.TZDateTime`, so the app must import `package:timezone` directly.
@@ -190,6 +193,12 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+  # Test-only: mock the url_launcher platform channel (the "Acerca de" landing
+  # link) without a real browser. Both are already in the tree transitively via
+  # url_launcher; declared here so the test import is a direct dependency.
+  url_launcher_platform_interface: ^2.3.2
+  plugin_platform_interface: ^2.1.8
 
   # Host-side (no device/emulator) unit tests for the on-device graph store
   # (roadmap SLICE A2). Opens a real in-memory sqlite via dart:ffi on the test

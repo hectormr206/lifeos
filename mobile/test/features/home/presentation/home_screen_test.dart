@@ -46,7 +46,8 @@ void main() {
 
     // App-shell slice: pairing was removed from the home UI.
     expect(find.text('Conectar con tu motor'), findsNothing);
-    expect(find.text('Aún no está conectado a ningún motor.'), findsOneWidget);
+    // On-device-first: the "not connected to an engine" message was removed.
+    expect(find.text('Aún no está conectado a ningún motor.'), findsNothing);
   });
 
   testWidgets('shows the connected view with a reachable indicator when paired', (tester) async {

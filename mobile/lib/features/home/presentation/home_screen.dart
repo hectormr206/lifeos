@@ -68,8 +68,10 @@ class _UnpairedView extends ConsumerWidget {
         // Axi's animated body — alive even before pairing (organ taps that
         // need the engine degrade gracefully on their target screens).
         const AxiBodyWidget(),
-        const SizedBox(height: 8),
-        Text(l10n.homeNotConnected),
+        // On-device-first: LifeOS presents as complete at startup. Pairing to a
+        // laptop engine is an OPTIONAL future interconnection reached from
+        // Ajustes, never a startup requirement — so there is no "not connected"
+        // message here anymore; the home just offers the offline path.
         const SizedBox(height: 16),
         if (localModelInstalled)
           // Primary offline path: ensure local mode is on, then open the chat.

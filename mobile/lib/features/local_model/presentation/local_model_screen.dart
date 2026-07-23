@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../domain/notification_permission.dart';
 import 'local_model_notifier.dart';
 import 'local_model_providers.dart';
+import 'required_models_manager.dart';
 
 /// Model-manager screen (roadmap SLICE 1): a "usar modelo local" toggle plus a
 /// "descargar modelo" action with live progress + installed state. The
@@ -26,6 +27,11 @@ class LocalModelScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Unified model manager (option B): the four required models + a
+          // "Descargar todo" that fetches the missing ones so the offline
+          // experience is never half-broken.
+          const RequiredModelsManager(),
+          const Divider(height: 32),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Usar modelo local'),

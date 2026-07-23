@@ -120,10 +120,71 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appTagline => 'Axi, always with you ⚡';
 
   @override
-  String get settingsTooltip => 'Settings';
+  String get aboutSlogan => 'Your life, your machine, not their cloud.';
 
   @override
-  String get homeNotConnected => 'Not connected to any engine yet.';
+  String get aboutAuthor => 'Created by Héctor Martínez';
+
+  @override
+  String get aboutLandingLink => 'lifeos.hectormr.com';
+
+  @override
+  String get requiredModelsSectionTitle => 'Required models';
+
+  @override
+  String get requiredModelsSectionSubtitle =>
+      'LifeOS works fully offline once these four models are installed.';
+
+  @override
+  String get requiredModelsDownloadAll => 'Download all';
+
+  @override
+  String get requiredModelsContinue => 'Continue download';
+
+  @override
+  String get requiredModelsWifiNote =>
+      'We recommend connecting to Wi-Fi for the initial download (~2.9 GB).';
+
+  @override
+  String requiredModelsOverall(int ready, int total, int percent) {
+    return 'Getting LifeOS ready — $ready of $total · $percent%';
+  }
+
+  @override
+  String get requiredModelStatusInstalled => 'Installed';
+
+  @override
+  String requiredModelStatusDownloading(int percent) {
+    return 'Downloading $percent%';
+  }
+
+  @override
+  String get requiredModelStatusAvailable => 'Available to download';
+
+  @override
+  String get requiredModelStatusError => 'Download error';
+
+  @override
+  String get modelNameBrain => 'Brain';
+
+  @override
+  String get modelNameStt => 'Hearing (speech to text)';
+
+  @override
+  String get modelNameTts => 'Voice (Piper)';
+
+  @override
+  String get modelNameEmbed => 'Memory (embeddings)';
+
+  @override
+  String get chatPreparingTitle => 'Getting LifeOS ready';
+
+  @override
+  String get chatPreparingBody =>
+      'Download the required models to chat offline.';
+
+  @override
+  String get settingsTooltip => 'Settings';
 
   @override
   String get homeChatOffline => 'Chat with Axi (offline)';

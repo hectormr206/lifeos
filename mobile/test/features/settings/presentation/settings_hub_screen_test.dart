@@ -13,6 +13,8 @@ import 'package:lifeos/l10n/language_preference.dart';
 import 'package:lifeos/l10n/locale_providers.dart';
 import 'package:lifeos/theme/theme_mode_preferences.dart';
 import 'package:lifeos/theme/theme_providers.dart';
+import 'package:plugin_platform_interface/plugin_platform_interface.dart';
+import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 import '../../../support/fake_language_preferences.dart';
 import '../../../support/fake_theme_mode_preferences.dart';
@@ -94,8 +96,30 @@ void main() {
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
 
-    // Subtitle is "Versión 1.0.0 (10) · <tagline>" — match the version prefix.
+    // Version line still shows "Versión 1.0.0 (10)".
     expect(find.textContaining('Versión 1.0.0 (10)'), findsOneWidget);
+  });
+
+  testWidgets('Acerca de shows the landing slogan, author credit and a link', (tester) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Tu vida, tu máquina, no su nube.'), findsOneWidget);
+    expect(find.text('Creado por Héctor Martínez'), findsOneWidget);
+    expect(find.text('lifeos.hectormr.com'), findsOneWidget);
+  });
+
+  testWidgets('tapping the landing link opens lifeos.hectormr.com externally', (tester) async {
+    final launcher = _FakeUrlLauncher();
+    UrlLauncherPlatform.instance = launcher;
+
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('lifeos.hectormr.com'));
+    await tester.pumpAndSettle();
+
+    expect(launcher.launched, ['https://lifeos.hectormr.com']);
   });
 
   testWidgets('appearance selector changes and persists ThemeMode', (tester) async {
@@ -157,4 +181,25 @@ void main() {
     expect(container.read(languageProvider), AppLanguage.en);
     expect(languagePrefs.stored, AppLanguage.en);
   });
+}
+
+/// Records launched URLs so the "Acerca de" link can be verified without a
+/// platform channel (no real browser).
+class _FakeUrlLauncher extends Fake with MockPlatformInterfaceMixin implements UrlLauncherPlatform {
+  final List<String> launched = [];
+
+  @override
+  Future<bool> canLaunch(String url) async => true;
+
+  @override
+  Future<bool> launchUrl(String url, LaunchOptions options) async {
+    launched.add(url);
+    return true;
+  }
+
+  @override
+  Future<bool> supportsMode(PreferredLaunchMode mode) async => true;
+
+  @override
+  Future<bool> supportsCloseForMode(PreferredLaunchMode mode) async => false;
 }

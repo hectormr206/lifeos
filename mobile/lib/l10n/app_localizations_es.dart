@@ -122,10 +122,71 @@ class AppLocalizationsEs extends AppLocalizations {
   String get appTagline => 'Axi, siempre contigo ⚡';
 
   @override
-  String get settingsTooltip => 'Ajustes';
+  String get aboutSlogan => 'Tu vida, tu máquina, no su nube.';
 
   @override
-  String get homeNotConnected => 'Aún no está conectado a ningún motor.';
+  String get aboutAuthor => 'Creado por Héctor Martínez';
+
+  @override
+  String get aboutLandingLink => 'lifeos.hectormr.com';
+
+  @override
+  String get requiredModelsSectionTitle => 'Modelos necesarios';
+
+  @override
+  String get requiredModelsSectionSubtitle =>
+      'LifeOS funciona por completo sin conexión cuando estos cuatro modelos están instalados.';
+
+  @override
+  String get requiredModelsDownloadAll => 'Descargar todo';
+
+  @override
+  String get requiredModelsContinue => 'Continuar descarga';
+
+  @override
+  String get requiredModelsWifiNote =>
+      'Te recomendamos conectarte a Wi-Fi para la descarga inicial (~2.9 GB).';
+
+  @override
+  String requiredModelsOverall(int ready, int total, int percent) {
+    return 'Preparando LifeOS — $ready de $total · $percent%';
+  }
+
+  @override
+  String get requiredModelStatusInstalled => 'Instalado';
+
+  @override
+  String requiredModelStatusDownloading(int percent) {
+    return 'Descargando $percent%';
+  }
+
+  @override
+  String get requiredModelStatusAvailable => 'Disponible para descargar';
+
+  @override
+  String get requiredModelStatusError => 'Error en la descarga';
+
+  @override
+  String get modelNameBrain => 'Cerebro';
+
+  @override
+  String get modelNameStt => 'Oído (voz a texto)';
+
+  @override
+  String get modelNameTts => 'Voz (Piper)';
+
+  @override
+  String get modelNameEmbed => 'Memoria (embeddings)';
+
+  @override
+  String get chatPreparingTitle => 'Preparando LifeOS';
+
+  @override
+  String get chatPreparingBody =>
+      'Descarga los modelos necesarios para chatear sin conexión.';
+
+  @override
+  String get settingsTooltip => 'Ajustes';
 
   @override
   String get homeChatOffline => 'Chatear con Axi (sin conexión)';

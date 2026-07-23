@@ -39,9 +39,40 @@
   "appVersionLabel": "Versión {name} ({build})",
   "appVersionLoading": "Versión…",
   "appTagline": "Axi, siempre contigo ⚡",
+  "aboutSlogan": "Tu vida, tu máquina, no su nube.",
+  "aboutAuthor": "Creado por Héctor Martínez",
+  "aboutLandingLink": "lifeos.hectormr.com",
+
+  "requiredModelsSectionTitle": "Modelos necesarios",
+  "requiredModelsSectionSubtitle": "LifeOS funciona por completo sin conexión cuando estos cuatro modelos están instalados.",
+  "requiredModelsDownloadAll": "Descargar todo",
+  "requiredModelsContinue": "Continuar descarga",
+  "requiredModelsWifiNote": "Te recomendamos conectarte a Wi-Fi para la descarga inicial (~2.9 GB).",
+  "requiredModelsOverall": "Preparando LifeOS — {ready} de {total} · {percent}%",
+  "@requiredModelsOverall": {
+    "placeholders": {
+      "ready": { "type": "int" },
+      "total": { "type": "int" },
+      "percent": { "type": "int" }
+    }
+  },
+  "requiredModelStatusInstalled": "Instalado",
+  "requiredModelStatusDownloading": "Descargando {percent}%",
+  "@requiredModelStatusDownloading": {
+    "placeholders": {
+      "percent": { "type": "int" }
+    }
+  },
+  "requiredModelStatusAvailable": "Disponible para descargar",
+  "requiredModelStatusError": "Error en la descarga",
+  "modelNameBrain": "Cerebro",
+  "modelNameStt": "Oído (voz a texto)",
+  "modelNameTts": "Voz (Piper)",
+  "modelNameEmbed": "Memoria (embeddings)",
+  "chatPreparingTitle": "Preparando LifeOS",
+  "chatPreparingBody": "Descarga los modelos necesarios para chatear sin conexión.",
 
   "settingsTooltip": "Ajustes",
-  "homeNotConnected": "Aún no está conectado a ningún motor.",
   "homeChatOffline": "Chatear con Axi (sin conexión)",
   "homeUseLocalModel": "Usar modelo local (sin conexión)",
   "homeConnectedTo": "Conectado a {url}",

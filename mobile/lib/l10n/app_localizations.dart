@@ -314,17 +314,125 @@ abstract class AppLocalizations {
   /// **'Axi, always with you ⚡'**
   String get appTagline;
 
+  /// No description provided for @aboutSlogan.
+  ///
+  /// In en, this message translates to:
+  /// **'Your life, your machine, not their cloud.'**
+  String get aboutSlogan;
+
+  /// No description provided for @aboutAuthor.
+  ///
+  /// In en, this message translates to:
+  /// **'Created by Héctor Martínez'**
+  String get aboutAuthor;
+
+  /// No description provided for @aboutLandingLink.
+  ///
+  /// In en, this message translates to:
+  /// **'lifeos.hectormr.com'**
+  String get aboutLandingLink;
+
+  /// No description provided for @requiredModelsSectionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Required models'**
+  String get requiredModelsSectionTitle;
+
+  /// No description provided for @requiredModelsSectionSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'LifeOS works fully offline once these four models are installed.'**
+  String get requiredModelsSectionSubtitle;
+
+  /// No description provided for @requiredModelsDownloadAll.
+  ///
+  /// In en, this message translates to:
+  /// **'Download all'**
+  String get requiredModelsDownloadAll;
+
+  /// No description provided for @requiredModelsContinue.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue download'**
+  String get requiredModelsContinue;
+
+  /// No description provided for @requiredModelsWifiNote.
+  ///
+  /// In en, this message translates to:
+  /// **'We recommend connecting to Wi-Fi for the initial download (~2.9 GB).'**
+  String get requiredModelsWifiNote;
+
+  /// No description provided for @requiredModelsOverall.
+  ///
+  /// In en, this message translates to:
+  /// **'Getting LifeOS ready — {ready} of {total} · {percent}%'**
+  String requiredModelsOverall(int ready, int total, int percent);
+
+  /// No description provided for @requiredModelStatusInstalled.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed'**
+  String get requiredModelStatusInstalled;
+
+  /// No description provided for @requiredModelStatusDownloading.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading {percent}%'**
+  String requiredModelStatusDownloading(int percent);
+
+  /// No description provided for @requiredModelStatusAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Available to download'**
+  String get requiredModelStatusAvailable;
+
+  /// No description provided for @requiredModelStatusError.
+  ///
+  /// In en, this message translates to:
+  /// **'Download error'**
+  String get requiredModelStatusError;
+
+  /// No description provided for @modelNameBrain.
+  ///
+  /// In en, this message translates to:
+  /// **'Brain'**
+  String get modelNameBrain;
+
+  /// No description provided for @modelNameStt.
+  ///
+  /// In en, this message translates to:
+  /// **'Hearing (speech to text)'**
+  String get modelNameStt;
+
+  /// No description provided for @modelNameTts.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice (Piper)'**
+  String get modelNameTts;
+
+  /// No description provided for @modelNameEmbed.
+  ///
+  /// In en, this message translates to:
+  /// **'Memory (embeddings)'**
+  String get modelNameEmbed;
+
+  /// No description provided for @chatPreparingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Getting LifeOS ready'**
+  String get chatPreparingTitle;
+
+  /// No description provided for @chatPreparingBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Download the required models to chat offline.'**
+  String get chatPreparingBody;
+
   /// No description provided for @settingsTooltip.
   ///
   /// In en, this message translates to:
   /// **'Settings'**
   String get settingsTooltip;
-
-  /// No description provided for @homeNotConnected.
-  ///
-  /// In en, this message translates to:
-  /// **'Not connected to any engine yet.'**
-  String get homeNotConnected;
 
   /// No description provided for @homeChatOffline.
   ///

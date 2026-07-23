@@ -6,10 +6,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:lifeos/features/embedding/embedding_providers.dart';
 import 'package:lifeos/features/local_model/domain/notification_permission.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_screen.dart';
+import 'package:lifeos/features/stt/presentation/stt_providers.dart';
+import 'package:lifeos/features/tts/presentation/tts_providers.dart';
+import 'package:lifeos/l10n/app_localizations.dart';
+import 'package:lifeos/l10n/locale_providers.dart';
 
+import '../../embedding/embed_model_warmup_test.dart' show FakeEmbedModelGateway;
+import '../../stt/support/fake_stt.dart';
+import '../../tts/support/fake_tts.dart';
 import '../support/fake_brain_model_ota.dart';
 import '../support/fake_local_llm_engine.dart';
 
@@ -43,14 +51,42 @@ Future<void> _pump(
             .overrideWithValue(brainGateway ?? FakeBrainModelUpdateGateway(configured: false)),
         brainModelVersionStoreProvider
             .overrideWithValue(versionStore ?? FakeBrainModelVersionStore()),
+        // The unified model manager on this screen composes the STT/TTS/embed
+        // download providers — fake their gateways so no real background
+        // downloader / path_provider channel is touched.
+        sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
+        ttsVoiceGatewayProvider.overrideWithValue(FakeTtsVoiceGateway()),
+        appLanguageCodeProvider.overrideWithValue('es'),
+        embedModelGatewayProvider.overrideWithValue(FakeEmbedModelGateway(installed: null)),
       ],
-      child: MaterialApp.router(routerConfig: router),
+      // The manager localizes its strings, so the app needs the l10n delegates
+      // (the rest of the screen still uses hardcoded neutral Spanish).
+      child: MaterialApp.router(
+        routerConfig: router,
+        locale: const Locale('es'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+      ),
     ),
   );
   await tester.pumpAndSettle();
 }
 
 void main() {
+  // The screen is a scrolling ListView (now led by the unified model manager);
+  // give tests a tall viewport so every section below the fold is laid out — a
+  // ListView only builds its visible children.
+  setUp(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.views.first;
+    view.physicalSize = const Size(1000, 3200);
+    view.devicePixelRatio = 1.0;
+  });
+  tearDown(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.views.first;
+    view.resetPhysicalSize();
+    view.resetDevicePixelRatio();
+  });
+
   testWidgets('shows the toggle and a download button when not installed', (tester) async {
     await _pump(tester, installed: false);
 
@@ -107,8 +143,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('la descarga funciona igual'), findsOneWidget);
-    // Re-request affordance: the (retry) download button is still there.
-    expect(find.byType(FilledButton), findsOneWidget);
+    // Re-request affordance: the brain (retry) download button is still there.
+    // (The unified manager adds its own "Descargar todo" FilledButton, so scope
+    // the assertion to the brain button by its post-failure retry label.)
+    expect(find.widgetWithText(FilledButton, 'Reintentar descarga'), findsOneWidget);
     // No permanent-denial escape hatch on a soft denial.
     expect(find.widgetWithText(TextButton, 'Abrir ajustes'), findsNothing);
   });

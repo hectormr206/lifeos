@@ -40,8 +40,9 @@ void main() {
     await tester.pump();
 
     expect(find.byType(AxiBodyWidget), findsOneWidget);
-    // Existing content is intact (integrate, don't destroy).
-    expect(find.text('Aún no está conectado a ningún motor.'), findsOneWidget);
+    // On-device-first: the "not connected to an engine" message was removed;
+    // the Axi body still renders as the home's on-device content.
+    expect(find.text('Aún no está conectado a ningún motor.'), findsNothing);
   });
 
   testWidgets('paired home renders Axi\'s animated body above the quick nav',
