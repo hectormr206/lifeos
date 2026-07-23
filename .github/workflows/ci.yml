@@ -28,7 +28,11 @@ jobs:
       # pyaudio (a core engine dep) builds against portaudio's C headers,
       # which a bare runner lacks (this laptop already has them).
       - name: Install system build deps (portaudio)
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+        run: |
+          # Skip when headers are preinstalled (self-hosted runner image).
+          if [ ! -e /usr/include/portaudio.h ]; then
+            sudo apt-get update && sudo apt-get install -y portaudio19-dev
+          fi
       - name: Sync axi deps
         working-directory: axi
         run: uv sync --python 3.12
@@ -49,7 +53,11 @@ jobs:
       # pyaudio (a core engine dep) builds against portaudio's C headers,
       # which a bare runner lacks (this laptop already has them).
       - name: Install system build deps (portaudio)
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+        run: |
+          # Skip when headers are preinstalled (self-hosted runner image).
+          if [ ! -e /usr/include/portaudio.h ]; then
+            sudo apt-get update && sudo apt-get install -y portaudio19-dev
+          fi
       - name: Sync axi deps
         working-directory: axi
         run: uv sync --python 3.12
@@ -105,7 +113,11 @@ jobs:
       - name: Set up Python 3.12
         run: uv python install 3.12
       - name: Install system build deps (portaudio)
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+        run: |
+          # Skip when headers are preinstalled (self-hosted runner image).
+          if [ ! -e /usr/include/portaudio.h ]; then
+            sudo apt-get update && sudo apt-get install -y portaudio19-dev
+          fi
       - name: Sync axi deps
         working-directory: axi
         run: uv sync --python 3.12
