@@ -381,6 +381,45 @@ void main() {
     expect(find.text('Desliza para cancelar'), findsNothing);
   });
 
+  testWidgets('opening the keyboard reflows the list to the most recent messages', (tester) async {
+    // Regression: when the soft keyboard opens the message list must scroll so
+    // the newest messages stay visible above it, instead of being hidden behind
+    // the keyboard until the user scrolls manually.
+    final ts = DateTime.now();
+    final repo = _FakeChatRepository(
+      history: [
+        for (var i = 0; i < 40; i++)
+          ChatMessage(id: 'm$i', role: i.isEven ? ChatRole.user : ChatRole.axi, text: 'mensaje $i', timestamp: ts),
+      ],
+    );
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())),
+    );
+    await tester.pumpAndSettle();
+    addTearDown(tester.view.resetViewInsets);
+
+    // The main message list's scroll position.
+    final position = tester
+        .state<ScrollableState>(find.descendant(of: find.byType(ListView), matching: find.byType(Scrollable)).first)
+        .position;
+
+    // Simulate the user having scrolled up to read older history (away from the
+    // most recent messages).
+    position.jumpTo(0);
+    await tester.pump();
+    expect(position.pixels, 0);
+
+    // Keyboard opens: a bottom inset appears. This drives didChangeMetrics.
+    tester.view.viewInsets = const FakeViewPadding(bottom: 400);
+    await tester.pumpAndSettle();
+
+    // The list reflowed to its end — the most recent messages are visible.
+    expect(position.pixels, moreOrLessEquals(position.maxScrollExtent, epsilon: 1.0));
+    expect(position.pixels, greaterThan(0));
+  });
+
   testWidgets('outgoing user messages render WhatsApp ticks by delivery status', (tester) async {
     final ts = DateTime.now();
     final repo = _FakeChatRepository(

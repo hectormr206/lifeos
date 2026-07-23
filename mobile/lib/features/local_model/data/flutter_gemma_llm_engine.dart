@@ -159,7 +159,12 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   }
 
   @override
-  Future<GenerationResult> generate(String prompt) async {
+  Future<GenerationResult> generate(
+    String prompt, {
+    double? temperature,
+    int? topK,
+    double? topP,
+  }) async {
     final model = _model;
     if (model == null) {
       throw StateError('Local model not loaded. Call load() before generate().');
@@ -171,14 +176,16 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     final chat = await model.createChat(
       maxOutputTokens: _config.maxOutputTokens,
       modelType: ModelType.gemma4,
-      // Gemma-recommended sampling. flutter_gemma's `createChat` defaults to
-      // `topK: 1` (pure greedy/argmax), which sends this model into degenerate
-      // repetition loops ("well well well…"), worst on the vision path. Passing
-      // Gemma's recommended sampling restores healthy, varied output. The seed
-      // is varied per call so the reply is not deterministic across turns.
-      temperature: 1.0,
-      topK: 64,
-      topP: 0.95,
+      // BENCHMARK-TUNED sampling from our model_audit tune-to-peak recipe for
+      // gemma-4-E2B (see LocalModelConfig.tuned*). Replaces the old guessed
+      // values; flutter_gemma's `createChat` otherwise defaults to `topK: 1`
+      // (pure greedy) which sends this model into degenerate repetition loops.
+      // A caller may override (temperature/topK/topP) for the escape-temp retry;
+      // otherwise the tuned constant is used. Seed varied per call so the reply
+      // is not deterministic across turns.
+      temperature: temperature ?? LocalModelConfig.tunedTemperature,
+      topK: topK ?? LocalModelConfig.tunedTopK,
+      topP: topP ?? LocalModelConfig.tunedTopP,
       randomSeed: DateTime.now().millisecondsSinceEpoch & 0x7fffffff,
     );
     await chat.addQueryChunk(Message.text(text: prompt, isUser: true));
@@ -201,7 +208,13 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   }
 
   @override
-  Future<GenerationResult> generateWithImages(String prompt, List<Uint8List> images) async {
+  Future<GenerationResult> generateWithImages(
+    String prompt,
+    List<Uint8List> images, {
+    double? temperature,
+    int? topK,
+    double? topP,
+  }) async {
     final model = _model;
     if (model == null) {
       throw StateError('Local model not loaded. Call load() before generateWithImages().');
@@ -223,17 +236,15 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       maxOutputTokens: _config.maxOutputTokens,
       modelType: ModelType.gemma4,
       supportImage: true,
-      // The vision path uses TIGHTER sampling than the text path (which stays at
-      // 1.0/64/0.95, see [generate]). The image logits are flatter, so the
-      // greedy `topK: 1` default still needs overriding to avoid the "well
-      // well…" repetition loop, but the higher temperature also samples
-      // control tokens like `<pad>` far too readily — surfacing as literal
-      // "<pad><pad>…" text. Lowering to 0.7/40/0.9 keeps replies varied while
-      // sharply cutting the odds of sampling a special token. The two paths
-      // intentionally differ. Seed varied per call for non-deterministic output.
-      temperature: 0.7,
-      topK: 40,
-      topP: 0.9,
+      // BENCHMARK-TUNED sampling from our model_audit tune-to-peak recipe for
+      // gemma-4-E2B (see LocalModelConfig.tuned*). The tuned sweep gives the
+      // vision role the SAME setting as text (0.6/20/0.95), replacing the old
+      // arbitrary 0.7/40/0.9 that degenerated → emitted `<pad>` → blank bubble.
+      // A caller may override (the escape-temp retry) when the low-temp recipe
+      // still degenerates on the phone. Seed varied per call for non-determinism.
+      temperature: temperature ?? LocalModelConfig.tunedTemperature,
+      topK: topK ?? LocalModelConfig.tunedTopK,
+      topP: topP ?? LocalModelConfig.tunedTopP,
       randomSeed: DateTime.now().millisecondsSinceEpoch & 0x7fffffff,
     );
     await chat.addQueryChunk(

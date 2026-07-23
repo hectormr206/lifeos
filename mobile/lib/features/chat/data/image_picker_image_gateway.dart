@@ -19,7 +19,11 @@ class ImagePickerImageGateway implements ImagePickerGateway {
         PhotoSource.camera => ip.ImageSource.camera,
         PhotoSource.gallery => ip.ImageSource.gallery,
       },
-      maxWidth: 1568,
+      // Bound the LONGEST side to ~1024px (encoder-friendly for gemma-4-E2B's
+      // vision tower) so borderline high-res photos don't add per-image variance
+      // that pushes the sampler into degeneration. Quality 85 keeps it small.
+      maxWidth: 1024,
+      maxHeight: 1024,
       imageQuality: 85,
     );
     if (file == null) return null;

@@ -29,10 +29,16 @@ class ChatScreen extends ConsumerStatefulWidget {
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends ConsumerState<ChatScreen> {
+class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObserver {
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   String? _lastShownError;
+
+  // Last seen keyboard inset (physical px). We compare against it in
+  // [didChangeMetrics] to tell the keyboard OPENING (or growing) apart from it
+  // closing, so we only reflow the list downward when recent messages would
+  // otherwise be hidden behind the keyboard.
+  double _lastBottomInset = 0;
 
   // Photos the user has attached but not yet sent. They accumulate here as
   // removable thumbnails in the compose area (WhatsApp-style) until the user
@@ -69,11 +75,34 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.initState();
     // Rebuild the trailing button (mic ↔ send) as the user types.
     _textController.addListener(_onTextChanged);
+    // Observe window-metric changes so we can react to the soft keyboard
+    // opening (see [didChangeMetrics]).
+    WidgetsBinding.instance.addObserver(this);
     _speech = ref.read(speechControllerProvider.notifier);
+  }
+
+  // When the soft keyboard opens (or grows), the Scaffold resizes the message
+  // list upward, which would otherwise leave the most recent messages hidden
+  // behind the keyboard until the user scrolls. Detect the bottom inset
+  // INCREASING and reflow the list to its end so recent messages stay visible
+  // above the keyboard. We ignore the inset shrinking (keyboard closing) so we
+  // never fight the user scrolling up through history. This never touches focus
+  // and does not interact with the recording overlay (the mic keeps the field
+  // focused without changing the inset), so it can't conflict with press-and-
+  // hold recording.
+  @override
+  void didChangeMetrics() {
+    if (!mounted) return;
+    final bottomInset = View.of(context).viewInsets.bottom;
+    if (bottomInset > _lastBottomInset) {
+      _scrollToBottomSoon();
+    }
+    _lastBottomInset = bottomInset;
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _textController.removeListener(_onTextChanged);
     _textController.dispose();
     _scrollController.dispose();
@@ -367,6 +396,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
 
     return Scaffold(
+      // Ride the input bar above the soft keyboard (Flutter's default, pinned
+      // explicitly): the body shrinks to the keyboard, and [didChangeMetrics]
+      // then reflows the message list so recent messages stay visible above it.
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         title: const Text('Axi'),
         actions: [

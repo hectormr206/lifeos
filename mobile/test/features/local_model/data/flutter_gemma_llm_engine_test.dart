@@ -19,16 +19,14 @@ void main() {
 
   // Sampling contract: flutter_gemma's `createChat` defaults to `topK: 1` (pure
   // greedy/argmax), which drives gemma-4 into degenerate "well well well…"
-  // repetition loops. Both paths override it, but they INTENTIONALLY DIVERGE:
-  //   * text (`generate`)          → 1.0 / 64 / 0.95 (varied, creative)
-  //   * image (`generateWithImages`) → 0.7 / 40 / 0.9 (tighter — the flatter
-  //     vision logits under 1.0 sampled the `<pad>` control token far too
-  //     readily, surfacing as literal "<pad><pad>…"; the lower settings sharply
-  //     cut that while still avoiding the greedy loop).
-  // There is no injection seam for the native InferenceModel (load() reaches the
-  // real FFI and throws on the host), so we assert the contract at the source:
-  // the two `createChat` invocations carry the expected per-path sampling, and
-  // the seed is varied per call (not a constant).
+  // repetition loops; and a guessed high temperature over-sampled the `<pad>`
+  // control token on the flat vision logits → blank bubble. BOTH paths now use
+  // the SAME BENCHMARK-TUNED recipe from our model_audit tune-to-peak for
+  // gemma-4-E2B (LocalModelConfig.tuned* = 0.6 / 20 / 0.95), which the tuned
+  // sweep peaked for both the vision and text roles. There is no injection seam
+  // for the native InferenceModel (load() reaches the real FFI and throws on the
+  // host), so we assert the contract at the source: both `createChat`
+  // invocations pass the tuned constant (defaulted), and vary the seed per call.
   group('createChat sampling params', () {
     final source = File(
       'lib/features/local_model/data/flutter_gemma_llm_engine.dart',
@@ -39,23 +37,22 @@ void main() {
     final chatCalls =
         RegExp(r'await model\.createChat\(([\s\S]*?)\);').allMatches(source).map((m) => m.group(1)!).toList();
 
+    test('the tuned constant IS the benchmark-tuned recipe (0.6 / 20 / 0.95)', () {
+      expect(LocalModelConfig.tunedTemperature, 0.6);
+      expect(LocalModelConfig.tunedTopK, 20);
+      expect(LocalModelConfig.tunedTopP, 0.95);
+    });
+
     test('there are exactly two createChat calls (text + image paths)', () {
       expect(chatCalls.length, 2);
     });
 
-    test('the TEXT path keeps the creative 1.0 / 64 / 0.95 sampling', () {
-      final text = chatCalls[0];
-      expect(text, contains('temperature: 1.0'), reason: 'must override the greedy default');
-      expect(text, contains('topK: 64'), reason: 'topK: 1 default causes repetition loops');
-      expect(text, contains('topP: 0.95'));
-    });
-
-    test('the VISION path uses the tighter 0.7 / 40 / 0.9 sampling (anti <pad>)', () {
-      final vision = chatCalls[1];
-      expect(vision, contains('temperature: 0.7'),
-          reason: 'high temperature over-samples control tokens on flat vision logits');
-      expect(vision, contains('topK: 40'));
-      expect(vision, contains('topP: 0.9'));
+    test('both paths wire the tuned sampling constant (no magic numbers)', () {
+      for (final call in chatCalls) {
+        expect(call, contains('LocalModelConfig.tunedTemperature'));
+        expect(call, contains('LocalModelConfig.tunedTopK'));
+        expect(call, contains('LocalModelConfig.tunedTopP'));
+      }
     });
 
     test('both paths override the greedy default and vary the seed per call', () {

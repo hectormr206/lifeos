@@ -70,6 +70,13 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   final List<String> prompts = [];
   final List<String> imagePrompts = [];
 
+  /// Records the sampling passed to each [generate] / [generateWithImages] call
+  /// so tests can assert the tuned constant (default) and the escape-temp retry
+  /// override. Each entry is `(temperature, topK, topP)` — null when the caller
+  /// omitted the override and the real engine falls back to the tuned constant.
+  final List<(double?, int?, double?)> generateSampling = [];
+  final List<(double?, int?, double?)> imageSampling = [];
+
   /// Records the images handed to [generateWithImages], so a test can assert the
   /// VISION path actually received the attachments. [lastImageBytes] is the
   /// first of the last batch (single-image convenience); [lastImages] is the
@@ -100,17 +107,30 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   }
 
   @override
-  Future<GenerationResult> generate(String prompt) async {
+  Future<GenerationResult> generate(
+    String prompt, {
+    double? temperature,
+    int? topK,
+    double? topP,
+  }) async {
     generateCount++;
     prompts.add(prompt);
+    generateSampling.add((temperature, topK, topP));
     if (generateShouldFail) throw Exception('generate boom');
     return GenerationResult(text: reply(prompt), metrics: metrics);
   }
 
   @override
-  Future<GenerationResult> generateWithImages(String prompt, List<Uint8List> images) async {
+  Future<GenerationResult> generateWithImages(
+    String prompt,
+    List<Uint8List> images, {
+    double? temperature,
+    int? topK,
+    double? topP,
+  }) async {
     generateWithImagesCount++;
     imagePrompts.add(prompt);
+    imageSampling.add((temperature, topK, topP));
     lastImages = images;
     lastImageBytes = images.isEmpty ? null : images.first;
     if (generateWithImagesShouldFail) throw Exception('vision boom');

@@ -32,15 +32,26 @@ class OnDeviceChatRepository implements ChatRepository {
     return result;
   }
 
+  /// Neutral-Spanish (no voseo) fallback shown instead of a blank bubble when
+  /// the model degenerates to empty output. Text vs. vision variants.
+  static const String _emptyTextFallback =
+      'No pude generar una respuesta, intenta de nuevo.';
+  static const String _emptyImageFallback =
+      'No pude interpretar la imagen, intenta de nuevo.';
+
   @override
   Future<ChatMessage> sendMessage(String text) => _serialize(() async {
         try {
           await (_loadFuture ??= _engine.load());
           final result = await _engine.generate(text);
+          // Lighter empty-guard than the vision path (no image retry): if the
+          // backend still degenerated to empty, show a neutral-Spanish fallback
+          // rather than a blank bubble. Keep the metrics from the attempt.
+          final text0 = result.text.trim().isEmpty ? _emptyTextFallback : result.text;
           return ChatMessage(
             id: 'local-${DateTime.now().microsecondsSinceEpoch}',
             role: ChatRole.axi,
-            text: result.text,
+            text: text0,
             timestamp: DateTime.now(),
             // Per-response metrics ride along so the chat UI can show tokens/s +
             // latency under the bubble and full stats in a modal.
@@ -62,11 +73,29 @@ class OnDeviceChatRepository implements ChatRepository {
           // turn). If the installed variant is text-only, the engine throws and
           // we surface a clear Spanish message rather than silently dropping the
           // photos.
-          final result = await _engine.generateWithImages(text, images);
+          var result = await _engine.generateWithImages(text, images);
+          // EMPTY-OUTPUT SAFETY NET: the phone's litertlm backend can still
+          // degenerate to empty at the tuned low temperature (where the
+          // llama.cpp-tuned recipe doesn't). Retry ONCE at ESCAPE sampling —
+          // the higher-entropy config empirically proven to produce output on
+          // the phone (see LocalModelConfig.escape*).
+          if (result.text.trim().isEmpty) {
+            result = await _engine.generateWithImages(
+              text,
+              images,
+              temperature: LocalModelConfig.escapeTemperature,
+              topK: LocalModelConfig.escapeTopK,
+              topP: LocalModelConfig.escapeTopP,
+            );
+          }
+          // If the escape retry is ALSO empty, show a neutral-Spanish fallback
+          // rather than a blank bubble.
+          final resultText =
+              result.text.trim().isEmpty ? _emptyImageFallback : result.text;
           return ChatMessage(
             id: 'local-${DateTime.now().microsecondsSinceEpoch}',
             role: ChatRole.axi,
-            text: result.text,
+            text: resultText,
             timestamp: DateTime.now(),
             metrics: result.metrics,
           );

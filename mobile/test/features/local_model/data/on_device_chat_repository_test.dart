@@ -116,6 +116,65 @@ void main() {
     );
   });
 
+  test('sendMessage/sendImages call the engine with the tuned default sampling', () async {
+    // The repository must NOT pass overrides on the first (tuned) attempt — the
+    // real engine then falls back to LocalModelConfig.tuned*. A null override
+    // triple is exactly that "use the tuned constant" signal.
+    final engine = FakeLocalLlmEngine();
+    final repo = OnDeviceChatRepository(engine);
+
+    await repo.sendMessage('hola');
+    await repo.sendImages('qué es', [Uint8List.fromList([1])]);
+
+    expect(engine.generateSampling.single, (null, null, null));
+    expect(engine.imageSampling.single, (null, null, null));
+  });
+
+  test('sendImages retries at ESCAPE sampling when the first reply is empty', () async {
+    var calls = 0;
+    // Empty on the first (tuned) attempt, non-empty on the escape retry.
+    final engine = FakeLocalLlmEngine(imageReply: (_) => ++calls == 1 ? '' : 'lo veo ahora');
+    final repo = OnDeviceChatRepository(engine);
+
+    final message = await repo.sendImages('qué es', [Uint8List.fromList([1])]);
+
+    expect(message.text, 'lo veo ahora');
+    expect(engine.generateWithImagesCount, 2);
+    // First attempt is the tuned default (no overrides); the retry carries the
+    // escape sampling proven to work on the phone.
+    expect(engine.imageSampling[0], (null, null, null));
+    expect(
+      engine.imageSampling[1],
+      (
+        LocalModelConfig.escapeTemperature,
+        LocalModelConfig.escapeTopK,
+        LocalModelConfig.escapeTopP,
+      ),
+    );
+  });
+
+  test('sendImages falls back to neutral Spanish when BOTH attempts are empty', () async {
+    // Every attempt degenerates to empty → user sees the fallback, not a blank.
+    final engine = FakeLocalLlmEngine(imageReply: (_) => '   ');
+    final repo = OnDeviceChatRepository(engine);
+
+    final message = await repo.sendImages('qué es', [Uint8List.fromList([1])]);
+
+    expect(message.text, 'No pude interpretar la imagen, intenta de nuevo.');
+    expect(engine.generateWithImagesCount, 2); // tuned + one escape retry, no more
+  });
+
+  test('sendMessage falls back to neutral Spanish on empty text output', () async {
+    final engine = FakeLocalLlmEngine(reply: (_) => '');
+    final repo = OnDeviceChatRepository(engine);
+
+    final message = await repo.sendMessage('hola');
+
+    expect(message.text, 'No pude generar una respuesta, intenta de nuevo.');
+    // No image-style retry for text — one attempt only.
+    expect(engine.generateCount, 1);
+  });
+
   test('wraps engine failures in a ChatException and allows retry', () async {
     final engine = FakeLocalLlmEngine(generateShouldFail: true);
     final repo = OnDeviceChatRepository(engine);

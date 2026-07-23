@@ -36,6 +36,26 @@ class LocalModelConfig {
     this.maxOutputTokens = 512,
   });
 
+  /// BENCHMARK-TUNED sampling for gemma-4-E2B, straight from our `model_audit`
+  /// tune-to-peak recipe (the authoritative per-role sweep). These are the tuned
+  /// values for BOTH the vision role AND the general/text roles — the same
+  /// setting peaked quality for both (only the longsum role differs, which this
+  /// app does not use). They REPLACE the old guessed values (vision was at an
+  /// arbitrary 0.7/40/0.9 that degenerated → emitted `<pad>` → blank bubble).
+  /// Passed to every `createChat` unless a caller overrides them (see the
+  /// escape-temp retry in OnDeviceChatRepository).
+  static const double tunedTemperature = 0.6;
+  static const int tunedTopK = 20;
+  static const double tunedTopP = 0.95;
+
+  /// ESCAPE sampling: the higher-entropy config empirically proven to still
+  /// produce output on the phone's litertlm backend when the tuned low-temp
+  /// recipe degenerates to empty. Used only as a one-shot retry, never the
+  /// default — the tuned recipe is preferred for quality.
+  static const double escapeTemperature = 1.0;
+  static const int escapeTopK = 64;
+  static const double escapeTopP = 0.95;
+
   /// Max photos the model accepts per turn. flutter_gemma's native `.litertlm`
   /// FFI path supports several images in a single query (accumulated into one
   /// turn), but only up to the `maxNumImages` the model was created with — and
@@ -89,7 +109,16 @@ abstract class LocalLlmEngine {
   /// Runs one non-streaming completion for [prompt] and returns the reply
   /// text together with its [GenerationMetrics] (tokens/s, latency, backend).
   /// SLICE 1 is single-turn (no retained conversation history).
-  Future<GenerationResult> generate(String prompt);
+  ///
+  /// [temperature]/[topK]/[topP] override the BENCHMARK-TUNED sampling
+  /// ([LocalModelConfig.tuned*]) for this call only — used by the escape-temp
+  /// retry when the tuned recipe degenerates to empty. Omit for the tuned path.
+  Future<GenerationResult> generate(
+    String prompt, {
+    double? temperature,
+    int? topK,
+    double? topP,
+  });
 
   /// Runs one non-streaming multimodal completion for [prompt] together with
   /// one or more attached [images] (JPEG/PNG), all sent within a single turn.
@@ -100,7 +129,17 @@ abstract class LocalLlmEngine {
   ///
   /// Real vision inference is arm64/Pixel-only (gemma-4-E2B multimodal build);
   /// the x86_64 emulator can exercise only the attach/UI flow, not inference.
-  Future<GenerationResult> generateWithImages(String prompt, List<Uint8List> images);
+  ///
+  /// [temperature]/[topK]/[topP] override the BENCHMARK-TUNED sampling
+  /// ([LocalModelConfig.tuned*]) for this call only — used by the escape-temp
+  /// retry when the tuned recipe degenerates to empty. Omit for the tuned path.
+  Future<GenerationResult> generateWithImages(
+    String prompt,
+    List<Uint8List> images, {
+    double? temperature,
+    int? topK,
+    double? topP,
+  });
 
   /// Releases the loaded model + native handles. Safe to call when not
   /// loaded.
