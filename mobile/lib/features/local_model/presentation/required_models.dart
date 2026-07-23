@@ -18,13 +18,13 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../l10n/locale_providers.dart';
 import '../../embedding/embed_model_warmup.dart';
 import '../../embedding/embedding_providers.dart';
 import '../../stt/domain/stt_model.dart';
 import '../../stt/presentation/stt_providers.dart';
 import '../../tts/domain/tts_voice.dart';
 import '../../tts/presentation/tts_providers.dart';
+import '../../voice_settings/presentation/voice_catalog_providers.dart';
 import 'local_model_notifier.dart';
 
 /// The four models the offline experience needs. Ordered biggest-first so
@@ -89,13 +89,13 @@ class RequiredModelsSummary {
   int get overallPercent => (overallProgress * 100).round();
 }
 
-/// Fail-soft probe of whether the current language's Piper voice is already on
-/// disk. The [ttsVoiceDownloadProvider] does NOT hydrate installed state at
-/// build (it deliberately starts Absent), so readiness at rest needs this seam.
+/// Fail-soft probe of whether the SELECTED Piper voice is already on disk. The
+/// catalog controller starts every voice Absent and probes asynchronously, so
+/// readiness at rest still needs this direct seam.
 final ttsVoiceInstalledProbeProvider = FutureProvider<bool>((ref) async {
-  final languageCode = ref.watch(appLanguageCodeProvider);
+  final voiceId = ref.watch(selectedVoiceProvider);
   try {
-    final voice = await ref.watch(ttsVoiceGatewayProvider).installedVoice(languageCode);
+    final voice = await ref.watch(ttsVoiceGatewayProvider).installedVoice(voiceId);
     return voice != null;
   } catch (_) {
     return false;
@@ -119,7 +119,8 @@ final embedModelInstalledProbeProvider = FutureProvider<bool>((ref) async {
 final requiredModelsSummaryProvider = Provider<RequiredModelsSummary>((ref) {
   final brain = ref.watch(localModelManagerProvider);
   final stt = ref.watch(sttModelDownloadProvider);
-  final tts = ref.watch(ttsVoiceDownloadProvider);
+  final selectedVoice = ref.watch(selectedVoiceProvider);
+  final tts = ref.watch(voiceCatalogControllerProvider)[selectedVoice] ?? const TtsVoiceAbsent();
   final ttsProbeInstalled = ref.watch(ttsVoiceInstalledProbeProvider).value ?? false;
   final embed = ref.watch(embedModelWarmupProvider);
   final embedProbeInstalled = ref.watch(embedModelInstalledProbeProvider).value ?? false;
@@ -271,10 +272,11 @@ class RequiredModelsDownloadNotifier extends Notifier<bool> {
   }
 
   Future<void> _ensureTts() async {
-    if (ref.read(ttsVoiceDownloadProvider) is TtsVoiceReady) return;
+    final voiceId = ref.read(selectedVoiceProvider);
+    if (ref.read(voiceCatalogControllerProvider)[voiceId] is TtsVoiceReady) return;
     // download() itself checks installedVoice and lands Ready without fetching
     // when the voice is already on disk, so this never re-downloads either.
-    await ref.read(ttsVoiceDownloadProvider.notifier).downloadForCurrentLanguage();
+    await ref.read(voiceCatalogControllerProvider.notifier).download(voiceId);
   }
 
   Future<void> _ensureEmbed() async {

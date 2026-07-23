@@ -206,6 +206,47 @@ class MemoryWriter {
     return _hubUuidCache = hub.uuid;
   }
 
+  /// The user hub uuid (public wrapper over [_ensureUserHub]), created on first
+  /// need. Used by the open-ended [RelationExtractor] to resolve a relation
+  /// whose subject is the user (`Héctor` / `yo`) to the same hub every parser
+  /// uses.
+  Future<String> ensureUserHub() => _ensureUserHub();
+
+  /// Resolve (or create) a GENERIC entity node labelled [label] — the non-person
+  /// endpoint of an open-ended relation (a medication, condition, place, org,
+  /// product, event…). Ported in spirit from the laptop `identity.ensure_entity`.
+  ///
+  /// Dedup is by folded label (and any recorded alias), searched across both the
+  /// requested [kind] and the existing `person`/`entity` nodes, so "Celia" the
+  /// person and "Celia" the extracted entity resolve to ONE node (the user hub is
+  /// never a match). On creation the node is temporally stamped via [occurredAt]
+  /// so every extracted entity carries occurred_at = now, like every fact.
+  Future<String> ensureEntity(
+    String label, {
+    String kind = 'entity',
+    DateTime? occurredAt,
+  }) async {
+    final l = label.trim();
+    if (l.isEmpty) return _ensureUserHub();
+    final low = foldAccents(l.toLowerCase());
+    for (final k in <String>{kind, 'person', 'entity'}) {
+      for (final n in await _store.listNodesByKind(k)) {
+        if (n.data['role'] == 'user') continue;
+        if (foldAccents(n.label.toLowerCase()) == low) return n.uuid;
+        if (_aliasList(n.data).any((a) => foldAccents(a.toLowerCase()) == low)) {
+          return n.uuid;
+        }
+      }
+    }
+    final node = await _store.createNode(
+      kind: kind,
+      label: l,
+      data: const <String, Object?>{},
+      occurredAt: occurredAt,
+    );
+    return node.uuid;
+  }
+
   /// Resolve the person node the user relates to via [relation], creating it (and
   /// the typed `hub --relation--> person` edge) on first need. Ports the laptop
   /// `identity.add_relation` + `_resolve_relation_person` + `ensure_entity`.

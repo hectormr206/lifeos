@@ -1,5 +1,6 @@
-// Proves the Piper voice manifest: exact hosted filenames per language, the
-// derived (never hosted) tokens name, and the placeholder-URL guard.
+// Proves the Piper voice manifest: any voice id resolves to its flat hosted
+// filenames (`<id>.onnx` + `.onnx.json`), the derived (never hosted) tokens
+// name, the size floors, and the placeholder-URL guard.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/tts/data/tts_voice_source_config.dart';
 
@@ -7,25 +8,18 @@ void main() {
   group('TtsVoiceSourceConfig', () {
     const config = TtsVoiceSourceConfig();
 
-    test('es maps to the es_MX-ald-medium Piper voice files', () {
-      final voice = config.voiceForLanguage('es');
-      expect(voice, isNotNull);
-      expect(voice!.model.name, 'es_MX-ald-medium.onnx');
-      expect(voice.config.name, 'es_MX-ald-medium.onnx.json');
-      expect(voice.tokensFileName, 'es_MX-ald-medium.onnx.tokens.txt');
+    test('a voice id resolves to its flat <id>.onnx / <id>.onnx.json files', () {
+      final voice = config.specForVoice('es_MX-claude');
+      expect(voice.model.name, 'es_MX-claude.onnx');
+      expect(voice.config.name, 'es_MX-claude.onnx.json');
+      expect(voice.tokensFileName, 'es_MX-claude.onnx.tokens.txt');
     });
 
-    test('en maps to the en_US-lessac-medium Piper voice files', () {
-      final voice = config.voiceForLanguage('en');
-      expect(voice, isNotNull);
-      expect(voice!.model.name, 'en_US-lessac-medium.onnx');
-      expect(voice.config.name, 'en_US-lessac-medium.onnx.json');
-      expect(voice.tokensFileName, 'en_US-lessac-medium.onnx.tokens.txt');
-    });
-
-    test('an unsupported language has no Piper voice (system voice covers it)', () {
-      expect(config.voiceForLanguage('fr'), isNull);
-      expect(config.voiceForLanguage(''), isNull);
+    test('a different voice id resolves to its own files (no hardcoded case)', () {
+      final voice = config.specForVoice('en_GB-alan');
+      expect(voice.model.name, 'en_GB-alan.onnx');
+      expect(voice.config.name, 'en_GB-alan.onnx.json');
+      expect(voice.files.map((f) => f.name), ['en_GB-alan.onnx', 'en_GB-alan.onnx.json']);
     });
 
     test('shared espeak-ng-data archive is a gzip tar with a size floor', () {
@@ -44,9 +38,9 @@ void main() {
     });
 
     test('model size floors reject an error page / truncated download', () {
-      expect(config.spanish.model.minBytes, greaterThanOrEqualTo(1024 * 1024));
-      expect(config.english.model.minBytes, greaterThanOrEqualTo(1024 * 1024));
-      expect(config.spanish.config.minBytes, greaterThan(0));
+      final voice = config.specForVoice('es_ES-davefx');
+      expect(voice.model.minBytes, greaterThanOrEqualTo(1024 * 1024));
+      expect(voice.config.minBytes, greaterThan(0));
     });
   });
 }

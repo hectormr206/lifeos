@@ -9,7 +9,9 @@ import 'package:lifeos/features/tts/domain/tts_playback.dart';
 import 'package:lifeos/features/tts/domain/tts_voice.dart';
 import 'package:lifeos/features/tts/domain/tts_voice_gateway.dart';
 
-/// [TtsVoiceGateway] with a per-language installed map and scripted download.
+/// [TtsVoiceGateway] with a per-voice-id installed map and scripted download.
+/// Presence of a voice id in [installed] models "both files (.onnx + .onnx.json)
+/// present" — the concrete gateway's installed criterion.
 class FakeTtsVoiceGateway implements TtsVoiceGateway {
   FakeTtsVoiceGateway({
     Map<String, TtsVoicePaths>? installed,
@@ -23,25 +25,25 @@ class FakeTtsVoiceGateway implements TtsVoiceGateway {
   final List<String> downloadCalls = [];
 
   @override
-  Future<TtsVoicePaths?> installedVoice(String languageCode) async => installed[languageCode];
+  Future<TtsVoicePaths?> installedVoice(String voiceId) async => installed[voiceId];
 
   @override
   Future<TtsVoicePaths> download(
-    String languageCode, {
+    String voiceId, {
     void Function(double progress)? onProgress,
   }) async {
-    downloadCalls.add(languageCode);
+    downloadCalls.add(voiceId);
     final error = downloadError;
     if (error != null) throw error;
     for (final p in downloadProgress) {
       onProgress?.call(p);
     }
     final paths = TtsVoicePaths(
-      model: '$languageCode.onnx',
-      tokens: '$languageCode.tokens.txt',
+      model: '$voiceId.onnx',
+      tokens: '$voiceId.tokens.txt',
       dataDir: 'espeak-ng-data',
     );
-    installed[languageCode] = paths;
+    installed[voiceId] = paths;
     return paths;
   }
 }

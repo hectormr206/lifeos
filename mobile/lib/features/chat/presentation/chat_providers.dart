@@ -9,6 +9,7 @@ import '../../tts/data/audioplayers_tts_playback.dart';
 import '../../tts/data/piper_preferred_text_to_speech_gateway.dart';
 import '../../tts/data/sherpa_piper_tts_gateway.dart';
 import '../../tts/presentation/tts_providers.dart';
+import '../../voice_settings/presentation/voice_catalog_providers.dart';
 import '../../voice_settings/presentation/voice_settings_providers.dart';
 import '../data/record_audio_recorder_gateway.dart';
 import '../domain/audio_player_gateway.dart';
@@ -78,6 +79,11 @@ final textToSpeechGatewayProvider = Provider<TextToSpeechGateway>((ref) {
   // speak-time (not `watch`) so a language change re-selects the voice without
   // recreating (and re-loading) the shared engine.
   String currentLanguageCode() => ref.read(appLanguageCodeProvider);
+  // The NEURAL voice follows the user's explicit pick (default es_MX-claude),
+  // read live at speak-time so a new pick applies to the next utterance without
+  // recreating (and re-loading) the shared engine. The system FALLBACK still
+  // follows the app language (it has a voice per locale, not per pick).
+  String currentVoiceId() => ref.read(selectedVoiceProvider);
   // Read the "Voz" tuning LIVE at speak-time (not `watch`) so the rate slider
   // applies to the next utterance without recreating the shared engine.
   final gateway = PiperPreferredTextToSpeechGateway(
@@ -85,7 +91,7 @@ final textToSpeechGatewayProvider = Provider<TextToSpeechGateway>((ref) {
       voiceGateway: ref.watch(ttsVoiceGatewayProvider),
       synthesizer: ref.watch(piperSpeechSynthesizerProvider),
       playback: AudioplayersTtsPlayback(),
-      currentLanguageCode: currentLanguageCode,
+      currentVoiceId: currentVoiceId,
       currentSpeed: () => ref.read(voiceSettingsProvider).piperSpeed,
     ),
     fallback: FlutterTtsTextToSpeechGateway(
@@ -95,8 +101,8 @@ final textToSpeechGatewayProvider = Provider<TextToSpeechGateway>((ref) {
     ),
     // Lazy first-speak trigger: fire-and-forget so the fallback utterance is
     // never blocked by the (large) voice download.
-    onVoiceAbsent: () =>
-        unawaited(ref.read(ttsVoiceDownloadProvider.notifier).downloadForCurrentLanguage()),
+    onVoiceAbsent: () => unawaited(
+        ref.read(voiceCatalogControllerProvider.notifier).download(ref.read(selectedVoiceProvider))),
   );
   ref.onDispose(gateway.dispose);
   return gateway;

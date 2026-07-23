@@ -30,10 +30,12 @@ import '../../../core/graph/local_graph_store.dart';
 import '../../domains/data/local_domain_repository.dart';
 import '../../domains/domain/local_entry_config.dart';
 import '../../embedding/domain/rag_service.dart';
+import '../../local_model/domain/local_llm_engine.dart';
 import '../../memory/data/memory_writer.dart';
 import '../../memory/domain/domain_router.dart';
 import '../../memory/domain/health_parser.dart';
 import '../../memory/domain/person_naming.dart';
+import '../../memory/domain/relation_extractor.dart';
 import '../../memory/domain/recall_block.dart';
 import '../../memory/domain/subject.dart';
 import 'axi_prompt_context.dart';
@@ -42,16 +44,22 @@ import 'axi_prompt_context.dart';
 ///
 /// [rag] is null when the embedding stack is unavailable — recall then runs
 /// LEXICALLY over [store] and no fact is vector-indexed on write.
+///
+/// [engine] is the on-device LLM used for OPEN-ENDED relation extraction (the
+/// model-based complement to the deterministic parsers). Null → that step is
+/// skipped and only the deterministic capture runs (the chat still answers).
 class ChatContextDeps {
   const ChatContextDeps({
     required this.store,
     required this.writer,
     this.rag,
+    this.engine,
   });
 
   final LocalGraphStore store;
   final MemoryWriter writer;
   final RagService? rag;
+  final LocalLlmEngine? engine;
 }
 
 /// Resolves [ChatContextDeps] for a turn, or null when the graph store is
@@ -196,16 +204,34 @@ class ChatContextBuilder {
         domain: domain,
         label: label,
         subject: subject,
-        // Only a routed domain (a measurement/event) gets dated to "now"; a bare
-        // identity/relationship statement stays undated so recall never invents a
-        // measurement day for it.
-        occurredAt: domain != null ? now() : null,
+        // EVERY extracted fact is temporally stamped (occurred_at = now):
+        // whether it routes to a domain or is a bare identity/relationship
+        // statement, it happened NOW from the graph's point of view, so recall
+        // and the deterministic prediction layer can always place it in time.
+        occurredAt: now(),
         data: <String, dynamic>{'raw_utterance': userText.trim(), ...provenance},
       );
 
       // Make the new fact semantically recallable (embedder permitting), then
       // free the embedder's RAM again.
       await _indexIfPossible(deps, node);
+
+      // ── Open-ended relation extraction (model-based complement) ────────────
+      // The deterministic parsers above did NOT fully consume this turn (a
+      // structured health hit returns early, so medical/physiological content
+      // never reaches here). When an on-device model is wired, ask it for the
+      // open-ended facts + subject-predicate-object relations the deterministic
+      // parsers can't catch. Best-effort; every write is stamped occurred_at =
+      // now inside the extractor. A miss / malformed JSON is a no-op.
+      final engine = deps.engine;
+      if (engine != null) {
+        await RelationExtractor(
+          engine: engine,
+          writer: deps.writer,
+          store: deps.store,
+          now: now,
+        ).extractAndWrite(userText, axiText);
+      }
     } catch (_) {
       // Best-effort memory write; a failure never surfaces to the user.
     }

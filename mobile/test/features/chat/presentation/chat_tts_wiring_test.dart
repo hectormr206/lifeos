@@ -45,6 +45,6 @@ void main() {
     }
     await Future<void>.delayed(Duration.zero);
 
-    expect(voices.downloadCalls, ['es']); // Piper next time
+    expect(voices.downloadCalls, ['es_MX-claude']); // Piper next time
   });
 }

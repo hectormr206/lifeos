@@ -464,6 +464,96 @@ abstract class AppLocalizations {
   /// **'The voice follows the app language (Region / Language).'**
   String get voiceLanguageNote;
 
+  /// No description provided for @voiceCatalogNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a voice'**
+  String get voiceCatalogNavTitle;
+
+  /// No description provided for @voiceCatalogNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse, preview and download more voices'**
+  String get voiceCatalogNavSubtitle;
+
+  /// No description provided for @voiceCatalogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose voice'**
+  String get voiceCatalogTitle;
+
+  /// No description provided for @voiceCatalogGroupSpanish.
+  ///
+  /// In en, this message translates to:
+  /// **'Spanish'**
+  String get voiceCatalogGroupSpanish;
+
+  /// No description provided for @voiceCatalogGroupEnglish.
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get voiceCatalogGroupEnglish;
+
+  /// No description provided for @voiceCatalogPreviewButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview'**
+  String get voiceCatalogPreviewButton;
+
+  /// No description provided for @voiceCatalogUseButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Use this voice'**
+  String get voiceCatalogUseButton;
+
+  /// No description provided for @voiceCatalogSelectedBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Selected'**
+  String get voiceCatalogSelectedBadge;
+
+  /// No description provided for @voiceCatalogDownloadButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Download'**
+  String get voiceCatalogDownloadButton;
+
+  /// No description provided for @voiceCatalogStatusInstalled.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloaded'**
+  String get voiceCatalogStatusInstalled;
+
+  /// No description provided for @voiceCatalogStatusAbsent.
+  ///
+  /// In en, this message translates to:
+  /// **'Not downloaded'**
+  String get voiceCatalogStatusAbsent;
+
+  /// No description provided for @voiceCatalogStatusDownloading.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading… {percent}%'**
+  String voiceCatalogStatusDownloading(int percent);
+
+  /// No description provided for @voiceCatalogStatusFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Download failed'**
+  String get voiceCatalogStatusFailed;
+
+  /// No description provided for @voiceCatalogSampleEs.
+  ///
+  /// In en, this message translates to:
+  /// **'Hola, soy Axi, tu asistente personal.'**
+  String get voiceCatalogSampleEs;
+
+  /// No description provided for @voiceCatalogSampleEn.
+  ///
+  /// In en, this message translates to:
+  /// **'Hi, I\'m Axi, your personal assistant.'**
+  String get voiceCatalogSampleEn;
+
   /// No description provided for @sectionAdvanced.
   ///
   /// In en, this message translates to:

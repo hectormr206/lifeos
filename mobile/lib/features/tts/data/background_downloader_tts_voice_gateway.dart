@@ -56,9 +56,9 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
       );
 
   @override
-  Future<TtsVoicePaths?> installedVoice(String languageCode) async {
-    final spec = _config.voiceForLanguage(languageCode);
-    if (spec == null) return null;
+  Future<TtsVoicePaths?> installedVoice(String voiceId) async {
+    if (voiceId.isEmpty) return null;
+    final spec = _config.specForVoice(voiceId);
     try {
       final paths = await _resolvePaths(spec);
       final model = File(paths.model);
@@ -75,16 +75,16 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
 
   @override
   Future<TtsVoicePaths> download(
-    String languageCode, {
+    String voiceId, {
     void Function(double progress)? onProgress,
   }) async {
     if (!_config.isConfigured) {
       throw TtsVoiceDownloadException('Origen de la voz neuronal no configurado.');
     }
-    final spec = _config.voiceForLanguage(languageCode);
-    if (spec == null) {
-      throw TtsVoiceDownloadException('No hay voz neuronal para "$languageCode".');
+    if (voiceId.isEmpty) {
+      throw TtsVoiceDownloadException('No se indicó ninguna voz para descargar.');
     }
+    final spec = _config.specForVoice(voiceId);
 
     // Clear any stale/failed task record for our group first (same defensive
     // reset the STT + app-update downloads use to avoid a re-attach loop).

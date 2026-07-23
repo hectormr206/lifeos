@@ -65,8 +65,9 @@ class TtsVoiceFile {
   final int minBytes;
 }
 
-/// One per-language Piper voice: the acoustic model and its piper JSON config
-/// (which the app turns into the sherpa-onnx `tokens.txt` locally).
+/// One Piper voice: the acoustic model and its piper JSON config (which the app
+/// turns into the sherpa-onnx `tokens.txt` locally). Built per voice id by
+/// [TtsVoiceSourceConfig.specForVoice] — there is no per-language hardcoding.
 class TtsVoiceSpec {
   const TtsVoiceSpec({required this.model, required this.config});
 
@@ -83,31 +84,30 @@ class TtsVoiceSpec {
   List<TtsVoiceFile> get files => [model, config];
 }
 
-/// Immutable snapshot of the TTS voice source (base URL + per-language voice
-/// manifest + the shared espeak-ng-data archive). Injected into the downloader
-/// gateway so tests can supply their own values.
+/// Immutable snapshot of the TTS voice source (base URL + the shared
+/// espeak-ng-data archive + the size floors every voice's files must clear).
+/// Injected into the downloader gateway so tests can supply their own values.
+///
+/// The per-voice manifest is DERIVED from the voice id via [specForVoice] —
+/// every catalog voice lives FLAT at `<baseUrl>/<id>.onnx` (+ `.onnx.json`), so
+/// adding a voice needs no change here, only a `VoiceDescriptor` in the catalog.
 class TtsVoiceSourceConfig {
   const TtsVoiceSourceConfig({
     this.baseUrl = kTtsModelBaseUrl,
-    this.spanish = const TtsVoiceSpec(
-      model: TtsVoiceFile(name: 'es_MX-ald-medium.onnx', minBytes: 10 * 1024 * 1024),
-      config: TtsVoiceFile(name: 'es_MX-ald-medium.onnx.json', minBytes: 1024),
-    ),
-    this.english = const TtsVoiceSpec(
-      model: TtsVoiceFile(name: 'en_US-lessac-medium.onnx', minBytes: 10 * 1024 * 1024),
-      config: TtsVoiceFile(name: 'en_US-lessac-medium.onnx.json', minBytes: 1024),
-    ),
+    this.modelMinBytes = 10 * 1024 * 1024,
+    this.configMinBytes = 1024,
     this.espeakData = const TtsVoiceFile(name: 'espeak-ng-data.tar.gz', minBytes: 1024 * 1024),
   });
 
   /// Public base URL for `<baseUrl>/<file.name>`.
   final String baseUrl;
 
-  /// es → neutral-Mexican Piper voice.
-  final TtsVoiceSpec spanish;
+  /// Smallest plausible size of a complete `*.onnx` (a medium VITS is ~60 MB;
+  /// an error page or truncated download is a few KB and fails this floor).
+  final int modelMinBytes;
 
-  /// en → US-English Piper voice.
-  final TtsVoiceSpec english;
+  /// Smallest plausible size of a complete `*.onnx.json`.
+  final int configMinBytes;
 
   /// GZIP tar of the `espeak-ng-data/` directory (shared by ALL voices),
   /// extracted once next to the models.
@@ -117,14 +117,13 @@ class TtsVoiceSourceConfig {
   /// `OfflineTtsVitsModelConfig.dataDir` points at).
   static const String espeakDataDirName = 'espeak-ng-data';
 
-  /// The voice for app language [languageCode], or null when the language has
-  /// no Piper voice yet (the system voice keeps covering it). ADDING A
-  /// LANGUAGE = one more case here + two hosted files.
-  TtsVoiceSpec? voiceForLanguage(String languageCode) => switch (languageCode) {
-        'es' => spanish,
-        'en' => english,
-        _ => null,
-      };
+  /// The remote/local file manifest for the voice [voiceId] (its `<id>.onnx`
+  /// model + `<id>.onnx.json` config). Pure string derivation — the id is the
+  /// hosted file stem — so ANY catalog voice resolves without a hardcoded case.
+  TtsVoiceSpec specForVoice(String voiceId) => TtsVoiceSpec(
+        model: TtsVoiceFile(name: '$voiceId.onnx', minBytes: modelMinBytes),
+        config: TtsVoiceFile(name: '$voiceId.onnx.json', minBytes: configMinBytes),
+      );
 
   /// True only once the placeholder URL has been replaced with a real one.
   /// Guards the download from firing against the placeholder host.

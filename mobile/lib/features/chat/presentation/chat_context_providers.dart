@@ -20,6 +20,7 @@ import '../../../l10n/locale_providers.dart';
 import '../../embedding/domain/rag_service.dart';
 import '../../embedding/embed_model_warmup.dart';
 import '../../embedding/embedding_providers.dart';
+import '../../local_model/presentation/local_model_providers.dart';
 import '../../memory/data/memory_writer.dart';
 import '../domain/chat_context_builder.dart';
 
@@ -55,6 +56,9 @@ final chatContextBuilderProvider = Provider<ChatContextBuilder>((ref) {
           store: store,
           writer: MemoryWriter(store),
           rag: rag,
+          // On-device model for OPEN-ENDED relation extraction (best-effort;
+          // the extractor loads/guards it and no-ops on any failure).
+          engine: ref.read(localLlmEngineProvider),
         );
       } catch (_) {
         return null; // Graph store unavailable → no memory this turn.

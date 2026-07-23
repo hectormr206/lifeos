@@ -2,14 +2,14 @@ import 'dart:typed_data';
 
 import 'tts_voice.dart';
 
-/// Raised by [SherpaPiperTtsGateway.speak] when the Piper voice for the
-/// current language is not installed yet — the composite gateway falls back
-/// to the system voice AND triggers the lazy background download.
+/// Raised by [SherpaPiperTtsGateway.speak] when the SELECTED Piper voice is not
+/// installed yet — the composite gateway falls back to the system voice AND
+/// triggers the lazy background download of that voice.
 class PiperVoiceUnavailableException implements Exception {
-  PiperVoiceUnavailableException(this.languageCode);
-  final String languageCode;
+  PiperVoiceUnavailableException(this.voiceId);
+  final String voiceId;
   @override
-  String toString() => 'Piper voice for "$languageCode" is not installed.';
+  String toString() => 'Piper voice "$voiceId" is not installed.';
 }
 
 /// Raised when synthesis itself fails (engine load error, bogus model…) —

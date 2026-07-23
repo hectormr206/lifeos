@@ -206,6 +206,54 @@ class AppLocalizationsEs extends AppLocalizations {
       'La voz sigue el idioma de la app (Región / Idioma).';
 
   @override
+  String get voiceCatalogNavTitle => 'Elegir voz';
+
+  @override
+  String get voiceCatalogNavSubtitle =>
+      'Explora, preescucha y descarga más voces';
+
+  @override
+  String get voiceCatalogTitle => 'Elegir voz';
+
+  @override
+  String get voiceCatalogGroupSpanish => 'Español';
+
+  @override
+  String get voiceCatalogGroupEnglish => 'Inglés';
+
+  @override
+  String get voiceCatalogPreviewButton => 'Preescuchar';
+
+  @override
+  String get voiceCatalogUseButton => 'Usar esta voz';
+
+  @override
+  String get voiceCatalogSelectedBadge => 'Seleccionada';
+
+  @override
+  String get voiceCatalogDownloadButton => 'Descargar';
+
+  @override
+  String get voiceCatalogStatusInstalled => 'Descargada';
+
+  @override
+  String get voiceCatalogStatusAbsent => 'Sin descargar';
+
+  @override
+  String voiceCatalogStatusDownloading(int percent) {
+    return 'Descargando… $percent%';
+  }
+
+  @override
+  String get voiceCatalogStatusFailed => 'Error al descargar';
+
+  @override
+  String get voiceCatalogSampleEs => 'Hola, soy Axi, tu asistente personal.';
+
+  @override
+  String get voiceCatalogSampleEn => 'Hi, I\'m Axi, your personal assistant.';
+
+  @override
   String get sectionAdvanced => 'Avanzado';
 
   @override

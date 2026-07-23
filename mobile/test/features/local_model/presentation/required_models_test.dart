@@ -91,7 +91,7 @@ void main() {
       final c = _container(
         brainInstalled: true,
         sttInstalled: _sttPaths,
-        ttsInstalled: {'es': _ttsVoice},
+        ttsInstalled: {'es_MX-claude': _ttsVoice},
         embedInstalled: _embedPaths,
       );
       await _settle(c);
@@ -107,7 +107,7 @@ void main() {
       final c = _container(
         brainInstalled: true,
         sttInstalled: _sttPaths,
-        ttsInstalled: {'es': _ttsVoice},
+        ttsInstalled: {'es_MX-claude': _ttsVoice},
         embedInstalled: null,
       );
       await _settle(c);
@@ -154,7 +154,7 @@ void main() {
       expect(brainGateway.downloadCount, 0);
       // The three missing companions each downloaded exactly once.
       expect(sttGateway.downloadCalls, 1);
-      expect(ttsGateway.downloadCalls, ['es']);
+      expect(ttsGateway.downloadCalls, ['es_MX-claude']);
       expect(embedGateway.downloads, 1);
 
       // Everything is now installed → the experience is ready.
@@ -164,7 +164,7 @@ void main() {
 
     test('with everything already installed, Descargar todo downloads nothing', () async {
       final sttGateway = FakeSttModelGateway(installed: _sttPaths);
-      final ttsGateway = FakeTtsVoiceGateway(installed: {'es': _ttsVoice});
+      final ttsGateway = FakeTtsVoiceGateway(installed: {'es_MX-claude': _ttsVoice});
       final embedGateway = FakeEmbedModelGateway(installed: _embedPaths);
 
       final c = _container(

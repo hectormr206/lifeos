@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../chat/presentation/chat_providers.dart';
 import '../../tts/domain/tts_voice.dart';
-import '../../tts/presentation/tts_providers.dart';
+import '../domain/voice_catalog.dart';
 import '../domain/voice_settings.dart';
+import 'voice_catalog_providers.dart';
 import 'voice_settings_providers.dart';
 
 /// Settings → "Voz": the DELIBERATELY MINIMAL speak-aloud screen. One curated
@@ -43,12 +45,14 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
   void initState() {
     super.initState();
     // Proactively make the NEURAL voice the active one: probe + download the
-    // Piper voice for the current language on open. No-op if already installed
-    // (lands Ready) or a download is already in flight. Fire-and-forget — the
-    // status card reflects progress via [ttsVoiceDownloadProvider].
+    // SELECTED voice on open. No-op if already installed (lands Ready) or a
+    // download is already in flight. Fire-and-forget — the status card reflects
+    // progress via the catalog controller entry for the selected voice.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(ttsVoiceDownloadProvider.notifier).downloadForCurrentLanguage();
+      ref
+          .read(voiceCatalogControllerProvider.notifier)
+          .download(ref.read(selectedVoiceProvider));
     });
   }
 
@@ -57,7 +61,9 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
     final l10n = AppLocalizations.of(context);
     final autoSpeak = ref.watch(voiceReplyEnabledProvider);
     final settings = ref.watch(voiceSettingsProvider);
-    final voiceStatus = ref.watch(ttsVoiceDownloadProvider);
+    final selectedVoice = ref.watch(selectedVoiceProvider);
+    final voiceStatus =
+        ref.watch(voiceCatalogControllerProvider)[selectedVoice] ?? const TtsVoiceAbsent();
     final rate = _dragRate ?? settings.rate;
 
     return Scaffold(
@@ -75,6 +81,16 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
           ),
           const Divider(),
           _VoiceStatusCard(status: voiceStatus),
+          ListTile(
+            leading: const Icon(Icons.tune_outlined),
+            title: Text(l10n.voiceCatalogNavTitle),
+            subtitle: Text(
+              '${VoiceCatalog.byId(selectedVoice)?.displayName ?? selectedVoice} · '
+              '${l10n.voiceCatalogNavSubtitle}',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/voice/catalog'),
+          ),
           const Divider(),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -228,8 +244,9 @@ class _VoiceStatusCard extends ConsumerWidget {
             Align(
               alignment: Alignment.centerLeft,
               child: FilledButton.tonalIcon(
-                onPressed: () =>
-                    ref.read(ttsVoiceDownloadProvider.notifier).downloadForCurrentLanguage(),
+                onPressed: () => ref
+                    .read(voiceCatalogControllerProvider.notifier)
+                    .download(ref.read(selectedVoiceProvider)),
                 icon: const Icon(Icons.download_outlined),
                 label: Text(
                   status is TtsVoiceFailed ? l10n.voiceRetryButton : l10n.voiceDownloadButton,

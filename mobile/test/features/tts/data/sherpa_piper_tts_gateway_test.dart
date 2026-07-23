@@ -1,4 +1,4 @@
-// Proves the Piper gateway: voice selection follows the CURRENT app language,
+// Proves the Piper gateway: synthesis uses the SELECTED voice's resolved path,
 // an absent voice surfaces as PiperVoiceUnavailableException (never a crash),
 // synthesized PCM is played as a WAV, and stop() cancels an in-flight
 // synthesis so its late result is discarded.
@@ -12,41 +12,44 @@ import 'package:lifeos/features/tts/domain/tts_voice.dart';
 
 import '../support/fake_tts.dart';
 
-const _esVoice = TtsVoicePaths(model: 'es.onnx', tokens: 'es.tokens.txt', dataDir: 'espeak');
-const _enVoice = TtsVoicePaths(model: 'en.onnx', tokens: 'en.tokens.txt', dataDir: 'espeak');
+const _claudeVoice =
+    TtsVoicePaths(model: 'es_MX-claude.onnx', tokens: 'es_MX-claude.tokens.txt', dataDir: 'espeak');
+const _alanVoice =
+    TtsVoicePaths(model: 'en_GB-alan.onnx', tokens: 'en_GB-alan.tokens.txt', dataDir: 'espeak');
 
 void main() {
   group('SherpaPiperTtsGateway', () {
     late FakeTtsVoiceGateway voices;
     late FakeSynthesizer synthesizer;
     late FakePlayback playback;
-    late String language;
+    late String voiceId;
 
     SherpaPiperTtsGateway build() => SherpaPiperTtsGateway(
           voiceGateway: voices,
           synthesizer: synthesizer,
           playback: playback,
-          currentLanguageCode: () => language,
+          currentVoiceId: () => voiceId,
         );
 
     setUp(() {
-      voices = FakeTtsVoiceGateway(installed: {'es': _esVoice, 'en': _enVoice});
+      voices = FakeTtsVoiceGateway(
+          installed: {'es_MX-claude': _claudeVoice, 'en_GB-alan': _alanVoice});
       synthesizer = FakeSynthesizer();
       playback = FakePlayback();
-      language = 'es';
+      voiceId = 'es_MX-claude';
     });
 
-    test('speak synthesizes with the voice of the CURRENT language', () async {
+    test('speak synthesizes with the SELECTED voice path', () async {
       final gateway = build();
 
       await gateway.speak('hola');
-      language = 'en';
+      voiceId = 'en_GB-alan';
       await gateway.speak('hello');
 
       expect(synthesizer.calls, hasLength(2));
-      expect(synthesizer.calls[0].$1.model, 'es.onnx');
+      expect(synthesizer.calls[0].$1.model, 'es_MX-claude.onnx');
       expect(synthesizer.calls[0].$2, 'hola');
-      expect(synthesizer.calls[1].$1.model, 'en.onnx');
+      expect(synthesizer.calls[1].$1.model, 'en_GB-alan.onnx');
     });
 
     test('speak plays the synthesized PCM wrapped as a WAV', () async {
@@ -77,12 +80,12 @@ void main() {
       expect(playback.played, isEmpty);
     });
 
-    test('a language without a Piper voice is unavailable too', () async {
-      language = 'fr';
+    test('an uninstalled selected voice is unavailable too', () async {
+      voiceId = 'es_AR-daniela'; // known catalog voice, just not downloaded
       final gateway = build();
 
       await expectLater(
-        gateway.speak('bonjour'),
+        gateway.speak('hola'),
         throwsA(isA<PiperVoiceUnavailableException>()),
       );
     });

@@ -52,6 +52,7 @@ import 'features/reminders/presentation/local_reminders_providers.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
 import 'features/settings/presentation/settings_hub_screen.dart';
 import 'features/settings/presentation/settings_screen.dart';
+import 'features/voice_settings/presentation/voice_catalog_screen.dart';
 import 'features/voice_settings/presentation/voice_settings_screen.dart';
 import 'features/web_search/presentation/web_search_settings_screen.dart';
 import 'theme/lifeos_theme.dart';
@@ -206,6 +207,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Voz: neural (Piper) speak-aloud — auto-speak, natural-voice download, and
       // a speech-rate slider. Not pairing-gated: a local preference, works offline.
       GoRoute(path: '/settings/voice', builder: (context, state) => const VoiceSettingsScreen()),
+      // Neural-voice picker: browse, preview and download the catalog voices,
+      // and pick the active one. Local + offline, so not pairing-gated.
+      GoRoute(
+          path: '/settings/voice/catalog',
+          builder: (context, state) => const VoiceCatalogScreen()),
       // DATA-CONTROL KIT: on-device backups + the protected full wipe. Both
       // operate on LOCAL data only, so neither is pairing-gated.
       GoRoute(path: '/settings/backups', builder: (context, state) => const BackupsScreen()),
