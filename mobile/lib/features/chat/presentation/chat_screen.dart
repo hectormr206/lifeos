@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/widgets/pending_sync_banner.dart';
 import '../../local_model/domain/generation_metrics.dart';
 import '../../local_model/domain/local_llm_engine.dart' show LocalModelConfig;
+import '../../local_model/presentation/local_model_load_notifier.dart';
 import '../domain/chat_message.dart';
 import '../domain/image_picker_gateway.dart';
 import 'chat_notifier.dart';
@@ -95,6 +96,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool get _canSend => _hasText || _hasPendingImages;
 
   void _send() {
+    // Never start a turn while the on-device model is re-initialising. The send
+    // button is already disabled, but the keyboard's "send" action still routes
+    // here, so guard it too.
+    if (ref.read(localModelLoadProvider).isLoading) return;
     final text = _textController.text;
     if (_hasPendingImages) {
       // Text + every attached photo go together in one turn.
@@ -346,6 +351,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final chat = ref.watch(chatNotifierProvider);
+    // On-device model (re)initialisation state. While the weights are loading
+    // into RAM — the few seconds after reopening the app — sending is gated so a
+    // generation never starts before the model is ready.
+    final modelLoading = ref.watch(localModelLoadProvider).isLoading;
 
     ref.listen(chatNotifierProvider, (previous, next) {
       if (next.error != null && next.error != _lastShownError) {
@@ -371,6 +380,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       body: Column(
         children: [
           const PendingSyncBanner(),
+          const _ModelLoadingBanner(),
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
@@ -385,7 +395,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (_hasPendingImages) _pendingImagesStrip(context),
-                _buildInputBar(context, chat.sending),
+                _buildInputBar(context, chat.sending, modelLoading),
               ],
             ),
           ),
@@ -394,8 +404,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  Widget _buildInputBar(BuildContext context, bool sending) {
+  Widget _buildInputBar(BuildContext context, bool sending, bool modelLoading) {
     final scheme = Theme.of(context).colorScheme;
+    // While the on-device model is re-initialising into RAM, block send + attach
+    // so no generation starts before it is ready (the FIFO queue would otherwise
+    // hand a turn to an unloaded engine). Voice notes stay available: they use a
+    // canned reply and never run the model.
+    final busy = sending || _recording || modelLoading;
     // NOTE: the mic [Listener] MUST stay mounted while recording — if it were
     // swapped out when `_recording` flips true, the in-flight pointer capture
     // would be lost and the finger-release would never end the recording. The
@@ -410,7 +425,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.attach_file),
             tooltip: 'Adjuntar',
-            onPressed: (sending || _recording) ? null : _openAttachSheet,
+            onPressed: busy ? null : _openAttachSheet,
           ),
           Expanded(
             // The text field stays MOUNTED while recording, with the recording
@@ -453,7 +468,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             icon: const Icon(Icons.send),
             tooltip: 'Enviar',
             color: scheme.primary,
-            onPressed: (sending || _recording || !_canSend) ? null : _send,
+            onPressed: (busy || !_canSend) ? null : _send,
           ),
         ],
       ),
@@ -571,6 +586,74 @@ String _formatDuration(Duration d) {
 
 String _formatTime(DateTime t) =>
     '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+/// Branded banner shown at the top of the message list while the on-device
+/// model is (re)initialising into RAM — the few seconds after reopening the app
+/// when the weights are being loaded back from disk. Renders nothing in
+/// cloud/HTTP mode (the loader stays idle) and once the model is ready. On a
+/// load failure it swaps to a neutral-Spanish error with a "Reintentar" action.
+class _ModelLoadingBanner extends ConsumerWidget {
+  const _ModelLoadingBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final load = ref.watch(localModelLoadProvider);
+    final scheme = Theme.of(context).colorScheme;
+
+    if (load.isLoading) {
+      return Material(
+        color: scheme.secondaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                // No load-progress signal from the engine → indeterminate spinner.
+                child: CircularProgressIndicator(strokeWidth: 2, color: scheme.primary),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Cargando el modelo…',
+                  style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (load.hasError) {
+      return Material(
+        color: scheme.errorContainer,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+          child: Row(
+            children: [
+              Icon(Icons.error_outline, size: 18, color: scheme.onErrorContainer),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'No se pudo cargar el modelo. Revísalo e intenta de nuevo.',
+                  style: TextStyle(color: scheme.onErrorContainer, fontSize: 13),
+                ),
+              ),
+              TextButton(
+                onPressed: () => ref.read(localModelLoadProvider.notifier).retry(),
+                child: const Text('Reintentar'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
+}
 
 /// "Axi está escribiendo…" indicator shown while a reply is in flight.
 class _TypingIndicator extends StatelessWidget {

@@ -4,6 +4,7 @@
 // model's VISION path (generateWithImages), press-and-hold produces a playable
 // voice-note bubble, and the "Responder por voz" toggle is disabled but its
 // preference persists. No live engine/plugins — everything is faked.
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -19,9 +20,17 @@ import 'package:lifeos/features/chat/presentation/chat_providers.dart';
 import 'package:lifeos/features/chat/presentation/chat_screen.dart';
 import 'package:lifeos/features/local_model/data/on_device_chat_repository.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
+import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
 import '../support/fake_chat_gateways.dart';
+
+/// Pins the on-device toggle ON without the async shared_preferences hydration,
+/// so the model-loading banner + send-gating tests are deterministic.
+class _EnabledLocalModeNotifier extends LocalModelEnabledNotifier {
+  @override
+  bool build() => true;
+}
 
 class _FakeChatRepository implements ChatRepository {
   _FakeChatRepository({this.history = const []});
@@ -610,5 +619,75 @@ void main() {
     await notifier.setEnabled(false);
     expect(prefs.persisted, isFalse);
     expect(prefs.writes, greaterThan(0));
+  });
+
+  testWidgets('shows "Cargando el modelo…" and disables send while the on-device model loads, then enables when ready',
+      (tester) async {
+    // The real scenario: app reopened → weights re-initialising into RAM. The
+    // loadGate holds the engine in the "loading" state until we release it.
+    final gate = Completer<void>();
+    final engine = FakeLocalLlmEngine(installed: true, loadGate: gate);
+    final repo = OnDeviceChatRepository(engine);
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(repo),
+          localLlmEngineProvider.overrideWithValue(engine),
+          localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    // Branded loading banner is visible with an indeterminate spinner.
+    expect(find.text('Cargando el modelo…'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    // Even with text typed, send stays disabled until the model is ready.
+    await tester.enterText(find.byType(TextField), 'hola');
+    await tester.pump();
+    final sendWhileLoading = tester.widget<IconButton>(find.widgetWithIcon(IconButton, Icons.send));
+    expect(sendWhileLoading.onPressed, isNull, reason: 'no generation may start before the model is ready');
+
+    // Model finishes loading → banner gone, send enabled.
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Cargando el modelo…'), findsNothing);
+    final sendWhenReady = tester.widget<IconButton>(find.widgetWithIcon(IconButton, Icons.send));
+    expect(sendWhenReady.onPressed, isNotNull);
+    expect(engine.generateCount, 0, reason: 'send was blocked throughout the load');
+  });
+
+  testWidgets('a failed model load shows a neutral-Spanish error with a working Reintentar', (tester) async {
+    final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+    final repo = OnDeviceChatRepository(engine);
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(repo),
+          localLlmEngineProvider.overrideWithValue(engine),
+          localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('No se pudo cargar el modelo'), findsOneWidget);
+    expect(find.text('Reintentar'), findsOneWidget);
+
+    // The next attempt succeeds → error clears.
+    engine.loadShouldFail = false;
+    await tester.tap(find.text('Reintentar'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reintentar'), findsNothing);
+    expect(find.textContaining('No se pudo cargar el modelo'), findsNothing);
+    final sendWhenReady = tester.widget<IconButton>(find.widgetWithIcon(IconButton, Icons.send));
+    expect(sendWhenReady.onPressed, isNull, reason: 'no text typed yet, but the model is ready');
   });
 }

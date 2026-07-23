@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
@@ -16,6 +17,8 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     this.generateShouldFail = false,
     this.generateWithImagesShouldFail = false,
     this.deleteShouldFail = false,
+    this.loadShouldFail = false,
+    this.loadGate,
     String Function(String prompt)? reply,
     String Function(String prompt)? imageReply,
     GenerationMetrics? metrics,
@@ -43,6 +46,16 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   final bool generateShouldFail;
   final bool generateWithImagesShouldFail;
   final bool deleteShouldFail;
+
+  /// When true, [load] throws so the model-load error/retry path is testable.
+  /// Mutable so a test can flip it off and prove a "Reintentar" then succeeds.
+  bool loadShouldFail;
+
+  /// Optional gate that [load] awaits before completing — lets a widget test
+  /// hold the engine in the "loading" state (banner visible, send disabled) and
+  /// then release it to observe the transition to ready. Null = load resolves
+  /// immediately.
+  final Completer<void>? loadGate;
   final String Function(String prompt) reply;
   final String Function(String prompt) imageReply;
 
@@ -82,6 +95,8 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   Future<void> load({LocalLlmBackend? backend}) async {
     loadCount++;
     loadedBackend = backend;
+    if (loadGate != null) await loadGate!.future;
+    if (loadShouldFail) throw Exception('load boom');
   }
 
   @override
