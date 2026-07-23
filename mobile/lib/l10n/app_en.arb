@@ -8,6 +8,8 @@
   "languageEnglish": "English",
   "actionClose": "Close",
   "actionRetry": "Retry",
+  "actionCancel": "Cancel",
+  "actionDelete": "Delete",
 
   "settingsTitle": "Settings",
   "sectionAppearance": "Appearance",
@@ -129,5 +131,56 @@
   "briefingLinkCopied": "Link copied to clipboard",
   "briefingScheduleTitle": "Automatic briefing",
   "briefingScheduleSubtitle": "Generates the briefing every day at the chosen time. If the app is closed, you will get a notification to generate it with one tap.",
-  "briefingScheduleTimeLabel": "Briefing time"
+  "briefingScheduleTimeLabel": "Briefing time",
+
+  "chatDeleteMessage": "Delete message",
+  "chatDeleteConversation": "Delete conversation",
+  "chatDeleteConversationTitle": "Delete conversation?",
+  "chatDeleteConversationBody": "This deletes the messages, the memories Axi derived from this conversation, and its voice notes on this device.",
+
+  "backupsNavTitle": "Backups",
+  "backupsNavSubtitle": "Create and restore copies of your data",
+  "backupsTitle": "Backups",
+  "backupsCreateNow": "Create backup now",
+  "backupsAutoSection": "Automatic",
+  "backupsManualSection": "Manual",
+  "backupsEmpty": "No backups yet. LifeOS creates one automatically every day when you open the app.",
+  "backupsCreated": "Backup created",
+  "backupsDeleted": "Backup deleted",
+  "backupsDeleteTooltip": "Delete backup",
+  "backupsPreRestoreLabel": "Pre-restore copy (your previous data)",
+  "backupsRestoreTitle": "Restore this backup?",
+  "backupsRestoreBody": "Your current data is saved first as a \"pre-restore\" copy, so you can always come back to it from this list.",
+  "backupsRestoreConfirm": "Restore",
+  "backupsRestored": "Backup restored. Your previous data was saved as a pre-restore copy.",
+  "backupsOperationFailed": "The operation failed: {error}",
+  "@backupsOperationFailed": {
+    "placeholders": { "error": { "type": "String" } }
+  },
+  "dataControlBusy": "Wait until Axi finishes before doing this.",
+
+  "sectionDangerZone": "Danger zone",
+  "wipeNavTitle": "Delete all my data",
+  "wipeNavSubtitle": "Erases your data on this device. Models and settings are kept.",
+  "wipeTitle": "Delete all my data",
+  "wipeDeletesTitle": "This will be deleted",
+  "wipeDeletesBody": "• Your memory graph (facts, people, conversations, vectors)\n• Chat history\n• Voice notes stored on this device\n• Your last briefing, its schedule and sources\n• Reminders and their scheduled alarms",
+  "wipeKeepsTitle": "This is kept",
+  "wipeKeepsBody": "• Downloaded models (chat, voice, embeddings)\n• App settings (language, theme, onboarding)",
+  "wipeBackupFirst": "Create a backup before deleting",
+  "wipeTypePrompt": "Type {word} to confirm",
+  "@wipeTypePrompt": {
+    "placeholders": { "word": { "type": "String" } }
+  },
+  "wipeCountdownButton": "Delete ({seconds})",
+  "@wipeCountdownButton": {
+    "placeholders": { "seconds": { "type": "int" } }
+  },
+  "wipeConfirmButton": "Delete everything",
+  "wipeInProgress": "Deleting…",
+  "wipeDone": "All your data on this device was deleted.",
+  "wipePartialFailure": "Some data could not be deleted: {targets}",
+  "@wipePartialFailure": {
+    "placeholders": { "targets": { "type": "String" } }
+  }
 }

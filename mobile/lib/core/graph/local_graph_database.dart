@@ -23,6 +23,14 @@ class LocalGraphDatabase {
 
   static const String _fileName = 'lifeos_graph.db';
 
+  /// Absolute path of the encrypted graph DB file. Exposed for the
+  /// data-control kit (backups copy this file; wipe deletes it) so the file
+  /// location is defined in exactly ONE place.
+  Future<String> databasePath() async {
+    final dir = await getApplicationSupportDirectory();
+    return '${dir.path}/$_fileName';
+  }
+
   /// Open (creating + keying on first run) the encrypted graph database,
   /// through the non-destructive migration framework.
   ///
@@ -36,8 +44,7 @@ class LocalGraphDatabase {
   ///  * applies only additive, ordered migration steps (see
   ///    `local_graph_migrations.dart` + `MIGRATIONS.md`).
   Future<Database> open() async {
-    final dir = await getApplicationSupportDirectory();
-    final path = '${dir.path}/$_fileName';
+    final path = await databasePath();
     final key = await _keyStore.loadOrCreateKey();
 
     return openGuardedGraphDatabase(

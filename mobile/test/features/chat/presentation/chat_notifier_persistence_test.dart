@@ -36,6 +36,16 @@ class _InMemoryHistory implements ChatHistoryRepository {
 
   @override
   Future<void> clearConversation() async => messages.clear();
+
+  @override
+  Future<String> conversationUuid() async => 'conv-fake';
+
+  @override
+  Future<void> deleteMessage(ChatMessage message) async =>
+      messages.removeWhere((m) => m.id == message.id);
+
+  @override
+  Future<void> deleteConversation() async => messages.clear();
 }
 
 class _FakeChatRepository implements ChatRepository {

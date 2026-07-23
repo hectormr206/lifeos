@@ -199,4 +199,15 @@ class AppNotifications {
       // Best-effort.
     }
   }
+
+  /// Cancel EVERY pending scheduled notification (data-control full wipe:
+  /// reminders + briefing alarms all die with the data they referenced).
+  /// Best-effort like every other call in this component.
+  Future<void> cancelAllScheduled() async {
+    try {
+      await _plugin.cancelAll();
+    } catch (_) {
+      // Best-effort.
+    }
+  }
 }

@@ -92,6 +92,15 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/graph'),
           ),
+          // DATA-CONTROL KIT: on-device backups of the encrypted graph DB.
+          // Offline-reachable — everything is local.
+          ListTile(
+            leading: const Icon(Icons.archive_outlined),
+            title: Text(l10n.backupsNavTitle),
+            subtitle: Text(l10n.backupsNavSubtitle),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/backups'),
+          ),
           ListTile(
             enabled: false,
             leading: const Icon(Icons.mic_none_outlined),
@@ -110,6 +119,10 @@ class SettingsHubScreen extends ConsumerWidget {
           const Divider(),
           _SectionHeader(l10n.sectionAbout),
           const _AboutTile(),
+          // DATA-CONTROL KIT: the danger zone lives LAST and visually
+          // distinct (error colours) — the protected full wipe entry point.
+          const Divider(),
+          const _DangerZoneSection(),
         ],
       ),
     );
@@ -199,6 +212,42 @@ class _AppearanceTile extends StatelessWidget {
         showSelectedIcon: false,
         onSelectionChanged: (selection) => onChanged(selection.first),
       ),
+    );
+  }
+}
+
+/// "Zona de peligro" — error-coloured section at the very bottom of the hub
+/// leading to the protected full-wipe screen (`/settings/danger`).
+class _DangerZoneSection extends StatelessWidget {
+  const _DangerZoneSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Text(
+            l10n.sectionDangerZone,
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: scheme.error,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.4,
+                ),
+          ),
+        ),
+        ListTile(
+          leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
+          title: Text(l10n.wipeNavTitle, style: TextStyle(color: scheme.error)),
+          subtitle: Text(l10n.wipeNavSubtitle),
+          trailing: Icon(Icons.chevron_right, color: scheme.error),
+          onTap: () => context.push('/settings/danger'),
+        ),
+        const SizedBox(height: 12),
+      ],
     );
   }
 }

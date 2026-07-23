@@ -104,16 +104,34 @@ class ChatContextBuilder {
   ///
   /// NEVER throws; callers fire this `unawaited` so it can neither block nor
   /// reorder the FIFO send flow.
+  ///
+  /// PROVENANCE (data-control kit): when the caller knows which chat
+  /// conversation/message produced this turn, it passes
+  /// [sourceConversationUuid] / [sourceMessageId] and BOTH the conversation-
+  /// turn node and any derived fact are stamped with them (in `data`, no
+  /// schema change) — that stamp is what lets "Eliminar conversación/mensaje"
+  /// cascade-delete the memories the exchange produced.
   Future<void> recordTurn({
     required String userText,
     required String axiText,
+    String? sourceConversationUuid,
+    String? sourceMessageId,
   }) async {
     try {
       final deps = await loadDeps();
       if (deps == null) return;
 
+      final provenance = <String, Object?>{
+        kSourceConversationKey: ?sourceConversationUuid,
+        kSourceMessageKey: ?sourceMessageId,
+      };
+
       // Durable dialogue record (kind 'conversation'; excluded from fact recall).
-      await deps.writer.writeConversationTurn(userText: userText, axiText: axiText);
+      await deps.writer.writeConversationTurn(
+        userText: userText,
+        axiText: axiText,
+        data: provenance.isEmpty ? null : provenance,
+      );
 
       if (!_looksLikeStatement(userText)) return;
 
@@ -136,7 +154,7 @@ class ChatContextBuilder {
         // identity/relationship statement stays undated so recall never invents a
         // measurement day for it.
         occurredAt: domain != null ? now() : null,
-        data: <String, dynamic>{'raw_utterance': userText.trim()},
+        data: <String, dynamic>{'raw_utterance': userText.trim(), ...provenance},
       );
 
       // Make the new fact semantically recallable (embedder permitting), then

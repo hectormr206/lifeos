@@ -34,6 +34,11 @@ class GraphKeyStore {
     return key;
   }
 
+  /// Delete the persisted key (data-control full wipe). The NEXT
+  /// [loadOrCreateKey] mints a brand-new key, so a freshly recreated DB is
+  /// encrypted under a key that never protected the wiped data (key rotation).
+  Future<void> deleteKey() => _storage.delete(key: _secureKey);
+
   /// 32 cryptographically-random bytes, hex-encoded (64 chars) — a 256-bit key.
   String _generateKeyHex() {
     final bytes = List<int>.generate(32, (_) => _random.nextInt(256));

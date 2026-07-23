@@ -27,6 +27,12 @@ class AppLocalizationsEs extends AppLocalizations {
   String get actionRetry => 'Reintentar';
 
   @override
+  String get actionCancel => 'Cancelar';
+
+  @override
+  String get actionDelete => 'Eliminar';
+
+  @override
   String get settingsTitle => 'Ajustes';
 
   @override
@@ -346,4 +352,128 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get briefingScheduleTimeLabel => 'Hora del boletín';
+
+  @override
+  String get chatDeleteMessage => 'Eliminar mensaje';
+
+  @override
+  String get chatDeleteConversation => 'Eliminar conversación';
+
+  @override
+  String get chatDeleteConversationTitle => '¿Eliminar la conversación?';
+
+  @override
+  String get chatDeleteConversationBody =>
+      'Se eliminarán los mensajes, los recuerdos que Axi derivó de esta conversación y sus notas de voz en este dispositivo.';
+
+  @override
+  String get backupsNavTitle => 'Copias de seguridad';
+
+  @override
+  String get backupsNavSubtitle => 'Crea y restaura copias de tus datos';
+
+  @override
+  String get backupsTitle => 'Copias de seguridad';
+
+  @override
+  String get backupsCreateNow => 'Crear copia ahora';
+
+  @override
+  String get backupsAutoSection => 'Automáticas';
+
+  @override
+  String get backupsManualSection => 'Manuales';
+
+  @override
+  String get backupsEmpty =>
+      'Aún no hay copias. LifeOS crea una automáticamente cada día al abrir la app.';
+
+  @override
+  String get backupsCreated => 'Copia creada';
+
+  @override
+  String get backupsDeleted => 'Copia eliminada';
+
+  @override
+  String get backupsDeleteTooltip => 'Eliminar copia';
+
+  @override
+  String get backupsPreRestoreLabel =>
+      'Copia pre-restauración (tus datos anteriores)';
+
+  @override
+  String get backupsRestoreTitle => '¿Restaurar esta copia?';
+
+  @override
+  String get backupsRestoreBody =>
+      'Primero se guardan tus datos actuales como copia \"pre-restauración\", así siempre puedes regresar a ellos desde esta lista.';
+
+  @override
+  String get backupsRestoreConfirm => 'Restaurar';
+
+  @override
+  String get backupsRestored =>
+      'Copia restaurada. Tus datos anteriores se guardaron como copia pre-restauración.';
+
+  @override
+  String backupsOperationFailed(String error) {
+    return 'La operación falló: $error';
+  }
+
+  @override
+  String get dataControlBusy => 'Espera a que Axi termine antes de hacer esto.';
+
+  @override
+  String get sectionDangerZone => 'Zona de peligro';
+
+  @override
+  String get wipeNavTitle => 'Borrar todos mis datos';
+
+  @override
+  String get wipeNavSubtitle =>
+      'Elimina tus datos en este dispositivo. Los modelos y ajustes se conservan.';
+
+  @override
+  String get wipeTitle => 'Borrar todos mis datos';
+
+  @override
+  String get wipeDeletesTitle => 'Esto se eliminará';
+
+  @override
+  String get wipeDeletesBody =>
+      '• Tu grafo de memoria (hechos, personas, conversaciones, vectores)\n• El historial del chat\n• Las notas de voz guardadas en este dispositivo\n• Tu último boletín, su horario y sus fuentes\n• Los recordatorios y sus alarmas programadas';
+
+  @override
+  String get wipeKeepsTitle => 'Esto se conserva';
+
+  @override
+  String get wipeKeepsBody =>
+      '• Los modelos descargados (chat, voz, embeddings)\n• Los ajustes de la app (idioma, tema, onboarding)';
+
+  @override
+  String get wipeBackupFirst => 'Crear una copia antes de borrar';
+
+  @override
+  String wipeTypePrompt(String word) {
+    return 'Escribe $word para confirmar';
+  }
+
+  @override
+  String wipeCountdownButton(int seconds) {
+    return 'Borrar ($seconds)';
+  }
+
+  @override
+  String get wipeConfirmButton => 'Borrar todo';
+
+  @override
+  String get wipeInProgress => 'Borrando…';
+
+  @override
+  String get wipeDone => 'Se borraron todos tus datos en este dispositivo.';
+
+  @override
+  String wipePartialFailure(String targets) {
+    return 'Algunos datos no se pudieron borrar: $targets';
+  }
 }

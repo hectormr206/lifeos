@@ -134,6 +134,18 @@ abstract class AppLocalizations {
   /// **'Retry'**
   String get actionRetry;
 
+  /// No description provided for @actionCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get actionCancel;
+
+  /// No description provided for @actionDelete.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get actionDelete;
+
   /// No description provided for @settingsTitle.
   ///
   /// In en, this message translates to:
@@ -727,6 +739,222 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Briefing time'**
   String get briefingScheduleTimeLabel;
+
+  /// No description provided for @chatDeleteMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete message'**
+  String get chatDeleteMessage;
+
+  /// No description provided for @chatDeleteConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete conversation'**
+  String get chatDeleteConversation;
+
+  /// No description provided for @chatDeleteConversationTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete conversation?'**
+  String get chatDeleteConversationTitle;
+
+  /// No description provided for @chatDeleteConversationBody.
+  ///
+  /// In en, this message translates to:
+  /// **'This deletes the messages, the memories Axi derived from this conversation, and its voice notes on this device.'**
+  String get chatDeleteConversationBody;
+
+  /// No description provided for @backupsNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Backups'**
+  String get backupsNavTitle;
+
+  /// No description provided for @backupsNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Create and restore copies of your data'**
+  String get backupsNavSubtitle;
+
+  /// No description provided for @backupsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Backups'**
+  String get backupsTitle;
+
+  /// No description provided for @backupsCreateNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Create backup now'**
+  String get backupsCreateNow;
+
+  /// No description provided for @backupsAutoSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic'**
+  String get backupsAutoSection;
+
+  /// No description provided for @backupsManualSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Manual'**
+  String get backupsManualSection;
+
+  /// No description provided for @backupsEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No backups yet. LifeOS creates one automatically every day when you open the app.'**
+  String get backupsEmpty;
+
+  /// No description provided for @backupsCreated.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup created'**
+  String get backupsCreated;
+
+  /// No description provided for @backupsDeleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup deleted'**
+  String get backupsDeleted;
+
+  /// No description provided for @backupsDeleteTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete backup'**
+  String get backupsDeleteTooltip;
+
+  /// No description provided for @backupsPreRestoreLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Pre-restore copy (your previous data)'**
+  String get backupsPreRestoreLabel;
+
+  /// No description provided for @backupsRestoreTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore this backup?'**
+  String get backupsRestoreTitle;
+
+  /// No description provided for @backupsRestoreBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Your current data is saved first as a \"pre-restore\" copy, so you can always come back to it from this list.'**
+  String get backupsRestoreBody;
+
+  /// No description provided for @backupsRestoreConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore'**
+  String get backupsRestoreConfirm;
+
+  /// No description provided for @backupsRestored.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup restored. Your previous data was saved as a pre-restore copy.'**
+  String get backupsRestored;
+
+  /// No description provided for @backupsOperationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The operation failed: {error}'**
+  String backupsOperationFailed(String error);
+
+  /// No description provided for @dataControlBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'Wait until Axi finishes before doing this.'**
+  String get dataControlBusy;
+
+  /// No description provided for @sectionDangerZone.
+  ///
+  /// In en, this message translates to:
+  /// **'Danger zone'**
+  String get sectionDangerZone;
+
+  /// No description provided for @wipeNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete all my data'**
+  String get wipeNavTitle;
+
+  /// No description provided for @wipeNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Erases your data on this device. Models and settings are kept.'**
+  String get wipeNavSubtitle;
+
+  /// No description provided for @wipeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete all my data'**
+  String get wipeTitle;
+
+  /// No description provided for @wipeDeletesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'This will be deleted'**
+  String get wipeDeletesTitle;
+
+  /// No description provided for @wipeDeletesBody.
+  ///
+  /// In en, this message translates to:
+  /// **'• Your memory graph (facts, people, conversations, vectors)\n• Chat history\n• Voice notes stored on this device\n• Your last briefing, its schedule and sources\n• Reminders and their scheduled alarms'**
+  String get wipeDeletesBody;
+
+  /// No description provided for @wipeKeepsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'This is kept'**
+  String get wipeKeepsTitle;
+
+  /// No description provided for @wipeKeepsBody.
+  ///
+  /// In en, this message translates to:
+  /// **'• Downloaded models (chat, voice, embeddings)\n• App settings (language, theme, onboarding)'**
+  String get wipeKeepsBody;
+
+  /// No description provided for @wipeBackupFirst.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a backup before deleting'**
+  String get wipeBackupFirst;
+
+  /// No description provided for @wipeTypePrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Type {word} to confirm'**
+  String wipeTypePrompt(String word);
+
+  /// No description provided for @wipeCountdownButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete ({seconds})'**
+  String wipeCountdownButton(int seconds);
+
+  /// No description provided for @wipeConfirmButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete everything'**
+  String get wipeConfirmButton;
+
+  /// No description provided for @wipeInProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Deleting…'**
+  String get wipeInProgress;
+
+  /// No description provided for @wipeDone.
+  ///
+  /// In en, this message translates to:
+  /// **'All your data on this device was deleted.'**
+  String get wipeDone;
+
+  /// No description provided for @wipePartialFailure.
+  ///
+  /// In en, this message translates to:
+  /// **'Some data could not be deleted: {targets}'**
+  String wipePartialFailure(String targets);
 }
 
 class _AppLocalizationsDelegate

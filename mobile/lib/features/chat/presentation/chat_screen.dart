@@ -358,6 +358,56 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     ref.read(chatNotifierProvider.notifier).addVoiceNote(path, duration);
   }
 
+  // ── Delete message / conversation (data-control kit, part C) ─────────────
+
+  /// Long-press affordance: a bottom sheet with "Eliminar mensaje". Tapping
+  /// it deletes the bubble + its persisted node/vectors/derived facts/clip.
+  Future<void> _showMessageActions(ChatMessage message) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: Text(AppLocalizations.of(sheetContext).chatDeleteMessage),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                ref.read(chatNotifierProvider.notifier).deleteMessage(message);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Simple confirm dialog (NOT the typed-word ceremony — that is only for
+  /// the full wipe), then cascade-delete the whole conversation.
+  Future<void> _confirmDeleteConversation() async {
+    final l10n = AppLocalizations.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(l10n.chatDeleteConversationTitle),
+        content: Text(l10n.chatDeleteConversationBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(l10n.actionCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(l10n.actionDelete),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await ref.read(chatNotifierProvider.notifier).deleteConversation();
+  }
+
   // ── "Responder por voz" toggle (disabled until on-device TTS) ─────────────
 
   Future<void> _openVoiceReplySheet() async {
@@ -410,6 +460,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
             tooltip: AppLocalizations.of(context).chatVoiceReplyTooltip,
             onPressed: _openVoiceReplySheet,
           ),
+          // Data-control kit (part C): delete the whole conversation with
+          // cascade (messages, derived memories, vectors, voice notes).
+          PopupMenuButton<_ChatMenuAction>(
+            onSelected: (action) {
+              switch (action) {
+                case _ChatMenuAction.deleteConversation:
+                  _confirmDeleteConversation();
+              }
+            },
+            itemBuilder: (menuContext) => [
+              PopupMenuItem(
+                value: _ChatMenuAction.deleteConversation,
+                child: Text(AppLocalizations.of(menuContext).chatDeleteConversation),
+              ),
+            ],
+          ),
         ],
       ),
       body: Column(
@@ -422,7 +488,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
               controller: _scrollController,
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
               itemCount: chat.messages.length,
-              itemBuilder: (context, index) => _MessageBubble(message: chat.messages[index]),
+              itemBuilder: (context, index) {
+                final message = chat.messages[index];
+                return _MessageBubble(
+                  message: message,
+                  // Long-press → "Eliminar mensaje" (cascade: bubble +
+                  // persisted node + vectors + derived facts + voice clip).
+                  onLongPress: () => _showMessageActions(message),
+                );
+              },
             ),
           ),
           if (chat.sending) const _TypingIndicator(),
@@ -829,12 +903,19 @@ class _TypingIndicator extends StatelessWidget {
   }
 }
 
+/// The chat AppBar's overflow-menu actions.
+enum _ChatMenuAction { deleteConversation }
+
 /// A WhatsApp/Telegram-style message bubble with a tail, timestamp and
 /// per-role colours (light + dark). Renders text, image, or voice content.
+/// [onLongPress] surfaces the per-message actions (delete). NOTE: on the
+/// selectable Markdown area of an Axi reply the long-press starts a TEXT
+/// SELECTION instead; the bubble padding/meta line always long-presses.
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
+  const _MessageBubble({required this.message, this.onLongPress});
 
   final ChatMessage message;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -854,50 +935,53 @@ class _MessageBubble extends StatelessWidget {
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-        decoration: BoxDecoration(color: bubbleColor, borderRadius: radius),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _content(context, onBubble, scheme),
-            const SizedBox(height: 2),
-            // Meta line: timestamp + (for a sent user message) WhatsApp ticks.
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _formatTime(message.timestamp),
-                  style: TextStyle(fontSize: 11, color: onBubble.withValues(alpha: 0.7)),
-                ),
-                if (isUser && message.status != null) ...[
-                  const SizedBox(width: 4),
-                  _StatusTicks(status: message.status!, color: onBubble),
-                ],
-                // "Axi habla": read this reply aloud. Only on Axi text replies
-                // that actually have words to speak.
-                if (!isUser &&
-                    message.kind == ChatMessageKind.text &&
-                    message.text.trim().isNotEmpty) ...[
-                  const SizedBox(width: 4),
-                  _SpeakButton(
-                    messageId: message.id,
-                    text: message.text,
-                    color: onBubble,
-                  ),
-                ],
-              ],
-            ),
-            // Per-response metrics (on-device Axi replies only): a compact
-            // always-visible line + a discreet button to the full-stats modal.
-            if (!isUser && message.metrics != null) ...[
+      child: GestureDetector(
+        onLongPress: onLongPress,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+          decoration: BoxDecoration(color: bubbleColor, borderRadius: radius),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _content(context, onBubble, scheme),
               const SizedBox(height: 2),
-              _MetricsLine(metrics: message.metrics!, color: onBubble, scheme: scheme),
+              // Meta line: timestamp + (for a sent user message) WhatsApp ticks.
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _formatTime(message.timestamp),
+                    style: TextStyle(fontSize: 11, color: onBubble.withValues(alpha: 0.7)),
+                  ),
+                  if (isUser && message.status != null) ...[
+                    const SizedBox(width: 4),
+                    _StatusTicks(status: message.status!, color: onBubble),
+                  ],
+                  // "Axi habla": read this reply aloud. Only on Axi text replies
+                  // that actually have words to speak.
+                  if (!isUser &&
+                      message.kind == ChatMessageKind.text &&
+                      message.text.trim().isNotEmpty) ...[
+                    const SizedBox(width: 4),
+                    _SpeakButton(
+                      messageId: message.id,
+                      text: message.text,
+                      color: onBubble,
+                    ),
+                  ],
+                ],
+              ),
+              // Per-response metrics (on-device Axi replies only): a compact
+              // always-visible line + a discreet button to the full-stats modal.
+              if (!isUser && message.metrics != null) ...[
+                const SizedBox(height: 2),
+                _MetricsLine(metrics: message.metrics!, color: onBubble, scheme: scheme),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

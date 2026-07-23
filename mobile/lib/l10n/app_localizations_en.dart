@@ -27,6 +27,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get actionRetry => 'Retry';
 
   @override
+  String get actionCancel => 'Cancel';
+
+  @override
+  String get actionDelete => 'Delete';
+
+  @override
   String get settingsTitle => 'Settings';
 
   @override
@@ -343,4 +349,127 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get briefingScheduleTimeLabel => 'Briefing time';
+
+  @override
+  String get chatDeleteMessage => 'Delete message';
+
+  @override
+  String get chatDeleteConversation => 'Delete conversation';
+
+  @override
+  String get chatDeleteConversationTitle => 'Delete conversation?';
+
+  @override
+  String get chatDeleteConversationBody =>
+      'This deletes the messages, the memories Axi derived from this conversation, and its voice notes on this device.';
+
+  @override
+  String get backupsNavTitle => 'Backups';
+
+  @override
+  String get backupsNavSubtitle => 'Create and restore copies of your data';
+
+  @override
+  String get backupsTitle => 'Backups';
+
+  @override
+  String get backupsCreateNow => 'Create backup now';
+
+  @override
+  String get backupsAutoSection => 'Automatic';
+
+  @override
+  String get backupsManualSection => 'Manual';
+
+  @override
+  String get backupsEmpty =>
+      'No backups yet. LifeOS creates one automatically every day when you open the app.';
+
+  @override
+  String get backupsCreated => 'Backup created';
+
+  @override
+  String get backupsDeleted => 'Backup deleted';
+
+  @override
+  String get backupsDeleteTooltip => 'Delete backup';
+
+  @override
+  String get backupsPreRestoreLabel => 'Pre-restore copy (your previous data)';
+
+  @override
+  String get backupsRestoreTitle => 'Restore this backup?';
+
+  @override
+  String get backupsRestoreBody =>
+      'Your current data is saved first as a \"pre-restore\" copy, so you can always come back to it from this list.';
+
+  @override
+  String get backupsRestoreConfirm => 'Restore';
+
+  @override
+  String get backupsRestored =>
+      'Backup restored. Your previous data was saved as a pre-restore copy.';
+
+  @override
+  String backupsOperationFailed(String error) {
+    return 'The operation failed: $error';
+  }
+
+  @override
+  String get dataControlBusy => 'Wait until Axi finishes before doing this.';
+
+  @override
+  String get sectionDangerZone => 'Danger zone';
+
+  @override
+  String get wipeNavTitle => 'Delete all my data';
+
+  @override
+  String get wipeNavSubtitle =>
+      'Erases your data on this device. Models and settings are kept.';
+
+  @override
+  String get wipeTitle => 'Delete all my data';
+
+  @override
+  String get wipeDeletesTitle => 'This will be deleted';
+
+  @override
+  String get wipeDeletesBody =>
+      '• Your memory graph (facts, people, conversations, vectors)\n• Chat history\n• Voice notes stored on this device\n• Your last briefing, its schedule and sources\n• Reminders and their scheduled alarms';
+
+  @override
+  String get wipeKeepsTitle => 'This is kept';
+
+  @override
+  String get wipeKeepsBody =>
+      '• Downloaded models (chat, voice, embeddings)\n• App settings (language, theme, onboarding)';
+
+  @override
+  String get wipeBackupFirst => 'Create a backup before deleting';
+
+  @override
+  String wipeTypePrompt(String word) {
+    return 'Type $word to confirm';
+  }
+
+  @override
+  String wipeCountdownButton(int seconds) {
+    return 'Delete ($seconds)';
+  }
+
+  @override
+  String get wipeConfirmButton => 'Delete everything';
+
+  @override
+  String get wipeInProgress => 'Deleting…';
+
+  @override
+  String get wipeDone => 'All your data on this device was deleted.';
+
+  @override
+  String wipePartialFailure(String targets) {
+    return 'Some data could not be deleted: $targets';
+  }
 }

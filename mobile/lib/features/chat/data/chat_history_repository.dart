@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import '../../../core/graph/graph_records.dart';
 import '../../../core/graph/local_graph_store.dart';
 import '../../local_model/domain/generation_metrics.dart';
 import '../../local_model/domain/local_llm_engine.dart' show LocalLlmBackend;
+import '../../memory/data/memory_writer.dart'
+    show kSourceConversationKey, kSourceMessageKey;
 import '../domain/chat_message.dart';
 
 /// Persists the chat conversation to the on-device graph store so history
@@ -27,9 +30,22 @@ import '../domain/chat_message.dart';
 /// written to the DB (only a count + per-image byte length marker); a voice
 /// note keeps its on-disk [ChatMessage.audioPath] path, not the audio bytes.
 class ChatHistoryRepository {
-  ChatHistoryRepository(this._store, {this.conversationSlug = 'default'});
+  ChatHistoryRepository(
+    this._store, {
+    this.conversationSlug = 'default',
+    Future<void> Function(String path)? deleteAudioFile,
+  }) : _deleteAudioFile = deleteAudioFile ?? _defaultDeleteAudioFile;
 
   final LocalGraphStore _store;
+
+  /// Deletes a voice-note clip from disk during a cascade delete. Injectable
+  /// so host tests exercise the cascade against temp files.
+  final Future<void> Function(String path) _deleteAudioFile;
+
+  static Future<void> _defaultDeleteAudioFile(String path) async {
+    final file = File(path);
+    if (await file.exists()) await file.delete();
+  }
 
   /// Stable identifier of the single default conversation (multi-conversation
   /// UI is a later slice). Persisted in the conversation node's `data['slug']`.
@@ -114,6 +130,86 @@ class ChatHistoryRepository {
     for (final edge in edges) {
       await _store.softDeleteNode(edge.dstUuid);
     }
+  }
+
+  /// The default conversation node's uuid (created if absent). This is the
+  /// provenance stamp ([kSourceConversationKey]) C1's memory write-back
+  /// attaches to derived facts/turns so the cascade below can find them.
+  Future<String> conversationUuid() => _ensureConversation();
+
+  // --- cascade delete (data-control kit, part C) ---------------------------
+
+  /// Delete ONE message with cascade: the persisted message node (tombstoned,
+  /// sync-safe — which also tombstones its `has_message` edge), its stored
+  /// vectors (hard-deleted, local-only), its voice-note clip on disk, and any
+  /// derived fact/turn node stamped with this message's provenance.
+  ///
+  /// One lexical search finds every candidate: the message node's `data`
+  /// contains its own id, and derived nodes carry it under
+  /// [kSourceMessageKey] — both are exact-matched in Dart before deleting.
+  Future<void> deleteMessage(ChatMessage message) async {
+    final candidates = await _store.searchNodes(message.id, limit: 200);
+    for (final node in candidates) {
+      final isMessageNode =
+          node.kind == _kMessageKind && node.data['id'] == message.id;
+      final isDerived = node.data[kSourceMessageKey] == message.id;
+      if (!isMessageNode && !isDerived) continue;
+      await _cascadeDeleteNode(node);
+    }
+  }
+
+  /// Delete the WHOLE default conversation with cascade:
+  ///  * every message node (+ vectors + voice-note clips on disk),
+  ///  * every derived fact and conversation-turn node stamped with this
+  ///    conversation's provenance ([kSourceConversationKey]) + their vectors,
+  ///  * the conversation node itself (tombstoning its incident edges).
+  ///
+  /// Graph rows use the store's tombstone soft-delete (sync-safe); audio
+  /// files are hard-deleted. Facts written BEFORE provenance stamping existed
+  /// carry no stamp and are NOT reachable by this cascade (documented
+  /// limitation). A later send re-creates a fresh conversation node.
+  Future<void> deleteConversation() async {
+    final conversationUuid = await _ensureConversation();
+
+    // 1. Every message of the conversation.
+    final edges = await _store.edgesForNode(
+      conversationUuid,
+      direction: EdgeDirection.outgoing,
+      relation: _kHasMessage,
+    );
+    for (final edge in edges) {
+      final node = await _store.getNodeByUuid(edge.dstUuid);
+      if (node != null) await _cascadeDeleteNode(node);
+    }
+
+    // 2. Derived facts + conversation-turn nodes (provenance-stamped). The
+    //    uuid only ever appears in `data` as the provenance stamp, so the
+    //    lexical search over label+data finds exactly these nodes.
+    final derived = await _store.searchNodes(conversationUuid, limit: 500);
+    for (final node in derived) {
+      if (node.data[kSourceConversationKey] != conversationUuid) continue;
+      await _cascadeDeleteNode(node);
+    }
+
+    // 3. The conversation node itself.
+    await _store.deleteNodeVector(conversationUuid);
+    await _store.softDeleteNode(conversationUuid);
+    _conversationUuid = null;
+  }
+
+  /// Shared cascade step for one node: voice clip off disk (best-effort),
+  /// vectors hard-deleted, row tombstoned (which tombstones incident edges).
+  Future<void> _cascadeDeleteNode(GraphNodeRecord node) async {
+    final audioPath = node.data['audioPath'];
+    if (audioPath is String && audioPath.isNotEmpty) {
+      try {
+        await _deleteAudioFile(audioPath);
+      } catch (_) {
+        // A missing/locked clip must never abort the graph cascade.
+      }
+    }
+    await _store.deleteNodeVector(node.uuid);
+    await _store.softDeleteNode(node.uuid);
   }
 
   // --- serialization -------------------------------------------------------

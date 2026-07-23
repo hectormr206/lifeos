@@ -25,6 +25,16 @@ const String kInvolvesRelation = 'involves';
 /// Max graph-node label length (laptop renderers cap at 120).
 const int kMaxLabelLength = 120;
 
+/// PROVENANCE data keys (data-control kit, cascade delete). C1's write-back
+/// stamps every derived fact/conversation-turn node with the chat
+/// conversation and user-message it came from, so "Eliminar conversación/
+/// mensaje" can find and cascade-delete the memories that conversation
+/// produced. Stored in the node's `data` JSON — NO schema change. Facts
+/// written BEFORE these stamps existed carry neither key and are therefore
+/// out of the cascade's reach (documented limitation).
+const String kSourceConversationKey = 'sourceConversationUuid';
+const String kSourceMessageKey = 'sourceMessageId';
+
 /// Render a node label from the laptop renderer priority:
 /// `raw_utterance -> title -> structured` fallback. Returns the first
 /// non-empty, trimmed source, capped to [kMaxLabelLength]; null when all are
@@ -153,15 +163,18 @@ class MemoryWriter {
 
   /// Write one conversation turn (user + Axi text) as a `conversation` node,
   /// linked to the user hub. Used so the graph keeps a durable dialogue record.
+  /// [data] merges extra payload (e.g. the [kSourceConversationKey]/
+  /// [kSourceMessageKey] provenance stamps) into the node — additive only.
   Future<GraphNodeRecord> writeConversationTurn({
     required String userText,
     required String axiText,
+    Map<String, Object?>? data,
   }) async {
     final label = renderLabel(rawUtterance: userText) ?? userText.trim();
     final turn = await _store.createNode(
       kind: 'conversation',
       label: label,
-      data: <String, Object?>{'userText': userText, 'axiText': axiText},
+      data: <String, Object?>{'userText': userText, 'axiText': axiText, ...?data},
     );
     final hubUuid = await _ensureUserHub();
     await _store.createEdge(

@@ -14,6 +14,9 @@ import 'features/body/presentation/body_screen.dart';
 import 'features/briefings/presentation/briefings_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
 import 'features/connection/domain/connection_status.dart';
+import 'features/data_control/presentation/backups_screen.dart';
+import 'features/data_control/presentation/danger_zone_screen.dart';
+import 'features/data_control/presentation/data_control_providers.dart';
 import 'features/connection/presentation/connection_notifier.dart';
 import 'features/connection/presentation/connection_screen.dart';
 import 'features/digest/presentation/digest_screen.dart';
@@ -172,6 +175,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Permissions management. Not pairing-gated (works offline, mirrors the
       // appearance/about surfaces).
       GoRoute(path: '/settings/permissions', builder: (context, state) => const PermissionsScreen()),
+      // DATA-CONTROL KIT: on-device backups + the protected full wipe. Both
+      // operate on LOCAL data only, so neither is pairing-gated.
+      GoRoute(path: '/settings/backups', builder: (context, state) => const BackupsScreen()),
+      GoRoute(path: '/settings/danger', builder: (context, state) => const DangerZoneScreen()),
       // ON-DEVICE memory browser (roadmap SLICE C5). Under `/settings/…` so it
       // is NOT pairing-gated (no gate entry matches this sub-path): it reads the
       // local encrypted graph store and works fully offline/unpaired. Distinct
@@ -232,6 +239,10 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // opens the Recordatorios screen. Own payload ('reminder'); coexists with
     // the update/briefing handlers via the shared payload registry.
     WidgetsBinding.instance.addPostFrameCallback((_) => _wireReminderNotificationTap());
+    // Data-control kit: daily automatic backup — create one on app open if
+    // none exists for today (retention-capped). Fire-and-forget: a backup
+    // must never block or break startup.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoBackup());
     _startForegroundUpdatePolling();
   }
 
@@ -304,6 +315,14 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
       if (await scheduler.launchedByTap()) _openRemindersScreen();
     } catch (_) {
       // Notifications are best-effort — never block app startup.
+    }
+  }
+
+  Future<void> _maybeAutoBackup() async {
+    try {
+      await ref.read(graphBackupServiceProvider).maybeAutoBackup();
+    } catch (_) {
+      // Best-effort: no store yet / no platform channel — never block startup.
     }
   }
 

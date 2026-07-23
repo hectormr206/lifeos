@@ -261,7 +261,8 @@ class ChatNotifier extends Notifier<ChatUiState> {
       // Axi remembers next time. On-device only; best-effort and fire-and-forget
       // (see `_recordTurn`) so it never blocks or reorders the FIFO send flow.
       onReply: ref.read(localModelEnabledProvider)
-          ? (reply) => _recordTurn(trimmed, reply.text)
+          ? (reply) =>
+              _recordTurn(trimmed, reply.text, sourceMessageId: userMessage.id)
           : null,
     ));
   }
@@ -306,7 +307,8 @@ class ChatNotifier extends Notifier<ChatUiState> {
         run: () => ref.read(chatRepositoryProvider).sendMessage(original),
         errorPrefix: 'No se pudo enviar el mensaje',
         onReply: ref.read(localModelEnabledProvider)
-            ? (reply) => _recordTurn(original, reply.text)
+            ? (reply) => _recordTurn(original, reply.text,
+                sourceMessageId: userMessage.id)
             : null,
       ));
       return;
@@ -345,12 +347,68 @@ class ChatNotifier extends Notifier<ChatUiState> {
   /// Fire-and-forget memory write-back for one completed text turn. NEVER
   /// awaited by the drain loop, so it can neither block nor reorder a
   /// generation; the builder swallows every failure internally.
-  void _recordTurn(String userText, String axiText) {
-    unawaited(
-      ref
-          .read(chatContextBuilderProvider)
-          .recordTurn(userText: userText, axiText: axiText),
+  ///
+  /// Data-control kit: passes PROVENANCE (the user message id + the
+  /// conversation uuid, resolved best-effort) so derived facts/turns are
+  /// stamped and "Eliminar conversación/mensaje" can cascade to them.
+  void _recordTurn(String userText, String axiText, {String? sourceMessageId}) {
+    unawaited(() async {
+      try {
+        String? conversationUuid;
+        final repo = await _history();
+        if (repo != null) {
+          try {
+            conversationUuid = await repo.conversationUuid();
+          } catch (_) {
+            // No store → unstamped write-back (recall still works).
+          }
+        }
+        await ref.read(chatContextBuilderProvider).recordTurn(
+              userText: userText,
+              axiText: axiText,
+              sourceMessageId: sourceMessageId,
+              sourceConversationUuid: conversationUuid,
+            );
+      } catch (_) {
+        // Disposed mid-flight / builder unavailable — best-effort by contract.
+      }
+    }());
+  }
+
+  /// Deletes ONE message: its bubble immediately, then (best-effort) its
+  /// persisted node, vectors, voice clip, and provenance-stamped derived
+  /// facts via [ChatHistoryRepository.deleteMessage].
+  Future<void> deleteMessage(ChatMessage message) async {
+    if (_disposed) return;
+    state = state.copyWith(
+      messages: [
+        for (final m in state.messages)
+          if (m.id != message.id) m,
+      ],
     );
+    final repo = await _history();
+    if (repo == null) return;
+    try {
+      await repo.deleteMessage(message);
+    } catch (_) {
+      // Best-effort: the bubble is already gone; persistence degrades.
+    }
+  }
+
+  /// Deletes the WHOLE conversation with cascade (messages, derived facts,
+  /// turn nodes, vectors, voice clips) via
+  /// [ChatHistoryRepository.deleteConversation]. The visible transcript
+  /// clears immediately; persistence is best-effort.
+  Future<void> deleteConversation() async {
+    if (_disposed) return;
+    state = state.copyWith(messages: const []);
+    final repo = await _history();
+    if (repo == null) return;
+    try {
+      await repo.deleteConversation();
+    } catch (_) {
+      // Best-effort: the visible conversation is already cleared.
+    }
   }
 
   /// Advances an outgoing user message's delivery [status] in place (WhatsApp
@@ -579,7 +637,8 @@ class ChatNotifier extends Notifier<ChatUiState> {
       run: () => ref.read(chatRepositoryProvider).sendMessage(transcript),
       errorPrefix: 'No se pudo enviar el mensaje',
       onReply: ref.read(localModelEnabledProvider)
-          ? (reply) => _recordTurn(transcript, reply.text)
+          ? (reply) =>
+              _recordTurn(transcript, reply.text, sourceMessageId: note.id)
           : null,
     ));
   }
