@@ -6,7 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Abstracted so the chat UI depends on the interface and tests inject a fake
 /// without the shared_preferences platform channel.
 abstract class VoiceReplyPreferences {
-  /// The persisted "respond by voice" value; defaults to `false`.
+  /// The persisted "respond by voice" value; defaults to `true` (Axi speaks
+  /// every reply out of the box — the "everything-on" default).
   Future<bool> isEnabled();
 
   /// Persists the toggle value.
@@ -15,7 +16,7 @@ abstract class VoiceReplyPreferences {
 
 /// [VoiceReplyPreferences] backed by `shared_preferences`.
 class SharedPrefsVoiceReplyPreferences implements VoiceReplyPreferences {
-  SharedPrefsVoiceReplyPreferences({SharedPreferences? prefs}) : _prefs = prefs;
+  SharedPrefsVoiceReplyPreferences({SharedPreferences? prefs}) : _prefs = prefs; // ignore: prefer_initializing_formals
 
   static const String enabledKey = 'chat_voice_reply_enabled';
 
@@ -24,7 +25,7 @@ class SharedPrefsVoiceReplyPreferences implements VoiceReplyPreferences {
   Future<SharedPreferences> get _instance async => _prefs ??= await SharedPreferences.getInstance();
 
   @override
-  Future<bool> isEnabled() async => (await _instance).getBool(enabledKey) ?? false;
+  Future<bool> isEnabled() async => (await _instance).getBool(enabledKey) ?? true;
 
   @override
   Future<void> setEnabled(bool value) async => (await _instance).setBool(enabledKey, value);

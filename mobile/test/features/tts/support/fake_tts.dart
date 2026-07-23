@@ -64,12 +64,18 @@ class FakeSynthesizer implements PiperSpeechSynthesizer {
 
   final List<(TtsVoicePaths, String)> calls = [];
 
+  /// The [speed] passed to the most recent [synthesize] (default 1.0), so tests
+  /// can assert the persisted "Voz" rate reached the engine.
+  double lastSpeed = 1.0;
+
   @override
   Future<SynthesizedAudio> synthesize({
     required TtsVoicePaths voice,
     required String text,
+    double speed = 1.0,
   }) async {
     calls.add((voice, text));
+    lastSpeed = speed;
     final pending = gate;
     if (pending != null) await pending.future;
     final e = error;

@@ -47,8 +47,8 @@ abstract class MorningBriefingPreferences {
 
   Future<void> saveLastBriefing(OnDeviceBriefing briefing);
 
-  /// The "Boletín automático" schedule (disabled + 8:00 until the user
-  /// enables it).
+  /// The "Boletín automático" schedule (ENABLED + 8:00 by default — the
+  /// "everything-on" default; the user opts out).
   Future<BriefingSchedule> schedule();
 
   Future<void> saveSchedule(BriefingSchedule schedule);
@@ -94,7 +94,9 @@ class SharedPrefsMorningBriefingPreferences implements MorningBriefingPreference
   Future<BriefingSchedule> schedule() async {
     final p = await _instance;
     return BriefingSchedule(
-      enabled: p.getBool(scheduleEnabledKey) ?? false,
+      // Absent key (first run) → DEFAULT ON (everything-on rule); the user opts
+      // out, so a never-set schedule is enabled at the default hour.
+      enabled: p.getBool(scheduleEnabledKey) ?? true,
       hour: p.getInt(scheduleHourKey) ?? BriefingSchedule.defaultHour,
       minute: p.getInt(scheduleMinuteKey) ?? BriefingSchedule.defaultMinute,
     );

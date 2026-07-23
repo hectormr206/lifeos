@@ -113,7 +113,7 @@ function showPanel(n) {
   const epoch = n.occurred_at || n.created_at;
   if (epoch) {
     try {
-      meta += ' ' + new Date(epoch * 1000).toLocaleDateString(LANG === 'en' ? 'en-US' : 'es-MX');
+      meta += ' ' + new Date(epoch * 1000).toLocaleString(LANG === 'en' ? 'en-US' : 'es-MX');
     } catch (e) { /* decorative */ }
   }
   document.getElementById('p-meta').innerHTML = meta;

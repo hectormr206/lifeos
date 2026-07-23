@@ -52,13 +52,41 @@ class LocalRemindersRepository {
     return reminders;
   }
 
-  /// Update a reminder's [status] in place (pending → fired → done). Returns
-  /// the updated reminder, or null when the node no longer exists.
+  /// Update a reminder's [status] in place (pending → fired → done/disabled).
+  /// Returns the updated reminder, or null when the node no longer exists.
   Future<LocalReminder?> setStatus(String uuid, LocalReminderStatus status) async {
     final node = await _store.getNodeByUuid(uuid);
     if (node == null) return null;
     final updated = await _store.upsertNode(
       node.copyWith(data: {...node.data, 'status': status.name}),
+    );
+    return LocalReminder.fromNode(updated);
+  }
+
+  /// Edit a reminder's CONTENT in place (same uuid): text, due instant and
+  /// recurrence. Editing re-activates it (status → pending) so the alarm is
+  /// (re)armed by the caller. Returns the updated reminder, or null when the
+  /// node no longer exists.
+  Future<LocalReminder?> update(
+    String uuid, {
+    required String text,
+    required DateTime dueAt,
+    ReminderRecurrence recurrence = ReminderRecurrence.none,
+  }) async {
+    final node = await _store.getNodeByUuid(uuid);
+    if (node == null) return null;
+    final edited = LocalReminder(
+      uuid: uuid,
+      text: text,
+      dueAt: dueAt,
+      recurrence: recurrence,
+    );
+    final updated = await _store.upsertNode(
+      node.copyWith(
+        label: text,
+        occurredAt: dueAt,
+        data: {...node.data, ...edited.toData()},
+      ),
     );
     return LocalReminder.fromNode(updated);
   }

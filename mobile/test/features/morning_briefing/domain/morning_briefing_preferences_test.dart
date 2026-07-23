@@ -59,10 +59,10 @@ void main() {
     expect(loaded.generatedAt, DateTime(2026, 7, 20, 8, 30));
   });
 
-  test('defaults the schedule to disabled at 8:00 when nothing is stored', () async {
+  test('defaults the schedule to ENABLED at 8:00 when nothing is stored', () async {
     SharedPreferences.setMockInitialValues({});
     final prefs = SharedPrefsMorningBriefingPreferences();
-    expect(await prefs.schedule(), const BriefingSchedule(enabled: false, hour: 8, minute: 0));
+    expect(await prefs.schedule(), const BriefingSchedule(enabled: true, hour: 8, minute: 0));
   });
 
   test('round-trips the "Boletín automático" schedule', () async {

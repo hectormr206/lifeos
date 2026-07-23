@@ -27,6 +27,7 @@ GoRouter _router() => GoRouter(
         GoRoute(path: '/settings/local-model', builder: (c, s) => const Scaffold(body: Text('MODEL'))),
         GoRoute(path: '/settings/updates', builder: (c, s) => const Scaffold(body: Text('UPDATES'))),
         GoRoute(path: '/settings/engine', builder: (c, s) => const Scaffold(body: Text('ENGINE'))),
+        GoRoute(path: '/settings/voice', builder: (c, s) => const Scaffold(body: Text('VOICE'))),
         GoRoute(
             path: '/settings/danger-zone',
             builder: (c, s) => const Scaffold(body: Text('DANGER MENU'))),
@@ -145,6 +146,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('MODEL'), findsOneWidget);
+  });
+
+  testWidgets('tapping "Voz" pushes the voice settings screen', (tester) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Voz'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('VOICE'), findsOneWidget);
   });
 
   testWidgets('tapping "Configuración del motor" navigates to the engine editor', (tester) async {

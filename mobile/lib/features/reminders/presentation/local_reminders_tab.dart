@@ -70,23 +70,104 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
   }
 
   /// Explicit date + time pickers (the "unparseable → ask for a time" path).
-  Future<DateTime?> _pickDateTime() async {
+  /// [initial] pre-seeds the pickers when editing an existing reminder.
+  Future<DateTime?> _pickDateTime({DateTime? initial}) async {
     final now = DateTime.now();
+    final seed = initial ?? now.add(const Duration(hours: 1));
     final date = await showDatePicker(
       context: context,
-      initialDate: now,
-      firstDate: now,
+      initialDate: seed.isBefore(now) ? now : seed,
+      firstDate: now.subtract(const Duration(days: 1)),
       lastDate: now.add(const Duration(days: 365 * 2)),
       helpText: '¿Qué día te lo recuerdo?',
     );
     if (date == null || !mounted) return null;
     final time = await showTimePicker(
       context: context,
-      initialTime: TimeOfDay.fromDateTime(now.add(const Duration(hours: 1))),
+      initialTime: TimeOfDay.fromDateTime(seed),
       helpText: '¿A qué hora?',
     );
     if (time == null) return null;
     return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  }
+
+  /// Edit an existing reminder: change its text and, optionally, its date/time.
+  Future<void> _edit(LocalReminder reminder) async {
+    final controller = TextEditingController(text: reminder.text);
+    var dueAt = reminder.dueAt;
+    final notifier = ref.read(localRemindersNotifierProvider.notifier);
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) {
+          String two(int n) => n.toString().padLeft(2, '0');
+          final whenText =
+              '${two(dueAt.day)}/${two(dueAt.month)}/${dueAt.year} ${two(dueAt.hour)}:${two(dueAt.minute)}';
+          return Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 16,
+              bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Editar recordatorio',
+                    style: Theme.of(sheetContext).textTheme.titleMedium),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  decoration: const InputDecoration(
+                    labelText: '¿Qué te recuerdo?',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.schedule),
+                  title: const Text('Fecha y hora'),
+                  subtitle: Text(whenText),
+                  trailing: const Icon(Icons.edit),
+                  onTap: () async {
+                    final picked = await _pickDateTime(initial: dueAt);
+                    if (picked != null) setSheetState(() => dueAt = picked);
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(false),
+                      child: const Text('Cancelar'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(true),
+                      child: const Text('Guardar cambios'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    if (saved == true) {
+      final text = controller.text.trim();
+      await notifier.edit(
+        reminder,
+        text: text.isEmpty ? reminder.text : text,
+        dueAt: dueAt,
+        recurrence: reminder.recurrence,
+      );
+    }
+    controller.dispose();
   }
 
   @override
@@ -193,6 +274,10 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
               .complete(reminder),
           onDelete: () =>
               ref.read(localRemindersNotifierProvider.notifier).remove(reminder),
+          onEdit: () => _edit(reminder),
+          onToggleEnabled: (enabled) => ref
+              .read(localRemindersNotifierProvider.notifier)
+              .setEnabled(reminder, enabled),
         );
       },
     );
@@ -204,36 +289,62 @@ class _LocalReminderTile extends StatelessWidget {
     required this.reminder,
     required this.onDone,
     required this.onDelete,
+    required this.onEdit,
+    required this.onToggleEnabled,
   });
 
   final LocalReminder reminder;
   final VoidCallback onDone;
   final VoidCallback onDelete;
+  final VoidCallback onEdit;
+  final ValueChanged<bool> onToggleEnabled;
 
   @override
   Widget build(BuildContext context) {
     final fired = reminder.status == LocalReminderStatus.fired;
+    final disabled = reminder.isDisabled;
+    final scheme = Theme.of(context).colorScheme;
     return ListTile(
       leading: Icon(
-        reminder.recurrence == ReminderRecurrence.daily
-            ? Icons.repeat
-            : Icons.alarm,
-        color: fired ? Theme.of(context).colorScheme.tertiary : null,
+        disabled
+            ? Icons.notifications_off_outlined
+            : (reminder.recurrence == ReminderRecurrence.daily
+                ? Icons.repeat
+                : Icons.alarm),
+        color: disabled
+            ? scheme.outline
+            : (fired ? scheme.tertiary : null),
       ),
-      title: Text(reminder.text),
+      title: Text(
+        reminder.text,
+        style: disabled ? TextStyle(color: scheme.outline) : null,
+      ),
       subtitle: Text(_subtitle()),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: const Icon(Icons.check_circle_outline),
-            tooltip: 'Marcar como hecho',
-            onPressed: onDone,
+          // Deactivate / reactivate without deleting.
+          Switch(
+            value: !disabled,
+            onChanged: onToggleEnabled,
           ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'Eliminar',
-            onPressed: onDelete,
+          PopupMenuButton<String>(
+            tooltip: 'Acciones',
+            onSelected: (action) {
+              switch (action) {
+                case 'edit':
+                  onEdit();
+                case 'done':
+                  onDone();
+                case 'delete':
+                  onDelete();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'edit', child: Text('Editar')),
+              PopupMenuItem(value: 'done', child: Text('Marcar como hecho')),
+              PopupMenuItem(value: 'delete', child: Text('Eliminar')),
+            ],
           ),
         ],
       ),
@@ -244,14 +355,12 @@ class _LocalReminderTile extends StatelessWidget {
     final local = reminder.dueAt;
     String two(int n) => n.toString().padLeft(2, '0');
     final time = '${two(local.hour)}:${two(local.minute)}';
-    if (reminder.recurrence == ReminderRecurrence.daily) {
-      return 'Todos los días a las $time';
-    }
-    final date = '${two(local.day)}/${two(local.month)}/${local.year}';
-    final when = '$date $time';
-    return reminder.status == LocalReminderStatus.fired
-        ? '$when · ya sonó'
-        : when;
+    final base = reminder.recurrence == ReminderRecurrence.daily
+        ? 'Todos los días a las $time'
+        : '${two(local.day)}/${two(local.month)}/${local.year} $time';
+    if (reminder.isDisabled) return '$base · desactivado';
+    if (reminder.status == LocalReminderStatus.fired) return '$base · ya sonó';
+    return base;
   }
 }
 

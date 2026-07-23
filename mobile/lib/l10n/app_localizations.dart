@@ -359,8 +359,110 @@ abstract class AppLocalizations {
   /// No description provided for @voiceNavSubtitle.
   ///
   /// In en, this message translates to:
-  /// **'Coming soon'**
+  /// **'How Axi speaks: natural voice and auto-read'**
   String get voiceNavSubtitle;
+
+  /// No description provided for @voiceScreenTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice'**
+  String get voiceScreenTitle;
+
+  /// No description provided for @voiceAutoSpeakTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply by voice'**
+  String get voiceAutoSpeakTitle;
+
+  /// No description provided for @voiceAutoSpeakSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Axi reads every reply aloud'**
+  String get voiceAutoSpeakSubtitle;
+
+  /// No description provided for @voiceStatusReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Natural voice active'**
+  String get voiceStatusReady;
+
+  /// No description provided for @voiceStatusReadyDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'Axi speaks with the on-device neural voice.'**
+  String get voiceStatusReadyDetail;
+
+  /// No description provided for @voiceStatusDownloading.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading the natural voice… {percent}%'**
+  String voiceStatusDownloading(int percent);
+
+  /// No description provided for @voiceStatusAbsent.
+  ///
+  /// In en, this message translates to:
+  /// **'Using the system voice'**
+  String get voiceStatusAbsent;
+
+  /// No description provided for @voiceStatusAbsentDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'Download the natural voice so Axi sounds more human.'**
+  String get voiceStatusAbsentDetail;
+
+  /// No description provided for @voiceStatusFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t download the natural voice'**
+  String get voiceStatusFailed;
+
+  /// No description provided for @voiceDownloadButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Download natural voice'**
+  String get voiceDownloadButton;
+
+  /// No description provided for @voiceRetryButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get voiceRetryButton;
+
+  /// No description provided for @voiceRateLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Speed'**
+  String get voiceRateLabel;
+
+  /// No description provided for @voiceRateSlow.
+  ///
+  /// In en, this message translates to:
+  /// **'Slow'**
+  String get voiceRateSlow;
+
+  /// No description provided for @voiceRateFast.
+  ///
+  /// In en, this message translates to:
+  /// **'Fast'**
+  String get voiceRateFast;
+
+  /// No description provided for @voiceTestButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Test voice'**
+  String get voiceTestButton;
+
+  /// No description provided for @voiceSampleText.
+  ///
+  /// In en, this message translates to:
+  /// **'Hi, I\'m Axi. This is how my voice will sound when I read your replies.'**
+  String get voiceSampleText;
+
+  /// No description provided for @voiceLanguageNote.
+  ///
+  /// In en, this message translates to:
+  /// **'The voice follows the app language (Region / Language).'**
+  String get voiceLanguageNote;
 
   /// No description provided for @sectionAdvanced.
   ///
@@ -565,6 +667,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'My data'**
   String get homeMyData;
+
+  /// No description provided for @homeMyLife.
+  ///
+  /// In en, this message translates to:
+  /// **'My life'**
+  String get homeMyLife;
 
   /// No description provided for @homeHowIsAxi.
   ///

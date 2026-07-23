@@ -20,6 +20,9 @@ import 'features/data_control/presentation/danger_zone_screen.dart';
 import 'features/data_control/presentation/data_control_providers.dart';
 import 'features/connection/presentation/connection_notifier.dart';
 import 'features/connection/presentation/connection_screen.dart';
+import 'features/daily_digest/presentation/daily_digest_notifier.dart';
+import 'features/daily_digest/presentation/daily_digest_providers.dart';
+import 'features/daily_digest/presentation/daily_digest_screen.dart';
 import 'features/dictation/presentation/dictation_setup_screen.dart';
 import 'features/digest/presentation/digest_screen.dart';
 import 'features/domains/domain/domain_descriptor.dart';
@@ -36,6 +39,7 @@ import 'features/local_model/presentation/local_model_providers.dart';
 import 'features/local_model/presentation/local_model_screen.dart';
 import 'features/meetings/presentation/meeting_detail_screen.dart';
 import 'features/meetings/presentation/meetings_screen.dart';
+import 'features/mi_vida/presentation/mi_vida_screen.dart';
 import 'features/morning_briefing/presentation/morning_briefing_notifier.dart';
 import 'features/morning_briefing/presentation/morning_briefing_providers.dart';
 import 'features/morning_briefing/presentation/morning_briefing_screen.dart';
@@ -48,6 +52,7 @@ import 'features/reminders/presentation/local_reminders_providers.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
 import 'features/settings/presentation/settings_hub_screen.dart';
 import 'features/settings/presentation/settings_screen.dart';
+import 'features/voice_settings/presentation/voice_settings_screen.dart';
 import 'features/web_search/presentation/web_search_settings_screen.dart';
 import 'theme/lifeos_theme.dart';
 import 'theme/theme_providers.dart';
@@ -155,6 +160,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => DomainListScreen(descriptor: domainDescriptorFor(state.pathParameters['key']!)),
       ),
       GoRoute(path: '/body', builder: (context, state) => const BodyScreen()),
+      // Unified "Mi vida" view: all local domain data (by domain + person) plus
+      // the notifications (reminders + daily digest), each entry editable in
+      // place. Local-only, so NOT pairing-gated (no gate entry matches).
+      GoRoute(path: '/mi-vida', builder: (context, state) => const MiVidaScreen()),
       GoRoute(path: '/reminders', builder: (context, state) => const RemindersScreen()),
       GoRoute(path: '/insights', builder: (context, state) => const InsightsScreen()),
       GoRoute(path: '/briefings', builder: (context, state) => const BriefingsScreen()),
@@ -180,6 +189,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // generates it itself with the local model, no engine connection needed.
       // Distinct from the pairing-gated `/briefings` viewer above.
       GoRoute(path: '/settings/briefing', builder: (context, state) => const MorningBriefingScreen()),
+      // ON-DEVICE daily digest (built-in, default-ON): view today's summary and
+      // manage its schedule/instructions (edit + deactivate, never delete). Not
+      // pairing-gated: it aggregates LOCAL data + the on-device model.
+      GoRoute(path: '/settings/daily-digest', builder: (context, state) => const DailyDigestScreen()),
       GoRoute(
         path: '/settings/briefing/sources',
         builder: (context, state) => const MorningBriefingSourcesScreen(),
@@ -190,6 +203,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Web-search provider picker (DuckDuckGo / SearXNG propio / Ninguna). Not
       // pairing-gated: a local preference, works offline.
       GoRoute(path: '/settings/web-search', builder: (context, state) => const WebSearchSettingsScreen()),
+      // Voz: neural (Piper) speak-aloud — auto-speak, natural-voice download, and
+      // a speech-rate slider. Not pairing-gated: a local preference, works offline.
+      GoRoute(path: '/settings/voice', builder: (context, state) => const VoiceSettingsScreen()),
       // DATA-CONTROL KIT: on-device backups + the protected full wipe. Both
       // operate on LOCAL data only, so neither is pairing-gated.
       GoRoute(path: '/settings/backups', builder: (context, state) => const BackupsScreen()),
@@ -257,6 +273,10 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // and the launch-time auto-run (generate today's briefing if the schedule
     // says one is due and none exists yet).
     WidgetsBinding.instance.addPostFrameCallback((_) => _wireScheduledBriefing());
+    // On-device DAILY DIGEST (built-in, default-ON): wire its "ready" + scheduled
+    // notification taps, and catch up on a due run at launch. Own payloads
+    // ('daily_digest' / 'daily_digest_scheduled'); coexists with the others.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _wireDailyDigest());
     // Local reminders (C2): a reminder-notification tap — warm or cold-start —
     // opens the Recordatorios screen. Own payload ('reminder'); coexists with
     // the update/briefing handlers via the shared payload registry.
@@ -380,6 +400,38 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     unawaited(ref.read(morningBriefingNotifierProvider.notifier).maybeAutoGenerate());
   }
 
+  /// On-device daily digest: wire the "ready" + scheduled notification taps and,
+  /// on a normal launch, catch up on a due run (the already-generated-today
+  /// guard lives in the notifier). Mirrors the scheduled-briefing wiring.
+  Future<void> _wireDailyDigest() async {
+    final scheduler = ref.read(dailyDigestSchedulerProvider);
+    final notifications = ref.read(dailyDigestNotificationsProvider);
+    try {
+      await notifications.registerTapHandler(_openDailyDigestScreen);
+      await scheduler.registerTapHandler(_onScheduledDigestTap);
+      if (await notifications.launchedByTap()) {
+        _openDailyDigestScreen();
+      } else if (await scheduler.launchedByTap()) {
+        _onScheduledDigestTap();
+      } else {
+        await ref.read(dailyDigestNotifierProvider.notifier).maybeAutoGenerate();
+      }
+    } catch (_) {
+      // Scheduling/notifications are best-effort — never block app startup.
+    }
+  }
+
+  void _openDailyDigestScreen() {
+    if (!mounted) return;
+    ref.read(goRouterProvider).push('/settings/daily-digest');
+  }
+
+  void _onScheduledDigestTap() {
+    if (!mounted) return;
+    ref.read(goRouterProvider).push('/settings/daily-digest');
+    unawaited(ref.read(dailyDigestNotifierProvider.notifier).maybeAutoGenerate());
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
     // Self-hosted OTA update: on returning to the foreground, re-check for an
@@ -395,6 +447,9 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
         // Scheduled briefing: a warm-resume past the scheduled hour catches up
         // (no-op when disabled, not due, or already generated today).
         unawaited(ref.read(morningBriefingNotifierProvider.notifier).maybeAutoGenerate());
+        // Daily digest: same warm-resume catch-up (no-op when disabled/not due/
+        // already generated today).
+        unawaited(ref.read(dailyDigestNotifierProvider.notifier).maybeAutoGenerate());
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
         // Backgrounded/killed: stop polling so no checks run off-screen.

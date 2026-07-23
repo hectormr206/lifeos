@@ -33,10 +33,12 @@ class SynthesizedAudio {
 /// gateway is unit-testable without FFI. Implementations MUST run the actual
 /// synthesis off the UI thread — it is CPU-bound for hundreds of ms.
 abstract class PiperSpeechSynthesizer {
-  /// Synthesizes [text] with [voice]. Throws [PiperSynthesisException] on any
+  /// Synthesizes [text] with [voice] at [speed] (1.0 = the voice's natural
+  /// pace; > 1.0 faster, < 1.0 slower). Throws [PiperSynthesisException] on any
   /// engine failure (never returns silently-empty audio as success).
   Future<SynthesizedAudio> synthesize({
     required TtsVoicePaths voice,
     required String text,
+    double speed = 1.0,
   });
 }

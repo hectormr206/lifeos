@@ -168,7 +168,10 @@ void main() {
   });
 
   test('maybeAutoGenerate is a no-op run-wise when the schedule is disabled', () async {
-    final h = _harness(now: DateTime(2026, 7, 22, 9, 0)); // schedule defaults to disabled
+    final h = _harness(
+      now: DateTime(2026, 7, 22, 9, 0),
+      initialSchedule: const BriefingSchedule(enabled: false), // explicitly disabled
+    );
     await h.notifier.ready;
 
     await h.notifier.maybeAutoGenerate();

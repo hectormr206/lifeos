@@ -25,7 +25,10 @@ class SherpaPiperTtsGateway implements TextToSpeechGateway {
     required this._synthesizer,
     required this._playback,
     required this._currentLanguageCode,
-  });
+    double Function()? currentSpeed,
+  }) : _currentSpeed = currentSpeed ?? _defaultSpeed;
+
+  static double _defaultSpeed() => 1.0;
 
   final TtsVoiceGateway _voiceGateway;
   final PiperSpeechSynthesizer _synthesizer;
@@ -34,6 +37,10 @@ class SherpaPiperTtsGateway implements TextToSpeechGateway {
   /// Reads the CURRENT app language live at each speak, so switching language
   /// in Settings changes the spoken voice without recreating the gateway.
   final String Function() _currentLanguageCode;
+
+  /// Reads the CURRENT speech-rate multiplier live at each speak, so the "Voz"
+  /// slider applies to the next utterance without recreating the gateway.
+  final double Function() _currentSpeed;
 
   /// Bumped by every speak/stop; a synthesis whose epoch is stale by the time
   /// it finishes is discarded instead of played (stop() cancels pending synth).
@@ -51,7 +58,8 @@ class SherpaPiperTtsGateway implements TextToSpeechGateway {
     if (epoch != _epoch) return; // stopped / superseded during the probe
 
     await _playback.stop(); // one utterance at a time
-    final audio = await _synthesizer.synthesize(voice: voice, text: text);
+    final audio =
+        await _synthesizer.synthesize(voice: voice, text: text, speed: _currentSpeed());
     if (epoch != _epoch) return; // stopped / superseded while synthesizing
     await _playback.play(pcmFloat32ToWav16(audio.samples, audio.sampleRate));
   }

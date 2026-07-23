@@ -72,9 +72,9 @@ void main() {
     });
   });
 
-  test('defaults to disabled at 8:00', () {
+  test('defaults to ENABLED at 8:00 (everything-on default)', () {
     const def = BriefingSchedule();
-    expect(def.enabled, isFalse);
+    expect(def.enabled, isTrue);
     expect(def.hour, 8);
     expect(def.minute, 0);
   });

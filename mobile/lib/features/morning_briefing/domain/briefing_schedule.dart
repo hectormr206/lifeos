@@ -1,12 +1,13 @@
 /// The user's "Boletín automático" setting: whether the briefing should be
-/// triggered daily and at which local wall-clock time (default 8:00, disabled).
+/// triggered daily and at which local wall-clock time (default 8:00, ENABLED —
+/// the "everything-on" default; the user opts out).
 ///
 /// Pure value object + pure date math so the trigger logic (when is the next
 /// run? should we auto-run right now?) is unit-testable with plain [DateTime]s
 /// and no platform channels.
 class BriefingSchedule {
   const BriefingSchedule({
-    this.enabled = false,
+    this.enabled = true,
     this.hour = defaultHour,
     this.minute = defaultMinute,
   });

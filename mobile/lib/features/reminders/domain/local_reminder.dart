@@ -5,11 +5,14 @@ import '../../../core/graph/graph_records.dart';
 enum ReminderRecurrence { none, daily }
 
 /// Lifecycle of a LOCAL reminder:
-///   * [pending] — scheduled, its notification has not fired yet.
-///   * [fired]   — its due instant passed (the notification fired, or would
+///   * [pending]  — scheduled, its notification has not fired yet.
+///   * [fired]    — its due instant passed (the notification fired, or would
 ///     have); still visible so the user can complete/delete it.
-///   * [done]    — the user marked it done. Hidden from the default list.
-enum LocalReminderStatus { pending, fired, done }
+///   * [done]     — the user marked it done. Hidden from the default list.
+///   * [disabled] — the user turned it OFF without deleting it: the row stays
+///     (still visible so it can be re-enabled) but its scheduled notification
+///     is cancelled. Re-enabling returns it to [pending] and reschedules.
+enum LocalReminderStatus { pending, fired, done, disabled }
 
 /// A reminder created AND stored ON-DEVICE (roadmap slice C2 — laptop
 /// parity for `lifeos_reminders` without a paired engine).
@@ -47,13 +50,22 @@ class LocalReminder {
   /// notification ids (app-update, briefing, …).
   int get notificationId => 0x40000000 | (uuid.hashCode & 0x3fffffff);
 
-  LocalReminder copyWith({LocalReminderStatus? status}) => LocalReminder(
+  LocalReminder copyWith({
+    String? text,
+    DateTime? dueAt,
+    ReminderRecurrence? recurrence,
+    LocalReminderStatus? status,
+  }) =>
+      LocalReminder(
         uuid: uuid,
-        text: text,
-        dueAt: dueAt,
-        recurrence: recurrence,
+        text: text ?? this.text,
+        dueAt: dueAt ?? this.dueAt,
+        recurrence: recurrence ?? this.recurrence,
         status: status ?? this.status,
       );
+
+  /// Whether this reminder's alarm is currently OFF (user deactivated it).
+  bool get isDisabled => status == LocalReminderStatus.disabled;
 
   /// The node `data` payload (A3-style: everything the row needs to round-trip,
   /// timestamps as UTC ISO-8601 strings).

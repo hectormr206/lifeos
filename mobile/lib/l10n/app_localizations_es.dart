@@ -145,7 +145,65 @@ class AppLocalizationsEs extends AppLocalizations {
   String get voiceNavTitle => 'Voz';
 
   @override
-  String get voiceNavSubtitle => 'Próximamente';
+  String get voiceNavSubtitle =>
+      'Cómo habla Axi: voz natural y lectura automática';
+
+  @override
+  String get voiceScreenTitle => 'Voz';
+
+  @override
+  String get voiceAutoSpeakTitle => 'Responder por voz';
+
+  @override
+  String get voiceAutoSpeakSubtitle => 'Axi lee cada respuesta en voz alta';
+
+  @override
+  String get voiceStatusReady => 'Voz natural activa';
+
+  @override
+  String get voiceStatusReadyDetail =>
+      'Axi habla con la voz neuronal en tu dispositivo.';
+
+  @override
+  String voiceStatusDownloading(int percent) {
+    return 'Descargando la voz natural… $percent%';
+  }
+
+  @override
+  String get voiceStatusAbsent => 'Usando la voz del sistema';
+
+  @override
+  String get voiceStatusAbsentDetail =>
+      'Descarga la voz natural para que Axi suene más humano.';
+
+  @override
+  String get voiceStatusFailed => 'No se pudo descargar la voz natural';
+
+  @override
+  String get voiceDownloadButton => 'Descargar voz natural';
+
+  @override
+  String get voiceRetryButton => 'Reintentar';
+
+  @override
+  String get voiceRateLabel => 'Velocidad';
+
+  @override
+  String get voiceRateSlow => 'Lenta';
+
+  @override
+  String get voiceRateFast => 'Rápida';
+
+  @override
+  String get voiceTestButton => 'Probar voz';
+
+  @override
+  String get voiceSampleText =>
+      'Hola, soy Axi. Así sonará mi voz cuando te lea tus respuestas.';
+
+  @override
+  String get voiceLanguageNote =>
+      'La voz sigue el idioma de la app (Región / Idioma).';
 
   @override
   String get sectionAdvanced => 'Avanzado';
@@ -259,6 +317,9 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get homeMyData => 'Mis datos';
+
+  @override
+  String get homeMyLife => 'Mi vida';
 
   @override
   String get homeHowIsAxi => '¿Cómo está Axi?';

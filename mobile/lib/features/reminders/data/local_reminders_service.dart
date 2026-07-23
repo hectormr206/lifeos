@@ -60,6 +60,39 @@ class LocalRemindersService {
     }
   }
 
+  /// Edit a reminder's content (text/time/recurrence) and re-arm its alarm.
+  /// Cancels the old alarm first so a changed time never leaves a stale one.
+  /// Editing re-activates the reminder (a previously disabled one turns back on).
+  Future<void> edit(
+    LocalReminder reminder, {
+    required String text,
+    required DateTime dueAt,
+    ReminderRecurrence recurrence = ReminderRecurrence.none,
+  }) async {
+    await _scheduler.cancel(reminder);
+    final updated = await _repository.update(
+      reminder.uuid,
+      text: text,
+      dueAt: dueAt,
+      recurrence: recurrence,
+    );
+    if (updated != null) await _scheduler.schedule(updated);
+  }
+
+  /// Enable/disable a reminder WITHOUT deleting it. Disabling cancels the
+  /// scheduled notification and keeps the row (status → disabled); enabling
+  /// returns it to pending and reschedules its alarm.
+  Future<void> setEnabled(LocalReminder reminder, bool enabled) async {
+    if (enabled) {
+      final updated =
+          await _repository.setStatus(reminder.uuid, LocalReminderStatus.pending);
+      if (updated != null) await _scheduler.schedule(updated);
+    } else {
+      await _scheduler.cancel(reminder);
+      await _repository.setStatus(reminder.uuid, LocalReminderStatus.disabled);
+    }
+  }
+
   Future<void> complete(LocalReminder reminder) async {
     await _scheduler.cancel(reminder);
     await _repository.setStatus(reminder.uuid, LocalReminderStatus.done);

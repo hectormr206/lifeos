@@ -111,10 +111,11 @@ class SettingsHubScreen extends ConsumerWidget {
             onTap: () => context.push('/settings/backups'),
           ),
           ListTile(
-            enabled: false,
-            leading: const Icon(Icons.mic_none_outlined),
+            leading: const Icon(Icons.record_voice_over_outlined),
             title: Text(l10n.voiceNavTitle),
             subtitle: Text(l10n.voiceNavSubtitle),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/voice'),
           ),
           const Divider(),
           _SectionHeader(l10n.sectionAdvanced),

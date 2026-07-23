@@ -9,6 +9,7 @@ import '../../tts/data/audioplayers_tts_playback.dart';
 import '../../tts/data/piper_preferred_text_to_speech_gateway.dart';
 import '../../tts/data/sherpa_piper_tts_gateway.dart';
 import '../../tts/presentation/tts_providers.dart';
+import '../../voice_settings/presentation/voice_settings_providers.dart';
 import '../data/record_audio_recorder_gateway.dart';
 import '../domain/audio_player_gateway.dart';
 import '../domain/audio_recorder_gateway.dart';
@@ -22,6 +23,14 @@ import '../domain/voice_reply_preferences.dart';
 /// in a `SearchAugmentedChatRepository` so each text turn is grounded in live
 /// DuckDuckGo results with a "Fuentes:"/"Sources:" list. Defaults to `false`
 /// (off) and lives only in memory — a per-session choice, not persisted.
+///
+/// EVERYTHING-ON EXCEPTION (deliberate): unlike the other feature toggles that
+/// this slice defaults ON, this one STAYS OFF by default. Running a live web
+/// search on EVERY chat message is costly + slow (a network round-trip per
+/// turn), so it is a per-message opt-in the user flips with the globe button.
+/// The provider *selection* is DuckDuckGo-ready out of the box
+/// (`WebSearchProvider.duckduckgo` default) — only the per-message execution is
+/// opt-in.
 ///
 /// A [NotifierProvider] (not the legacy `StateProvider`, which riverpod 3 keeps
 /// only under `flutter_riverpod/legacy`) to match the codebase convention.
@@ -69,14 +78,21 @@ final textToSpeechGatewayProvider = Provider<TextToSpeechGateway>((ref) {
   // speak-time (not `watch`) so a language change re-selects the voice without
   // recreating (and re-loading) the shared engine.
   String currentLanguageCode() => ref.read(appLanguageCodeProvider);
+  // Read the "Voz" tuning LIVE at speak-time (not `watch`) so the rate slider
+  // applies to the next utterance without recreating the shared engine.
   final gateway = PiperPreferredTextToSpeechGateway(
     preferred: SherpaPiperTtsGateway(
       voiceGateway: ref.watch(ttsVoiceGatewayProvider),
       synthesizer: ref.watch(piperSpeechSynthesizerProvider),
       playback: AudioplayersTtsPlayback(),
       currentLanguageCode: currentLanguageCode,
+      currentSpeed: () => ref.read(voiceSettingsProvider).piperSpeed,
     ),
-    fallback: FlutterTtsTextToSpeechGateway(currentLanguageCode: currentLanguageCode),
+    fallback: FlutterTtsTextToSpeechGateway(
+      currentLanguageCode: currentLanguageCode,
+      currentRate: () => ref.read(voiceSettingsProvider).systemRate,
+      currentPitch: () => ref.read(voiceSettingsProvider).systemPitch,
+    ),
     // Lazy first-speak trigger: fire-and-forget so the fallback utterance is
     // never blocked by the (large) voice download.
     onVoiceAbsent: () =>
@@ -133,8 +149,14 @@ final voiceReplyPreferencesProvider =
 
 /// The persisted "Responder por voz" (Axi auto-speaks new replies) toggle
 /// value. When `true`, the chat screen speaks every newly-arrived Axi text
-/// reply aloud via the shared [SpeechController]. Defaults to `false`;
-/// hydrates asynchronously without blocking first read.
+/// reply aloud via the shared [SpeechController]. The EFFECTIVE default is ON
+/// (the "everything-on" rule): the persisted preference defaults to `true`
+/// ([SharedPrefsVoiceReplyPreferences.isEnabled] → `?? true`), so a fresh
+/// install speaks out of the box and the user opts out. The notifier starts at
+/// the safe pre-hydration value `false` and flips to the persisted `true`
+/// within the first frame — deliberately NOT `true` here, so a chat opened with
+/// a single historical reply is never mistaken for a fresh append and spoken on
+/// load (the `_maybeSpeakNewReply` +1-append heuristic).
 final voiceReplyEnabledProvider =
     NotifierProvider<VoiceReplyEnabledNotifier, bool>(VoiceReplyEnabledNotifier.new);
 

@@ -143,7 +143,64 @@ class AppLocalizationsEn extends AppLocalizations {
   String get voiceNavTitle => 'Voice';
 
   @override
-  String get voiceNavSubtitle => 'Coming soon';
+  String get voiceNavSubtitle => 'How Axi speaks: natural voice and auto-read';
+
+  @override
+  String get voiceScreenTitle => 'Voice';
+
+  @override
+  String get voiceAutoSpeakTitle => 'Reply by voice';
+
+  @override
+  String get voiceAutoSpeakSubtitle => 'Axi reads every reply aloud';
+
+  @override
+  String get voiceStatusReady => 'Natural voice active';
+
+  @override
+  String get voiceStatusReadyDetail =>
+      'Axi speaks with the on-device neural voice.';
+
+  @override
+  String voiceStatusDownloading(int percent) {
+    return 'Downloading the natural voice… $percent%';
+  }
+
+  @override
+  String get voiceStatusAbsent => 'Using the system voice';
+
+  @override
+  String get voiceStatusAbsentDetail =>
+      'Download the natural voice so Axi sounds more human.';
+
+  @override
+  String get voiceStatusFailed => 'Couldn\'t download the natural voice';
+
+  @override
+  String get voiceDownloadButton => 'Download natural voice';
+
+  @override
+  String get voiceRetryButton => 'Retry';
+
+  @override
+  String get voiceRateLabel => 'Speed';
+
+  @override
+  String get voiceRateSlow => 'Slow';
+
+  @override
+  String get voiceRateFast => 'Fast';
+
+  @override
+  String get voiceTestButton => 'Test voice';
+
+  @override
+  String get voiceSampleText =>
+      'Hi, I\'m Axi. This is how my voice will sound when I read your replies.';
+
+  @override
+  String get voiceLanguageNote =>
+      'The voice follows the app language (Region / Language).';
 
   @override
   String get sectionAdvanced => 'Advanced';
@@ -257,6 +314,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get homeMyData => 'My data';
+
+  @override
+  String get homeMyLife => 'My life';
 
   @override
   String get homeHowIsAxi => 'How is Axi?';

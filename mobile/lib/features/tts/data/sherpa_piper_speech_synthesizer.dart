@@ -24,10 +24,11 @@ class SherpaPiperSpeechSynthesizer implements PiperSpeechSynthesizer {
   Future<SynthesizedAudio> synthesize({
     required TtsVoicePaths voice,
     required String text,
+    double speed = 1.0,
   }) async {
     final SynthesizedAudio audio;
     try {
-      audio = await Isolate.run(() => _synthesizeSync(voice, text));
+      audio = await Isolate.run(() => _synthesizeSync(voice, text, speed));
     } catch (e) {
       throw PiperSynthesisException('No se pudo sintetizar la voz: $e');
     }
@@ -40,7 +41,7 @@ class SherpaPiperSpeechSynthesizer implements PiperSpeechSynthesizer {
 
   /// Runs in the worker isolate — sherpa's FFI bindings are per-isolate, so
   /// init here (cheap + idempotent) before building the engine.
-  static SynthesizedAudio _synthesizeSync(TtsVoicePaths voice, String text) {
+  static SynthesizedAudio _synthesizeSync(TtsVoicePaths voice, String text, double speed) {
     sherpa.initBindings();
     final tts = sherpa.OfflineTts(
       sherpa.OfflineTtsConfig(
@@ -57,7 +58,9 @@ class SherpaPiperSpeechSynthesizer implements PiperSpeechSynthesizer {
       ),
     );
     try {
-      final audio = tts.generate(text: text, sid: 0, speed: 1.0);
+      // Guard the FFI call against a bogus multiplier reaching the engine.
+      final safeSpeed = speed.isFinite && speed > 0 ? speed : 1.0;
+      final audio = tts.generate(text: text, sid: 0, speed: safeSpeed);
       return SynthesizedAudio(samples: audio.samples, sampleRate: audio.sampleRate);
     } finally {
       tts.free();

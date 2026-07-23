@@ -83,6 +83,33 @@ class LocalRemindersNotifier extends Notifier<LocalRemindersUiState> {
     }
   }
 
+  /// Edit a reminder's content (text/time/recurrence) and re-arm its alarm.
+  Future<void> edit(
+    LocalReminder reminder, {
+    required String text,
+    required DateTime dueAt,
+    ReminderRecurrence recurrence = ReminderRecurrence.none,
+  }) async {
+    try {
+      final service = await ref.read(localRemindersServiceProvider.future);
+      await service.edit(reminder, text: text, dueAt: dueAt, recurrence: recurrence);
+      await _load();
+    } catch (_) {
+      state = state.copyWith(error: 'No se pudo editar el recordatorio.');
+    }
+  }
+
+  /// Turn a reminder on/off without deleting it (cancels/reschedules its alarm).
+  Future<void> setEnabled(LocalReminder reminder, bool enabled) async {
+    try {
+      final service = await ref.read(localRemindersServiceProvider.future);
+      await service.setEnabled(reminder, enabled);
+      await _load();
+    } catch (_) {
+      state = state.copyWith(error: 'No se pudo actualizar el recordatorio.');
+    }
+  }
+
   Future<void> complete(LocalReminder reminder) async {
     try {
       final service = await ref.read(localRemindersServiceProvider.future);

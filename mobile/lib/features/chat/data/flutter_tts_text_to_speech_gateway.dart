@@ -45,9 +45,15 @@ Future<String?> firstAvailableTtsLocale(
 /// in a higher-quality on-device engine (Piper) behind [TextToSpeechGateway]
 /// and only re-point `textToSpeechGatewayProvider` — no UI change.
 class FlutterTtsTextToSpeechGateway implements TextToSpeechGateway {
-  FlutterTtsTextToSpeechGateway({FlutterTts? tts, String Function()? currentLanguageCode})
-      : _tts = tts ?? FlutterTts(),
-        _currentLanguageCode = currentLanguageCode ?? _defaultLanguageCode {
+  FlutterTtsTextToSpeechGateway({
+    FlutterTts? tts,
+    String Function()? currentLanguageCode,
+    double Function()? currentRate,
+    double Function()? currentPitch,
+  })  : _tts = tts ?? FlutterTts(),
+        _currentLanguageCode = currentLanguageCode ?? _defaultLanguageCode,
+        _currentRate = currentRate ?? _defaultRate,
+        _currentPitch = currentPitch ?? _defaultPitch {
     // Natural end of an utterance (and engine-side errors) revert the button.
     // A deliberate stop() / speak()-switch is intentionally NOT wired to the
     // cancel handler, so switching messages never spuriously clears the
@@ -58,15 +64,25 @@ class FlutterTtsTextToSpeechGateway implements TextToSpeechGateway {
 
   static String _defaultLanguageCode() => 'es';
 
+  /// `flutter_tts` reads naturally at ~0.5 (0..1); 1.0 pitch is neutral.
+  static double _defaultRate() => 0.5;
+  static double _defaultPitch() => 1.0;
+
   final FlutterTts _tts;
 
   /// Reads the CURRENT app language live at each speak, so switching language in
   /// Settings changes the spoken voice without recreating the gateway.
   final String Function() _currentLanguageCode;
 
+  /// Read live at each speak so the "Voz" sliders apply to the next utterance
+  /// without recreating the gateway. Values are the plugin's native scales:
+  /// rate 0.0..1.0 (~0.5 natural), pitch 0.5..2.0 (1.0 neutral).
+  final double Function() _currentRate;
+  final double Function() _currentPitch;
+
   final _completions = StreamController<void>.broadcast();
 
-  /// Whether the one-time rate/pitch/volume setup ran.
+  /// Whether the one-time volume setup ran (rate/pitch are re-applied per speak).
   bool _configured = false;
 
   /// The language the voice is currently set to, so we re-select the locale only
@@ -79,11 +95,12 @@ class FlutterTtsTextToSpeechGateway implements TextToSpeechGateway {
 
   Future<void> _ensureConfigured() async {
     if (!_configured) {
-      await _tts.setSpeechRate(0.5); // 0..1; ~natural narration pace
-      await _tts.setPitch(1.0);
       await _tts.setVolume(1.0);
       _configured = true;
     }
+    // Re-applied every speak so a "Voz" slider change takes effect immediately.
+    await _tts.setSpeechRate(_currentRate()); // 0..1; ~0.5 natural narration pace
+    await _tts.setPitch(_currentPitch());
     await _applyVoiceForCurrentLanguage();
   }
 

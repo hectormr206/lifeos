@@ -48,11 +48,12 @@ class _FakeLocalGraphStore implements LocalGraphStore {
 }
 
 GraphNodeRecord _node(String uuid, String kind, DateTime createdAt,
-    {String? domain, DateTime? occurredAt}) {
+    {String? domain, DateTime? occurredAt, String? label, Map<String, Object?>? data}) {
   return GraphNodeRecord(
     uuid: uuid,
     kind: kind,
-    label: 'label-$uuid',
+    label: label ?? 'label-$uuid',
+    data: data ?? const <String, Object?>{},
     domain: domain,
     occurredAt: occurredAt,
     createdAt: createdAt,
@@ -77,12 +78,14 @@ void main() {
   final t0 = DateTime.utc(2026, 6, 1, 12);
 
   group('buildBrain3dPayload', () {
-    test('merges local kinds and keeps only edges between included nodes', () async {
+    test('includes knowledge kinds and keeps only edges between included nodes', () async {
       final store = _FakeLocalGraphStore(
         nodes: [
           _node('f1', 'fact', t0, domain: 'health'),
-          _node('c1', 'conversation', t0.add(const Duration(minutes: 1))),
           _node('p1', 'person', t0.add(const Duration(minutes: 2))),
+          _node('ev1', 'event', t0.add(const Duration(minutes: 3))),
+          // Chat plumbing — excluded from the "brain of your life" view.
+          _node('c1', 'conversation', t0.add(const Duration(minutes: 1))),
           // Kind the builder does not read — excluded entirely.
           _node('x1', 'unknown-kind', t0),
         ],
@@ -90,16 +93,69 @@ void main() {
           _edge('e1', 'f1', 'p1', relation: 'involves-person'),
           // Dangling endpoint (x1 not included) — must be dropped.
           _edge('e2', 'f1', 'x1'),
+          // Endpoint c1 (conversation) excluded — must be dropped too.
+          _edge('e3', 'f1', 'c1'),
         ],
       );
 
       final payload = await buildBrain3dPayload(store);
 
-      expect(payload.nodes.map((n) => n.uuid), containsAll(['f1', 'c1', 'p1']));
+      expect(payload.nodes.map((n) => n.uuid), containsAll(['f1', 'p1', 'ev1']));
+      expect(payload.nodes.map((n) => n.uuid), isNot(contains('c1')));
       expect(payload.nodes.map((n) => n.uuid), isNot(contains('x1')));
       expect(payload.truncated, isFalse);
       expect(payload.edges, hasLength(1));
       expect(payload.edges.single.uuid, 'e1');
+    });
+
+    test('excludes conversation and chat_message plumbing entirely', () async {
+      final store = _FakeLocalGraphStore(
+        nodes: [
+          _node('f1', 'fact', t0, label: 'Presión 120/80'),
+          _node('c1', 'conversation', t0, label: 'Chat con Axi'),
+          _node('m1', 'chat_message', t0, label: 'Hola'),
+        ],
+      );
+
+      final payload = await buildBrain3dPayload(store);
+
+      expect(payload.nodes.map((n) => n.uuid), ['f1']);
+    });
+
+    test('keeps the user hub (person role=user "Yo") and connects it', () async {
+      final store = _FakeLocalGraphStore(
+        nodes: [
+          _node('hub', 'person', t0,
+              label: 'Yo', data: const {'role': 'user'}),
+          _node('f1', 'fact', t0.add(const Duration(minutes: 1)),
+              label: 'Presión 120/80'),
+        ],
+        edges: [_edge('e1', 'hub', 'f1', relation: 'about')],
+      );
+
+      final payload = await buildBrain3dPayload(store);
+
+      expect(payload.nodes.map((n) => n.uuid), containsAll(['hub', 'f1']));
+      expect(payload.edges.single.uuid, 'e1');
+    });
+
+    test('drops trivial greeting/filler facts (low-value guard)', () async {
+      final store = _FakeLocalGraphStore(
+        nodes: [
+          _node('g1', 'fact', t0, label: 'hola'),
+          _node('g2', 'fact', t0, label: 'gracias'),
+          _node('g3', 'fact', t0, label: 'ok'),
+          _node('g4', 'fact', t0, label: 'Buenos días'),
+          _node('g5', 'fact', t0, label: '  Gracias!  '),
+          // Real knowledge — must survive.
+          _node('f1', 'fact', t0, label: 'Celia cumple años el 3 de mayo'),
+          _node('f2', 'fact', t0, label: 'Presión 120/80'),
+        ],
+      );
+
+      final payload = await buildBrain3dPayload(store);
+
+      expect(payload.nodes.map((n) => n.uuid), ['f1', 'f2']);
     });
 
     test('edges touching two included nodes are not duplicated', () async {

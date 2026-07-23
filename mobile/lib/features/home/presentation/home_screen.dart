@@ -87,6 +87,13 @@ class _UnpairedView extends ConsumerWidget {
             icon: const Icon(Icons.offline_bolt_outlined),
             label: Text(l10n.homeUseLocalModel),
           ),
+        const SizedBox(height: 12),
+        // "Mi vida" is fully on-device, so it is reachable even unpaired.
+        OutlinedButton.icon(
+          onPressed: () => context.push('/mi-vida'),
+          icon: const Icon(Icons.auto_stories_outlined),
+          label: Text(l10n.homeMyLife),
+        ),
       ],
     );
   }
@@ -141,6 +148,13 @@ class _ConnectedView extends ConsumerWidget {
           onPressed: () => context.push('/domains'),
           icon: const Icon(Icons.dashboard_outlined),
           label: Text(l10n.homeMyData),
+        ),
+        const SizedBox(height: 12),
+        // Unified "Mi vida" view: all data + notifications in one place.
+        OutlinedButton.icon(
+          onPressed: () => context.push('/mi-vida'),
+          icon: const Icon(Icons.auto_stories_outlined),
+          label: Text(l10n.homeMyLife),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(

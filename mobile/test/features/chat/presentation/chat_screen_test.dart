@@ -649,14 +649,15 @@ void main() {
 
   testWidgets('does NOT auto-speak a reply when Responder por voz is off', (tester) async {
     final tts = FakeTextToSpeechGateway();
-    // Default preference is OFF (no override needed beyond the fake gateway).
-
+    // Voice auto-speak now DEFAULTS ON (everything-on rule), so this "off"
+    // scenario must set the preference OFF explicitly.
     await _pumpScreen(
       tester,
       ProviderScope(
         overrides: [
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           textToSpeechGatewayProvider.overrideWithValue(tts),
+          voiceReplyPreferencesProvider.overrideWithValue(FakeVoiceReplyPreferences()),
         ],
         child: _chatApp,
       ),
@@ -741,6 +742,9 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(repo),
           textToSpeechGatewayProvider.overrideWithValue(tts),
+          // Voice auto-speak defaults ON now; keep it OFF so only the manual
+          // speaker button drives TTS in these cases.
+          voiceReplyPreferencesProvider.overrideWithValue(FakeVoiceReplyPreferences()),
         ],
         child: _chatApp,
       ),
@@ -777,6 +781,9 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(repo),
           textToSpeechGatewayProvider.overrideWithValue(tts),
+          // Voice auto-speak defaults ON now; keep it OFF so only the manual
+          // speaker button drives TTS in these cases.
+          voiceReplyPreferencesProvider.overrideWithValue(FakeVoiceReplyPreferences()),
         ],
         child: _chatApp,
       ),
@@ -809,6 +816,9 @@ void main() {
         overrides: [
           chatRepositoryProvider.overrideWithValue(repo),
           textToSpeechGatewayProvider.overrideWithValue(tts),
+          // Voice auto-speak defaults ON now; keep it OFF so only the manual
+          // speaker button drives TTS in these cases.
+          voiceReplyPreferencesProvider.overrideWithValue(FakeVoiceReplyPreferences()),
         ],
         child: _chatApp,
       ),
