@@ -18,6 +18,7 @@ class DomainFieldSpec {
     required this.type,
     this.required = false,
     this.enumOptions,
+    this.enumLabels,
     this.unitHint,
     this.min,
     this.max,
@@ -36,6 +37,12 @@ class DomainFieldSpec {
   /// Choices for a [DomainFieldType.enumType] field. Required (non-null,
   /// non-empty) whenever [type] is [DomainFieldType.enumType].
   final List<String>? enumOptions;
+
+  /// Optional Spanish display labels for [enumOptions] (wire value →
+  /// user-facing text). Missing keys fall back to the raw option string —
+  /// keeps stored values laptop-compatible while the UI stays in neutral
+  /// Spanish (local-entry config, spec native-domain-crud).
+  final Map<String, String>? enumLabels;
 
   /// Optional short unit hint shown as a field suffix (e.g. "mmHg", "min").
   final String? unitHint;

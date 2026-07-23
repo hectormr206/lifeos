@@ -7,7 +7,8 @@ import '../domain/domain_descriptor.dart';
 /// of the registered domains (health, finance, exercise this slice — the
 /// same grid grows to 7 by extending [domainDescriptors], no widget
 /// changes). Tapping a card opens that domain's [DomainListScreen] at
-/// `/domains/:key`. Paired-only, gated in go_router the same way as `/chat`.
+/// `/domains/:key`. No longer pairing-gated (native domain CRUD): each
+/// domain screen's local tab works fully offline/unpaired.
 class DomainsHubScreen extends StatelessWidget {
   const DomainsHubScreen({super.key});
 

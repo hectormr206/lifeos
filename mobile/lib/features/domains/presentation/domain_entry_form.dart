@@ -16,10 +16,20 @@ class DomainEntryForm extends StatefulWidget {
     required this.onSubmit,
     this.submitting = false,
     this.errorText,
+    this.initialValues,
+    this.submitLabel = 'Guardar',
     super.key,
   });
 
   final List<DomainFieldSpec> spec;
+
+  /// Prefill for EDIT flows (native domain CRUD): field key → stored value.
+  /// Date fields accept a [DateTime] or an ISO8601 string; missing keys keep
+  /// the create defaults (now / first enum option / empty text).
+  final Map<String, Object?>? initialValues;
+
+  /// Save-button caption (create vs edit reuse the same widget).
+  final String submitLabel;
 
   /// Called with the exact built POST body ([buildDomainEntryBody]'s
   /// output) once the form validates successfully.
@@ -45,18 +55,30 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
   @override
   void initState() {
     super.initState();
+    final initial = widget.initialValues ?? const <String, Object?>{};
     for (final field in widget.spec) {
+      final preset = initial[field.key];
       switch (field.type) {
         case DomainFieldType.date:
-          _values[field.key] = DateTime.now();
+          _values[field.key] = _asDateTime(preset) ?? DateTime.now();
         case DomainFieldType.enumType:
-          _values[field.key] = field.enumOptions!.first;
+          _values[field.key] = (preset is String && field.enumOptions!.contains(preset))
+              ? preset
+              : field.enumOptions!.first;
         case DomainFieldType.text:
         case DomainFieldType.number:
         case DomainFieldType.integer:
-          _controllers[field.key] = TextEditingController();
+          _controllers[field.key] = TextEditingController(text: preset?.toString() ?? '');
       }
     }
+  }
+
+  /// Accepts the two shapes an initial date value can arrive in: a [DateTime]
+  /// (in-memory) or the ISO8601 string a stored entry carries.
+  static DateTime? _asDateTime(Object? value) {
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value)?.toLocal();
+    return null;
   }
 
   @override
@@ -142,7 +164,7 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
             icon: widget.submitting
                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.save_outlined),
-            label: const Text('Guardar'),
+            label: Text(widget.submitLabel),
           ),
           if (widget.errorText != null)
             Padding(
@@ -160,7 +182,10 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
         return DropdownButtonFormField<String>(
           initialValue: _values[field.key] as String?,
           decoration: InputDecoration(labelText: field.label, border: const OutlineInputBorder()),
-          items: [for (final option in field.enumOptions!) DropdownMenuItem(value: option, child: Text(option))],
+          items: [
+            for (final option in field.enumOptions!)
+              DropdownMenuItem(value: option, child: Text(field.enumLabels?[option] ?? option)),
+          ],
           onChanged: (value) => setState(() => _values[field.key] = value),
         );
       case DomainFieldType.date:

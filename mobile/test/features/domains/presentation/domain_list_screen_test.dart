@@ -1,7 +1,10 @@
-// Proves DomainListScreen (design D2's generic "data-table widget") renders
-// entries, the subject badge when present (family attribution), the
-// empty/error states, and that the NL quick-capture bar reuses the chat
-// endpoint and triggers a refresh. No live engine — both repositories faked.
+// Proves EngineDomainTab (design D2's generic "data-table widget", the
+// "Desde tu laptop" tab since the native-domain-CRUD slice) renders entries,
+// the subject badge when present (family attribution), the empty/error
+// states, and that the NL quick-capture bar reuses the chat endpoint and
+// triggers a refresh. No live engine — both repositories faked. The LOCAL
+// tab and the DomainListScreen tab wrapper are covered by
+// local_domain_tab_test.dart.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -69,6 +72,15 @@ class _FakeChatRepository implements ChatRepository {
   }
 }
 
+/// Hosts the engine tab the way [DomainListScreen] does (title AppBar +
+/// tab body) without the local tab's graph-store dependency.
+Widget _host(DomainDescriptor descriptor) => MaterialApp(
+      home: Scaffold(
+        appBar: AppBar(title: Text(descriptor.title)),
+        body: EngineDomainTab(descriptor: descriptor),
+      ),
+    );
+
 void main() {
   final descriptor = domainDescriptors.firstWhere((d) => d.key == 'health');
 
@@ -79,7 +91,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [domainRepositoryProvider.overrideWithValue(repo)],
-        child: MaterialApp(home: DomainListScreen(descriptor: descriptor)),
+        child: _host(descriptor),
       ),
     );
     await tester.pump();
@@ -96,7 +108,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [domainRepositoryProvider.overrideWithValue(repo)],
-        child: MaterialApp(home: DomainListScreen(descriptor: descriptor)),
+        child: _host(descriptor),
       ),
     );
     await tester.pump();
@@ -111,7 +123,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [domainRepositoryProvider.overrideWithValue(repo)],
-        child: MaterialApp(home: DomainListScreen(descriptor: descriptor)),
+        child: _host(descriptor),
       ),
     );
     await tester.pump();
@@ -126,7 +138,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [domainRepositoryProvider.overrideWithValue(repo)],
-        child: MaterialApp(home: DomainListScreen(descriptor: descriptor)),
+        child: _host(descriptor),
       ),
     );
     await tester.pump();
@@ -144,7 +156,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [domainRepositoryProvider.overrideWithValue(repo)],
-        child: MaterialApp(home: DomainListScreen(descriptor: calendar)),
+        child: _host(calendar),
       ),
     );
     await tester.pump();
@@ -164,7 +176,7 @@ void main() {
           domainRepositoryProvider.overrideWithValue(repo),
           chatRepositoryProvider.overrideWithValue(chat),
         ],
-        child: MaterialApp(home: DomainListScreen(descriptor: descriptor)),
+        child: _host(descriptor),
       ),
     );
     await tester.pump();
@@ -189,7 +201,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [domainRepositoryProvider.overrideWithValue(repo)],
-        child: MaterialApp(home: DomainListScreen(descriptor: finance)),
+        child: _host(finance),
       ),
     );
     await tester.pump();
@@ -226,7 +238,7 @@ void main() {
           domainRepositoryProvider.overrideWithValue(repo),
           connectivityStatusProvider.overrideWith(() => _FixedConnectivityNotifier(fixed)),
         ],
-        child: MaterialApp(home: DomainListScreen(descriptor: descriptor)),
+        child: _host(descriptor),
       ),
     );
     await tester.pump();

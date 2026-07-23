@@ -7,22 +7,62 @@ import '../domain/domain_entry.dart';
 import '../domain/domain_form_spec.dart';
 import 'domain_entry_form.dart';
 import 'domain_notifier.dart';
+import 'local_domain_tab.dart';
 
-/// The generic domain data list screen (design D2's "generic data-table
-/// widget"). ONE widget class instantiated per [DomainDescriptor] — all
-/// per-domain differences live in data ([DomainEntry.raw]), never in widget
-/// code. This slice is list/view + NL quick-capture only; structured
-/// create/edit forms are a later slice (spec `mobile-domain-crud`).
-class DomainListScreen extends ConsumerStatefulWidget {
+/// A domain's screen — two coexisting surfaces (native domain CRUD, same
+/// tab pattern as `RemindersScreen`, roadmap slice C2):
+///   * "En este teléfono": LOCAL CRUD over the on-device encrypted graph
+///     ([LocalDomainTab]) — create/edit/delete/filter structured entries
+///     fully offline/unpaired. This is why `/domains` is no longer
+///     pairing-gated.
+///   * "Desde tu laptop": the original pairing-gated engine VIEWER
+///     ([EngineDomainTab]). Unpaired it degrades to its own connection
+///     error.
+/// Still ONE widget class instantiated per [DomainDescriptor] — all
+/// per-domain differences live in data/config, never in widget code.
+class DomainListScreen extends StatelessWidget {
   const DomainListScreen({required this.descriptor, super.key});
 
   final DomainDescriptor descriptor;
 
   @override
-  ConsumerState<DomainListScreen> createState() => _DomainListScreenState();
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(descriptor.title),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'En este teléfono', icon: Icon(Icons.smartphone)),
+              Tab(text: 'Desde tu laptop', icon: Icon(Icons.laptop_mac)),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            LocalDomainTab(descriptor: descriptor),
+            EngineDomainTab(descriptor: descriptor),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _DomainListScreenState extends ConsumerState<DomainListScreen> {
+/// The engine-data VIEWER (design D2's generic "data-table widget"),
+/// unchanged behavior, now hosted as the "Desde tu laptop" tab. List +
+/// NL quick-capture + structured create (spec structured-domain-forms).
+class EngineDomainTab extends ConsumerStatefulWidget {
+  const EngineDomainTab({required this.descriptor, super.key});
+
+  final DomainDescriptor descriptor;
+
+  @override
+  ConsumerState<EngineDomainTab> createState() => _EngineDomainTabState();
+}
+
+class _EngineDomainTabState extends ConsumerState<EngineDomainTab> {
   final _captureController = TextEditingController();
   String? _lastShownCaptureError;
 
@@ -92,19 +132,8 @@ class _DomainListScreenState extends ConsumerState<DomainListScreen> {
       }
     });
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.descriptor.title),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.post_add),
-            tooltip: 'Agregar registro',
-            onPressed: _openCreateForm,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
+    return Column(
+      children: [
           const OfflineBanner(),
           Expanded(
             child: RefreshIndicator(
@@ -129,6 +158,13 @@ class _DomainListScreenState extends ConsumerState<DomainListScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  // Structured create on the ENGINE (was the AppBar action
+                  // before the local/laptop tab split).
+                  IconButton(
+                    icon: const Icon(Icons.post_add),
+                    tooltip: 'Agregar registro',
+                    onPressed: _openCreateForm,
+                  ),
                   IconButton(
                     icon: state.capturing
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
@@ -140,8 +176,7 @@ class _DomainListScreenState extends ConsumerState<DomainListScreen> {
               ),
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 
