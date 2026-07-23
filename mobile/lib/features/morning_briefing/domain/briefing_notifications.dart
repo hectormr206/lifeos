@@ -1,4 +1,4 @@
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../../../core/notifications/app_notifications.dart';
 
 /// Posts the local "tu boletín está listo" notification for the ON-DEVICE
 /// morning briefing.
@@ -22,14 +22,16 @@ abstract class BriefingNotifications {
   Future<bool> launchedByTap();
 }
 
-/// Production [BriefingNotifications] backed by `flutter_local_notifications`.
+/// Production [BriefingNotifications] backed by the shared [AppNotifications].
+///
+/// Tap handling + plugin initialization are delegated to [AppNotifications] so
+/// the briefing handler and the app-update handler share ONE `initialize()`
+/// and coexist in one payload → handler registry (neither clobbers the other).
 class FlutterLocalBriefingNotifications implements BriefingNotifications {
-  FlutterLocalBriefingNotifications([FlutterLocalNotificationsPlugin? plugin])
-      : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
+  FlutterLocalBriefingNotifications([AppNotifications? notifications])
+      : _notifications = notifications ?? AppNotifications.instance;
 
-  final FlutterLocalNotificationsPlugin _plugin;
-  bool _initialized = false;
-  void Function()? _onTapBriefing;
+  final AppNotifications _notifications;
 
   static const int _notificationId = 5310;
 
@@ -40,66 +42,22 @@ class FlutterLocalBriefingNotifications implements BriefingNotifications {
   static const String _channelName = 'Boletín matutino';
   static const String _payload = 'morning_briefing';
 
-  Future<void> _ensureInitialized() async {
-    if (_initialized) return;
-    const settings = InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    );
-    await _plugin.initialize(
-      settings: settings,
-      onDidReceiveNotificationResponse: (response) {
-        if (response.payload == _payload) _onTapBriefing?.call();
-      },
-    );
-    _initialized = true;
-  }
+  @override
+  Future<void> registerTapHandler(void Function() onTapBriefing) =>
+      _notifications.registerTapHandler(_payload, onTapBriefing);
 
   @override
-  Future<void> registerTapHandler(void Function() onTapBriefing) async {
-    _onTapBriefing = onTapBriefing;
-    try {
-      await _ensureInitialized();
-    } catch (_) {
-      // No channel (test) — the handler is still stored for a later init.
-    }
-  }
+  Future<bool> launchedByTap() async =>
+      await _notifications.launchedByTap() == _payload;
 
   @override
-  Future<bool> launchedByTap() async {
-    try {
-      final details = await _plugin.getNotificationAppLaunchDetails();
-      return (details?.didNotificationLaunchApp ?? false) &&
-          details?.notificationResponse?.payload == _payload;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  @override
-  Future<void> showBriefingReady() async {
-    try {
-      await _ensureInitialized();
-      const details = NotificationDetails(
-        android: AndroidNotificationDetails(
-          _channelId,
-          _channelName,
-          channelDescription: 'Avisos cuando tu boletín matutino está listo.',
-          // HIGH importance + priority so Android shows a floating heads-up
-          // notification, matching the app-update channel behavior.
-          importance: Importance.high,
-          priority: Priority.high,
-        ),
-      );
-      await _plugin.show(
+  Future<void> showBriefingReady() => _notifications.show(
         id: _notificationId,
+        channelId: _channelId,
+        channelName: _channelName,
+        channelDescription: 'Avisos cuando tu boletín matutino está listo.',
         title: 'Tu boletín está listo',
         body: 'Toca para leer el boletín matutino que Axi preparó para ti.',
-        notificationDetails: details,
         payload: _payload,
       );
-    } catch (_) {
-      // No channel (test) / denied permission — never let a notification
-      // failure break the pipeline; the briefing still shows in-app.
-    }
-  }
 }
