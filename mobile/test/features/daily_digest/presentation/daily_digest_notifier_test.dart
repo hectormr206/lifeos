@@ -1,6 +1,8 @@
-// Proves the on-device daily digest is a BUILT-IN, default-ON schedule that can
-// be edited (time + instructions) and DEACTIVATED but not deleted; and that a
-// generate run narrates the deterministic facts, persists, and notifies.
+// Proves the on-device daily digest is a BUILT-IN, default-ON schedule whose
+// ONLY user controls are: edit send TIME, ACTIVATE/DEACTIVATE, and GENERATE
+// now — never delete, and the narration instruction is NOT exposed. Also proves
+// a generate run narrates the deterministic facts using the fixed internal
+// instruction, persists, and notifies.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/graph/local_graph_migrations.dart';
@@ -21,17 +23,12 @@ import '../../local_model/support/fake_local_llm_engine.dart';
 
 class _FakePrefs implements DailyDigestPreferences {
   DailyDigestSchedule _schedule = const DailyDigestSchedule();
-  String _instructions = kDefaultDigestInstructions;
   DailyDigest? _digest;
 
   @override
   Future<DailyDigestSchedule> schedule() async => _schedule;
   @override
   Future<void> saveSchedule(DailyDigestSchedule s) async => _schedule = s;
-  @override
-  Future<String> instructions() async => _instructions;
-  @override
-  Future<void> saveInstructions(String i) async => _instructions = i;
   @override
   Future<DailyDigest?> lastDigest() async => _digest;
   @override
@@ -108,18 +105,18 @@ void main() {
     expect(scheduler.scheduled.last, DateTime(2026, 7, 22, 7, 30).add(const Duration(days: 1)));
   });
 
-  test('edit instructions persists; reset restores the default', () async {
+  test('narration instruction is NOT exposed: no state, no editing API', () {
     final container = build();
     addTearDown(container.dispose);
-    final notifier = container.read(dailyDigestNotifierProvider.notifier)..clock = () => now;
-    await notifier.ready;
+    final notifier = container.read(dailyDigestNotifierProvider.notifier);
+    final state = container.read(dailyDigestNotifierProvider);
 
-    await notifier.setInstructions('Solo bullet points');
-    expect(container.read(dailyDigestNotifierProvider).instructions, 'Solo bullet points');
-    expect(await prefs.instructions(), 'Solo bullet points');
-
-    await notifier.resetInstructions();
-    expect(container.read(dailyDigestNotifierProvider).instructions, kDefaultDigestInstructions);
+    // The public contract is only: time-edit, activate/deactivate, generate.
+    // There is no instruction state and no instruction-editing method, so the
+    // dynamic lookups below prove the surface is gone (would throw if present).
+    expect(() => (state as dynamic).instructions, throwsNoSuchMethodError);
+    expect(() => (notifier as dynamic).setInstructions('x'), throwsNoSuchMethodError);
+    expect(() => (notifier as dynamic).resetInstructions(), throwsNoSuchMethodError);
   });
 
   test('deactivate keeps the built-in (no delete): cancels alarm, can re-enable', () async {
@@ -141,7 +138,7 @@ void main() {
     expect(notifier, isA<DailyDigestNotifier>());
   });
 
-  test('generate narrates the deterministic facts, persists + notifies', () async {
+  test('generate narrates using the fixed internal instruction, persists + notifies', () async {
     final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
     addTearDown(db.close);
     await createLatestGraphSchema(db); // v1 base + migrations (vec_nodes)
@@ -151,10 +148,11 @@ void main() {
     final weight = localEntryTypeFor('health', 'weight')!;
     await repo.create('health', weight, {'value': 80, 'ts': now});
 
+    final engine = FakeLocalLlmEngine(reply: (_) => 'Hoy te cuidaste bien.');
     final service = DailyDigestService(
       repository: repo,
       store: store,
-      engine: FakeLocalLlmEngine(reply: (_) => 'Hoy te cuidaste bien.'),
+      engine: engine,
     );
     final container = build(service: service);
     addTearDown(container.dispose);
@@ -167,6 +165,9 @@ void main() {
     expect(digest.entriesCount, 1);
     expect(digest.wrapUp, 'Hoy te cuidaste bien.');
     expect(digest.deterministicText, contains('Salud'));
+    // The model was grounded with the FIXED internal narration instruction
+    // (not any user-supplied text — that surface no longer exists).
+    expect(engine.prompts.single, contains(kDailyDigestNarrationInstruction));
     expect(notifications.shown, 1);
     expect(await prefs.lastDigest(), isNotNull);
   });

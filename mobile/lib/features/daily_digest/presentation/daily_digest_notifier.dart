@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../domain/daily_digest.dart';
-import '../domain/daily_digest_preferences.dart';
 import '../domain/daily_digest_schedule.dart';
 import 'daily_digest_providers.dart';
 
@@ -15,7 +14,6 @@ enum DailyDigestPhase { idle, generating, done, error }
 class DailyDigestState {
   const DailyDigestState({
     this.schedule = const DailyDigestSchedule(),
-    this.instructions = kDefaultDigestInstructions,
     this.digest,
     this.phase = DailyDigestPhase.idle,
     this.error,
@@ -23,9 +21,6 @@ class DailyDigestState {
 
   /// The schedule (ENABLED + 21:00 by default — everything-on rule).
   final DailyDigestSchedule schedule;
-
-  /// The editable wrap-up instructions.
-  final String instructions;
 
   /// The last digest produced (persisted so it survives navigation).
   final DailyDigest? digest;
@@ -39,14 +34,12 @@ class DailyDigestState {
 
   DailyDigestState copyWith({
     DailyDigestSchedule? schedule,
-    String? instructions,
     DailyDigest? digest,
     DailyDigestPhase? phase,
     String? error,
   }) =>
       DailyDigestState(
         schedule: schedule ?? this.schedule,
-        instructions: instructions ?? this.instructions,
         digest: digest ?? this.digest,
         phase: phase ?? this.phase,
         error: error,
@@ -57,8 +50,10 @@ class DailyDigestState {
 /// and persistence. Mirrors [MorningBriefingNotifier]'s scheduled-autonomous-run
 /// shape (OS reminder + in-app timer, one-shot + rearm).
 ///
-/// The digest is a BUILT-IN: it can be EDITED (time + instructions) and
-/// DEACTIVATED, but never DELETED — there is no delete method here.
+/// The digest is a BUILT-IN: the user may only change the send TIME,
+/// ACTIVATE/DEACTIVATE it, and trigger a run ("generar ahora"). It is never
+/// DELETED — there is no delete method here. The narration instruction is a
+/// fixed internal constant and is not exposed or editable.
 class DailyDigestNotifier extends Notifier<DailyDigestState> {
   Future<void>? _bootstrapFuture;
   Timer? _autoRunTimer;
@@ -82,17 +77,16 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
     try {
       final prefs = ref.read(dailyDigestPreferencesProvider);
       final schedule = await prefs.schedule();
-      final instructions = await prefs.instructions();
       final last = await prefs.lastDigest();
-      state = state.copyWith(schedule: schedule, instructions: instructions, digest: last);
+      state = state.copyWith(schedule: schedule, digest: last);
     } catch (_) {
       // Persistence unavailable (no platform channel in a widget test) — keep
-      // the safe defaults (schedule ON, default instructions).
+      // the safe defaults (schedule ON).
     }
     await _armTriggers();
   }
 
-  // ── Schedule + instructions (edit / deactivate; never delete) ──────────────
+  // ── Schedule (edit time / deactivate; never delete) ────────────────────────
 
   Future<void> setScheduleEnabled(bool enabled) =>
       _updateSchedule(state.schedule.copyWith(enabled: enabled));
@@ -109,19 +103,6 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
     }
     await _armTriggers();
   }
-
-  Future<void> setInstructions(String instructions) async {
-    final text = instructions.trim().isEmpty ? kDefaultDigestInstructions : instructions;
-    state = state.copyWith(instructions: text);
-    try {
-      await ref.read(dailyDigestPreferencesProvider).saveInstructions(text);
-    } catch (_) {
-      // Best-effort persistence.
-    }
-  }
-
-  /// Restore the built-in default instructions.
-  Future<void> resetInstructions() => setInstructions(kDefaultDigestInstructions);
 
   // ── Triggers (OS reminder + in-app timer) ──────────────────────────────────
 
@@ -165,7 +146,7 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
     state = state.copyWith(phase: DailyDigestPhase.generating, error: null);
     try {
       final service = await ref.read(dailyDigestServiceProvider.future);
-      final digest = await service.generate(now: clock(), instructions: state.instructions);
+      final digest = await service.generate(now: clock());
       state = state.copyWith(digest: digest, phase: DailyDigestPhase.done);
       try {
         await ref.read(dailyDigestPreferencesProvider).saveLastDigest(digest);

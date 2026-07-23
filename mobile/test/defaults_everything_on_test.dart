@@ -33,10 +33,9 @@ void main() {
       final prefs = SharedPrefsMorningBriefingPreferences();
       expect((await prefs.schedule()).enabled, isTrue);
     });
-    test('daily digest prefs schedule enabled + default instructions', () async {
+    test('daily digest prefs schedule enabled by default', () async {
       final prefs = SharedPrefsDailyDigestPreferences();
       expect((await prefs.schedule()).enabled, isTrue);
-      expect(await prefs.instructions(), kDefaultDigestInstructions);
     });
     test('voice-reply auto-speak enabled', () async {
       expect(await SharedPrefsVoiceReplyPreferences().isEnabled(), isTrue);

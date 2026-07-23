@@ -9,8 +9,9 @@ import 'daily_digest_notifier.dart';
 
 /// The on-device DAILY DIGEST screen: shows today's generated summary (model
 /// wrap-up + the exact aggregated facts) and lets the user manage the built-in
-/// schedule — edit the time + wrap-up instructions, or deactivate it. The
-/// digest is a BUILT-IN: it can be edited and turned off, but never deleted.
+/// schedule — edit the SEND TIME, ACTIVATE/DEACTIVATE it, or GENERATE now. The
+/// digest is a BUILT-IN: it can be turned off but never deleted. The narration
+/// instruction is fixed internally and is never shown or edited here.
 class DailyDigestScreen extends ConsumerStatefulWidget {
   const DailyDigestScreen({super.key});
 
@@ -30,8 +31,6 @@ class _DailyDigestScreenState extends ConsumerState<DailyDigestScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           _ScheduleCard(schedule: state.schedule, notifier: notifier),
-          const SizedBox(height: 12),
-          _InstructionsCard(instructions: state.instructions, notifier: notifier),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: state.isGenerating ? null : notifier.generate,
@@ -101,77 +100,6 @@ class _ScheduleCard extends StatelessWidget {
                 : null,
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _InstructionsCard extends StatefulWidget {
-  const _InstructionsCard({required this.instructions, required this.notifier});
-
-  final String instructions;
-  final DailyDigestNotifier notifier;
-
-  @override
-  State<_InstructionsCard> createState() => _InstructionsCardState();
-}
-
-class _InstructionsCardState extends State<_InstructionsCard> {
-  late final TextEditingController _controller = TextEditingController(text: widget.instructions);
-
-  @override
-  void didUpdateWidget(covariant _InstructionsCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Keep the field in sync when the notifier resets/loads a new value and the
-    // field is not being actively edited.
-    if (widget.instructions != oldWidget.instructions &&
-        widget.instructions != _controller.text) {
-      _controller.text = widget.instructions;
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Instrucciones del resumen', style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: 4),
-            const Text(
-              'Con esto Axi le da forma a la redacción. Los datos siempre son '
-              'exactos; esto solo cambia el tono/estilo.',
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _controller,
-              maxLines: 4,
-              decoration: const InputDecoration(border: OutlineInputBorder()),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                TextButton(
-                  onPressed: () => widget.notifier.resetInstructions(),
-                  child: const Text('Restablecer'),
-                ),
-                FilledButton(
-                  onPressed: () => widget.notifier.setInstructions(_controller.text),
-                  child: const Text('Guardar'),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }

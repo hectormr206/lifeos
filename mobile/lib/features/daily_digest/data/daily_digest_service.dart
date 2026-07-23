@@ -8,6 +8,18 @@ import '../../memory/domain/person_directory.dart';
 import '../domain/daily_digest.dart';
 import '../domain/daily_digest_aggregator.dart';
 
+/// FIXED, internal narration instruction that shapes the on-device model's
+/// natural-language wrap-up over the deterministically-assembled facts.
+///
+/// This is a PRODUCT-OWNED constant: it is NOT user-editable, NOT surfaced in
+/// the UI, and NOT read from or written to preferences. The digest still needs
+/// a narration instruction for the model, so it lives here and is used only by
+/// [DailyDigestService.generate].
+const String kDailyDigestNarrationInstruction =
+    'Escribe un resumen breve y cálido de mi día en español neutro, a partir de '
+    'los registros de hoy. Usa solo los hechos listados; no inventes nada ni '
+    'agregues datos. Máximo 4 frases.';
+
 /// Builds the on-device daily digest: a DETERMINISTIC aggregation of TODAY's
 /// local domain data (grouped by domain + person) plus an OPTIONAL short
 /// natural-language wrap-up from the on-device model OVER those facts.
@@ -50,13 +62,10 @@ class DailyDigestService {
     return aggregateDailyDigest(entriesByDomain, now: now, directory: directory);
   }
 
-  /// Generate a full digest for [now] with the user's [instructions] shaping the
-  /// model wrap-up. Deterministic facts are always produced; the wrap-up is
-  /// best-effort.
-  Future<DailyDigest> generate({
-    required DateTime now,
-    required String instructions,
-  }) async {
+  /// Generate a full digest for [now]. The model wrap-up is shaped by the fixed
+  /// internal [kDailyDigestNarrationInstruction] (not user-configurable).
+  /// Deterministic facts are always produced; the wrap-up is best-effort.
+  Future<DailyDigest> generate({required DateTime now}) async {
     final data = await aggregate(now: now);
     final facts = renderDigestFacts(data);
 
@@ -73,7 +82,7 @@ class DailyDigestService {
     try {
       await _engine.load();
       final result = await _engine.generate(
-        _wrapUpPrompt(instructions: instructions, facts: facts),
+        _wrapUpPrompt(facts: facts),
         temperature: longsumTemperature,
         topK: longsumTopK,
         topP: longsumTopP,
@@ -92,11 +101,11 @@ class DailyDigestService {
     );
   }
 
-  /// The wrap-up prompt: the user's instructions plus the deterministic facts.
-  /// The model is explicitly grounded ("usa solo estos datos") so it narrates,
-  /// never invents.
-  String _wrapUpPrompt({required String instructions, required String facts}) =>
-      '$instructions\n\n'
+  /// The wrap-up prompt: the fixed internal narration instruction plus the
+  /// deterministic facts. The model is explicitly grounded ("usa solo estos
+  /// datos") so it narrates, never invents.
+  String _wrapUpPrompt({required String facts}) =>
+      '$kDailyDigestNarrationInstruction\n\n'
       'Estos son los datos reales de hoy (no agregues nada que no esté aquí):\n\n'
       '$facts';
 }

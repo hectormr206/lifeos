@@ -191,8 +191,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Distinct from the pairing-gated `/briefings` viewer above.
       GoRoute(path: '/settings/briefing', builder: (context, state) => const MorningBriefingScreen()),
       // ON-DEVICE daily digest (built-in, default-ON): view today's summary and
-      // manage its schedule/instructions (edit + deactivate, never delete). Not
-      // pairing-gated: it aggregates LOCAL data + the on-device model.
+      // manage its send time (edit + deactivate + generate now, never delete).
+      // Not pairing-gated: it aggregates LOCAL data + the on-device model.
       GoRoute(path: '/settings/daily-digest', builder: (context, state) => const DailyDigestScreen()),
       GoRoute(
         path: '/settings/briefing/sources',
