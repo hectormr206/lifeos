@@ -27,9 +27,13 @@ import 'dart:async';
 
 import '../../../core/graph/graph_records.dart';
 import '../../../core/graph/local_graph_store.dart';
+import '../../domains/data/local_domain_repository.dart';
+import '../../domains/domain/local_entry_config.dart';
 import '../../embedding/domain/rag_service.dart';
 import '../../memory/data/memory_writer.dart';
 import '../../memory/domain/domain_router.dart';
+import '../../memory/domain/health_parser.dart';
+import '../../memory/domain/person_naming.dart';
 import '../../memory/domain/recall_block.dart';
 import '../../memory/domain/subject.dart';
 import 'axi_prompt_context.dart';
@@ -133,7 +137,49 @@ class ChatContextBuilder {
         data: provenance.isEmpty ? null : provenance,
       );
 
-      if (!_looksLikeStatement(userText)) return;
+      // ── DETERMINISTIC structured capture, evaluated FIRST ──────────────────
+      // A metric parse or an explicit naming statement is itself a strong
+      // save-worthy signal, so both are computed BEFORE the generic statement
+      // gate — a bare "122 77 55 pulsos" (whose only content is numbers) would
+      // otherwise be dropped by [_looksLikeStatement]. Model-free.
+      final parsed = parseHealthEntry(userText);
+      final naming = detectPersonNaming(userText);
+      if (parsed == null && naming == null && !_looksLikeStatement(userText)) {
+        return;
+      }
+
+      // ── Deterministic explicit name/nickname learning ──────────────────────
+      // "mi esposa se llama Celia" / "a mi papá le decimos Beto" upgrades the
+      // relation's person node to a real named node (label + alias). The
+      // utterance itself still falls through to the normal fact write below.
+      if (naming != null) {
+        await deps.writer.learnPersonName(
+          naming.relation,
+          name: naming.name,
+          alias: naming.alias,
+        );
+      }
+
+      // ── Structured health capture (crown jewel) ────────────────────────────
+      // On a hit the reading lands as a TYPED domain entry (visible in the
+      // domains list) plus its graph fact, attributed to the parsed subject; on
+      // a miss the raw-fact behavior below is unchanged (never mis-file).
+      if (parsed != null) {
+        final entryType = localEntryTypeFor(parsed.domainKey, parsed.type);
+        if (entryType != null) {
+          final structured = await _captureStructured(
+            deps,
+            parsed,
+            entryType,
+            provenance,
+            userText,
+            sourceMessageId,
+            sourceConversationUuid,
+          );
+          await _indexIfPossible(deps, structured);
+          return; // structured hit → done, skip the raw fallback.
+        }
+      }
 
       // Extract a concise fact: strip any leading/trailing family-subject marker
       // ("mi esposa ...") so the label is the reading itself and the subject is
@@ -159,18 +205,58 @@ class ChatContextBuilder {
 
       // Make the new fact semantically recallable (embedder permitting), then
       // free the embedder's RAM again.
-      final rag = deps.rag;
-      if (node != null && rag != null) {
-        try {
-          await rag.indexNode(node);
-        } catch (_) {
-          // Embedding backend unavailable — the fact is still lexically recallable.
-        } finally {
-          await _safeDispose(rag);
-        }
-      }
+      await _indexIfPossible(deps, node);
     } catch (_) {
       // Best-effort memory write; a failure never surfaces to the user.
+    }
+  }
+
+  /// Land a parsed health reading as a STRUCTURED domain entry (+ its graph
+  /// fact) via [LocalDomainRepository]. The entryId is DETERMINISTIC (keyed on
+  /// the source message) so a retry of the same turn dedupes; provenance +
+  /// raw utterance ride along so conversation-delete cascade reaches it.
+  Future<GraphNodeRecord?> _captureStructured(
+    ChatContextDeps deps,
+    ParsedEntry parsed,
+    LocalEntryType entryType,
+    Map<String, Object?> provenance,
+    String userText,
+    String? sourceMessageId,
+    String? sourceConversationUuid,
+  ) async {
+    final repo = LocalDomainRepository(deps.store, writer: deps.writer, now: now);
+    final seed = sourceMessageId ??
+        sourceConversationUuid ??
+        now().toUtc().microsecondsSinceEpoch.toString();
+    final entryId = 'chat:$seed:${parsed.type}';
+    final entry = await repo.create(
+      parsed.domainKey,
+      entryType,
+      // The parsed fields become the typed form values; `ts` defaults to now().
+      <String, Object?>{...parsed.fields},
+      entryId: entryId,
+      subject: parsed.subject,
+      label: parsed.title,
+      extraData: <String, Object?>{
+        'raw_utterance': userText.trim(),
+        ...provenance,
+      },
+    );
+    return deps.store.getNodeByUuid(entry.uuid);
+  }
+
+  /// Best-effort RAG indexing of a freshly-written fact node, disposing the
+  /// embedder afterwards (RAM load-around-the-turn). A no-op when there is no
+  /// node or no embedder.
+  Future<void> _indexIfPossible(ChatContextDeps deps, GraphNodeRecord? node) async {
+    final rag = deps.rag;
+    if (node == null || rag == null) return;
+    try {
+      await rag.indexNode(node);
+    } catch (_) {
+      // Embedding backend unavailable — the fact is still lexically recallable.
+    } finally {
+      await _safeDispose(rag);
     }
   }
 

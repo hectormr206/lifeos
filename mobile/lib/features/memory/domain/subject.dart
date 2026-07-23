@@ -127,6 +127,22 @@ final RegExp _queryRe = RegExp(
   caseSensitive: false,
 );
 
+// Loose/ingestion-oriented: a possessive family marker ANYWHERE, optionally led
+// by a preposition ("de/a/con/para/of/for/to/with mi <rel>"). Used by the
+// structured-capture path so a marker that sits neither at the exact start
+// ("de mi esposa son 120, 60, 49 pulsos") nor at the exact end ("esto le salió a
+// mi papá 135, 89, 95 pulsos") is still attributed. The "mi|my" possessive is
+// the false-positive guard — a self reading ("mi presión 120/80") has no
+// relation word and never matches.
+final RegExp _looseRe = RegExp(
+  <String>[
+    r'(?:\b(?:de|a|con|para|of|for|to|with)\s+)?\b(?:mi|my)\s+(?<rel>',
+    _relationAlt,
+    r')\b',
+  ].join(),
+  caseSensitive: false,
+);
+
 /// A detected family-subject marker plus the marker-stripped remainder(s).
 class SubjectMatch {
   const SubjectMatch({
@@ -146,6 +162,14 @@ class SubjectMatch {
 }
 
 String _canon(String rel) => _relationCanon[foldAccents(rel.toLowerCase())]!;
+
+/// The folded relation-word alternation (longest-first), shared with adjacent
+/// ingestion parsers (e.g. person naming) so there is ONE relation vocabulary.
+String get relationAlternation => _relationAlt;
+
+/// Canonical ES relation label for an already accent-folded, lowercased
+/// relation word ("papa" → "papá"), or null when it is not a known relation.
+String? canonRelation(String foldedRel) => _relationCanon[foldedRel];
 
 /// Detect a family-subject marker at the start or end of [text].
 ///
@@ -204,6 +228,28 @@ String? detectQuerySubject(String? query) {
   if (query == null || query.isEmpty) return null;
   final m = _queryRe.firstMatch(foldAccents(query));
   return m == null ? null : _canon(m.namedGroup('rel')!);
+}
+
+/// Loose family-subject detection for the STRUCTURED-CAPTURE ingestion path.
+///
+/// Unlike [detectSubject] (start/end-anchored, clean marker strip), this catches
+/// a possessive family marker ANYWHERE — including a leading `de mi <rel>` or a
+/// mid-sentence `a mi <rel>` — and returns the canonical relation label plus the
+/// text with just the marker phrase blanked out. The remainder still contains
+/// the reading's numbers (the metric parser is un-anchored), so it parses even
+/// with leftover filler. Returns null when no possessive family marker is
+/// present (→ the entry is the user's own). Precision guard: the "mi|my"
+/// possessive is required, so a self reading never matches.
+SubjectMatch? detectSubjectLoose(String? text) {
+  if (text == null || text.isEmpty) return null;
+  final m = _looseRe.firstMatch(foldAccents(text));
+  if (m == null) return null;
+  final remainder =
+      '${text.substring(0, m.start)} ${text.substring(m.end)}'.trim();
+  return SubjectMatch(
+    subject: _canon(m.namedGroup('rel')!),
+    remainder: remainder,
+  );
 }
 
 /// Possessive phrasing for a family subject, for chat confirmations.

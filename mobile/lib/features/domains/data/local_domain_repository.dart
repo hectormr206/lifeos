@@ -88,19 +88,38 @@ class LocalDomainRepository {
   /// `buildDomainEntryBody` output: nulls dropped, dates as ISO strings).
   /// Goes through [MemoryWriter.writeFact] so the entry gets the same hub
   /// `about` edge, low-value guard and entryId dedupe as chat facts.
+  ///
+  /// CHAT STRUCTURED-CAPTURE seam (C1): the deterministic health parser routes a
+  /// hit through here so the reading lands as a STRUCTURED domain entry (visible
+  /// in the domains list / future unified life view) instead of an opaque raw
+  /// fact. Those callers pass:
+  ///   * [entryId]    — a DETERMINISTIC id (from the source message) so a retry
+  ///                    of the same turn dedupes instead of duplicating,
+  ///   * [subject]    — the canonical family relation label ("esposa"), so the
+  ///                    fact links to that person node (named when known),
+  ///   * [label]      — the parser's normalized title as the graph label,
+  ///   * [extraData]  — provenance stamps + raw utterance so conversation-delete
+  ///                    cascade reaches it like any other C1 fact.
   Future<LocalDomainEntry> create(
     String domainKey,
     LocalEntryType entryType,
-    Map<String, Object?> values,
-  ) async {
+    Map<String, Object?> values, {
+    String? entryId,
+    String? subject,
+    String? label,
+    Map<String, Object?>? extraData,
+  }) async {
     final occurredAt = _tsOf(values) ?? _now();
     final data = _entryData(entryType, values)
-      ..['entryId'] = '$domainKey:${entryType.type}:${_now().toUtc().microsecondsSinceEpoch}-${_entrySeq++}';
+      ..addAll(extraData ?? const <String, Object?>{})
+      ..['entryId'] = entryId ??
+          '$domainKey:${entryType.type}:${_now().toUtc().microsecondsSinceEpoch}-${_entrySeq++}';
     final node = await _writer.writeFact(
       domain: domainKey,
-      label: renderLocalEntryLabel(entryType, values),
+      label: label ?? renderLocalEntryLabel(entryType, values),
       data: data,
       occurredAt: occurredAt,
+      subject: subject,
     );
     if (node == null) {
       throw LocalDomainException('El registro está vacío — agrega al menos un dato.');

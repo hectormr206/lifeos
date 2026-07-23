@@ -14,6 +14,7 @@ library;
 import '../../../core/graph/graph_records.dart';
 import '../../../core/graph/local_graph_store.dart';
 import '../domain/domain_router.dart' show graphDomainForKey;
+import '../domain/subject.dart' show canonRelation, foldAccents;
 
 /// Edge relation from the user hub to every fact it owns (laptop `about`).
 const String kHubAboutRelation = 'about';
@@ -149,9 +150,12 @@ class MemoryWriter {
       relation: kHubAboutRelation,
     );
 
-    // Optional family link: fact --involves--> person.
+    // Optional family link: fact --involves--> person. The subject arrives as a
+    // canonical relation label ("esposa"); [ensurePerson] resolves it to the
+    // NAMED person node (e.g. Celia) via the hub's typed relation edge when the
+    // name is known, or a relation-labelled node otherwise.
     if (subject != null && subject.trim().isNotEmpty) {
-      final personUuid = await _ensurePerson(subject.trim());
+      final personUuid = await ensurePerson(subject.trim());
       await _store.createEdge(
         srcUuid: fact.uuid,
         dstUuid: personUuid,
@@ -202,20 +206,268 @@ class MemoryWriter {
     return _hubUuidCache = hub.uuid;
   }
 
-  /// A family-subject person node ("esposa"), created on first need. Never the
-  /// hub (role must not be 'user'); matched case/label-exact among person nodes.
-  Future<String> _ensurePerson(String subject) async {
-    final people = await _store.listNodesByKind('person');
-    for (final p in people) {
-      if (p.data['role'] == 'user') continue;
-      if (p.label == subject) return p.uuid;
+  /// Resolve the person node the user relates to via [relation], creating it (and
+  /// the typed `hub --relation--> person` edge) on first need. Ports the laptop
+  /// `identity.add_relation` + `_resolve_relation_person` + `ensure_entity`.
+  ///
+  /// Resolution (precision-first):
+  ///   1. An existing person reached by a hub edge whose kind matches [relation]
+  ///      or a synonym ("esposa"~"mujer"~"wife") — the NAMED node when known.
+  ///   2. Otherwise a new person is created labelled [name] (when learning a
+  ///      name) or the canonical relation word, wired to the hub by the typed
+  ///      relation edge so future readings resolve to it.
+  ///
+  /// When [name] is supplied for an already-resolved person, the name is applied
+  /// (label becomes the name; `data.relation` kept) — this is the name-learning
+  /// upgrade from a relation-labelled node to a real named one.
+  Future<String> ensurePerson(String relation, {String? name}) async {
+    final canon = _canonRelation(relation);
+    final hub = await _ensureUserHub();
+
+    final existing = await _resolveRelationPerson(canon, hub);
+    if (existing != null) {
+      if (name != null && name.trim().isNotEmpty) {
+        await _applyName(existing, canon, name.trim());
+      }
+      return existing;
     }
+
+    final label = (name != null && name.trim().isNotEmpty) ? name.trim() : canon;
     final person = await _store.createNode(
       kind: 'person',
-      label: subject,
-      data: <String, Object?>{'relation': subject},
+      label: label,
+      data: <String, Object?>{'relation': canon},
+    );
+    // hub --relation--> person (typed edge), so a later "de mi esposa …" resolves
+    // to THIS node even after it is renamed to the person's real name.
+    await _store.createEdge(
+      srcUuid: hub,
+      dstUuid: person.uuid,
+      relation: canon,
     );
     return person.uuid;
+  }
+
+  /// Learn a relation person's explicit NAME and/or NICKNAME (deterministic):
+  /// resolves/creates the relation's person, sets the name, and records the
+  /// alias (merging any separate node already labelled with that alias). Returns
+  /// the person uuid. Ports the deterministic half of the laptop identity
+  /// name-learning + `register_alias`.
+  Future<String> learnPersonName(
+    String relation, {
+    String? name,
+    String? alias,
+  }) async {
+    final uuid = await ensurePerson(relation, name: name);
+    if (alias != null && alias.trim().isNotEmpty) {
+      await registerAlias(uuid, alias.trim());
+    }
+    return uuid;
+  }
+
+  /// Record [alias] on the person [personUuid] and MERGE any SEPARATE person
+  /// node already labelled with that alias into it (its edges are repointed, then
+  /// it is soft-deleted). Idempotent. Ports laptop `identity.register_alias`.
+  Future<void> registerAlias(String personUuid, String alias) async {
+    final node = await _store.getNodeByUuid(personUuid);
+    if (node == null) return;
+    final a = alias.trim();
+    if (a.isEmpty || a.toLowerCase() == node.label.toLowerCase()) {
+      // Still fold any duplicate node labelled with it into this one.
+      await _mergeDuplicatesLabelled(personUuid, a);
+      return;
+    }
+    final aliases = _aliasList(node.data);
+    if (!aliases.any((x) => x.toLowerCase() == a.toLowerCase())) {
+      aliases.add(a);
+      await _store.upsertNode(node.copyWith(
+        data: <String, Object?>{...node.data, 'aliases': aliases},
+      ));
+    }
+    await _mergeDuplicatesLabelled(personUuid, a);
+  }
+
+  /// Set [name] as the label of an existing relation person (keeping
+  /// `data.relation`), then fuzzy-merge any near-duplicate person (coref
+  /// score ≥ 0.9) into it. The old relation label is not lost — it stays as
+  /// `data.relation` and remains resolvable via the typed hub edge.
+  Future<void> _applyName(String personUuid, String canon, String name) async {
+    final node = await _store.getNodeByUuid(personUuid);
+    if (node == null) return;
+    if (node.label != name) {
+      await _store.upsertNode(node.copyWith(
+        label: name,
+        data: <String, Object?>{...node.data, 'relation': canon},
+      ));
+    }
+    await _corefMerge(personUuid, name);
+  }
+
+  /// Repoint every live edge of a duplicate person onto [canonicalUuid], then
+  /// soft-delete the duplicate. Used by both alias-merge and coref-merge.
+  Future<void> _mergeInto(String canonicalUuid, String duplicateUuid) async {
+    if (duplicateUuid == canonicalUuid) return;
+    final edges = await _store.edgesForNode(duplicateUuid);
+    for (final e in edges) {
+      final src = e.srcUuid == duplicateUuid ? canonicalUuid : e.srcUuid;
+      final dst = e.dstUuid == duplicateUuid ? canonicalUuid : e.dstUuid;
+      if (src == dst) continue;
+      await _store.createEdge(
+        srcUuid: src,
+        dstUuid: dst,
+        relation: e.relation,
+        data: e.data,
+      );
+    }
+    // Soft-delete tombstones the duplicate's original (now-repointed) edges too.
+    await _store.softDeleteNode(duplicateUuid);
+  }
+
+  /// Merge any non-hub person node whose label equals [label] (case-insensitive)
+  /// into [canonicalUuid].
+  Future<void> _mergeDuplicatesLabelled(String canonicalUuid, String label) async {
+    final low = label.toLowerCase();
+    for (final p in await _store.listNodesByKind('person')) {
+      if (p.uuid == canonicalUuid || p.data['role'] == 'user') continue;
+      if (p.label.toLowerCase() == low) {
+        await _mergeInto(canonicalUuid, p.uuid);
+      }
+    }
+  }
+
+  /// Fuzzy coref: merge any non-hub person whose name/alias scores ≥ 0.9 against
+  /// [name] into [canonicalUuid]. DETERMINISTIC (token Jaccard + edit ratio) —
+  /// SEAM: an optional E2B confirmation-only path for the 0.7–0.9 band is left
+  /// for a later slice; this slice never calls a model.
+  Future<void> _corefMerge(String canonicalUuid, String name) async {
+    for (final p in await _store.listNodesByKind('person')) {
+      if (p.uuid == canonicalUuid || p.data['role'] == 'user') continue;
+      final names = <String>[p.label, ..._aliasList(p.data)];
+      final best = names.fold<double>(0, (m, n) {
+        final s = _corefScore(name, n);
+        return s > m ? s : m;
+      });
+      if (best >= 0.9) await _mergeInto(canonicalUuid, p.uuid);
+    }
+  }
+
+  // ── Relation synonyms (folded) — ported from identity._RELATION_SYNONYMS ────
+  static const Map<String, Set<String>> _relationSynonyms = <String, Set<String>>{
+    'esposa': {'esposa', 'mujer', 'wife'},
+    'esposo': {'esposo', 'marido', 'husband'},
+    'mama': {'mama', 'madre', 'mom', 'mother'},
+    'papa': {'papa', 'padre', 'dad', 'father'},
+    'hijo': {'hijo', 'son'},
+    'hija': {'hija', 'daughter'},
+    'hermano': {'hermano', 'brother'},
+    'hermana': {'hermana', 'sister'},
+    'abuelo': {'abuelo', 'grandpa', 'grandfather'},
+    'abuela': {'abuela', 'grandma', 'grandmother'},
+    'suegro': {'suegro', 'father_in_law'},
+    'suegra': {'suegra', 'mother_in_law'},
+    'tio': {'tio', 'uncle'},
+    'tia': {'tia', 'aunt'},
+    'primo': {'primo', 'cousin'},
+    'prima': {'prima', 'cousin'},
+    'novio': {'novio', 'boyfriend'},
+    'novia': {'novia', 'girlfriend'},
+  };
+
+  /// Canonical (accented) relation label for a raw [relation] word; falls back
+  /// to the trimmed input when it is not a recognised relation.
+  static String _canonRelation(String relation) {
+    final folded = foldAccents(relation.trim().toLowerCase());
+    return canonRelation(folded) ?? relation.trim();
+  }
+
+  /// All folded terms that count as [relation] (itself + synonyms).
+  static Set<String> _relationTerms(String relation) {
+    final rn = foldAccents(relation.toLowerCase()).replaceAll(' ', '_');
+    for (final entry in _relationSynonyms.entries) {
+      if (rn == entry.key || entry.value.contains(rn)) {
+        return <String>{entry.key, ...entry.value};
+      }
+    }
+    return <String>{rn};
+  }
+
+  /// The person the hub relates to via [relation] (synonym-aware), or null.
+  Future<String?> _resolveRelationPerson(String relation, String hub) async {
+    final terms = _relationTerms(relation);
+    final edges = await _store.edgesForNode(hub, direction: EdgeDirection.outgoing);
+    for (final e in edges) {
+      final relFolded = foldAccents(e.relation.toLowerCase()).replaceAll(' ', '_');
+      if (!terms.contains(relFolded)) continue;
+      final person = await _store.getNodeByUuid(e.dstUuid);
+      if (person != null && person.kind == 'person' && person.data['role'] != 'user') {
+        return person.uuid;
+      }
+    }
+    return null;
+  }
+
+  static List<String> _aliasList(Map<String, Object?> data) {
+    final raw = data['aliases'];
+    if (raw is List) return raw.map((e) => e.toString()).toList();
+    return <String>[];
+  }
+
+  /// 0..1 likeness (token Jaccard vs. edit ratio, accent-insensitive). Ported
+  /// from laptop `identity._coref_score` (Jaccard + SequenceMatcher, with the
+  /// subset/first-token/≥2-overlap boost to ~0.95).
+  static double _corefScore(String a, String b) {
+    final ta = _tokens(a);
+    final tb = _tokens(b);
+    if (ta.isEmpty || tb.isEmpty) return 0;
+    final sa = ta.toSet();
+    final sb = tb.toSet();
+    final inter = sa.where(sb.contains).length;
+    final union = <String>{...sa, ...sb}.length;
+    final jaccard = inter / union;
+    final edit = _ratio(ta.join(' '), tb.join(' '));
+    var score = jaccard > edit ? jaccard : edit;
+    if ((sa.containsAll(sb) || sb.containsAll(sa)) && ta.first == tb.first && inter >= 2) {
+      score = score > 0.95 ? score : 0.95;
+    }
+    return score;
+  }
+
+  static List<String> _tokens(String name) => foldAccents(name.toLowerCase())
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((t) => t.isNotEmpty)
+      .toList();
+
+  /// SequenceMatcher-style similarity ratio in 0..1: `2·M / (|a|+|b|)` where M is
+  /// the longest common subsequence length — the same shape as Python difflib's
+  /// `ratio()` for the short entity names this compares (so the ≥0.9 auto-merge
+  /// threshold behaves like the laptop's).
+  static double _ratio(String a, String b) {
+    if (a.isEmpty && b.isEmpty) return 1;
+    final total = a.length + b.length;
+    if (total == 0) return 1;
+    return 2 * _lcs(a, b) / total;
+  }
+
+  static int _lcs(String a, String b) {
+    final m = a.length;
+    final n = b.length;
+    if (m == 0 || n == 0) return 0;
+    var prev = List<int>.filled(n + 1, 0);
+    var curr = List<int>.filled(n + 1, 0);
+    for (var i = 1; i <= m; i++) {
+      for (var j = 1; j <= n; j++) {
+        if (a.codeUnitAt(i - 1) == b.codeUnitAt(j - 1)) {
+          curr[j] = prev[j - 1] + 1;
+        } else {
+          curr[j] = prev[j] > curr[j - 1] ? prev[j] : curr[j - 1];
+        }
+      }
+      final tmp = prev;
+      prev = curr;
+      curr = tmp;
+      curr = List<int>.filled(n + 1, 0);
+    }
+    return prev[n];
   }
 
   /// Find a live `fact` node whose `data['entryId']` equals [entryId].
