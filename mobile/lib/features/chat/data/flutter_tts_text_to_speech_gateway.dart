@@ -4,14 +4,50 @@ import 'package:flutter_tts/flutter_tts.dart';
 
 import '../domain/text_to_speech_gateway.dart';
 
+/// Ordered TTS locale candidates for a given app language code (i18n slice).
+///
+/// The first one the device actually has installed wins; the bare language tag
+/// is the last resort. ADDING A LANGUAGE = one more case here.
+List<String> ttsLocaleCandidates(String languageCode) => switch (languageCode) {
+      // Neutral Latin-American first, then Spain, then the bare tag.
+      'es' => const ['es-MX', 'es-ES', 'es'],
+      'en' => const ['en-US', 'en-GB', 'en'],
+      _ => [languageCode],
+    };
+
+/// Returns the first [candidates] locale the engine reports as available, or
+/// null when none are (leaving the engine on its default). Extracted as a pure
+/// function — over an injected [isAvailable] probe — so the locale-selection
+/// logic is unit-testable without the `flutter_tts` platform channel.
+Future<String?> firstAvailableTtsLocale(
+  List<String> candidates,
+  Future<bool> Function(String locale) isAvailable,
+) async {
+  for (final locale in candidates) {
+    try {
+      if (await isAvailable(locale) == true) return locale;
+    } catch (_) {
+      // isLanguageAvailable can throw on some engines — try the next locale.
+    }
+  }
+  return null;
+}
+
 /// [TextToSpeechGateway] backed by the device's built-in OS text-to-speech via
 /// the `flutter_tts` plugin — the INTERIM speak-aloud engine.
+///
+/// i18n slice: the spoken language now follows the current app language
+/// ([currentLanguageCode]) instead of being hard-forced to Spanish. The graceful
+/// fallback is unchanged: if the device has NO voice for the selected language
+/// we leave the engine on its default rather than crash.
 ///
 /// SWAP SEAM: this confines `flutter_tts` to the edge. A future slice can drop
 /// in a higher-quality on-device engine (Piper) behind [TextToSpeechGateway]
 /// and only re-point `textToSpeechGatewayProvider` — no UI change.
 class FlutterTtsTextToSpeechGateway implements TextToSpeechGateway {
-  FlutterTtsTextToSpeechGateway([FlutterTts? tts]) : _tts = tts ?? FlutterTts() {
+  FlutterTtsTextToSpeechGateway({FlutterTts? tts, String Function()? currentLanguageCode})
+      : _tts = tts ?? FlutterTts(),
+        _currentLanguageCode = currentLanguageCode ?? _defaultLanguageCode {
     // Natural end of an utterance (and engine-side errors) revert the button.
     // A deliberate stop() / speak()-switch is intentionally NOT wired to the
     // cancel handler, so switching messages never spuriously clears the
@@ -20,43 +56,54 @@ class FlutterTtsTextToSpeechGateway implements TextToSpeechGateway {
     _tts.setErrorHandler((_) => _emitCompletion());
   }
 
+  static String _defaultLanguageCode() => 'es';
+
   final FlutterTts _tts;
+
+  /// Reads the CURRENT app language live at each speak, so switching language in
+  /// Settings changes the spoken voice without recreating the gateway.
+  final String Function() _currentLanguageCode;
+
   final _completions = StreamController<void>.broadcast();
+
+  /// Whether the one-time rate/pitch/volume setup ran.
   bool _configured = false;
 
-  /// Spanish locales in preference order: neutral Latin-American first, then
-  /// Spain, then the bare language tag. The first one the device actually has
-  /// installed wins.
-  static const _spanishLocales = ['es-MX', 'es-ES', 'es'];
+  /// The language the voice is currently set to, so we re-select the locale only
+  /// when the app language actually changes.
+  String? _appliedLanguageCode;
 
   void _emitCompletion() {
     if (!_completions.isClosed) _completions.add(null);
   }
 
   Future<void> _ensureConfigured() async {
-    if (_configured) return;
-    await _applySpanishVoice();
-    await _tts.setSpeechRate(0.5); // 0..1; ~natural narration pace
-    await _tts.setPitch(1.0);
-    await _tts.setVolume(1.0);
-    _configured = true;
+    if (!_configured) {
+      await _tts.setSpeechRate(0.5); // 0..1; ~natural narration pace
+      await _tts.setPitch(1.0);
+      await _tts.setVolume(1.0);
+      _configured = true;
+    }
+    await _applyVoiceForCurrentLanguage();
   }
 
-  /// Picks the best available Spanish voice. If the device has NO Spanish voice
-  /// installed we leave the engine on its default rather than crash — the
-  /// neutral-Spanish text is still read, just with the default voice.
-  Future<void> _applySpanishVoice() async {
-    for (final locale in _spanishLocales) {
-      try {
-        final available = await _tts.isLanguageAvailable(locale);
-        if (available == true) {
-          await _tts.setLanguage(locale);
-          return;
-        }
-      } catch (_) {
-        // isLanguageAvailable can throw on some engines — try the next locale.
-      }
+  /// Picks the best available voice for the CURRENT app language. If the device
+  /// has NO voice for it we leave the engine on its default rather than crash —
+  /// the text is still read, just with the default voice. Re-runs only when the
+  /// language changed since the last apply.
+  Future<void> _applyVoiceForCurrentLanguage() async {
+    final languageCode = _currentLanguageCode();
+    if (languageCode == _appliedLanguageCode) return;
+    final chosen = await firstAvailableTtsLocale(
+      ttsLocaleCandidates(languageCode),
+      (locale) async => (await _tts.isLanguageAvailable(locale)) == true,
+    );
+    if (chosen != null) {
+      await _tts.setLanguage(chosen);
     }
+    // Mark applied regardless: a missing voice stays on the engine default, and
+    // we should not re-probe every utterance for the same language.
+    _appliedLanguageCode = languageCode;
   }
 
   @override
@@ -75,7 +122,12 @@ class FlutterTtsTextToSpeechGateway implements TextToSpeechGateway {
 
   @override
   Future<void> dispose() async {
-    await _tts.stop();
+    try {
+      await _tts.stop();
+    } catch (_) {
+      // The platform channel may be gone (shutdown / no engine / a widget test
+      // with no plugin) — never let teardown throw.
+    }
     await _completions.close();
   }
 }

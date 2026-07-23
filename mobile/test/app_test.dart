@@ -5,11 +5,13 @@
 // tokenStoreProvider so ConnectionNotifier's startup bootstrap never touches
 // the real flutter_secure_storage platform channel (unavailable in this
 // test environment) and stays deterministically Unpaired.
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:lifeos/app.dart';
 import 'package:lifeos/core/api/api_providers.dart';
+import 'package:lifeos/l10n/locale_providers.dart';
 
 import 'support/fake_token_store.dart';
 
@@ -17,7 +19,12 @@ void main() {
   testWidgets('LifeOSApp boots to the home screen (app-shell: no connect CTA)', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
+        overrides: [
+          tokenStoreProvider.overrideWithValue(FakeTokenStore()),
+          // Pin Spanish so this smoke test asserts the es home strings
+          // regardless of the test host's device locale.
+          localeProvider.overrideWithValue(const Locale('es')),
+        ],
         child: const LifeOSApp(),
       ),
     );

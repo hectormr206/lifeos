@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../l10n/locale_providers.dart';
 import '../../local_model/domain/local_llm_engine.dart';
 import '../../local_model/presentation/local_model_providers.dart';
 import '../data/source_content_extractor.dart';
@@ -231,9 +232,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
         phase: BriefingPhase.summarizing,
         progressLabel: 'Resumiendo: ${extract.title}…',
       );
-      final prompt = 'Resume en 2 o 3 frases, en español neutro y claro, la siguiente fuente de '
-          'noticias. Devuelve solo el resumen, sin encabezados ni viñetas.\n\n'
-          'Fuente: ${extract.title}\n\nContenido:\n${extract.text}';
+      final prompt = _summarizePrompt(title: extract.title, content: extract.text);
       final result = await engine.generate(
         prompt,
         temperature: longsumTemperature,
@@ -252,10 +251,8 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   Future<String> _writeIntro(List<BriefingItem> items, {required LocalLlmEngine engine}) async {
     try {
       final titles = items.map((i) => '- ${i.sourceTitle}').join('\n');
-      final prompt = 'Escribe una introducción muy breve (1 o 2 frases), en español neutro, para un '
-          'boletín matutino que reúne estas fuentes. Devuelve solo la introducción.\n\n$titles';
       final result = await engine.generate(
-        prompt,
+        _introPrompt(titles),
         temperature: longsumTemperature,
         topK: longsumTopK,
         topP: longsumTopP,
@@ -265,8 +262,35 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     } catch (_) {
       // Fall through to a static intro below.
     }
-    return 'Esto es lo más destacado de tus fuentes esta mañana.';
+    return _fallbackIntro();
   }
+
+  /// The current briefing OUTPUT language (i18n slice). The summaries and intro
+  /// are written in this language, translating foreign-language sources into it.
+  String get _languageCode => ref.read(appLanguageCodeProvider);
+
+  String _summarizePrompt({required String title, required String content}) => switch (_languageCode) {
+        'en' => 'Summarize the following news source in 2 or 3 sentences, in clear English. '
+            'If the source is in another language, translate it into English. '
+            'Return only the summary, with no headings or bullet points.\n\n'
+            'Source: $title\n\nContent:\n$content',
+        _ => 'Resume en 2 o 3 frases, en español neutro y claro, la siguiente fuente de '
+            'noticias. Si la fuente está en otro idioma, tradúcela al español. '
+            'Devuelve solo el resumen, sin encabezados ni viñetas.\n\n'
+            'Fuente: $title\n\nContenido:\n$content',
+      };
+
+  String _introPrompt(String titles) => switch (_languageCode) {
+        'en' => 'Write a very short introduction (1 or 2 sentences), in English, for a morning '
+            'briefing that gathers these sources. Return only the introduction.\n\n$titles',
+        _ => 'Escribe una introducción muy breve (1 o 2 frases), en español neutro, para un '
+            'boletín matutino que reúne estas fuentes. Devuelve solo la introducción.\n\n$titles',
+      };
+
+  String _fallbackIntro() => switch (_languageCode) {
+        'en' => 'Here are the highlights from your sources this morning.',
+        _ => 'Esto es lo más destacado de tus fuentes esta mañana.',
+      };
 }
 
 final morningBriefingNotifierProvider =

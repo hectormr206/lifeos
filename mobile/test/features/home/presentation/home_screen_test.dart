@@ -12,6 +12,7 @@ import 'package:lifeos/core/auth/token_store.dart';
 import 'package:lifeos/features/home/presentation/home_providers.dart';
 import 'package:lifeos/features/home/presentation/home_screen.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
+import 'package:lifeos/l10n/app_localizations.dart';
 
 import '../../../features/local_model/support/fake_local_llm_engine.dart';
 import '../../../support/fake_token_store.dart';
@@ -23,12 +24,22 @@ GoRouter _routerToHome() => GoRouter(
       ],
     );
 
+/// Wraps the router in a Spanish-localized MaterialApp so the localized
+/// HomeScreen renders its es strings deterministically (the test host's device
+/// locale would otherwise resolve to English).
+Widget _localized(GoRouter router) => MaterialApp.router(
+      routerConfig: router,
+      locale: const Locale('es'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+    );
+
 void main() {
   testWidgets('app-shell: no "Conectar con tu motor" CTA when unpaired', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -49,7 +60,7 @@ void main() {
           tokenStoreProvider.overrideWithValue(store),
           engineReachableProvider.overrideWith((ref) async => true),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -63,7 +74,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -81,7 +92,7 @@ void main() {
           tokenStoreProvider.overrideWithValue(store),
           engineReachableProvider.overrideWith((ref) async => true),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -94,7 +105,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -112,7 +123,7 @@ void main() {
           tokenStoreProvider.overrideWithValue(store),
           engineReachableProvider.overrideWith((ref) async => true),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -125,7 +136,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -145,7 +156,7 @@ void main() {
           tokenStoreProvider.overrideWithValue(store),
           engineReachableProvider.overrideWith((ref) async => true),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -160,7 +171,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -179,7 +190,7 @@ void main() {
           tokenStoreProvider.overrideWithValue(store),
           engineReachableProvider.overrideWith((ref) async => true),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -193,7 +204,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -211,7 +222,7 @@ void main() {
           tokenStoreProvider.overrideWithValue(store),
           engineReachableProvider.overrideWith((ref) async => true),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -224,7 +235,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -242,7 +253,7 @@ void main() {
           tokenStoreProvider.overrideWithValue(store),
           engineReachableProvider.overrideWith((ref) async => true),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pump();
@@ -260,7 +271,7 @@ void main() {
           localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: false)),
           localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences()),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pumpAndSettle();
@@ -278,7 +289,7 @@ void main() {
           localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: true)),
           localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences()),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pumpAndSettle();
@@ -295,7 +306,7 @@ void main() {
           localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: true)),
           localModelPreferencesProvider.overrideWithValue(FakeLocalModelPreferences()),
         ],
-        child: MaterialApp.router(routerConfig: _routerToHome()),
+        child: _localized(_routerToHome()),
       ),
     );
     await tester.pumpAndSettle();

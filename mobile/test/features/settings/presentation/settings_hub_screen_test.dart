@@ -8,9 +8,13 @@ import 'package:go_router/go_router.dart';
 import 'package:lifeos/features/app_update/domain/app_version_info.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_providers.dart';
 import 'package:lifeos/features/settings/presentation/settings_hub_screen.dart';
+import 'package:lifeos/l10n/app_localizations.dart';
+import 'package:lifeos/l10n/language_preference.dart';
+import 'package:lifeos/l10n/locale_providers.dart';
 import 'package:lifeos/theme/theme_mode_preferences.dart';
 import 'package:lifeos/theme/theme_providers.dart';
 
+import '../../../support/fake_language_preferences.dart';
 import '../../../support/fake_theme_mode_preferences.dart';
 import '../../app_update/support/fakes.dart';
 
@@ -24,13 +28,26 @@ GoRouter _router() => GoRouter(
       ],
     );
 
-Widget _app({ThemeModePreferences? prefs, AppVersionInfo? version}) => ProviderScope(
+Widget _app({
+  ThemeModePreferences? prefs,
+  AppVersionInfo? version,
+  FakeLanguagePreferences? languagePrefs,
+}) =>
+    ProviderScope(
       overrides: [
         themeModePreferencesProvider.overrideWithValue(prefs ?? FakeThemeModePreferences()),
+        languagePreferencesProvider.overrideWithValue(languagePrefs ?? FakeLanguagePreferences()),
         appVersionInfoProvider
             .overrideWithValue(version ?? FakeAppVersionInfo(code: 10, name: '1.0.0')),
       ],
-      child: MaterialApp.router(routerConfig: _router()),
+      // Pin Spanish so the localized hub renders its es strings deterministically
+      // (the test host's device locale would otherwise resolve to English).
+      child: MaterialApp.router(
+        routerConfig: _router(),
+        locale: const Locale('es'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+      ),
     );
 
 void main() {
@@ -54,7 +71,11 @@ void main() {
     expect(find.text('Apariencia'), findsOneWidget);
     expect(find.text('Claro'), findsOneWidget);
     expect(find.text('Oscuro'), findsOneWidget);
-    expect(find.text('Sistema'), findsOneWidget);
+    // "Sistema" appears in both the appearance and language selectors.
+    expect(find.text('Sistema'), findsNWidgets(2));
+    // i18n slice: the Región section + language selector.
+    expect(find.text('Región'), findsOneWidget);
+    expect(find.text('English'), findsOneWidget);
     expect(find.text('Modelo local'), findsOneWidget);
     expect(find.text('Actualizaciones'), findsOneWidget);
     expect(find.text('Notificaciones'), findsOneWidget);
@@ -105,5 +126,20 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('ENGINE'), findsOneWidget);
+  });
+
+  testWidgets('Región selector changes and persists the language', (tester) async {
+    final languagePrefs = FakeLanguagePreferences();
+    await tester.pumpWidget(_app(languagePrefs: languagePrefs));
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(tester.element(find.text('Región')));
+    expect(container.read(languageProvider), AppLanguage.system);
+
+    await tester.tap(find.text('English'));
+    await tester.pumpAndSettle();
+
+    expect(container.read(languageProvider), AppLanguage.en);
+    expect(languagePrefs.stored, AppLanguage.en);
   });
 }

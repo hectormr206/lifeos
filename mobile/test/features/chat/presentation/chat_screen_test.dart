@@ -21,9 +21,20 @@ import 'package:lifeos/features/chat/presentation/chat_screen.dart';
 import 'package:lifeos/features/local_model/data/on_device_chat_repository.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
+import 'package:lifeos/l10n/app_localizations.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
 import '../support/fake_chat_gateways.dart';
+
+/// The chat screen wrapped in a Spanish-localized MaterialApp so its localized
+/// strings render deterministically (the test host's device locale would
+/// otherwise resolve to English).
+const _chatApp = MaterialApp(
+  home: ChatScreen(),
+  locale: Locale('es'),
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: AppLocalizations.supportedLocales,
+);
 
 /// Pins the on-device toggle ON without the async shared_preferences hydration,
 /// so the model-loading banner + send-gating tests are deterministic.
@@ -65,7 +76,7 @@ void main() {
       ],
     );
 
-    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())));
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: _chatApp));
 
     expect(find.text('hola'), findsOneWidget);
     expect(find.text('hola, ¿qué tal?'), findsOneWidget);
@@ -73,7 +84,7 @@ void main() {
   });
 
   testWidgets('input bar shows attach, mic and send buttons', (tester) async {
-    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: const MaterialApp(home: ChatScreen())));
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: _chatApp));
 
     expect(find.byIcon(Icons.attach_file), findsOneWidget);
     expect(find.byIcon(Icons.mic), findsOneWidget);
@@ -81,7 +92,7 @@ void main() {
   });
 
   testWidgets('tapping send calls the repository and shows the reply', (tester) async {
-    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: const MaterialApp(home: ChatScreen())));
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: _chatApp));
 
     await tester.enterText(find.byType(TextField), 'hola axi');
     await tester.pump();
@@ -104,7 +115,7 @@ void main() {
       ],
     );
 
-    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())));
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: _chatApp));
 
     expect(find.byType(MarkdownBody), findsOneWidget);
     expect(find.text(axiMarkdown), findsNothing);
@@ -129,7 +140,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(repo),
           imagePickerGatewayProvider.overrideWithValue(picker),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -174,7 +185,7 @@ void main() {
           audioRecorderGatewayProvider.overrideWithValue(recorder),
           audioPlayerGatewayProvider.overrideWithValue(player),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -210,7 +221,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -246,7 +257,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -277,7 +288,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -310,7 +321,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -340,7 +351,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -365,7 +376,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           audioRecorderGatewayProvider.overrideWithValue(recorder),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -395,7 +406,7 @@ void main() {
 
     await _pumpScreen(
       tester,
-      ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())),
+      ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: _chatApp),
     );
     await tester.pumpAndSettle();
     addTearDown(tester.view.resetViewInsets);
@@ -429,7 +440,7 @@ void main() {
       ],
     );
 
-    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())));
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: _chatApp));
 
     // Single ✓ for sent, double ✓✓ for delivered.
     expect(find.byIcon(Icons.done), findsOneWidget);
@@ -452,7 +463,7 @@ void main() {
     );
     final repo = OnDeviceChatRepository(engine);
 
-    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: const MaterialApp(home: ChatScreen())));
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: _chatApp));
 
     await tester.enterText(find.byType(TextField), 'hola');
     await tester.pump();
@@ -480,7 +491,7 @@ void main() {
 
   testWidgets('a reply without metrics shows no metrics line', (tester) async {
     // Plain (HTTP-style) repository: its reply carries no GenerationMetrics.
-    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: const MaterialApp(home: ChatScreen())));
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: _chatApp));
 
     await tester.enterText(find.byType(TextField), 'hola');
     await tester.pump();
@@ -502,7 +513,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           voiceReplyPreferencesProvider.overrideWithValue(prefs),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -532,7 +543,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(repo),
           textToSpeechGatewayProvider.overrideWithValue(FakeTextToSpeechGateway()),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -556,7 +567,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(repo),
           textToSpeechGatewayProvider.overrideWithValue(tts),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -592,7 +603,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(repo),
           textToSpeechGatewayProvider.overrideWithValue(tts),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -624,7 +635,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(repo),
           textToSpeechGatewayProvider.overrideWithValue(tts),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -676,7 +687,7 @@ void main() {
           localLlmEngineProvider.overrideWithValue(engine),
           localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
 
@@ -711,7 +722,7 @@ void main() {
           localLlmEngineProvider.overrideWithValue(engine),
           localModelEnabledProvider.overrideWith(_EnabledLocalModeNotifier.new),
         ],
-        child: const MaterialApp(home: ChatScreen()),
+        child: _chatApp,
       ),
     );
     await tester.pumpAndSettle();

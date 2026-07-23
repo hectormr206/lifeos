@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../l10n/app_localizations.dart';
 import '../../app_update/presentation/update_available_banner.dart';
 import '../../connection/domain/connection_status.dart';
 import '../../connection/presentation/connection_notifier.dart';
@@ -19,6 +20,7 @@ class HomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final connection = ref.watch(connectionNotifierProvider);
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -26,7 +28,7 @@ class HomeScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
-            tooltip: 'Ajustes',
+            tooltip: l10n.settingsTooltip,
             onPressed: () => context.push('/settings'),
           ),
         ],
@@ -57,11 +59,12 @@ class _UnpairedView extends ConsumerWidget {
     // wired under the hood for the OTA self-update). The offline local-model
     // path below is the sole home CTA when unpaired.
     final localModelInstalled = ref.watch(localModelManagerProvider).installed;
+    final l10n = AppLocalizations.of(context);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('Aún no está conectado a ningún motor.'),
+        Text(l10n.homeNotConnected),
         const SizedBox(height: 16),
         if (localModelInstalled)
           // Primary offline path: ensure local mode is on, then open the chat.
@@ -71,14 +74,14 @@ class _UnpairedView extends ConsumerWidget {
               if (context.mounted) context.push('/chat');
             },
             icon: const Icon(Icons.offline_bolt),
-            label: const Text('Chatear con Axi (sin conexión)'),
+            label: Text(l10n.homeChatOffline),
           )
         else
           // No weights yet → send the user to the manager to download first.
           OutlinedButton.icon(
             onPressed: () => context.push('/settings/local-model'),
             icon: const Icon(Icons.offline_bolt_outlined),
-            label: const Text('Usar modelo local (sin conexión)'),
+            label: Text(l10n.homeUseLocalModel),
           ),
       ],
     );
@@ -93,13 +96,14 @@ class _ConnectedView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final reachable = ref.watch(engineReachableProvider);
+    final l10n = AppLocalizations.of(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         // Self-hosted OTA update: shows only when an update is available;
         // taps through to /settings/updates.
         const SizedBox(width: 340, child: UpdateAvailableBanner()),
-        Text('Conectado a $engineUrl'),
+        Text(l10n.homeConnectedTo(engineUrl)),
         const SizedBox(height: 8),
         reachable.when(
           data: (ok) => Row(
@@ -107,7 +111,7 @@ class _ConnectedView extends ConsumerWidget {
             children: [
               Icon(ok ? Icons.check_circle : Icons.error, color: ok ? Colors.green : Colors.red),
               const SizedBox(width: 8),
-              Text(ok ? 'Motor accesible' : 'Motor no accesible'),
+              Text(ok ? l10n.homeEngineReachable : l10n.homeEngineUnreachable),
             ],
           ),
           loading: () => const SizedBox(
@@ -115,79 +119,79 @@ class _ConnectedView extends ConsumerWidget {
             height: 16,
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
-          error: (_, _) => const Text('Motor no accesible'),
+          error: (_, _) => Text(l10n.homeEngineUnreachable),
         ),
         const SizedBox(height: 24),
         FilledButton.icon(
           onPressed: () => context.push('/chat'),
           icon: const Icon(Icons.chat_bubble_outline),
-          label: const Text('Hablar con Axi'),
+          label: Text(l10n.homeTalkToAxi),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/domains'),
           icon: const Icon(Icons.dashboard_outlined),
-          label: const Text('Mis datos'),
+          label: Text(l10n.homeMyData),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/body'),
           icon: const Icon(Icons.favorite_border),
-          label: const Text('¿Cómo está Axi?'),
+          label: Text(l10n.homeHowIsAxi),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/reminders'),
           icon: const Icon(Icons.notifications_outlined),
-          label: const Text('Recordatorios'),
+          label: Text(l10n.homeReminders),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/insights'),
           icon: const Icon(Icons.insights_outlined),
-          label: const Text('Resumen'),
+          label: Text(l10n.homeSummary),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/briefings'),
           icon: const Icon(Icons.campaign_outlined),
-          label: const Text('Boletines'),
+          label: Text(l10n.homeBulletins),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/digest'),
           icon: const Icon(Icons.today_outlined),
-          label: const Text('Resumen de hoy'),
+          label: Text(l10n.homeTodaySummary),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/graph'),
           icon: const Icon(Icons.hub_outlined),
-          label: const Text('Cerebro'),
+          label: Text(l10n.homeBrain),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/settings'),
           icon: const Icon(Icons.tune),
-          label: const Text('Ajustes'),
+          label: Text(l10n.homeSettings),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/settings/local-model'),
           icon: const Icon(Icons.offline_bolt_outlined),
-          label: const Text('Modelo local'),
+          label: Text(l10n.homeLocalModel),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/meetings'),
           icon: const Icon(Icons.groups_outlined),
-          label: const Text('Reuniones'),
+          label: Text(l10n.homeMeetings),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: () => context.push('/settings/updates'),
           icon: const Icon(Icons.system_update),
-          label: const Text('Actualizaciones'),
+          label: Text(l10n.homeUpdates),
         ),
       ],
     );

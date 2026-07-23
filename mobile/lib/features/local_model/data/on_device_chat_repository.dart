@@ -11,9 +11,18 @@ import '../domain/local_llm_engine.dart';
 /// SLICE 1 scope: text-only, non-streaming, single-turn. [loadHistory]
 /// returns `[]` (no local conversation persistence yet — TODO(roadmap)).
 class OnDeviceChatRepository implements ChatRepository {
-  OnDeviceChatRepository(this._engine);
+  OnDeviceChatRepository(this._engine, {String Function(String message)? decoratePrompt})
+      : _decoratePrompt = decoratePrompt ?? _identity;
 
   final LocalLlmEngine _engine;
+
+  /// Wraps the raw user message with Axi's system preamble (reply-language +
+  /// current date/time) just before it reaches the engine. Injected by
+  /// `chatRepositoryProvider` from the live language setting + `Clock`; defaults
+  /// to the identity so tests and the vision empty-retry path stay unchanged.
+  final String Function(String message) _decoratePrompt;
+
+  static String _identity(String message) => message;
 
   /// Serialises access to the engine: an on-device model has one native
   /// context, so overlapping [sendMessage] calls (double-tap send, races)
@@ -43,7 +52,7 @@ class OnDeviceChatRepository implements ChatRepository {
   Future<ChatMessage> sendMessage(String text) => _serialize(() async {
         try {
           await (_loadFuture ??= _engine.load());
-          final result = await _engine.generate(text);
+          final result = await _engine.generate(_decoratePrompt(text));
           // Lighter empty-guard than the vision path (no image retry): if the
           // backend still degenerated to empty, show a neutral-Spanish fallback
           // rather than a blank bubble. Keep the metrics from the attempt.
@@ -69,11 +78,14 @@ class OnDeviceChatRepository implements ChatRepository {
   Future<ChatMessage> sendImages(String text, List<Uint8List> images) => _serialize(() async {
         try {
           await (_loadFuture ??= _engine.load());
+          // Prepend Axi's language + current-datetime preamble once; both the
+          // primary attempt and the escape retry send the same decorated text.
+          final prompt = _decoratePrompt(text);
           // Routes to the on-device model's VISION path (all photos in one
           // turn). If the installed variant is text-only, the engine throws and
           // we surface a clear Spanish message rather than silently dropping the
           // photos.
-          var result = await _engine.generateWithImages(text, images);
+          var result = await _engine.generateWithImages(prompt, images);
           // EMPTY-OUTPUT SAFETY NET: the phone's litertlm backend can still
           // degenerate to empty at the tuned low temperature (where the
           // llama.cpp-tuned recipe doesn't). Retry ONCE at ESCAPE sampling —
@@ -81,7 +93,7 @@ class OnDeviceChatRepository implements ChatRepository {
           // the phone (see LocalModelConfig.escape*).
           if (result.text.trim().isEmpty) {
             result = await _engine.generateWithImages(
-              text,
+              prompt,
               images,
               temperature: LocalModelConfig.escapeTemperature,
               topK: LocalModelConfig.escapeTopK,

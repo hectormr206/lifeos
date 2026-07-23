@@ -9,6 +9,7 @@ import '../data/record_audio_recorder_gateway.dart';
 import '../domain/audio_player_gateway.dart';
 import '../domain/audio_recorder_gateway.dart';
 import '../domain/image_picker_gateway.dart';
+import '../../../l10n/locale_providers.dart';
 import '../domain/text_to_speech_gateway.dart';
 import '../domain/voice_reply_preferences.dart';
 
@@ -34,7 +35,12 @@ final audioPlayerGatewayProvider = Provider<AudioPlayerGateway>((ref) {
 /// SWAP SEAM: point this at a higher-quality on-device engine (Piper) behind
 /// [TextToSpeechGateway] later — no UI or controller change needed.
 final textToSpeechGatewayProvider = Provider<TextToSpeechGateway>((ref) {
-  final gateway = FlutterTtsTextToSpeechGateway();
+  // i18n slice: the spoken voice follows the current app language. `read` at
+  // speak-time (not `watch`) so a language change re-selects the voice without
+  // recreating (and re-loading) the shared engine.
+  final gateway = FlutterTtsTextToSpeechGateway(
+    currentLanguageCode: () => ref.read(appLanguageCodeProvider),
+  );
   ref.onDispose(gateway.dispose);
   return gateway;
 });

@@ -6,6 +6,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/pending_sync_banner.dart';
+import '../../../l10n/app_localizations.dart';
 import '../../local_model/domain/generation_metrics.dart';
 import '../../local_model/domain/local_llm_engine.dart' show LocalModelConfig;
 import '../../local_model/presentation/local_model_load_notifier.dart';
@@ -165,12 +166,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
           children: [
             ListTile(
               leading: const Icon(Icons.photo_camera),
-              title: const Text('Cámara'),
+              title: Text(AppLocalizations.of(sheetContext).chatCamera),
               onTap: () => Navigator.of(sheetContext).pop(PhotoSource.camera),
             ),
             ListTile(
               leading: const Icon(Icons.photo_library),
-              title: const Text('Galería'),
+              title: Text(AppLocalizations.of(sheetContext).chatGallery),
               onTap: () => Navigator.of(sheetContext).pop(PhotoSource.gallery),
             ),
           ],
@@ -196,7 +197,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo adjuntar la imagen: $error')),
+        SnackBar(content: Text(AppLocalizations.of(context).chatAttachError('$error'))),
       );
     }
   }
@@ -209,7 +210,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'Puedes adjuntar hasta ${LocalModelConfig.maxImagesPerMessage} imágenes por mensaje.',
+          AppLocalizations.of(context).chatAttachLimit(LocalModelConfig.maxImagesPerMessage),
         ),
       ),
     );
@@ -250,7 +251,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       _holdTimer!.cancel();
       _holdTimer = null;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mantén presionado para grabar una nota de voz')),
+        SnackBar(content: Text(AppLocalizations.of(context).chatHoldToRecord)),
       );
       return;
     }
@@ -290,9 +291,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       _pointerDown = false;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Permiso de micrófono denegado. Actívalo en Ajustes para grabar notas de voz.'),
-        ),
+        SnackBar(content: Text(AppLocalizations.of(context).chatMicPermissionDenied)),
       );
       return;
     }
@@ -370,8 +369,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
           // ready for when TTS lands.
           onChanged: null,
           secondary: const Icon(Icons.record_voice_over),
-          title: const Text('Responder por voz'),
-          subtitle: const Text('Próximamente (voz on-device)'),
+          title: Text(AppLocalizations.of(context).chatVoiceReplyTitle),
+          subtitle: Text(AppLocalizations.of(context).chatVoiceReplySubtitle),
         ),
       ),
     );
@@ -401,11 +400,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       // then reflows the message list so recent messages stay visible above it.
       resizeToAvoidBottomInset: true,
       appBar: AppBar(
-        title: const Text('Axi'),
+        title: Text(AppLocalizations.of(context).chatTitle),
         actions: [
           IconButton(
             icon: const Icon(Icons.record_voice_over),
-            tooltip: 'Responder por voz',
+            tooltip: AppLocalizations.of(context).chatVoiceReplyTooltip,
             onPressed: _openVoiceReplySheet,
           ),
         ],
@@ -457,7 +456,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
         children: [
           IconButton(
             icon: const Icon(Icons.attach_file),
-            tooltip: 'Adjuntar',
+            tooltip: AppLocalizations.of(context).chatAttachTooltip,
             onPressed: busy ? null : _openAttachSheet,
           ),
           Expanded(
@@ -499,7 +498,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
           ),
           IconButton(
             icon: const Icon(Icons.send),
-            tooltip: 'Enviar',
+            tooltip: AppLocalizations.of(context).chatSendTooltip,
             color: scheme.primary,
             onPressed: (busy || !_canSend) ? null : _send,
           ),
@@ -515,7 +514,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
         textInputAction: TextInputAction.send,
         onSubmitted: (_) => _send(),
         decoration: InputDecoration(
-          hintText: 'Escribe un mensaje…',
+          hintText: AppLocalizations.of(context).chatInputHint,
           filled: true,
           fillColor: scheme.surfaceContainerHighest,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -576,7 +575,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
 
   Widget _recordingIndicator(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final label = _willCancel ? 'Suelta para cancelar' : 'Desliza para cancelar';
+    final l10n = AppLocalizations.of(context);
+    final label = _willCancel ? l10n.chatReleaseToCancel : l10n.chatSlideToCancel;
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -649,7 +649,7 @@ class _ModelLoadingBanner extends ConsumerWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Cargando el modelo…',
+                  AppLocalizations.of(context).chatModelLoading,
                   style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 13),
                 ),
               ),
@@ -670,13 +670,13 @@ class _ModelLoadingBanner extends ConsumerWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'No se pudo cargar el modelo. Revísalo e intenta de nuevo.',
+                  AppLocalizations.of(context).chatModelLoadError,
                   style: TextStyle(color: scheme.onErrorContainer, fontSize: 13),
                 ),
               ),
               TextButton(
                 onPressed: () => ref.read(localModelLoadProvider.notifier).retry(),
-                child: const Text('Reintentar'),
+                child: Text(AppLocalizations.of(context).actionRetry),
               ),
             ],
           ),
@@ -708,7 +708,8 @@ class _TypingIndicator extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2, color: scheme.primary),
             ),
             const SizedBox(width: 8),
-            Text('Axi está escribiendo…', style: TextStyle(color: scheme.onSurfaceVariant)),
+            Text(AppLocalizations.of(context).chatTyping,
+                style: TextStyle(color: scheme.onSurfaceVariant)),
           ],
         ),
       ),
@@ -907,7 +908,9 @@ class _SpeakButton extends ConsumerWidget {
           isSpeaking ? Icons.stop_circle : Icons.volume_up,
           size: 15,
           color: color.withValues(alpha: 0.7),
-          semanticLabel: isSpeaking ? 'Detener lectura' : 'Escuchar respuesta',
+          semanticLabel: isSpeaking
+              ? AppLocalizations.of(context).chatStopReading
+              : AppLocalizations.of(context).chatListenReply,
         ),
       ),
     );
@@ -962,6 +965,7 @@ Future<void> _showMetricsSheet(BuildContext context, GenerationMetrics m) {
     isScrollControlled: true,
     builder: (sheetContext) {
       final scheme = Theme.of(sheetContext).colorScheme;
+      final l10n = AppLocalizations.of(sheetContext);
       return SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
@@ -973,29 +977,31 @@ Future<void> _showMetricsSheet(BuildContext context, GenerationMetrics m) {
                 children: [
                   Icon(Icons.insights, color: scheme.primary),
                   const SizedBox(width: 8),
-                  Text('Métricas de la respuesta',
+                  Text(l10n.chatMetricsTitle,
                       style: Theme.of(sheetContext).textTheme.titleMedium),
                 ],
               ),
               const SizedBox(height: 12),
-              _MetricRow(label: 'Velocidad', value: '${m.tokensPerSec.round()} tok/s'),
+              _MetricRow(label: l10n.metricSpeed, value: '${m.tokensPerSec.round()} tok/s'),
               _MetricRow(
-                label: 'Tokens generados',
-                value: '${m.tokensOut}${m.tokensApproximate ? ' (aprox.)' : ''}',
+                label: l10n.metricTokens,
+                value: '${m.tokensOut}${m.tokensApproximate ? l10n.metricTokensApprox : ''}',
               ),
-              _MetricRow(label: 'Tiempo total', value: '${m.totalMs} ms (${_formatSeconds(m.totalMs)})'),
               _MetricRow(
-                label: 'Primer token (TTFT)',
-                value: m.ttftMs != null ? '${m.ttftMs} ms' : 'No disponible',
+                  label: l10n.metricTotalTime,
+                  value: '${m.totalMs} ms (${_formatSeconds(m.totalMs)})'),
+              _MetricRow(
+                label: l10n.metricTtft,
+                value: m.ttftMs != null ? '${m.ttftMs} ms' : l10n.metricUnavailable,
               ),
-              _MetricRow(label: 'Backend', value: m.backend.name.toUpperCase()),
-              _MetricRow(label: 'Modelo', value: m.modelId),
+              _MetricRow(label: l10n.metricBackend, value: m.backend.name.toUpperCase()),
+              _MetricRow(label: l10n.metricModel, value: m.modelId),
               const SizedBox(height: 12),
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: () => Navigator.of(sheetContext).pop(),
-                  child: const Text('Cerrar'),
+                  child: Text(l10n.actionClose),
                 ),
               ),
             ],
@@ -1106,7 +1112,7 @@ class _VoiceNoteBubbleState extends ConsumerState<_VoiceNoteBubble> {
         if (widget.message.transcriptionPending) ...[
           const SizedBox(height: 2),
           Text(
-            'Transcripción pendiente (STT)',
+            AppLocalizations.of(context).chatTranscriptionPending,
             style: TextStyle(fontSize: 11, color: widget.onBubble.withValues(alpha: 0.7)),
           ),
         ],

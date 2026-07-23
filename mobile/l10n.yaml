@@ -1,0 +1,16 @@
+# Flutter gen-l10n configuration (i18n slice).
+#
+# ADDING A NEW LANGUAGE = one more ARB file: drop `app_<code>.arb` next to the
+# others in `arb-dir`, translate every key from the template, register the
+# `Locale` in `AppLocalizations.supportedLocales` (already re-exported via
+# MaterialApp.supportedLocales in app.dart), and add it to the language
+# selector's options in the Región settings section. No code changes to the
+# framework wiring are needed.
+arb-dir: lib/l10n
+template-arb-file: app_en.arb
+output-localization-file: app_localizations.dart
+output-class: AppLocalizations
+# Keep untranslated keys falling back to the template locale instead of failing
+# the build, and emit a report so the follow-up translation sweep is easy.
+untranslated-messages-file: lib/l10n/untranslated.txt
+nullable-getter: false

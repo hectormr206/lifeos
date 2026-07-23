@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../l10n/app_localizations.dart';
+import '../../../l10n/language_preference.dart';
+import '../../../l10n/locale_providers.dart';
 import '../../../theme/lifeos_theme.dart';
 import '../../../theme/theme_providers.dart';
 import '../../app_update/domain/app_version_info.dart';
@@ -22,73 +25,109 @@ class SettingsHubScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
+    final language = ref.watch(languageProvider);
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Ajustes')),
+      appBar: AppBar(title: Text(l10n.settingsTitle)),
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          const _SectionHeader('Apariencia'),
+          _SectionHeader(l10n.sectionAppearance),
           _AppearanceTile(
             themeMode: themeMode,
             onChanged: (mode) => ref.read(themeModeProvider.notifier).setThemeMode(mode),
           ),
           const Divider(),
-          const _SectionHeader('General'),
+          // i18n slice: the "Región" section — pick the app language.
+          _SectionHeader(l10n.sectionRegion),
+          _LanguageTile(
+            language: language,
+            onChanged: (value) => ref.read(languageProvider.notifier).setLanguage(value),
+          ),
+          const Divider(),
+          _SectionHeader(l10n.sectionGeneral),
           ListTile(
             leading: const Icon(Icons.offline_bolt_outlined),
-            title: const Text('Modelo local'),
-            subtitle: const Text('Descargá y gestioná el modelo en el dispositivo'),
+            title: Text(l10n.localModelTitle),
+            subtitle: Text(l10n.localModelSubtitle),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/local-model'),
           ),
           ListTile(
             leading: const Icon(Icons.wb_sunny_outlined),
-            title: const Text('Boletín'),
-            subtitle: const Text('Genera un boletín matutino en el dispositivo'),
+            title: Text(l10n.briefingNavTitle),
+            subtitle: Text(l10n.briefingNavSubtitle),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/briefing'),
           ),
           ListTile(
             leading: const Icon(Icons.system_update),
-            title: const Text('Actualizaciones'),
-            subtitle: const Text('Buscar e instalar nuevas versiones'),
+            title: Text(l10n.updatesNavTitle),
+            subtitle: Text(l10n.updatesNavSubtitle),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/updates'),
           ),
           ListTile(
             leading: const Icon(Icons.notifications_outlined),
-            title: const Text('Notificaciones'),
-            subtitle: const Text('Avisos de nuevas versiones'),
+            title: Text(l10n.notificationsNavTitle),
+            subtitle: Text(l10n.notificationsNavSubtitle),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/updates'),
           ),
           ListTile(
             leading: const Icon(Icons.privacy_tip_outlined),
-            title: const Text('Permisos'),
-            subtitle: const Text('Revisa y gestiona los permisos de la app'),
+            title: Text(l10n.permissionsNavTitle),
+            subtitle: Text(l10n.permissionsNavSubtitle),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/permissions'),
           ),
-          const ListTile(
+          ListTile(
             enabled: false,
-            leading: Icon(Icons.mic_none_outlined),
-            title: Text('Voz'),
-            subtitle: Text('Próximamente'),
+            leading: const Icon(Icons.mic_none_outlined),
+            title: Text(l10n.voiceNavTitle),
+            subtitle: Text(l10n.voiceNavSubtitle),
           ),
           const Divider(),
-          const _SectionHeader('Avanzado'),
+          _SectionHeader(l10n.sectionAdvanced),
           ListTile(
             leading: const Icon(Icons.tune),
-            title: const Text('Configuración del motor'),
-            subtitle: const Text('Parámetros del motor emparejado'),
+            title: Text(l10n.engineConfigTitle),
+            subtitle: Text(l10n.engineConfigSubtitle),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/engine'),
           ),
           const Divider(),
-          const _SectionHeader('Acerca de'),
+          _SectionHeader(l10n.sectionAbout),
           const _AboutTile(),
         ],
+      ),
+    );
+  }
+}
+
+/// System / Español / English selector — sets + persists [languageProvider].
+/// ADDING A LANGUAGE = add a segment here (and its ARB file).
+class _LanguageTile extends StatelessWidget {
+  const _LanguageTile({required this.language, required this.onChanged});
+
+  final AppLanguage language;
+  final ValueChanged<AppLanguage> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: SegmentedButton<AppLanguage>(
+        segments: [
+          ButtonSegment(value: AppLanguage.system, label: Text(l10n.languageSystem)),
+          ButtonSegment(value: AppLanguage.es, label: Text(l10n.languageSpanish)),
+          ButtonSegment(value: AppLanguage.en, label: Text(l10n.languageEnglish)),
+        ],
+        selected: {language},
+        showSelectedIcon: false,
+        onSelectionChanged: (selection) => onChanged(selection.first),
       ),
     );
   }
@@ -125,24 +164,25 @@ class _AppearanceTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
       child: SegmentedButton<ThemeMode>(
-        segments: const [
+        segments: [
           ButtonSegment(
             value: ThemeMode.light,
-            label: Text('Claro'),
-            icon: Icon(Icons.light_mode_outlined),
+            label: Text(l10n.appearanceLight),
+            icon: const Icon(Icons.light_mode_outlined),
           ),
           ButtonSegment(
             value: ThemeMode.dark,
-            label: Text('Oscuro'),
-            icon: Icon(Icons.dark_mode_outlined),
+            label: Text(l10n.appearanceDark),
+            icon: const Icon(Icons.dark_mode_outlined),
           ),
           ButtonSegment(
             value: ThemeMode.system,
-            label: Text('Sistema'),
-            icon: Icon(Icons.brightness_auto_outlined),
+            label: Text(l10n.appearanceSystem),
+            icon: const Icon(Icons.brightness_auto_outlined),
           ),
         ],
         selected: {themeMode},
@@ -163,12 +203,13 @@ class _AboutTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final info = ref.watch(appVersionInfoProvider);
+    final l10n = AppLocalizations.of(context);
     return FutureBuilder<(String, int)>(
       future: _loadVersion(info),
       builder: (context, snapshot) {
         final version = switch (snapshot.data) {
-          (final name, final build) => 'Versión $name ($build)',
-          null => 'Versión…',
+          (final name, final build) => l10n.appVersionLabel(name, build),
+          null => l10n.appVersionLoading,
         };
         return ListTile(
           leading: Container(
@@ -187,7 +228,7 @@ class _AboutTile extends ConsumerWidget {
             ),
           ),
           title: const Text('LifeOS'),
-          subtitle: Text('$version · Axi, siempre contigo ⚡'),
+          subtitle: Text('$version · ${l10n.appTagline}'),
         );
       },
     );

@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/outbox/sync_service.dart';
+import 'l10n/app_localizations.dart';
+import 'l10n/locale_providers.dart';
 import 'features/app_update/presentation/app_update_notifier.dart';
 import 'features/app_update/presentation/app_update_providers.dart';
 import 'features/app_update/presentation/app_updates_screen.dart';
@@ -302,6 +304,15 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
       theme: lifeosLightTheme,
       darkTheme: lifeosDarkTheme,
       themeMode: ref.watch(themeModeProvider),
+      // i18n slice: the whole app (and Material/Cupertino widgets) localize to
+      // the persisted language. `locale` is always a concrete supported locale
+      // (system is resolved to es/en in localeProvider), so behavior never
+      // depends on Flutter's fallback ordering. Adding a language = one more ARB
+      // file (it flows in via AppLocalizations.supportedLocales) plus a selector
+      // option and, if needed, a system-resolution case.
+      locale: ref.watch(localeProvider),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       routerConfig: router,
     );
   }

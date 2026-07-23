@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../l10n/app_localizations.dart';
 import '../../../theme/lifeos_theme.dart';
 import '../domain/morning_briefing.dart';
 import 'morning_briefing_notifier.dart';
@@ -21,14 +22,15 @@ class MorningBriefingScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(morningBriefingNotifierProvider);
     final notifier = ref.read(morningBriefingNotifierProvider.notifier);
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Boletín'),
+        title: Text(l10n.briefingTitle),
         actions: [
           IconButton(
             icon: const Icon(Icons.tune),
-            tooltip: 'Fuentes',
+            tooltip: l10n.briefingSourcesTooltip,
             onPressed: () => context.push('/settings/briefing/sources'),
           ),
         ],
@@ -37,7 +39,7 @@ class MorningBriefingScreen extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
         children: [
           if (state.isGenerating)
-            _ProgressCard(label: state.progressLabel ?? 'Generando…')
+            _ProgressCard(label: state.progressLabel ?? l10n.briefingGenerating)
           else if (state.phase == BriefingPhase.error && state.error != null)
             _ErrorCard(message: state.error!),
           if (state.briefing != null) ...[
@@ -57,7 +59,7 @@ class MorningBriefingScreen extends ConsumerWidget {
                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
               )
             : const Icon(Icons.auto_awesome),
-        label: Text(state.isGenerating ? 'Generando…' : 'Generar boletín ahora'),
+        label: Text(state.isGenerating ? l10n.briefingGenerating : l10n.briefingGenerateNow),
       ),
     );
   }
@@ -125,16 +127,17 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 48),
       child: Column(
         children: [
           const Icon(Icons.wb_sunny_outlined, size: 56, color: LifeOSColors.teal),
           const SizedBox(height: 16),
-          Text('Aún no hay boletín', style: textTheme.titleMedium, textAlign: TextAlign.center),
+          Text(l10n.briefingEmptyTitle, style: textTheme.titleMedium, textAlign: TextAlign.center),
           const SizedBox(height: 8),
           Text(
-            'Toca "Generar boletín ahora" y Axi leerá tus fuentes y las resumirá en el dispositivo.',
+            l10n.briefingEmptyBody,
             style: textTheme.bodyMedium,
             textAlign: TextAlign.center,
           ),
@@ -152,13 +155,14 @@ class _BriefingHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Boletín matutino', style: textTheme.headlineSmall),
+        Text(l10n.briefingHeaderTitle, style: textTheme.headlineSmall),
         const SizedBox(height: 4),
         Text(
-          _formatTimestamp(briefing.generatedAt),
+          l10n.briefingGeneratedAt(_formatTimestamp(briefing.generatedAt)),
           style: textTheme.labelMedium?.copyWith(color: Theme.of(context).hintColor),
         ),
         if (briefing.intro.trim().isNotEmpty) ...[
@@ -171,7 +175,7 @@ class _BriefingHeader extends StatelessWidget {
 
   static String _formatTimestamp(DateTime dt) {
     String two(int n) => n.toString().padLeft(2, '0');
-    return 'Generado el ${two(dt.day)}/${two(dt.month)}/${dt.year} a las ${two(dt.hour)}:${two(dt.minute)}';
+    return '${two(dt.day)}/${two(dt.month)}/${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
   }
 }
 
@@ -227,7 +231,7 @@ class _BriefingItemCard extends StatelessWidget {
     await Clipboard.setData(ClipboardData(text: url));
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Enlace copiado al portapapeles')),
+      SnackBar(content: Text(AppLocalizations.of(context).briefingLinkCopied)),
     );
   }
 }

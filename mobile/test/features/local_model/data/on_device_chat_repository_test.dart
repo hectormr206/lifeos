@@ -25,6 +25,31 @@ void main() {
     expect(engine.prompts, ['hola']);
   });
 
+  test('decoratePrompt prefixes the engine prompt (Axi language + datetime)', () async {
+    final engine = FakeLocalLlmEngine();
+    final repo = OnDeviceChatRepository(
+      engine,
+      decoratePrompt: (message) => 'PREAMBLE\n\n$message',
+    );
+
+    await repo.sendMessage('hola');
+
+    // The engine receives the DECORATED text, not the raw user message.
+    expect(engine.prompts.single, 'PREAMBLE\n\nhola');
+  });
+
+  test('decoratePrompt is applied to the vision path too', () async {
+    final engine = FakeLocalLlmEngine();
+    final repo = OnDeviceChatRepository(
+      engine,
+      decoratePrompt: (message) => 'PREAMBLE\n\n$message',
+    );
+
+    await repo.sendImages('qué ves', [Uint8List.fromList([1, 2])]);
+
+    expect(engine.imagePrompts.first, 'PREAMBLE\n\nqué ves');
+  });
+
   test('sendMessage attaches the engine GenerationMetrics to the axi message', () async {
     const metrics = GenerationMetrics(
       totalMs: 900,

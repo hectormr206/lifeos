@@ -1,0 +1,686 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:intl/intl.dart' as intl;
+
+import 'app_localizations_en.dart';
+import 'app_localizations_es.dart';
+
+// ignore_for_file: type=lint
+
+/// Callers can lookup localized strings with an instance of AppLocalizations
+/// returned by `AppLocalizations.of(context)`.
+///
+/// Applications need to include `AppLocalizations.delegate()` in their app's
+/// `localizationDelegates` list, and the locales they support in the app's
+/// `supportedLocales` list. For example:
+///
+/// ```dart
+/// import 'l10n/app_localizations.dart';
+///
+/// return MaterialApp(
+///   localizationsDelegates: AppLocalizations.localizationsDelegates,
+///   supportedLocales: AppLocalizations.supportedLocales,
+///   home: MyApplicationHome(),
+/// );
+/// ```
+///
+/// ## Update pubspec.yaml
+///
+/// Please make sure to update your pubspec.yaml to include the following
+/// packages:
+///
+/// ```yaml
+/// dependencies:
+///   # Internationalization support.
+///   flutter_localizations:
+///     sdk: flutter
+///   intl: any # Use the pinned version from flutter_localizations
+///
+///   # Rest of dependencies
+/// ```
+///
+/// ## iOS Applications
+///
+/// iOS applications define key application metadata, including supported
+/// locales, in an Info.plist file that is built into the application bundle.
+/// To configure the locales supported by your app, you’ll need to edit this
+/// file.
+///
+/// First, open your project’s ios/Runner.xcworkspace Xcode workspace file.
+/// Then, in the Project Navigator, open the Info.plist file under the Runner
+/// project’s Runner folder.
+///
+/// Next, select the Information Property List item, select Add Item from the
+/// Editor menu, then select Localizations from the pop-up menu.
+///
+/// Select and expand the newly-created Localizations item then, for each
+/// locale your application supports, add a new item and select the locale
+/// you wish to add from the pop-up menu in the Value field. This list should
+/// be consistent with the languages listed in the AppLocalizations.supportedLocales
+/// property.
+abstract class AppLocalizations {
+  AppLocalizations(String locale)
+    : localeName = intl.Intl.canonicalizedLocale(locale.toString());
+
+  final String localeName;
+
+  static AppLocalizations of(BuildContext context) {
+    return Localizations.of<AppLocalizations>(context, AppLocalizations)!;
+  }
+
+  static const LocalizationsDelegate<AppLocalizations> delegate =
+      _AppLocalizationsDelegate();
+
+  /// A list of this localizations delegate along with the default localizations
+  /// delegates.
+  ///
+  /// Returns a list of localizations delegates containing this delegate along with
+  /// GlobalMaterialLocalizations.delegate, GlobalCupertinoLocalizations.delegate,
+  /// and GlobalWidgetsLocalizations.delegate.
+  ///
+  /// Additional delegates can be added by appending to this list in
+  /// MaterialApp. This list does not have to be used at all if a custom list
+  /// of delegates is preferred or required.
+  static const List<LocalizationsDelegate<dynamic>> localizationsDelegates =
+      <LocalizationsDelegate<dynamic>>[
+        delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+      ];
+
+  /// A list of this localizations delegate's supported locales.
+  static const List<Locale> supportedLocales = <Locale>[
+    Locale('en'),
+    Locale('es'),
+  ];
+
+  /// No description provided for @appTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'LifeOS'**
+  String get appTitle;
+
+  /// No description provided for @languageSystem.
+  ///
+  /// In en, this message translates to:
+  /// **'System'**
+  String get languageSystem;
+
+  /// No description provided for @languageSpanish.
+  ///
+  /// In en, this message translates to:
+  /// **'Español'**
+  String get languageSpanish;
+
+  /// No description provided for @languageEnglish.
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get languageEnglish;
+
+  /// No description provided for @actionClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get actionClose;
+
+  /// No description provided for @actionRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get actionRetry;
+
+  /// No description provided for @settingsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get settingsTitle;
+
+  /// No description provided for @sectionAppearance.
+  ///
+  /// In en, this message translates to:
+  /// **'Appearance'**
+  String get sectionAppearance;
+
+  /// No description provided for @appearanceLight.
+  ///
+  /// In en, this message translates to:
+  /// **'Light'**
+  String get appearanceLight;
+
+  /// No description provided for @appearanceDark.
+  ///
+  /// In en, this message translates to:
+  /// **'Dark'**
+  String get appearanceDark;
+
+  /// No description provided for @appearanceSystem.
+  ///
+  /// In en, this message translates to:
+  /// **'System'**
+  String get appearanceSystem;
+
+  /// No description provided for @sectionRegion.
+  ///
+  /// In en, this message translates to:
+  /// **'Region'**
+  String get sectionRegion;
+
+  /// No description provided for @languageTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Language'**
+  String get languageTitle;
+
+  /// No description provided for @languageSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose the app\'s language'**
+  String get languageSubtitle;
+
+  /// No description provided for @sectionGeneral.
+  ///
+  /// In en, this message translates to:
+  /// **'General'**
+  String get sectionGeneral;
+
+  /// No description provided for @localModelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Local model'**
+  String get localModelTitle;
+
+  /// No description provided for @localModelSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Download and manage the on-device model'**
+  String get localModelSubtitle;
+
+  /// No description provided for @briefingNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Briefing'**
+  String get briefingNavTitle;
+
+  /// No description provided for @briefingNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Generate a morning briefing on device'**
+  String get briefingNavSubtitle;
+
+  /// No description provided for @updatesNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Updates'**
+  String get updatesNavTitle;
+
+  /// No description provided for @updatesNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Check for and install new versions'**
+  String get updatesNavSubtitle;
+
+  /// No description provided for @notificationsNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Notifications'**
+  String get notificationsNavTitle;
+
+  /// No description provided for @notificationsNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'New-version alerts'**
+  String get notificationsNavSubtitle;
+
+  /// No description provided for @permissionsNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Permissions'**
+  String get permissionsNavTitle;
+
+  /// No description provided for @permissionsNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Review and manage the app\'s permissions'**
+  String get permissionsNavSubtitle;
+
+  /// No description provided for @voiceNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice'**
+  String get voiceNavTitle;
+
+  /// No description provided for @voiceNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Coming soon'**
+  String get voiceNavSubtitle;
+
+  /// No description provided for @sectionAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced'**
+  String get sectionAdvanced;
+
+  /// No description provided for @engineConfigTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Engine configuration'**
+  String get engineConfigTitle;
+
+  /// No description provided for @engineConfigSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Paired-engine parameters'**
+  String get engineConfigSubtitle;
+
+  /// No description provided for @sectionAbout.
+  ///
+  /// In en, this message translates to:
+  /// **'About'**
+  String get sectionAbout;
+
+  /// No description provided for @appVersionLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Version {name} ({build})'**
+  String appVersionLabel(String name, int build);
+
+  /// No description provided for @appVersionLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Version…'**
+  String get appVersionLoading;
+
+  /// No description provided for @appTagline.
+  ///
+  /// In en, this message translates to:
+  /// **'Axi, always with you ⚡'**
+  String get appTagline;
+
+  /// No description provided for @settingsTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get settingsTooltip;
+
+  /// No description provided for @homeNotConnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Not connected to any engine yet.'**
+  String get homeNotConnected;
+
+  /// No description provided for @homeChatOffline.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat with Axi (offline)'**
+  String get homeChatOffline;
+
+  /// No description provided for @homeUseLocalModel.
+  ///
+  /// In en, this message translates to:
+  /// **'Use local model (offline)'**
+  String get homeUseLocalModel;
+
+  /// No description provided for @homeConnectedTo.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected to {url}'**
+  String homeConnectedTo(String url);
+
+  /// No description provided for @homeEngineReachable.
+  ///
+  /// In en, this message translates to:
+  /// **'Engine reachable'**
+  String get homeEngineReachable;
+
+  /// No description provided for @homeEngineUnreachable.
+  ///
+  /// In en, this message translates to:
+  /// **'Engine unreachable'**
+  String get homeEngineUnreachable;
+
+  /// No description provided for @homeTalkToAxi.
+  ///
+  /// In en, this message translates to:
+  /// **'Talk to Axi'**
+  String get homeTalkToAxi;
+
+  /// No description provided for @homeMyData.
+  ///
+  /// In en, this message translates to:
+  /// **'My data'**
+  String get homeMyData;
+
+  /// No description provided for @homeHowIsAxi.
+  ///
+  /// In en, this message translates to:
+  /// **'How is Axi?'**
+  String get homeHowIsAxi;
+
+  /// No description provided for @homeReminders.
+  ///
+  /// In en, this message translates to:
+  /// **'Reminders'**
+  String get homeReminders;
+
+  /// No description provided for @homeSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'Summary'**
+  String get homeSummary;
+
+  /// No description provided for @homeBulletins.
+  ///
+  /// In en, this message translates to:
+  /// **'Bulletins'**
+  String get homeBulletins;
+
+  /// No description provided for @homeTodaySummary.
+  ///
+  /// In en, this message translates to:
+  /// **'Today\'s summary'**
+  String get homeTodaySummary;
+
+  /// No description provided for @homeBrain.
+  ///
+  /// In en, this message translates to:
+  /// **'Brain'**
+  String get homeBrain;
+
+  /// No description provided for @homeSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get homeSettings;
+
+  /// No description provided for @homeLocalModel.
+  ///
+  /// In en, this message translates to:
+  /// **'Local model'**
+  String get homeLocalModel;
+
+  /// No description provided for @homeMeetings.
+  ///
+  /// In en, this message translates to:
+  /// **'Meetings'**
+  String get homeMeetings;
+
+  /// No description provided for @homeUpdates.
+  ///
+  /// In en, this message translates to:
+  /// **'Updates'**
+  String get homeUpdates;
+
+  /// No description provided for @chatTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Axi'**
+  String get chatTitle;
+
+  /// No description provided for @chatVoiceReplyTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply by voice'**
+  String get chatVoiceReplyTooltip;
+
+  /// No description provided for @chatVoiceReplyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply by voice'**
+  String get chatVoiceReplyTitle;
+
+  /// No description provided for @chatVoiceReplySubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Coming soon (on-device voice)'**
+  String get chatVoiceReplySubtitle;
+
+  /// No description provided for @chatCamera.
+  ///
+  /// In en, this message translates to:
+  /// **'Camera'**
+  String get chatCamera;
+
+  /// No description provided for @chatGallery.
+  ///
+  /// In en, this message translates to:
+  /// **'Gallery'**
+  String get chatGallery;
+
+  /// No description provided for @chatAttachError.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not attach the image: {error}'**
+  String chatAttachError(String error);
+
+  /// No description provided for @chatAttachLimit.
+  ///
+  /// In en, this message translates to:
+  /// **'You can attach up to {count} images per message.'**
+  String chatAttachLimit(int count);
+
+  /// No description provided for @chatHoldToRecord.
+  ///
+  /// In en, this message translates to:
+  /// **'Press and hold to record a voice note'**
+  String get chatHoldToRecord;
+
+  /// No description provided for @chatMicPermissionDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone permission denied. Enable it in Settings to record voice notes.'**
+  String get chatMicPermissionDenied;
+
+  /// No description provided for @chatReleaseToCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Release to cancel'**
+  String get chatReleaseToCancel;
+
+  /// No description provided for @chatSlideToCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Slide to cancel'**
+  String get chatSlideToCancel;
+
+  /// No description provided for @chatInputHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Type a message…'**
+  String get chatInputHint;
+
+  /// No description provided for @chatAttachTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Attach'**
+  String get chatAttachTooltip;
+
+  /// No description provided for @chatSendTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Send'**
+  String get chatSendTooltip;
+
+  /// No description provided for @chatModelLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading the model…'**
+  String get chatModelLoading;
+
+  /// No description provided for @chatModelLoadError.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not load the model. Check it and try again.'**
+  String get chatModelLoadError;
+
+  /// No description provided for @chatTyping.
+  ///
+  /// In en, this message translates to:
+  /// **'Axi is typing…'**
+  String get chatTyping;
+
+  /// No description provided for @chatStopReading.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop reading'**
+  String get chatStopReading;
+
+  /// No description provided for @chatListenReply.
+  ///
+  /// In en, this message translates to:
+  /// **'Listen to reply'**
+  String get chatListenReply;
+
+  /// No description provided for @chatMetricsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Response metrics'**
+  String get chatMetricsTitle;
+
+  /// No description provided for @metricSpeed.
+  ///
+  /// In en, this message translates to:
+  /// **'Speed'**
+  String get metricSpeed;
+
+  /// No description provided for @metricTokens.
+  ///
+  /// In en, this message translates to:
+  /// **'Generated tokens'**
+  String get metricTokens;
+
+  /// No description provided for @metricTokensApprox.
+  ///
+  /// In en, this message translates to:
+  /// **' (approx.)'**
+  String get metricTokensApprox;
+
+  /// No description provided for @metricTotalTime.
+  ///
+  /// In en, this message translates to:
+  /// **'Total time'**
+  String get metricTotalTime;
+
+  /// No description provided for @metricTtft.
+  ///
+  /// In en, this message translates to:
+  /// **'First token (TTFT)'**
+  String get metricTtft;
+
+  /// No description provided for @metricUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Not available'**
+  String get metricUnavailable;
+
+  /// No description provided for @metricBackend.
+  ///
+  /// In en, this message translates to:
+  /// **'Backend'**
+  String get metricBackend;
+
+  /// No description provided for @metricModel.
+  ///
+  /// In en, this message translates to:
+  /// **'Model'**
+  String get metricModel;
+
+  /// No description provided for @chatTranscriptionPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Transcription pending (STT)'**
+  String get chatTranscriptionPending;
+
+  /// No description provided for @briefingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Briefing'**
+  String get briefingTitle;
+
+  /// No description provided for @briefingSourcesTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Sources'**
+  String get briefingSourcesTooltip;
+
+  /// No description provided for @briefingGenerating.
+  ///
+  /// In en, this message translates to:
+  /// **'Generating…'**
+  String get briefingGenerating;
+
+  /// No description provided for @briefingGenerateNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Generate briefing now'**
+  String get briefingGenerateNow;
+
+  /// No description provided for @briefingEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No briefing yet'**
+  String get briefingEmptyTitle;
+
+  /// No description provided for @briefingEmptyBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap \"Generate briefing now\" and Axi will read your sources and summarize them on device.'**
+  String get briefingEmptyBody;
+
+  /// No description provided for @briefingHeaderTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Morning briefing'**
+  String get briefingHeaderTitle;
+
+  /// No description provided for @briefingGeneratedAt.
+  ///
+  /// In en, this message translates to:
+  /// **'Generated on {datetime}'**
+  String briefingGeneratedAt(String datetime);
+
+  /// No description provided for @briefingLinkCopied.
+  ///
+  /// In en, this message translates to:
+  /// **'Link copied to clipboard'**
+  String get briefingLinkCopied;
+}
+
+class _AppLocalizationsDelegate
+    extends LocalizationsDelegate<AppLocalizations> {
+  const _AppLocalizationsDelegate();
+
+  @override
+  Future<AppLocalizations> load(Locale locale) {
+    return SynchronousFuture<AppLocalizations>(lookupAppLocalizations(locale));
+  }
+
+  @override
+  bool isSupported(Locale locale) =>
+      <String>['en', 'es'].contains(locale.languageCode);
+
+  @override
+  bool shouldReload(_AppLocalizationsDelegate old) => false;
+}
+
+AppLocalizations lookupAppLocalizations(Locale locale) {
+  // Lookup logic when only language code is specified.
+  switch (locale.languageCode) {
+    case 'en':
+      return AppLocalizationsEn();
+    case 'es':
+      return AppLocalizationsEs();
+  }
+
+  throw FlutterError(
+    'AppLocalizations.delegate failed to load unsupported locale "$locale". This is likely '
+    'an issue with the localizations generation tool. Please file an issue '
+    'on GitHub with a reproducible sample app and the gen-l10n configuration '
+    'that was used.',
+  );
+}

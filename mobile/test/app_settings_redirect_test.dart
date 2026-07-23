@@ -3,6 +3,7 @@
 //     updates, about) — NOT pairing-gated.
 //   * `/settings/engine` is the engine config editor (laptop /config parity),
 //     relocated from `/settings` and still pairing-gated.
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/app.dart';
@@ -11,6 +12,7 @@ import 'package:lifeos/core/auth/token_store.dart';
 import 'package:lifeos/features/settings/data/settings_repository.dart';
 import 'package:lifeos/features/settings/domain/config_field_descriptor.dart';
 import 'package:lifeos/features/settings/presentation/settings_notifier.dart';
+import 'package:lifeos/l10n/locale_providers.dart';
 
 import 'support/fake_token_store.dart';
 
@@ -24,7 +26,11 @@ class _FakeSettingsRepository implements SettingsRepository {
 
 void main() {
   testWidgets('unpaired: /settings renders the hub (not gated)', (tester) async {
-    final container = ProviderContainer(overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())]);
+    final container = ProviderContainer(overrides: [
+      tokenStoreProvider.overrideWithValue(FakeTokenStore()),
+      // Pin Spanish so the localized hub asserts its es "Apariencia" heading.
+      localeProvider.overrideWithValue(const Locale('es')),
+    ]);
     addTearDown(container.dispose);
     await tester.pumpWidget(UncontrolledProviderScope(container: container, child: const LifeOSApp()));
     await tester.pump();
