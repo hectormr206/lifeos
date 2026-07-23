@@ -14,6 +14,8 @@ class DomainDescriptor {
     required this.icon,
     required this.listPath,
     required this.listKey,
+    this.routerHint = '',
+    this.keywords = const <String>[],
   });
 
   /// Stable identifier, also used as the `/domains/:key` route segment.
@@ -37,6 +39,18 @@ class DomainDescriptor {
   /// than a hardcoded key in the repository (data-driven, not special-cased
   /// per domain).
   final String listKey;
+
+  /// One-line ES description of what this domain captures, ported verbatim
+  /// from each laptop domain spec's `router_hint` (`axi/src/axi/*_chat.py`).
+  /// Used by the on-device heuristic domain router (SLICE A3) and, later, as
+  /// the LLM classifier prompt line (C1 seam) — one source of truth, mirroring
+  /// the laptop `chat_router._build_router_system`.
+  final String routerHint;
+
+  /// Accent-insensitive keyword stems the heuristic router matches against a
+  /// message, DERIVED from [routerHint]. Stems are lowercased and unaccented;
+  /// the router folds accents on both sides before a word-boundary match.
+  final List<String> keywords;
 
   @override
   bool operator ==(Object other) => other is DomainDescriptor && other.key == key;
@@ -81,6 +95,13 @@ const domainDescriptors = <DomainDescriptor>[
     icon: Icons.favorite,
     listPath: '/api/v1/health/entries',
     listKey: 'entries',
+    routerHint: 'salud física/médica: presión, glucosa, peso, pulso, sueño, '
+        'síntomas, dolor, enfermedad, medicamentos, estudios médicos',
+    keywords: <String>[
+      'presion', 'glucosa', 'peso', 'pulso', 'sueno', 'dormi', 'dormir',
+      'sintoma', 'sintomas', 'dolor', 'enfermedad', 'medicamento', 'pastilla',
+      'salud', 'azucar', 'frecuencia cardiaca',
+    ],
   ),
   DomainDescriptor(
     key: 'finance',
@@ -88,6 +109,13 @@ const domainDescriptors = <DomainDescriptor>[
     icon: Icons.attach_money,
     listPath: '/api/v1/finance/entries',
     listKey: 'entries',
+    routerHint: 'dinero: gastos, ingresos, ahorros, pagos de deuda, sueldo, '
+        'precios, compras, presupuesto, cuentas',
+    keywords: <String>[
+      'gasto', 'gaste', 'ingreso', 'ahorro', 'deuda', 'sueldo', 'precio',
+      'compra', 'presupuesto', 'cuenta', 'dinero', 'pago', 'pague', 'gasolina',
+      'factura',
+    ],
   ),
   DomainDescriptor(
     key: 'exercise',
@@ -95,6 +123,13 @@ const domainDescriptors = <DomainDescriptor>[
     icon: Icons.fitness_center,
     listPath: '/api/v1/exercise/sessions',
     listKey: 'sessions',
+    routerHint: 'actividad física: caminar, correr, cardio, pesas/fuerza, yoga, '
+        'deportes, gimnasio, entrenar',
+    keywords: <String>[
+      'caminar', 'camine', 'correr', 'corri', 'cardio', 'pesas', 'fuerza',
+      'yoga', 'deporte', 'gimnasio', 'entrenar', 'entrene', 'ejercicio',
+      'trote',
+    ],
   ),
   DomainDescriptor(
     key: 'relationships',
@@ -102,6 +137,12 @@ const domainDescriptors = <DomainDescriptor>[
     icon: Icons.people,
     listPath: '/api/v1/relationships/interactions',
     listKey: 'interactions',
+    routerHint: 'relaciones con personas: llamadas, mensajes, encuentros, '
+        'conflictos, con familia/amigos/pareja',
+    keywords: <String>[
+      'llamada', 'llame', 'mensaje', 'encuentro', 'conflicto', 'amigo',
+      'amiga', 'familia', 'pareja', 'discuti', 'visite', 'reconcilie',
+    ],
   ),
   DomainDescriptor(
     key: 'spirituality',
@@ -109,6 +150,12 @@ const domainDescriptors = <DomainDescriptor>[
     icon: Icons.self_improvement,
     listPath: '/api/v1/spirituality/entries',
     listKey: 'entries',
+    routerHint: 'vida interior: reflexión, gratitud, meditación, oración, '
+        'mindfulness, valores, propósito, paz',
+    keywords: <String>[
+      'reflexion', 'gratitud', 'meditacion', 'medite', 'oracion', 'rece',
+      'mindfulness', 'valores', 'proposito', 'paz', 'agradeci', 'espiritual',
+    ],
   ),
   DomainDescriptor(
     key: 'learning',
@@ -116,6 +163,12 @@ const domainDescriptors = <DomainDescriptor>[
     icon: Icons.school,
     listPath: '/api/v1/learning/entries',
     listKey: 'entries',
+    routerHint: 'conocimiento: libros, cursos, artículos, ideas, preguntas de '
+        'investigación, notas de estudio, citas',
+    keywords: <String>[
+      'libro', 'curso', 'articulo', 'idea', 'aprendi', 'estudie', 'lei',
+      'investigacion', 'apunte', 'leccion', 'aprendizaje',
+    ],
   ),
   DomainDescriptor(
     key: 'calendar',
@@ -123,6 +176,12 @@ const domainDescriptors = <DomainDescriptor>[
     icon: Icons.event,
     listPath: '/api/v1/calendar',
     listKey: 'events',
+    routerHint: 'eventos y fechas: viajes, cumpleaños, aniversarios, fiestas, '
+        'hitos, citas con fecha, deadlines',
+    keywords: <String>[
+      'viaje', 'cumpleanos', 'aniversario', 'fiesta', 'hito', 'deadline',
+      'evento', 'cita', 'reunion', 'vuelo', 'vencimiento',
+    ],
   ),
 ];
 
