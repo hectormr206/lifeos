@@ -43,6 +43,7 @@ class ChatMessage {
     this.images = const [],
     this.audioPath,
     this.audioDuration,
+    this.transcription,
     this.transcriptionPending = false,
     this.status,
     this.metrics,
@@ -75,10 +76,20 @@ class ChatMessage {
   /// Length of the recorded voice note ([ChatMessageKind.voice] only).
   final Duration? audioDuration;
 
-  /// A sent voice note whose speech-to-text transcription is deferred to the
-  /// STT slice — the UI shows a "Transcripción pendiente (STT)" note rather
-  /// than faking a transcription.
+  /// The on-device (Whisper) speech-to-text result for a voice note, kept
+  /// SEPARATE from [text] so the bubble can show the audio with the transcript
+  /// hidden by default and revealed on tap. This is exactly what is fed to Axi;
+  /// storing it here is a PRESENTATION concern only. Null until STT completes
+  /// (see [transcriptionPending]) and for every non-voice message.
+  final String? transcription;
+
+  /// A sent voice note whose speech-to-text transcription has not resolved yet
+  /// — the UI shows a "Transcripción pendiente (STT)" note rather than a
+  /// transcript expander. Cleared once [transcription] is set.
   final bool transcriptionPending;
+
+  /// A voice note with a recognized transcript ready to reveal on tap.
+  bool get hasTranscription => transcription != null && transcription!.isNotEmpty;
 
   /// Delivery status for an outgoing user message (WhatsApp checkmarks); null
   /// for Axi/history/voice messages that show no checkmark.
@@ -93,7 +104,13 @@ class ChatMessage {
 
   /// Returns a copy with the given fields replaced. Used to advance a user
   /// message's [status] (sending → sent → delivered) without rebuilding it.
-  ChatMessage copyWith({ChatMessageStatus? status, GenerationMetrics? metrics}) => ChatMessage(
+  ChatMessage copyWith({
+    ChatMessageStatus? status,
+    GenerationMetrics? metrics,
+    String? transcription,
+    bool? transcriptionPending,
+  }) =>
+      ChatMessage(
         id: id,
         role: role,
         text: text,
@@ -102,7 +119,8 @@ class ChatMessage {
         images: images,
         audioPath: audioPath,
         audioDuration: audioDuration,
-        transcriptionPending: transcriptionPending,
+        transcription: transcription ?? this.transcription,
+        transcriptionPending: transcriptionPending ?? this.transcriptionPending,
         status: status ?? this.status,
         metrics: metrics ?? this.metrics,
       );
@@ -118,6 +136,7 @@ class ChatMessage {
       _sameImages(other.images, images) &&
       other.audioPath == audioPath &&
       other.audioDuration == audioDuration &&
+      other.transcription == transcription &&
       other.transcriptionPending == transcriptionPending &&
       other.status == status &&
       other.metrics == metrics;
@@ -132,6 +151,7 @@ class ChatMessage {
         Object.hashAll(images.map((b) => b.length)),
         audioPath,
         audioDuration,
+        transcription,
         transcriptionPending,
         status,
         metrics,

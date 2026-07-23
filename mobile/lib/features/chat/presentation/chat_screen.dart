@@ -1358,6 +1358,7 @@ class _VoiceNoteBubble extends ConsumerStatefulWidget {
 
 class _VoiceNoteBubbleState extends ConsumerState<_VoiceNoteBubble> {
   bool _playing = false;
+  bool _transcriptExpanded = false;
   StreamSubscription<bool>? _sub;
 
   Future<void> _toggle() async {
@@ -1408,7 +1409,22 @@ class _VoiceNoteBubbleState extends ConsumerState<_VoiceNoteBubble> {
             Text(_formatDuration(duration), style: TextStyle(color: widget.onBubble)),
           ],
         ),
-        if (widget.message.transcriptionPending) ...[
+        // Once STT has resolved, the transcript lives UNDER the audio, hidden
+        // by default and revealed on tap ("Ver transcripción" ▸). This is a
+        // presentation concern only — the transcript is still stored and still
+        // what Axi consumed. While STT is still pending, show the pending note
+        // instead of an expander.
+        if (widget.message.hasTranscription) ...[
+          const SizedBox(height: 4),
+          _buildTranscriptToggle(context),
+          if (_transcriptExpanded) ...[
+            const SizedBox(height: 4),
+            Text(
+              widget.message.transcription!,
+              style: TextStyle(fontSize: 13, color: widget.onBubble),
+            ),
+          ],
+        ] else if (widget.message.transcriptionPending) ...[
           const SizedBox(height: 2),
           Text(
             AppLocalizations.of(context).chatTranscriptionPending,
@@ -1416,6 +1432,41 @@ class _VoiceNoteBubbleState extends ConsumerState<_VoiceNoteBubble> {
           ),
         ],
       ],
+    );
+  }
+
+  /// The compact tap target that shows/hides the transcript. Defaults to
+  /// COLLAPSED ("Ver transcripción" ▸); expanding flips the label + chevron.
+  Widget _buildTranscriptToggle(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final label =
+        _transcriptExpanded ? l10n.chatHideTranscription : l10n.chatShowTranscription;
+    return InkWell(
+      onTap: () => setState(() => _transcriptExpanded = !_transcriptExpanded),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _transcriptExpanded
+                  ? Icons.keyboard_arrow_down
+                  : Icons.keyboard_arrow_right,
+              size: 16,
+              color: widget.onBubble.withValues(alpha: 0.8),
+            ),
+            const SizedBox(width: 2),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: widget.onBubble.withValues(alpha: 0.8),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -151,7 +151,10 @@ void main() {
 
     expect(history.messages, hasLength(2));
     expect(history.messages[0].kind, ChatMessageKind.voice);
-    expect(history.messages[0].text, 'compra leche');
+    // The transcript persists in its dedicated field (hidden, tap-to-reveal),
+    // not on the bubble label.
+    expect(history.messages[0].transcription, 'compra leche');
+    expect(history.messages[0].text, '');
     expect(history.messages[0].transcriptionPending, isFalse);
     expect(history.messages[0].audioPath, '/tmp/voice-9.wav');
     expect(history.messages[1].role, ChatRole.axi);

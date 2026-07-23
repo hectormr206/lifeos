@@ -5,10 +5,12 @@
 // the readiness gate + banners quiet so the composer and bubbles render. No live
 // engine, no network, no plugins.
 //
-// NOTE (honest gap): the voice bubble currently renders the WhatsApp-style
-// waveform + duration + a "Transcripción pendiente (STT)" note. There is NO
-// on-screen transcript yet — speech-to-text display is a future slice — so the
-// golden shows the pending-transcript placeholder, which is the real current UI.
+// NOTE: the voice bubble renders the WhatsApp-style waveform + duration + a
+// COLLAPSED "Ver transcripción" affordance. On-device STT stores the transcript
+// in the message's dedicated `transcription` field; the bubble hides it by
+// default and reveals it on tap, so the golden shows the collapsed row (the real
+// default UI). A voice note whose STT is still pending would instead show the
+// "Transcripción pendiente (STT)" note.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -76,12 +78,12 @@ void main() {
       ChatMessage(
         id: 'v1',
         role: ChatRole.user,
-        text: 'nota de voz',
+        text: '',
         timestamp: ts,
         kind: ChatMessageKind.voice,
         audioPath: '/tmp/fake-voice-note.m4a',
         audioDuration: const Duration(seconds: 4),
-        transcriptionPending: true,
+        transcription: 'recuérdame comprar leche',
       ),
     ]);
 

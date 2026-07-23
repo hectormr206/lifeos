@@ -62,4 +62,69 @@ void main() {
 
     expect(axi.copyWith(metrics: metrics).metrics, metrics);
   });
+
+  test('transcription defaults to null and takes part in equality', () {
+    final ts = DateTime.utc(2026, 1, 1);
+    final pending = ChatMessage(
+      id: 'v1',
+      role: ChatRole.user,
+      text: '',
+      timestamp: ts,
+      kind: ChatMessageKind.voice,
+      transcriptionPending: true,
+    );
+    expect(pending.transcription, isNull);
+    expect(pending.hasTranscription, isFalse);
+
+    final transcribed = ChatMessage(
+      id: 'v1',
+      role: ChatRole.user,
+      text: '',
+      timestamp: ts,
+      kind: ChatMessageKind.voice,
+      transcription: 'comprar leche',
+    );
+    expect(pending, isNot(equals(transcribed)));
+    expect(transcribed.hasTranscription, isTrue);
+  });
+
+  test('copyWith stores a transcription and clears the pending flag', () {
+    final ts = DateTime.utc(2026, 1, 1);
+    final pending = ChatMessage(
+      id: 'v1',
+      role: ChatRole.user,
+      text: '',
+      timestamp: ts,
+      kind: ChatMessageKind.voice,
+      audioPath: '/tmp/v.wav',
+      transcriptionPending: true,
+    );
+
+    final done =
+        pending.copyWith(transcription: 'hola mundo', transcriptionPending: false);
+
+    expect(done.transcription, 'hola mundo');
+    expect(done.transcriptionPending, isFalse);
+    // The bubble label and audio clip are untouched by the transcript store.
+    expect(done.text, '');
+    expect(done.audioPath, '/tmp/v.wav');
+    expect(done.kind, ChatMessageKind.voice);
+  });
+
+  test('copyWith(status:) preserves an already-set transcription', () {
+    final ts = DateTime.utc(2026, 1, 1);
+    final transcribed = ChatMessage(
+      id: 'v1',
+      role: ChatRole.user,
+      text: '',
+      timestamp: ts,
+      kind: ChatMessageKind.voice,
+      transcription: 'algo',
+    );
+
+    // Delivery ticks advance on the voice bubble AFTER the transcript is set.
+    final delivered = transcribed.copyWith(status: ChatMessageStatus.delivered);
+    expect(delivered.transcription, 'algo');
+    expect(delivered.status, ChatMessageStatus.delivered);
+  });
 }

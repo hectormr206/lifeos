@@ -552,6 +552,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatTranscriptionPending => 'Transcription pending (STT)';
 
   @override
+  String get chatShowTranscription => 'Show transcription';
+
+  @override
+  String get chatHideTranscription => 'Hide transcription';
+
+  @override
   String get sttTranscribing => 'Transcribing…';
 
   @override

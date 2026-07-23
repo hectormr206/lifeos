@@ -684,27 +684,20 @@ class ChatNotifier extends Notifier<ChatUiState> {
     _persist(reply);
   }
 
-  /// Writes [transcript] onto the voice bubble [noteId] and clears its
-  /// pending flag, leaving the audio clip + everything else intact. Returns
-  /// the updated bubble so the caller can persist exactly what is shown, or
-  /// null when the bubble is gone (history cleared mid-transcription).
+  /// Stores [transcript] in the voice bubble [noteId]'s dedicated
+  /// [ChatMessage.transcription] field and clears its pending flag, leaving the
+  /// audio clip, the (empty) bubble label, and everything else intact. The
+  /// transcript is a HIDDEN, tap-to-reveal presentation concern — it is NOT
+  /// written onto [ChatMessage.text]. What Axi consumes is the caller's
+  /// `transcript` variable, unchanged. Returns the updated bubble so the caller
+  /// can persist exactly what is shown, or null when the bubble is gone
+  /// (history cleared mid-transcription).
   ChatMessage? _setVoiceTranscript(String noteId, String transcript) {
     ChatMessage? updated;
     final messages = state.messages.map((m) {
       if (m.id != noteId) return m;
-      return updated = ChatMessage(
-        id: m.id,
-        role: m.role,
-        text: transcript,
-        timestamp: m.timestamp,
-        kind: m.kind,
-        images: m.images,
-        audioPath: m.audioPath,
-        audioDuration: m.audioDuration,
-        transcriptionPending: false,
-        status: m.status,
-        metrics: m.metrics,
-      );
+      return updated =
+          m.copyWith(transcription: transcript, transcriptionPending: false);
     }).toList();
     state = state.copyWith(messages: messages);
     return updated;

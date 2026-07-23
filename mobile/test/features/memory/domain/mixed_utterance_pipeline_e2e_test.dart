@@ -14,11 +14,12 @@
 // depends on. We hand it the strict-JSON `{"facts":[...],"relations":[...]}`
 // the extractor expects, per call.
 //
-// ── HONEST BASELINE — the segmentation gap this test pins ────────────────────
-// The app does NOT yet segment a single mixed-topic utterance. Group 1 proves
-// what the CURRENT pipeline does with the mixed utterance; groups 2–4 prove each
-// sub-capability works IN ISOLATION (one topic per turn). The delta between them
-// is precisely the future segmentation slice. See the group doc-comments.
+// ── CROWN-JEWEL SEGMENTATION — multi-topic / multi-person ────────────────────
+// Group 1 proves the mixed-topic utterance is now SEGMENTED into
+// subject-attributed clauses: two blood-pressure readings routed to the right
+// people (mine → me, Celia's → the wife) plus the exercise + spirituality
+// topics on the user hub. Groups 2–4 keep proving each sub-capability in
+// ISOLATION (one topic per turn) — the single-topic behaviour is unchanged.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:lifeos/core/graph/graph_records.dart';
@@ -81,27 +82,23 @@ void main() {
       'y de mi esposa son 120 60 49 pulsos';
 
   // ───────────────────────────────────────────────────────────────────────────
-  // GROUP 1 — the REAL current behaviour on the MIXED utterance.
+  // GROUP 1 — the CROWN-JEWEL multi-topic / multi-person SEGMENTATION.
   //
-  // This documents the segmentation GAP as executable truth. With one
-  // mixed-topic line the pipeline:
-  //   * captures ONLY the FIRST blood-pressure reading (122) — there is no
-  //     multi-metric split;
-  //   * MIS-ATTRIBUTES it to "esposa", because the loose subject detector sees
-  //     "de mi esposa" ANYWHERE in the line and treats the whole utterance as
-  //     one subject (my 122 should be mine, Celia's 120 is never captured);
-  //   * NEVER invokes the model extractor (a structured health hit returns
-  //     early), so the exercise + spirituality topics are DROPPED.
-  // These asserts will need updating when the segmentation slice lands — that is
-  // the point of the baseline.
+  // One mixed-topic line is split into subject-attributed clauses so the SAME
+  // utterance now produces the CORRECT result deterministically:
+  //   * MY blood pressure (sys=122) → the USER hub — the "de mi esposa" marker
+  //     is LOCAL to its own clause and no longer hijacks the whole line;
+  //   * Celia's blood pressure (sys=120) → the wife/Celia person hub;
+  //   * exercise "corrí 5km" → the user hub, EXERCISE domain;
+  //   * spirituality "recé el rosario" → the user hub, SPIRITUALITY domain;
+  //   * every node stamped occurred_at = now.
+  // Medical numbers stay 100% deterministic (the model is scripted EMPTY here to
+  // prove the readings + person routing never depend on it).
   // ───────────────────────────────────────────────────────────────────────────
-  group('mixed utterance (current pipeline — segmentation NOT yet done)', () {
-    test('captures exactly ONE BP reading, mis-attributed, and skips the model',
+  group('mixed utterance (multi-topic / multi-person segmentation)', () {
+    test('splits into two correctly-attributed BPs + exercise + spirituality',
         () async {
-      final engine = FakeLocalLlmEngine(
-        reply: (_) => '{"facts":[{"label":"debería no ejecutarse"}],'
-            '"relations":[]}',
-      );
+      final engine = FakeLocalLlmEngine(reply: (_) => '{"facts":[],"relations":[]}');
       final builder = ChatContextBuilder(
         loadDeps: () async =>
             ChatContextDeps(store: store, writer: writer, engine: engine),
@@ -115,28 +112,45 @@ void main() {
         sourceMessageId: 'msg-mixed',
       );
 
-      // Only ONE structured health entry — no segmentation into two readings.
+      // TWO structured blood-pressure entries, each on the RIGHT subject.
       final bp = await domainRepo().list('health', type: 'blood_pressure');
-      expect(bp.length, 1, reason: 'no multi-metric segmentation yet');
-      expect(bp.single.data['systolic'], 122, reason: 'the FIRST reading only');
+      expect(bp.length, 2, reason: 'the mixed line splits into two readings');
 
-      // GAP: the whole line is attributed to esposa (loose subject match on
-      // "de mi esposa"), so MY reading is mis-filed and Celia's 120 is lost.
-      expect(bp.single.data['subject'], 'esposa',
-          reason: 'current loose-subject behaviour — the segmentation slice '
-              'must fix this so 122 is the user and 120 is Celia');
-      expect(bp.any((e) => e.data['systolic'] == 120), isFalse,
-          reason: "Celia's real reading is not captured from a mixed line");
+      final mine = bp.firstWhere((e) => e.data['subject'] == null);
+      expect(mine.data['systolic'], 122, reason: 'MY 122 → the user (no marker)');
 
-      // The deterministic health hit returned early → the model extractor was
-      // never asked, so exercise + spirituality never became nodes.
-      expect(engine.generateCount, 0,
-          reason: 'structured health hit short-circuits the model pass');
-      final labels = (await facts()).map((f) => f.label).toList();
-      expect(labels.any((l) => l.contains('5km') || l.contains('5 km')), isFalse);
-      expect(labels.any((l) => l.toLowerCase().contains('rosario')), isFalse);
+      final celiaReading = bp.firstWhere((e) => e.data['subject'] == 'esposa');
+      expect(celiaReading.data['systolic'], 120,
+          reason: "Celia's 120 → the wife, from the LOCAL marker only");
 
-      // Temporal rule STILL holds for everything that WAS written.
+      // Celia's reading links to the named Celia person hub, NOT the user.
+      final celia = (await people()).firstWhere((p) => p.label == 'Celia');
+      final celiaFact =
+          (await facts()).firstWhere((f) => f.data['systolic'] == 120);
+      final involves =
+          await store.edgesForNode(celiaFact.uuid, relation: 'involves');
+      expect(involves.map((e) => e.dstUuid), contains(celia.uuid));
+
+      // Exercise + spirituality clauses became user-hub facts on the right
+      // domain — captured DETERMINISTICALLY (the scripted model returned empty).
+      final exercise =
+          (await facts()).where((f) => f.domain == 'exercise').toList();
+      expect(exercise.any((f) => f.label.contains('5km') || f.label.contains('5 km')),
+          isTrue,
+          reason: 'exercise clause routes to the exercise domain');
+      final spirit =
+          (await facts()).where((f) => f.domain == 'spirituality').toList();
+      expect(spirit.any((f) => f.label.toLowerCase().contains('rosario')), isTrue,
+          reason: 'spirituality clause routes to the spirituality domain');
+
+      // The exercise + spirituality facts hang off the USER hub (about edge).
+      final hub = await userHub();
+      final about = await store.edgesForNode(hub.uuid, relation: 'about');
+      final aboutDst = about.map((e) => e.dstUuid).toSet();
+      expect(aboutDst.contains(exercise.first.uuid), isTrue);
+      expect(aboutDst.contains(spirit.first.uuid), isTrue);
+
+      // Temporal rule holds for EVERY written node.
       for (final n in [...await facts(), ...await entities()]) {
         expect(n.occurredAt, isNotNull, reason: 'every written node is stamped');
       }

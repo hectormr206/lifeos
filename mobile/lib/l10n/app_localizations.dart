@@ -1106,6 +1106,18 @@ abstract class AppLocalizations {
   /// **'Transcription pending (STT)'**
   String get chatTranscriptionPending;
 
+  /// No description provided for @chatShowTranscription.
+  ///
+  /// In en, this message translates to:
+  /// **'Show transcription'**
+  String get chatShowTranscription;
+
+  /// No description provided for @chatHideTranscription.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide transcription'**
+  String get chatHideTranscription;
+
   /// No description provided for @sttTranscribing.
   ///
   /// In en, this message translates to:

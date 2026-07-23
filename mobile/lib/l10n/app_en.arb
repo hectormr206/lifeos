@@ -220,6 +220,8 @@
   "metricBackend": "Backend",
   "metricModel": "Model",
   "chatTranscriptionPending": "Transcription pending (STT)",
+  "chatShowTranscription": "Show transcription",
+  "chatHideTranscription": "Hide transcription",
   "sttTranscribing": "Transcribing…",
   "sttDownloadVoiceModel": "Download voice model",
   "sttDownloadingVoiceModel": "Downloading voice model… {percent}%",

@@ -557,6 +557,12 @@ class AppLocalizationsEs extends AppLocalizations {
   String get chatTranscriptionPending => 'Transcripción pendiente (STT)';
 
   @override
+  String get chatShowTranscription => 'Ver transcripción';
+
+  @override
+  String get chatHideTranscription => 'Ocultar transcripción';
+
+  @override
   String get sttTranscribing => 'Transcribiendo…';
 
   @override

@@ -199,6 +199,8 @@
   "metricBackend": "Backend",
   "metricModel": "Modelo",
   "chatTranscriptionPending": "Transcripción pendiente (STT)",
+  "chatShowTranscription": "Ver transcripción",
+  "chatHideTranscription": "Ocultar transcripción",
   "sttTranscribing": "Transcribiendo…",
   "sttDownloadVoiceModel": "Descargar modelo de voz",
   "sttDownloadingVoiceModel": "Descargando modelo de voz… {percent}%",

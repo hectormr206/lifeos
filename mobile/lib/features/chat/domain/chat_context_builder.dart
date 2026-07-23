@@ -38,6 +38,7 @@ import '../../memory/domain/person_naming.dart';
 import '../../memory/domain/relation_extractor.dart';
 import '../../memory/domain/recall_block.dart';
 import '../../memory/domain/subject.dart';
+import '../../memory/domain/utterance_segmenter.dart';
 import 'axi_prompt_context.dart';
 
 /// The runtime dependencies the builder composes, resolved lazily per turn.
@@ -73,6 +74,7 @@ class ChatContextBuilder {
     required this.languageCode,
     required this.now,
     this.router = const DomainRouter(),
+    this.segmenter = const UtteranceSegmenter(),
     this.recallK = 8,
   });
 
@@ -80,6 +82,11 @@ class ChatContextBuilder {
   final String Function() languageCode;
   final DateTime Function() now;
   final DomainRouter router;
+
+  /// Splits a single dictated turn into subject-attributed clauses so a
+  /// multi-topic / multi-person line is captured on the correct hubs.
+  final UtteranceSegmenter segmenter;
+
   final int recallK;
 
   /// Build the full prompt text for [message]: Axi's behavior prompt + the
@@ -145,21 +152,24 @@ class ChatContextBuilder {
         data: provenance.isEmpty ? null : provenance,
       );
 
-      // ── DETERMINISTIC structured capture, evaluated FIRST ──────────────────
-      // A metric parse or an explicit naming statement is itself a strong
-      // save-worthy signal, so both are computed BEFORE the generic statement
-      // gate — a bare "122 77 55 pulsos" (whose only content is numbers) would
-      // otherwise be dropped by [_looksLikeStatement]. Model-free.
-      final parsed = parseHealthEntry(userText);
+      // ── DETERMINISTIC multi-topic / multi-person SEGMENTATION, FIRST ───────
+      // A single dictated line often braids several topics AND several people
+      // ("122 77 55 pulsos, corrí 5km …, y de mi esposa son 120 60 49 pulsos").
+      // Split it into subject-attributed clauses so EACH reading/note lands on
+      // the right hub, and a family-subject marker is LOCAL to its clause —
+      // never a global whole-string scan that hijacks the whole utterance.
+      // Model-free.
+      final segments = segmenter.segment(userText);
       final naming = detectPersonNaming(userText);
-      if (parsed == null && naming == null && !_looksLikeStatement(userText)) {
+      final anyHealth = segments.any((s) => parseHealthCore(s.text) != null);
+      if (!anyHealth && naming == null && !_looksLikeStatement(userText)) {
         return;
       }
 
-      // ── Deterministic explicit name/nickname learning ──────────────────────
+      // ── Deterministic explicit name/nickname learning (whole-turn scoped) ──
       // "mi esposa se llama Celia" / "a mi papá le decimos Beto" upgrades the
       // relation's person node to a real named node (label + alias). The
-      // utterance itself still falls through to the normal fact write below.
+      // clause(s) still fall through to the normal per-segment write below.
       if (naming != null) {
         await deps.writer.learnPersonName(
           naming.relation,
@@ -168,63 +178,50 @@ class ChatContextBuilder {
         );
       }
 
-      // ── Structured health capture (crown jewel) ────────────────────────────
-      // On a hit the reading lands as a TYPED domain entry (visible in the
-      // domains list) plus its graph fact, attributed to the parsed subject; on
-      // a miss the raw-fact behavior below is unchanged (never mis-file).
-      if (parsed != null) {
-        final entryType = localEntryTypeFor(parsed.domainKey, parsed.type);
-        if (entryType != null) {
-          final structured = await _captureStructured(
-            deps,
-            parsed,
-            entryType,
-            provenance,
-            userText,
-            sourceMessageId,
-            sourceConversationUuid,
-          );
-          await _indexIfPossible(deps, structured);
-          return; // structured hit → done, skip the raw fallback.
+      // ── Per-segment capture ────────────────────────────────────────────────
+      // Medical readings are captured 100% deterministically on the segment's
+      // resolved subject; every other clause becomes a fact on the right hub.
+      var hasNonHealthContent = false;
+      for (var i = 0; i < segments.length; i++) {
+        final seg = segments[i];
+
+        // Structured health capture (crown jewel): a hit lands as a TYPED domain
+        // entry (visible in the domains list) plus its graph fact, attributed to
+        // THIS clause's subject (122 → me, 120 → Celia). Medical numbers are
+        // NEVER routed through the model.
+        final parsed = parseHealthCore(seg.text)?.withSubject(seg.subject);
+        if (parsed != null) {
+          final entryType = localEntryTypeFor(parsed.domainKey, parsed.type);
+          if (entryType != null) {
+            final structured = await _captureStructured(
+              deps,
+              parsed,
+              entryType,
+              provenance,
+              userText,
+              sourceMessageId,
+              sourceConversationUuid,
+              i,
+            );
+            await _indexIfPossible(deps, structured);
+            continue; // this reading is owned deterministically.
+          }
         }
+
+        // Non-health clause → a fact on the correct hub/domain (or generic).
+        hasNonHealthContent = true;
+        await _captureSegmentFact(deps, seg, provenance);
       }
 
-      // Extract a concise fact: strip any leading/trailing family-subject marker
-      // ("mi esposa ...") so the label is the reading itself and the subject is
-      // recorded separately (A3 subject wiring).
-      final match = detectSubject(userText);
-      final subject = match?.subject;
-      final source = (match != null && match.remainder.trim().isNotEmpty)
-          ? match.remainder
-          : userText;
-      final label = renderLabel(rawUtterance: source) ?? userText.trim();
-      final domain = router.routeDomain(userText);
-
-      final node = await deps.writer.writeFact(
-        domain: domain,
-        label: label,
-        subject: subject,
-        // EVERY extracted fact is temporally stamped (occurred_at = now):
-        // whether it routes to a domain or is a bare identity/relationship
-        // statement, it happened NOW from the graph's point of view, so recall
-        // and the deterministic prediction layer can always place it in time.
-        occurredAt: now(),
-        data: <String, dynamic>{'raw_utterance': userText.trim(), ...provenance},
-      );
-
-      // Make the new fact semantically recallable (embedder permitting), then
-      // free the embedder's RAM again.
-      await _indexIfPossible(deps, node);
-
       // ── Open-ended relation extraction (model-based complement) ────────────
-      // The deterministic parsers above did NOT fully consume this turn (a
-      // structured health hit returns early, so medical/physiological content
-      // never reaches here). When an on-device model is wired, ask it for the
-      // open-ended facts + subject-predicate-object relations the deterministic
-      // parsers can't catch. Best-effort; every write is stamped occurred_at =
-      // now inside the extractor. A miss / malformed JSON is a no-op.
+      // Only when the turn carried NON-health content the deterministic parsers
+      // could not fully own (a pure-medical turn returns without ever touching
+      // the model). When an on-device model is wired, ask it for the open-ended
+      // facts + subject-predicate-object relations the deterministic parsers
+      // can't catch. Best-effort; person routing + medical values NEVER depend
+      // on it, and isLoggedVital inside the extractor still guards every write.
       final engine = deps.engine;
-      if (engine != null) {
+      if (hasNonHealthContent && engine != null) {
         await RelationExtractor(
           engine: engine,
           writer: deps.writer,
@@ -249,12 +246,17 @@ class ChatContextBuilder {
     String userText,
     String? sourceMessageId,
     String? sourceConversationUuid,
+    int segmentIndex,
   ) async {
     final repo = LocalDomainRepository(deps.store, writer: deps.writer, now: now);
     final seed = sourceMessageId ??
         sourceConversationUuid ??
         now().toUtc().microsecondsSinceEpoch.toString();
-    final entryId = 'chat:$seed:${parsed.type}';
+    // The segment index disambiguates several readings of the SAME type in one
+    // turn ("122 …, y de mi esposa 120 …" → two blood_pressure entries) while
+    // keeping the write idempotent: a retry of the same message reuses the same
+    // per-segment ids instead of duplicating.
+    final entryId = 'chat:$seed:${parsed.type}:$segmentIndex';
     final entry = await repo.create(
       parsed.domainKey,
       entryType,
@@ -269,6 +271,39 @@ class ChatContextBuilder {
       },
     );
     return deps.store.getNodeByUuid(entry.uuid);
+  }
+
+  /// Write one NON-health clause as a graph fact on the correct hub, routed to a
+  /// deterministic domain when the signal is clear (exercise verbs → exercise,
+  /// "recé …" → spirituality…), stamped occurred_at = now and attributed to the
+  /// clause's resolved subject. Clauses with no save-worthy signal (no domain,
+  /// no personal-recall vocabulary, no family subject) are skipped — the model
+  /// extractor is the catch-all for open-ended content. Best-effort indexing
+  /// follows so the fact is semantically recallable.
+  Future<void> _captureSegmentFact(
+    ChatContextDeps deps,
+    UtteranceSegment seg,
+    Map<String, Object?> provenance,
+  ) async {
+    final text = seg.text.trim();
+    if (text.isEmpty) return;
+    final domain = router.routeDomain(text);
+    if (domain == null &&
+        seg.subject == null &&
+        !looksLikePersonalRecall(text)) {
+      return; // no deterministic signal → leave it to the model complement.
+    }
+    final label = renderLabel(rawUtterance: text) ?? text;
+    final node = await deps.writer.writeFact(
+      domain: domain,
+      label: label,
+      subject: seg.subject,
+      // Every extracted fact is stamped occurred_at = now so recall and the
+      // deterministic prediction layer can place it in time.
+      occurredAt: now(),
+      data: <String, dynamic>{'raw_utterance': text, ...provenance},
+    );
+    await _indexIfPossible(deps, node);
   }
 
   /// Best-effort RAG indexing of a freshly-written fact node, disposing the

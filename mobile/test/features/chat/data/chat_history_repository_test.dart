@@ -110,6 +110,29 @@ void main() {
     expect(loaded.audioPath, '/tmp/voice-1.m4a');
     expect(loaded.audioDuration, const Duration(seconds: 5));
     expect(loaded.transcriptionPending, isTrue);
+    // A pending note has no transcript yet.
+    expect(loaded.transcription, isNull);
+  });
+
+  test('a transcribed voice note round-trips its transcription (collapsed)', () async {
+    final voice = ChatMessage(
+      id: 'v2',
+      role: ChatRole.user,
+      text: '',
+      timestamp: DateTime.utc(2026, 1, 1),
+      kind: ChatMessageKind.voice,
+      audioPath: '/tmp/voice-2.m4a',
+      audioDuration: const Duration(seconds: 3),
+      transcription: 'comprar leche',
+    );
+    await repo.appendMessage(voice);
+
+    final loaded = (await repo.loadMessages()).single;
+    expect(loaded.kind, ChatMessageKind.voice);
+    expect(loaded.transcription, 'comprar leche');
+    expect(loaded.transcriptionPending, isFalse);
+    // The transcript stays OFF the bubble label — presentation-only.
+    expect(loaded.text, '');
   });
 
   test('generation metrics round-trip on an Axi reply', () async {

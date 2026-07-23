@@ -132,6 +132,73 @@ void main() {
     expect(find.byType(TextField), findsOneWidget);
   });
 
+  testWidgets('a transcribed voice note renders a COLLAPSED transcript that expands on tap',
+      (tester) async {
+    final ts = DateTime.now();
+    const transcript = 'recuérdame comprar leche';
+    final repo = _FakeChatRepository(
+      history: [
+        ChatMessage(
+          id: 'v1',
+          role: ChatRole.user,
+          text: '',
+          timestamp: ts,
+          kind: ChatMessageKind.voice,
+          audioPath: '/tmp/fake-voice.m4a',
+          audioDuration: const Duration(seconds: 4),
+          transcription: transcript,
+        ),
+      ],
+    );
+
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: _chatApp));
+
+    // Collapsed by default: the "Ver transcripción" affordance is shown but the
+    // transcript text is NOT, and it is not a pending note.
+    expect(find.text('Ver transcripción'), findsOneWidget);
+    expect(find.text('Ocultar transcripción'), findsNothing);
+    expect(find.text(transcript), findsNothing);
+    expect(find.text('Transcripción pendiente (STT)'), findsNothing);
+
+    // Tapping reveals the transcript and flips the label.
+    await tester.tap(find.text('Ver transcripción'));
+    await tester.pump();
+    expect(find.text(transcript), findsOneWidget);
+    expect(find.text('Ocultar transcripción'), findsOneWidget);
+    expect(find.text('Ver transcripción'), findsNothing);
+
+    // Tapping again collapses it back.
+    await tester.tap(find.text('Ocultar transcripción'));
+    await tester.pump();
+    expect(find.text(transcript), findsNothing);
+    expect(find.text('Ver transcripción'), findsOneWidget);
+  });
+
+  testWidgets('a still-pending voice note shows the pending note and NO expander',
+      (tester) async {
+    final ts = DateTime.now();
+    final repo = _FakeChatRepository(
+      history: [
+        ChatMessage(
+          id: 'v1',
+          role: ChatRole.user,
+          text: '',
+          timestamp: ts,
+          kind: ChatMessageKind.voice,
+          audioPath: '/tmp/fake-voice.m4a',
+          audioDuration: const Duration(seconds: 4),
+          transcriptionPending: true,
+        ),
+      ],
+    );
+
+    await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(repo)], child: _chatApp));
+
+    expect(find.text('Transcripción pendiente (STT)'), findsOneWidget);
+    expect(find.text('Ver transcripción'), findsNothing);
+    expect(find.text('Ocultar transcripción'), findsNothing);
+  });
+
   testWidgets('input bar shows attach, mic and send buttons', (tester) async {
     await _pumpScreen(tester, ProviderScope(overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())], child: _chatApp));
 

@@ -221,6 +221,7 @@ class ChatHistoryRepository {
         'kind': m.kind.name,
         'createdAt': m.timestamp.toUtc().millisecondsSinceEpoch,
         'transcriptionPending': m.transcriptionPending,
+        if (m.transcription != null) 'transcription': m.transcription,
         if (m.status != null) 'status': m.status!.name,
         if (m.audioPath != null) 'audioPath': m.audioPath,
         if (m.audioDuration != null) 'audioDurationMs': m.audioDuration!.inMilliseconds,
@@ -247,6 +248,7 @@ class ChatHistoryRepository {
       kind: _kindFrom(d['kind']),
       audioPath: d['audioPath'] as String?,
       audioDuration: audioMs is num ? Duration(milliseconds: audioMs.toInt()) : null,
+      transcription: d['transcription'] as String?,
       transcriptionPending: d['transcriptionPending'] == true,
       // History-loaded messages carry no delivery checkmark (mobile-chat
       // convention: only in-flight user messages show a tick).

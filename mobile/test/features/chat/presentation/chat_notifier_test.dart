@@ -458,7 +458,10 @@ void main() {
       // The voice bubble now carries the transcript, keeps its clip, and is no
       // longer pending.
       final voice = state.messages.firstWhere((m) => m.kind == ChatMessageKind.voice);
-      expect(voice.text, 'recuérdame comprar leche');
+      // Presentation change: the transcript lives in its own field (hidden,
+      // tap-to-reveal), NOT written onto the user-facing bubble label.
+      expect(voice.transcription, 'recuérdame comprar leche');
+      expect(voice.text, '');
       expect(voice.transcriptionPending, isFalse);
       expect(voice.audioPath, '/tmp/voice-1.wav');
 
