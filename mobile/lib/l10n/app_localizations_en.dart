@@ -290,6 +290,21 @@ class AppLocalizationsEn extends AppLocalizations {
       'Couldn\'t download the voice model. Tap to retry.';
 
   @override
+  String get ttsDownloadVoice => 'Download neural voice';
+
+  @override
+  String ttsDownloadingVoice(Object percent) {
+    return 'Downloading neural voice… $percent%';
+  }
+
+  @override
+  String get ttsVoiceReady => 'Neural voice ready';
+
+  @override
+  String get ttsVoiceFailed =>
+      'Couldn\'t download the neural voice. The system voice will be used meanwhile.';
+
+  @override
   String get briefingTitle => 'Briefing';
 
   @override

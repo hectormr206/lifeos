@@ -39,7 +39,9 @@ flutter build apk --release \
   --build-number="$BUILD_NUMBER" \
   --dart-define=UPDATE_BASE_URL="$UPDATE_BASE_URL" \
   --dart-define=UPDATE_ACCESS_KEY="$UPDATE_ACCESS_KEY" \
-  --dart-define=STT_MODEL_BASE_URL="${STT_MODEL_BASE_URL:-$UPDATE_BASE_URL/stt}"
+  --dart-define=STT_MODEL_BASE_URL="${STT_MODEL_BASE_URL:-$UPDATE_BASE_URL/stt}" \
+  --dart-define=TTS_MODEL_BASE_URL="${TTS_MODEL_BASE_URL:-$UPDATE_BASE_URL/tts}" \
+  --dart-define=EMBED_MODEL_BASE_URL="${EMBED_MODEL_BASE_URL:-$UPDATE_BASE_URL/embed}"
 
 APK="$MOBILE_DIR/build/app/outputs/flutter-apk/app-release.apk"
 [[ -f "$APK" ]] || { echo "ERROR: no se generó $APK" >&2; exit 1; }

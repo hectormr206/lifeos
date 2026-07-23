@@ -1,0 +1,42 @@
+import 'dart:typed_data';
+
+import 'tts_voice.dart';
+
+/// Raised by [SherpaPiperTtsGateway.speak] when the Piper voice for the
+/// current language is not installed yet — the composite gateway falls back
+/// to the system voice AND triggers the lazy background download.
+class PiperVoiceUnavailableException implements Exception {
+  PiperVoiceUnavailableException(this.languageCode);
+  final String languageCode;
+  @override
+  String toString() => 'Piper voice for "$languageCode" is not installed.';
+}
+
+/// Raised when synthesis itself fails (engine load error, bogus model…) —
+/// the composite gateway falls back to the system voice WITHOUT re-triggering
+/// a download (the files are present; downloading again would not help).
+class PiperSynthesisException implements Exception {
+  PiperSynthesisException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// Raw synthesized audio: mono Float32 PCM in -1..1 at [sampleRate] Hz.
+class SynthesizedAudio {
+  const SynthesizedAudio({required this.samples, required this.sampleRate});
+  final Float32List samples;
+  final int sampleRate;
+}
+
+/// Seam over the neural synthesis engine (sherpa-onnx Piper VITS) so the
+/// gateway is unit-testable without FFI. Implementations MUST run the actual
+/// synthesis off the UI thread — it is CPU-bound for hundreds of ms.
+abstract class PiperSpeechSynthesizer {
+  /// Synthesizes [text] with [voice]. Throws [PiperSynthesisException] on any
+  /// engine failure (never returns silently-empty audio as success).
+  Future<SynthesizedAudio> synthesize({
+    required TtsVoicePaths voice,
+    required String text,
+  });
+}

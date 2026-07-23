@@ -632,6 +632,30 @@ abstract class AppLocalizations {
   /// **'Couldn\'t download the voice model. Tap to retry.'**
   String get sttVoiceModelFailed;
 
+  /// No description provided for @ttsDownloadVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Download neural voice'**
+  String get ttsDownloadVoice;
+
+  /// No description provided for @ttsDownloadingVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading neural voice… {percent}%'**
+  String ttsDownloadingVoice(Object percent);
+
+  /// No description provided for @ttsVoiceReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Neural voice ready'**
+  String get ttsVoiceReady;
+
+  /// No description provided for @ttsVoiceFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t download the neural voice. The system voice will be used meanwhile.'**
+  String get ttsVoiceFailed;
+
   /// No description provided for @briefingTitle.
   ///
   /// In en, this message translates to:

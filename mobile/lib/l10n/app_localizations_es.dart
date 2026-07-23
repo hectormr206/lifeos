@@ -293,6 +293,21 @@ class AppLocalizationsEs extends AppLocalizations {
       'No se pudo descargar el modelo de voz. Toca para reintentar.';
 
   @override
+  String get ttsDownloadVoice => 'Descargar voz neuronal';
+
+  @override
+  String ttsDownloadingVoice(Object percent) {
+    return 'Descargando voz neuronal… $percent%';
+  }
+
+  @override
+  String get ttsVoiceReady => 'Voz neuronal lista';
+
+  @override
+  String get ttsVoiceFailed =>
+      'No se pudo descargar la voz neuronal. Mientras tanto se usará la voz del sistema.';
+
+  @override
   String get briefingTitle => 'Boletín';
 
   @override

@@ -110,6 +110,11 @@
   "sttVoiceModelReady": "Voice model ready",
   "sttVoiceModelFailed": "Couldn't download the voice model. Tap to retry.",
 
+  "ttsDownloadVoice": "Download neural voice",
+  "ttsDownloadingVoice": "Downloading neural voice… {percent}%",
+  "ttsVoiceReady": "Neural voice ready",
+  "ttsVoiceFailed": "Couldn't download the neural voice. The system voice will be used meanwhile.",
+
   "briefingTitle": "Briefing",
   "briefingSourcesTooltip": "Sources",
   "briefingGenerating": "Generating…",

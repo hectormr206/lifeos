@@ -95,6 +95,11 @@
   "sttVoiceModelReady": "Modelo de voz listo",
   "sttVoiceModelFailed": "No se pudo descargar el modelo de voz. Toca para reintentar.",
 
+  "ttsDownloadVoice": "Descargar voz neuronal",
+  "ttsDownloadingVoice": "Descargando voz neuronal… {percent}%",
+  "ttsVoiceReady": "Voz neuronal lista",
+  "ttsVoiceFailed": "No se pudo descargar la voz neuronal. Mientras tanto se usará la voz del sistema.",
+
   "briefingTitle": "Boletín",
   "briefingSourcesTooltip": "Fuentes",
   "briefingGenerating": "Generando…",
