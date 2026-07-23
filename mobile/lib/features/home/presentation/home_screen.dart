@@ -138,85 +138,221 @@ class _ConnectedView extends ConsumerWidget {
           error: (_, _) => Text(l10n.homeEngineUnreachable),
         ),
         const SizedBox(height: 24),
+        // Primary CTA — talking to Axi stays the headline action.
         FilledButton.icon(
           onPressed: () => context.push('/chat'),
           icon: const Icon(Icons.chat_bubble_outline),
           label: Text(l10n.homeTalkToAxi),
         ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/domains'),
-          icon: const Icon(Icons.dashboard_outlined),
-          label: Text(l10n.homeMyData),
+        const SizedBox(height: 24),
+        // Everything below is grouped into labeled sections so that viewing
+        // records ("Tus registros") is obvious and prominent, and the
+        // system/plumbing entries sink to the bottom. Constrained to the same
+        // 340-wide column as the update banner for a tidy vertical rhythm.
+        SizedBox(
+          width: 340,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 1) Your records — the most prominent group.
+              _SectionHeader(label: l10n.homeSectionRecords),
+              // "Mi vida" is the primary records entry: a filled tonal card
+              // with a subtitle so it clearly stands out from the rest.
+              _RecordCard(
+                icon: Icons.auto_stories_outlined,
+                title: l10n.homeMyLife,
+                subtitle: l10n.homeMyLifeSubtitle,
+                onTap: () => context.push('/mi-vida'),
+                prominent: true,
+              ),
+              const SizedBox(height: 8),
+              // Per-domain entry point: browse/add records by category.
+              _RecordCard(
+                icon: Icons.dashboard_outlined,
+                title: l10n.homeMyData,
+                subtitle: l10n.homeMyDataSubtitle,
+                onTap: () => context.push('/domains'),
+              ),
+
+              // 2) Axi — the living agent surfaces.
+              _SectionHeader(label: l10n.homeSectionAxi),
+              _NavButton(
+                icon: Icons.favorite_border,
+                label: l10n.homeHowIsAxi,
+                onPressed: () => context.push('/body'),
+              ),
+              const SizedBox(height: 12),
+              _NavButton(
+                icon: Icons.hub_outlined,
+                label: l10n.homeBrain,
+                onPressed: () => context.push('/graph'),
+              ),
+              const SizedBox(height: 12),
+              _NavButton(
+                icon: Icons.groups_outlined,
+                label: l10n.homeMeetings,
+                onPressed: () => context.push('/meetings'),
+              ),
+
+              // 3) Notices & summaries.
+              _SectionHeader(label: l10n.homeSectionNotices),
+              _NavButton(
+                icon: Icons.notifications_outlined,
+                label: l10n.homeReminders,
+                onPressed: () => context.push('/reminders'),
+              ),
+              const SizedBox(height: 12),
+              _NavButton(
+                icon: Icons.insights_outlined,
+                label: l10n.homeSummary,
+                onPressed: () => context.push('/insights'),
+              ),
+              const SizedBox(height: 12),
+              _NavButton(
+                icon: Icons.campaign_outlined,
+                label: l10n.homeBulletins,
+                onPressed: () => context.push('/briefings'),
+              ),
+              const SizedBox(height: 12),
+              _NavButton(
+                icon: Icons.today_outlined,
+                label: l10n.homeTodaySummary,
+                onPressed: () => context.push('/digest'),
+              ),
+
+              // 4) Settings & system — least prominent, at the bottom.
+              _SectionHeader(label: l10n.homeSectionSystem),
+              _NavButton(
+                icon: Icons.tune,
+                label: l10n.homeSettings,
+                onPressed: () => context.push('/settings'),
+              ),
+              const SizedBox(height: 12),
+              _NavButton(
+                icon: Icons.offline_bolt_outlined,
+                label: l10n.homeLocalModel,
+                onPressed: () => context.push('/settings/local-model'),
+              ),
+              const SizedBox(height: 12),
+              _NavButton(
+                icon: Icons.system_update,
+                label: l10n.homeUpdates,
+                onPressed: () => context.push('/settings/updates'),
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 12),
-        // Unified "Mi vida" view: all data + notifications in one place.
-        OutlinedButton.icon(
-          onPressed: () => context.push('/mi-vida'),
-          icon: const Icon(Icons.auto_stories_outlined),
-          label: Text(l10n.homeMyLife),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/body'),
-          icon: const Icon(Icons.favorite_border),
-          label: Text(l10n.homeHowIsAxi),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/reminders'),
-          icon: const Icon(Icons.notifications_outlined),
-          label: Text(l10n.homeReminders),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/insights'),
-          icon: const Icon(Icons.insights_outlined),
-          label: Text(l10n.homeSummary),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/briefings'),
-          icon: const Icon(Icons.campaign_outlined),
-          label: Text(l10n.homeBulletins),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/digest'),
-          icon: const Icon(Icons.today_outlined),
-          label: Text(l10n.homeTodaySummary),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/graph'),
-          icon: const Icon(Icons.hub_outlined),
-          label: Text(l10n.homeBrain),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/settings'),
-          icon: const Icon(Icons.tune),
-          label: Text(l10n.homeSettings),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/settings/local-model'),
-          icon: const Icon(Icons.offline_bolt_outlined),
-          label: Text(l10n.homeLocalModel),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/meetings'),
-          icon: const Icon(Icons.groups_outlined),
-          label: Text(l10n.homeMeetings),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => context.push('/settings/updates'),
-          icon: const Icon(Icons.system_update),
-          label: Text(l10n.homeUpdates),
-        ),
+        const SizedBox(height: 24),
       ],
+    );
+  }
+}
+
+/// Muted, left-aligned label that introduces a group of home entries so the
+/// flat list reads as a small set of scannable sections.
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 24, bottom: 8, left: 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          label,
+          style: theme.textTheme.labelLarge?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            letterSpacing: 0.4,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A prominent, subtitle-bearing entry for the "Tus registros" section.
+/// [prominent] tints it with the secondary container so "Mi vida" pops as the
+/// primary way to view records; the non-prominent variant is a plain outlined
+/// card for the per-category entry point.
+class _RecordCard extends StatelessWidget {
+  const _RecordCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.prominent = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  final bool prominent;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      color: prominent ? scheme.secondaryContainer : null,
+      shape: prominent
+          ? null
+          : RoundedRectangleBorder(
+              side: BorderSide(color: scheme.outlineVariant),
+              borderRadius: BorderRadius.circular(12),
+            ),
+      child: ListTile(
+        leading: Icon(
+          icon,
+          color: prominent ? scheme.onSecondaryContainer : scheme.primary,
+        ),
+        title: Text(
+          title,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: prominent ? FontWeight.w600 : FontWeight.w500,
+            color: prominent ? scheme.onSecondaryContainer : null,
+          ),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: prominent
+                ? scheme.onSecondaryContainer.withValues(alpha: 0.8)
+                : scheme.onSurfaceVariant,
+          ),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
+/// Full-width outlined navigation entry — the uniform look for the secondary
+/// sections (Axi, notices, system).
+class _NavButton extends StatelessWidget {
+  const _NavButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon),
+      label: Text(label),
     );
   }
 }

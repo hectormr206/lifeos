@@ -401,10 +401,28 @@ class AppLocalizationsEs extends AppLocalizations {
   String get homeTalkToAxi => 'Hablar con Axi';
 
   @override
-  String get homeMyData => 'Mis datos';
+  String get homeMyData => 'Registrar por categoría';
+
+  @override
+  String get homeMyDataSubtitle => 'Salud, finanzas, ejercicio, relaciones…';
 
   @override
   String get homeMyLife => 'Mi vida';
+
+  @override
+  String get homeMyLifeSubtitle => 'Todo lo que registras, por persona';
+
+  @override
+  String get homeSectionRecords => 'Tus registros';
+
+  @override
+  String get homeSectionAxi => 'Axi';
+
+  @override
+  String get homeSectionNotices => 'Avisos y resúmenes';
+
+  @override
+  String get homeSectionSystem => 'Ajustes y sistema';
 
   @override
   String get homeHowIsAxi => '¿Cómo está Axi?';

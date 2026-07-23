@@ -398,10 +398,28 @@ class AppLocalizationsEn extends AppLocalizations {
   String get homeTalkToAxi => 'Talk to Axi';
 
   @override
-  String get homeMyData => 'My data';
+  String get homeMyData => 'Log by category';
+
+  @override
+  String get homeMyDataSubtitle => 'Health, finances, exercise, relationships…';
 
   @override
   String get homeMyLife => 'My life';
+
+  @override
+  String get homeMyLifeSubtitle => 'Everything you log, by person';
+
+  @override
+  String get homeSectionRecords => 'Your records';
+
+  @override
+  String get homeSectionAxi => 'Axi';
+
+  @override
+  String get homeSectionNotices => 'Notices & summaries';
+
+  @override
+  String get homeSectionSystem => 'Settings & system';
 
   @override
   String get homeHowIsAxi => 'How is Axi?';

@@ -821,14 +821,50 @@ abstract class AppLocalizations {
   /// No description provided for @homeMyData.
   ///
   /// In en, this message translates to:
-  /// **'My data'**
+  /// **'Log by category'**
   String get homeMyData;
+
+  /// No description provided for @homeMyDataSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Health, finances, exercise, relationships…'**
+  String get homeMyDataSubtitle;
 
   /// No description provided for @homeMyLife.
   ///
   /// In en, this message translates to:
   /// **'My life'**
   String get homeMyLife;
+
+  /// No description provided for @homeMyLifeSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Everything you log, by person'**
+  String get homeMyLifeSubtitle;
+
+  /// No description provided for @homeSectionRecords.
+  ///
+  /// In en, this message translates to:
+  /// **'Your records'**
+  String get homeSectionRecords;
+
+  /// No description provided for @homeSectionAxi.
+  ///
+  /// In en, this message translates to:
+  /// **'Axi'**
+  String get homeSectionAxi;
+
+  /// No description provided for @homeSectionNotices.
+  ///
+  /// In en, this message translates to:
+  /// **'Notices & summaries'**
+  String get homeSectionNotices;
+
+  /// No description provided for @homeSectionSystem.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings & system'**
+  String get homeSectionSystem;
 
   /// No description provided for @homeHowIsAxi.
   ///

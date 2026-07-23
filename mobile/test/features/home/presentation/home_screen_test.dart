@@ -21,6 +21,8 @@ GoRouter _routerToHome() => GoRouter(
       routes: [
         GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
         GoRoute(path: '/chat', builder: (context, state) => const Scaffold(body: Text('CHAT'))),
+        GoRoute(path: '/mi-vida', builder: (context, state) => const Scaffold(body: Text('MI VIDA'))),
+        GoRoute(path: '/domains', builder: (context, state) => const Scaffold(body: Text('DOMAINS'))),
       ],
     );
 
@@ -102,7 +104,8 @@ void main() {
     expect(find.text('Hablar con Axi'), findsOneWidget);
   });
 
-  testWidgets('hides the "Mis datos" CTA when unpaired', (tester) async {
+  testWidgets('hides the record entries ("Mi vida" / "Registrar por categoría") when unpaired',
+      (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
@@ -111,10 +114,16 @@ void main() {
     );
     await tester.pump();
 
+    // The renamed per-category entry only appears in the paired view.
+    expect(find.text('Registrar por categoría'), findsNothing);
+    // Old label is gone entirely.
     expect(find.text('Mis datos'), findsNothing);
+    // "Tus registros" section header is part of the connected view only.
+    expect(find.text('Tus registros'), findsNothing);
   });
 
-  testWidgets('shows the "Mis datos" CTA when paired', (tester) async {
+  testWidgets('shows the grouped "Tus registros" section with both record entries when paired',
+      (tester) async {
     final store = FakeTokenStore(
       const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
     );
@@ -130,7 +139,67 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('Mis datos'), findsOneWidget);
+    // Section headers render, grouping the flat list.
+    expect(find.text('Tus registros'), findsOneWidget);
+    expect(find.text('Axi'), findsOneWidget);
+    expect(find.text('Avisos y resúmenes'), findsOneWidget);
+    expect(find.text('Ajustes y sistema'), findsOneWidget);
+
+    // Both record entries are present with their clarifying subtitles.
+    expect(find.text('Mi vida'), findsOneWidget);
+    expect(find.text('Todo lo que registras, por persona'), findsOneWidget);
+    expect(find.text('Registrar por categoría'), findsOneWidget);
+    expect(find.text('Salud, finanzas, ejercicio, relaciones…'), findsOneWidget);
+    // The old flat label is gone.
+    expect(find.text('Mis datos'), findsNothing);
+  });
+
+  testWidgets('tapping "Mi vida" navigates to /mi-vida', (tester) async {
+    final store = FakeTokenStore(
+      const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          tokenStoreProvider.overrideWithValue(store),
+          engineReachableProvider.overrideWith((ref) async => true),
+        ],
+        child: _localized(_routerToHome()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    await tester.ensureVisible(find.text('Mi vida'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mi vida'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('MI VIDA'), findsOneWidget);
+  });
+
+  testWidgets('tapping "Registrar por categoría" navigates to /domains', (tester) async {
+    final store = FakeTokenStore(
+      const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          tokenStoreProvider.overrideWithValue(store),
+          engineReachableProvider.overrideWith((ref) async => true),
+        ],
+        child: _localized(_routerToHome()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    await tester.ensureVisible(find.text('Registrar por categoría'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Registrar por categoría'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('DOMAINS'), findsOneWidget);
   });
 
   testWidgets('hides the "visible soul" CTAs (body/reminders/insights) when unpaired', (tester) async {
