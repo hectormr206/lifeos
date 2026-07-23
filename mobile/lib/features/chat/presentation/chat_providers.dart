@@ -5,6 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/audioplayers_audio_player_gateway.dart';
 import '../data/flutter_tts_text_to_speech_gateway.dart';
 import '../data/image_picker_image_gateway.dart';
+import '../../tts/data/audioplayers_tts_playback.dart';
+import '../../tts/data/piper_preferred_text_to_speech_gateway.dart';
+import '../../tts/data/sherpa_piper_tts_gateway.dart';
+import '../../tts/presentation/tts_providers.dart';
 import '../data/record_audio_recorder_gateway.dart';
 import '../domain/audio_player_gateway.dart';
 import '../domain/audio_recorder_gateway.dart';
@@ -54,14 +58,29 @@ final audioPlayerGatewayProvider = Provider<AudioPlayerGateway>((ref) {
 /// "Axi habla" (speak-aloud) engine. Long-lived (one shared engine); disposed
 /// with the container. Overridden with a fake in tests.
 ///
-/// SWAP SEAM: point this at a higher-quality on-device engine (Piper) behind
-/// [TextToSpeechGateway] later — no UI or controller change needed.
+/// Roadmap slice B3 (the SWAP SEAM cashing in): Piper neural voices via
+/// sherpa-onnx are now PREFERRED, with the OS voice (`flutter_tts`) as the
+/// always-works fallback. When the Piper voice for the current language is
+/// not downloaded yet, the first speak triggers its background download and
+/// the system voice covers that utterance — Piper takes over next time. No
+/// UI or [SpeechController] change: same [TextToSpeechGateway] contract.
 final textToSpeechGatewayProvider = Provider<TextToSpeechGateway>((ref) {
   // i18n slice: the spoken voice follows the current app language. `read` at
   // speak-time (not `watch`) so a language change re-selects the voice without
   // recreating (and re-loading) the shared engine.
-  final gateway = FlutterTtsTextToSpeechGateway(
-    currentLanguageCode: () => ref.read(appLanguageCodeProvider),
+  String currentLanguageCode() => ref.read(appLanguageCodeProvider);
+  final gateway = PiperPreferredTextToSpeechGateway(
+    preferred: SherpaPiperTtsGateway(
+      voiceGateway: ref.watch(ttsVoiceGatewayProvider),
+      synthesizer: ref.watch(piperSpeechSynthesizerProvider),
+      playback: AudioplayersTtsPlayback(),
+      currentLanguageCode: currentLanguageCode,
+    ),
+    fallback: FlutterTtsTextToSpeechGateway(currentLanguageCode: currentLanguageCode),
+    // Lazy first-speak trigger: fire-and-forget so the fallback utterance is
+    // never blocked by the (large) voice download.
+    onVoiceAbsent: () =>
+        unawaited(ref.read(ttsVoiceDownloadProvider.notifier).downloadForCurrentLanguage()),
   );
   ref.onDispose(gateway.dispose);
   return gateway;

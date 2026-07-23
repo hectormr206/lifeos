@@ -125,6 +125,15 @@ abstract class LocalGraphStore {
     int k = 5,
     String? model,
   });
+
+  /// Live `fact` nodes that have NO stored vector under [model], oldest-created
+  /// first (roadmap SLICE B1b backfill). Used to index pre-existing facts once
+  /// the embedder becomes available; a fact indexed under a DIFFERENT model
+  /// still counts as missing (caveat R8 — each model needs its own vectors).
+  Future<List<GraphNodeRecord>> listFactNodesMissingVector(
+    String model, {
+    int limit = 32,
+  });
 }
 
 /// sqflite-backed [LocalGraphStore]. Works identically against an on-device
@@ -433,6 +442,22 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
         .take(k)
         .map((s) => GraphNodeRecord.fromRow(s.row))
         .toList();
+  }
+
+  @override
+  Future<List<GraphNodeRecord>> listFactNodesMissingVector(
+    String model, {
+    int limit = 32,
+  }) async {
+    final rows = await _db.rawQuery(
+      'SELECT n.* FROM $kNodesTable n '
+      "WHERE n.kind = 'fact' AND n.deleted_at IS NULL "
+      'AND NOT EXISTS (SELECT 1 FROM $kVecNodesTable v '
+      'WHERE v.node_uuid = n.uuid AND v.model = ?) '
+      'ORDER BY n.created_at ASC LIMIT ?',
+      [model, limit],
+    );
+    return rows.map(GraphNodeRecord.fromRow).toList();
   }
 
   /// Encode [vec] (its first [dim] values) as a little-endian float32 BLOB.

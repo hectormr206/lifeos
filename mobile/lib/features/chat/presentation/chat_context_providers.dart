@@ -10,12 +10,15 @@
 ///   * embedder absent    → deps.rag null → lexical recall, no indexing.
 library;
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/clock/clock.dart';
 import '../../../core/graph/graph_providers.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../embedding/domain/rag_service.dart';
+import '../../embedding/embed_model_warmup.dart';
 import '../../embedding/embedding_providers.dart';
 import '../../memory/data/memory_writer.dart';
 import '../domain/chat_context_builder.dart';
@@ -31,6 +34,15 @@ final chatContextBuilderProvider = Provider<ChatContextBuilder>((ref) {
     loadDeps: () async {
       try {
         final store = await ref.read(localGraphStoreProvider.future);
+        // Lazy first-recall trigger (roadmap SLICE B1b): nudge the embedding
+        // model warmup (probe / download-on-first-use / backfill) without
+        // blocking the turn. Single-flight + best-effort inside the notifier;
+        // recall below still runs lexically until the model is ready.
+        try {
+          unawaited(
+            ref.read(embedModelWarmupProvider.notifier).ensureStarted(),
+          );
+        } catch (_) {/* warmup must never affect the turn */}
         RagService? rag;
         try {
           // Constructs the RAG service (embedder handle is lazy — no native load

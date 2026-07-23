@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../embedding/embed_model_warmup.dart';
 import 'local_model_providers.dart';
 
 /// Lifecycle of getting the on-device weights resident in RAM and ready for
@@ -75,6 +78,13 @@ class LocalModelLoadNotifier extends Notifier<LocalModelLoadState> {
       // spinner rather than a percentage.
       await ref.read(localLlmEngineProvider).load();
       state = const LocalModelLoadState(status: LocalModelLoadStatus.ready);
+      // Same warm point, different model: kick the embedding-model warmup
+      // (download-on-first-use + backfill) in the background. Best-effort —
+      // semantic recall stays on C1's lexical fallback until it lands
+      // (roadmap SLICE B1b).
+      try {
+        unawaited(ref.read(embedModelWarmupProvider.notifier).ensureStarted());
+      } catch (_) {/* never let the memory warmup affect the LLM load */}
     } catch (error) {
       state = LocalModelLoadState(
         status: LocalModelLoadStatus.error,

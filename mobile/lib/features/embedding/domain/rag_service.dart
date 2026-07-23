@@ -47,6 +47,31 @@ class RagService {
     return store.recall(vec, k: k, model: embedder.model);
   }
 
+  /// Index every live `fact` node that has no vector under this embedder's
+  /// model yet (roadmap SLICE B1b backfill: facts recorded while semantic
+  /// recall was dormant become recallable once the model lands). Runs in
+  /// [batchSize] batches up to [maxNodes] per call so it stays off the critical
+  /// path; the caller re-invokes on a later warmup for anything left. Returns
+  /// the number of nodes indexed. Throws on an embed failure — callers treat
+  /// the whole pass as best-effort.
+  Future<int> backfillMissingVectors({int batchSize = 16, int maxNodes = 256}) async {
+    var indexed = 0;
+    while (indexed < maxNodes) {
+      final missing = await store.listFactNodesMissingVector(
+        embedder.model,
+        limit: batchSize,
+      );
+      if (missing.isEmpty) break;
+      for (final node in missing) {
+        await indexNode(node);
+        indexed++;
+        if (indexed >= maxNodes) break;
+      }
+      if (missing.length < batchSize) break;
+    }
+    return indexed;
+  }
+
   /// Flat, human-readable text for a node: its label plus the scalar values of
   /// its `data` map. Mirrors what the model would "read" about the node; keeps
   /// embeddings stable and independent of JSON key ordering.

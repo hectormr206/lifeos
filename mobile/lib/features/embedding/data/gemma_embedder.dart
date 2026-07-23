@@ -1,27 +1,35 @@
 /// Real, on-device [TextEmbedder] backed by flutter_gemma's native embedding
-/// API (roadmap SLICE B1). Everything plugin-specific is confined here; the RAG
-/// layer only ever sees [TextEmbedder].
+/// API (roadmap SLICE B1, activated in B1b). Everything plugin-specific is
+/// confined here; the RAG layer only ever sees [TextEmbedder].
 ///
-/// API (verified against flutter_gemma 1.3.1 sources — the
-/// `flutter_gemma_embeddings` add-on shape):
+/// API (verified against flutter_gemma 1.3.1 sources):
 ///   install: `FlutterGemma.installEmbedder()
-///     .modelFromNetwork(modelUrl, token).tokenizerFromNetwork(tokenizerUrl,
-///     token).install()`  → auto-sets the active embedding model.
-///   load:    `FlutterGemma.getActiveEmbedder(preferredBackend)`  → EmbeddingModel
+///     .modelFromFile(path).tokenizerFromFile(path).install()`  → auto-sets the
+///     active embedding model (idempotent: an already-installed file pair is
+///     just re-activated).
+///   load:    `FlutterGemma.getActiveEmbedder()`  → EmbeddingModel
 ///   embed:   `model.generateEmbedding(text, taskType:)`  → `List<double>`
 ///   dispose: `model.close()`
 ///
 /// EMBEDDING-BACKEND REGISTRATION: flutter_gemma core registers NO embedding
-/// backend by default — the native runtime lives in the separate
+/// backend by default — the native LiteRT runtime lives in the separate
 /// `flutter_gemma_embeddings` package (its `LiteRtEmbeddingBackend` implements
-/// `EmbeddingBackendProvider`). Production MUST register it once via
+/// `EmbeddingBackendProvider`). Production registers it once via
 /// `FlutterGemma.initialize(embeddingBackends: [LiteRtEmbeddingBackend()])`;
 /// without it the first `getActiveEmbedder`/`generateEmbedding` throws a clear
 /// "add the embeddings package" StateError. That registration is injected as
-/// the [initializer] seam (kept swappable so this file needs no dependency on
-/// the backend package and tests never touch a plugin channel). The app wires a
-/// concrete initializer at startup (a disjoint slice); the default here is a
-/// bare `FlutterGemma.initialize()` so this class compiles and stays testable.
+/// the [initializer] seam (see data/flutter_gemma_embedding_backend.dart) so
+/// this file needs no dependency on the backend package and tests never touch
+/// a plugin channel. The default here is a bare `FlutterGemma.initialize()` so
+/// this class compiles and stays testable.
+///
+/// MODEL FILES: the ~179 MB EmbeddingGemma weights are NOT fetched from the
+/// (license-gated) HuggingFace repo at runtime — the [pathsLoader] seam
+/// resolves the files the [EmbedModelGateway] downloaded from the VPS on first
+/// use. While the gateway reports "not installed" (loader → null) [embed]
+/// throws a [StateError]; C1's chat context builder catches ANY embed failure
+/// and falls back to lexical recall, so semantic recall simply stays dormant
+/// until the download lands.
 ///
 /// MRL (Matryoshka) TRUNCATION: EmbeddingGemma-300M emits [nativeDimension]
 /// (768) values; we keep the first [dimension] (512). MRL guarantees the leading
@@ -37,25 +45,13 @@ import 'dart:typed_data';
 
 import 'package:flutter_gemma/flutter_gemma.dart';
 
+import '../domain/embed_model.dart';
 import '../domain/text_embedder.dart';
 
 /// Immutable config for the on-device embedder. Defaults to EmbeddingGemma-300M
 /// truncated to 512 dims (MRL).
 class EmbedderConfig {
-  const EmbedderConfig({
-    this.modelUrl = defaultModelUrl,
-    this.tokenizerUrl = defaultTokenizerUrl,
-    this.dimension = 512,
-    this.huggingFaceToken,
-  });
-
-  /// EmbeddingGemma-300M weights (gated on HuggingFace → [huggingFaceToken]).
-  static const String defaultModelUrl =
-      'https://huggingface.co/google/embeddinggemma-300m/resolve/main/model.tflite';
-
-  /// Matching SentencePiece tokenizer.
-  static const String defaultTokenizerUrl =
-      'https://huggingface.co/google/embeddinggemma-300m/resolve/main/sentencepiece.model';
+  const EmbedderConfig({this.dimension = 512});
 
   /// Native output width of EmbeddingGemma-300M before MRL truncation.
   static const int nativeDimension = 768;
@@ -65,28 +61,29 @@ class EmbedderConfig {
   /// non-comparable key rather than a silent corpus mismatch.
   String get modelKey => 'embeddinggemma-300m@$dimension';
 
-  final String modelUrl;
-  final String tokenizerUrl;
-
   /// Truncated (MRL) output width used by the app. Must be ≤ [nativeDimension].
   final int dimension;
-
-  /// Optional HuggingFace token for the gated EmbeddingGemma download.
-  final String? huggingFaceToken;
 }
+
+/// Resolves the on-disk model files, or null while they are not downloaded yet.
+typedef EmbedModelPathsLoader = Future<EmbedModelPaths?> Function();
 
 /// [TextEmbedder] over the unified `flutter_gemma` embedding API.
 class GemmaEmbedder implements TextEmbedder {
   GemmaEmbedder(
     this._config, {
+    required this._pathsLoader,
     Future<void> Function()? initializer,
   }) : _initializer = initializer ?? _defaultInitializer;
 
-  /// Bare init seam — production overrides this with one that also registers
-  /// `LiteRtEmbeddingBackend()` from `flutter_gemma_embeddings`.
+  /// Bare init seam — production overrides this with
+  /// `registerLiteRtEmbeddingBackend` (data/flutter_gemma_embedding_backend.dart),
+  /// which also registers `LiteRtEmbeddingBackend()` from
+  /// `flutter_gemma_embeddings`.
   static Future<void> _defaultInitializer() => FlutterGemma.initialize();
 
   final EmbedderConfig _config;
+  final EmbedModelPathsLoader _pathsLoader;
   final Future<void> Function() _initializer;
 
   Future<void>? _initFuture;
@@ -102,18 +99,33 @@ class GemmaEmbedder implements TextEmbedder {
   /// One-shot idempotent plugin init (registers the embedding backend).
   Future<void> _ensureInitialized() => _initFuture ??= _initializer();
 
-  /// One-shot idempotent download+activate of the embedder weights + tokenizer.
-  Future<void> _ensureInstalled() => _installFuture ??= _install();
+  /// Single-flight install/activate of the downloaded weights + tokenizer.
+  /// A FAILED attempt (e.g. files not downloaded yet) clears the cached future
+  /// so a later call retries once the gateway has the files.
+  Future<void> _ensureInstalled() async {
+    final inFlight = _installFuture;
+    if (inFlight != null) return inFlight;
+    final attempt = _install();
+    _installFuture = attempt;
+    try {
+      await attempt;
+    } catch (_) {
+      _installFuture = null;
+      rethrow;
+    }
+  }
 
   Future<void> _install() async {
     await _ensureInitialized();
-    if (FlutterGemma.hasActiveEmbedder()) return;
+    final paths = await _pathsLoader();
+    if (paths == null) {
+      throw StateError(
+        'Embedding model not downloaded yet — semantic recall stays dormant.',
+      );
+    }
     await FlutterGemma.installEmbedder()
-        .modelFromNetwork(_config.modelUrl, token: _config.huggingFaceToken)
-        .tokenizerFromNetwork(
-          _config.tokenizerUrl,
-          token: _config.huggingFaceToken,
-        )
+        .modelFromFile(paths.model)
+        .tokenizerFromFile(paths.tokenizer)
         .install();
   }
 

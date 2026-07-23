@@ -150,4 +150,69 @@ void main() {
       expect(hits.map((n) => n.uuid).toList(), [mine.uuid]);
     });
   });
+
+  group('backfillMissingVectors', () {
+    test('backfillMissingVectors indexes only unvectored live facts',
+        () async {
+      // Facts recorded while the embedder was dormant (no vector yet).
+      final oldFact = await store.createNode(kind: 'fact', label: 'old');
+      final older = await store.createNode(kind: 'fact', label: 'older');
+      // Already indexed under THIS model → must be skipped.
+      final done = await store.createNode(kind: 'fact', label: 'done');
+      // Not a fact → never backfilled.
+      await store.createNode(kind: 'conversation', label: 'chit chat');
+      // Tombstoned fact → never backfilled.
+      final dead = await store.createNode(kind: 'fact', label: 'dead');
+      await store.softDeleteNode(dead.uuid);
+
+      final embedder = FakeTextEmbedder({
+        'old': [1, 0, 0],
+        'older': [0, 1, 0],
+      });
+      final rag = RagService(embedder: embedder, store: store);
+      await store.upsertNodeVector(
+          done.uuid, embedder.model, 3, Float32List.fromList([0, 0, 1]));
+
+      final indexed = await rag.backfillMissingVectors(batchSize: 1);
+
+      expect(indexed, 2);
+      expect(
+        embedder.calls.map((c) => c.text).toSet(),
+        {'old', 'older'},
+      );
+      expect(embedder.calls.every((c) => !c.isQuery), isTrue);
+      // Both backfilled facts are now recallable under this model.
+      final hits = await store.recall(Float32List.fromList([1, 0, 0]),
+          k: 10, model: embedder.model);
+      expect(hits.map((n) => n.uuid).toSet(),
+          {oldFact.uuid, older.uuid, done.uuid});
+    });
+
+    test(
+        'backfillMissingVectors treats a DIFFERENT-model vector as missing '
+        '(R8: every model needs its own vectors)', () async {
+      final fact = await store.createNode(kind: 'fact', label: 'crossed');
+      await store.upsertNodeVector(
+          fact.uuid, 'someOtherModel@3', 3, Float32List.fromList([1, 0, 0]));
+
+      final embedder = FakeTextEmbedder({'crossed': [0, 1, 0]});
+      final rag = RagService(embedder: embedder, store: store);
+
+      expect(await rag.backfillMissingVectors(), 1);
+      final hits = await store.recall(Float32List.fromList([0, 1, 0]),
+          k: 5, model: embedder.model);
+      expect(hits.single.uuid, fact.uuid);
+    });
+
+    test('backfillMissingVectors caps the pass at maxNodes', () async {
+      for (var i = 0; i < 5; i++) {
+        await store.createNode(kind: 'fact', label: 'fact $i');
+      }
+      final embedder = FakeTextEmbedder({});
+      final rag = RagService(embedder: embedder, store: store);
+
+      expect(await rag.backfillMissingVectors(batchSize: 2, maxNodes: 3), 3);
+      expect(embedder.calls.length, 3);
+    });
+  });
 }

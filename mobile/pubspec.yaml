@@ -76,6 +76,17 @@ dependencies:
   # android/app/build.gradle.kts abiFilters).
   flutter_gemma_litertlm: 1.1.0
 
+  # Embedding backend for flutter_gemma (roadmap SLICE B1b): core registers NO
+  # embedding backend by default — the LiteRT C-API runtime that actually runs
+  # EmbeddingGemma-300M (.tflite) lives in this companion package. It must be
+  # registered once via
+  # `FlutterGemma.initialize(embeddingBackends: [LiteRtEmbeddingBackend()])`
+  # before any installEmbedder/getActiveEmbedder, or those throw a StateError.
+  # Native LiteRT library fetched at build time (Native Assets, hook/build.dart),
+  # same as flutter_gemma_litertlm. Pinned exact for the same ABI-coupling
+  # reason. arm64-v8a only on Android.
+  flutter_gemma_embeddings: 1.0.2
+
   # The downloader flutter_gemma uses for the model fetch. Already resolved
   # transitively via flutter_gemma; made direct so we can, before each download:
   #   * request POST_NOTIFICATIONS (Android 13+ foreground-service notification),
