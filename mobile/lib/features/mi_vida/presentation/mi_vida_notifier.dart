@@ -75,6 +75,9 @@ class MiVidaNotifier extends Notifier<MiVidaState> {
     try {
       final repo = await ref.read(localDomainRepositoryProvider.future);
       final store = await ref.read(localGraphStoreProvider.future);
+      // The provider may be invalidated mid-load (e.g. a full wipe rebuilds
+      // this notifier). Bail before touching `state` on a disposed Ref.
+      if (!ref.mounted) return;
 
       final entriesByDomain = <String, List<LocalDomainEntry>>{};
       for (final descriptor in domainDescriptors) {
@@ -94,12 +97,14 @@ class MiVidaNotifier extends Notifier<MiVidaState> {
         // Reminders store unavailable — show the domain data anyway.
       }
 
+      if (!ref.mounted) return;
       state = state.copyWith(
         loading: false,
         sections: sections,
         reminders: reminders,
       );
     } catch (_) {
+      if (!ref.mounted) return;
       state = state.copyWith(
         loading: false,
         error: 'No se pudo abrir la memoria local de este teléfono.',

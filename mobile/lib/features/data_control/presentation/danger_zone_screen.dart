@@ -5,6 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../chat/presentation/chat_notifier.dart';
+import '../../domains/presentation/local_domain_notifier.dart';
+import '../../graph/presentation/local_graph_notifier.dart';
+import '../../insights/presentation/prediction_providers.dart';
+import '../../mi_vida/presentation/mi_vida_notifier.dart';
 import '../../morning_briefing/presentation/morning_briefing_notifier.dart';
 import '../domain/backup_info.dart';
 import '../domain/wipe_confirm_gate.dart';
@@ -92,10 +96,19 @@ class _DangerZoneScreenState extends ConsumerState<DangerZoneScreen> {
             .createBackup(kind: BackupKind.manual);
       }
       final outcome = await ref.read(wipeRegistryProvider).wipeAll();
-      // Reset the in-memory surfaces that mirrored the wiped stores.
+      // Reset the in-memory surfaces that mirrored the wiped stores so every
+      // graph-backed view refreshes to empty WITHOUT an app restart. These are
+      // keep-alive providers that `ref.read` (not `watch`) the store, so they
+      // hold stale records until explicitly invalidated.
       ref.invalidate(chatNotifierProvider);
       ref.invalidate(morningBriefingNotifierProvider);
       ref.invalidate(backupsListProvider);
+      ref.invalidate(localGraphListProvider); // "Mi memoria" browser
+      ref.invalidate(miVidaNotifierProvider); // "Mi vida" aggregation
+      ref.invalidate(localDomainNotifierProvider); // per-domain local lists
+      ref.invalidate(predictionPatternsProvider); // "Patrones" insights
+      // Cerebro 3D (brain3dPayloadProvider) is autoDispose and re-reads the
+      // store on each screen entry, so it needs no explicit invalidation here.
       if (!mounted) return;
       if (outcome.allSucceeded) {
         _snack(l10n.wipeDone);
