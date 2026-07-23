@@ -35,9 +35,14 @@ class SelectedVoiceNotifier extends Notifier<String> {
   Future<void> _hydrate() async {
     try {
       final stored = await ref.read(selectedVoicePreferencesProvider).load();
-      // Ignore an unknown/legacy id so a stale preference can never point the
-      // engine at a voice that is no longer in the catalog.
-      if (stored != null && VoiceCatalog.contains(stored)) state = stored;
+      // Accept a known catalog voice OR the system-voice sentinel (persisted
+      // after the user deletes their selected voice with none left). Ignore any
+      // other unknown/legacy id so a stale preference can never point the engine
+      // at a voice that is no longer in the catalog.
+      if (stored != null &&
+          (VoiceCatalog.contains(stored) || stored == VoiceCatalog.systemVoiceId)) {
+        state = stored;
+      }
     } catch (_) {
       // Persistence unavailable (e.g. no platform channel in a widget test) —
       // stay on the shipped default rather than crashing.
@@ -61,6 +66,20 @@ class SelectedVoiceNotifier extends Notifier<String> {
       // Best-effort persistence; in-memory state still reflects the choice.
     }
     await ref.read(voiceCatalogControllerProvider.notifier).download(voiceId);
+  }
+
+  /// Moves the selection to [voiceId] after the current voice was deleted:
+  /// persists it but does NOT trigger any download. [voiceId] is either an
+  /// already-installed voice or [VoiceCatalog.systemVoiceId] — a deleted voice
+  /// must never be auto-redownloaded, so this deliberately skips the
+  /// download step that [select] performs.
+  Future<void> fallbackTo(String voiceId) async {
+    state = voiceId;
+    try {
+      await ref.read(selectedVoicePreferencesProvider).save(voiceId);
+    } catch (_) {
+      // Best-effort persistence; in-memory state still reflects the fallback.
+    }
   }
 }
 
@@ -146,6 +165,35 @@ class VoiceCatalogController extends Notifier<Map<String, TtsVoiceStatus>> {
     } catch (_) {
       // Best-effort preview.
     }
+  }
+
+  /// Deletes the on-disk files of [voiceId] and marks it Absent. When it was
+  /// the SELECTED voice, selection falls back — WITHOUT re-downloading — to
+  /// another already-installed voice if one exists, otherwise to the
+  /// device/system voice ([VoiceCatalog.systemVoiceId]). Ignores unknown ids;
+  /// never throws (a filesystem error still lands the voice Absent).
+  Future<void> delete(String voiceId) async {
+    if (!VoiceCatalog.contains(voiceId)) return;
+    try {
+      await ref.read(ttsVoiceGatewayProvider).deleteVoice(voiceId);
+    } catch (_) {
+      // Best-effort: even a partial delete still reads as no-longer-installed.
+    }
+    _set(voiceId, const TtsVoiceAbsent());
+    if (ref.read(selectedVoiceProvider) == voiceId) {
+      final replacement = _firstInstalledOther(voiceId) ?? VoiceCatalog.systemVoiceId;
+      await ref.read(selectedVoiceProvider.notifier).fallbackTo(replacement);
+    }
+  }
+
+  /// The id of the first still-installed catalog voice other than [excludeId],
+  /// or null when none remains installed.
+  String? _firstInstalledOther(String excludeId) {
+    for (final voice in VoiceCatalog.all) {
+      if (voice.id == excludeId) continue;
+      if (state[voice.id] is TtsVoiceReady) return voice.id;
+    }
+    return null;
   }
 
   void _set(String voiceId, TtsVoiceStatus status) =>

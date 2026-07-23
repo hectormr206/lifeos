@@ -554,6 +554,72 @@ abstract class AppLocalizations {
   /// **'Hi, I\'m Axi, your personal assistant.'**
   String get voiceCatalogSampleEn;
 
+  /// No description provided for @voiceCatalogRegionMexico.
+  ///
+  /// In en, this message translates to:
+  /// **'Mexico'**
+  String get voiceCatalogRegionMexico;
+
+  /// No description provided for @voiceCatalogRegionSpain.
+  ///
+  /// In en, this message translates to:
+  /// **'Spain'**
+  String get voiceCatalogRegionSpain;
+
+  /// No description provided for @voiceCatalogRegionArgentina.
+  ///
+  /// In en, this message translates to:
+  /// **'Argentina'**
+  String get voiceCatalogRegionArgentina;
+
+  /// No description provided for @voiceCatalogRegionUnitedStates.
+  ///
+  /// In en, this message translates to:
+  /// **'United States'**
+  String get voiceCatalogRegionUnitedStates;
+
+  /// No description provided for @voiceCatalogRegionUnitedKingdom.
+  ///
+  /// In en, this message translates to:
+  /// **'United Kingdom'**
+  String get voiceCatalogRegionUnitedKingdom;
+
+  /// No description provided for @voiceCatalogDeleteButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get voiceCatalogDeleteButton;
+
+  /// No description provided for @voiceCatalogDeleteTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete this voice?'**
+  String get voiceCatalogDeleteTitle;
+
+  /// No description provided for @voiceCatalogDeleteMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'The files for {voice} will be removed from this device. You can download it again anytime.'**
+  String voiceCatalogDeleteMessage(String voice);
+
+  /// No description provided for @voiceCatalogDeleteSelectedMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'{voice} is your active voice. It will be removed from this device and the app will use another downloaded voice, or your device\'s voice if none remain.'**
+  String voiceCatalogDeleteSelectedMessage(String voice);
+
+  /// No description provided for @voiceCatalogDeleteConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get voiceCatalogDeleteConfirm;
+
+  /// No description provided for @voiceCatalogDeleteCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get voiceCatalogDeleteCancel;
+
   /// No description provided for @sectionAdvanced.
   ///
   /// In en, this message translates to:

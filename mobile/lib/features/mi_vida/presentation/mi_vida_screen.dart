@@ -240,7 +240,8 @@ class _MiVidaScreenState extends ConsumerState<MiVidaScreen> {
                 padding: EdgeInsets.all(24),
                 child: Text(
                   'Aún no hay datos guardados en este teléfono.\n'
-                  'Registra algo desde el chat o desde un dominio.',
+                  'Cuéntale algo a Axi en el chat, o entra a una categoría '
+                  '(Salud, Ejercicio, Finanzas…) para registrarlo ahí.',
                   textAlign: TextAlign.center,
                 ),
               )

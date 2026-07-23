@@ -19,4 +19,11 @@ abstract class TtsVoiceGateway {
     String voiceId, {
     void Function(double progress)? onProgress,
   });
+
+  /// Deletes the on-disk files that belong ONLY to the voice [voiceId] — its
+  /// model (`*.onnx`), Piper config (`*.onnx.json`) and derived tokens table —
+  /// leaving the SHARED espeak-ng-data directory (needed by every other voice)
+  /// untouched. A no-op for a voice whose files are already gone; never throws
+  /// for a missing file, so after it returns the voice reads back as absent.
+  Future<void> deleteVoice(String voiceId);
 }

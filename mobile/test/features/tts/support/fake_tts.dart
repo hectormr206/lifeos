@@ -17,12 +17,20 @@ class FakeTtsVoiceGateway implements TtsVoiceGateway {
     Map<String, TtsVoicePaths>? installed,
     this.downloadError,
     this.downloadProgress = const [1.0],
+    this.deleteError,
   }) : installed = installed ?? {};
 
   final Map<String, TtsVoicePaths> installed;
   final Object? downloadError;
   final List<double> downloadProgress;
+  final Object? deleteError;
   final List<String> downloadCalls = [];
+  final List<String> deleteCalls = [];
+
+  /// When set, every download parks on this gate BEFORE landing installed, so a
+  /// test can hold several downloads in flight at once and prove that starting
+  /// one never cancels/freezes another (the shared-group deadlock regression).
+  Completer<void>? downloadGate;
 
   @override
   Future<TtsVoicePaths?> installedVoice(String voiceId) async => installed[voiceId];
@@ -38,6 +46,8 @@ class FakeTtsVoiceGateway implements TtsVoiceGateway {
     for (final p in downloadProgress) {
       onProgress?.call(p);
     }
+    final gate = downloadGate;
+    if (gate != null) await gate.future;
     final paths = TtsVoicePaths(
       model: '$voiceId.onnx',
       tokens: '$voiceId.tokens.txt',
@@ -45,6 +55,14 @@ class FakeTtsVoiceGateway implements TtsVoiceGateway {
     );
     installed[voiceId] = paths;
     return paths;
+  }
+
+  @override
+  Future<void> deleteVoice(String voiceId) async {
+    deleteCalls.add(voiceId);
+    final error = deleteError;
+    if (error != null) throw error;
+    installed.remove(voiceId);
   }
 }
 

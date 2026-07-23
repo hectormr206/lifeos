@@ -46,10 +46,19 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
   /// cheap "was the archive really extracted" marker.
   static const String _espeakMarker = 'phontab';
 
-  DownloadTask _taskFor(TtsVoiceFile file) => DownloadTask(
+  /// The downloader group for [voiceId]'s tasks — DERIVED PER VOICE so the
+  /// defensive `reset(group:)` at the start of a download only clears THAT
+  /// voice's own stale/failed tasks and never cancels a sibling voice that is
+  /// downloading concurrently (a single shared group made starting voice B
+  /// reset voice A's in-flight task, freezing both). Non-alphanumeric id chars
+  /// are sanitized so the group is a stable, valid identifier.
+  static String groupForVoice(String voiceId) =>
+      '${_group}_${voiceId.replaceAll(RegExp('[^A-Za-z0-9]'), '_')}';
+
+  DownloadTask _taskFor(TtsVoiceFile file, String group) => DownloadTask(
         url: _joinUrl(_config.baseUrl, file.name),
         filename: file.name,
-        group: _group,
+        group: group,
         baseDirectory: BaseDirectory.applicationSupport,
         directory: _directory,
         updates: Updates.statusAndProgress,
@@ -85,11 +94,13 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
       throw TtsVoiceDownloadException('No se indicó ninguna voz para descargar.');
     }
     final spec = _config.specForVoice(voiceId);
+    final group = groupForVoice(voiceId);
 
-    // Clear any stale/failed task record for our group first (same defensive
-    // reset the STT + app-update downloads use to avoid a re-attach loop).
+    // Clear any stale/failed task record for THIS VOICE's group first (same
+    // defensive reset the STT + app-update downloads use to avoid a re-attach
+    // loop). Scoped per voice so a concurrent sibling download is never reset.
     try {
-      await _downloader.reset(group: _group);
+      await _downloader.reset(group: group);
     } catch (_) {/* opportunistic */}
 
     final paths = await _resolvePaths(spec);
@@ -98,7 +109,7 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
 
     for (var i = 0; i < files.length; i++) {
       final file = files[i];
-      final task = _taskFor(file);
+      final task = _taskFor(file, group);
       final result = await _downloader.download(
         task,
         onProgress: (p) {
@@ -115,8 +126,8 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
       await _verifySize(await task.filePath(), file);
     }
 
-    await _writeTokens(spec, paths);
-    if (needsEspeak) await _extractEspeakData(paths);
+    await _writeTokens(spec, paths, group);
+    if (needsEspeak) await _extractEspeakData(paths, group);
 
     if (onProgress != null) onProgress(1.0);
     return paths;
@@ -124,8 +135,12 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
 
   /// Derives `*.tokens.txt` from the downloaded `*.onnx.json` so sherpa-onnx
   /// gets the token table its converted piper models expect.
-  Future<void> _writeTokens(TtsVoiceSpec spec, TtsVoicePaths paths) async {
-    final configPath = await _taskFor(spec.config).filePath();
+  Future<void> _writeTokens(
+    TtsVoiceSpec spec,
+    TtsVoicePaths paths,
+    String group,
+  ) async {
+    final configPath = await _taskFor(spec.config, group).filePath();
     try {
       final tokens = piperTokensFromConfigJson(await File(configPath).readAsString());
       await File(paths.tokens).writeAsString(tokens, flush: true);
@@ -137,9 +152,12 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
   }
 
   /// Extracts espeak-ng-data.tar.gz next to the models, verifies the marker
-  /// file landed, and deletes the archive to reclaim space.
-  Future<void> _extractEspeakData(TtsVoicePaths paths) async {
-    final archivePath = await _taskFor(_config.espeakData).filePath();
+  /// file landed, and deletes the archive to reclaim space. Idempotent: if a
+  /// concurrent voice download already extracted the shared data (marker
+  /// present), it skips re-extracting so two downloads never race on the dir.
+  Future<void> _extractEspeakData(TtsVoicePaths paths, String group) async {
+    if (File('${paths.dataDir}/$_espeakMarker').existsSync()) return;
+    final archivePath = await _taskFor(_config.espeakData, group).filePath();
     final modelDir = File(paths.model).parent;
     await extractTarGz(archivePath, modelDir);
     if (!File('${paths.dataDir}/$_espeakMarker').existsSync()) {
@@ -170,8 +188,26 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
     }
   }
 
+  @override
+  Future<void> deleteVoice(String voiceId) async {
+    if (voiceId.isEmpty) return;
+    final spec = _config.specForVoice(voiceId);
+    // Only this voice's OWN files — model, Piper config, derived tokens. The
+    // shared espeak-ng-data dir stays: every other installed voice needs it.
+    final configPath = await _taskFor(spec.config, _group).filePath();
+    final paths = await _resolvePaths(spec);
+    for (final path in [paths.model, configPath, paths.tokens]) {
+      try {
+        final file = File(path);
+        if (file.existsSync()) await file.delete();
+      } catch (_) {/* best effort per file — a missing file is already "gone" */}
+    }
+  }
+
+  // The group here is irrelevant: [DownloadTask.filePath] is derived from the
+  // base directory + filename, not the group, so path resolution is stable.
   Future<TtsVoicePaths> _resolvePaths(TtsVoiceSpec spec) async {
-    final model = await _taskFor(spec.model).filePath();
+    final model = await _taskFor(spec.model, _group).filePath();
     final dir = File(model).parent.path;
     return TtsVoicePaths(
       model: model,

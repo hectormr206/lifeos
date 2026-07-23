@@ -5,11 +5,14 @@
 //  * the controller detects installed voices (both files present) as Ready and
 //    the rest as Absent, streams download progress, and never throws on failure.
 // All engine/persistence/network seams are faked (no platform channels).
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/tts/domain/tts_voice.dart';
 import 'package:lifeos/features/tts/presentation/tts_providers.dart';
 import 'package:lifeos/features/voice_settings/domain/selected_voice.dart';
+import 'package:lifeos/features/voice_settings/domain/voice_catalog.dart';
 import 'package:lifeos/features/voice_settings/presentation/voice_catalog_providers.dart';
 
 import '../../tts/support/fake_tts.dart';
@@ -181,6 +184,121 @@ void main() {
       await notifier.download('en_GB-alan'); // must not throw
 
       expect(container.read(voiceCatalogControllerProvider)['en_GB-alan'], isA<TtsVoiceFailed>());
+    });
+
+    test('concurrent downloads all complete — starting one never freezes another',
+        () async {
+      final gateway = FakeTtsVoiceGateway()..downloadGate = Completer<void>();
+      final container = _container(gateway: gateway);
+      final notifier = container.read(voiceCatalogControllerProvider.notifier);
+      await notifier.ready;
+
+      // Kick off three downloads WITHOUT awaiting the first before the next —
+      // they are all in flight at once (the shared-group deadlock regression).
+      final futures = [
+        notifier.download('es_MX-claude'),
+        notifier.download('en_US-lessac'),
+        notifier.download('es_MX-ald'),
+      ];
+      // Let each download run up to the gate (past its async probe + progress).
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      // All three parked at the gate, all Downloading, none cancelled.
+      final mid = container.read(voiceCatalogControllerProvider);
+      expect(mid['es_MX-claude'], isA<TtsVoiceDownloading>());
+      expect(mid['en_US-lessac'], isA<TtsVoiceDownloading>());
+      expect(mid['es_MX-ald'], isA<TtsVoiceDownloading>());
+
+      gateway.downloadGate!.complete();
+      await Future.wait(futures);
+
+      final done = container.read(voiceCatalogControllerProvider);
+      expect(done['es_MX-claude'], isA<TtsVoiceReady>());
+      expect(done['en_US-lessac'], isA<TtsVoiceReady>());
+      expect(done['es_MX-ald'], isA<TtsVoiceReady>());
+      expect(gateway.downloadCalls, containsAll(['es_MX-claude', 'en_US-lessac', 'es_MX-ald']));
+    });
+  });
+
+  group('VoiceCatalogController.delete', () {
+    test('deletes a downloaded non-selected voice: removes files, marks Absent', () async {
+      final gateway = FakeTtsVoiceGateway(installed: {
+        'es_MX-claude': _paths,
+        'en_US-lessac': _paths,
+      });
+      final container = _container(gateway: gateway);
+      final controller = container.read(voiceCatalogControllerProvider.notifier);
+      await controller.ready;
+      await container.read(selectedVoiceProvider.notifier).ready; // stays es_MX-claude
+
+      await controller.delete('en_US-lessac');
+
+      expect(gateway.deleteCalls, ['en_US-lessac']);
+      expect(gateway.installed.containsKey('en_US-lessac'), isFalse);
+      expect(container.read(voiceCatalogControllerProvider)['en_US-lessac'], isA<TtsVoiceAbsent>());
+      // Selection untouched, no download triggered.
+      expect(container.read(selectedVoiceProvider), 'es_MX-claude');
+      expect(gateway.downloadCalls, isEmpty);
+    });
+
+    test('deleting the SELECTED voice falls back to another installed voice, no redownload',
+        () async {
+      final prefs = FakeSelectedVoicePreferences(initial: 'es_MX-claude');
+      final gateway = FakeTtsVoiceGateway(installed: {
+        'es_MX-claude': _paths,
+        'en_US-lessac': _paths,
+      });
+      final container = _container(gateway: gateway, prefs: prefs);
+      final controller = container.read(voiceCatalogControllerProvider.notifier);
+      await controller.ready;
+      await container.read(selectedVoiceProvider.notifier).ready;
+
+      await controller.delete('es_MX-claude');
+
+      final selected = container.read(selectedVoiceProvider);
+      expect(selected, 'en_US-lessac'); // fell back to the other installed voice
+      expect(prefs.stored, 'en_US-lessac'); // persisted
+      expect(gateway.downloadCalls, isEmpty); // NEVER re-download the deleted voice
+    });
+
+    test('deleting the SELECTED voice with none left falls back to the system voice',
+        () async {
+      final prefs = FakeSelectedVoicePreferences(initial: 'es_MX-claude');
+      final gateway = FakeTtsVoiceGateway(installed: {'es_MX-claude': _paths});
+      final container = _container(gateway: gateway, prefs: prefs);
+      final controller = container.read(voiceCatalogControllerProvider.notifier);
+      await controller.ready;
+      await container.read(selectedVoiceProvider.notifier).ready;
+
+      await controller.delete('es_MX-claude');
+
+      expect(container.read(selectedVoiceProvider), VoiceCatalog.systemVoiceId);
+      expect(prefs.stored, VoiceCatalog.systemVoiceId);
+      expect(gateway.downloadCalls, isEmpty);
+    });
+
+    test('the system-voice selection sticks across launches (hydrates, no redownload)',
+        () async {
+      final gateway = FakeTtsVoiceGateway(); // nothing installed
+      final container = _container(
+        gateway: gateway,
+        prefs: FakeSelectedVoicePreferences(initial: VoiceCatalog.systemVoiceId),
+      );
+      final notifier = container.read(selectedVoiceProvider.notifier);
+      await notifier.ready;
+
+      expect(container.read(selectedVoiceProvider), VoiceCatalog.systemVoiceId);
+      expect(gateway.downloadCalls, isEmpty);
+    });
+
+    test('delete ignores an unknown voice id', () async {
+      final gateway = FakeTtsVoiceGateway();
+      final container = _container(gateway: gateway);
+      final controller = container.read(voiceCatalogControllerProvider.notifier);
+      await controller.ready;
+
+      await controller.delete('not-a-voice');
+
+      expect(gateway.deleteCalls, isEmpty);
     });
   });
 }

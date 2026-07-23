@@ -85,6 +85,23 @@
   "voiceCatalogStatusFailed": "Error al descargar",
   "voiceCatalogSampleEs": "Hola, soy Axi, tu asistente personal.",
   "voiceCatalogSampleEn": "Hi, I'm Axi, your personal assistant.",
+  "voiceCatalogRegionMexico": "México",
+  "voiceCatalogRegionSpain": "España",
+  "voiceCatalogRegionArgentina": "Argentina",
+  "voiceCatalogRegionUnitedStates": "Estados Unidos",
+  "voiceCatalogRegionUnitedKingdom": "Reino Unido",
+  "voiceCatalogDeleteButton": "Eliminar",
+  "voiceCatalogDeleteTitle": "¿Eliminar esta voz?",
+  "voiceCatalogDeleteMessage": "Se borrarán los archivos de {voice} de este dispositivo. Podrás volver a descargarla cuando quieras.",
+  "@voiceCatalogDeleteMessage": {
+    "placeholders": { "voice": { "type": "String" } }
+  },
+  "voiceCatalogDeleteSelectedMessage": "{voice} es tu voz activa. Se borrará de este dispositivo y la app usará otra voz descargada, o la voz del dispositivo si no queda ninguna.",
+  "@voiceCatalogDeleteSelectedMessage": {
+    "placeholders": { "voice": { "type": "String" } }
+  },
+  "voiceCatalogDeleteConfirm": "Eliminar",
+  "voiceCatalogDeleteCancel": "Cancelar",
   "sectionAdvanced": "Avanzado",
   "engineConfigTitle": "Configuración del motor",
   "engineConfigSubtitle": "Parámetros del motor emparejado",

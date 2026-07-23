@@ -254,6 +254,43 @@ class AppLocalizationsEs extends AppLocalizations {
   String get voiceCatalogSampleEn => 'Hi, I\'m Axi, your personal assistant.';
 
   @override
+  String get voiceCatalogRegionMexico => 'México';
+
+  @override
+  String get voiceCatalogRegionSpain => 'España';
+
+  @override
+  String get voiceCatalogRegionArgentina => 'Argentina';
+
+  @override
+  String get voiceCatalogRegionUnitedStates => 'Estados Unidos';
+
+  @override
+  String get voiceCatalogRegionUnitedKingdom => 'Reino Unido';
+
+  @override
+  String get voiceCatalogDeleteButton => 'Eliminar';
+
+  @override
+  String get voiceCatalogDeleteTitle => '¿Eliminar esta voz?';
+
+  @override
+  String voiceCatalogDeleteMessage(String voice) {
+    return 'Se borrarán los archivos de $voice de este dispositivo. Podrás volver a descargarla cuando quieras.';
+  }
+
+  @override
+  String voiceCatalogDeleteSelectedMessage(String voice) {
+    return '$voice es tu voz activa. Se borrará de este dispositivo y la app usará otra voz descargada, o la voz del dispositivo si no queda ninguna.';
+  }
+
+  @override
+  String get voiceCatalogDeleteConfirm => 'Eliminar';
+
+  @override
+  String get voiceCatalogDeleteCancel => 'Cancelar';
+
+  @override
   String get sectionAdvanced => 'Avanzado';
 
   @override

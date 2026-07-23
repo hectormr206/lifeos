@@ -85,6 +85,23 @@
   "voiceCatalogStatusFailed": "Download failed",
   "voiceCatalogSampleEs": "Hola, soy Axi, tu asistente personal.",
   "voiceCatalogSampleEn": "Hi, I'm Axi, your personal assistant.",
+  "voiceCatalogRegionMexico": "Mexico",
+  "voiceCatalogRegionSpain": "Spain",
+  "voiceCatalogRegionArgentina": "Argentina",
+  "voiceCatalogRegionUnitedStates": "United States",
+  "voiceCatalogRegionUnitedKingdom": "United Kingdom",
+  "voiceCatalogDeleteButton": "Delete",
+  "voiceCatalogDeleteTitle": "Delete this voice?",
+  "voiceCatalogDeleteMessage": "The files for {voice} will be removed from this device. You can download it again anytime.",
+  "@voiceCatalogDeleteMessage": {
+    "placeholders": { "voice": { "type": "String" } }
+  },
+  "voiceCatalogDeleteSelectedMessage": "{voice} is your active voice. It will be removed from this device and the app will use another downloaded voice, or your device's voice if none remain.",
+  "@voiceCatalogDeleteSelectedMessage": {
+    "placeholders": { "voice": { "type": "String" } }
+  },
+  "voiceCatalogDeleteConfirm": "Delete",
+  "voiceCatalogDeleteCancel": "Cancel",
   "sectionAdvanced": "Advanced",
   "engineConfigTitle": "Engine configuration",
   "engineConfigSubtitle": "Paired-engine parameters",
