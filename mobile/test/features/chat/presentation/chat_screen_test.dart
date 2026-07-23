@@ -2,8 +2,8 @@
 // tailed bubbles render user/Axi + markdown, the input bar shows attach+mic+
 // send, attaching a photo adds an image bubble and routes to the on-device
 // model's VISION path (generateWithImages), press-and-hold produces a playable
-// voice-note bubble, and the "Responder por voz" toggle is disabled but its
-// preference persists. No live engine/plugins — everything is faked.
+// voice-note bubble, and the "Responder por voz" toggle is interactive and
+// auto-speaks new Axi replies. No live engine/plugins — everything is faked.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -20,6 +20,7 @@ import 'package:lifeos/features/chat/presentation/chat_providers.dart';
 import 'package:lifeos/features/chat/presentation/chat_screen.dart';
 import 'package:lifeos/features/local_model/data/on_device_chat_repository.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
+import 'package:lifeos/features/local_model/presentation/local_model_load_notifier.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/local_model/presentation/required_models.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
@@ -33,10 +34,34 @@ import '../support/fake_chat_gateways.dart';
 
 /// The chat screen wrapped in a Spanish-localized MaterialApp so its localized
 /// strings render deterministically (the test host's device locale would
-/// otherwise resolve to English).
-const _chatApp = MaterialApp(
+/// otherwise resolve to English). RAW = no baseline overrides; used by the few
+/// tests that exercise the on-device readiness/model-load/STT branches directly
+/// and supply their own engine/ready/STT overrides.
+const _chatAppRaw = MaterialApp(
   home: ChatScreen(),
   locale: Locale('es'),
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: AppLocalizations.supportedLocales,
+);
+
+/// The chat screen with on-device-safe BASELINE overrides applied via a nested
+/// ProviderScope. Local mode is always on now, which mounts the readiness gate
+/// plus the model-load and STT banners on every chat render; the baseline pins
+/// them ready/quiet so a test that only cares about the composer and message
+/// bubbles still renders them. A test's own outer overrides (chat repository,
+/// TTS, prefs, mic gateways) are inherited unchanged — the baseline only sets
+/// providers no such test varies, so there is never a duplicate override.
+final _chatApp = MaterialApp(
+  home: ProviderScope(
+    overrides: [
+      lifeOsModelsReadyProvider.overrideWithValue(true),
+      localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: true)),
+      localModelLoadProvider.overrideWith(_ReadyLoadNotifier.new),
+      sttModelDownloadProvider.overrideWith(() => _FixedSttStatusNotifier(const SttModelReady())),
+    ],
+    child: const ChatScreen(),
+  ),
+  locale: const Locale('es'),
   localizationsDelegates: AppLocalizations.localizationsDelegates,
   supportedLocales: AppLocalizations.supportedLocales,
 );
@@ -46,6 +71,14 @@ const _chatApp = MaterialApp(
 class _EnabledLocalModeNotifier extends LocalModelEnabledNotifier {
   @override
   bool build() => true;
+}
+
+/// Pins the on-device model-load state to READY (no engine warm-up), so the
+/// composer renders and send is never gated in tests that don't target the
+/// load banner.
+class _ReadyLoadNotifier extends LocalModelLoadNotifier {
+  @override
+  LocalModelLoadState build() => const LocalModelLoadState(status: LocalModelLoadStatus.ready);
 }
 
 /// Pins the STT download notifier to a fixed status (no async hydration probe)
@@ -554,7 +587,7 @@ void main() {
     expect(find.textContaining('tok/s'), findsNothing);
   });
 
-  testWidgets('Responder por voz toggle is disabled but the preference persists', (tester) async {
+  testWidgets('Responder por voz toggle is interactive and persists the preference', (tester) async {
     final prefs = FakeVoiceReplyPreferences();
 
     await _pumpScreen(
@@ -571,11 +604,102 @@ void main() {
     await tester.tap(find.byIcon(Icons.record_voice_over));
     await tester.pumpAndSettle();
 
-    // The switch is shown but disabled (onChanged null) with the hint.
+    // The switch is now interactive (TTS/Piper is installed) — no "Próximamente".
     final tile = tester.widget<SwitchListTile>(find.byType(SwitchListTile));
-    expect(tile.onChanged, isNull);
+    expect(tile.onChanged, isNotNull);
+    expect(tile.value, isFalse);
     expect(find.text('Responder por voz'), findsOneWidget);
-    expect(find.text('Próximamente (voz on-device)'), findsOneWidget);
+    expect(find.textContaining('en voz alta'), findsOneWidget);
+    expect(find.text('Próximamente (voz on-device)'), findsNothing);
+
+    // Flip it on → the choice persists through the notifier.
+    await tester.tap(find.byType(SwitchListTile));
+    await tester.pumpAndSettle();
+    expect(prefs.persisted, isTrue);
+    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value, isTrue);
+  });
+
+  testWidgets('auto-speaks a NEW Axi reply when Responder por voz is on', (tester) async {
+    final tts = FakeTextToSpeechGateway();
+    final prefs = FakeVoiceReplyPreferences(enabled: true);
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          textToSpeechGatewayProvider.overrideWithValue(tts),
+          voiceReplyPreferencesProvider.overrideWithValue(prefs),
+        ],
+        child: _chatApp,
+      ),
+    );
+    // Let the preference hydrate to ON before sending.
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'hola axi');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    // Exactly the assistant reply is spoken — never the user's own turn.
+    expect(tts.spoken, ['Respuesta de Axi']);
+  });
+
+  testWidgets('does NOT auto-speak a reply when Responder por voz is off', (tester) async {
+    final tts = FakeTextToSpeechGateway();
+    // Default preference is OFF (no override needed beyond the fake gateway).
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          textToSpeechGatewayProvider.overrideWithValue(tts),
+        ],
+        child: _chatApp,
+      ),
+    );
+
+    await tester.enterText(find.byType(TextField), 'hola axi');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Respuesta de Axi'), findsOneWidget); // the reply arrived…
+    expect(tts.spoken, isEmpty); // …but nothing was auto-spoken.
+  });
+
+  testWidgets('does NOT auto-speak historical replies loaded on open', (tester) async {
+    final tts = FakeTextToSpeechGateway();
+    final prefs = FakeVoiceReplyPreferences(enabled: true);
+    final ts = DateTime.now();
+    final repo = _FakeChatRepository(
+      history: [
+        ChatMessage(id: '1-user', role: ChatRole.user, text: 'hola', timestamp: ts),
+        ChatMessage(id: '1-axi', role: ChatRole.axi, text: 'respuesta vieja', timestamp: ts),
+      ],
+    );
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(repo),
+          textToSpeechGatewayProvider.overrideWithValue(tts),
+          voiceReplyPreferencesProvider.overrideWithValue(prefs),
+        ],
+        child: _chatApp,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The old Axi bubble is shown but was never auto-spoken (only newly-arriving
+    // replies are — the whole transcript loads at once, not as a tail append).
+    expect(find.text('respuesta vieja'), findsOneWidget);
+    expect(tts.spoken, isEmpty);
   });
 
   testWidgets('only Axi text replies get a speak-aloud button', (tester) async {
@@ -746,7 +870,7 @@ void main() {
           sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
           speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
-        child: _chatApp,
+        child: _chatAppRaw,
       ),
     );
 
@@ -789,7 +913,7 @@ void main() {
           sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
           speechToTextProvider.overrideWithValue(FakeSpeechToText()),
         ],
-        child: _chatApp,
+        child: _chatAppRaw,
       ),
     );
     await tester.pumpAndSettle();
@@ -828,7 +952,7 @@ void main() {
 
     // ABSENT → the download affordance is shown; tapping it downloads (the
     // fake gateway succeeds) and the banner disappears (Ready shows nothing).
-    await _pumpScreen(tester, ProviderScope(overrides: baseOverrides, child: _chatApp));
+    await _pumpScreen(tester, ProviderScope(overrides: baseOverrides, child: _chatAppRaw));
     await tester.pumpAndSettle();
     expect(find.text('Descargar modelo de voz'), findsOneWidget);
 
@@ -848,7 +972,7 @@ void main() {
         sttModelDownloadProvider
             .overrideWith(() => _FixedSttStatusNotifier(const SttModelDownloading(0.42))),
       ],
-      child: _chatApp,
+      child: _chatAppRaw,
     ));
     await tester.pumpAndSettle();
     expect(find.text('Descargando modelo de voz… 42%'), findsOneWidget);
@@ -863,7 +987,7 @@ void main() {
         sttModelDownloadProvider
             .overrideWith(() => _FixedSttStatusNotifier(const SttModelFailed('boom'))),
       ],
-      child: _chatApp,
+      child: _chatAppRaw,
     ));
     await tester.pumpAndSettle();
     expect(find.text('No se pudo descargar el modelo de voz. Toca para reintentar.'), findsOneWidget);

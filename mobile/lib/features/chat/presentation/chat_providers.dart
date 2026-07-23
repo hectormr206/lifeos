@@ -131,12 +131,10 @@ class SpeechController extends Notifier<String?> {
 final voiceReplyPreferencesProvider =
     Provider<VoiceReplyPreferences>((ref) => SharedPrefsVoiceReplyPreferences());
 
-/// The persisted "Responder por voz" (Axi speaks) toggle value.
-///
-/// The feature is DISABLED in the UI until the on-device TTS model lands, but
-/// the user's chosen preference is hydrated + persisted here so it is ready
-/// the moment TTS ships. Defaults to `false`; hydrates asynchronously without
-/// blocking first read.
+/// The persisted "Responder por voz" (Axi auto-speaks new replies) toggle
+/// value. When `true`, the chat screen speaks every newly-arrived Axi text
+/// reply aloud via the shared [SpeechController]. Defaults to `false`;
+/// hydrates asynchronously without blocking first read.
 final voiceReplyEnabledProvider =
     NotifierProvider<VoiceReplyEnabledNotifier, bool>(VoiceReplyEnabledNotifier.new);
 

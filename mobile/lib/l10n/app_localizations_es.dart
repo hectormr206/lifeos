@@ -319,7 +319,8 @@ class AppLocalizationsEs extends AppLocalizations {
   String get chatVoiceReplyTitle => 'Responder por voz';
 
   @override
-  String get chatVoiceReplySubtitle => 'Próximamente (voz on-device)';
+  String get chatVoiceReplySubtitle =>
+      'Axi lee cada nueva respuesta en voz alta.';
 
   @override
   String get chatCamera => 'Cámara';

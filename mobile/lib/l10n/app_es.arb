@@ -115,7 +115,7 @@
   "chatTitle": "Axi",
   "chatVoiceReplyTooltip": "Responder por voz",
   "chatVoiceReplyTitle": "Responder por voz",
-  "chatVoiceReplySubtitle": "Próximamente (voz on-device)",
+  "chatVoiceReplySubtitle": "Axi lee cada nueva respuesta en voz alta.",
   "chatCamera": "Cámara",
   "chatGallery": "Galería",
   "chatAttachError": "No se pudo adjuntar la imagen: {error}",

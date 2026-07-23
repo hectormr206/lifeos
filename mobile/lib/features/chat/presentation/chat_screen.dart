@@ -420,25 +420,53 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     await ref.read(chatNotifierProvider.notifier).deleteConversation();
   }
 
-  // ── "Responder por voz" toggle (disabled until on-device TTS) ─────────────
+  // ── "Responder por voz" toggle (auto-speak every new Axi reply) ───────────
 
   Future<void> _openVoiceReplySheet() async {
-    final enabled = ref.read(voiceReplyEnabledProvider);
     await showModalBottomSheet<void>(
       context: context,
+      // A [Consumer] so the switch reflects (and rebuilds on) the live
+      // preference — flipping it persists through the notifier and, from then
+      // on, every NEW Axi text reply is auto-spoken (see the reply listener in
+      // [build]) with the SAME engine the per-message 🔊 button uses.
       builder: (_) => SafeArea(
-        child: SwitchListTile(
-          value: enabled,
-          // Disabled: needs the on-device TTS model (future slice). The
-          // preference persistence is wired (voiceReplyEnabledProvider) and
-          // ready for when TTS lands.
-          onChanged: null,
-          secondary: const Icon(Icons.record_voice_over),
-          title: Text(AppLocalizations.of(context).chatVoiceReplyTitle),
-          subtitle: Text(AppLocalizations.of(context).chatVoiceReplySubtitle),
+        child: Consumer(
+          builder: (context, ref, _) {
+            final enabled = ref.watch(voiceReplyEnabledProvider);
+            return SwitchListTile(
+              value: enabled,
+              onChanged: (value) =>
+                  ref.read(voiceReplyEnabledProvider.notifier).setEnabled(value),
+              secondary: const Icon(Icons.record_voice_over),
+              title: Text(AppLocalizations.of(context).chatVoiceReplyTitle),
+              subtitle: Text(AppLocalizations.of(context).chatVoiceReplySubtitle),
+            );
+          },
         ),
       ),
     );
+  }
+
+  /// Auto-speaks a newly-arrived Axi reply when "Responder por voz" is on.
+  ///
+  /// Fires ONLY on a genuine append of a single message to the tail (the reply
+  /// landing after a send), so historical messages loaded/hydrated on open
+  /// (which replace the whole transcript, not a +1 append) are never spoken.
+  /// Only assistant TEXT bubbles with actual words qualify — user turns,
+  /// images, and voice-note bubbles are skipped. Reuses the shared
+  /// [SpeechController]: `toggle` on the fresh id stops any previous utterance
+  /// and speaks this one, so only one reply is ever read at a time.
+  void _maybeSpeakNewReply(ChatUiState? previous, ChatUiState next) {
+    if (previous == null) return;
+    if (next.messages.length != previous.messages.length + 1) return;
+    if (!ref.read(voiceReplyEnabledProvider)) return;
+    final last = next.messages.last;
+    if (last.role != ChatRole.axi ||
+        last.kind != ChatMessageKind.text ||
+        last.text.trim().isEmpty) {
+      return;
+    }
+    _speech.toggle(last.id, last.text);
   }
 
   @override
@@ -465,6 +493,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       if (previous == null || next.messages.length != previous.messages.length) {
         _scrollToBottomSoon();
       }
+      _maybeSpeakNewReply(previous, next);
     });
 
     return Scaffold(

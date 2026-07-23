@@ -1,9 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Local-only persistence for the "Responder por voz" toggle (Axi speaks its
-/// replies). The feature itself needs the on-device TTS model (a future
-/// slice), so the toggle is shown DISABLED for now — but the user's chosen
-/// preference is still persisted here so it is ready the moment TTS lands.
+/// Local-only persistence for the "Responder por voz" toggle: when on, Axi
+/// auto-speaks every new text reply aloud through the on-device TTS engine.
 ///
 /// Abstracted so the chat UI depends on the interface and tests inject a fake
 /// without the shared_preferences platform channel.

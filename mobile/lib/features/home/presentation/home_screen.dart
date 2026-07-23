@@ -8,7 +8,6 @@ import '../../axi_body/presentation/axi_body_widget.dart';
 import '../../connection/domain/connection_status.dart';
 import '../../connection/presentation/connection_notifier.dart';
 import '../../local_model/presentation/local_model_notifier.dart';
-import '../../local_model/presentation/local_model_providers.dart';
 import 'home_providers.dart';
 
 /// Foundation home screen (design D1 / M0->M1 bridge; spec
@@ -74,12 +73,10 @@ class _UnpairedView extends ConsumerWidget {
         // message here anymore; the home just offers the offline path.
         const SizedBox(height: 16),
         if (localModelInstalled)
-          // Primary offline path: ensure local mode is on, then open the chat.
+          // Primary offline path: open the chat. Local mode is always on now
+          // (on-device-first), so there is no toggle to flip first.
           FilledButton.icon(
-            onPressed: () async {
-              await ref.read(localModelEnabledProvider.notifier).setEnabled(true);
-              if (context.mounted) context.push('/chat');
-            },
+            onPressed: () => context.push('/chat'),
             icon: const Icon(Icons.offline_bolt),
             label: Text(l10n.homeChatOffline),
           )

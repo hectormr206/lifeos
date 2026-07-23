@@ -317,7 +317,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatVoiceReplyTitle => 'Reply by voice';
 
   @override
-  String get chatVoiceReplySubtitle => 'Coming soon (on-device voice)';
+  String get chatVoiceReplySubtitle => 'Axi reads each new reply aloud.';
 
   @override
   String get chatCamera => 'Camera';

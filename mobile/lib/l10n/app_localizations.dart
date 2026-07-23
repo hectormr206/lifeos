@@ -677,7 +677,7 @@ abstract class AppLocalizations {
   /// No description provided for @chatVoiceReplySubtitle.
   ///
   /// In en, this message translates to:
-  /// **'Coming soon (on-device voice)'**
+  /// **'Axi reads each new reply aloud.'**
   String get chatVoiceReplySubtitle;
 
   /// No description provided for @chatCamera.

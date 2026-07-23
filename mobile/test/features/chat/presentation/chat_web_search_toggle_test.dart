@@ -11,14 +11,7 @@ import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
 import 'package:lifeos/features/chat/presentation/chat_providers.dart';
 import 'package:lifeos/features/chat/presentation/chat_screen.dart';
-import 'package:lifeos/l10n/app_localizations.dart';
-
-const _chatApp = MaterialApp(
-  home: ChatScreen(),
-  locale: Locale('es'),
-  localizationsDelegates: AppLocalizations.localizationsDelegates,
-  supportedLocales: AppLocalizations.supportedLocales,
-);
+import '../support/chat_test_harness.dart';
 
 class _FakeChatRepository implements ChatRepository {
   @override
@@ -38,7 +31,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [chatRepositoryProvider.overrideWithValue(_FakeChatRepository())],
-        child: _chatApp,
+        child: chatApp,
       ),
     );
     await tester.pump();

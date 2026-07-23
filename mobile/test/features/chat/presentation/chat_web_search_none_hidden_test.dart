@@ -12,16 +12,9 @@ import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
 import 'package:lifeos/features/chat/presentation/chat_providers.dart';
 import 'package:lifeos/features/chat/presentation/chat_screen.dart';
+import '../support/chat_test_harness.dart';
 import 'package:lifeos/features/web_search/domain/web_search_settings.dart';
 import 'package:lifeos/features/web_search/presentation/web_search_providers.dart';
-import 'package:lifeos/l10n/app_localizations.dart';
-
-const _chatApp = MaterialApp(
-  home: ChatScreen(),
-  locale: Locale('es'),
-  localizationsDelegates: AppLocalizations.localizationsDelegates,
-  supportedLocales: AppLocalizations.supportedLocales,
-);
 
 class _FakeChatRepository implements ChatRepository {
   @override
@@ -52,7 +45,7 @@ void main() {
           webSearchPreferencesProvider
               .overrideWithValue(_FakePrefs(const WebSearchSettings(provider: WebSearchProvider.none))),
         ],
-        child: _chatApp,
+        child: chatApp,
       ),
     );
     final container = ProviderScope.containerOf(tester.element(find.byType(ChatScreen)));
@@ -73,7 +66,7 @@ void main() {
           chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
           webSearchPreferencesProvider.overrideWithValue(_FakePrefs(const WebSearchSettings())),
         ],
-        child: _chatApp,
+        child: chatApp,
       ),
     );
     final container = ProviderScope.containerOf(tester.element(find.byType(ChatScreen)));

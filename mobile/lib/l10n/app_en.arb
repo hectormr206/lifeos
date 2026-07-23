@@ -130,7 +130,7 @@
   "chatTitle": "Axi",
   "chatVoiceReplyTooltip": "Reply by voice",
   "chatVoiceReplyTitle": "Reply by voice",
-  "chatVoiceReplySubtitle": "Coming soon (on-device voice)",
+  "chatVoiceReplySubtitle": "Axi reads each new reply aloud.",
   "chatCamera": "Camera",
   "chatGallery": "Gallery",
   "chatAttachError": "Could not attach the image: {error}",

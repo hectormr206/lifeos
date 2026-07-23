@@ -234,10 +234,8 @@ class LocalModelManagerNotifier extends Notifier<LocalModelManagerState> {
   /// re-downloaded later. Besides the engine uninstall this ALSO deletes the
   /// OTA-downloaded file (flutter_gemma never deletes external
   /// `fromFile`-installed files) and clears the tracked version. On success
-  /// [LocalModelManagerState.installed] flips to `false`; the on-device toggle
-  /// is then forced OFF (and persisted) because local mode is impossible
-  /// without weights. Delete failures surface an error and leave the weights
-  /// in place; the screen never crashes.
+  /// [LocalModelManagerState.installed] flips to `false`. Delete failures
+  /// surface an error and leave the weights in place; the screen never crashes.
   Future<void> deleteModel() async {
     if (state.deleting || state.downloading) return;
     state = state.copyWith(deleting: true, error: null);
@@ -253,9 +251,6 @@ class LocalModelManagerNotifier extends Notifier<LocalModelManagerState> {
         await ref.read(brainModelVersionStoreProvider).clear();
       } catch (_) {/* best effort */}
       state = state.copyWith(deleting: false, installed: false, clearInstalledVersion: true);
-      // Force local mode off now that the weights are gone (idempotent if it
-      // was already off). Uses the enabled-notifier so the choice is persisted.
-      await ref.read(localModelEnabledProvider.notifier).setEnabled(false);
     } catch (error) {
       state = state.copyWith(deleting: false, error: 'No se pudo eliminar el modelo: $error');
     }

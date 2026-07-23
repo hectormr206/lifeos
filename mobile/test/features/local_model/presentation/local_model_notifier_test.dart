@@ -147,27 +147,6 @@ void main() {
     expect(state.error, isNotNull);
   });
 
-  test('after deleteModel the local-mode toggle can no longer be on (gating)', () async {
-    final engine = FakeLocalLlmEngine(installed: true);
-    final container = ProviderContainer(overrides: [
-      localLlmEngineProvider.overrideWithValue(engine),
-      notificationPermissionGatewayProvider
-          .overrideWithValue(FakeNotificationPermissionGateway()),
-    ]);
-    addTearDown(container.dispose);
-
-    // Enable local mode (allowed because the model is installed).
-    await container.read(localModelEnabledProvider.notifier).setEnabled(true);
-    expect(container.read(localModelEnabledProvider), isTrue);
-
-    final notifier = container.read(localModelManagerProvider.notifier);
-    await notifier.ready;
-    await notifier.deleteModel();
-
-    // With the weights gone, local mode is forced back OFF.
-    expect(container.read(localModelEnabledProvider), isFalse);
-  });
-
   test('permanently denied is recorded and openNotificationSettings deep-links', () async {
     final gateway =
         FakeNotificationPermissionGateway(requestResult: NotificationPermission.permanentlyDenied);
