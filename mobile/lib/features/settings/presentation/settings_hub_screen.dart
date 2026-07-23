@@ -56,6 +56,13 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/updates'),
           ),
+          ListTile(
+            leading: const Icon(Icons.privacy_tip_outlined),
+            title: const Text('Permisos'),
+            subtitle: const Text('Revisa y gestiona los permisos de la app'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/permissions'),
+          ),
           const ListTile(
             enabled: false,
             leading: Icon(Icons.mic_none_outlined),

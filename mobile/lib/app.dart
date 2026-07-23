@@ -26,6 +26,9 @@ import 'features/local_model/presentation/local_model_providers.dart';
 import 'features/local_model/presentation/local_model_screen.dart';
 import 'features/meetings/presentation/meeting_detail_screen.dart';
 import 'features/meetings/presentation/meetings_screen.dart';
+import 'features/permissions/presentation/permissions_onboarding_screen.dart';
+import 'features/permissions/presentation/permissions_providers.dart';
+import 'features/permissions/presentation/permissions_screen.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
 import 'features/settings/presentation/settings_hub_screen.dart';
 import 'features/settings/presentation/settings_screen.dart';
@@ -68,9 +71,29 @@ import 'theme/theme_providers.dart';
 /// laptop `/meetings` parity, read-only: the phone is not the recorder in
 /// v1) are gated behind pairing the same way.
 final goRouterProvider = Provider<GoRouter>((ref) {
+  // Permissions onboarding gate: bridge the (async-hydrated) onboarding gate
+  // into a Listenable so the router re-evaluates `redirect` the moment the flag
+  // resolves — a first-launch user is then routed to `/onboarding` without
+  // needing to navigate. Does not affect the existing pairing gate.
+  final onboardingRefresh = ValueNotifier<int>(0);
+  ref.listen(onboardingGateProvider, (_, _) => onboardingRefresh.value++);
+  ref.onDispose(onboardingRefresh.dispose);
+
   return GoRouter(
+    refreshListenable: onboardingRefresh,
     redirect: (context, state) {
       final loc = state.matchedLocation;
+      // First-launch permissions onboarding (shown once). Until persistence
+      // resolves (`unknown`) we do NOT redirect, so an already-onboarded user
+      // never flashes the onboarding screen; once `pending`, everything routes
+      // to `/onboarding`; once `done`, `/onboarding` is bounced back to home.
+      final gate = ref.read(onboardingGateProvider);
+      if (gate == OnboardingGate.pending && loc != '/onboarding') {
+        return '/onboarding';
+      }
+      if (gate == OnboardingGate.done && loc == '/onboarding') {
+        return '/';
+      }
       final needsPairing = loc == '/chat' ||
           loc.startsWith('/domains') ||
           loc == '/body' ||
@@ -95,6 +118,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     },
     routes: [
       GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
+      // First-launch permissions onboarding (shown once via the onboarding
+      // gate above). Not pairing-gated — it runs before anything else.
+      GoRoute(path: '/onboarding', builder: (context, state) => const PermissionsOnboardingScreen()),
       GoRoute(path: '/settings/connection', builder: (context, state) => const ConnectionScreen()),
       GoRoute(path: '/chat', builder: (context, state) => const ChatScreen()),
       GoRoute(path: '/domains', builder: (context, state) => const DomainsHubScreen()),
@@ -122,6 +148,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // `/settings/local-model` above) so the updates screen always renders;
       // a check just reports "sin conexión" when unpaired.
       GoRoute(path: '/settings/updates', builder: (context, state) => const AppUpdatesScreen()),
+      // Permissions management. Not pairing-gated (works offline, mirrors the
+      // appearance/about surfaces).
+      GoRoute(path: '/settings/permissions', builder: (context, state) => const PermissionsScreen()),
       GoRoute(path: '/graph', builder: (context, state) => const GraphBrowserScreen()),
       GoRoute(
         path: '/graph/:id',
