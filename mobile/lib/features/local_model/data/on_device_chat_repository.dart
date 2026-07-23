@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import '../../chat/data/chat_repository.dart';
@@ -11,16 +12,19 @@ import '../domain/local_llm_engine.dart';
 /// SLICE 1 scope: text-only, non-streaming, single-turn. [loadHistory]
 /// returns `[]` (no local conversation persistence yet — TODO(roadmap)).
 class OnDeviceChatRepository implements ChatRepository {
-  OnDeviceChatRepository(this._engine, {String Function(String message)? decoratePrompt})
+  OnDeviceChatRepository(this._engine,
+      {FutureOr<String> Function(String message)? decoratePrompt})
       : _decoratePrompt = decoratePrompt ?? _identity;
 
   final LocalLlmEngine _engine;
 
-  /// Wraps the raw user message with Axi's system preamble (reply-language +
-  /// current date/time) just before it reaches the engine. Injected by
-  /// `chatRepositoryProvider` from the live language setting + `Clock`; defaults
-  /// to the identity so tests and the vision empty-retry path stay unchanged.
-  final String Function(String message) _decoratePrompt;
+  /// Wraps the raw user message with Axi's system preamble (persona + relevant
+  /// memory + reply-language + current date/time) just before it reaches the
+  /// engine. Injected by `chatRepositoryProvider` from the live context builder;
+  /// defaults to the identity so tests and the vision empty-retry path stay
+  /// unchanged. Returns a [FutureOr] so the memory recall (SLICE C1) can be
+  /// async while a plain sync decorator (language + datetime only) still fits.
+  final FutureOr<String> Function(String message) _decoratePrompt;
 
   static String _identity(String message) => message;
 
@@ -51,8 +55,11 @@ class OnDeviceChatRepository implements ChatRepository {
   @override
   Future<ChatMessage> sendMessage(String text) => _serialize(() async {
         try {
+          // Build the decorated prompt (may recall memory async) BEFORE loading
+          // the model, so the embedder is disposed by the time the LLM loads.
+          final prompt = await _decoratePrompt(text);
           await (_loadFuture ??= _engine.load());
-          final result = await _engine.generate(_decoratePrompt(text));
+          final result = await _engine.generate(prompt);
           // Lighter empty-guard than the vision path (no image retry): if the
           // backend still degenerated to empty, show a neutral-Spanish fallback
           // rather than a blank bubble. Keep the metrics from the attempt.
@@ -77,10 +84,11 @@ class OnDeviceChatRepository implements ChatRepository {
   @override
   Future<ChatMessage> sendImages(String text, List<Uint8List> images) => _serialize(() async {
         try {
+          // Build the decorated prompt (may recall memory async) BEFORE loading
+          // the model, so the embedder is disposed by the time the LLM loads.
+          // Both the primary attempt and the escape retry send the same text.
+          final prompt = await _decoratePrompt(text);
           await (_loadFuture ??= _engine.load());
-          // Prepend Axi's language + current-datetime preamble once; both the
-          // primary attempt and the escape retry send the same decorated text.
-          final prompt = _decoratePrompt(text);
           // Routes to the on-device model's VISION path (all photos in one
           // turn). If the installed variant is text-only, the engine throws and
           // we surface a clear Spanish message rather than silently dropping the

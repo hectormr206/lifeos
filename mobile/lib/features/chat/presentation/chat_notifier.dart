@@ -6,7 +6,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
-import '../../../core/clock/clock.dart';
 import '../../../core/graph/graph_providers.dart';
 import '../../../core/outbox/outbox.dart';
 import '../../../l10n/locale_providers.dart';
@@ -16,8 +15,8 @@ import '../../web_search/data/search_augmented_chat_repository.dart';
 import '../../web_search/presentation/web_search_providers.dart';
 import '../data/chat_history_repository.dart';
 import '../data/chat_repository.dart';
-import '../domain/axi_prompt_context.dart';
 import '../domain/chat_message.dart';
+import 'chat_context_providers.dart';
 import 'chat_providers.dart';
 
 /// The [ChatRepository] used app-wide; overridden with a fake in tests.
@@ -30,18 +29,18 @@ import 'chat_providers.dart';
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
   final ChatRepository base;
   if (ref.watch(localModelEnabledProvider)) {
-    // i18n + "Axi knows now": every on-device turn is prefixed with a preamble
-    // that (a) pins Axi's reply language to the current setting and (b) states
-    // the current device-local date/time. `read` (not `watch`) so a language or
-    // clock change never rebuilds the repository (which would drop the loaded
-    // weights / FIFO lock) — the closure re-reads both live at each send.
+    // SLICE C1: every on-device turn is prefixed with the full Axi context —
+    // (a) Axi's persona + response guidance, (b) a relevant MEMORY block routed
+    // + recalled from the graph, and (c) the reply-language + device-local
+    // date/time lines. Built async by the shared `chatContextBuilderProvider`
+    // (it recalls memory and disposes the embedder before the LLM loads).
+    // `read` (not `watch`) so a language/clock change never rebuilds the
+    // repository (which would drop the loaded weights / FIFO lock) — the builder
+    // re-reads language + clock live at each send.
     base = OnDeviceChatRepository(
       ref.watch(localLlmEngineProvider),
-      decoratePrompt: (message) => withAxiPromptPreamble(
-        message: message,
-        languageCode: ref.read(appLanguageCodeProvider),
-        now: ref.read(clockProvider).now(),
-      ),
+      decoratePrompt: (message) =>
+          ref.read(chatContextBuilderProvider).buildPreamble(message),
     );
   } else {
     base = HttpChatRepository(
@@ -242,7 +241,25 @@ class ChatNotifier extends Notifier<ChatUiState> {
       userMessageId: userMessage.id,
       run: () => ref.read(chatRepositoryProvider).sendMessage(trimmed),
       errorPrefix: 'No se pudo enviar el mensaje',
+      // SLICE C1 write-back: after Axi replies, persist the exchange to memory
+      // (conversation turn + a fact when the user stated something personal) so
+      // Axi remembers next time. On-device only; best-effort and fire-and-forget
+      // (see `_recordTurn`) so it never blocks or reorders the FIFO send flow.
+      onReply: ref.read(localModelEnabledProvider)
+          ? (reply) => _recordTurn(trimmed, reply.text)
+          : null,
     ));
+  }
+
+  /// Fire-and-forget memory write-back for one completed text turn. NEVER
+  /// awaited by the drain loop, so it can neither block nor reorder a
+  /// generation; the builder swallows every failure internally.
+  void _recordTurn(String userText, String axiText) {
+    unawaited(
+      ref
+          .read(chatContextBuilderProvider)
+          .recordTurn(userText: userText, axiText: axiText),
+    );
   }
 
   /// Advances an outgoing user message's delivery [status] in place (WhatsApp
@@ -326,6 +343,9 @@ class ChatNotifier extends Notifier<ChatUiState> {
           _setStatus(request.userMessageId, ChatMessageStatus.delivered);
           state = state.copyWith(messages: [...state.messages, reply]);
           _persist(reply);
+          // Best-effort memory write-back (unawaited inside the callback), fired
+          // only once the reply is in hand so it never delays the next turn.
+          request.onReply?.call(reply);
         } on ChatException catch (error) {
           // Keep the already-appended user message (left at "sent"); do not add
           // a phantom reply. Continue draining any queued items.
@@ -410,10 +430,16 @@ class _OutgoingRequest {
     required this.userMessageId,
     required this.run,
     required this.errorPrefix,
+    this.onReply,
   });
 
   final String userMessageId;
   final Future<ChatMessage> Function() run;
   final String errorPrefix;
+
+  /// Optional hook run once THIS request's reply is appended (SLICE C1 memory
+  /// write-back). Null for turns that should not be recorded (image/voice, or
+  /// when on-device mode is off).
+  final void Function(ChatMessage reply)? onReply;
   final Completer<void> done = Completer<void>();
 }

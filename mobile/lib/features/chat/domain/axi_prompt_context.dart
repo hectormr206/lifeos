@@ -30,6 +30,76 @@ String withAxiPromptPreamble({
 }) =>
     '${buildAxiPromptPreamble(languageCode: languageCode, now: now)}\n\n$message';
 
+/// Axi's CONCISE persona + response guidance (roadmap SLICE C1), ported and
+/// compressed from the laptop `axi/src/axi/brain.py` `SYSTEM_PROMPT(_EN)`.
+///
+/// Kept deliberately tight: the on-device model is ~2B, so this trades the
+/// laptop's long rulebook for the load-bearing rules only — persona, brevity
+/// (the reply may be spoken aloud), "you HAVE memory, use the MEMORIA RELEVANTE
+/// block, never say 'no tengo acceso'", the anti-invention guard (never fake a
+/// datum/date/source, health data especially), and "you cannot SAVE from this
+/// layer". Language-aware (es default / en).
+String axiBehaviorPrompt(String languageCode) => switch (languageCode) {
+      'en' => _behaviorEn,
+      _ => _behaviorEs,
+    };
+
+const String _behaviorEs =
+    'Eres Axi, el asistente personal de IA de Héctor. Hablas español claro y '
+    'directo, sin preámbulos ni cortesías vacías. Eres mentor técnico cuando la '
+    'pregunta es técnica y cálido cuando es personal. Tu respuesta puede leerse '
+    'en voz alta: sé breve, prosa corta, sin listas largas ni Markdown.\n'
+    'SÍ tienes memoria: si arriba aparece un bloque "MEMORIA RELEVANTE", esos '
+    'son hechos guardados sobre Héctor; úsalos con confianza y NUNCA digas "no '
+    'tengo acceso a tus datos". Si la memoria no trae lo que te preguntan, dilo '
+    'con honestidad y ofrece que te lo cuente. JAMÁS inventes un dato, una fecha '
+    'ni una fuente; inventar datos de salud está prohibido. Copia los valores '
+    'tal cual y respeta las fechas que aparezcan.\n'
+    'No puedes GUARDAR desde aquí: nunca digas "anotado" ni "registré tu dato". '
+    'Tú solo LEES tu memoria; otra capa la escribe.';
+
+const String _behaviorEn =
+    "You are Axi, Héctor's personal AI assistant. You speak clear, direct "
+    'English, no filler or empty pleasantries. You are a technical mentor when '
+    "the question is technical and warm when it's personal. Your reply may be "
+    'read aloud: be brief, short prose, no long lists or Markdown.\n'
+    'You DO have memory: if a "RELEVANT MEMORY" block appears above, those are '
+    'saved facts about Héctor; use them with confidence and NEVER say "I have no '
+    'access to your data". If the memory does not hold what is asked, say so '
+    'honestly and offer to be told. NEVER invent a datum, a date, or a source; '
+    'fabricating health data is forbidden. Copy values exactly and respect any '
+    'dates shown.\n'
+    'You cannot SAVE from this layer: never say "noted" or "I logged your data". '
+    'You only READ your memory; another layer writes it.';
+
+/// Assemble the full on-device preamble for one turn (roadmap SLICE C1):
+/// Axi's behavior prompt, then the language + current-datetime lines, then the
+/// optional [memoryBlock] ("MEMORIA RELEVANTE"/"RELEVANT MEMORY"), each block
+/// separated by a blank line. The memory block is omitted when empty.
+String composeAxiPreamble({
+  required String languageCode,
+  required DateTime now,
+  String memoryBlock = '',
+}) {
+  final sections = <String>[
+    axiBehaviorPrompt(languageCode),
+    buildAxiPromptPreamble(languageCode: languageCode, now: now),
+  ];
+  if (memoryBlock.trim().isNotEmpty) sections.add(memoryBlock.trim());
+  return sections.join('\n\n');
+}
+
+/// Prepend the full [composeAxiPreamble] context to a user [message], the exact
+/// text handed to the engine — the SLICE C1 superset of [withAxiPromptPreamble]
+/// (adds behavior + memory on top of language + datetime).
+String decorateWithAxiContext({
+  required String message,
+  required String languageCode,
+  required DateTime now,
+  String memoryBlock = '',
+}) =>
+    '${composeAxiPreamble(languageCode: languageCode, now: now, memoryBlock: memoryBlock)}\n\n$message';
+
 /// Locale-aware, human-readable formatting of [now] (e.g.
 /// "martes, 22 de julio de 2026, 14:30"). Falls back to the raw ISO string if
 /// the locale's date symbols were never initialized (keeps it crash-proof in a
