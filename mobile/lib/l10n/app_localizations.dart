@@ -770,6 +770,54 @@ abstract class AppLocalizations {
   /// **'Briefing time'**
   String get briefingScheduleTimeLabel;
 
+  /// No description provided for @briefingOpenArticle.
+  ///
+  /// In en, this message translates to:
+  /// **'Read full article →'**
+  String get briefingOpenArticle;
+
+  /// No description provided for @briefingFullSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'See full summary'**
+  String get briefingFullSummary;
+
+  /// No description provided for @briefingHideFullSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide full summary'**
+  String get briefingHideFullSummary;
+
+  /// No description provided for @briefingCommentsSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'See comments summary'**
+  String get briefingCommentsSummary;
+
+  /// No description provided for @briefingHideCommentsSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide comments summary'**
+  String get briefingHideCommentsSummary;
+
+  /// No description provided for @briefingSummarizing.
+  ///
+  /// In en, this message translates to:
+  /// **'Summarizing…'**
+  String get briefingSummarizing;
+
+  /// No description provided for @briefingSummarizingComments.
+  ///
+  /// In en, this message translates to:
+  /// **'Summarizing comments…'**
+  String get briefingSummarizingComments;
+
+  /// No description provided for @briefingSkippedSources.
+  ///
+  /// In en, this message translates to:
+  /// **'No news today: {sources}'**
+  String briefingSkippedSources(String sources);
+
   /// No description provided for @chatDeleteMessage.
   ///
   /// In en, this message translates to:

@@ -38,19 +38,24 @@ void main() {
     expect(await prefs.lastBriefing(), isNull);
 
     final briefing = OnDeviceBriefing(
-      intro: 'Buenos días',
-      items: const [
-        BriefingItem(sourceTitle: 'Fuente', url: 'https://x.com', summary: 'Resumen'),
+      articles: const [
+        BriefingArticle(
+          sourceName: 'Fuente',
+          title: 'Titular',
+          url: 'https://x.com',
+          description: 'Detalle',
+        ),
       ],
+      skippedSources: const ['Otra fuente'],
       generatedAt: DateTime(2026, 7, 20, 8, 30),
     );
     await prefs.saveLastBriefing(briefing);
 
     final loaded = await prefs.lastBriefing();
     expect(loaded, isNotNull);
-    expect(loaded!.intro, 'Buenos días');
-    expect(loaded.items.single.sourceTitle, 'Fuente');
-    expect(loaded.items.single.summary, 'Resumen');
+    expect(loaded!.articles.single.sourceName, 'Fuente');
+    expect(loaded.articles.single.title, 'Titular');
+    expect(loaded.skippedSources, ['Otra fuente']);
     expect(loaded.generatedAt, DateTime(2026, 7, 20, 8, 30));
   });
 

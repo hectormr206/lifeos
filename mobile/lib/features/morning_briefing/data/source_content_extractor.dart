@@ -1,3 +1,37 @@
+import 'dart:convert';
+
+/// One structured item parsed out of a feed (RSS `<item>`, Atom `<entry>`, or
+/// RDF `<item>`) — keeps the fields SEPARATE (not flattened to prose) so the
+/// card UI can render a title, a brief description, a link, and a date, and the
+/// freshness filter can act on [published].
+class ParsedFeedItem {
+  const ParsedFeedItem({
+    required this.title,
+    required this.link,
+    this.description = '',
+    this.published,
+    this.hnObjectId,
+  });
+
+  final String title;
+  final String link;
+  final String description;
+
+  /// Publication instant in UTC (null when the feed carried no parseable date).
+  final DateTime? published;
+
+  /// Hacker News Algolia `objectID`, set only for HN items.
+  final String? hnObjectId;
+}
+
+/// A parsed feed: its source/channel [sourceTitle] and the [items] it carried.
+class ParsedFeed {
+  const ParsedFeed({required this.sourceTitle, required this.items});
+
+  final String sourceTitle;
+  final List<ParsedFeedItem> items;
+}
+
 /// Readable content pulled out of one fetched source, ready to hand to the
 /// on-device model for summarization.
 class SourceExtract {
@@ -43,6 +77,25 @@ class SourceContentExtractor {
   static final RegExp _cdata = RegExp(r'<!\[CDATA\[(.*?)\]\]>', dotAll: true);
   static final RegExp _whitespace = RegExp(r'\s+');
 
+  // Per-item structured parsing (RSS/Atom/RDF).
+  static final RegExp _linkTag = RegExp(r'<link\b([^>]*)>', caseSensitive: false);
+  static final RegExp _linkTextTag =
+      RegExp(r'<link\b[^>]*>(.*?)</link>', dotAll: true, caseSensitive: false);
+  static final RegExp _hrefAttr = RegExp('''href\\s*=\\s*["']([^"']*)["']''', caseSensitive: false);
+  static final RegExp _relAttr = RegExp('''rel\\s*=\\s*["']([^"']*)["']''', caseSensitive: false);
+  static final RegExp _guidTag =
+      RegExp(r'<guid\b[^>]*>(.*?)</guid>', dotAll: true, caseSensitive: false);
+  static final RegExp _dateTag = RegExp(
+      r'<(pubDate|published|updated|dc:date|date)\b[^>]*>(.*?)</\1>',
+      dotAll: true,
+      caseSensitive: false);
+  static final RegExp _rfc822 = RegExp(
+      r'(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s+(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([+-]\d{4}|[A-Za-z]{1,5})?');
+  static const Map<String, int> _months = {
+    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+  };
+
   /// Whether [body] looks like an RSS/Atom/RDF feed (checked on the head so a
   /// stray `<rss>` mention deep in an HTML article never misclassifies it).
   bool looksLikeFeed(String body) {
@@ -87,6 +140,149 @@ class SourceContentExtractor {
     final stripped = _decodeEntities(withoutScripts.replaceAll(_anyTag, ' '));
     final text = stripped.replaceAll(_whitespace, ' ').trim();
     return SourceExtract(title: title.isNotEmpty ? title : host, text: _cap(text));
+  }
+
+  /// Parses [body] as an RSS/Atom/RDF feed into STRUCTURED per-item records
+  /// (title, link, description, published) — keeping fields separate rather
+  /// than flattening to prose (that is [extract]'s job for the on-demand
+  /// article read). Handles `<item>` (RSS + RDF) and `<entry>` (Atom).
+  ParsedFeed parseFeed(String body, {required String url}) {
+    final host = _hostOf(url);
+    final feedTitle = _firstTitle(body) ?? host;
+    final items = <ParsedFeedItem>[];
+    for (final match in _itemBlock.allMatches(body)) {
+      final block = match.group(2) ?? '';
+      final title = _clean(_titleTag.firstMatch(block)?.group(1) ?? '');
+      final link = _extractLink(block);
+      final desc = _clean(_descTag.firstMatch(block)?.group(2) ?? '');
+      final published = parseFeedDate(_dateTag.firstMatch(block)?.group(2));
+      if (title.isEmpty && link.isEmpty) continue;
+      items.add(ParsedFeedItem(title: title, link: link, description: desc, published: published));
+    }
+    return ParsedFeed(sourceTitle: feedTitle, items: items);
+  }
+
+  /// The item link: Atom's `<link href="…"/>` (preferring rel="alternate"),
+  /// falling back to RSS/RDF's `<link>url</link>` text, then a permalink guid.
+  String _extractLink(String block) {
+    String? alternate;
+    String? firstHref;
+    for (final m in _linkTag.allMatches(block)) {
+      final attrs = m.group(1) ?? '';
+      final href = _hrefAttr.firstMatch(attrs)?.group(1)?.trim();
+      if (href == null || href.isEmpty) continue;
+      firstHref ??= href;
+      final rel = _relAttr.firstMatch(attrs)?.group(1)?.toLowerCase() ?? 'alternate';
+      if (rel == 'alternate') alternate ??= href;
+    }
+    final atom = alternate ?? firstHref;
+    if (atom != null && atom.isNotEmpty) return _decodeEntities(atom);
+    final text = _clean(_linkTextTag.firstMatch(block)?.group(1) ?? '');
+    if (text.startsWith('http')) return text;
+    final guid = _clean(_guidTag.firstMatch(block)?.group(1) ?? '');
+    if (guid.startsWith('http')) return guid;
+    return '';
+  }
+
+  /// Parses a feed date string to a tz-aware UTC [DateTime], or null. Accepts
+  /// ISO-8601 (Atom `updated`/`published`, a trailing `Z` normalized) and
+  /// RFC-822 (RSS `pubDate`, sometimes `dc:date`). Public + static so it is
+  /// unit-testable on its own.
+  static DateTime? parseFeedDate(String? raw) {
+    final s = (raw ?? '').trim();
+    if (s.isEmpty) return null;
+    final iso = s.endsWith('Z') ? '${s.substring(0, s.length - 1)}+00:00' : s;
+    final isoDt = DateTime.tryParse(iso);
+    if (isoDt != null) return isoDt.toUtc();
+    final m = _rfc822.firstMatch(s);
+    if (m == null) return null;
+    final month = _months[m.group(2)!.toLowerCase()];
+    if (month == null) return null;
+    var year = int.parse(m.group(3)!);
+    if (year < 100) year += 2000;
+    final day = int.parse(m.group(1)!);
+    final hour = int.parse(m.group(4)!);
+    final minute = int.parse(m.group(5)!);
+    final second = int.tryParse(m.group(6) ?? '0') ?? 0;
+    final base = DateTime.utc(year, month, day, hour, minute, second);
+    final tz = m.group(7);
+    final offset = _offsetOf(tz);
+    return base.subtract(offset);
+  }
+
+  static Duration _offsetOf(String? tz) {
+    if (tz == null || tz.isEmpty) return Duration.zero;
+    final numeric = RegExp(r'^([+-])(\d{2})(\d{2})$').firstMatch(tz);
+    if (numeric != null) {
+      final sign = numeric.group(1) == '-' ? -1 : 1;
+      final h = int.parse(numeric.group(2)!);
+      final min = int.parse(numeric.group(3)!);
+      return Duration(hours: sign * h, minutes: sign * min);
+    }
+    // Named zones we normalize to UTC (feeds overwhelmingly use GMT/UTC).
+    return Duration.zero;
+  }
+
+  /// Parses the Hacker News Algolia `search?tags=front_page` JSON into dated
+  /// candidates, each carrying its `objectID` (as [ParsedFeedItem.hnObjectId])
+  /// so the comments feature can fetch the thread later. Never throws.
+  ParsedFeed parseHackerNews(String body, {String sourceName = 'Hacker News'}) {
+    final items = <ParsedFeedItem>[];
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic>) {
+        final hits = decoded['hits'];
+        if (hits is List) {
+          for (final hit in hits) {
+            if (hit is! Map) continue;
+            final oid = (hit['objectID'] ?? '').toString().trim();
+            final title = _clean((hit['title'] ?? '').toString());
+            if (title.isEmpty) continue;
+            var link = (hit['url'] ?? '').toString().trim();
+            if (link.isEmpty && oid.isNotEmpty) {
+              link = 'https://news.ycombinator.com/item?id=$oid';
+            }
+            if (link.isEmpty) continue;
+            items.add(ParsedFeedItem(
+              title: title,
+              link: link,
+              published: parseFeedDate(hit['created_at']?.toString()),
+              hnObjectId: oid.isEmpty ? null : oid,
+            ));
+          }
+        }
+      }
+    } catch (_) {
+      // Malformed/non-JSON body → no HN items (source skipped).
+    }
+    return ParsedFeed(sourceTitle: sourceName, items: items);
+  }
+
+  /// Flattens the first-level comments of a Hacker News Algolia item thread
+  /// (`items/<objectID>` JSON) into bounded readable text for on-demand
+  /// summarization. Returns '' on any malformed/empty input.
+  String extractHnComments(String body, {int maxComments = 15}) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) return '';
+      final buffer = StringBuffer();
+      var count = 0;
+      final children = decoded['children'];
+      if (children is List) {
+        for (final child in children) {
+          if (count >= maxComments) break;
+          if (child is! Map) continue;
+          final text = _clean((child['text'] ?? '').toString());
+          if (text.isEmpty) continue;
+          final author = (child['author'] ?? '').toString().trim();
+          buffer.writeln(author.isNotEmpty ? '- $author: $text' : '- $text');
+          count++;
+        }
+      }
+      return _cap(buffer.toString().trim());
+    } catch (_) {
+      return '';
+    }
   }
 
   /// The FEED/channel title = the first `<title>` OUTSIDE an item block. Since

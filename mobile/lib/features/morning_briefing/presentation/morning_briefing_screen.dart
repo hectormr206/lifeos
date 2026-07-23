@@ -8,13 +8,11 @@ import '../../../theme/lifeos_theme.dart';
 import '../domain/morning_briefing.dart';
 import 'morning_briefing_notifier.dart';
 
-/// The ON-DEVICE "Boletín" screen: shows the latest briefing the phone
-/// generated with its local model, a "Generar boletín ahora" button that runs
-/// the pipeline (with progress), and access to the source-URL editor.
-///
-/// Deliberately separate from the pairing-gated Boletines viewer
-/// (`/briefings`, features/briefings) which mirrors the laptop dashboard: this
-/// one is produced entirely on device and needs no engine connection.
+/// The ON-DEVICE "Boletín" screen: a grouped, card-per-item view of the latest
+/// briefing the phone built from its feeds + Hacker News (fetch/parse/freshness,
+/// NO bulk model summarization). Each item can be summarized ON DEMAND with the
+/// local model; HN items can also summarize their comments. Mirrors the
+/// laptop's per-item card (axi/templates/briefings.html).
 class MorningBriefingScreen extends ConsumerWidget {
   const MorningBriefingScreen({super.key});
 
@@ -46,7 +44,22 @@ class MorningBriefingScreen extends ConsumerWidget {
           if (state.briefing != null) ...[
             _BriefingHeader(briefing: state.briefing!),
             const SizedBox(height: 12),
-            for (final item in state.briefing!.items) _BriefingItemCard(item: item),
+            for (final group in state.briefing!.groups) ...[
+              _SourceHeader(name: group.sourceName),
+              for (final article in group.articles)
+                _ArticleCard(
+                  key: ValueKey(article.key),
+                  article: article,
+                  isSummarizing: state.isSummarizingArticle(article.key),
+                  summaryError: state.articleErrors[article.key],
+                  isSummarizingComments: state.isSummarizingComments(article.key),
+                  commentsError: state.commentErrors[article.key],
+                  onRequestSummary: () => notifier.summarizeArticle(article),
+                  onRequestComments: () => notifier.summarizeComments(article),
+                ),
+            ],
+            if (state.briefing!.skippedSources.isNotEmpty)
+              _SkippedNote(sources: state.briefing!.skippedSources),
           ] else if (!state.isGenerating && state.phase != BriefingPhase.error)
             const _EmptyState(),
         ],
@@ -66,9 +79,7 @@ class MorningBriefingScreen extends ConsumerWidget {
   }
 }
 
-/// "Boletín automático" setting: a daily-schedule switch plus the hour picker
-/// (default 8:00). Persisted through the notifier so the OS reminder and the
-/// in-app trigger re-arm immediately on every change.
+/// "Boletín automático" setting: a daily-schedule switch plus the hour picker.
 class _ScheduleCard extends StatelessWidget {
   const _ScheduleCard({required this.state, required this.notifier});
 
@@ -155,12 +166,7 @@ class _ErrorCard extends StatelessWidget {
           children: [
             Icon(Icons.error_outline, color: scheme.onErrorContainer),
             const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                message,
-                style: TextStyle(color: scheme.onErrorContainer),
-              ),
-            ),
+            Expanded(child: Text(message, style: TextStyle(color: scheme.onErrorContainer))),
           ],
         ),
       ),
@@ -183,11 +189,7 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: 16),
           Text(l10n.briefingEmptyTitle, style: textTheme.titleMedium, textAlign: TextAlign.center),
           const SizedBox(height: 8),
-          Text(
-            l10n.briefingEmptyBody,
-            style: textTheme.bodyMedium,
-            textAlign: TextAlign.center,
-          ),
+          Text(l10n.briefingEmptyBody, style: textTheme.bodyMedium, textAlign: TextAlign.center),
         ],
       ),
     );
@@ -212,10 +214,6 @@ class _BriefingHeader extends StatelessWidget {
           l10n.briefingGeneratedAt(_formatTimestamp(briefing.generatedAt)),
           style: textTheme.labelMedium?.copyWith(color: Theme.of(context).hintColor),
         ),
-        if (briefing.intro.trim().isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Text(briefing.intro, style: textTheme.bodyLarge),
-        ],
       ],
     );
   }
@@ -226,14 +224,92 @@ class _BriefingHeader extends StatelessWidget {
   }
 }
 
-class _BriefingItemCard extends StatelessWidget {
-  const _BriefingItemCard({required this.item});
+/// A per-source section header (source name) preceding its item cards.
+class _SourceHeader extends StatelessWidget {
+  const _SourceHeader({required this.name});
 
-  final BriefingItem item;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16, bottom: 8),
+      child: Row(
+        children: [
+          Container(width: 3, height: 18, color: LifeOSColors.teal),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              name,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Note listing the sources that had no fresh items today.
+class _SkippedNote extends StatelessWidget {
+  const _SkippedNote({required this.sources});
+
+  final List<String> sources;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 20),
+      child: Text(
+        l10n.briefingSkippedSources(sources.join(', ')),
+        style: textTheme.labelMedium?.copyWith(color: Theme.of(context).hintColor),
+      ),
+    );
+  }
+}
+
+/// One article card: feed-native title + brief description + a link to the full
+/// article, an on-demand "Ver resumen completo", and (HN only) an on-demand
+/// "Ver resumen de comentarios". Stateful so the two panels toggle locally;
+/// the summary text/spinner/error come from the notifier state (props).
+class _ArticleCard extends StatefulWidget {
+  const _ArticleCard({
+    super.key,
+    required this.article,
+    required this.isSummarizing,
+    required this.summaryError,
+    required this.isSummarizingComments,
+    required this.commentsError,
+    required this.onRequestSummary,
+    required this.onRequestComments,
+  });
+
+  final BriefingArticle article;
+  final bool isSummarizing;
+  final String? summaryError;
+  final bool isSummarizingComments;
+  final String? commentsError;
+  final VoidCallback onRequestSummary;
+  final VoidCallback onRequestComments;
+
+  @override
+  State<_ArticleCard> createState() => _ArticleCardState();
+}
+
+class _ArticleCardState extends State<_ArticleCard> {
+  bool _showSummary = false;
+  bool _showComments = false;
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final l10n = AppLocalizations.of(context);
+    final article = widget.article;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -241,44 +317,162 @@ class _BriefingItemCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(item.sourceTitle, style: textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text(item.summary, style: textTheme.bodyMedium),
-            if (item.url.isNotEmpty) ...[
+            Text(article.title, style: textTheme.titleMedium),
+            if (article.publishedAt != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                _formatDate(article.publishedAt!),
+                style: textTheme.labelSmall?.copyWith(color: Theme.of(context).hintColor),
+              ),
+            ],
+            if (article.description.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(article.description, style: textTheme.bodyMedium),
+            ],
+            if (article.url.isNotEmpty) ...[
               const SizedBox(height: 12),
               InkWell(
-                onTap: () => _copyLink(context, item.url),
+                onTap: () => _copyLink(context, article.url, l10n),
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.link, size: 16, color: LifeOSColors.teal),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          item.url,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: textTheme.labelMedium?.copyWith(color: LifeOSColors.teal),
-                        ),
-                      ),
-                    ],
+                  child: Text(
+                    l10n.briefingOpenArticle,
+                    style: textTheme.labelLarge?.copyWith(color: LifeOSColors.teal),
                   ),
                 ),
               ),
             ],
+            // On-demand full-article summary.
+            if (article.url.isNotEmpty)
+              _ActionRow(
+                label: _showSummary ? l10n.briefingHideFullSummary : l10n.briefingFullSummary,
+                color: LifeOSColors.teal,
+                onTap: _toggleSummary,
+              ),
+            if (_showSummary)
+              _SummaryPanel(
+                loading: widget.isSummarizing,
+                loadingLabel: l10n.briefingSummarizing,
+                error: widget.summaryError,
+                text: article.fullSummary,
+              ),
+            // On-demand HN comments summary.
+            if (article.isHackerNews)
+              _ActionRow(
+                label: _showComments
+                    ? l10n.briefingHideCommentsSummary
+                    : l10n.briefingCommentsSummary,
+                color: LifeOSColors.pink,
+                onTap: _toggleComments,
+              ),
+            if (_showComments)
+              _SummaryPanel(
+                loading: widget.isSummarizingComments,
+                loadingLabel: l10n.briefingSummarizingComments,
+                error: widget.commentsError,
+                text: article.commentsSummary,
+              ),
           ],
         ),
       ),
     );
   }
 
-  Future<void> _copyLink(BuildContext context, String url) async {
+  void _toggleSummary() {
+    setState(() => _showSummary = !_showSummary);
+    if (_showSummary && (widget.article.fullSummary ?? '').isEmpty && !widget.isSummarizing) {
+      widget.onRequestSummary();
+    }
+  }
+
+  void _toggleComments() {
+    setState(() => _showComments = !_showComments);
+    if (_showComments &&
+        (widget.article.commentsSummary ?? '').isEmpty &&
+        !widget.isSummarizingComments) {
+      widget.onRequestComments();
+    }
+  }
+
+  Future<void> _copyLink(BuildContext context, String url, AppLocalizations l10n) async {
     await Clipboard.setData(ClipboardData(text: url));
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(AppLocalizations.of(context).briefingLinkCopied)),
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(l10n.briefingLinkCopied)));
+  }
+
+  static String _formatDate(DateTime dtUtc) {
+    final local = dtUtc.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(local.day)}/${two(local.month)} ${two(local.hour)}:${two(local.minute)}';
+  }
+}
+
+class _ActionRow extends StatelessWidget {
+  const _ActionRow({required this.label, required this.color, required this.onTap});
+
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(color: color),
+        ),
+      ),
+    );
+  }
+}
+
+class _SummaryPanel extends StatelessWidget {
+  const _SummaryPanel({
+    required this.loading,
+    required this.loadingLabel,
+    required this.error,
+    required this.text,
+  });
+
+  final bool loading;
+  final String loadingLabel;
+  final String? error;
+  final String? text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget child;
+    if (loading) {
+      child = Row(
+        children: [
+          const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+          const SizedBox(width: 12),
+          Text(loadingLabel, style: theme.textTheme.bodySmall),
+        ],
+      );
+    } else if (error != null) {
+      child = Text(error!, style: theme.textTheme.bodySmall?.copyWith(color: LifeOSColors.pink));
+    } else if ((text ?? '').isNotEmpty) {
+      child = Text(text!, style: theme.textTheme.bodyMedium);
+    } else {
+      child = const SizedBox.shrink();
+    }
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 4, bottom: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: child,
     );
   }
 }

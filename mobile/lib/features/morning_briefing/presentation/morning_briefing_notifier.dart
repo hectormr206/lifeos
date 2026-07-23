@@ -3,29 +3,25 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/clock/clock.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../local_model/domain/local_llm_engine.dart';
 import '../../local_model/presentation/local_model_providers.dart';
 import '../data/source_content_extractor.dart';
+import '../domain/briefing_assembler.dart';
 import '../domain/briefing_schedule.dart';
 import '../domain/morning_briefing.dart';
 import '../domain/source_fetcher.dart';
 import 'morning_briefing_providers.dart';
 
 /// Where the on-device briefing pipeline currently is, so the UI can show a
-/// meaningful progress/loading state (reusing the model-loading pattern).
+/// meaningful progress/loading state.
 enum BriefingPhase {
   /// Not running — showing the last briefing (or the empty state).
   idle,
 
-  /// Bringing the on-device weights resident in RAM (loads on demand).
-  loadingModel,
-
-  /// Fetching + extracting the configured sources.
+  /// Fetching + parsing the configured sources (fast: NO model summarization).
   fetching,
-
-  /// The model is summarizing.
-  summarizing,
 
   /// A briefing was produced this run.
   done,
@@ -34,6 +30,15 @@ enum BriefingPhase {
   /// message.
   error,
 }
+
+/// Hacker News front-page candidates via the Algolia JSON API. Fetched with the
+/// same browser-like [SourceFetcher] as the feeds; parsed by
+/// [SourceContentExtractor.parseHackerNews]. Each item keeps its `objectID`, so
+/// the on-demand "Ver resumen de comentarios" action can fetch the thread.
+const String hnFrontPageUrl = 'https://hn.algolia.com/api/v1/search?tags=front_page';
+
+/// The HN Algolia single-item (comments thread) endpoint prefix.
+const String hnItemUrlPrefix = 'https://hn.algolia.com/api/v1/items/';
 
 /// Immutable UI state for the on-device "boletín matutino".
 class MorningBriefingState {
@@ -44,6 +49,10 @@ class MorningBriefingState {
     this.phase = BriefingPhase.idle,
     this.progressLabel,
     this.error,
+    this.summarizingArticles = const {},
+    this.summarizingComments = const {},
+    this.articleErrors = const {},
+    this.commentErrors = const {},
   });
 
   /// Configured news-source URLs (the user adds/removes these).
@@ -57,17 +66,28 @@ class MorningBriefingState {
 
   final BriefingPhase phase;
 
-  /// Human-readable progress line while [isGenerating] (e.g. "Resumiendo…").
+  /// Human-readable progress line while generating.
   final String? progressLabel;
 
-  /// Neutral-Spanish failure message (only set when [phase] is
-  /// [BriefingPhase.error]).
+  /// Neutral-Spanish failure message (only when [phase] is [BriefingPhase.error]).
   final String? error;
 
-  bool get isGenerating =>
-      phase == BriefingPhase.loadingModel ||
-      phase == BriefingPhase.fetching ||
-      phase == BriefingPhase.summarizing;
+  /// Article keys whose on-demand full summary is being generated right now.
+  final Set<String> summarizingArticles;
+
+  /// Article keys whose on-demand HN comments summary is being generated.
+  final Set<String> summarizingComments;
+
+  /// Per-article on-demand full-summary error messages (keyed by article key).
+  final Map<String, String> articleErrors;
+
+  /// Per-article on-demand comments-summary error messages.
+  final Map<String, String> commentErrors;
+
+  bool get isGenerating => phase == BriefingPhase.fetching;
+
+  bool isSummarizingArticle(String key) => summarizingArticles.contains(key);
+  bool isSummarizingComments(String key) => summarizingComments.contains(key);
 
   MorningBriefingState copyWith({
     List<String>? sources,
@@ -76,6 +96,10 @@ class MorningBriefingState {
     BriefingPhase? phase,
     String? progressLabel,
     String? error,
+    Set<String>? summarizingArticles,
+    Set<String>? summarizingComments,
+    Map<String, String>? articleErrors,
+    Map<String, String>? commentErrors,
   }) =>
       MorningBriefingState(
         sources: sources ?? this.sources,
@@ -84,19 +108,22 @@ class MorningBriefingState {
         phase: phase ?? this.phase,
         progressLabel: progressLabel,
         error: error,
+        summarizingArticles: summarizingArticles ?? this.summarizingArticles,
+        summarizingComments: summarizingComments ?? this.summarizingComments,
+        articleErrors: articleErrors ?? this.articleErrors,
+        commentErrors: commentErrors ?? this.commentErrors,
       );
 }
 
 /// Runs the ON-DEVICE morning-briefing pipeline and owns its UI state.
 ///
-/// Pipeline (all on device, nothing leaves the phone):
-///   1. load the local model on demand (idempotent; left loaded after),
-///   2. for each configured source: HTTP GET → extract readable text
-///      (feed items or stripped HTML), per-source try/catch so a failing
-///      source is skipped, not fatal,
-///   3. summarize each source with the model using the LONGSUM tuned sampling,
-///   4. write a short overall intro, persist the briefing, and post a local
-///      notification.
+/// REDESIGN: briefing generation does NO bulk model summarization (the old
+/// pipeline summarized every source with the on-device model, which was slow +
+/// fragile and left most sources incomplete). Generation is now just
+/// fetch + parse (RSS/Atom/RDF + Hacker News) → freshness-filter (today/
+/// yesterday) → group by source (cap 10) → persist. The on-device model runs
+/// only ON DEMAND, per item, when the reader taps "Ver resumen completo" or
+/// (HN only) "Ver resumen de comentarios".
 class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   Future<void>? _bootstrapFuture;
 
@@ -104,20 +131,17 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// hour, this timer runs [generate] directly (fully autonomous, no tap).
   Timer? _autoRunTimer;
 
-  /// Injectable clock so the schedule/auto-run logic is testable with a frozen
-  /// "now" (production always uses the real clock).
+  /// Injectable clock for the schedule/auto-run logic (production uses the real
+  /// clock). Freshness uses [clockProvider] instead (the device-timezone seam).
   @visibleForTesting
   DateTime Function() clock = DateTime.now;
 
-  /// Lets tests await the initial hydration deterministically (mirrors the
-  /// `ready` seam on the other notifiers).
+  /// Lets tests await the initial hydration deterministically.
   Future<void> get ready => _bootstrapFuture ?? Future<void>.value();
 
-  /// LONGSUM tuned sampling for gemma-4-E2B, straight from the `model_audit`
-  /// tune-to-peak LONGSUM recipe (the summarization role). This is DELIBERATELY
-  /// different from the general/vision tuned recipe (0.6/20/0.95): summaries
-  /// want the lower-temperature longsum values for factual, non-divergent
-  /// output. Passed as per-call overrides to [LocalLlmEngine.generate].
+  /// LONGSUM tuned sampling for gemma-4-E2B (the summarization role): lower
+  /// temperature for factual, non-divergent summaries. Passed as per-call
+  /// overrides to [LocalLlmEngine.generate] for the on-demand summaries.
   static const double longsumTemperature = 0.2;
   static const int longsumTopK = 20;
   static const double longsumTopP = 0.9;
@@ -140,7 +164,6 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       // Persistence unavailable (e.g. no platform channel in a widget test) —
       // keep the safe empty default rather than crashing.
     }
-    // Arm/refresh the OS reminder + in-app timer for the hydrated schedule.
     await _armTriggers();
   }
 
@@ -173,12 +196,9 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   // "Boletín automático" (scheduled autonomous run)
   // ---------------------------------------------------------------------------
 
-  /// Turns the daily automatic briefing on/off, persists, and re-arms (or
-  /// cancels) the OS reminder + in-app timer.
   Future<void> setScheduleEnabled(bool enabled) =>
       _updateSchedule(state.schedule.copyWith(enabled: enabled));
 
-  /// Changes the daily hour/minute, persists, and re-arms the triggers.
   Future<void> setScheduleTime(int hour, int minute) =>
       _updateSchedule(state.schedule.copyWith(hour: hour, minute: minute));
 
@@ -192,14 +212,9 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     await _armTriggers();
   }
 
-  /// (Re)arms BOTH triggers for the current schedule:
-  ///   - the OS-scheduled reminder notification (fires even if the process is
-  ///     dead — tapping it launches the app, which auto-runs), and
-  ///   - an in-app [Timer] so a WARM process generates directly at the hour,
-  ///     no tap needed.
-  /// Disabled schedule → both are cancelled. One-shot by design: every app
-  /// start / resume / run re-arms for the NEXT occurrence, which naturally
-  /// skips a day whose briefing already exists.
+  /// (Re)arms BOTH triggers (OS reminder + in-app timer) for the current
+  /// schedule. Disabled → both cancelled. One-shot: every start/resume/run
+  /// re-arms for the NEXT occurrence.
   Future<void> _armTriggers() async {
     _autoRunTimer?.cancel();
     _autoRunTimer = null;
@@ -216,17 +231,11 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   }
 
   Future<void> _onAutoRunTimer() async {
-    // The process is warm at the scheduled hour — run autonomously. The OS
-    // reminder fired at the same instant; maybeAutoGenerate cancels it so the
-    // user is not asked to tap for a briefing that is being generated.
     await maybeAutoGenerate();
   }
 
-  /// Entry point for every trigger path (app launch, resume, reminder tap,
-  /// in-app timer): runs [generate] IF the schedule says a run is due now AND
-  /// today's briefing does not exist yet (the already-generated-today guard
-  /// lives in [BriefingSchedule.shouldRunNow]). Always re-arms the triggers
-  /// for the next occurrence afterwards.
+  /// Entry point for every trigger path: runs [generate] IF the schedule says a
+  /// run is due AND today's briefing does not exist yet. Always re-arms after.
   Future<void> maybeAutoGenerate() async {
     await ready;
     if (state.isGenerating) return;
@@ -235,70 +244,61 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       lastGeneratedAt: state.briefing?.generatedAt,
     );
     if (due) {
-      // Remove a pending/posted "toca aquí" reminder — we are generating now.
       await ref.read(briefingSchedulerProvider).cancelReminder();
       await generate();
     }
     await _armTriggers();
   }
 
-  /// Runs the whole pipeline. No-op while already generating.
+  // ---------------------------------------------------------------------------
+  // Generation: fetch + parse + freshness + group (NO model summarization)
+  // ---------------------------------------------------------------------------
+
+  /// Runs the whole (fast) pipeline. No-op while already generating.
   Future<void> generate() async {
     if (state.isGenerating) return;
-    final sources = state.sources;
-    if (sources.isEmpty) {
-      state = state.copyWith(
-        phase: BriefingPhase.error,
-        error: 'Agrega al menos una fuente de noticias para generar el boletín.',
-      );
-      return;
-    }
 
-    // 1) Load the model on demand (idempotent — stays loaded afterwards).
-    state = state.copyWith(phase: BriefingPhase.loadingModel, progressLabel: 'Cargando el modelo…');
-    try {
-      await ref.read(localLlmEngineProvider).load();
-    } catch (error) {
-      state = state.copyWith(
-        phase: BriefingPhase.error,
-        error: 'No se pudo cargar el modelo: $error. '
-            'Descarga el modelo en Ajustes › Modelo local e inténtalo de nuevo.',
-      );
-      return;
-    }
+    state = state.copyWith(phase: BriefingPhase.fetching, progressLabel: 'Leyendo tus fuentes…');
 
-    // 2 + 3) Fetch, extract, summarize each source.
-    final engine = ref.read(localLlmEngineProvider);
     final fetcher = ref.read(sourceFetcherProvider);
     final extractor = ref.read(sourceContentExtractorProvider);
-    final items = <BriefingItem>[];
+    final assembler = ref.read(briefingAssemblerProvider);
+    final now = ref.read(clockProvider).now();
 
-    for (var i = 0; i < sources.length; i++) {
-      final url = sources[i];
+    final harvests = <SourceHarvest>[];
+    final feeds = state.sources;
+    for (var i = 0; i < feeds.length; i++) {
       state = state.copyWith(
         phase: BriefingPhase.fetching,
-        progressLabel: 'Leyendo fuente ${i + 1} de ${sources.length}…',
+        progressLabel: 'Leyendo fuente ${i + 1} de ${feeds.length + 1}…',
       );
-      final item = await _summarizeSource(url, engine: engine, fetcher: fetcher, extractor: extractor);
-      if (item != null) items.add(item);
+      harvests.add(await _harvestFeed(feeds[i], fetcher, extractor));
     }
+    // Always add Hacker News (its own adapter), so the comments feature exists.
+    state = state.copyWith(phase: BriefingPhase.fetching, progressLabel: 'Leyendo Hacker News…');
+    harvests.add(await _harvestHackerNews(fetcher, extractor));
 
-    if (items.isEmpty) {
+    final briefing = assembler.assemble(harvests, now: now, generatedAt: now);
+
+    if (briefing.isEmpty) {
       state = state.copyWith(
         phase: BriefingPhase.error,
-        error: 'No se pudo generar el boletín: ninguna fuente respondió con contenido legible.',
+        error: 'No hay noticias frescas hoy en tus fuentes. Vuelve a intentarlo más tarde.',
       );
       return;
     }
 
-    // 4) Short overall intro over the collected summaries.
-    state = state.copyWith(phase: BriefingPhase.summarizing, progressLabel: 'Redactando la introducción…');
-    final intro = await _writeIntro(items, engine: engine);
+    state = state.copyWith(
+      briefing: briefing,
+      phase: BriefingPhase.done,
+      progressLabel: null,
+      // A fresh briefing clears any stale per-item caches/errors.
+      summarizingArticles: const {},
+      summarizingComments: const {},
+      articleErrors: const {},
+      commentErrors: const {},
+    );
 
-    final briefing = OnDeviceBriefing(intro: intro, items: items, generatedAt: clock());
-    state = state.copyWith(briefing: briefing, phase: BriefingPhase.done, progressLabel: null);
-
-    // Persist + notify (best-effort; neither is allowed to break the run).
     try {
       await ref.read(morningBriefingPreferencesProvider).saveLastBriefing(briefing);
     } catch (_) {
@@ -309,9 +309,6 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     } catch (_) {
       // Notification is best-effort; the briefing is already on screen.
     }
-    // Re-arm the scheduled triggers with the fresh generatedAt so a manual run
-    // BEFORE the scheduled hour moves today's reminder to tomorrow (idempotent
-    // when the caller was maybeAutoGenerate, which re-arms too).
     try {
       await _armTriggers();
     } catch (_) {
@@ -319,81 +316,215 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     }
   }
 
-  /// Fetch + extract + summarize ONE source. Returns null (source skipped) on
-  /// any per-source failure — a failing source is never fatal to the briefing.
-  Future<BriefingItem?> _summarizeSource(
-    String url, {
-    required LocalLlmEngine engine,
-    required SourceFetcher fetcher,
-    required SourceContentExtractor extractor,
-  }) async {
+  Future<SourceHarvest> _harvestFeed(
+    String url,
+    SourceFetcher fetcher,
+    SourceContentExtractor extractor,
+  ) async {
     try {
       final body = await fetcher.fetch(url);
-      final extract = extractor.extract(body, url: url);
-      if (extract.isEmpty) return null;
-
-      state = state.copyWith(
-        phase: BriefingPhase.summarizing,
-        progressLabel: 'Resumiendo: ${extract.title}…',
-      );
-      final prompt = _summarizePrompt(title: extract.title, content: extract.text);
-      final result = await engine.generate(
-        prompt,
-        temperature: longsumTemperature,
-        topK: longsumTopK,
-        topP: longsumTopP,
-      );
-      final summary = result.text.trim();
-      if (summary.isEmpty) return null;
-      return BriefingItem(sourceTitle: extract.title, url: url, summary: summary);
+      final feed = extractor.parseFeed(body, url: url);
+      final name = feed.sourceTitle.trim().isEmpty ? _hostLabel(url) : feed.sourceTitle.trim();
+      return SourceHarvest(name: name, items: feed.items);
     } catch (_) {
-      // Skip this one source; the rest of the briefing still proceeds.
-      return null;
+      return SourceHarvest(name: _hostLabel(url), failed: true);
     }
   }
 
-  Future<String> _writeIntro(List<BriefingItem> items, {required LocalLlmEngine engine}) async {
+  Future<SourceHarvest> _harvestHackerNews(
+    SourceFetcher fetcher,
+    SourceContentExtractor extractor,
+  ) async {
     try {
-      final titles = items.map((i) => '- ${i.sourceTitle}').join('\n');
-      final result = await engine.generate(
-        _introPrompt(titles),
-        temperature: longsumTemperature,
-        topK: longsumTopK,
-        topP: longsumTopP,
-      );
-      final intro = result.text.trim();
-      if (intro.isNotEmpty) return intro;
+      final body = await fetcher.fetch(hnFrontPageUrl);
+      final feed = extractor.parseHackerNews(body);
+      return SourceHarvest(name: feed.sourceTitle, items: feed.items);
     } catch (_) {
-      // Fall through to a static intro below.
+      return SourceHarvest(name: 'Hacker News', failed: true);
     }
-    return _fallbackIntro();
   }
 
-  /// The current briefing OUTPUT language (i18n slice). The summaries and intro
-  /// are written in this language, translating foreign-language sources into it.
+  String _hostLabel(String url) {
+    try {
+      final host = Uri.parse(url).host;
+      return host.isEmpty ? url : host;
+    } catch (_) {
+      return url;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // On-demand summaries (per item; run the on-device model only when tapped)
+  // ---------------------------------------------------------------------------
+
+  /// Fetches [article]'s page and summarizes it on-device (LONGSUM sampling),
+  /// caching the result on the article. No-op when already cached or in flight.
+  Future<void> summarizeArticle(BriefingArticle article) async {
+    final briefing = state.briefing;
+    if (briefing == null) return;
+    final key = article.key;
+    final current = briefing.articleForKey(key);
+    if (current == null) return;
+    if ((current.fullSummary ?? '').isNotEmpty) return;
+    if (state.isSummarizingArticle(key)) return;
+
+    _setArticlePending(key);
+    try {
+      await ref.read(localLlmEngineProvider).load();
+      final fetcher = ref.read(sourceFetcherProvider);
+      final extractor = ref.read(sourceContentExtractorProvider);
+      final body = await fetcher.fetch(current.url);
+      final extract = extractor.extract(body, url: current.url);
+      if (extract.isEmpty) throw Exception('sin contenido legible');
+      final result = await ref.read(localLlmEngineProvider).generate(
+            _articleSummaryPrompt(title: current.title, content: extract.text),
+            temperature: longsumTemperature,
+            topK: longsumTopK,
+            topP: longsumTopP,
+          );
+      final summary = result.text.trim();
+      if (summary.isEmpty) throw Exception('resumen vacío');
+      _cacheArticleUpdate(key, current.copyWith(fullSummary: summary));
+    } catch (_) {
+      _setArticleError(key, _summaryErrorMessage);
+    }
+  }
+
+  /// Fetches [article]'s HN comments thread and summarizes it on-device
+  /// (LONGSUM), caching the result. HN items only; no-op when cached/in flight.
+  Future<void> summarizeComments(BriefingArticle article) async {
+    final briefing = state.briefing;
+    if (briefing == null) return;
+    final key = article.key;
+    final current = briefing.articleForKey(key);
+    if (current == null || !current.isHackerNews) return;
+    if ((current.commentsSummary ?? '').isNotEmpty) return;
+    if (state.isSummarizingComments(key)) return;
+
+    _setCommentsPending(key);
+    try {
+      await ref.read(localLlmEngineProvider).load();
+      final fetcher = ref.read(sourceFetcherProvider);
+      final extractor = ref.read(sourceContentExtractorProvider);
+      final body = await fetcher.fetch('$hnItemUrlPrefix${current.hnObjectId}');
+      final comments = extractor.extractHnComments(body);
+      if (comments.trim().isEmpty) throw Exception('sin comentarios');
+      final result = await ref.read(localLlmEngineProvider).generate(
+            _commentsSummaryPrompt(comments),
+            temperature: longsumTemperature,
+            topK: longsumTopK,
+            topP: longsumTopP,
+          );
+      final summary = result.text.trim();
+      if (summary.isEmpty) throw Exception('resumen vacío');
+      _cacheCommentsUpdate(key, current.copyWith(commentsSummary: summary));
+    } catch (_) {
+      _setCommentsError(key, _commentsErrorMessage);
+    }
+  }
+
+  // --- per-item state transitions -------------------------------------------
+
+  void _setArticlePending(String key) {
+    state = state.copyWith(
+      phase: state.phase,
+      briefing: state.briefing,
+      summarizingArticles: {...state.summarizingArticles, key},
+      articleErrors: {...state.articleErrors}..remove(key),
+    );
+  }
+
+  void _cacheArticleUpdate(String key, BriefingArticle updated) {
+    final briefing = state.briefing?.replaceArticle(key, updated);
+    state = state.copyWith(
+      phase: state.phase,
+      briefing: briefing,
+      summarizingArticles: {...state.summarizingArticles}..remove(key),
+    );
+    _persistBriefing(briefing);
+  }
+
+  void _setArticleError(String key, String message) {
+    state = state.copyWith(
+      phase: state.phase,
+      briefing: state.briefing,
+      summarizingArticles: {...state.summarizingArticles}..remove(key),
+      articleErrors: {...state.articleErrors, key: message},
+    );
+  }
+
+  void _setCommentsPending(String key) {
+    state = state.copyWith(
+      phase: state.phase,
+      briefing: state.briefing,
+      summarizingComments: {...state.summarizingComments, key},
+      commentErrors: {...state.commentErrors}..remove(key),
+    );
+  }
+
+  void _cacheCommentsUpdate(String key, BriefingArticle updated) {
+    final briefing = state.briefing?.replaceArticle(key, updated);
+    state = state.copyWith(
+      phase: state.phase,
+      briefing: briefing,
+      summarizingComments: {...state.summarizingComments}..remove(key),
+    );
+    _persistBriefing(briefing);
+  }
+
+  void _setCommentsError(String key, String message) {
+    state = state.copyWith(
+      phase: state.phase,
+      briefing: state.briefing,
+      summarizingComments: {...state.summarizingComments}..remove(key),
+      commentErrors: {...state.commentErrors, key: message},
+    );
+  }
+
+  Future<void> _persistBriefing(OnDeviceBriefing? briefing) async {
+    if (briefing == null) return;
+    try {
+      await ref.read(morningBriefingPreferencesProvider).saveLastBriefing(briefing);
+    } catch (_) {
+      // Best-effort: the cached summary is still shown in memory.
+    }
+  }
+
+  // --- prompts / language ----------------------------------------------------
+
+  /// The current output language (i18n slice). On-demand summaries are written
+  /// in this language, translating foreign-language sources into it — which is
+  /// why the feed-native title/description are kept as-is on the card.
   String get _languageCode => ref.read(appLanguageCodeProvider);
 
-  String _summarizePrompt({required String title, required String content}) => switch (_languageCode) {
-        'en' => 'Summarize the following news source in 2 or 3 sentences, in clear English. '
-            'If the source is in another language, translate it into English. '
+  String get _summaryErrorMessage => switch (_languageCode) {
+        'en' => 'Could not generate the summary. Try again.',
+        _ => 'No se pudo generar el resumen. Inténtalo de nuevo.',
+      };
+
+  String get _commentsErrorMessage => switch (_languageCode) {
+        'en' => 'Could not summarize the comments. Try again.',
+        _ => 'No se pudo resumir los comentarios. Inténtalo de nuevo.',
+      };
+
+  String _articleSummaryPrompt({required String title, required String content}) =>
+      switch (_languageCode) {
+        'en' => 'Summarize the following news article in 3 to 5 sentences, in clear English. '
+            'If it is in another language, translate it into English. '
             'Return only the summary, with no headings or bullet points.\n\n'
-            'Source: $title\n\nContent:\n$content',
-        _ => 'Resume en 2 o 3 frases, en español neutro y claro, la siguiente fuente de '
-            'noticias. Si la fuente está en otro idioma, tradúcela al español. '
+            'Title: $title\n\nContent:\n$content',
+        _ => 'Resume en 3 a 5 frases, en español neutro y claro, el siguiente artículo de '
+            'noticias. Si está en otro idioma, tradúcelo al español. '
             'Devuelve solo el resumen, sin encabezados ni viñetas.\n\n'
-            'Fuente: $title\n\nContenido:\n$content',
+            'Título: $title\n\nContenido:\n$content',
       };
 
-  String _introPrompt(String titles) => switch (_languageCode) {
-        'en' => 'Write a very short introduction (1 or 2 sentences), in English, for a morning '
-            'briefing that gathers these sources. Return only the introduction.\n\n$titles',
-        _ => 'Escribe una introducción muy breve (1 o 2 frases), en español neutro, para un '
-            'boletín matutino que reúne estas fuentes. Devuelve solo la introducción.\n\n$titles',
-      };
-
-  String _fallbackIntro() => switch (_languageCode) {
-        'en' => 'Here are the highlights from your sources this morning.',
-        _ => 'Esto es lo más destacado de tus fuentes esta mañana.',
+  String _commentsSummaryPrompt(String comments) => switch (_languageCode) {
+        'en' => 'Summarize these Hacker News comments in 3 to 5 sentences, in English: the main '
+            'opinions and the points of agreement or disagreement. Return only the summary.\n\n$comments',
+        _ => 'Resume estos comentarios de Hacker News en 3 a 5 frases, en español neutro: las '
+            'opiniones principales y los puntos de acuerdo o desacuerdo. Devuelve solo el '
+            'resumen.\n\n$comments',
       };
 }
 

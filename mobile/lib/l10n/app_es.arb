@@ -120,6 +120,17 @@
   "briefingScheduleTitle": "Boletín automático",
   "briefingScheduleSubtitle": "Genera el boletín cada día a la hora elegida. Si la app está cerrada, recibirás un aviso para generarlo con un toque.",
   "briefingScheduleTimeLabel": "Hora del boletín",
+  "briefingOpenArticle": "Ver noticia completa →",
+  "briefingFullSummary": "Ver resumen completo",
+  "briefingHideFullSummary": "Ocultar resumen completo",
+  "briefingCommentsSummary": "Ver resumen de comentarios",
+  "briefingHideCommentsSummary": "Ocultar resumen de comentarios",
+  "briefingSummarizing": "Resumiendo…",
+  "briefingSummarizingComments": "Resumiendo comentarios…",
+  "briefingSkippedSources": "Sin novedades hoy: {sources}",
+  "@briefingSkippedSources": {
+    "placeholders": { "sources": { "type": "String" } }
+  },
 
   "chatDeleteMessage": "Eliminar mensaje",
   "chatDeleteMessagePairNote": "Se eliminará tu mensaje y la respuesta de Axi.",

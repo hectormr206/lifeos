@@ -16,9 +16,15 @@ class DioSourceFetcher implements SourceFetcher {
               // deep in dio; we validate the status ourselves below.
               validateStatus: (status) => status != null && status < 500,
               responseType: ResponseType.plain,
+              // Follow redirects (feeds routinely 301 http→https / to a CDN).
+              followRedirects: true,
+              maxRedirects: 5,
+              // Browser-like UA: several feeds (BBC Mundo, HF, the Linux blogs)
+              // return 403 to a bare bot UA but 200 to a browser-shaped one.
               headers: const {
-                'User-Agent': 'LifeOS-Axi/1.0 (morning-briefing)',
-                'Accept': 'application/rss+xml, application/atom+xml, text/html, */*',
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 14) LifeOS',
+                'Accept': 'application/rss+xml, application/atom+xml, application/xml, '
+                    'application/json, text/html, */*',
               },
             ));
 

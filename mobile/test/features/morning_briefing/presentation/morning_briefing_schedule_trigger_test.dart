@@ -6,6 +6,7 @@
 // next occurrence. Frozen clock, no alarms, no platform channels.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/clock/clock.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/morning_briefing/domain/briefing_schedule.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
@@ -15,10 +16,24 @@ import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_p
 import '../../local_model/support/fake_local_llm_engine.dart';
 import '../support/fakes.dart';
 
-const _rss = '''
+class _FixedClock implements Clock {
+  const _FixedClock(this._now);
+  final DateTime _now;
+  @override
+  DateTime now() => _now;
+}
+
+/// A DATED RSS body published "now" so the freshness filter keeps it.
+String _dated(DateTime now) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final dt = now.toUtc();
+  String two(int n) => n.toString().padLeft(2, '0');
+  final rfc = '${two(dt.day)} ${months[dt.month - 1]} ${dt.year} ${two(dt.hour)}:${two(dt.minute)}:00 GMT';
+  return '''
 <rss version="2.0"><channel><title>Fuente A</title>
-<item><title>Noticia A1</title><description>Detalle A1</description></item>
+<item><title>Noticia A1</title><link>https://a.com/1</link><description>Detalle A1</description><pubDate>$rfc</pubDate></item>
 </channel></rss>''';
+}
 
 /// A container with every dependency faked, plus a frozen clock on the
 /// notifier (set BEFORE hydration finishes so even the hydrate-time arming
@@ -47,10 +62,11 @@ const _rss = '''
   final container = ProviderContainer(
     overrides: [
       localLlmEngineProvider.overrideWithValue(engine),
-      sourceFetcherProvider.overrideWithValue(FakeSourceFetcher(bodies: {'https://a.com/rss': _rss})),
+      sourceFetcherProvider.overrideWithValue(FakeSourceFetcher(bodies: {'https://a.com/rss': _dated(now)})),
       morningBriefingPreferencesProvider.overrideWithValue(prefs),
       briefingNotificationsProvider.overrideWithValue(notifications),
       briefingSchedulerProvider.overrideWithValue(scheduler),
+      clockProvider.overrideWithValue(_FixedClock(now)),
     ],
   );
   addTearDown(container.dispose);
@@ -131,8 +147,7 @@ void main() {
 
   test('maybeAutoGenerate does NOT regenerate when today\'s briefing already exists', () async {
     final existing = OnDeviceBriefing(
-      intro: 'Ya generado',
-      items: const [BriefingItem(sourceTitle: 'F', url: 'https://a.com', summary: 'S')],
+      articles: const [BriefingArticle(sourceName: 'F', title: 'T', url: 'https://a.com')],
       generatedAt: DateTime(2026, 7, 22, 8, 1),
     );
     final h = _harness(
@@ -145,9 +160,9 @@ void main() {
     await h.notifier.maybeAutoGenerate();
 
     final state = h.container.read(morningBriefingNotifierProvider);
-    expect(state.briefing!.intro, 'Ya generado', reason: 'existing briefing untouched');
-    expect(h.engine.loadCount, 0, reason: 'pipeline never ran (guard)');
-    expect(h.notifications.shown, 0);
+    expect(state.briefing!.generatedAt, DateTime(2026, 7, 22, 8, 1),
+        reason: 'existing briefing untouched');
+    expect(h.notifications.shown, 0, reason: 'pipeline never ran (guard)');
     expect(h.scheduler.lastScheduled, DateTime(2026, 7, 23, 8, 0),
         reason: 'still re-armed for tomorrow');
   });

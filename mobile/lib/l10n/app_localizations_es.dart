@@ -373,6 +373,32 @@ class AppLocalizationsEs extends AppLocalizations {
   String get briefingScheduleTimeLabel => 'Hora del boletín';
 
   @override
+  String get briefingOpenArticle => 'Ver noticia completa →';
+
+  @override
+  String get briefingFullSummary => 'Ver resumen completo';
+
+  @override
+  String get briefingHideFullSummary => 'Ocultar resumen completo';
+
+  @override
+  String get briefingCommentsSummary => 'Ver resumen de comentarios';
+
+  @override
+  String get briefingHideCommentsSummary => 'Ocultar resumen de comentarios';
+
+  @override
+  String get briefingSummarizing => 'Resumiendo…';
+
+  @override
+  String get briefingSummarizingComments => 'Resumiendo comentarios…';
+
+  @override
+  String briefingSkippedSources(String sources) {
+    return 'Sin novedades hoy: $sources';
+  }
+
+  @override
   String get chatDeleteMessage => 'Eliminar mensaje';
 
   @override

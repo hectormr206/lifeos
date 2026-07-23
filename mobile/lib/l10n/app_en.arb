@@ -144,6 +144,17 @@
   "briefingScheduleTitle": "Automatic briefing",
   "briefingScheduleSubtitle": "Generates the briefing every day at the chosen time. If the app is closed, you will get a notification to generate it with one tap.",
   "briefingScheduleTimeLabel": "Briefing time",
+  "briefingOpenArticle": "Read full article →",
+  "briefingFullSummary": "See full summary",
+  "briefingHideFullSummary": "Hide full summary",
+  "briefingCommentsSummary": "See comments summary",
+  "briefingHideCommentsSummary": "Hide comments summary",
+  "briefingSummarizing": "Summarizing…",
+  "briefingSummarizingComments": "Summarizing comments…",
+  "briefingSkippedSources": "No news today: {sources}",
+  "@briefingSkippedSources": {
+    "placeholders": { "sources": { "type": "String" } }
+  },
 
   "chatDeleteMessage": "Delete message",
   "chatDeleteMessagePairNote": "Your message and Axi's reply will be deleted.",

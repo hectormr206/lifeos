@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/dio_source_fetcher.dart';
 import '../data/local_briefing_scheduler.dart';
 import '../data/source_content_extractor.dart';
+import '../domain/briefing_assembler.dart';
 import '../domain/briefing_notifications.dart';
 import '../domain/briefing_scheduler.dart';
 import '../domain/morning_briefing_preferences.dart';
@@ -21,6 +22,11 @@ final sourceFetcherProvider = Provider<SourceFetcher>((ref) => DioSourceFetcher(
 /// HTML). Stateless/pure; a plain provider is enough.
 final sourceContentExtractorProvider =
     Provider<SourceContentExtractor>((ref) => const SourceContentExtractor());
+
+/// Pure freshness/group/cap assembler (today/yesterday, 10 per source). Plain
+/// provider; overridable in tests.
+final briefingAssemblerProvider =
+    Provider<BriefingAssembler>((ref) => const BriefingAssembler());
 
 /// Local notification poster for "tu boletín está listo" (separate
 /// `lifeos_briefing` channel). Overridden with a fake in tests.
