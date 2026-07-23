@@ -26,6 +26,9 @@ import 'features/local_model/presentation/local_model_providers.dart';
 import 'features/local_model/presentation/local_model_screen.dart';
 import 'features/meetings/presentation/meeting_detail_screen.dart';
 import 'features/meetings/presentation/meetings_screen.dart';
+import 'features/morning_briefing/presentation/morning_briefing_providers.dart';
+import 'features/morning_briefing/presentation/morning_briefing_screen.dart';
+import 'features/morning_briefing/presentation/morning_briefing_sources_screen.dart';
 import 'features/permissions/presentation/permissions_onboarding_screen.dart';
 import 'features/permissions/presentation/permissions_providers.dart';
 import 'features/permissions/presentation/permissions_screen.dart';
@@ -148,6 +151,14 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // `/settings/local-model` above) so the updates screen always renders;
       // a check just reports "sin conexión" when unpaired.
       GoRoute(path: '/settings/updates', builder: (context, state) => const AppUpdatesScreen()),
+      // ON-DEVICE morning briefing ("Boletín"). Not pairing-gated: the phone
+      // generates it itself with the local model, no engine connection needed.
+      // Distinct from the pairing-gated `/briefings` viewer above.
+      GoRoute(path: '/settings/briefing', builder: (context, state) => const MorningBriefingScreen()),
+      GoRoute(
+        path: '/settings/briefing/sources',
+        builder: (context, state) => const MorningBriefingSourcesScreen(),
+      ),
       // Permissions management. Not pairing-gated (works offline, mirrors the
       // appearance/about surfaces).
       GoRoute(path: '/settings/permissions', builder: (context, state) => const PermissionsScreen()),
@@ -190,6 +201,10 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // Actualizaciones screen. Done after the first frame so the router is
     // ready, and covers both a tap while running and a cold-start launch.
     WidgetsBinding.instance.addPostFrameCallback((_) => _wireUpdateNotificationTap());
+    // On-device briefing: wire its notification tap to the Boletín screen.
+    // Separate channel + payload from the update notification above; does not
+    // touch the app-update wiring.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _wireBriefingNotificationTap());
     _startForegroundUpdatePolling();
   }
 
@@ -232,6 +247,23 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
   void _openUpdatesScreen() {
     if (!mounted) return;
     ref.read(goRouterProvider).push('/settings/updates');
+  }
+
+  /// On-device briefing: route a "tu boletín está listo" notification tap to the
+  /// Boletín screen, both while running and on a cold-start launch.
+  Future<void> _wireBriefingNotificationTap() async {
+    final notifications = ref.read(briefingNotificationsProvider);
+    try {
+      await notifications.registerTapHandler(_openBriefingScreen);
+      if (await notifications.launchedByTap()) _openBriefingScreen();
+    } catch (_) {
+      // Notifications are best-effort — never block app startup.
+    }
+  }
+
+  void _openBriefingScreen() {
+    if (!mounted) return;
+    ref.read(goRouterProvider).push('/settings/briefing');
   }
 
   @override

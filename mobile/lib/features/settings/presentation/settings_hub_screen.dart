@@ -43,6 +43,13 @@ class SettingsHubScreen extends ConsumerWidget {
             onTap: () => context.push('/settings/local-model'),
           ),
           ListTile(
+            leading: const Icon(Icons.wb_sunny_outlined),
+            title: const Text('Boletín'),
+            subtitle: const Text('Genera un boletín matutino en el dispositivo'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/briefing'),
+          ),
+          ListTile(
             leading: const Icon(Icons.system_update),
             title: const Text('Actualizaciones'),
             subtitle: const Text('Buscar e instalar nuevas versiones'),
