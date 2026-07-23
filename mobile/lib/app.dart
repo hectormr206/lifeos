@@ -19,6 +19,7 @@ import 'features/data_control/presentation/danger_zone_screen.dart';
 import 'features/data_control/presentation/data_control_providers.dart';
 import 'features/connection/presentation/connection_notifier.dart';
 import 'features/connection/presentation/connection_screen.dart';
+import 'features/dictation/presentation/dictation_setup_screen.dart';
 import 'features/digest/presentation/digest_screen.dart';
 import 'features/domains/domain/domain_descriptor.dart';
 import 'features/domains/presentation/domain_list_screen.dart';
@@ -57,8 +58,11 @@ import 'theme/theme_providers.dart';
 /// unpaired device is redirected to `/settings/connection` instead of
 /// reaching the chat screen.
 ///
-/// M2 slice 1: `/domains` (hub) and `/domains/:key` (per-domain list, spec
-/// `mobile-domain-crud`) are gated behind pairing the same way.
+/// M2 slice 1 introduced `/domains` (hub) and `/domains/:key` (per-domain
+/// list, spec `mobile-domain-crud`) gated behind pairing; the native
+/// domain-CRUD slice UNGATED them — each domain screen now has a local
+/// on-device CRUD tab that must work unpaired (same rationale as
+/// `/reminders`).
 ///
 /// "Visible soul" slice: `/body` (Axi's organs), `/reminders`, and
 /// `/insights` (digest preview) are gated behind pairing the same way as
@@ -112,8 +116,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // LOCAL tab (on-device store + scheduling) must work unpaired, same
       // rationale as `/settings/graph`. The engine-viewer tab inside the
       // screen degrades to its own connection error when unpaired.
+      // Native domain CRUD: `/domains` (hub + per-domain screens) is ungated
+      // the same way — each domain's "En este teléfono" tab is full local
+      // CRUD over the on-device graph; the "Desde tu laptop" tab degrades to
+      // its own connection error when unpaired.
       final needsPairing = loc == '/chat' ||
-          loc.startsWith('/domains') ||
           loc == '/body' ||
           loc == '/insights' ||
           loc == '/briefings' ||
@@ -161,6 +168,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Roadmap SLICE 1: on-device model manager. Not pairing-gated (no gate
       // entry matches this sub-path) so it is reachable offline/unpaired.
       GoRoute(path: '/settings/local-model', builder: (context, state) => const LocalModelScreen()),
+      // AXI KEYBOARD (IME): system-wide dictation setup. Not pairing-gated.
+      GoRoute(path: '/settings/dictation', builder: (context, state) => const DictationSetupScreen()),
       // Self-hosted OTA app update. Not pairing-gated (same rationale as
       // `/settings/local-model` above) so the updates screen always renders;
       // a check just reports "sin conexión" when unpaired.

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rounded dark key backdrop for the Axi keyboard utility row. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#23252D" />
+    <corners android:radius="10dp" />
+</shape>

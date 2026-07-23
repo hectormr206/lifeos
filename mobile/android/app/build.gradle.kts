@@ -71,8 +71,40 @@ flutter {
     source = "../.."
 }
 
+// AXI KEYBOARD (IME): the keyboard service runs OUTSIDE the Flutter engine, so
+// it needs sherpa-onnx's Kotlin/JNI API. The `sherpa_onnx` Dart plugin only
+// ships the C-API .so files (no Java classes), so we add the official prebuilt
+// AAR from the sherpa-onnx GitHub release:
+//   * SAME version as the Dart plugin (keep in lockstep with pubspec.lock);
+//   * the *static-link-onnxruntime* variant, whose libsherpa-onnx-jni.so has
+//     onnxruntime linked IN — no second libonnxruntime.so, so it cannot clash
+//     with the one the Dart plugin already packages.
+// The AAR (~37 MB, all ABIs; abiFilters keeps only arm64 in the APK) is NOT
+// committed — this task fetches it into app/libs/ on first build.
+val sherpaOnnxVersion = "1.13.4"
+val sherpaOnnxAar = file("libs/sherpa-onnx-static-link-onnxruntime-$sherpaOnnxVersion.aar")
+val downloadSherpaOnnxAar = tasks.register("downloadSherpaOnnxAar") {
+    outputs.file(sherpaOnnxAar)
+    doLast {
+        // Size floor: a captive-portal page or truncated download is tiny.
+        if (sherpaOnnxAar.exists() && sherpaOnnxAar.length() > 10_000_000L) return@doLast
+        sherpaOnnxAar.parentFile.mkdirs()
+        val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/" +
+            "v$sherpaOnnxVersion/sherpa-onnx-static-link-onnxruntime-$sherpaOnnxVersion.aar"
+        uri(url).toURL().openStream().use { input: java.io.InputStream ->
+            sherpaOnnxAar.outputStream().use { output -> input.copyTo(output) }
+        }
+        check(sherpaOnnxAar.length() > 10_000_000L) {
+            "sherpa-onnx AAR download looks truncated: ${sherpaOnnxAar.length()} bytes"
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(downloadSherpaOnnxAar) }
+
 dependencies {
     // Backports java.time (and friends) for flutter_local_notifications when
     // core library desugaring is enabled above.
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // AXI KEYBOARD (IME): sherpa-onnx Kotlin API (see the download task above).
+    implementation(files(sherpaOnnxAar))
 }

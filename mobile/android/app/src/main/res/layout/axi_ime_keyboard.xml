@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Axi keyboard (IME) — dictation-first layout: status line, one BIG mic
+     button, and a utility row (switch keyboard / backspace / open LifeOS).
+     Dark surface + teal accent (#00D4AA) per the LifeOS brand. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#14151A"
+    android:paddingTop="14dp"
+    android:paddingBottom="10dp"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp">
+
+    <!-- Status line: "Toca el micrófono…" / "Escuchando…" / "Transcribiendo…" -->
+    <TextView
+        android:id="@+id/axi_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:textColor="#B9BDC7"
+        android:textSize="14sp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:text="@string/axi_ime_status_idle" />
+
+    <!-- The big mic: tap to start, tap again to stop. Background tint is
+         swapped in code (teal idle → pink while recording). -->
+    <ImageButton
+        android:id="@+id/axi_mic"
+        android:layout_width="84dp"
+        android:layout_height="84dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/axi_ime_mic_bg"
+        android:backgroundTint="#00D4AA"
+        android:src="@android:drawable/ic_btn_speak_now"
+        android:scaleType="centerInside"
+        android:contentDescription="@string/axi_ime_mic_desc" />
+
+    <!-- Utility row: IME switcher, backspace, open LifeOS. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/axi_switch_keyboard"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/axi_ime_key_bg"
+            android:layout_marginEnd="6dp"
+            android:textColor="#B9BDC7"
+            android:textSize="18sp"
+            android:text="@string/axi_ime_switch" />
+
+        <Button
+            android:id="@+id/axi_backspace"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/axi_ime_key_bg"
+            android:layout_marginEnd="6dp"
+            android:textColor="#B9BDC7"
+            android:textSize="18sp"
+            android:text="@string/axi_ime_backspace" />
+
+        <Button
+            android:id="@+id/axi_open_app"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/axi_ime_key_bg"
+            android:textColor="#00D4AA"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:text="@string/axi_ime_open_app" />
+    </LinearLayout>
+</LinearLayout>

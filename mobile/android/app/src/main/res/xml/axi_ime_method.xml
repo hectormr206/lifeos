@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Metadata for the Axi dictation keyboard (android.view.im).
+     Keyboard-mode subtypes (not "voice") so it shows up in the regular
+     keyboard picker; ES first — the app's neutral default. -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:supportsSwitchingToNextInputMethod="true">
+    <subtype
+        android:label="@string/axi_ime_subtype_es"
+        android:imeSubtypeLocale="es"
+        android:imeSubtypeMode="keyboard" />
+    <subtype
+        android:label="@string/axi_ime_subtype_en"
+        android:imeSubtypeLocale="en"
+        android:imeSubtypeMode="keyboard" />
+</input-method>

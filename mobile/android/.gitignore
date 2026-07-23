@@ -12,3 +12,7 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# AXI KEYBOARD (IME): sherpa-onnx AAR is fetched by the downloadSherpaOnnxAar
+# gradle task on first build — never commit the ~37 MB binary.
+app/libs/

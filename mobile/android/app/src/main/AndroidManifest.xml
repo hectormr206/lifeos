@@ -65,6 +65,25 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- AXI KEYBOARD (IME): system-wide on-device dictation. The service
+             binds as an input method (BIND_INPUT_METHOD is a system-signature
+             permission that protects the binding — only the OS can bind).
+             STT runs fully on-device (sherpa-onnx + the Whisper model the app
+             already downloads); audio/text never leave the phone. An IME may
+             use the mic while it is the active input method (RECORD_AUDIO is
+             already declared above and granted through the LifeOS app). -->
+        <service
+            android:name=".ime.AxiImeService"
+            android:exported="true"
+            android:label="@string/axi_ime_label"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/axi_ime_method"/>
+        </service>
         <!-- flutter_local_notifications scheduled-notification receivers
              (plugin-documented setup; the plugin's own manifest does NOT
              declare them): the first delivers the AlarmManager broadcast that

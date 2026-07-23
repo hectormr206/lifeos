@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Axi keyboard (IME) strings. TODO(i18n): neutral-Spanish hardcoded for
+     now, like the rest of the app's user-facing copy. -->
+<resources>
+    <string name="axi_ime_label">Axi · Dictado LifeOS</string>
+    <string name="axi_ime_status_idle">Toca el micrófono para dictar</string>
+    <string name="axi_ime_mic_desc">Iniciar o detener dictado</string>
+    <string name="axi_ime_switch">🌐</string>
+    <string name="axi_ime_backspace">⌫</string>
+    <string name="axi_ime_open_app">Axi</string>
+    <string name="axi_ime_subtype_es">Español</string>
+    <string name="axi_ime_subtype_en">English</string>
+</resources>
