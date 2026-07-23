@@ -73,6 +73,7 @@
   "chatInputHint": "Escribe un mensaje…",
   "chatAttachTooltip": "Adjuntar",
   "chatSendTooltip": "Enviar",
+  "chatWebSearchTooltip": "Buscar en internet",
   "chatModelLoading": "Cargando el modelo…",
   "chatModelLoadError": "No se pudo cargar el modelo. Revísalo e intenta de nuevo.",
   "chatTyping": "Axi está escribiendo…",

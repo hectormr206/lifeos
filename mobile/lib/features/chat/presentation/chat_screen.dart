@@ -449,11 +449,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     // text field also stays mounted (see the Expanded below): the recording
     // indicator is overlaid on top of it rather than replacing it, so focus and
     // the keyboard survive and the bar never jumps out from under the finger.
+    // "Buscar en internet" (web search) mode toggle. Flipping it rebuilds
+    // chatRepositoryProvider, wrapping the active backend in the web-search
+    // decorator so the NEXT text turn is grounded in live results. The globe
+    // lights up (primary colour) while on. Stays available even while busy —
+    // it only changes the mode for the following send.
+    final webSearchOn = ref.watch(webSearchEnabledProvider);
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          IconButton(
+            icon: Icon(Icons.public, color: webSearchOn ? scheme.primary : null),
+            tooltip: AppLocalizations.of(context).chatWebSearchTooltip,
+            onPressed: () => ref.read(webSearchEnabledProvider.notifier).toggle(),
+          ),
           IconButton(
             icon: const Icon(Icons.attach_file),
             tooltip: AppLocalizations.of(context).chatAttachTooltip,

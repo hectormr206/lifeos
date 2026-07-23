@@ -12,10 +12,13 @@ import '../../../core/outbox/outbox.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../local_model/data/on_device_chat_repository.dart';
 import '../../local_model/presentation/local_model_providers.dart';
+import '../../web_search/data/search_augmented_chat_repository.dart';
+import '../../web_search/presentation/web_search_providers.dart';
 import '../data/chat_history_repository.dart';
 import '../data/chat_repository.dart';
 import '../domain/axi_prompt_context.dart';
 import '../domain/chat_message.dart';
+import 'chat_providers.dart';
 
 /// The [ChatRepository] used app-wide; overridden with a fake in tests.
 ///
@@ -25,13 +28,14 @@ import '../domain/chat_message.dart';
 /// offline write outbox + pending-sync reporter, M3 slice 2). Flipping the
 /// toggle rebuilds this provider, so the active chat screen swaps backends live.
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
+  final ChatRepository base;
   if (ref.watch(localModelEnabledProvider)) {
     // i18n + "Axi knows now": every on-device turn is prefixed with a preamble
     // that (a) pins Axi's reply language to the current setting and (b) states
     // the current device-local date/time. `read` (not `watch`) so a language or
     // clock change never rebuilds the repository (which would drop the loaded
     // weights / FIFO lock) — the closure re-reads both live at each send.
-    return OnDeviceChatRepository(
+    base = OnDeviceChatRepository(
       ref.watch(localLlmEngineProvider),
       decoratePrompt: (message) => withAxiPromptPreamble(
         message: message,
@@ -39,12 +43,27 @@ final chatRepositoryProvider = Provider<ChatRepository>((ref) {
         now: ref.read(clockProvider).now(),
       ),
     );
+  } else {
+    base = HttpChatRepository(
+      ref.watch(dioProvider),
+      outbox: ref.watch(outboxProvider),
+      pendingSync: ref.watch(pendingSyncCountProvider.notifier),
+    );
   }
-  return HttpChatRepository(
-    ref.watch(dioProvider),
-    outbox: ref.watch(outboxProvider),
-    pendingSync: ref.watch(pendingSyncCountProvider.notifier),
-  );
+  // Roadmap slice B4: when "buscar en internet" is on, wrap the active backend
+  // in the web-search decorator (grounds each text turn in live DDG results and
+  // appends a sources list). Rebuilding on toggle only re-creates the light
+  // wrapper — the long-lived on-device engine (its own provider) is untouched,
+  // so no weights reload. `read` for the sources label so a language change is
+  // honoured at send-time without rebuilding.
+  if (ref.watch(webSearchEnabledProvider)) {
+    return SearchAugmentedChatRepository(
+      inner: base,
+      pipeline: ref.watch(webSearchPipelineProvider),
+      sourcesLabel: () => ref.read(appLanguageCodeProvider) == 'en' ? 'Sources' : 'Fuentes',
+    );
+  }
+  return base;
 });
 
 /// On-device persistence of chat history via the local graph store (SLICE A2).

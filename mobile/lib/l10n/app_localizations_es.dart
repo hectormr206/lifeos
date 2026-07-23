@@ -226,6 +226,9 @@ class AppLocalizationsEs extends AppLocalizations {
   String get chatSendTooltip => 'Enviar';
 
   @override
+  String get chatWebSearchTooltip => 'Buscar en internet';
+
+  @override
   String get chatModelLoading => 'Cargando el modelo…';
 
   @override

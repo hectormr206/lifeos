@@ -506,6 +506,12 @@ abstract class AppLocalizations {
   /// **'Send'**
   String get chatSendTooltip;
 
+  /// No description provided for @chatWebSearchTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Search the web'**
+  String get chatWebSearchTooltip;
+
   /// No description provided for @chatModelLoading.
   ///
   /// In en, this message translates to:

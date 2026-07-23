@@ -13,6 +13,28 @@ import '../../../l10n/locale_providers.dart';
 import '../domain/text_to_speech_gateway.dart';
 import '../domain/voice_reply_preferences.dart';
 
+/// Whether "buscar en internet" (web search) is active for the chat (roadmap
+/// slice B4). When `true`, `chatRepositoryProvider` wraps the active repository
+/// in a `SearchAugmentedChatRepository` so each text turn is grounded in live
+/// DuckDuckGo results with a "Fuentes:"/"Sources:" list. Defaults to `false`
+/// (off) and lives only in memory — a per-session choice, not persisted.
+///
+/// A [NotifierProvider] (not the legacy `StateProvider`, which riverpod 3 keeps
+/// only under `flutter_riverpod/legacy`) to match the codebase convention.
+final webSearchEnabledProvider =
+    NotifierProvider<WebSearchEnabledNotifier, bool>(WebSearchEnabledNotifier.new);
+
+class WebSearchEnabledNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  /// Flips the toggle (globe button).
+  void toggle() => state = !state;
+
+  /// Sets the toggle to [value].
+  void set(bool value) => state = value;
+}
+
 /// Photo attach (camera/gallery). Overridden with a fake in tests.
 final imagePickerGatewayProvider =
     Provider<ImagePickerGateway>((ref) => ImagePickerImageGateway());
