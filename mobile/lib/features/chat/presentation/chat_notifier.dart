@@ -6,9 +6,11 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
+import '../../../core/graph/graph_providers.dart';
 import '../../../core/outbox/outbox.dart';
 import '../../local_model/data/on_device_chat_repository.dart';
 import '../../local_model/presentation/local_model_providers.dart';
+import '../data/chat_history_repository.dart';
 import '../data/chat_repository.dart';
 import '../domain/chat_message.dart';
 
@@ -28,6 +30,18 @@ final chatRepositoryProvider = Provider<ChatRepository>((ref) {
     outbox: ref.watch(outboxProvider),
     pendingSync: ref.watch(pendingSyncCountProvider.notifier),
   );
+});
+
+/// On-device persistence of chat history via the local graph store (SLICE A2).
+///
+/// Async because the underlying [localGraphStoreProvider] opens/keys the
+/// encrypted DB lazily. Consumers `await ...future` and DEGRADE GRACEFULLY on
+/// failure (store not ready / unavailable) — the chat stays fully usable
+/// in-memory, it just won't survive a restart. Overridden with a fake (or an
+/// in-memory sqflite store) in tests.
+final chatHistoryRepositoryProvider = FutureProvider<ChatHistoryRepository>((ref) async {
+  final store = await ref.watch(localGraphStoreProvider.future);
+  return ChatHistoryRepository(store);
 });
 
 /// The chat conversation's UI state (spec mobile-chat).
@@ -96,14 +110,82 @@ class ChatNotifier extends Notifier<ChatUiState> {
     }
   }
 
+  /// Resolves the on-device history store, or null when it is not available
+  /// (DB not open yet, no keystore, running under a plain widget test). A null
+  /// return is the graceful-degradation signal: the caller keeps working
+  /// in-memory and simply skips persistence.
+  Future<ChatHistoryRepository?> _history() async {
+    try {
+      return await ref.read(chatHistoryRepositoryProvider.future);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Fire-and-forget persistence of a single [message]. NEVER awaited by the
+  /// send flow, so it can neither block nor reorder a generation; any failure
+  /// (store down) is swallowed so the conversation stays usable in-memory.
+  void _persist(ChatMessage message) {
+    unawaited(() async {
+      final repo = await _history();
+      if (repo == null) return;
+      try {
+        await repo.appendMessage(message);
+      } catch (_) {
+        // Best-effort: an in-memory message that fails to persist is still shown.
+      }
+    }());
+  }
+
+  /// Lets tests await the persisted-history overlay ([_hydratePersisted])
+  /// deterministically. `ready` intentionally does NOT wait on it (see below).
+  Future<void>? _persistedHydration;
+  Future<void> get persistedReady => _persistedHydration ?? Future<void>.value();
+
   Future<void> _loadHistory() async {
+    // Fast path (gates [ready]): the repository's own history (HTTP server /
+    // on-device engine). NEVER gated on the async graph store, so the
+    // conversation shows immediately and a store that is slow/unavailable to
+    // open can never block hydration (or reorder the send flow).
     try {
       final history = await ref.read(chatRepositoryProvider).loadHistory();
       if (_disposed) return;
-      state = state.copyWith(messages: history);
+      if (history.isNotEmpty) state = state.copyWith(messages: history);
     } catch (_) {
-      // History failing to load must not block sending new messages — the
-      // conversation just starts empty.
+      // History failing to load must not block sending new messages.
+    }
+    // Overlay the persisted on-device history as a DETACHED best-effort: it is
+    // deliberately NOT awaited by [ready] so a graph store that opens slowly
+    // (or never, e.g. a plain widget test with no platform channel) can never
+    // block init. When it resolves it replaces the transcript with what
+    // survived the last app restart.
+    _persistedHydration = _hydratePersisted();
+  }
+
+  Future<void> _hydratePersisted() async {
+    try {
+      final repo = await _history();
+      if (repo == null) return;
+      final persisted = await repo.loadMessages();
+      if (_disposed) return;
+      if (persisted.isNotEmpty) state = state.copyWith(messages: persisted);
+    } catch (_) {
+      // Persisted load unavailable — keep whatever the fast path produced.
+    }
+  }
+
+  /// Clears the visible conversation and the persisted on-device history for
+  /// the default conversation. In-memory clears immediately; persistence is
+  /// best-effort.
+  Future<void> clearHistory() async {
+    if (_disposed) return;
+    state = state.copyWith(messages: const []);
+    final repo = await _history();
+    if (repo == null) return;
+    try {
+      await repo.clearConversation();
+    } catch (_) {
+      // Best-effort: the visible conversation is already cleared.
     }
   }
 
@@ -121,6 +203,7 @@ class ChatNotifier extends Notifier<ChatUiState> {
     // a clock), before the repository call resolves. `sending: true` keeps the
     // "escribiendo…" indicator up until the whole queue drains.
     state = state.copyWith(messages: [...state.messages, userMessage], sending: true, error: null);
+    _persist(userMessage);
     return _enqueue(_OutgoingRequest(
       userMessageId: userMessage.id,
       run: () => ref.read(chatRepositoryProvider).sendMessage(trimmed),
@@ -156,6 +239,7 @@ class ChatNotifier extends Notifier<ChatUiState> {
       status: ChatMessageStatus.sending,
     );
     state = state.copyWith(messages: [...state.messages, userMessage], sending: true, error: null);
+    _persist(userMessage);
     return _enqueue(_OutgoingRequest(
       userMessageId: userMessage.id,
       run: () => ref.read(chatRepositoryProvider).sendImages(trimmed, images),
@@ -207,6 +291,7 @@ class ChatNotifier extends Notifier<ChatUiState> {
           // `sending` true; it flips false only once the queue is fully drained.
           _setStatus(request.userMessageId, ChatMessageStatus.delivered);
           state = state.copyWith(messages: [...state.messages, reply]);
+          _persist(reply);
         } on ChatException catch (error) {
           // Keep the already-appended user message (left at "sent"); do not add
           // a phantom reply. Continue draining any queued items.
@@ -272,6 +357,10 @@ class ChatNotifier extends Notifier<ChatUiState> {
       timestamp: now,
     );
     state = state.copyWith(messages: [...state.messages, note, reply]);
+    // Persist both the voice bubble (by audio-path reference, never the audio
+    // bytes) and its canned Axi reply so they survive a restart.
+    _persist(note);
+    _persist(reply);
   }
 }
 
