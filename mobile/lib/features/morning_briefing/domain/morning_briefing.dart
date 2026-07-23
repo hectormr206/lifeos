@@ -21,6 +21,8 @@ class BriefingArticle {
     this.hnObjectId,
     this.fullSummary,
     this.commentsSummary,
+    this.translatedTitle,
+    this.translatedDescription,
   });
 
   /// Human-readable source name (feed/channel title or "Hacker News").
@@ -50,12 +52,39 @@ class BriefingArticle {
   /// Cached on-demand HN comments summary (null until first requested).
   final String? commentsSummary;
 
+  /// Cached app-language translation of [title] (null until a source's
+  /// accordion is expanded and its titles are batch-translated on device).
+  /// Persisted additively in the briefing JSON so a re-expand is instant.
+  final String? translatedTitle;
+
+  /// Cached app-language translation of [description] (null until translated,
+  /// or when the feed carried no brief). Persisted additively.
+  final String? translatedDescription;
+
   bool get isHackerNews => (hnObjectId ?? '').isNotEmpty;
+
+  /// The headline to render: the cached translation when present, else the
+  /// feed-native [title] (never blank — the translation fallback).
+  String get displayTitle =>
+      (translatedTitle != null && translatedTitle!.trim().isNotEmpty) ? translatedTitle! : title;
+
+  /// The brief to render: the cached translation when present, else the
+  /// feed-native [description].
+  String get displayDescription =>
+      (translatedDescription != null && translatedDescription!.trim().isNotEmpty)
+          ? translatedDescription!
+          : description;
 
   /// Stable identity for caching/pending-state lookups across state rebuilds.
   String get key => url.isNotEmpty ? url : '$sourceName::$title';
 
-  BriefingArticle copyWith({String? fullSummary, String? commentsSummary}) => BriefingArticle(
+  BriefingArticle copyWith({
+    String? fullSummary,
+    String? commentsSummary,
+    String? translatedTitle,
+    String? translatedDescription,
+  }) =>
+      BriefingArticle(
         sourceName: sourceName,
         title: title,
         url: url,
@@ -64,6 +93,8 @@ class BriefingArticle {
         hnObjectId: hnObjectId,
         fullSummary: fullSummary ?? this.fullSummary,
         commentsSummary: commentsSummary ?? this.commentsSummary,
+        translatedTitle: translatedTitle ?? this.translatedTitle,
+        translatedDescription: translatedDescription ?? this.translatedDescription,
       );
 
   Map<String, dynamic> toJson() => {
@@ -75,6 +106,8 @@ class BriefingArticle {
         if (hnObjectId != null) 'hnObjectId': hnObjectId,
         if (fullSummary != null) 'fullSummary': fullSummary,
         if (commentsSummary != null) 'commentsSummary': commentsSummary,
+        if (translatedTitle != null) 'translatedTitle': translatedTitle,
+        if (translatedDescription != null) 'translatedDescription': translatedDescription,
       };
 
   factory BriefingArticle.fromJson(Map<String, dynamic> json) => BriefingArticle(
@@ -86,6 +119,8 @@ class BriefingArticle {
         hnObjectId: json['hnObjectId'] as String?,
         fullSummary: json['fullSummary'] as String?,
         commentsSummary: json['commentsSummary'] as String?,
+        translatedTitle: json['translatedTitle'] as String?,
+        translatedDescription: json['translatedDescription'] as String?,
       );
 
   @override
@@ -98,11 +133,13 @@ class BriefingArticle {
       other.publishedAt == publishedAt &&
       other.hnObjectId == hnObjectId &&
       other.fullSummary == fullSummary &&
-      other.commentsSummary == commentsSummary;
+      other.commentsSummary == commentsSummary &&
+      other.translatedTitle == translatedTitle &&
+      other.translatedDescription == translatedDescription;
 
   @override
-  int get hashCode => Object.hash(
-      sourceName, title, url, description, publishedAt, hnObjectId, fullSummary, commentsSummary);
+  int get hashCode => Object.hash(sourceName, title, url, description, publishedAt, hnObjectId,
+      fullSummary, commentsSummary, translatedTitle, translatedDescription);
 }
 
 /// A run of consecutive articles that share a source, for the grouped card UI

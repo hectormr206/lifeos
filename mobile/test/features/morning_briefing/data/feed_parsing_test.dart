@@ -101,6 +101,33 @@ void main() {
     expect(feed.items[1].published, DateTime.utc(2026, 7, 22, 10, 0, 0));
   });
 
+  test('brief description: strips escaped HTML, decodes entities, caps to 200', () {
+    // Simon-Willison-style feed: the <description> ships ESCAPED HTML, so the
+    // tags only reappear after entity-decoding — they must still be stripped,
+    // and the (long) result capped with an ellipsis.
+    final body = StringBuffer('<rss version="2.0"><channel><title>SW</title><item>'
+        '<title>Post</title><link>https://sw.com/1</link><description>');
+    body.write('&lt;p&gt;Hola &amp;amp; ');
+    body.write('bienvenido. ' * 60); // long text to force the cap
+    body.write('&lt;/p&gt;</description>'
+        '<pubDate>Wed, 22 Jul 2026 11:00:00 GMT</pubDate></item></channel></rss>');
+
+    final feed = extractor.parseFeed(body.toString(), url: 'https://sw.com/rss');
+    final desc = feed.items.single.description;
+
+    expect(desc, isNot(contains('<')), reason: 'escaped tags stripped after decoding');
+    expect(desc, isNot(contains('&lt;')));
+    expect(desc, isNot(contains('&amp;')));
+    expect(desc, contains('Hola & bienvenido'));
+    expect(desc.length, lessThanOrEqualTo(201)); // 200 chars + the ellipsis
+    expect(desc.endsWith('…'), isTrue, reason: 'capped with an ellipsis');
+  });
+
+  test('brief cleanBrief keeps short plain text unchanged (no ellipsis)', () {
+    expect(extractor.cleanBrief('Texto breve y claro'), 'Texto breve y claro');
+    expect(extractor.cleanBrief('<![CDATA[Resumen &amp; detalle]]>'), 'Resumen & detalle');
+  });
+
   test('extractHnComments flattens first-level comments', () {
     const body = '''
 {"children":[

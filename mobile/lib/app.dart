@@ -15,6 +15,7 @@ import 'features/briefings/presentation/briefings_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
 import 'features/connection/domain/connection_status.dart';
 import 'features/data_control/presentation/backups_screen.dart';
+import 'features/data_control/presentation/danger_zone_menu_screen.dart';
 import 'features/data_control/presentation/danger_zone_screen.dart';
 import 'features/data_control/presentation/data_control_providers.dart';
 import 'features/connection/presentation/connection_notifier.dart';
@@ -188,6 +189,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // DATA-CONTROL KIT: on-device backups + the protected full wipe. Both
       // operate on LOCAL data only, so neither is pairing-gated.
       GoRoute(path: '/settings/backups', builder: (context, state) => const BackupsScreen()),
+      GoRoute(
+          path: '/settings/danger-zone',
+          builder: (context, state) => const DangerZoneMenuScreen()),
       GoRoute(path: '/settings/danger', builder: (context, state) => const DangerZoneScreen()),
       // ON-DEVICE memory browser (roadmap SLICE C5). Under `/settings/…` so it
       // is NOT pairing-gated (no gate entry matches this sub-path): it reads the

@@ -25,6 +25,9 @@ GoRouter _router() => GoRouter(
         GoRoute(path: '/settings/local-model', builder: (c, s) => const Scaffold(body: Text('MODEL'))),
         GoRoute(path: '/settings/updates', builder: (c, s) => const Scaffold(body: Text('UPDATES'))),
         GoRoute(path: '/settings/engine', builder: (c, s) => const Scaffold(body: Text('ENGINE'))),
+        GoRoute(
+            path: '/settings/danger-zone',
+            builder: (c, s) => const Scaffold(body: Text('DANGER MENU'))),
       ],
     );
 
@@ -73,8 +76,10 @@ void main() {
     expect(find.text('Oscuro'), findsOneWidget);
     // "Sistema" appears in both the appearance and language selectors.
     expect(find.text('Sistema'), findsNWidgets(2));
-    // i18n slice: the Región section + language selector.
-    expect(find.text('Región'), findsOneWidget);
+    // i18n slice: the language section + selector (renamed "Región" → "Idioma").
+    expect(find.text('Idioma'), findsOneWidget);
+    // The danger zone is now a tile that pushes its own screen (not inline).
+    expect(find.text('Zona de peligro'), findsOneWidget);
     expect(find.text('English'), findsOneWidget);
     expect(find.text('Modelo local'), findsOneWidget);
     expect(find.text('Actualizaciones'), findsOneWidget);
@@ -128,12 +133,22 @@ void main() {
     expect(find.text('ENGINE'), findsOneWidget);
   });
 
-  testWidgets('Región selector changes and persists the language', (tester) async {
+  testWidgets('tapping "Zona de peligro" pushes the danger-zone MENU', (tester) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Zona de peligro'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('DANGER MENU'), findsOneWidget);
+  });
+
+  testWidgets('Idioma selector changes and persists the language', (tester) async {
     final languagePrefs = FakeLanguagePreferences();
     await tester.pumpWidget(_app(languagePrefs: languagePrefs));
     await tester.pumpAndSettle();
 
-    final container = ProviderScope.containerOf(tester.element(find.text('Región')));
+    final container = ProviderScope.containerOf(tester.element(find.text('Idioma')));
     expect(container.read(languageProvider), AppLanguage.system);
 
     await tester.tap(find.text('English'));

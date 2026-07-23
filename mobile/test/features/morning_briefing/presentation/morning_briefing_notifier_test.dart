@@ -8,6 +8,7 @@ import 'package:lifeos/core/clock/clock.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_notifier.dart';
 import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_providers.dart';
+import 'package:lifeos/l10n/locale_providers.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
 import '../support/fakes.dart';
@@ -39,12 +40,27 @@ String _toRfc822(DateTime dt) {
 String _hnFrontPage(DateTime pub) => '''
 {"hits":[{"objectID":"42","title":"HN Story","url":"https://ext.com/story","created_at":"${pub.toUtc().toIso8601String()}"}]}''';
 
+/// Builds an RSS feed with English titles + descriptions (for the translation
+/// tests: it should be detected as NON-target when the app language is es).
+String _englishRss(String channel, List<(String, String)> items, DateTime pub) {
+  final rfc = _toRfc822(pub.toUtc());
+  final buffer = StringBuffer('<rss version="2.0"><channel><title>$channel</title>');
+  for (final (title, desc) in items) {
+    buffer.write('<item><title>$title</title>'
+        '<link>https://en.com/${title.hashCode}</link>'
+        '<description>$desc</description><pubDate>$rfc</pubDate></item>');
+  }
+  buffer.write('</channel></rss>');
+  return buffer.toString();
+}
+
 ProviderContainer _container({
   required FakeLocalLlmEngine engine,
   required FakeSourceFetcher fetcher,
   required FakeMorningBriefingPreferences prefs,
   required FakeBriefingNotifications notifications,
   required DateTime now,
+  String? languageCode,
 }) {
   final container = ProviderContainer(
     overrides: [
@@ -54,6 +70,7 @@ ProviderContainer _container({
       briefingNotificationsProvider.overrideWithValue(notifications),
       briefingSchedulerProvider.overrideWithValue(FakeBriefingScheduler()),
       clockProvider.overrideWithValue(_FixedClock(now)),
+      if (languageCode != null) appLanguageCodeProvider.overrideWithValue(languageCode),
     ],
   );
   addTearDown(container.dispose);
@@ -232,6 +249,127 @@ void main() {
         container.read(morningBriefingNotifierProvider).briefing!.articleForKey(hnArticle.key)!;
     expect(updated.commentsSummary, 'Resumen de comentarios');
     expect(engine.generateSampling.single, (0.2, 20, 0.9));
+  });
+
+  group('lazy per-source title translation', () {
+    test('translates a foreign source once, caches it, re-expand is a no-op', () async {
+      // Fake engine returns the batched numbered translation for the 2 titles.
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        reply: (_) => '1. El futuro de la IA ||| Un vistazo al futuro\n'
+            '2. Nuevo lanzamiento de Rust ||| Notas de la versión',
+      );
+      final fetcher = FakeSourceFetcher(bodies: {
+        'https://en.com/rss': _englishRss(
+          'English Source',
+          [
+            ('The Future of AI', 'A look at the future'),
+            ('New Rust Release', 'Release notes'),
+          ],
+          today,
+        ),
+        hnFrontPageUrl: '{"hits":[]}',
+      });
+      final prefs = FakeMorningBriefingPreferences(initialSources: ['https://en.com/rss']);
+      final container = _container(
+        engine: engine,
+        fetcher: fetcher,
+        prefs: prefs,
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+
+      await notifier.translateSource('English Source');
+
+      final group = container
+          .read(morningBriefingNotifierProvider)
+          .briefing!
+          .groups
+          .firstWhere((g) => g.sourceName == 'English Source');
+      expect(engine.loadCount, 1, reason: 'model loaded on demand for translation');
+      expect(engine.generateCount, 1, reason: 'ONE batched call for the whole source');
+      expect(engine.generateSampling.single, (0.3, 20, 0.9), reason: 'light translation sampling');
+      expect(group.articles[0].displayTitle, 'El futuro de la IA');
+      expect(group.articles[0].translatedTitle, 'El futuro de la IA');
+      expect(group.articles[0].displayDescription, 'Un vistazo al futuro');
+      expect(group.articles[1].displayTitle, 'Nuevo lanzamiento de Rust');
+      expect(prefs.saveCount, greaterThan(1), reason: 'translations persisted to cache');
+
+      // Re-expand: cached → no extra model call.
+      await notifier.translateSource('English Source');
+      expect(engine.generateCount, 1, reason: 'cached translation is not regenerated');
+    });
+
+    test('skips translating a source already in the target language', () async {
+      final engine = FakeLocalLlmEngine(installed: true);
+      final fetcher = FakeSourceFetcher(bodies: {
+        'https://es.com/rss': _datedRss('Fuente Española', 'La economía de España crece hoy', today),
+        hnFrontPageUrl: '{"hits":[]}',
+      });
+      final container = _container(
+        engine: engine,
+        fetcher: fetcher,
+        prefs: FakeMorningBriefingPreferences(initialSources: ['https://es.com/rss']),
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+
+      await notifier.translateSource('Fuente Española');
+
+      expect(engine.loadCount, 0, reason: 'same-language source is NOT translated');
+      expect(engine.generateCount, 0);
+      final group = container
+          .read(morningBriefingNotifierProvider)
+          .briefing!
+          .groups
+          .firstWhere((g) => g.sourceName == 'Fuente Española');
+      expect(group.articles.first.displayTitle, 'La economía de España crece hoy');
+    });
+
+    test('falls back to the feed-native title when translation fails', () async {
+      final engine = FakeLocalLlmEngine(installed: true, generateShouldFail: true);
+      final fetcher = FakeSourceFetcher(bodies: {
+        'https://en.com/rss': _englishRss(
+          'English Source',
+          [('The Future of AI', 'A look at the future')],
+          today,
+        ),
+        hnFrontPageUrl: '{"hits":[]}',
+      });
+      final container = _container(
+        engine: engine,
+        fetcher: fetcher,
+        prefs: FakeMorningBriefingPreferences(initialSources: ['https://en.com/rss']),
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+
+      await notifier.translateSource('English Source');
+
+      final article = container
+          .read(morningBriefingNotifierProvider)
+          .briefing!
+          .groups
+          .firstWhere((g) => g.sourceName == 'English Source')
+          .articles
+          .first;
+      expect(article.translatedTitle, isNull);
+      expect(article.displayTitle, 'The Future of AI', reason: 'never blank — native fallback');
+      expect(container.read(morningBriefingNotifierProvider).isTranslatingSource('English Source'),
+          isFalse);
+    });
   });
 
   test('addSource + removeSource persist through the preferences', () async {

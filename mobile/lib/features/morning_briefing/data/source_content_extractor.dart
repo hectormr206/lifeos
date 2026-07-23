@@ -57,7 +57,11 @@ class SourceExtract {
 ///   * anything else → HTML stripped to plain text, first chunk kept.
 /// Everything here is pure (no IO) so it is fully unit-testable.
 class SourceContentExtractor {
-  const SourceContentExtractor({this.maxItems = 6, this.maxChars = 1600});
+  const SourceContentExtractor({
+    this.maxItems = 6,
+    this.maxChars = 1600,
+    this.briefMaxChars = 200,
+  });
 
   /// Max feed items to keep (top headlines).
   final int maxItems;
@@ -65,6 +69,12 @@ class SourceContentExtractor {
   /// Hard cap on the extracted text length — the on-device model is small
   /// (~512 output tokens), so we feed it a bounded chunk.
   final int maxChars;
+
+  /// Hard cap on a per-item BRIEF description (the card summary). Some feeds
+  /// (e.g. Simon Willison's) ship raw/escaped HTML in `<description>`; once
+  /// tags are stripped and entities decoded the text can still be huge, so it
+  /// is bounded to a single readable snippet with an ellipsis.
+  final int briefMaxChars;
 
   static final RegExp _itemBlock = RegExp(r'<(item|entry)\b[^>]*>(.*?)</\1>', dotAll: true, caseSensitive: false);
   static final RegExp _titleTag = RegExp(r'<title\b[^>]*>(.*?)</title>', dotAll: true, caseSensitive: false);
@@ -154,7 +164,7 @@ class SourceContentExtractor {
       final block = match.group(2) ?? '';
       final title = _clean(_titleTag.firstMatch(block)?.group(1) ?? '');
       final link = _extractLink(block);
-      final desc = _clean(_descTag.firstMatch(block)?.group(2) ?? '');
+      final desc = cleanBrief(_descTag.firstMatch(block)?.group(2) ?? '');
       final published = parseFeedDate(_dateTag.firstMatch(block)?.group(2));
       if (title.isEmpty && link.isEmpty) continue;
       items.add(ParsedFeedItem(title: title, link: link, description: desc, published: published));
@@ -302,6 +312,22 @@ class SourceContentExtractor {
     s = s.replaceAll(_anyTag, ' ');
     s = _decodeEntities(s);
     return s.replaceAll(_whitespace, ' ').trim();
+  }
+
+  /// Cleans + caps a per-item BRIEF description for the card. Handles feeds that
+  /// double-encode HTML (escaped tags like `&lt;p&gt;` that only reappear AFTER
+  /// entity decoding): strips tags, decodes entities, strips the revealed tags,
+  /// decodes once more, collapses whitespace, then caps to [briefMaxChars] with
+  /// an ellipsis. Public so the brief-cleaning is unit-testable on its own.
+  String cleanBrief(String raw) {
+    var s = raw.replaceAllMapped(_cdata, (m) => m.group(1) ?? '');
+    s = s.replaceAll(_anyTag, ' '); // strip literal tags
+    s = _decodeEntities(s); // escaped tags/entities reappear
+    s = s.replaceAll(_anyTag, ' '); // strip the now-revealed tags
+    s = _decodeEntities(s); // decode any remaining nested entities
+    s = s.replaceAll(_whitespace, ' ').trim();
+    if (s.length <= briefMaxChars) return s;
+    return '${s.substring(0, briefMaxChars).trimRight()}…';
   }
 
   String _decodeEntities(String s) => s

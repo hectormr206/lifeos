@@ -27,6 +27,7 @@ class SettingsHubScreen extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     final language = ref.watch(languageProvider);
     final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.settingsTitle)),
@@ -116,13 +117,20 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/engine'),
           ),
+          // DATA-CONTROL KIT: the danger zone is NOT exposed inline at the
+          // bottom of the hub (too easy to tap by accident). A discreet tile
+          // pushes the "Zona de peligro" MENU screen, which in turn holds the
+          // protected wipe ceremony — an extra nesting level of separation.
+          ListTile(
+            leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
+            title: Text(l10n.sectionDangerZone, style: TextStyle(color: scheme.error)),
+            subtitle: Text(l10n.wipeNavTitle),
+            trailing: Icon(Icons.chevron_right, color: scheme.error),
+            onTap: () => context.push('/settings/danger-zone'),
+          ),
           const Divider(),
           _SectionHeader(l10n.sectionAbout),
           const _AboutTile(),
-          // DATA-CONTROL KIT: the danger zone lives LAST and visually
-          // distinct (error colours) — the protected full wipe entry point.
-          const Divider(),
-          const _DangerZoneSection(),
         ],
       ),
     );
@@ -212,42 +220,6 @@ class _AppearanceTile extends StatelessWidget {
         showSelectedIcon: false,
         onSelectionChanged: (selection) => onChanged(selection.first),
       ),
-    );
-  }
-}
-
-/// "Zona de peligro" — error-coloured section at the very bottom of the hub
-/// leading to the protected full-wipe screen (`/settings/danger`).
-class _DangerZoneSection extends StatelessWidget {
-  const _DangerZoneSection();
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Text(
-            l10n.sectionDangerZone,
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: scheme.error,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.4,
-                ),
-          ),
-        ),
-        ListTile(
-          leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
-          title: Text(l10n.wipeNavTitle, style: TextStyle(color: scheme.error)),
-          subtitle: Text(l10n.wipeNavSubtitle),
-          trailing: Icon(Icons.chevron_right, color: scheme.error),
-          onTap: () => context.push('/settings/danger'),
-        ),
-        const SizedBox(height: 12),
-      ],
     );
   }
 }

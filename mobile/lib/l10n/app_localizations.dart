@@ -179,7 +179,7 @@ abstract class AppLocalizations {
   /// No description provided for @sectionRegion.
   ///
   /// In en, this message translates to:
-  /// **'Region'**
+  /// **'Language'**
   String get sectionRegion;
 
   /// No description provided for @languageTitle.
@@ -811,6 +811,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Summarizing comments…'**
   String get briefingSummarizingComments;
+
+  /// No description provided for @briefingTranslating.
+  ///
+  /// In en, this message translates to:
+  /// **'Translating…'**
+  String get briefingTranslating;
+
+  /// No description provided for @briefingNoSummaryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'No summary — tap \"See full summary\".'**
+  String get briefingNoSummaryHint;
 
   /// No description provided for @briefingSkippedSources.
   ///

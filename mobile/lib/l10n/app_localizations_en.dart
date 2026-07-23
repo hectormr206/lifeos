@@ -48,7 +48,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appearanceSystem => 'System';
 
   @override
-  String get sectionRegion => 'Region';
+  String get sectionRegion => 'Language';
 
   @override
   String get languageTitle => 'Language';
@@ -389,6 +389,12 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get briefingSummarizingComments => 'Summarizing comments…';
+
+  @override
+  String get briefingTranslating => 'Translating…';
+
+  @override
+  String get briefingNoSummaryHint => 'No summary — tap \"See full summary\".';
 
   @override
   String briefingSkippedSources(String sources) {

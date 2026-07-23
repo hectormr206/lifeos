@@ -16,7 +16,7 @@
   "appearanceLight": "Light",
   "appearanceDark": "Dark",
   "appearanceSystem": "System",
-  "sectionRegion": "Region",
+  "sectionRegion": "Language",
   "languageTitle": "Language",
   "languageSubtitle": "Choose the app's language",
   "sectionGeneral": "General",
@@ -151,6 +151,8 @@
   "briefingHideCommentsSummary": "Hide comments summary",
   "briefingSummarizing": "Summarizing…",
   "briefingSummarizingComments": "Summarizing comments…",
+  "briefingTranslating": "Translating…",
+  "briefingNoSummaryHint": "No summary — tap \"See full summary\".",
   "briefingSkippedSources": "No news today: {sources}",
   "@briefingSkippedSources": {
     "placeholders": { "sources": { "type": "String" } }

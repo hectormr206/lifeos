@@ -44,20 +44,13 @@ class MorningBriefingScreen extends ConsumerWidget {
           if (state.briefing != null) ...[
             _BriefingHeader(briefing: state.briefing!),
             const SizedBox(height: 12),
-            for (final group in state.briefing!.groups) ...[
-              _SourceHeader(name: group.sourceName),
-              for (final article in group.articles)
-                _ArticleCard(
-                  key: ValueKey(article.key),
-                  article: article,
-                  isSummarizing: state.isSummarizingArticle(article.key),
-                  summaryError: state.articleErrors[article.key],
-                  isSummarizingComments: state.isSummarizingComments(article.key),
-                  commentsError: state.commentErrors[article.key],
-                  onRequestSummary: () => notifier.summarizeArticle(article),
-                  onRequestComments: () => notifier.summarizeComments(article),
-                ),
-            ],
+            for (final group in state.briefing!.groups)
+              _SourceSection(
+                key: ValueKey('src::${group.sourceName}'),
+                group: group,
+                state: state,
+                notifier: notifier,
+              ),
             if (state.briefing!.skippedSources.isNotEmpty)
               _SkippedNote(sources: state.briefing!.skippedSources),
           ] else if (!state.isGenerating && state.phase != BriefingPhase.error)
@@ -224,30 +217,75 @@ class _BriefingHeader extends StatelessWidget {
   }
 }
 
-/// A per-source section header (source name) preceding its item cards.
-class _SourceHeader extends StatelessWidget {
-  const _SourceHeader({required this.name});
+/// A per-source COLLAPSIBLE section: a header showing `Source (count)`,
+/// COLLAPSED by default, that reveals the source's item cards when tapped. On
+/// its FIRST expansion it kicks off the lazy per-source title/brief translation
+/// (a subtle "Traduciendo…" row shows while that batched model call runs).
+class _SourceSection extends StatelessWidget {
+  const _SourceSection({
+    super.key,
+    required this.group,
+    required this.state,
+    required this.notifier,
+  });
 
-  final String name;
+  final BriefingGroup group;
+  final MorningBriefingState state;
+  final MorningBriefingNotifier notifier;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 16, bottom: 8),
-      child: Row(
-        children: [
-          Container(width: 3, height: 18, color: LifeOSColors.teal),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              name,
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
-            ),
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+    final translating = state.isTranslatingSource(group.sourceName);
+    return Card(
+      margin: const EdgeInsets.only(top: 8, bottom: 4),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        // Drop the ExpansionTile's default divider lines for a cleaner card.
+        data: theme.copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          // Collapsed by default; expansion state is kept per screen session.
+          initiallyExpanded: false,
+          maintainState: true,
+          leading: Container(width: 3, height: 20, color: LifeOSColors.teal),
+          title: Text(
+            '${group.sourceName} (${group.articles.length})',
+            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
-        ],
+          onExpansionChanged: (expanded) {
+            if (expanded) notifier.translateSource(group.sourceName);
+          },
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          children: [
+            if (translating)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(l10n.briefingTranslating, style: theme.textTheme.bodySmall),
+                  ],
+                ),
+              ),
+            for (final article in group.articles)
+              _ArticleCard(
+                key: ValueKey(article.key),
+                article: article,
+                isSummarizing: state.isSummarizingArticle(article.key),
+                summaryError: state.articleErrors[article.key],
+                isSummarizingComments: state.isSummarizingComments(article.key),
+                commentsError: state.commentErrors[article.key],
+                onRequestSummary: () => notifier.summarizeArticle(article),
+                onRequestComments: () => notifier.summarizeComments(article),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -317,7 +355,7 @@ class _ArticleCardState extends State<_ArticleCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(article.title, style: textTheme.titleMedium),
+            Text(article.displayTitle, style: textTheme.titleMedium),
             if (article.publishedAt != null) ...[
               const SizedBox(height: 4),
               Text(
@@ -325,10 +363,19 @@ class _ArticleCardState extends State<_ArticleCard> {
                 style: textTheme.labelSmall?.copyWith(color: Theme.of(context).hintColor),
               ),
             ],
-            if (article.description.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(article.description, style: textTheme.bodyMedium),
-            ],
+            const SizedBox(height: 8),
+            if (article.displayDescription.isNotEmpty)
+              Text(article.displayDescription, style: textTheme.bodyMedium)
+            else
+              // No feed brief (e.g. Hugging Face Blog, Hacker News): a subtle
+              // hint instead of an empty box.
+              Text(
+                l10n.briefingNoSummaryHint,
+                style: textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).hintColor,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
             if (article.url.isNotEmpty) ...[
               const SizedBox(height: 12),
               InkWell(
