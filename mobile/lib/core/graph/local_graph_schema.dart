@@ -27,8 +27,18 @@ library;
 
 import 'package:sqflite_sqlcipher/sqflite.dart';
 
-/// Bumped when the DDL below changes; drives `onUpgrade` migrations.
-const int kLocalGraphSchemaVersion = 1;
+/// Current on-disk schema version. Bumped for EVERY schema change; drives the
+/// `onCreate`/`onUpgrade` migration framework in `local_graph_migrations.dart`.
+///
+/// MIGRATION DISCIPLINE (data-safety-critical — the app auto-updates via OTA):
+///   Do NOT edit the v1 DDL below to add new columns/tables. That DDL is the
+///   FROZEN v1 base every installed device started from. To change the schema:
+///     1. Append ONE additive step to `kGraphMigrations` (ADD COLUMN / CREATE
+///        TABLE / CREATE INDEX / backfill — NEVER DROP/DELETE/TRUNCATE/rename).
+///     2. Bump this constant.
+///     3. Add a vN→vN+1 data-survival test.
+///   See `MIGRATIONS.md` next to this file for the full protocol.
+const int kLocalGraphSchemaVersion = 2;
 
 const String kNodesTable = 'nodes';
 const String kEdgesTable = 'edges';
@@ -79,9 +89,14 @@ const List<String> _indexes = <String>[
   'CREATE INDEX IF NOT EXISTS idx_edges_deleted   ON $kEdgesTable(deleted_at)',
 ];
 
-/// Materialise the full core-graph schema on a freshly-opened database.
+/// Materialise the FROZEN v1 base schema. This is the historical starting
+/// point of every device that ever installed the app; it must NEVER be edited
+/// to add v2+ columns/tables — those go through `kGraphMigrations` instead.
+/// Fresh installs get the latest schema via `createLatestGraphSchema` (base +
+/// migrations), so callers should prefer that; this remains public for the
+/// store unit tests that exercise the v1 shape directly.
 /// Idempotent (`IF NOT EXISTS` throughout) so it is safe to call on every
-/// open as a belt-and-braces guard, not only in `onCreate`.
+/// open as a belt-and-braces guard.
 Future<void> applyLocalGraphSchema(DatabaseExecutor db) async {
   await db.execute(_createNodesTable);
   await db.execute(_createEdgesTable);
