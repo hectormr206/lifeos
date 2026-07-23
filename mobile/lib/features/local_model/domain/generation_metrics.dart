@@ -25,6 +25,7 @@ class GenerationMetrics {
     required this.backend,
     required this.modelId,
     this.ttftMs,
+    this.decodeTokensPerSec,
     this.tokensApproximate = false,
   });
 
@@ -45,14 +46,37 @@ class GenerationMetrics {
   /// report one (never fabricated).
   final int? ttftMs;
 
+  /// The runtime's OWN average decode speed in tokens/second (flutter_gemma's
+  /// native `SessionMetrics.tokensPerSecond`), or null when it did not report
+  /// one. This is the TRUE decode rate — it excludes session init, prefill, and
+  /// time-to-first-token — so [tokensPerSec] prefers it over any wall-clock
+  /// estimate. Never fabricated.
+  final double? decodeTokensPerSec;
+
   /// True when [tokensOut] is a character-heuristic estimate rather than a
   /// native token count — surfaced in the UI so the number is not mistaken for
   /// an exact measurement.
   final bool tokensApproximate;
 
-  /// Generation speed in tokens per (wall-clock) second — the headline metric.
-  /// Zero when [totalMs] is zero (guards div-by-zero on a sub-millisecond run).
-  double get tokensPerSec => totalMs > 0 ? tokensOut * 1000 / totalMs : 0;
+  /// Generation speed in tokens per second — the headline metric.
+  ///
+  /// PREFERS the runtime's native decode rate ([decodeTokensPerSec]) when it is
+  /// present: that is the true decode throughput and is NOT diluted by session
+  /// init, prefill, or TTFT. When the runtime reports no decode rate, it falls
+  /// back to a wall-clock estimate that STILL excludes the prefill/TTFT window
+  /// (`tokensOut / ((totalMs - ttftMs) / 1000)`), never the raw
+  /// `tokensOut / totalMs` (which counts init+prefill+TTFT as if it were decode
+  /// and reads far too low). Zero when there is no positive decode window to
+  /// divide by (guards div-by-zero on a sub-millisecond run).
+  double get tokensPerSec {
+    final native = decodeTokensPerSec;
+    if (native != null && native > 0) return native;
+    // Exclude the prefill/TTFT window from the denominator so the fallback
+    // reflects decode speed, not end-to-end latency. A null TTFT contributes 0.
+    final decodeMs = totalMs - (ttftMs ?? 0);
+    if (decodeMs <= 0) return 0;
+    return tokensOut * 1000 / decodeMs;
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -62,11 +86,12 @@ class GenerationMetrics {
       other.backend == backend &&
       other.modelId == modelId &&
       other.ttftMs == ttftMs &&
+      other.decodeTokensPerSec == decodeTokensPerSec &&
       other.tokensApproximate == tokensApproximate;
 
   @override
-  int get hashCode =>
-      Object.hash(totalMs, tokensOut, backend, modelId, ttftMs, tokensApproximate);
+  int get hashCode => Object.hash(
+      totalMs, tokensOut, backend, modelId, ttftMs, decodeTokensPerSec, tokensApproximate);
 
   @override
   String toString() => 'GenerationMetrics(totalMs: $totalMs, tokensOut: $tokensOut, '

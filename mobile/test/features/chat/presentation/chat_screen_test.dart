@@ -222,7 +222,12 @@ void main() {
     expect(find.text('Transcripción pendiente (STT)'), findsNothing);
   });
 
-  testWidgets('pointer-cancel always ends the recording (regression: no stuck recording)', (tester) async {
+  testWidgets('pointer-cancel of a real (non-slid) recording keeps the note (no stuck recording, no drop)',
+      (tester) async {
+    // FIX 2: a pointer-cancel that steals the gesture (scroll/rebuild/system)
+    // during a REAL recording must NOT silently drop the note — only an
+    // intentional slide-to-cancel discards. The recording is still torn down
+    // (never stuck), but the take is finalized into a bubble.
     final recorder = FakeAudioRecorderGateway();
 
     await _pumpScreen(
@@ -239,16 +244,81 @@ void main() {
     final gesture = await tester.startGesture(tester.getCenter(find.byIcon(Icons.mic)));
     await tester.pump(const Duration(milliseconds: 400)); // hold fires → recording
     await tester.pump();
-    // The gesture is stolen (scroll/rebuild/system) → pointer-cancel.
+    // The gesture is stolen (scroll/rebuild/system) → pointer-cancel, no slide.
     await gesture.cancel();
     await tester.pump();
     await tester.pump();
 
-    // Recording is torn down (discarded), never left hanging.
+    // Recording ended (not stuck) AND the note was preserved.
     expect(recorder.startCount, 1);
+    expect(recorder.stopCount, 1, reason: 'a non-slid take is finalized, not discarded');
+    expect(recorder.cancelCount, 0);
+    expect(find.text('Transcripción pendiente (STT)'), findsOneWidget);
+    // The recording UI is gone (indicator no longer shown).
+    expect(find.text('Desliza para cancelar'), findsNothing);
+  });
+
+  testWidgets('pointer-cancel AFTER sliding to cancel still discards the recording', (tester) async {
+    final recorder = FakeAudioRecorderGateway();
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          audioRecorderGatewayProvider.overrideWithValue(recorder),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final start = tester.getCenter(find.byIcon(Icons.mic));
+    final gesture = await tester.startGesture(start);
+    await tester.pump(const Duration(milliseconds: 400)); // hold fires → recording
+    await tester.pump();
+    // Slide past the cancel threshold FIRST, then the gesture is stolen.
+    await gesture.moveTo(start - const Offset(160, 0));
+    await tester.pump();
+    await gesture.cancel();
+    await tester.pump();
+    await tester.pump();
+
+    // Intentional slide-to-cancel wins → discarded, no bubble.
     expect(recorder.cancelCount, 1);
     expect(recorder.stopCount, 0);
     expect(find.text('Transcripción pendiente (STT)'), findsNothing);
+  });
+
+  testWidgets('a short/empty take (recorder.stop returns null) STILL drops a voice-note bubble', (tester) async {
+    // FIX 2: a very short recording yields a null path from stop(); the note
+    // must not vanish — the bubble (and Axi's canned reply) still appear.
+    final recorder = FakeAudioRecorderGateway(stopReturnsNull: true);
+
+    await _pumpScreen(
+      tester,
+      ProviderScope(
+        overrides: [
+          chatRepositoryProvider.overrideWithValue(_FakeChatRepository()),
+          audioRecorderGatewayProvider.overrideWithValue(recorder),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final gesture = await tester.startGesture(tester.getCenter(find.byIcon(Icons.mic)));
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    await tester.pump();
+
+    expect(recorder.startCount, 1);
+    expect(recorder.stopCount, 1);
+    expect(recorder.cancelCount, 0);
+    // The note still appeared despite the null path.
+    expect(find.text('Transcripción pendiente (STT)'), findsOneWidget);
+    // Axi's canned reply is present too.
+    expect(find.textContaining('notas de voz'), findsOneWidget);
   });
 
   testWidgets('a quick tap on the mic records nothing and shows the hold hint', (tester) async {
@@ -341,8 +411,9 @@ void main() {
     await tester.tap(find.byIcon(Icons.send));
     await tester.pumpAndSettle();
 
-    // Compact always-visible line: 40 tokens / 2.0 s → 20 tok/s.
-    expect(find.textContaining('20 tok/s'), findsOneWidget);
+    // Compact always-visible line: 40 tokens over the 1.85 s decode window
+    // (2.0 s total minus the 150 ms TTFT/prefill) → 22 tok/s.
+    expect(find.textContaining('22 tok/s'), findsOneWidget);
     expect(find.byIcon(Icons.bar_chart), findsOneWidget);
 
     // The stats button opens a modal with the full breakdown.

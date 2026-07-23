@@ -238,9 +238,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
     if (_recording) {
-      _finishRecording(cancel: true);
+      // A pointer-cancel on a REAL recording (arena stole the gesture, rebuild,
+      // OS) must NOT silently drop the note — only an intentional slide-to-
+      // cancel does. Honor the user's slide intent ([_willCancel]); otherwise
+      // finalize the take so its bubble + Axi's reply still appear.
+      _finishRecording(cancel: _willCancel);
     } else {
-      _releaseCancel = true;
+      // Start still in flight: remember the slide intent, not a forced discard.
+      _releaseCancel = _willCancel;
     }
   }
 
@@ -309,8 +314,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       await recorder.cancel();
       return;
     }
+    // A short/empty take makes `stop()` return null. We STILL append the note
+    // (with a null clip) so the voice bubble + Axi's canned reply always appear
+    // — a real recording must never silently vanish. Only an intentional slide-
+    // to-cancel (handled above via `cancel`) discards a take.
     final path = await recorder.stop();
-    if (path == null) return;
     ref.read(chatNotifierProvider.notifier).addVoiceNote(path, duration);
   }
 
@@ -388,11 +396,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Widget _buildInputBar(BuildContext context, bool sending) {
     final scheme = Theme.of(context).colorScheme;
-    // NOTE: the mic [GestureDetector] MUST stay mounted while recording — if it
-    // were swapped out when `_recording` flips true, the in-flight long-press
-    // recognizer would be disposed and the finger-release would never fire
-    // `onLongPressEnd` (recording would never stop). So only the middle section
-    // (text field ↔ recording indicator) swaps; the mic stays put.
+    // NOTE: the mic [Listener] MUST stay mounted while recording — if it were
+    // swapped out when `_recording` flips true, the in-flight pointer capture
+    // would be lost and the finger-release would never end the recording. The
+    // text field also stays mounted (see the Expanded below): the recording
+    // indicator is overlaid on top of it rather than replacing it, so focus and
+    // the keyboard survive and the bar never jumps out from under the finger.
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
       child: Row(
@@ -404,7 +413,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             onPressed: (sending || _recording) ? null : _openAttachSheet,
           ),
           Expanded(
-            child: _recording ? _recordingIndicator(context) : _textFieldFor(scheme),
+            // The text field stays MOUNTED while recording, with the recording
+            // indicator drawn ON TOP of it (not swapping it out). Swapping it
+            // out unfocused the field, which dismissed the keyboard and shifted
+            // the whole input bar — and the mic — DOWNWARD, out from under the
+            // user's finger mid-press. Keeping the field mounted preserves focus
+            // and the keyboard state, so the layout never jumps when recording
+            // begins. The overlay is opaque and ignores pointers (the record
+            // gesture is captured by the mic [Listener], so slide-to-cancel is
+            // unaffected).
+            child: Stack(
+              children: [
+                _textFieldFor(scheme),
+                if (_recording)
+                  Positioned.fill(
+                    child: AbsorbPointer(child: _recordingIndicator(context)),
+                  ),
+              ],
+            ),
           ),
           const SizedBox(width: 4),
           // Press-and-hold to record a voice note (WhatsApp-style). A raw

@@ -56,6 +56,41 @@ class _FakeChatRepository implements ChatRepository {
   }
 }
 
+/// A repository that tags each reply with the order it was called and asserts
+/// how many sends are in flight at once, so a test can prove the FIFO queue
+/// runs generations strictly one at a time (never concurrently).
+class _OrderTrackingRepository implements ChatRepository {
+  int _calls = 0;
+  int active = 0;
+  int maxConcurrent = 0;
+  final List<String> order = [];
+
+  Future<ChatMessage> _run(String tag) async {
+    active++;
+    if (active > maxConcurrent) maxConcurrent = active;
+    order.add(tag);
+    // Yield so a broken (concurrent) implementation would overlap here. A
+    // microtask (not a `Future.delayed` timer): under `pumpAndSettle` a bare
+    // zero-duration timer parks the drain with NO frame scheduled, so the pump
+    // loop exits early and a following `Future.wait` hangs on the unfired
+    // timer. A microtask is flushed within the pump, so the drain keeps
+    // scheduling frames and settles deterministically.
+    await Future<void>.microtask(() {});
+    active--;
+    final n = ++_calls;
+    return ChatMessage(id: 'axi-$n', role: ChatRole.axi, text: 'reply-$tag', timestamp: DateTime.now());
+  }
+
+  @override
+  Future<List<ChatMessage>> loadHistory() async => const [];
+
+  @override
+  Future<ChatMessage> sendMessage(String text) => _run(text);
+
+  @override
+  Future<ChatMessage> sendImages(String text, List<Uint8List> images) => _run('img:$text');
+}
+
 void main() {
   group('ChatNotifier', () {
     testWidgets('loadHistory populates the conversation on init', (tester) async {
@@ -313,6 +348,92 @@ void main() {
       await future;
 
       expect(container.read(chatNotifierProvider).messages[1].metrics, metrics);
+    });
+
+    testWidgets('FIFO queue: several rapid sends are answered in order, never concurrently',
+        (tester) async {
+      final repo = _OrderTrackingRepository();
+      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      // Fire three sends back-to-back WITHOUT awaiting — mimics a user (or the
+      // keyboard `onSubmitted` path) firing several before the first finishes.
+      final f1 = notifier.sendMessage('uno');
+      final f2 = notifier.sendMessage('dos');
+      final f3 = notifier.sendImages([Uint8List.fromList([1])], caption: 'tres');
+
+      // All three user bubbles appear immediately (optimistic), sending is true.
+      expect(container.read(chatNotifierProvider).messages.length, 3);
+      expect(container.read(chatNotifierProvider).sending, isTrue);
+
+      await tester.pumpAndSettle();
+      await Future.wait([f1, f2, f3]);
+
+      // Exactly one generation ran at a time.
+      expect(repo.maxConcurrent, 1, reason: 'the single on-device session must never run two calls at once');
+      // And they ran in the order they were fired.
+      expect(repo.order, ['uno', 'dos', 'img:tres']);
+
+      // Final transcript: the three user bubbles were appended optimistically
+      // up front (all three sends fire before the queue drains), then Axi's
+      // replies stream in one at a time, IN ORDER. That order — every user
+      // message, then each reply as its turn completes — is the WhatsApp-style
+      // behaviour: your messages show immediately, answers arrive as generated.
+      final texts = container.read(chatNotifierProvider).messages.map((m) => m.text).toList();
+      expect(texts, ['uno', 'dos', 'tres', 'reply-uno', 'reply-dos', 'reply-img:tres']);
+      // Queue drained → indicator gone.
+      expect(container.read(chatNotifierProvider).sending, isFalse);
+    });
+
+    testWidgets('the keyboard-send path enqueues rather than starting a concurrent generation',
+        (tester) async {
+      // Guards the FIX 3 immediate-safety requirement: a second send arriving
+      // while one is in flight (the unguarded `onSubmitted` case) must queue,
+      // not overlap. We start one delayed send, then fire another before it
+      // resolves, and prove the second only reaches the repo after the first.
+      final delay = Completer<void>();
+      final repo = _FakeChatRepository(
+        sendResult: ChatMessage(id: 'a', role: ChatRole.axi, text: 'ok', timestamp: DateTime.now()),
+        sendDelay: delay,
+      );
+      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      notifier.sendMessage('primero');
+      notifier.sendMessage('segundo'); // arrives while the first is queued/running
+      await tester.pump(); // first item hands off to the (delayed) repo
+      expect(repo.sendCalls, 1, reason: 'only the head of the queue may be in flight');
+
+      delay.complete();
+      await tester.pumpAndSettle();
+      // Second was processed only after the first completed → 2 total, no overlap.
+      expect(repo.sendCalls, 2);
+    });
+
+    testWidgets('addVoiceNote with a null path (short/empty take) STILL appends the bubble + reply',
+        (tester) async {
+      // FIX 2: a very short recording makes recorder.stop() return null. The
+      // note must not silently vanish — the voice bubble and canned Axi reply
+      // still appear; the clip is just absent.
+      final repo = _FakeChatRepository();
+      final container = ProviderContainer(overrides: [chatRepositoryProvider.overrideWithValue(repo)]);
+      addTearDown(container.dispose);
+      final notifier = container.read(chatNotifierProvider.notifier);
+      await notifier.ready;
+
+      notifier.addVoiceNote(null, Duration.zero);
+
+      final state = container.read(chatNotifierProvider);
+      expect(state.messages.length, 2);
+      expect(state.messages[0].kind, ChatMessageKind.voice);
+      expect(state.messages[0].audioPath, isNull);
+      expect(state.messages[1].role, ChatRole.axi);
+      expect(state.messages[1].text, ChatNotifier.voiceNotePlaceholderReply);
+      expect(state.sending, isFalse);
     });
 
     testWidgets('addVoiceNote appends a local voice bubble plus a canned Axi reply, no send', (tester) async {

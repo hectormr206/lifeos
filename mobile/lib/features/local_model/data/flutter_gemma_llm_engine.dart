@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_gemma_litertlm/flutter_gemma_litertlm.dart';
 
@@ -43,6 +44,26 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
 
   final LocalModelConfig _config;
   final Future<void> Function() _initializer;
+
+  /// Special/control tokens that LiteRT-LM can DETOKENIZE to literal text on the
+  /// Android FFI path (e.g. a sampled `<pad>` surfacing as the literal string
+  /// `<pad>`, which the flatter vision logits under a high temperature make
+  /// especially likely). None of these are ever meant to reach the user, so we
+  /// scrub them out of the model's text before it is shown. Matches Gemma's
+  /// special-token vocabulary: pad/eos/bos/turn markers and the reserved
+  /// `<unusedN>` slots.
+  static final RegExp _specialToken =
+      RegExp(r'<(pad|eos|bos|end_of_turn|start_of_turn|unused\d*)>');
+
+  /// Removes any [_specialToken] literals from [s]. Applied both per streamed
+  /// fragment (so a token wholly inside one chunk is caught) and on the final
+  /// accumulated string (so a `<pad>` split across two chunks is still caught).
+  static String _stripSpecialTokens(String s) => s.replaceAll(_specialToken, '');
+
+  /// Test-only view of [_stripSpecialTokens] so the scrub contract (e.g. `<pad>`
+  /// removed, legitimate text/whitespace preserved) can be asserted directly.
+  @visibleForTesting
+  static String stripSpecialTokensForTest(String s) => _stripSpecialTokens(s);
 
   Future<void>? _initFuture;
   InferenceModel? _model;
@@ -164,14 +185,18 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     final response = await chat.generateChatResponse();
     stopwatch.stop();
     final text = switch (response) {
-      TextResponse(:final token) => token,
+      // Strip control tokens (e.g. a detokenized "<pad>") from the fragment as
+      // it is accumulated, then trim the final result once below.
+      TextResponse(:final token) => _stripSpecialTokens(token),
       // Tools are not enabled this slice, so only TextResponse is expected;
       // anything else degrades to empty rather than crashing the chat.
       _ => '',
     };
+    // Final scrub catches any special token that was split across chunks.
+    final cleaned = _stripSpecialTokens(text);
     return GenerationResult(
-      text: text,
-      metrics: _metricsFor(chat, text, stopwatch.elapsedMilliseconds),
+      text: cleaned,
+      metrics: _metricsFor(chat, cleaned, stopwatch.elapsedMilliseconds),
     );
   }
 
@@ -198,13 +223,17 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       maxOutputTokens: _config.maxOutputTokens,
       modelType: ModelType.gemma4,
       supportImage: true,
-      // Same Gemma-recommended sampling as the text path (see [generate]). The
-      // vision path is where the default `topK: 1` greedy loop was most severe,
-      // so this is what actually fixes the "well well well…" repetition on
-      // image replies. Seed varied per call for non-deterministic output.
-      temperature: 1.0,
-      topK: 64,
-      topP: 0.95,
+      // The vision path uses TIGHTER sampling than the text path (which stays at
+      // 1.0/64/0.95, see [generate]). The image logits are flatter, so the
+      // greedy `topK: 1` default still needs overriding to avoid the "well
+      // well…" repetition loop, but the higher temperature also samples
+      // control tokens like `<pad>` far too readily — surfacing as literal
+      // "<pad><pad>…" text. Lowering to 0.7/40/0.9 keeps replies varied while
+      // sharply cutting the odds of sampling a special token. The two paths
+      // intentionally differ. Seed varied per call for non-deterministic output.
+      temperature: 0.7,
+      topK: 40,
+      topP: 0.9,
       randomSeed: DateTime.now().millisecondsSinceEpoch & 0x7fffffff,
     );
     await chat.addQueryChunk(
@@ -213,12 +242,15 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     final response = await chat.generateChatResponse();
     stopwatch.stop();
     final text = switch (response) {
-      TextResponse(:final token) => token,
+      // Same special-token scrub as the text path — this is the SAFETY NET that
+      // catches a detokenized "<pad>" even if sampling still produces one.
+      TextResponse(:final token) => _stripSpecialTokens(token),
       _ => '',
     };
+    final cleaned = _stripSpecialTokens(text);
     return GenerationResult(
-      text: text,
-      metrics: _metricsFor(chat, text, stopwatch.elapsedMilliseconds),
+      text: cleaned,
+      metrics: _metricsFor(chat, cleaned, stopwatch.elapsedMilliseconds),
     );
   }
 
@@ -231,6 +263,7 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     var tokensOut = _estimateTokens(text);
     var approximate = true;
     int? ttftMs;
+    double? decodeTokensPerSec;
     try {
       final native = chat.session.getSessionMetrics();
       if (native.outputTokens > 0) {
@@ -239,9 +272,15 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       }
       final ttft = native.timeToFirstTokenMs;
       if (ttft != null && ttft > 0) ttftMs = ttft.round();
+      // The runtime's OWN average decode speed (flutter_gemma 1.3.1
+      // SessionMetrics.tokensPerSecond, a double). This is the true decode rate
+      // — it excludes init/prefill/TTFT — so GenerationMetrics prefers it over
+      // any wall-clock derivation. Null/zero when the runtime did not report it.
+      final tps = native.tokensPerSecond;
+      if (tps != null && tps > 0) decodeTokensPerSec = tps;
     } catch (_) {
       // Runtime did not expose metrics (non-FFI / not loaded) — keep the
-      // heuristic estimate; never invent a token count or TTFT.
+      // heuristic estimate; never invent a token count, TTFT, or decode rate.
     }
     return GenerationMetrics(
       totalMs: totalMs,
@@ -249,6 +288,7 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       backend: _loadedBackend ?? _config.backend,
       modelId: _config.modelId,
       ttftMs: ttftMs,
+      decodeTokensPerSec: decodeTokensPerSec,
       tokensApproximate: approximate,
     );
   }

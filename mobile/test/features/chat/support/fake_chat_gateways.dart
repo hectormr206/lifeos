@@ -25,10 +25,16 @@ class FakeImagePickerGateway implements ImagePickerGateway {
 /// In-memory [AudioRecorderGateway] — no microphone. Scriptable permission,
 /// counts start/stop/cancel so the press-and-hold flow is host-testable.
 class FakeAudioRecorderGateway implements AudioRecorderGateway {
-  FakeAudioRecorderGateway({this.permission = true, this.path = '/tmp/fake-voice.m4a'});
+  FakeAudioRecorderGateway({
+    this.permission = true,
+    this.path = '/tmp/fake-voice.m4a',
+    this.stopReturnsNull = false,
+  });
 
   bool permission;
   String path;
+  // Simulates a very short/empty take: recorder.stop() yields no file (null).
+  bool stopReturnsNull;
 
   int startCount = 0;
   int stopCount = 0;
@@ -49,7 +55,7 @@ class FakeAudioRecorderGateway implements AudioRecorderGateway {
   Future<String?> stop() async {
     stopCount++;
     _recording = false;
-    return path;
+    return stopReturnsNull ? null : path;
   }
 
   @override
