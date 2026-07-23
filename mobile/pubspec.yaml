@@ -115,6 +115,21 @@ dependencies:
   record: ^7.1.1
   audioplayers: ^6.8.1
 
+  # On-device encrypted graph store (roadmap SLICE A2): the local
+  # property-graph (nodes + edges) that backs memory, RAG, domains, the graph
+  # browser, and future sync. Ported from axi/src/axi/store.py's SQLCipher
+  # property-graph. sqflite_sqlcipher (not plain sqflite) so the DB file is
+  # AES-256 encrypted at rest with a per-install key held in
+  # flutter_secure_storage. Raw-SQL surface mirrors store.py 1:1; host unit
+  # tests run on the standard sqlite backend via sqflite_common_ffi (dev dep).
+  sqflite_sqlcipher: ^3.1.0
+
+  # RFC-4122 v4 UUIDs for the graph store's sync-forward `uuid` primary sync
+  # id (roadmap SLICE A2 / PRD D1). Every node/edge gets a globally-unique id
+  # at creation so later sync can merge two devices' graphs without an id
+  # rewrite. Already resolved transitively; made direct because we mint them.
+  uuid: ^4.5.3
+
   # "Axi habla" (speak-aloud): reads an assistant reply out loud using the
   # device's built-in OS text-to-speech voices. This is the INTERIM engine —
   # it lives behind TextToSpeechGateway (features/chat/domain) so a future
@@ -132,6 +147,15 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+  # Host-side (no device/emulator) unit tests for the on-device graph store
+  # (roadmap SLICE A2). Opens a real in-memory sqlite via dart:ffi on the test
+  # VM so the repository's SQL runs exactly as on-device — minus SQLCipher,
+  # which needs the native encrypted lib only present on a real device. The
+  # keyed-open encryption path is documented + guarded, core logic is proven
+  # against real sqlite here. Same standard-sqlite-in-test tradeoff store.py's
+  # own suite makes.
+  sqflite_common_ffi: ^2.3.3
 
   # Generates the Android launcher icons (all mipmap densities + adaptive
   # icon) from the Axi axolotl mark. App-shell slice. Run with:
