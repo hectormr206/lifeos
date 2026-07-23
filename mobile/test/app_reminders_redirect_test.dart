@@ -1,5 +1,7 @@
-// Proves /reminders is gated behind pairing (spec mobile-app-shell), same
-// pattern as /chat and /domains.
+// Roadmap slice C2 changed the contract: /reminders is NO LONGER pairing-gated
+// (local on-device reminders must work with no engine), so both paired and
+// unpaired navigation render the Recordatorios screen with its two tabs.
+// (Previously this file asserted the old redirect-to-connection behavior.)
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/app.dart';
@@ -19,20 +21,29 @@ class _FakeRemindersRepository implements RemindersRepository {
   Future<void> cancel(String id) async {}
 }
 
+Future<void> _pumpAppAndGo(WidgetTester tester, ProviderContainer container) async {
+  await tester.pumpWidget(UncontrolledProviderScope(container: container, child: const LifeOSApp()));
+  await tester.pump();
+  container.read(goRouterProvider).go('/reminders');
+  // Bounded pumps instead of pumpAndSettle: the local tab shows an ongoing
+  // loading spinner while the (never-resolving in tests) graph store opens.
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 300));
+}
+
 void main() {
-  testWidgets('unpaired: navigating to /reminders redirects to the connection screen', (tester) async {
+  testWidgets('unpaired: /reminders renders the reminders screen (local tab, ungated)', (tester) async {
     final container = ProviderContainer(overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())]);
     addTearDown(container.dispose);
-    await tester.pumpWidget(UncontrolledProviderScope(container: container, child: const LifeOSApp()));
-    await tester.pump();
 
-    container.read(goRouterProvider).go('/reminders');
-    await tester.pumpAndSettle();
+    await _pumpAppAndGo(tester, container);
 
-    expect(find.text('Conexión'), findsOneWidget);
+    expect(find.text('Recordatorios'), findsOneWidget);
+    expect(find.text('En este teléfono'), findsOneWidget);
+    expect(find.text('Desde tu laptop'), findsOneWidget);
   });
 
-  testWidgets('paired: navigating to /reminders renders the reminders screen', (tester) async {
+  testWidgets('paired: /reminders renders the reminders screen', (tester) async {
     final store = FakeTokenStore(
       const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
     );
@@ -41,13 +52,10 @@ void main() {
       remindersRepositoryProvider.overrideWithValue(_FakeRemindersRepository()),
     ]);
     addTearDown(container.dispose);
-    await tester.pumpWidget(UncontrolledProviderScope(container: container, child: const LifeOSApp()));
-    await tester.pump();
-    await tester.pump();
 
-    container.read(goRouterProvider).go('/reminders');
-    await tester.pumpAndSettle();
+    await _pumpAppAndGo(tester, container);
 
     expect(find.text('Recordatorios'), findsOneWidget);
+    expect(find.text('En este teléfono'), findsOneWidget);
   });
 }
