@@ -82,6 +82,16 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/permissions'),
           ),
+          // ON-DEVICE memory browser (roadmap SLICE C5). Offline-reachable, not
+          // pairing-gated — reads the local encrypted graph store.
+          // TODO(i18n): hardcoded neutral Spanish pending the i18n sweep.
+          ListTile(
+            leading: const Icon(Icons.hub_outlined),
+            title: const Text('Mi memoria'),
+            subtitle: const Text('Explora lo que Axi recuerda en este dispositivo'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/graph'),
+          ),
           ListTile(
             enabled: false,
             leading: const Icon(Icons.mic_none_outlined),

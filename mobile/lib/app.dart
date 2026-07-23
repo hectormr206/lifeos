@@ -22,6 +22,8 @@ import 'features/domains/presentation/domain_list_screen.dart';
 import 'features/domains/presentation/domains_hub_screen.dart';
 import 'features/graph/presentation/graph_browser_screen.dart';
 import 'features/graph/presentation/graph_node_screen.dart';
+import 'features/graph/presentation/local_graph_browser_screen.dart';
+import 'features/graph/presentation/local_graph_node_screen.dart';
 import 'features/home/presentation/home_screen.dart';
 import 'features/insights/presentation/insights_screen.dart';
 import 'features/local_model/presentation/local_model_providers.dart';
@@ -164,6 +166,15 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Permissions management. Not pairing-gated (works offline, mirrors the
       // appearance/about surfaces).
       GoRoute(path: '/settings/permissions', builder: (context, state) => const PermissionsScreen()),
+      // ON-DEVICE memory browser (roadmap SLICE C5). Under `/settings/…` so it
+      // is NOT pairing-gated (no gate entry matches this sub-path): it reads the
+      // local encrypted graph store and works fully offline/unpaired. Distinct
+      // from the pairing-gated engine browser at `/graph` below.
+      GoRoute(path: '/settings/graph', builder: (context, state) => const LocalGraphBrowserScreen()),
+      GoRoute(
+        path: '/settings/graph/:uuid',
+        builder: (context, state) => LocalGraphNodeScreen(nodeUuid: state.pathParameters['uuid']!),
+      ),
       GoRoute(path: '/graph', builder: (context, state) => const GraphBrowserScreen()),
       GoRoute(
         path: '/graph/:id',
