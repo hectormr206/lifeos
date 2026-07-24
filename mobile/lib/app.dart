@@ -50,6 +50,8 @@ import 'features/permissions/presentation/permissions_screen.dart';
 import 'features/reminders/data/reminder_notifications.dart';
 import 'features/reminders/presentation/local_reminders_providers.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
+import 'features/security/presentation/app_lock_gate.dart';
+import 'features/security/presentation/app_lock_providers.dart';
 import 'features/settings/presentation/settings_hub_screen.dart';
 import 'features/settings/presentation/settings_screen.dart';
 import 'features/settings/presentation/timezone_settings_screen.dart';
@@ -464,6 +466,11 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
       case AppLifecycleState.detached:
         // Backgrounded/killed: stop polling so no checks run off-screen.
         _stopForegroundUpdatePolling();
+        // Optional biometric app lock: re-lock on leaving the foreground so
+        // returning requires auth again. No-op when the lock is disabled or
+        // while a biometric prompt is in flight (the guard inside
+        // onBackground() prevents the prompt's own backgrounding from looping).
+        ref.read(appLockControllerProvider.notifier).onBackground();
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
         break;
@@ -494,6 +501,10 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
       routerConfig: router,
+      // Optional biometric app lock: wrap EVERY route so the gate covers the
+      // whole app (cold start + resume). Default OFF, so this is a transparent
+      // pass-through for users who never opt in.
+      builder: (context, child) => AppLockGate(child: child ?? const SizedBox.shrink()),
     );
   }
 }

@@ -33,6 +33,12 @@
              silently drops the alarm). -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Optional biometric app lock (fingerprint / face): local_auth's Android
+         BiometricPrompt needs USE_BIOMETRIC (API 28+). With
+         AuthenticationOptions(biometricOnly = false) the OS automatically
+         offers the device credential (PIN/pattern/password) as a fallback, so
+         no separate legacy USE_FINGERPRINT is required. Opt-in, default OFF. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <application
         android:label="LifeOS"
         android:name="${applicationName}"

@@ -10,6 +10,8 @@ import '../../../theme/lifeos_theme.dart';
 import '../../../theme/theme_providers.dart';
 import '../../app_update/domain/app_version_info.dart';
 import '../../app_update/presentation/app_update_providers.dart';
+import '../../security/domain/biometric_authenticator.dart';
+import '../../security/presentation/app_lock_providers.dart';
 
 /// The Settings hub (app-shell slice) — the gear on the home screen lands
 /// here. A grouped, branded list of ALL app configuration: appearance
@@ -98,6 +100,10 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/permissions'),
           ),
+          const Divider(),
+          // Optional biometric app lock. Offline-reachable, opt-in, default OFF.
+          _SectionHeader(l10n.sectionSecurity),
+          const _AppLockTile(),
           // ON-DEVICE memory browser (roadmap SLICE C5). Offline-reachable, not
           // pairing-gated — reads the local encrypted graph store.
           // TODO(i18n): hardcoded neutral Spanish pending the i18n sweep.
@@ -149,6 +155,50 @@ class SettingsHubScreen extends ConsumerWidget {
           const _AboutTile(),
         ],
       ),
+    );
+  }
+}
+
+/// Optional biometric app-lock toggle (opt-in, default OFF).
+///
+/// Turning it ON first requires ONE successful authentication (so the user
+/// proves the device can authenticate and can never lock themselves out next
+/// launch): only a `success` confirm actually enables + persists it. A failed
+/// confirm or an unable-to-authenticate device leaves the lock OFF and explains
+/// why via a SnackBar.
+class _AppLockTile extends ConsumerWidget {
+  const _AppLockTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
+    final enabled = ref.watch(appLockEnabledProvider);
+
+    Future<void> onChanged(bool value) async {
+      final messenger = ScaffoldMessenger.of(context);
+      final notifier = ref.read(appLockControllerProvider.notifier);
+      if (value) {
+        // Enabling: require one successful confirm auth.
+        final result = await notifier.enable();
+        if (result == BiometricAuthResult.success) return;
+        messenger.showSnackBar(SnackBar(
+          content: Text(
+            result == BiometricAuthResult.unavailable
+                ? l10n.appLockUnavailableToast
+                : l10n.appLockEnableFailed,
+          ),
+        ));
+      } else {
+        await notifier.disable();
+      }
+    }
+
+    return SwitchListTile(
+      secondary: const Icon(Icons.fingerprint),
+      title: Text(l10n.appLockNavTitle),
+      subtitle: Text(l10n.appLockNavSubtitle),
+      value: enabled,
+      onChanged: onChanged,
     );
   }
 }

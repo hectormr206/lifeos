@@ -840,4 +840,38 @@ class AppLocalizationsEs extends AppLocalizations {
   String wipePartialFailure(String targets) {
     return 'Algunos datos no se pudieron borrar: $targets';
   }
+
+  @override
+  String get sectionSecurity => 'Seguridad';
+
+  @override
+  String get appLockNavTitle => 'Bloqueo con huella o rostro';
+
+  @override
+  String get appLockNavSubtitle => 'Pide tu huella o rostro para abrir la app';
+
+  @override
+  String get appLockLockedTitle => 'LifeOS está bloqueado';
+
+  @override
+  String get appLockLockedBody =>
+      'Tus datos están protegidos en este dispositivo. Verifica tu identidad para continuar.';
+
+  @override
+  String get appLockUnlockButton => 'Desbloquear';
+
+  @override
+  String get appLockUnavailableBody =>
+      'Este dispositivo ya no puede verificar tu identidad (sin huella, rostro ni PIN configurados). Desactiva el bloqueo para entrar.';
+
+  @override
+  String get appLockDisableButton => 'Desactivar bloqueo';
+
+  @override
+  String get appLockEnableFailed =>
+      'No se pudo verificar. El bloqueo sigue desactivado.';
+
+  @override
+  String get appLockUnavailableToast =>
+      'Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo.';
 }

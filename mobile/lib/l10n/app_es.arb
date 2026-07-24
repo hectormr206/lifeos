@@ -295,5 +295,16 @@
   "wipeConfirmButton": "Borrar todo",
   "wipeInProgress": "Borrando…",
   "wipeDone": "Se borraron todos tus datos en este dispositivo.",
-  "wipePartialFailure": "Algunos datos no se pudieron borrar: {targets}"
+  "wipePartialFailure": "Algunos datos no se pudieron borrar: {targets}",
+
+  "sectionSecurity": "Seguridad",
+  "appLockNavTitle": "Bloqueo con huella o rostro",
+  "appLockNavSubtitle": "Pide tu huella o rostro para abrir la app",
+  "appLockLockedTitle": "LifeOS está bloqueado",
+  "appLockLockedBody": "Tus datos están protegidos en este dispositivo. Verifica tu identidad para continuar.",
+  "appLockUnlockButton": "Desbloquear",
+  "appLockUnavailableBody": "Este dispositivo ya no puede verificar tu identidad (sin huella, rostro ni PIN configurados). Desactiva el bloqueo para entrar.",
+  "appLockDisableButton": "Desactivar bloqueo",
+  "appLockEnableFailed": "No se pudo verificar. El bloqueo sigue desactivado.",
+  "appLockUnavailableToast": "Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo."
 }

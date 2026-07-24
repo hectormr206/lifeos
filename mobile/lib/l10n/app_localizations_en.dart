@@ -833,4 +833,38 @@ class AppLocalizationsEn extends AppLocalizations {
   String wipePartialFailure(String targets) {
     return 'Some data could not be deleted: $targets';
   }
+
+  @override
+  String get sectionSecurity => 'Security';
+
+  @override
+  String get appLockNavTitle => 'Fingerprint or face lock';
+
+  @override
+  String get appLockNavSubtitle =>
+      'Ask for your fingerprint or face to open the app';
+
+  @override
+  String get appLockLockedTitle => 'LifeOS is locked';
+
+  @override
+  String get appLockLockedBody =>
+      'Your data is protected on this device. Verify your identity to continue.';
+
+  @override
+  String get appLockUnlockButton => 'Unlock';
+
+  @override
+  String get appLockUnavailableBody =>
+      'This device can no longer verify your identity (no fingerprint, face or PIN set up). Turn the lock off to get in.';
+
+  @override
+  String get appLockDisableButton => 'Turn off lock';
+
+  @override
+  String get appLockEnableFailed => 'Could not verify. The lock stays off.';
+
+  @override
+  String get appLockUnavailableToast =>
+      'Set up a fingerprint, face or PIN on your device to turn the lock on.';
 }

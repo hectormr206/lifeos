@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.9.11+1
+version: 0.9.12+1
 
 environment:
   sdk: ^3.12.2
@@ -187,6 +187,17 @@ dependencies:
   # WebView. `WebViewPlatform.instance` (re-exported here) gates usage so
   # host tests / desktop fall back cleanly to non-WebView content.
   webview_flutter: ^4.14.1
+
+  # Optional biometric app lock (fingerprint / face). All of the user's
+  # health/life data lives on-device, so app entry (cold start + resume from
+  # background) can be gated behind a device biometric — with the OS
+  # device-credential (PIN/pattern) as the automatic fallback. Opt-in,
+  # default OFF. Wrapped behind BiometricAuthenticator (features/security)
+  # so the flow is unit-testable with a fake and the plugin stays at the edge.
+  # NOTE: local_auth requires the host Activity to extend FlutterFragmentActivity
+  # (see android/.../MainActivity.kt) and the USE_BIOMETRIC permission
+  # (AndroidManifest.xml). Purely on-device: no network.
+  local_auth: ^3.0.2
 
 dev_dependencies:
   flutter_test:

@@ -334,5 +334,16 @@
   "wipePartialFailure": "Some data could not be deleted: {targets}",
   "@wipePartialFailure": {
     "placeholders": { "targets": { "type": "String" } }
-  }
+  },
+
+  "sectionSecurity": "Security",
+  "appLockNavTitle": "Fingerprint or face lock",
+  "appLockNavSubtitle": "Ask for your fingerprint or face to open the app",
+  "appLockLockedTitle": "LifeOS is locked",
+  "appLockLockedBody": "Your data is protected on this device. Verify your identity to continue.",
+  "appLockUnlockButton": "Unlock",
+  "appLockUnavailableBody": "This device can no longer verify your identity (no fingerprint, face or PIN set up). Turn the lock off to get in.",
+  "appLockDisableButton": "Turn off lock",
+  "appLockEnableFailed": "Could not verify. The lock stays off.",
+  "appLockUnavailableToast": "Set up a fingerprint, face or PIN on your device to turn the lock on."
 }

@@ -4,11 +4,18 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity() {
+// Optional biometric app lock: local_auth's Android implementation shows the
+// system BiometricPrompt, which requires the host Activity to be a
+// FragmentActivity (it attaches a fragment to run the prompt). Flutter's
+// default FlutterActivity is NOT a FragmentActivity, so we switch to
+// FlutterFragmentActivity — otherwise authenticate() throws
+// "local_auth requires activity to be a FragmentActivity" at runtime. The
+// existing dictation MethodChannel below is unchanged.
+class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

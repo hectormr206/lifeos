@@ -1609,6 +1609,66 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Some data could not be deleted: {targets}'**
   String wipePartialFailure(String targets);
+
+  /// No description provided for @sectionSecurity.
+  ///
+  /// In en, this message translates to:
+  /// **'Security'**
+  String get sectionSecurity;
+
+  /// No description provided for @appLockNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Fingerprint or face lock'**
+  String get appLockNavTitle;
+
+  /// No description provided for @appLockNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Ask for your fingerprint or face to open the app'**
+  String get appLockNavSubtitle;
+
+  /// No description provided for @appLockLockedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'LifeOS is locked'**
+  String get appLockLockedTitle;
+
+  /// No description provided for @appLockLockedBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Your data is protected on this device. Verify your identity to continue.'**
+  String get appLockLockedBody;
+
+  /// No description provided for @appLockUnlockButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlock'**
+  String get appLockUnlockButton;
+
+  /// No description provided for @appLockUnavailableBody.
+  ///
+  /// In en, this message translates to:
+  /// **'This device can no longer verify your identity (no fingerprint, face or PIN set up). Turn the lock off to get in.'**
+  String get appLockUnavailableBody;
+
+  /// No description provided for @appLockDisableButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Turn off lock'**
+  String get appLockDisableButton;
+
+  /// No description provided for @appLockEnableFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not verify. The lock stays off.'**
+  String get appLockEnableFailed;
+
+  /// No description provided for @appLockUnavailableToast.
+  ///
+  /// In en, this message translates to:
+  /// **'Set up a fingerprint, face or PIN on your device to turn the lock on.'**
+  String get appLockUnavailableToast;
 }
 
 class _AppLocalizationsDelegate
