@@ -39,11 +39,34 @@ class ApkDownloadService {
   static const String _group = 'app_updates';
   static const String _filename = 'lifeos-update.apk';
 
+  /// Fixed task id so a re-entry into the flow ATTACHES to the same background
+  /// task instead of spawning a second one. (Without a stable id every
+  /// [DownloadTask] gets a random id and the "is it already running?" check
+  /// below could never match.)
+  static const String _taskId = 'app_update_apk';
+
+  /// Broadcast stream of task updates (status + progress) coming from the
+  /// native background isolate. The app-level listener in
+  /// [AppUpdateNotifier] subscribes to this ONCE so progress and completion are
+  /// tracked independently of whichever screen is (or isn't) on top — the
+  /// download keeps flowing into state after the Updates screen is gone.
+  Stream<TaskUpdate> get updates => _downloader.updates;
+
+  /// Whether [task] is our app-update download (vs. any other group sharing the
+  /// same [FileDownloader] singleton, e.g. STT/model/voice downloads). The
+  /// listener uses this to ignore unrelated traffic.
+  bool isUpdateTask(Task task) => task.group == _group && task.taskId == _taskId;
+
   /// Build the [DownloadTask] for [manifest]: `<base>/download` with the
   /// access-key header. Exposed for testing the URL + header wiring without
   /// touching the network.
+  ///
+  /// `allowPause: true` marks the task resumable, so an interrupted/backgrounded
+  /// transfer resumes from where it left off (when the server honors range
+  /// requests) rather than restarting from zero.
   @visibleForTesting
   DownloadTask buildDownloadTask(AppManifest manifest) => DownloadTask(
+        taskId: _taskId,
         url: _joinUrl(_config.baseUrl, '/download'),
         headers: {kUpdateAccessKeyHeader: _config.accessKey},
         filename: _filename,
@@ -51,42 +74,49 @@ class ApkDownloadService {
         baseDirectory: BaseDirectory.temporary,
         directory: 'app_updates',
         updates: Updates.statusAndProgress,
+        allowPause: true,
       );
 
-  /// Download + verify the APK described by [manifest]. Emits progress in
-  /// `0.0..1.0`; returns the verified absolute file path once verification
-  /// passes. Throws [ApkDownloadException] on an unconfigured source, a failed
-  /// download, or a sha256 mismatch.
-  Future<String> downloadAndVerify(
-    AppManifest manifest, {
-    void Function(double progress)? onProgress,
-  }) async {
+  /// Start — or ATTACH to — the background download of the APK described by
+  /// [manifest]. If a task for the update is already enqueued/running/paused it
+  /// is LEFT UNTOUCHED (never reset/cancelled) and this returns `false`; the
+  /// shared [updates] listener is already carrying its progress. Otherwise a
+  /// fresh task is enqueued and this returns `true`.
+  ///
+  /// Unlike the old convenience `download(...)` call, this does NOT await the
+  /// transfer — progress and completion arrive asynchronously on [updates], so
+  /// the download outlives the caller (and the screen).
+  Future<bool> startDownload(AppManifest manifest) async {
     if (!_config.isConfigured) {
       throw ApkDownloadException('Origen de actualizaciones no configurado.');
     }
-
-    // Clear any stale/failed task record for our group first (same defensive
-    // reset the model download uses to avoid a re-attach loop).
-    try {
-      await _downloader.reset(group: _group);
-    } catch (_) {/* opportunistic */}
+    // Already in flight? Attach — do NOT reset an active/paused task (that was
+    // the bug: re-entering the flow cancelled and restarted from zero).
+    if (await _isAlreadyRunning()) return false;
 
     final task = buildDownloadTask(manifest);
-
-    final result = await _downloader.download(
-      task,
-      onProgress: (p) {
-        if (p >= 0 && onProgress != null) onProgress(p);
-      },
-    );
-    if (result.status != TaskStatus.complete) {
-      throw ApkDownloadException('La descarga no se completó (${result.status.name}).');
+    final enqueued = await _downloader.enqueue(task);
+    if (!enqueued) {
+      throw ApkDownloadException('No se pudo iniciar la descarga.');
     }
-
-    final path = await task.filePath();
-    await verifyApk(path, manifest.sha256);
-    return path;
+    return true;
   }
+
+  /// True when our update task is already known to the native downloader
+  /// (enqueued, running, paused, or waiting to retry).
+  Future<bool> _isAlreadyRunning() async {
+    try {
+      final tasks = await _downloader.allTasks(group: _group);
+      return tasks.any((t) => t.taskId == _taskId);
+    } catch (_) {
+      // No platform channel / probe failure — treat as "not running" so a
+      // fresh enqueue can proceed rather than wedging the flow.
+      return false;
+    }
+  }
+
+  /// Absolute path the APK lands at (once complete) for verification + install.
+  Future<String> apkFilePath(AppManifest manifest) => buildDownloadTask(manifest).filePath();
 
   /// Verify the file at [path] has SHA-256 == [expectedSha256]. Deletes the
   /// file and throws [ApkDownloadException] on mismatch or a read failure.

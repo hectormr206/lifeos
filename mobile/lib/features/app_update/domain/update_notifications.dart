@@ -9,6 +9,12 @@ abstract class UpdateNotifications {
   /// Show "Nueva versión de LifeOS disponible" for [versionName].
   Future<void> showUpdateAvailable(String versionName);
 
+  /// Show "La actualización está lista para instalar" for [versionName], posted
+  /// when the background APK download has finished + verified. Tapping it routes
+  /// to the updates screen (same payload as [showUpdateAvailable]) where the
+  /// user taps to install.
+  Future<void> showUpdateReady(String versionName);
+
   /// Register the callback fired when the user taps the update notification
   /// while the app is running (foreground or backgrounded). Initializes the
   /// plugin with the tap handler so a tap deep-links to the updates screen
@@ -38,6 +44,9 @@ class FlutterLocalUpdateNotifications implements UpdateNotifications {
   final AppNotifications _notifications;
 
   static const int _notificationId = 4210;
+  // Distinct id from the "available" notification so a "ready to install" alert
+  // is its own entry (the "available" one may have been dismissed already).
+  static const int _readyNotificationId = 4211;
   // Bumped from 'lifeos_app_updates' to '..._v2': on Android 8+ a channel's
   // importance is cached at creation and cannot be raised by code, so the old
   // default-importance channel would keep suppressing the heads-up pop-up on
@@ -67,6 +76,17 @@ class FlutterLocalUpdateNotifications implements UpdateNotifications {
         channelDescription: 'Avisos cuando hay una nueva versión de LifeOS.',
         title: 'Actualización disponible',
         body: 'Versión $versionName lista — toca para actualizar LifeOS.',
+        payload: _payload,
+      );
+
+  @override
+  Future<void> showUpdateReady(String versionName) => _notifications.show(
+        id: _readyNotificationId,
+        channelId: _channelId,
+        channelName: _channelName,
+        channelDescription: 'Avisos cuando hay una nueva versión de LifeOS.',
+        title: 'Actualización lista',
+        body: 'Versión $versionName descargada — toca para instalar.',
         payload: _payload,
       );
 }

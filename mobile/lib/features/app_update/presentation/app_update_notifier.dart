@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/apk_download_service.dart';
@@ -94,11 +97,97 @@ final appUpdateNotifierProvider =
 /// → install. Defensive throughout — a check never throws; download/install
 /// failures land in [AppUpdateUiState.error] rather than crashing.
 class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
+  /// App-level subscription to the background APK download's status+progress
+  /// stream. Registered ONCE from [build] (this provider is kept alive for the
+  /// app's lifetime) so the download is tracked independently of the Updates
+  /// screen — leaving the screen no longer stops or restarts it.
+  StreamSubscription<TaskUpdate>? _updatesSub;
+
   @override
   AppUpdateUiState build() {
     final seed = ref.read(appUpdateInitialStatusProvider);
     _hydrate();
+    _listenForDownloadUpdates();
+    ref.onDispose(() {
+      _updatesSub?.cancel();
+      _updatesSub = null;
+    });
     return AppUpdateUiState(status: seed ?? const UpdateUnknown());
+  }
+
+  /// Subscribe (exactly once) to the download service's updates stream so
+  /// background progress/completion flow into state even when no screen is
+  /// listening. Guarded against duplicate subscriptions; a missing platform
+  /// channel (widget tests without a fake service) is swallowed.
+  void _listenForDownloadUpdates() {
+    if (_updatesSub != null) return;
+    try {
+      _updatesSub =
+          ref.read(apkDownloadServiceProvider).updates.listen(_onDownloadUpdate);
+    } catch (_) {
+      // No background_downloader channel in this context — the stream is
+      // optional; the flow still works, just without background tracking.
+    }
+  }
+
+  /// Handle one background-download event. Progress advances the bar;
+  /// completion verifies + records the APK and posts the "ready" notification;
+  /// a terminal failure surfaces an error. Ignores traffic from other download
+  /// groups sharing the same [FileDownloader] singleton.
+  Future<void> _onDownloadUpdate(TaskUpdate update) async {
+    final service = ref.read(apkDownloadServiceProvider);
+    if (!service.isUpdateTask(update.task)) return;
+
+    if (update is TaskProgressUpdate) {
+      final p = update.progress;
+      // Negative sentinels (e.g. progressFailed) aren't real progress.
+      if (p >= 0 && state.downloadedApkPath == null) {
+        state = state.copyWith(downloadProgress: p.clamp(0.0, 1.0));
+      }
+      return;
+    }
+    if (update is TaskStatusUpdate) {
+      switch (update.status) {
+        case TaskStatus.complete:
+          await _onDownloadComplete(service);
+        case TaskStatus.failed:
+        case TaskStatus.canceled:
+        case TaskStatus.notFound:
+          state = state.copyWith(
+            error: 'No se pudo descargar la actualización.',
+            clearDownloadProgress: true,
+            clearInstallPending: true,
+          );
+        case TaskStatus.enqueued:
+        case TaskStatus.running:
+        case TaskStatus.paused:
+        case TaskStatus.waitingToRetry:
+          // Still in flight — progress events carry the bar.
+          break;
+      }
+    }
+  }
+
+  Future<void> _onDownloadComplete(ApkDownloadService service) async {
+    final status = state.status;
+    if (status is! UpdateAvailable) return;
+    try {
+      final path = await service.apkFilePath(status.manifest);
+      // SHA-256 gate still runs BEFORE the APK is ever handed to the installer.
+      await service.verifyApk(path, status.manifest.sha256);
+      state = state.copyWith(downloadedApkPath: path, downloadProgress: 1);
+      // Tell the user it's ready — a tap routes to /settings/updates to install.
+      await ref.read(updateNotificationsProvider).showUpdateReady(status.versionName);
+      // One-tap flow in progress? Continue straight into the install.
+      if (state.installPending) await _tryInstall();
+    } on ApkDownloadException catch (e) {
+      state = state.copyWith(error: e.message, clearDownloadProgress: true);
+    } catch (_) {
+      state = state.copyWith(
+        error: 'No se pudo verificar la actualización.',
+        clearDownloadProgress: true,
+      );
+    }
   }
 
   Future<void> _hydrate() async {
@@ -160,13 +249,16 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
     final status = state.status;
     if (status is! UpdateAvailable) return;
     state = state.copyWith(installPending: true, clearError: true);
-    // Download first unless a verified APK is already on disk; progress is
-    // surfaced the whole time via [downloadUpdate].
-    if (state.downloadedApkPath == null) {
-      await downloadUpdate();
-      if (state.downloadedApkPath == null) return; // download failed → error set
+    // Already verified on disk? Install straight away.
+    if (state.downloadedApkPath != null) {
+      await _tryInstall();
+      return;
     }
-    await _tryInstall();
+    // Otherwise kick off (or attach to) the background download. Completion +
+    // the follow-on install are driven by the app-level updates listener, which
+    // sees [installPending] and continues into _tryInstall — so the flow no
+    // longer depends on this method staying awaited on the Updates screen.
+    await downloadUpdate();
   }
 
   /// Run an update check. [auto] distinguishes a launch/background check from
@@ -210,24 +302,22 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
     }
   }
 
-  /// Download + verify the available APK, tracking progress in state.
+  /// Start (or attach to) the background download of the available APK.
+  /// Progress, verification, and completion are handled asynchronously by the
+  /// app-level updates listener ([_onDownloadUpdate]); this method only ignites
+  /// the transfer and never awaits it, so it survives leaving the screen.
   Future<void> downloadUpdate() async {
     final status = state.status;
     if (status is! UpdateAvailable) return;
-    state = state.copyWith(
-      downloadProgress: 0,
-      clearDownloadedApkPath: true,
-      clearError: true,
-    );
+    if (state.downloadedApkPath != null) return; // already downloaded + verified
+    // Seed the bar to 0 only when starting fresh — a re-entry while a download
+    // is already in flight must NOT reset visible progress back to zero.
+    if (state.downloadProgress == null) {
+      state = state.copyWith(downloadProgress: 0, clearError: true);
+    }
     try {
-      final path = await ref.read(apkDownloadServiceProvider).downloadAndVerify(
-            status.manifest,
-            onProgress: (p) => state = state.copyWith(downloadProgress: p),
-          );
-      state = state.copyWith(
-        downloadedApkPath: path,
-        downloadProgress: 1,
-      );
+      // Returns false when it attached to an already-running task (no restart).
+      await ref.read(apkDownloadServiceProvider).startDownload(status.manifest);
     } on ApkDownloadException catch (e) {
       state = state.copyWith(error: e.message, clearDownloadProgress: true);
     } catch (_) {

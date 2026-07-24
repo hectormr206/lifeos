@@ -1,4 +1,9 @@
+import 'dart:async';
+
+import 'package:background_downloader/background_downloader.dart';
+import 'package:lifeos/features/app_update/data/apk_download_service.dart';
 import 'package:lifeos/features/app_update/domain/apk_installer.dart';
+import 'package:lifeos/features/app_update/domain/app_manifest.dart';
 import 'package:lifeos/features/app_update/domain/app_update_preferences.dart';
 import 'package:lifeos/features/app_update/domain/app_version_info.dart';
 import 'package:lifeos/features/app_update/domain/update_notifications.dart';
@@ -43,14 +48,17 @@ class FakeAppUpdatePreferences implements AppUpdatePreferences {
   }
 }
 
-/// Records "showUpdateAvailable" calls.
+/// Records "showUpdateAvailable" + "showUpdateReady" calls.
 class FakeUpdateNotifications implements UpdateNotifications {
   final List<String> shown = [];
+  final List<String> readyShown = [];
   void Function()? tapHandler;
   bool launchedByTapResult = false;
 
   @override
   Future<void> showUpdateAvailable(String versionName) async => shown.add(versionName);
+  @override
+  Future<void> showUpdateReady(String versionName) async => readyShown.add(versionName);
   @override
   Future<void> registerTapHandler(void Function() onTapUpdate) async => tapHandler = onTapUpdate;
   @override
@@ -79,4 +87,61 @@ class FakeApkInstaller implements ApkInstaller {
 
   @override
   Future<void> openInstallSettings() async => openSettingsCalls++;
+}
+
+/// In-memory [ApkDownloadService] with a controllable updates stream — no
+/// `background_downloader` platform channel. Drives the notifier's app-level
+/// listener from tests: push [emitProgress]/[emitComplete]/[emitFailed] events
+/// and assert how state reacts. Records how many times a download was started
+/// and whether it "attached" (already running) vs. enqueued fresh.
+class FakeApkDownloadService extends ApkDownloadService {
+  FakeApkDownloadService() : super();
+
+  final StreamController<TaskUpdate> _controller = StreamController<TaskUpdate>.broadcast();
+
+  int startCalls = 0;
+
+  /// When true, [startDownload] reports it attached to an in-flight task
+  /// (returns false) instead of enqueuing a new one.
+  bool alreadyRunning = false;
+
+  /// Path [apkFilePath] resolves and [verifyApk] receives.
+  String apkPath = '/tmp/lifeos-update.apk';
+
+  /// When true, [verifyApk] throws (sha256 mismatch simulation).
+  bool verifyThrows = false;
+  String? verifiedPath;
+
+  DownloadTask get _task => DownloadTask(
+        taskId: 'app_update_apk',
+        url: 'https://updates.example/lifeos/download',
+        group: 'app_updates',
+      );
+
+  @override
+  Stream<TaskUpdate> get updates => _controller.stream;
+
+  @override
+  bool isUpdateTask(Task task) => task.group == 'app_updates';
+
+  @override
+  Future<bool> startDownload(AppManifest manifest) async {
+    startCalls++;
+    return !alreadyRunning;
+  }
+
+  @override
+  Future<String> apkFilePath(AppManifest manifest) async => apkPath;
+
+  @override
+  Future<void> verifyApk(String path, String expectedSha256) async {
+    verifiedPath = path;
+    if (verifyThrows) throw ApkDownloadException('sha256 mismatch');
+  }
+
+  void emitProgress(double p) => _controller.add(TaskProgressUpdate(_task, p));
+  void emitComplete() => _controller.add(TaskStatusUpdate(_task, TaskStatus.complete));
+  void emitStatus(TaskStatus s) => _controller.add(TaskStatusUpdate(_task, s));
+
+  Future<void> dispose() => _controller.close();
 }

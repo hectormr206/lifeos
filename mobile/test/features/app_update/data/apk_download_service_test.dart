@@ -57,6 +57,17 @@ void main() {
       );
       expect(svc.buildDownloadTask(_manifest).url, 'https://u.example/lifeos/download');
     });
+
+    test('uses a STABLE task id + allowPause so re-entry attaches and resumes', () {
+      final task = service().buildDownloadTask(_manifest);
+      // Fixed id → a second start finds (attaches to) the same task instead of
+      // spawning a random-id duplicate.
+      expect(task.taskId, 'app_update_apk');
+      expect(service().buildDownloadTask(_manifest).taskId, task.taskId);
+      // Resumable: an interrupted transfer resumes rather than restarting.
+      expect(task.allowPause, isTrue);
+      expect(service().isUpdateTask(task), isTrue);
+    });
   });
 
   group('sha256 verification gate', () {
