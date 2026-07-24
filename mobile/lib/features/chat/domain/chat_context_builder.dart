@@ -38,8 +38,22 @@ import '../../memory/domain/person_naming.dart';
 import '../../memory/domain/relation_extractor.dart';
 import '../../memory/domain/recall_block.dart';
 import '../../memory/domain/subject.dart';
+import '../../memory/domain/user_naming.dart';
 import '../../memory/domain/utterance_segmenter.dart';
 import 'axi_prompt_context.dart';
+
+/// The user's onboarding identity as seen through the graph store.
+///
+/// [available] separates "memory is reachable" from "the name is known": a null
+/// [name] with [available] true means the user has NOT told us their name yet
+/// (first-run onboarding should greet + ask), whereas [available] false means
+/// the store could not be opened this call (skip onboarding, degrade silently).
+class UserIdentity {
+  const UserIdentity({required this.available, this.name});
+
+  final bool available;
+  final String? name;
+}
 
 /// The runtime dependencies the builder composes, resolved lazily per turn.
 ///
@@ -99,9 +113,13 @@ class ChatContextBuilder {
     final lang = languageCode();
     final at = now();
     var memoryBlock = '';
+    String? userName;
     try {
       final deps = await loadDeps();
       if (deps != null) {
+        // The captured name (first-run onboarding) so Axi addresses the user by
+        // name and "yo/mi" anchors to the user hub. Best-effort like recall.
+        userName = await deps.writer.userDisplayName();
         final facts = await _retrieve(deps, message);
         memoryBlock = buildRecallBlock(message, facts, en: lang == 'en', now: at);
       }
@@ -113,7 +131,50 @@ class ChatContextBuilder {
       languageCode: lang,
       now: at,
       memoryBlock: memoryBlock,
+      userName: userName,
     );
+  }
+
+  /// The user's first-run identity (memory availability + known name). Never
+  /// throws; an unreachable store returns `available: false` so the caller can
+  /// tell "no name yet" apart from "no store this call".
+  Future<UserIdentity> userIdentity() async {
+    try {
+      final deps = await loadDeps();
+      if (deps == null) return const UserIdentity(available: false);
+      final name = await deps.writer.userDisplayName();
+      return UserIdentity(available: true, name: name);
+    } catch (_) {
+      return const UserIdentity(available: false);
+    }
+  }
+
+  /// DETERMINISTICALLY capture the user's OWN name from [userText] and store it
+  /// on the user hub (first-run onboarding). Parses BEFORE touching the store,
+  /// so a message that carries no name never reads the graph. When
+  /// [answeringNamePrompt] is true (the last bubble was Axi's onboarding
+  /// question) a BARE reply like "Héctor" is accepted; otherwise only explicit
+  /// "me llamo …" / "soy …" forms are.
+  ///
+  /// Never invokes the model. Returns the stored display name, or null when
+  /// nothing name-like was found, the store is unavailable, or a name is already
+  /// known (a captured name is never silently overwritten from chat).
+  Future<String?> captureUserName(
+    String userText, {
+    required bool answeringNamePrompt,
+  }) async {
+    final candidate = parseUserName(userText, bareAllowed: answeringNamePrompt);
+    if (candidate == null) return null;
+    try {
+      final deps = await loadDeps();
+      if (deps == null) return null;
+      final existing = await deps.writer.userDisplayName();
+      if (existing != null && existing.isNotEmpty) return null;
+      await deps.writer.setUserName(candidate);
+      return candidate;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Persist the finished exchange (roadmap SLICE C1, write half). Best-effort:

@@ -212,6 +212,40 @@ class MemoryWriter {
   /// uses.
   Future<String> ensureUserHub() => _ensureUserHub();
 
+  /// Data key holding the USER's own captured display name on the hub. Distinct
+  /// from the (cosmetic) [userLabel] placeholder: its presence is the canonical
+  /// "the user has told us their name" marker read by [userDisplayName].
+  static const String kUserNameKey = 'name';
+
+  /// The user's captured display name (first-run onboarding), or null when it
+  /// was never set. Read from the hub's `data['name']`, NOT its label (the label
+  /// starts as the cosmetic "Yo" placeholder).
+  Future<String?> userDisplayName() async {
+    final people = await _store.listNodesByKind('person');
+    for (final p in people) {
+      if (p.data['role'] != 'user') continue;
+      final name = p.data[kUserNameKey];
+      return (name is String && name.trim().isNotEmpty) ? name.trim() : null;
+    }
+    return null;
+  }
+
+  /// Store the user's own [name] on the hub (crown-jewel identity), creating the
+  /// hub if absent. ADDITIVE: keeps `data.role` + any existing keys, records the
+  /// name under [kUserNameKey], and mirrors it to the hub label so "yo/mi"
+  /// resolves to a named node. No-op on an empty name.
+  Future<void> setUserName(String name) async {
+    final n = name.trim();
+    if (n.isEmpty) return;
+    final hubUuid = await _ensureUserHub();
+    final node = await _store.getNodeByUuid(hubUuid);
+    if (node == null) return;
+    await _store.upsertNode(node.copyWith(
+      label: n,
+      data: <String, Object?>{...node.data, kUserNameKey: n},
+    ));
+  }
+
   /// Resolve (or create) a GENERIC entity node labelled [label] — the non-person
   /// endpoint of an open-ended relation (a medication, condition, place, org,
   /// product, event…). Ported in spirit from the laptop `identity.ensure_entity`.

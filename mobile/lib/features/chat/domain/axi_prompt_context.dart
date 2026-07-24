@@ -80,13 +80,31 @@ String composeAxiPreamble({
   required String languageCode,
   required DateTime now,
   String memoryBlock = '',
+  String? userName,
 }) {
   final sections = <String>[
     axiBehaviorPrompt(languageCode),
     buildAxiPromptPreamble(languageCode: languageCode, now: now),
   ];
+  final nameLine = _userNameLine(languageCode, userName);
+  if (nameLine != null) sections.add(nameLine);
   if (memoryBlock.trim().isNotEmpty) sections.add(memoryBlock.trim());
   return sections.join('\n\n');
+}
+
+/// The model-facing line that tells Axi the user's captured name so it addresses
+/// them personally and self-references ("yo/mi") anchor to the named user hub.
+/// Null when the name is unknown (nothing added to the preamble). Neutral
+/// Spanish by default; English on an English install.
+String? _userNameLine(String languageCode, String? userName) {
+  final name = userName?.trim();
+  if (name == null || name.isEmpty) return null;
+  return switch (languageCode) {
+    'en' => 'The user\'s name is $name. Address them by name when it feels '
+        'natural. When the user says "I", "me" or "my", they mean $name.',
+    _ => 'El usuario se llama $name. Dirígete a él por su nombre cuando sea '
+        'natural. Cuando el usuario diga "yo", "me" o "mi", se refiere a $name.',
+  };
 }
 
 /// Prepend the full [composeAxiPreamble] context to a user [message], the exact
@@ -97,8 +115,9 @@ String decorateWithAxiContext({
   required String languageCode,
   required DateTime now,
   String memoryBlock = '',
+  String? userName,
 }) =>
-    '${composeAxiPreamble(languageCode: languageCode, now: now, memoryBlock: memoryBlock)}\n\n$message';
+    '${composeAxiPreamble(languageCode: languageCode, now: now, memoryBlock: memoryBlock, userName: userName)}\n\n$message';
 
 /// Locale-aware, human-readable formatting of [now] (e.g.
 /// "martes, 22 de julio de 2026, 14:30"). Falls back to the raw ISO string if

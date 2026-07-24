@@ -565,6 +565,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatTyping => 'Axi is typing…';
 
   @override
+  String get chatOnboardingGreeting =>
+      'Hi, I\'m Axi 🐾 — your assistant, and everything you tell me lives only on your phone. To start: what should I call you?';
+
+  @override
+  String chatOnboardingNameConfirm(String name) {
+    return 'Nice to meet you, $name! How can I help?';
+  }
+
+  @override
   String get chatStopReading => 'Stop reading';
 
   @override

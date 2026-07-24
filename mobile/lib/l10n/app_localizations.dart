@@ -1124,6 +1124,18 @@ abstract class AppLocalizations {
   /// **'Axi is typing…'**
   String get chatTyping;
 
+  /// No description provided for @chatOnboardingGreeting.
+  ///
+  /// In en, this message translates to:
+  /// **'Hi, I\'m Axi 🐾 — your assistant, and everything you tell me lives only on your phone. To start: what should I call you?'**
+  String get chatOnboardingGreeting;
+
+  /// No description provided for @chatOnboardingNameConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Nice to meet you, {name}! How can I help?'**
+  String chatOnboardingNameConfirm(String name);
+
   /// No description provided for @chatStopReading.
   ///
   /// In en, this message translates to:

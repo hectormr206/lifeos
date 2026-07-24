@@ -13,7 +13,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/chat/data/chat_history_repository.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
+import 'package:lifeos/features/chat/domain/chat_context_builder.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
+import 'package:lifeos/features/chat/presentation/chat_context_providers.dart';
 import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
 import 'package:lifeos/features/stt/domain/stt_model.dart';
 import 'package:lifeos/features/stt/presentation/stt_providers.dart';
@@ -62,6 +64,21 @@ class _FakeChatRepository implements ChatRepository {
   Future<ChatMessage> sendImages(String text, List<Uint8List> images) async => sendResult!;
 }
 
+/// A context builder whose graph store is UNAVAILABLE this launch
+/// (`loadDeps` → null). This is the deterministic graceful-degradation path:
+/// `userIdentity()` reports `available: false`, so first-run onboarding is
+/// skipped entirely and NO greeting is seeded. These tests exercise the
+/// persistence/cascade mechanics, not onboarding — without this override
+/// `chatContextBuilderProvider` would resolve the real `localGraphStoreProvider`,
+/// whose ffi backend never completes under the test zone and hangs the seeding
+/// chain that `persistedReady` awaits. Onboarding's own seeding is covered by
+/// chat_onboarding_test.dart (which wires an in-memory store).
+ChatContextBuilder _noStoreBuilder() => ChatContextBuilder(
+      loadDeps: () async => null,
+      languageCode: () => 'es',
+      now: () => DateTime.utc(2026, 1, 1),
+    );
+
 void main() {
   late _InMemoryHistory history;
 
@@ -71,6 +88,7 @@ void main() {
     final container = ProviderContainer(overrides: [
       chatRepositoryProvider.overrideWithValue(repo),
       chatHistoryRepositoryProvider.overrideWith((ref) async => history),
+      chatContextBuilderProvider.overrideWithValue(_noStoreBuilder()),
       // Deterministic STT: the model is "not downloaded", so a voice note
       // degrades to the canned fallback reply (no native recognizer in a test).
       sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(installed: null)),
@@ -135,6 +153,7 @@ void main() {
     final container = ProviderContainer(overrides: [
       chatRepositoryProvider.overrideWithValue(_FakeChatRepository(sendResult: reply)),
       chatHistoryRepositoryProvider.overrideWith((ref) async => history),
+      chatContextBuilderProvider.overrideWithValue(_noStoreBuilder()),
       sttModelGatewayProvider.overrideWithValue(FakeSttModelGateway(
         installed: const SttModelPaths(encoder: 'e', decoder: 'd', tokens: 't'),
       )),

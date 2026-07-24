@@ -228,6 +228,13 @@
   "chatModelLoading": "Loading the model…",
   "chatModelLoadError": "Could not load the model. Check it and try again.",
   "chatTyping": "Axi is typing…",
+  "chatOnboardingGreeting": "Hi, I'm Axi 🐾 — your assistant, and everything you tell me lives only on your phone. To start: what should I call you?",
+  "chatOnboardingNameConfirm": "Nice to meet you, {name}! How can I help?",
+  "@chatOnboardingNameConfirm": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
   "chatStopReading": "Stop reading",
   "chatListenReply": "Listen to reply",
   "chatMetricsTitle": "Response metrics",

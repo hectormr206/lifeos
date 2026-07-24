@@ -9,8 +9,10 @@ import '../../../core/api/api_providers.dart';
 import '../../../core/clock/clock.dart';
 import '../../../core/graph/graph_providers.dart';
 import '../../../core/outbox/outbox.dart';
+import '../../../l10n/app_localizations.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../local_model/data/on_device_chat_repository.dart';
+import '../../memory/domain/user_naming.dart';
 import '../../reminders/domain/local_reminder.dart';
 import '../../reminders/domain/reminder_parser.dart';
 import '../../reminders/presentation/local_reminders_providers.dart';
@@ -130,6 +132,17 @@ class ChatNotifier extends Notifier<ChatUiState> {
   /// uncaught async failure (the resource leak this guards against).
   bool _disposed = false;
 
+  /// Stable id of the seeded first-run greeting (Axi's onboarding name
+  /// question). Persisted with the message, so its presence as the LAST bubble
+  /// is what tells a bare reply ("Héctor") that it is the user's name — even
+  /// across an app restart (the id survives serialization).
+  static const String onboardingQuestionId = 'onboarding-name-question';
+
+  /// True once the user's own name is known (captured or already on the hub).
+  /// While false, each send attempts a deterministic name capture; once true
+  /// the onboarding path is skipped entirely so it never touches normal chat.
+  bool _userNameKnown = false;
+
   /// Lets tests await the initial [loadHistory] deterministically, mirroring
   /// `ConnectionNotifier.ready`.
   Future<void> get ready => _bootstrapFuture ?? Future<void>.value();
@@ -202,8 +215,59 @@ class ChatNotifier extends Notifier<ChatUiState> {
     // deliberately NOT awaited by [ready] so a graph store that opens slowly
     // (or never, e.g. a plain widget test with no platform channel) can never
     // block init. When it resolves it replaces the transcript with what
-    // survived the last app restart.
-    _persistedHydration = _hydratePersisted();
+    // survived the last app restart. Onboarding seeding is chained AFTER it so
+    // the "empty history" decision sees the persisted transcript, not just the
+    // fast path.
+    _persistedHydration = _hydratePersisted().then((_) => _maybeSeedOnboarding());
+  }
+
+  /// FIRST-RUN onboarding (roadmap SLICE C1 follow-up): when the chat opens with
+  /// EMPTY history and the user has not told us their name yet, seed ONE scripted
+  /// Axi greeting that introduces Axi and asks how to be called. Scripted +
+  /// instant (never the model), and persisted as the first bubble so it does not
+  /// re-post on a normal re-open; a full wipe (which clears history AND the user
+  /// hub) naturally re-enables it on the next empty-history open.
+  ///
+  /// Also seeds [_userNameKnown] for the session: when a name is already on the
+  /// hub the whole onboarding/capture path is disabled. Skipped entirely when
+  /// the graph store is unavailable this launch (nothing to persist or read) —
+  /// the chat still works and onboarding simply waits for a store.
+  Future<void> _maybeSeedOnboarding() async {
+    if (_disposed) return;
+    final identity =
+        await ref.read(chatContextBuilderProvider).userIdentity();
+    if (_disposed) return;
+    if (!identity.available) return; // no store this launch → wait.
+    final known = identity.name != null && identity.name!.trim().isNotEmpty;
+    _userNameKnown = known;
+    if (known) return;
+    // Name unknown: greet only on a truly empty transcript (first run / after a
+    // wipe). An existing conversation with no name yet is left alone; a later
+    // "me llamo …" can still be captured.
+    if (state.messages.isNotEmpty) return;
+    final greeting = ChatMessage(
+      id: onboardingQuestionId,
+      role: ChatRole.axi,
+      text: _l10n().chatOnboardingGreeting,
+      timestamp: DateTime.now(),
+    );
+    state = state.copyWith(messages: [greeting]);
+    _persist(greeting);
+  }
+
+  /// App-localized strings for the notifier (no [BuildContext] here): resolve the
+  /// generated bundle from the app language the rest of the deterministic path
+  /// (reminders, web-search) reads at send time.
+  AppLocalizations _l10n() =>
+      lookupAppLocalizations(Locale(ref.read(appLanguageCodeProvider)));
+
+  /// True when the last visible bubble is Axi's onboarding name question — the
+  /// signal that lets the NEXT user message be read as a bare name.
+  bool _lastBubbleIsOnboardingQuestion() {
+    final msgs = state.messages;
+    return msgs.isNotEmpty &&
+        msgs.last.role == ChatRole.axi &&
+        msgs.last.id == onboardingQuestionId;
   }
 
   Future<void> _hydratePersisted() async {
@@ -236,6 +300,11 @@ class ChatNotifier extends Notifier<ChatUiState> {
   Future<void> sendMessage(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return Future<void>.value();
+    // Captured BEFORE the optimistic append (which would otherwise become the
+    // last bubble): was the last bubble Axi's onboarding question? If so a bare
+    // reply is treated as the user's name.
+    final answeringNamePrompt =
+        !_userNameKnown && _lastBubbleIsOnboardingQuestion();
     final userMessage = ChatMessage(
       id: 'local-${DateTime.now().microsecondsSinceEpoch}',
       role: ChatRole.user,
@@ -258,6 +327,27 @@ class ChatNotifier extends Notifier<ChatUiState> {
     if (reminderIntent != null) {
       return _handleReminderIntent(trimmed, userMessage, reminderIntent);
     }
+    // First-run onboarding name capture (DETERMINISTIC — never the model). While
+    // the name is unknown, a SYNCHRONOUS parse decides whether this message even
+    // looks like a name: only then do we take the async capture path (which reads
+    // + writes the user hub). A normal message parses to null here and goes
+    // STRAIGHT to the model send — no store read, no extra frame, no async hop —
+    // so onboarding never adds latency to (or reorders) ordinary chat.
+    if (!_userNameKnown &&
+        parseUserName(trimmed, bareAllowed: answeringNamePrompt) != null) {
+      return _maybeCaptureNameThenSend(
+        trimmed,
+        userMessage,
+        answeringNamePrompt: answeringNamePrompt,
+      );
+    }
+    return _sendTextToModel(trimmed, userMessage);
+  }
+
+  /// Normal model send for a text turn: the FIFO enqueue + C1 memory write-back
+  /// (on-device only). Shared by the default path and the onboarding fall-through
+  /// so the two never drift.
+  Future<void> _sendTextToModel(String trimmed, ChatMessage userMessage) {
     return _enqueue(_OutgoingRequest(
       userMessageId: userMessage.id,
       run: () => ref.read(chatRepositoryProvider).sendMessage(trimmed),
@@ -271,6 +361,43 @@ class ChatNotifier extends Notifier<ChatUiState> {
               _recordTurn(trimmed, reply.text, sourceMessageId: userMessage.id)
           : null,
     ));
+  }
+
+  /// Attempt a deterministic user-name capture for [trimmed]; on success store
+  /// it on the user hub and answer with a scripted confirmation (NO model call),
+  /// otherwise fall through to the normal model send so the message is answered
+  /// as usual. NEVER blocks normal chat.
+  Future<void> _maybeCaptureNameThenSend(
+    String trimmed,
+    ChatMessage userMessage, {
+    required bool answeringNamePrompt,
+  }) async {
+    String? name;
+    try {
+      name = await ref.read(chatContextBuilderProvider).captureUserName(
+            trimmed,
+            answeringNamePrompt: answeringNamePrompt,
+          );
+    } catch (_) {
+      name = null; // store unavailable / builder error → treat as no capture.
+    }
+    if (_disposed) return;
+    if (name == null) {
+      // Not a name → ordinary chat (recorded + answered by the model).
+      await _sendTextToModel(trimmed, userMessage);
+      return;
+    }
+    // Captured: mark known, confirm deterministically, skip the model.
+    _userNameKnown = true;
+    _setStatus(userMessage.id, ChatMessageStatus.delivered);
+    final reply = ChatMessage(
+      id: 'onboarding-name-confirm-${DateTime.now().microsecondsSinceEpoch}',
+      role: ChatRole.axi,
+      text: _l10n().chatOnboardingNameConfirm(name),
+      timestamp: DateTime.now(),
+    );
+    state = state.copyWith(messages: [...state.messages, reply], sending: false);
+    _persist(reply);
   }
 
   /// Parse [text] as a fully-resolved reminder request against the device
