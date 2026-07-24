@@ -213,6 +213,7 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
       model: model,
       tokens: '$dir/${spec.tokensFileName}',
       dataDir: '$dir/${TtsVoiceSourceConfig.espeakDataDirName}',
+      config: '$dir/${spec.config.name}',
     );
   }
 

@@ -1,18 +1,33 @@
-// Proves the voice catalog domain: the 38 curated voices, the single shipped
-// default (es_MX-claude), the derived hosted file names, the system-voice
-// sentinel, and the region grouping (es-MX, es-ES, es-AR, en-US, en-GB).
+// Proves the voice catalog domain: the 23 curated SAFE voices (all
+// `phoneme_type: espeak` + single-speaker), the single shipped default
+// (es_MX-claude), the derived hosted file names, the system-voice sentinel, and
+// the region grouping (es-MX, es-ES, es-AR, en-US, en-GB). The 15 crash-prone
+// voices (missing phoneme_type or multi-speaker) were removed — synthesizing
+// them crashed sherpa-onnx NATIVELY on preview.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/voice_settings/domain/voice_catalog.dart';
 
+/// The 15 voices removed because their Piper config crashes the engine —
+/// none of them may ever reappear in the catalog.
+const _removedCrashProneIds = {
+  // Missing phoneme_type (8)
+  'es_ES-carlfm', 'es_ES-mls_9972', 'es_ES-mls_10246',
+  'en_GB-southern_english_female', 'en_US-danny', 'en_US-kathleen',
+  'en_US-ryan', 'en_US-libritts',
+  // Multi-speaker (7)
+  'en_GB-aru', 'en_GB-semaine', 'en_GB-vctk', 'en_US-arctic',
+  'en_US-l2arctic', 'en_US-libritts_r', 'es_ES-sharvard',
+};
+
 void main() {
   group('VoiceCatalog', () {
-    test('holds exactly 38 voices (8 Spanish + 21 US + 9 UK)', () {
-      expect(VoiceCatalog.all, hasLength(38));
+    test('holds exactly 23 SAFE voices (4 Spanish + 14 US + 5 UK)', () {
+      expect(VoiceCatalog.all, hasLength(23));
       expect(VoiceCatalog.all.where((v) => v.languageTag == 'es-MX'), hasLength(2));
-      expect(VoiceCatalog.all.where((v) => v.languageTag == 'es-ES'), hasLength(5));
+      expect(VoiceCatalog.all.where((v) => v.languageTag == 'es-ES'), hasLength(1));
       expect(VoiceCatalog.all.where((v) => v.languageTag == 'es-AR'), hasLength(1));
-      expect(VoiceCatalog.all.where((v) => v.languageTag == 'en-US'), hasLength(21));
-      expect(VoiceCatalog.all.where((v) => v.languageTag == 'en-GB'), hasLength(9));
+      expect(VoiceCatalog.all.where((v) => v.languageTag == 'en-US'), hasLength(14));
+      expect(VoiceCatalog.all.where((v) => v.languageTag == 'en-GB'), hasLength(5));
     });
 
     test('every id is unique and matches the <locale>-<name> shape', () {
@@ -23,20 +38,26 @@ void main() {
       }
     });
 
-    test('the exact 38 hosted ids are present', () {
+    test('the exact 23 hosted ids are present', () {
       expect(VoiceCatalog.all.map((v) => v.id).toSet(), {
         'es_MX-claude', 'es_MX-ald',
-        'es_ES-davefx', 'es_ES-sharvard', 'es_ES-carlfm', 'es_ES-mls_9972', 'es_ES-mls_10246',
+        'es_ES-davefx',
         'es_AR-daniela',
-        'en_US-lessac', 'en_US-ryan', 'en_US-amy', 'en_US-libritts', 'en_US-libritts_r',
-        'en_US-ljspeech', 'en_US-kristin', 'en_US-joe', 'en_US-john', 'en_US-kathleen',
-        'en_US-hfc_female', 'en_US-hfc_male', 'en_US-arctic', 'en_US-bryce', 'en_US-danny',
-        'en_US-kusal', 'en_US-l2arctic', 'en_US-mike', 'en_US-norman', 'en_US-reza_ibrahim',
-        'en_US-sam',
-        'en_GB-alan', 'en_GB-alba', 'en_GB-aru', 'en_GB-cori', 'en_GB-jenny_dioco',
-        'en_GB-northern_english_male', 'en_GB-semaine', 'en_GB-southern_english_female',
-        'en_GB-vctk',
+        'en_US-lessac', 'en_US-amy', 'en_US-ljspeech', 'en_US-kristin',
+        'en_US-joe', 'en_US-john', 'en_US-hfc_female', 'en_US-hfc_male',
+        'en_US-bryce', 'en_US-kusal', 'en_US-mike', 'en_US-norman',
+        'en_US-reza_ibrahim', 'en_US-sam',
+        'en_GB-alan', 'en_GB-alba', 'en_GB-cori', 'en_GB-jenny_dioco',
+        'en_GB-northern_english_male',
       });
+    });
+
+    test('none of the 15 crash-prone voices remain in the catalog', () {
+      final ids = VoiceCatalog.all.map((v) => v.id).toSet();
+      for (final removed in _removedCrashProneIds) {
+        expect(ids.contains(removed), isFalse, reason: 'must not list $removed');
+        expect(VoiceCatalog.contains(removed), isFalse, reason: removed);
+      }
     });
 
     test('es_MX-claude is the one and only default, first in the list', () {
@@ -65,17 +86,17 @@ void main() {
       expect(VoiceCatalog.byId('en_GB-alan')!.languageCode, 'en');
     });
 
-    test('groups by language: Spanish (8) first, then English (30)', () {
+    test('groups by language: Spanish (4) first, then English (19)', () {
       final groups = VoiceCatalog.groupedByLanguage;
       expect(groups.map((g) => g.languageCode), ['es', 'en']);
-      expect(groups[0].voices, hasLength(8));
-      expect(groups[1].voices, hasLength(30));
+      expect(groups[0].voices, hasLength(4));
+      expect(groups[1].voices, hasLength(19));
     });
 
     test('groups by region in declared order with correct counts', () {
       final groups = VoiceCatalog.groupedByRegion;
       expect(groups.map((g) => g.languageTag), ['es-MX', 'es-ES', 'es-AR', 'en-US', 'en-GB']);
-      expect(groups.map((g) => g.voices.length), [2, 5, 1, 21, 9]);
+      expect(groups.map((g) => g.voices.length), [2, 1, 1, 14, 5]);
       expect(groups.first.languageCode, 'es');
       expect(groups.last.languageCode, 'en');
     });

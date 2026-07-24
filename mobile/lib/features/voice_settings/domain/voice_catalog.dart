@@ -96,6 +96,14 @@ class VoiceCatalog {
 
   /// All hosted voices, in display order (default voice first), grouped by
   /// region: Spanish (México, España, Argentina) then English (US, UK).
+  ///
+  /// Only voices whose Piper config is safe for the on-device sherpa-onnx
+  /// engine are listed — `phoneme_type: espeak` AND single-speaker
+  /// (`num_speakers <= 1`). Voices missing `phoneme_type` or that are
+  /// multi-speaker crash sherpa NATIVELY (uncatchable from Dart) on synthesis,
+  /// so they are deliberately excluded from the catalog (and a defensive
+  /// pre-synthesis guard rejects any incompatible config that still reaches the
+  /// engine — see `assertPiperVoiceCompatible`).
   static const List<VoiceDescriptor> all = [
     // ── Español · México ──────────────────────────────────────────────────
     VoiceDescriptor(
@@ -118,30 +126,6 @@ class VoiceCatalog {
       languageTag: 'es-ES',
       languageLabel: 'Spanish (Spain)',
     ),
-    VoiceDescriptor(
-      id: 'es_ES-sharvard',
-      displayName: 'Sharvard (España)',
-      languageTag: 'es-ES',
-      languageLabel: 'Spanish (Spain)',
-    ),
-    VoiceDescriptor(
-      id: 'es_ES-carlfm',
-      displayName: 'Carlfm (España)',
-      languageTag: 'es-ES',
-      languageLabel: 'Spanish (Spain)',
-    ),
-    VoiceDescriptor(
-      id: 'es_ES-mls_9972',
-      displayName: 'MLS 9972 (España)',
-      languageTag: 'es-ES',
-      languageLabel: 'Spanish (Spain)',
-    ),
-    VoiceDescriptor(
-      id: 'es_ES-mls_10246',
-      displayName: 'MLS 10246 (España)',
-      languageTag: 'es-ES',
-      languageLabel: 'Spanish (Spain)',
-    ),
     // ── Español · Argentina ───────────────────────────────────────────────
     VoiceDescriptor(
       id: 'es_AR-daniela',
@@ -157,26 +141,8 @@ class VoiceCatalog {
       languageLabel: 'English (US)',
     ),
     VoiceDescriptor(
-      id: 'en_US-ryan',
-      displayName: 'Ryan (US)',
-      languageTag: 'en-US',
-      languageLabel: 'English (US)',
-    ),
-    VoiceDescriptor(
       id: 'en_US-amy',
       displayName: 'Amy (US)',
-      languageTag: 'en-US',
-      languageLabel: 'English (US)',
-    ),
-    VoiceDescriptor(
-      id: 'en_US-libritts',
-      displayName: 'LibriTTS (US)',
-      languageTag: 'en-US',
-      languageLabel: 'English (US)',
-    ),
-    VoiceDescriptor(
-      id: 'en_US-libritts_r',
-      displayName: 'LibriTTS-R (US)',
       languageTag: 'en-US',
       languageLabel: 'English (US)',
     ),
@@ -205,12 +171,6 @@ class VoiceCatalog {
       languageLabel: 'English (US)',
     ),
     VoiceDescriptor(
-      id: 'en_US-kathleen',
-      displayName: 'Kathleen (US)',
-      languageTag: 'en-US',
-      languageLabel: 'English (US)',
-    ),
-    VoiceDescriptor(
       id: 'en_US-hfc_female',
       displayName: 'HFC Female (US)',
       languageTag: 'en-US',
@@ -223,32 +183,14 @@ class VoiceCatalog {
       languageLabel: 'English (US)',
     ),
     VoiceDescriptor(
-      id: 'en_US-arctic',
-      displayName: 'Arctic (US)',
-      languageTag: 'en-US',
-      languageLabel: 'English (US)',
-    ),
-    VoiceDescriptor(
       id: 'en_US-bryce',
       displayName: 'Bryce (US)',
       languageTag: 'en-US',
       languageLabel: 'English (US)',
     ),
     VoiceDescriptor(
-      id: 'en_US-danny',
-      displayName: 'Danny (US)',
-      languageTag: 'en-US',
-      languageLabel: 'English (US)',
-    ),
-    VoiceDescriptor(
       id: 'en_US-kusal',
       displayName: 'Kusal (US)',
-      languageTag: 'en-US',
-      languageLabel: 'English (US)',
-    ),
-    VoiceDescriptor(
-      id: 'en_US-l2arctic',
-      displayName: 'L2Arctic (US)',
       languageTag: 'en-US',
       languageLabel: 'English (US)',
     ),
@@ -290,12 +232,6 @@ class VoiceCatalog {
       languageLabel: 'English (UK)',
     ),
     VoiceDescriptor(
-      id: 'en_GB-aru',
-      displayName: 'Aru (UK)',
-      languageTag: 'en-GB',
-      languageLabel: 'English (UK)',
-    ),
-    VoiceDescriptor(
       id: 'en_GB-cori',
       displayName: 'Cori (UK)',
       languageTag: 'en-GB',
@@ -310,24 +246,6 @@ class VoiceCatalog {
     VoiceDescriptor(
       id: 'en_GB-northern_english_male',
       displayName: 'Northern English (UK)',
-      languageTag: 'en-GB',
-      languageLabel: 'English (UK)',
-    ),
-    VoiceDescriptor(
-      id: 'en_GB-semaine',
-      displayName: 'Semaine (UK)',
-      languageTag: 'en-GB',
-      languageLabel: 'English (UK)',
-    ),
-    VoiceDescriptor(
-      id: 'en_GB-southern_english_female',
-      displayName: 'Southern English (UK)',
-      languageTag: 'en-GB',
-      languageLabel: 'English (UK)',
-    ),
-    VoiceDescriptor(
-      id: 'en_GB-vctk',
-      displayName: 'VCTK (UK)',
       languageTag: 'en-GB',
       languageLabel: 'English (UK)',
     ),

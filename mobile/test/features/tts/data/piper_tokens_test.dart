@@ -2,6 +2,7 @@
 // the same `<symbol> <id>` table sherpa-onnx's piper conversion script writes.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/tts/data/piper_tokens.dart';
+import 'package:lifeos/features/tts/domain/piper_speech_synthesizer.dart';
 
 void main() {
   group('piperTokensFromConfigJson', () {
@@ -36,6 +37,49 @@ void main() {
       expect(
         () => piperTokensFromConfigJson('{"phoneme_id_map": {"a": "4"}}'),
         throwsA(isA<PiperTokensException>()),
+      );
+    });
+  });
+
+  group('assertPiperVoiceCompatible', () {
+    test('accepts a valid espeak single-speaker config', () {
+      const json = '{"phoneme_type": "espeak", "num_speakers": 1}';
+      expect(() => assertPiperVoiceCompatible(json), returnsNormally);
+    });
+
+    test('accepts an espeak config with num_speakers absent', () {
+      const json = '{"phoneme_type": "espeak"}';
+      expect(() => assertPiperVoiceCompatible(json), returnsNormally);
+    });
+
+    test('rejects a config missing phoneme_type (crashes sherpa natively)', () {
+      const json = '{"num_speakers": 1}';
+      expect(
+        () => assertPiperVoiceCompatible(json),
+        throwsA(isA<UnsupportedVoiceException>()),
+      );
+    });
+
+    test('rejects a non-espeak phoneme_type', () {
+      const json = '{"phoneme_type": "text", "num_speakers": 1}';
+      expect(
+        () => assertPiperVoiceCompatible(json),
+        throwsA(isA<UnsupportedVoiceException>()),
+      );
+    });
+
+    test('rejects a multi-speaker config (num_speakers > 1)', () {
+      const json = '{"phoneme_type": "espeak", "num_speakers": 904}';
+      expect(
+        () => assertPiperVoiceCompatible(json),
+        throwsA(isA<UnsupportedVoiceException>()),
+      );
+    });
+
+    test('rejects invalid JSON', () {
+      expect(
+        () => assertPiperVoiceCompatible('<html>error'),
+        throwsA(isA<UnsupportedVoiceException>()),
       );
     });
   });

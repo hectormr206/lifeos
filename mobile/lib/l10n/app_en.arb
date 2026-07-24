@@ -98,6 +98,7 @@
   "voiceCatalogStatusFailed": "Download failed",
   "voiceCatalogSampleEs": "Hola, soy Axi, tu asistente personal.",
   "voiceCatalogSampleEn": "Hi, I'm Axi, your personal assistant.",
+  "voiceIncompatibleMessage": "This voice is not supported on this device.",
   "voiceCatalogRegionMexico": "Mexico",
   "voiceCatalogRegionSpain": "Spain",
   "voiceCatalogRegionArgentina": "Argentina",

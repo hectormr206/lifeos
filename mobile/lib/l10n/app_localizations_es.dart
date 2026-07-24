@@ -281,6 +281,10 @@ class AppLocalizationsEs extends AppLocalizations {
   String get voiceCatalogSampleEn => 'Hi, I\'m Axi, your personal assistant.';
 
   @override
+  String get voiceIncompatibleMessage =>
+      'Esta voz no es compatible en este dispositivo.';
+
+  @override
   String get voiceCatalogRegionMexico => 'México';
 
   @override

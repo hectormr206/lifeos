@@ -602,6 +602,12 @@ abstract class AppLocalizations {
   /// **'Hi, I\'m Axi, your personal assistant.'**
   String get voiceCatalogSampleEn;
 
+  /// No description provided for @voiceIncompatibleMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'This voice is not supported on this device.'**
+  String get voiceIncompatibleMessage;
+
   /// No description provided for @voiceCatalogRegionMexico.
   ///
   /// In en, this message translates to:

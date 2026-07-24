@@ -1,9 +1,11 @@
+import 'dart:io';
 import 'dart:isolate';
 
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../domain/piper_speech_synthesizer.dart';
 import '../domain/tts_voice.dart';
+import 'piper_tokens.dart';
 
 /// [PiperSpeechSynthesizer] backed by the offline sherpa-onnx VITS engine
 /// running a Piper voice (roadmap slice B3). Fully on-device.
@@ -26,6 +28,13 @@ class SherpaPiperSpeechSynthesizer implements PiperSpeechSynthesizer {
     required String text,
     double speed = 1.0,
   }) async {
+    // Reject an incompatible voice BEFORE touching sherpa: an unsupported
+    // config (non-espeak phoneme_type or multi-speaker) crashes the engine
+    // NATIVELY — uncatchable — so we throw a catchable [UnsupportedVoiceException]
+    // here instead. Runs OUTSIDE the try/catch below so it is NOT rewrapped as
+    // a generic synthesis failure and stays catchable by the call sites.
+    await _assertVoiceCompatible(voice);
+
     final SynthesizedAudio audio;
     try {
       audio = await Isolate.run(() => _synthesizeSync(voice, text, speed));
@@ -37,6 +46,23 @@ class SherpaPiperSpeechSynthesizer implements PiperSpeechSynthesizer {
       throw PiperSynthesisException('La síntesis de voz no produjo audio.');
     }
     return audio;
+  }
+
+  /// Parses the voice's `*.onnx.json` and throws [UnsupportedVoiceException]
+  /// when it is incompatible with the engine (see [assertPiperVoiceCompatible]).
+  /// Skips silently when no config path is supplied (test fakes) or the file is
+  /// unreadable — we only ever REFUSE a config we can positively see is unsafe,
+  /// never block a voice we cannot inspect.
+  static Future<void> _assertVoiceCompatible(TtsVoicePaths voice) async {
+    final configPath = voice.config;
+    if (configPath == null) return;
+    final String json;
+    try {
+      json = await File(configPath).readAsString();
+    } catch (_) {
+      return; // cannot read → cannot judge; let synthesis proceed/fail normally
+    }
+    assertPiperVoiceCompatible(json); // throws UnsupportedVoiceException if unsafe
   }
 
   /// Runs in the worker isolate — sherpa's FFI bindings are per-isolate, so

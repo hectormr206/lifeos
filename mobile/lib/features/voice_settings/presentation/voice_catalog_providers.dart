@@ -1,9 +1,37 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../tts/domain/piper_speech_synthesizer.dart';
 import '../../tts/domain/tts_voice.dart';
 import '../../tts/presentation/tts_providers.dart';
 import '../domain/selected_voice.dart';
 import '../domain/voice_catalog.dart';
+
+/// A one-shot notice the catalog picker surfaces to the user (as a SnackBar).
+/// Currently only fires when a previewed voice is INCOMPATIBLE with this
+/// device — the pre-synthesis guard refused it instead of letting the engine
+/// crash. The screen listens, shows the localized message, and resets it to
+/// null so the same notice can fire again later.
+enum VoicePreviewNotice { incompatibleVoice }
+
+/// Ephemeral channel for [VoicePreviewNotice]. Null when there is nothing to
+/// show; the picker screen consumes it and calls [VoicePreviewNoticeNotifier.clear].
+///
+/// A [NotifierProvider] (not the legacy `StateProvider`, which riverpod 3 keeps
+/// only under `flutter_riverpod/legacy`) to match this codebase's convention.
+final voicePreviewNoticeProvider =
+    NotifierProvider<VoicePreviewNoticeNotifier, VoicePreviewNotice?>(
+        VoicePreviewNoticeNotifier.new);
+
+class VoicePreviewNoticeNotifier extends Notifier<VoicePreviewNotice?> {
+  @override
+  VoicePreviewNotice? build() => null;
+
+  /// Raises [notice] for the screen to surface.
+  void show(VoicePreviewNotice notice) => state = notice;
+
+  /// Clears the pending notice after it has been shown.
+  void clear() => state = null;
+}
 
 /// Local-only persistence of the chosen voice id. Overridden with a fake in
 /// tests. Lives in its OWN provider (no chat import) so any layer can read the
@@ -150,8 +178,10 @@ class VoiceCatalogController extends Notifier<Map<String, TtsVoiceStatus>> {
   }
 
   /// Plays a short sample sentence with [voiceId], downloading it first when it
-  /// is not yet installed. Best-effort: any failure is swallowed (a broken
-  /// preview must never crash the picker).
+  /// is not yet installed. Best-effort: a generic failure is swallowed (a broken
+  /// preview must never crash the picker). An INCOMPATIBLE voice, though,
+  /// surfaces a [VoicePreviewNotice.incompatibleVoice] notice so the user learns
+  /// why nothing played — the guard refused it instead of crashing the app.
   Future<void> preview(String voiceId, String sampleText) async {
     try {
       final gateway = ref.read(ttsVoiceGatewayProvider);
@@ -162,6 +192,10 @@ class VoiceCatalogController extends Notifier<Map<String, TtsVoiceStatus>> {
       }
       if (paths == null) return;
       await ref.read(ttsPreviewProvider).play(voice: paths, text: sampleText);
+    } on UnsupportedVoiceException {
+      ref.read(voicePreviewNoticeProvider.notifier).show(
+            VoicePreviewNotice.incompatibleVoice,
+          );
     } catch (_) {
       // Best-effort preview.
     }

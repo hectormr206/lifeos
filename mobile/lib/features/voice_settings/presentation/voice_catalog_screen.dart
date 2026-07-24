@@ -28,6 +28,19 @@ class VoiceCatalogScreen extends ConsumerWidget {
     final statuses = ref.watch(voiceCatalogControllerProvider);
     final groups = VoiceCatalog.groupedByRegion;
 
+    // Surface a one-shot preview notice (e.g. an incompatible voice the guard
+    // refused) as a SnackBar, then clear it so it can fire again later.
+    ref.listen(voicePreviewNoticeProvider, (_, notice) {
+      if (notice == null) return;
+      final message = switch (notice) {
+        VoicePreviewNotice.incompatibleVoice => l10n.voiceIncompatibleMessage,
+      };
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+      ref.read(voicePreviewNoticeProvider.notifier).clear();
+    });
+
     String? previousLanguage;
     final children = <Widget>[];
     for (final group in groups) {

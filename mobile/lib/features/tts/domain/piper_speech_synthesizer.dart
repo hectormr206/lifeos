@@ -22,6 +22,21 @@ class PiperSynthesisException implements Exception {
   String toString() => message;
 }
 
+/// Raised when a Piper voice's `*.onnx.json` config is INCOMPATIBLE with the
+/// on-device sherpa-onnx engine — synthesizing it would crash the app NATIVELY
+/// (an uncatchable FFI abort), so the synthesizer refuses it BEFORE calling
+/// sherpa and throws this catchable Dart exception instead. Preview/speak call
+/// sites catch it and show a neutral "voice not supported" message rather than
+/// letting the process die. Incompatible = `phoneme_type` is not "espeak" or
+/// the voice is multi-speaker (`num_speakers > 1`, which needs a speaker id we
+/// never pass).
+class UnsupportedVoiceException implements Exception {
+  UnsupportedVoiceException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
 /// Raw synthesized audio: mono Float32 PCM in -1..1 at [sampleRate] Hz.
 class SynthesizedAudio {
   const SynthesizedAudio({required this.samples, required this.sampleRate});

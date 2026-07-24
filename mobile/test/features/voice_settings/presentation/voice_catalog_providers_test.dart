@@ -9,6 +9,8 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/tts/data/tts_preview.dart';
+import 'package:lifeos/features/tts/domain/piper_speech_synthesizer.dart';
 import 'package:lifeos/features/tts/domain/tts_voice.dart';
 import 'package:lifeos/features/tts/presentation/tts_providers.dart';
 import 'package:lifeos/features/voice_settings/domain/selected_voice.dart';
@@ -216,6 +218,54 @@ void main() {
       expect(done['en_US-lessac'], isA<TtsVoiceReady>());
       expect(done['es_MX-ald'], isA<TtsVoiceReady>());
       expect(gateway.downloadCalls, containsAll(['es_MX-claude', 'en_US-lessac', 'es_MX-ald']));
+    });
+  });
+
+  group('VoiceCatalogController.preview', () {
+    test('an incompatible voice surfaces the incompatible notice, never throws',
+        () async {
+      final gateway = FakeTtsVoiceGateway(installed: {'es_MX-claude': _paths});
+      // The synthesizer refuses the voice as the real guard would — a catchable
+      // UnsupportedVoiceException instead of a native crash.
+      final synthesizer = FakeSynthesizer(
+        error: UnsupportedVoiceException('no compatible'),
+      );
+      final container = ProviderContainer(overrides: [
+        ttsVoiceGatewayProvider.overrideWithValue(gateway),
+        selectedVoicePreferencesProvider.overrideWithValue(FakeSelectedVoicePreferences()),
+        ttsPreviewProvider.overrideWithValue(
+          TtsPreview(synthesizer: synthesizer, playback: FakePlayback()),
+        ),
+      ]);
+      addTearDown(container.dispose);
+      final notifier = container.read(voiceCatalogControllerProvider.notifier);
+      await notifier.ready;
+
+      // Must NOT throw — a native crash is exactly what the guard prevents.
+      await notifier.preview('es_MX-claude', 'hola');
+
+      expect(
+        container.read(voicePreviewNoticeProvider),
+        VoicePreviewNotice.incompatibleVoice,
+      );
+    });
+
+    test('a normal preview leaves the notice null', () async {
+      final gateway = FakeTtsVoiceGateway(installed: {'es_MX-claude': _paths});
+      final container = ProviderContainer(overrides: [
+        ttsVoiceGatewayProvider.overrideWithValue(gateway),
+        selectedVoicePreferencesProvider.overrideWithValue(FakeSelectedVoicePreferences()),
+        ttsPreviewProvider.overrideWithValue(
+          TtsPreview(synthesizer: FakeSynthesizer(), playback: FakePlayback()),
+        ),
+      ]);
+      addTearDown(container.dispose);
+      final notifier = container.read(voiceCatalogControllerProvider.notifier);
+      await notifier.ready;
+
+      await notifier.preview('es_MX-claude', 'hola');
+
+      expect(container.read(voicePreviewNoticeProvider), isNull);
     });
   });
 
