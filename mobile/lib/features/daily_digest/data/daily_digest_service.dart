@@ -1,3 +1,5 @@
+import 'package:timezone/timezone.dart' as tz;
+
 import '../../../core/graph/local_graph_store.dart';
 import '../../domains/data/local_domain_repository.dart';
 import '../../domains/domain/domain_descriptor.dart';
@@ -49,24 +51,24 @@ class DailyDigestService {
 
   /// Aggregate today's data (pure, deterministic) into a structured view — used
   /// by the digest screen and the unified "Mi vida" view.
-  Future<DailyDigestData> aggregate({required DateTime now}) async {
+  Future<DailyDigestData> aggregate({required DateTime now, tz.Location? location}) async {
     final entriesByDomain = <String, List<LocalDomainEntry>>{};
     for (final descriptor in domainDescriptors) {
       // Fetch the whole history for the domain; the aggregator filters to TODAY
-      // using [now] (device tz via clockProvider) so the today-window is driven
-      // by the injected clock, not the repository's own DateTime.now.
+      // using [now] in the effective zone ([location] — the override, or null
+      // for device-local) so the today-window matches the user's chosen zone.
       entriesByDomain[descriptor.key] =
           await _repository.list(descriptor.key, period: LocalEntryPeriod.todo);
     }
     final directory = PersonDirectory.fromNodes(await _store.listNodesByKind('person'));
-    return aggregateDailyDigest(entriesByDomain, now: now, directory: directory);
+    return aggregateDailyDigest(entriesByDomain, now: now, directory: directory, location: location);
   }
 
   /// Generate a full digest for [now]. The model wrap-up is shaped by the fixed
   /// internal [kDailyDigestNarrationInstruction] (not user-configurable).
   /// Deterministic facts are always produced; the wrap-up is best-effort.
-  Future<DailyDigest> generate({required DateTime now}) async {
-    final data = await aggregate(now: now);
+  Future<DailyDigest> generate({required DateTime now, tz.Location? location}) async {
+    final data = await aggregate(now: now, location: location);
     final facts = renderDigestFacts(data);
 
     if (data.isEmpty) {

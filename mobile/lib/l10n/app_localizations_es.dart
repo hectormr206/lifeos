@@ -142,6 +142,33 @@ class AppLocalizationsEs extends AppLocalizations {
       'Revisa y gestiona los permisos de la app';
 
   @override
+  String get timezoneNavTitle => 'Zona horaria';
+
+  @override
+  String get timezoneNavSubtitle => 'Automática o elige una zona manualmente';
+
+  @override
+  String get timezoneTitle => 'Zona horaria';
+
+  @override
+  String get timezoneAutomaticLabel => 'Automática (usar la del teléfono)';
+
+  @override
+  String get timezoneAutomaticSubtitle =>
+      'Detecta la zona de tu dispositivo, con horario de verano.';
+
+  @override
+  String timezoneDetectedLabel(String zone) {
+    return 'Detectada: $zone';
+  }
+
+  @override
+  String get timezoneSearchHint => 'Buscar zona…';
+
+  @override
+  String get timezoneNoResults => 'Sin resultados';
+
+  @override
   String get voiceNavTitle => 'Voz';
 
   @override

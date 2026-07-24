@@ -1,15 +1,27 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/graph/graph_providers.dart';
+import '../../../core/timezone/timezone_providers.dart';
 import '../data/local_reminders_repository.dart';
 import '../data/local_reminders_service.dart';
 import '../data/reminder_notifications.dart';
 import '../domain/reminder_scheduler.dart';
 
 /// The production notification scheduler; overridden with a fake in tests so
-/// no `flutter_local_notifications` channel is touched.
-final reminderSchedulerProvider =
-    Provider<ReminderScheduler>((ref) => NotificationReminderScheduler());
+/// no `flutter_local_notifications` channel is touched. Alarms are built in the
+/// EFFECTIVE, DST-aware zone (device zone in AUTOMATIC mode, else the override),
+/// resolved lazily so a reminder repeats at the correct LOCAL wall time.
+final reminderSchedulerProvider = Provider<ReminderScheduler>(
+  (ref) => NotificationReminderScheduler(
+    locationResolver: () async {
+      try {
+        return (await ref.read(effectiveTimezoneProvider.future)).location;
+      } catch (_) {
+        return null;
+      }
+    },
+  ),
+);
 
 /// The app-wide LOCAL reminders write-path (store + scheduler). Async because
 /// the underlying [localGraphStoreProvider] opens/keys the encrypted DB

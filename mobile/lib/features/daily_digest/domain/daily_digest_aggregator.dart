@@ -12,6 +12,8 @@
 /// its exact per-record timestamp; entries from any other day are excluded.
 library;
 
+import 'package:timezone/timezone.dart' as tz;
+
 import '../../domains/domain/domain_descriptor.dart';
 import '../../domains/domain/local_domain_entry.dart';
 import '../../memory/domain/person_directory.dart';
@@ -19,19 +21,25 @@ import 'daily_digest.dart';
 
 /// Aggregate today's entries (grouped by domain + person) from the per-domain
 /// entry lists. [entriesByDomain] is keyed by `DomainDescriptor.key`.
+///
+/// TIMEZONE: [location] selects the zone that defines "today" (the local
+/// calendar day). `null` (AUTOMATIC) uses device-local time (unchanged); a
+/// manual override uses that zone, so an entry near midnight lands in the right
+/// local day for the chosen zone.
 DailyDigestData aggregateDailyDigest(
   Map<String, List<LocalDomainEntry>> entriesByDomain, {
   required DateTime now,
   required PersonDirectory directory,
+  tz.Location? location,
 }) {
-  final today = _localDay(now);
+  final today = _localDay(now, location);
   final sections = <DigestDomainSection>[];
 
   for (final descriptor in domainDescriptors) {
     final all = entriesByDomain[descriptor.key] ?? const <LocalDomainEntry>[];
-    // TODAY only, using the entry's EXACT timestamp in device-local time.
+    // TODAY only, using the entry's EXACT timestamp in the effective zone.
     final todays = all
-        .where((e) => _localDay(e.timestamp.toLocal()) == today)
+        .where((e) => _localDay(e.timestamp, location) == today)
         .toList()
       ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
     if (todays.isEmpty) continue;
@@ -68,8 +76,8 @@ DailyDigestData aggregateDailyDigest(
   return DailyDigestData(generatedAt: now, sections: sections);
 }
 
-DateTime _localDay(DateTime t) {
-  final local = t.toLocal();
+DateTime _localDay(DateTime t, [tz.Location? location]) {
+  final local = location == null ? t.toLocal() : tz.TZDateTime.from(t, location);
   return DateTime(local.year, local.month, local.day);
 }
 

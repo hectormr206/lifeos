@@ -133,12 +133,14 @@ class AppNotifications {
   /// (LOCAL reminders, roadmap slice C2). Same channel/payload contract as
   /// [show]; re-scheduling with the same [id] replaces the previous schedule.
   ///
-  /// The instant is scheduled as a UTC `TZDateTime` — an absolute point in
-  /// time, so no device IANA-zone lookup (= no extra plugin dep) is needed.
-  /// With [repeatDailyAtTime] the plugin repeats at the same UTC wall time
-  /// every day (`DateTimeComponents.time`), which is the same LOCAL time on
-  /// every fixed-offset zone (Mexico has no DST). A future timezone slice can
-  /// swap in a real local `tz.Location` behind this one method.
+  /// TIMEZONE: pass the effective [location] (the device zone in AUTOMATIC mode,
+  /// or the user's manual override) so the alarm is built in a REAL, DST-aware
+  /// `tz.Location`. This matters for [repeatDailyAtTime]: a daily reminder repeats
+  /// at the same LOCAL wall time every day (`DateTimeComponents.time`) with DST
+  /// handled correctly by the plugin — replacing the old fixed-offset/UTC
+  /// simplification (which only happened to work on a no-DST zone like Mexico).
+  /// When [location] is `null` the previous UTC behavior is kept as a safe
+  /// fallback (a one-shot still fires on the right instant either way).
   ///
   /// `AndroidScheduleMode.inexactAllowWhileIdle` is used deliberately: it
   /// needs NO `SCHEDULE_EXACT_ALARM` manifest permission (no native file
@@ -153,15 +155,20 @@ class AppNotifications {
     required String payload,
     required DateTime scheduledAt,
     bool repeatDailyAtTime = false,
+    tz.Location? location,
   }) async {
     try {
       await _ensureInitialized();
       _ensureTimeZones();
-      final when = tz.TZDateTime.from(scheduledAt.toUtc(), tz.UTC);
+      // Build the alarm in the effective local zone (DST-aware) when known; the
+      // absolute instant is preserved either way, only the wall-clock fields
+      // (used by DateTimeComponents.time for a daily repeat) change.
+      final zone = location ?? tz.UTC;
+      final when = tz.TZDateTime.from(scheduledAt, zone);
       // A past one-shot would throw in the plugin; the caller decides how to
       // surface overdue reminders, so just skip scheduling. A daily repeat is
       // fine: DateTimeComponents.time matches the NEXT occurrence.
-      if (!repeatDailyAtTime && !when.isAfter(tz.TZDateTime.now(tz.UTC))) {
+      if (!repeatDailyAtTime && !when.isAfter(tz.TZDateTime.now(zone))) {
         return;
       }
       final details = NotificationDetails(

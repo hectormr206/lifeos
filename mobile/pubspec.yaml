@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.9.10+1
+version: 0.9.11+1
 
 environment:
   sdk: ^3.12.2
@@ -139,6 +139,11 @@ dependencies:
   # flutter_local_notifications, pinned 0.11.1 in the lock) — this line only
   # promotes it to a direct dependency; no new package is resolved.
   timezone: ^0.11.1
+  # Device IANA zone detection (timezone slice): returns the device's IANA zone
+  # id (e.g. "America/Mexico_City") so the effective-timezone resolver can, in
+  # AUTOMATIC mode, follow the phone's zone. The `timezone` package above turns
+  # that id into a DST-aware `tz.Location`; this package only reports the id.
+  flutter_timezone: ^4.1.1
   open_filex: ^4.7.0
   image_picker: ^1.2.3
   record: ^7.1.1

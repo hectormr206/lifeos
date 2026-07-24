@@ -1,3 +1,5 @@
+import 'package:timezone/timezone.dart' as tz;
+
 /// The user's "Boletín automático" setting: whether the briefing should be
 /// triggered daily and at which local wall-clock time (default 8:00, ENABLED —
 /// the "everything-on" default; the user opts out).
@@ -5,6 +7,12 @@
 /// Pure value object + pure date math so the trigger logic (when is the next
 /// run? should we auto-run right now?) is unit-testable with plain [DateTime]s
 /// and no platform channels.
+///
+/// TIMEZONE: [nextRun]/[shouldRunNow] take an optional [tz.Location]. When it is
+/// `null` (AUTOMATIC mode) the wall-clock (`hour:minute`) is interpreted in the
+/// device-local zone, exactly as before. When a manual override [tz.Location] is
+/// passed, the same wall-clock is interpreted in THAT zone (DST-aware), so an
+/// 08:00 briefing fires at 08:00 in the chosen zone.
 class BriefingSchedule {
   const BriefingSchedule({
     this.enabled = true,
@@ -35,11 +43,12 @@ class BriefingSchedule {
   /// briefing was already generated today ([lastGeneratedAt]) — so generating
   /// manually at 7:50 moves an 8:00 reminder to tomorrow instead of nagging
   /// ten minutes later.
-  DateTime nextRun(DateTime now, {DateTime? lastGeneratedAt}) {
-    var candidate = DateTime(now.year, now.month, now.day, hour, minute);
+  DateTime nextRun(DateTime now, {DateTime? lastGeneratedAt, tz.Location? location}) {
+    final lastLocal = _inZone(lastGeneratedAt, location);
+    var candidate = _slot(now, now.day, location);
     if (!candidate.isAfter(now) ||
-        (lastGeneratedAt != null && _sameDay(candidate, lastGeneratedAt))) {
-      candidate = DateTime(now.year, now.month, now.day + 1, hour, minute);
+        (lastLocal != null && _sameDay(candidate, lastLocal))) {
+      candidate = _slot(now, now.day + 1, location);
     }
     return candidate;
   }
@@ -47,13 +56,23 @@ class BriefingSchedule {
   /// Whether an automatic run is due RIGHT NOW: the schedule is enabled,
   /// today's scheduled time already arrived, and no briefing was generated
   /// today yet ([lastGeneratedAt] — the already-generated-today guard).
-  bool shouldRunNow(DateTime now, {DateTime? lastGeneratedAt}) {
+  bool shouldRunNow(DateTime now, {DateTime? lastGeneratedAt, tz.Location? location}) {
     if (!enabled) return false;
-    final todaySlot = DateTime(now.year, now.month, now.day, hour, minute);
+    final todaySlot = _slot(now, now.day, location);
     if (now.isBefore(todaySlot)) return false;
-    if (lastGeneratedAt != null && _sameDay(now, lastGeneratedAt)) return false;
+    final lastLocal = _inZone(lastGeneratedAt, location);
+    if (lastLocal != null && _sameDay(now, lastLocal)) return false;
     return true;
   }
+
+  /// The `hour:minute` slot on [ref]'s (year, month, [day]) — built in
+  /// [location] when given (DST-aware), else device-local.
+  DateTime _slot(DateTime ref, int day, tz.Location? location) => location == null
+      ? DateTime(ref.year, ref.month, day, hour, minute)
+      : tz.TZDateTime(location, ref.year, ref.month, day, hour, minute);
+
+  static DateTime? _inZone(DateTime? t, tz.Location? location) =>
+      t == null || location == null ? t : tz.TZDateTime.from(t, location);
 
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;

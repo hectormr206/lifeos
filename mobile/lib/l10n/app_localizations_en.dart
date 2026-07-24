@@ -140,6 +140,33 @@ class AppLocalizationsEn extends AppLocalizations {
       'Review and manage the app\'s permissions';
 
   @override
+  String get timezoneNavTitle => 'Time zone';
+
+  @override
+  String get timezoneNavSubtitle => 'Automatic or pick a zone manually';
+
+  @override
+  String get timezoneTitle => 'Time zone';
+
+  @override
+  String get timezoneAutomaticLabel => 'Automatic (use the phone\'s)';
+
+  @override
+  String get timezoneAutomaticSubtitle =>
+      'Detects your device\'s zone, with daylight saving time.';
+
+  @override
+  String timezoneDetectedLabel(String zone) {
+    return 'Detected: $zone';
+  }
+
+  @override
+  String get timezoneSearchHint => 'Search zone…';
+
+  @override
+  String get timezoneNoResults => 'No results';
+
+  @override
   String get voiceNavTitle => 'Voice';
 
   @override

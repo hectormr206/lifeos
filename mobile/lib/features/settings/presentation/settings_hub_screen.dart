@@ -85,6 +85,13 @@ class SettingsHubScreen extends ConsumerWidget {
             onTap: () => context.push('/settings/updates'),
           ),
           ListTile(
+            leading: const Icon(Icons.schedule_outlined),
+            title: Text(l10n.timezoneNavTitle),
+            subtitle: Text(l10n.timezoneNavSubtitle),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/timezone'),
+          ),
+          ListTile(
             leading: const Icon(Icons.privacy_tip_outlined),
             title: Text(l10n.permissionsNavTitle),
             subtitle: Text(l10n.permissionsNavSubtitle),

@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:timezone/timezone.dart' as tz;
 
+import '../../../core/timezone/timezone_providers.dart';
 import '../domain/daily_digest.dart';
 import '../domain/daily_digest_schedule.dart';
 import 'daily_digest_providers.dart';
@@ -58,6 +60,10 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
   Future<void>? _bootstrapFuture;
   Timer? _autoRunTimer;
 
+  /// Set once the provider is disposed, so an in-flight async arm (which now
+  /// awaits the effective-zone resolution) never touches `state` afterwards.
+  bool _disposed = false;
+
   /// Injectable clock for schedule math AND the aggregation "today" window
   /// (production uses the device clock; tests inject a fixed one).
   @visibleForTesting
@@ -68,7 +74,10 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
 
   @override
   DailyDigestState build() {
-    ref.onDispose(() => _autoRunTimer?.cancel());
+    ref.onDispose(() {
+      _disposed = true;
+      _autoRunTimer?.cancel();
+    });
     _bootstrapFuture = _hydrate();
     return const DailyDigestState();
   }
@@ -106,6 +115,22 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
 
   // ── Triggers (OS reminder + in-app timer) ──────────────────────────────────
 
+  /// The manual-override [tz.Location] to apply to schedule math, or `null` in
+  /// AUTOMATIC mode (device-local, unchanged behavior). Best-effort: any failure
+  /// to read the effective zone degrades to device-local.
+  Future<tz.Location?> _overrideLocation() async {
+    try {
+      return (await ref.read(effectiveTimezoneProvider.future)).overrideLocation;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Reinterprets [base] in [location] so its wall-clock fields are the local
+  /// calendar day/time in the effective zone; `null` keeps it device-local.
+  DateTime _nowIn(DateTime base, tz.Location? location) =>
+      location == null ? base : tz.TZDateTime.from(base, location);
+
   Future<void> _armTriggers() async {
     _autoRunTimer?.cancel();
     _autoRunTimer = null;
@@ -115,20 +140,31 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
       await scheduler.cancelReminder();
       return;
     }
-    final now = clock();
-    final next = schedule.nextRun(now, lastGeneratedAt: state.digest?.generatedAt);
+    final location = await _overrideLocation();
+    if (_disposed) return;
+    final base = clock();
+    final now = _nowIn(base, location);
+    final next = schedule.nextRun(
+      now,
+      lastGeneratedAt: state.digest?.generatedAt,
+      location: location,
+    );
     await scheduler.scheduleReminder(next);
-    _autoRunTimer = Timer(next.difference(now), () => maybeAutoGenerate());
+    if (_disposed) return;
+    _autoRunTimer = Timer(next.difference(base), () => maybeAutoGenerate());
   }
 
   /// Entry point for every trigger path: runs [generate] IF a run is due AND
   /// today's digest does not exist yet. Always re-arms after.
   Future<void> maybeAutoGenerate() async {
     await ready;
-    if (state.isGenerating) return;
+    if (_disposed || state.isGenerating) return;
+    final location = await _overrideLocation();
+    if (_disposed) return;
     final due = state.schedule.shouldRunNow(
-      clock(),
+      _nowIn(clock(), location),
       lastGeneratedAt: state.digest?.generatedAt,
+      location: location,
     );
     if (due) {
       await ref.read(dailyDigestSchedulerProvider).cancelReminder();
@@ -145,8 +181,9 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
     if (state.isGenerating) return;
     state = state.copyWith(phase: DailyDigestPhase.generating, error: null);
     try {
+      final location = await _overrideLocation();
       final service = await ref.read(dailyDigestServiceProvider.future);
-      final digest = await service.generate(now: clock());
+      final digest = await service.generate(now: clock(), location: location);
       state = state.copyWith(digest: digest, phase: DailyDigestPhase.done);
       try {
         await ref.read(dailyDigestPreferencesProvider).saveLastDigest(digest);

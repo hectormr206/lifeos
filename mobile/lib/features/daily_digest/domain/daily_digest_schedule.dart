@@ -8,6 +8,14 @@
 ///
 /// Pure value object + pure date math, so the trigger logic is unit-testable
 /// with plain [DateTime]s and no platform channels (mirrors BriefingSchedule).
+///
+/// TIMEZONE: [nextRun]/[shouldRunNow] take an optional [tz.Location] — `null`
+/// (AUTOMATIC) interprets the wall-clock in device-local time (unchanged); a
+/// manual override interprets it in that zone (DST-aware).
+library;
+
+import 'package:timezone/timezone.dart' as tz;
+
 class DailyDigestSchedule {
   const DailyDigestSchedule({
     this.enabled = true,
@@ -38,24 +46,35 @@ class DailyDigestSchedule {
   /// The next instant (device-local time) the schedule should fire, given
   /// [now]. Skips today's slot when it already passed, and also when a digest
   /// was already generated today ([lastGeneratedAt]).
-  DateTime nextRun(DateTime now, {DateTime? lastGeneratedAt}) {
-    var candidate = DateTime(now.year, now.month, now.day, hour, minute);
+  DateTime nextRun(DateTime now, {DateTime? lastGeneratedAt, tz.Location? location}) {
+    final lastLocal = _inZone(lastGeneratedAt, location);
+    var candidate = _slot(now, now.day, location);
     if (!candidate.isAfter(now) ||
-        (lastGeneratedAt != null && _sameDay(candidate, lastGeneratedAt))) {
-      candidate = DateTime(now.year, now.month, now.day + 1, hour, minute);
+        (lastLocal != null && _sameDay(candidate, lastLocal))) {
+      candidate = _slot(now, now.day + 1, location);
     }
     return candidate;
   }
 
   /// Whether an automatic run is due RIGHT NOW: enabled, today's slot passed,
   /// and no digest generated today yet ([lastGeneratedAt] guard).
-  bool shouldRunNow(DateTime now, {DateTime? lastGeneratedAt}) {
+  bool shouldRunNow(DateTime now, {DateTime? lastGeneratedAt, tz.Location? location}) {
     if (!enabled) return false;
-    final todaySlot = DateTime(now.year, now.month, now.day, hour, minute);
+    final todaySlot = _slot(now, now.day, location);
     if (now.isBefore(todaySlot)) return false;
-    if (lastGeneratedAt != null && _sameDay(now, lastGeneratedAt)) return false;
+    final lastLocal = _inZone(lastGeneratedAt, location);
+    if (lastLocal != null && _sameDay(now, lastLocal)) return false;
     return true;
   }
+
+  /// The `hour:minute` slot on [ref]'s (year, month, [day]) — built in
+  /// [location] when given (DST-aware), else device-local.
+  DateTime _slot(DateTime ref, int day, tz.Location? location) => location == null
+      ? DateTime(ref.year, ref.month, day, hour, minute)
+      : tz.TZDateTime(location, ref.year, ref.month, day, hour, minute);
+
+  static DateTime? _inZone(DateTime? t, tz.Location? location) =>
+      t == null || location == null ? t : tz.TZDateTime.from(t, location);
 
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;

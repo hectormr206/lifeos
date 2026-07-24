@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:timezone/timezone.dart' as tz;
 
 import '../../../core/clock/clock.dart';
+import '../../../core/timezone/timezone_providers.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../local_model/domain/local_llm_engine.dart';
 import '../../local_model/domain/on_device_translator.dart';
@@ -132,6 +134,10 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// hour, this timer runs [generate] directly (fully autonomous, no tap).
   Timer? _autoRunTimer;
 
+  /// Set once disposed, so an in-flight async arm (now awaiting the effective
+  /// zone) never touches `state` afterwards.
+  bool _disposed = false;
+
   /// Injectable clock for the schedule/auto-run logic (production uses the real
   /// clock). Freshness uses [clockProvider] instead (the device-timezone seam).
   @visibleForTesting
@@ -156,7 +162,10 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
 
   @override
   MorningBriefingState build() {
-    ref.onDispose(() => _autoRunTimer?.cancel());
+    ref.onDispose(() {
+      _disposed = true;
+      _autoRunTimer?.cancel();
+    });
     _bootstrapFuture = _hydrate();
     return const MorningBriefingState();
   }
@@ -223,6 +232,19 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// (Re)arms BOTH triggers (OS reminder + in-app timer) for the current
   /// schedule. Disabled → both cancelled. One-shot: every start/resume/run
   /// re-arms for the NEXT occurrence.
+  /// The manual-override [tz.Location] for schedule math, or `null` in AUTOMATIC
+  /// mode (device-local, unchanged). Best-effort — failures degrade to local.
+  Future<tz.Location?> _overrideLocation() async {
+    try {
+      return (await ref.read(effectiveTimezoneProvider.future)).overrideLocation;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  DateTime _nowIn(DateTime base, tz.Location? location) =>
+      location == null ? base : tz.TZDateTime.from(base, location);
+
   Future<void> _armTriggers() async {
     _autoRunTimer?.cancel();
     _autoRunTimer = null;
@@ -232,10 +254,18 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       await scheduler.cancelReminder();
       return;
     }
-    final now = clock();
-    final next = schedule.nextRun(now, lastGeneratedAt: state.briefing?.generatedAt);
+    final location = await _overrideLocation();
+    if (_disposed) return;
+    final base = clock();
+    final now = _nowIn(base, location);
+    final next = schedule.nextRun(
+      now,
+      lastGeneratedAt: state.briefing?.generatedAt,
+      location: location,
+    );
     await scheduler.scheduleReminder(next);
-    _autoRunTimer = Timer(next.difference(now), _onAutoRunTimer);
+    if (_disposed) return;
+    _autoRunTimer = Timer(next.difference(base), _onAutoRunTimer);
   }
 
   Future<void> _onAutoRunTimer() async {
@@ -246,10 +276,13 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// run is due AND today's briefing does not exist yet. Always re-arms after.
   Future<void> maybeAutoGenerate() async {
     await ready;
-    if (state.isGenerating) return;
+    if (_disposed || state.isGenerating) return;
+    final location = await _overrideLocation();
+    if (_disposed) return;
     final due = state.schedule.shouldRunNow(
-      clock(),
+      _nowIn(clock(), location),
       lastGeneratedAt: state.briefing?.generatedAt,
+      location: location,
     );
     if (due) {
       await ref.read(briefingSchedulerProvider).cancelReminder();

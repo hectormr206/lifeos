@@ -52,6 +52,7 @@ import 'features/reminders/presentation/local_reminders_providers.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
 import 'features/settings/presentation/settings_hub_screen.dart';
 import 'features/settings/presentation/settings_screen.dart';
+import 'features/settings/presentation/timezone_settings_screen.dart';
 import 'features/voice_settings/presentation/voice_catalog_screen.dart';
 import 'features/voice_settings/presentation/voice_settings_screen.dart';
 import 'features/web_search/presentation/web_search_settings_screen.dart';
@@ -201,6 +202,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Permissions management. Not pairing-gated (works offline, mirrors the
       // appearance/about surfaces).
       GoRoute(path: '/settings/permissions', builder: (context, state) => const PermissionsScreen()),
+      // Zona horaria: automatic device-zone detection (DST-aware) by default,
+      // with an optional manual IANA override. Local preference, works offline.
+      GoRoute(path: '/settings/timezone', builder: (context, state) => const TimezoneSettingsScreen()),
       // Web-search provider picker (DuckDuckGo / SearXNG propio / Ninguna). Not
       // pairing-gated: a local preference, works offline.
       GoRoute(path: '/settings/web-search', builder: (context, state) => const WebSearchSettingsScreen()),

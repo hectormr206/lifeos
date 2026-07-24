@@ -1,3 +1,5 @@
+import 'package:timezone/timezone.dart' as tz;
+
 import '../../../core/notifications/app_notifications.dart';
 import '../domain/local_reminder.dart';
 import '../domain/reminder_scheduler.dart';
@@ -10,10 +12,19 @@ import '../domain/reminder_scheduler.dart';
 /// the single payload-dispatch registry, so a reminder tap never collides
 /// with the update/briefing handlers.
 class NotificationReminderScheduler implements ReminderScheduler {
-  NotificationReminderScheduler([AppNotifications? notifications])
-      : _notifications = notifications ?? AppNotifications.instance;
+  NotificationReminderScheduler({
+    AppNotifications? notifications,
+    Future<tz.Location?> Function()? locationResolver,
+  })  : _notifications = notifications ?? AppNotifications.instance,
+        _locationResolver = locationResolver;
 
   final AppNotifications _notifications;
+
+  /// Resolves the effective, DST-aware [tz.Location] to build alarms in (device
+  /// zone in AUTOMATIC mode, the override otherwise). `null` (or unset) → the
+  /// scheduler falls back to the previous UTC/instant behavior. Best-effort:
+  /// its own failures fall back to `null`.
+  final Future<tz.Location?> Function()? _locationResolver;
 
   static const String channelId = 'lifeos_reminders';
   static const String channelName = 'Recordatorios';
@@ -26,17 +37,29 @@ class NotificationReminderScheduler implements ReminderScheduler {
   static const String payload = 'reminder';
 
   @override
-  Future<void> schedule(LocalReminder reminder) => _notifications.zonedSchedule(
-        id: reminder.notificationId,
-        channelId: channelId,
-        channelName: channelName,
-        channelDescription: channelDescription,
-        title: 'Recordatorio',
-        body: reminder.text,
-        payload: payload,
-        scheduledAt: reminder.dueAt,
-        repeatDailyAtTime: reminder.recurrence == ReminderRecurrence.daily,
-      );
+  Future<void> schedule(LocalReminder reminder) async {
+    tz.Location? location;
+    if (_locationResolver != null) {
+      try {
+        location = await _locationResolver();
+      } catch (_) {
+        // Best-effort: fall back to the UTC/instant path.
+        location = null;
+      }
+    }
+    await _notifications.zonedSchedule(
+      id: reminder.notificationId,
+      channelId: channelId,
+      channelName: channelName,
+      channelDescription: channelDescription,
+      title: 'Recordatorio',
+      body: reminder.text,
+      payload: payload,
+      scheduledAt: reminder.dueAt,
+      repeatDailyAtTime: reminder.recurrence == ReminderRecurrence.daily,
+      location: location,
+    );
+  }
 
   @override
   Future<void> cancel(LocalReminder reminder) =>

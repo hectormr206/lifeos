@@ -350,6 +350,54 @@ abstract class AppLocalizations {
   /// **'Review and manage the app\'s permissions'**
   String get permissionsNavSubtitle;
 
+  /// No description provided for @timezoneNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Time zone'**
+  String get timezoneNavTitle;
+
+  /// No description provided for @timezoneNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic or pick a zone manually'**
+  String get timezoneNavSubtitle;
+
+  /// No description provided for @timezoneTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Time zone'**
+  String get timezoneTitle;
+
+  /// No description provided for @timezoneAutomaticLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic (use the phone\'s)'**
+  String get timezoneAutomaticLabel;
+
+  /// No description provided for @timezoneAutomaticSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Detects your device\'s zone, with daylight saving time.'**
+  String get timezoneAutomaticSubtitle;
+
+  /// No description provided for @timezoneDetectedLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Detected: {zone}'**
+  String timezoneDetectedLabel(String zone);
+
+  /// No description provided for @timezoneSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search zone…'**
+  String get timezoneSearchHint;
+
+  /// No description provided for @timezoneNoResults.
+  ///
+  /// In en, this message translates to:
+  /// **'No results'**
+  String get timezoneNoResults;
+
   /// No description provided for @voiceNavTitle.
   ///
   /// In en, this message translates to:

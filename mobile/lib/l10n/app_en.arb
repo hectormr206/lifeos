@@ -45,6 +45,19 @@
   "notificationsNavSubtitle": "New-version alerts",
   "permissionsNavTitle": "Permissions",
   "permissionsNavSubtitle": "Review and manage the app's permissions",
+  "timezoneNavTitle": "Time zone",
+  "timezoneNavSubtitle": "Automatic or pick a zone manually",
+  "timezoneTitle": "Time zone",
+  "timezoneAutomaticLabel": "Automatic (use the phone's)",
+  "timezoneAutomaticSubtitle": "Detects your device's zone, with daylight saving time.",
+  "timezoneDetectedLabel": "Detected: {zone}",
+  "@timezoneDetectedLabel": {
+    "placeholders": {
+      "zone": { "type": "String" }
+    }
+  },
+  "timezoneSearchHint": "Search zone…",
+  "timezoneNoResults": "No results",
   "voiceNavTitle": "Voice",
   "voiceNavSubtitle": "How Axi speaks: natural voice and auto-read",
   "voiceScreenTitle": "Voice",
