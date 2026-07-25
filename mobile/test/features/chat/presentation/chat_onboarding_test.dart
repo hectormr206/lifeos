@@ -294,8 +294,8 @@ void main() {
     );
   });
 
-  testWidgets('ignoring the question (a health log) captures no name and the '
-      'model answers normally', (tester) async {
+  testWidgets('ignoring the question (a health log) captures no name and is '
+      'answered by the deterministic capture ack', (tester) async {
     final container = buildContainer();
     final notifier = container.read(chatNotifierProvider.notifier);
     await notifier.ready;
@@ -307,10 +307,14 @@ void main() {
     await send;
     await tester.pump();
 
-    // No bogus name captured; the model answered the turn.
+    // No bogus name captured; the turn was answered by the capture ack (the
+    // onboarding question is simply left unanswered — chat is never blocked).
     expect(await writer.userDisplayName(), isNull);
-    expect(chatRepo.sendCalls, 1);
-    expect(container.read(chatNotifierProvider).messages.last.text, 'modelo');
+    expect(chatRepo.sendCalls, 0);
+    expect(
+      container.read(chatNotifierProvider).messages.last.text,
+      es.chatCaptureAck('Salud', 'presión 122/80, pulso 60'),
+    );
   });
 
   // ── The seeded greeting under delete/clear (data-integrity) ──────────────

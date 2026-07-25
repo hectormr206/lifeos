@@ -34,6 +34,7 @@ import '../../local_model/domain/local_llm_engine.dart';
 import '../../memory/data/memory_writer.dart';
 import '../../memory/domain/domain_router.dart';
 import '../../memory/domain/health_parser.dart';
+import '../../memory/domain/person_directory.dart';
 import '../../memory/domain/person_naming.dart';
 import '../../memory/domain/relation_extractor.dart';
 import '../../memory/domain/recall_block.dart';
@@ -80,6 +81,63 @@ class ChatContextDeps {
 /// Resolves [ChatContextDeps] for a turn, or null when the graph store is
 /// unavailable (memory degrades to OFF for that turn — the chat still answers).
 typedef ChatContextDepsLoader = Future<ChatContextDeps?> Function();
+
+/// ONE thing the DETERMINISTIC capture actually wrote for a turn — the raw
+/// material of Axi's "Anotado en Salud: …" acknowledgment (laptop parity).
+///
+/// [domainKey] is a [DomainDescriptor.key] (`health`, `exercise`, …) so the UI
+/// can label it with the same domain title the rest of the app shows.
+/// [title] is the normalized label that was stored ("presión 122/77, pulso 55").
+/// [subject] is the person the entry belongs to, already resolved to a DISPLAY
+/// name ("Celia") when known, or null when the entry is the user's own.
+class CaptureEntry {
+  const CaptureEntry({
+    required this.domainKey,
+    required this.title,
+    this.subject,
+  });
+
+  final String domainKey;
+  final String title;
+  final String? subject;
+
+  CaptureEntry withSubjectDisplay(String? display) => CaptureEntry(
+        domainKey: domainKey,
+        title: title,
+        subject: display,
+      );
+}
+
+/// What the deterministic (model-free) capture wrote for one user turn.
+///
+/// [entries] is what the chat can CONFIRM back to the user; empty means nothing
+/// domain-typed was written, and the turn must be answered normally (model).
+/// [hasNonHealthContent] is the gate for the model-based open-ended extractor —
+/// a purely medical turn never touches the model.
+class CaptureSummary {
+  const CaptureSummary({
+    this.entries = const <CaptureEntry>[],
+    this.hasNonHealthContent = false,
+  });
+
+  const CaptureSummary.empty() : this();
+
+  final List<CaptureEntry> entries;
+  final bool hasNonHealthContent;
+
+  bool get isEmpty => entries.isEmpty;
+  bool get isNotEmpty => entries.isNotEmpty;
+}
+
+/// The model-free triage of a turn: its subject-attributed segments plus any
+/// whole-turn explicit person naming. Null (see [_planCapture]) means the turn
+/// carries no deterministic capture signal at all.
+class _CapturePlan {
+  const _CapturePlan({required this.segments, this.naming});
+
+  final List<UtteranceSegment> segments;
+  final PersonNaming? naming;
+}
 
 /// Builds the per-turn prompt preamble and writes the exchange back to memory.
 class ChatContextBuilder {
@@ -197,40 +255,98 @@ class ChatContextBuilder {
     String? sourceConversationUuid,
     String? sourceMessageId,
   }) async {
+    await recordConversationTurn(
+      userText: userText,
+      axiText: axiText,
+      sourceConversationUuid: sourceConversationUuid,
+      sourceMessageId: sourceMessageId,
+    );
+    final summary = await captureTurn(
+      userText,
+      sourceConversationUuid: sourceConversationUuid,
+      sourceMessageId: sourceMessageId,
+    );
+    await extractOpenEnded(
+      userText: userText,
+      axiText: axiText,
+      summary: summary,
+    );
+  }
+
+  /// Persist ONLY the durable dialogue record (kind 'conversation'; excluded
+  /// from fact recall). Split out of [recordTurn] because the deterministic
+  /// capture now runs BEFORE the reply exists (it may BE the reply), while the
+  /// turn itself can only be stored once the shown reply is known.
+  ///
+  /// Never throws (best-effort by contract).
+  Future<void> recordConversationTurn({
+    required String userText,
+    required String axiText,
+    String? sourceConversationUuid,
+    String? sourceMessageId,
+  }) async {
     try {
       final deps = await loadDeps();
       if (deps == null) return;
-
-      final provenance = <String, Object?>{
-        kSourceConversationKey: ?sourceConversationUuid,
-        kSourceMessageKey: ?sourceMessageId,
-      };
-
-      // Durable dialogue record (kind 'conversation'; excluded from fact recall).
+      final provenance = _provenance(sourceConversationUuid, sourceMessageId);
       await deps.writer.writeConversationTurn(
         userText: userText,
         axiText: axiText,
         data: provenance.isEmpty ? null : provenance,
       );
+    } catch (_) {
+      // Best-effort memory write; a failure never surfaces to the user.
+    }
+  }
 
-      // ── DETERMINISTIC multi-topic / multi-person SEGMENTATION, FIRST ───────
-      // A single dictated line often braids several topics AND several people
-      // ("122 77 55 pulsos, corrí 5km …, y de mi esposa son 120 60 49 pulsos").
-      // Split it into subject-attributed clauses so EACH reading/note lands on
-      // the right hub, and a family-subject marker is LOCAL to its clause —
-      // never a global whole-string scan that hijacks the whole utterance.
-      // Model-free.
-      final segments = segmenter.segment(userText);
-      final naming = detectPersonNaming(userText);
-      final anyHealth = segments.any((s) => parseHealthCore(s.text) != null);
-      if (!anyHealth && naming == null && !_looksLikeStatement(userText)) {
-        return;
-      }
+  /// SYNCHRONOUS, model-free, store-free triage: could [userText] produce a
+  /// deterministic capture at all? The exact same predicate [captureTurn] uses,
+  /// exposed so the chat can decide whether to even take the async capture path
+  /// (an ordinary message goes STRAIGHT to the model — no store read, no extra
+  /// async hop, no added latency).
+  bool looksCapturable(String userText) => _planCapture(userText) != null;
+
+  /// Run the DETERMINISTIC (model-free) capture for [userText] and report WHAT
+  /// was written, so the chat can confirm it back to the user instead of asking
+  /// the model for a reply (laptop parity: `dashboard.py` answers a structured
+  /// health capture with "Anotado en salud como vital: …").
+  ///
+  /// Writes exactly what [recordTurn] used to write in its capture half: typed
+  /// domain entries for medical readings, graph facts for the other clauses,
+  /// explicit person naming, and best-effort vector indexing. It does NOT store
+  /// the conversation turn ([recordConversationTurn]) and NEVER invokes the
+  /// model ([extractOpenEnded] does, afterwards).
+  ///
+  /// Never throws: on any failure the entries written so far are still
+  /// reported, so the acknowledgment only ever claims real writes.
+  Future<CaptureSummary> captureTurn(
+    String userText, {
+    String? sourceConversationUuid,
+    String? sourceMessageId,
+  }) async {
+    // ── DETERMINISTIC multi-topic / multi-person SEGMENTATION, FIRST ─────────
+    // A single dictated line often braids several topics AND several people
+    // ("122 77 55 pulsos, corrí 5km …, y de mi esposa son 120 60 49 pulsos").
+    // Split it into subject-attributed clauses so EACH reading/note lands on
+    // the right hub, and a family-subject marker is LOCAL to its clause —
+    // never a global whole-string scan that hijacks the whole utterance.
+    // Model-free.
+    final plan = _planCapture(userText);
+    if (plan == null) return const CaptureSummary.empty();
+
+    final entries = <CaptureEntry>[];
+    var hasNonHealthContent = false;
+    ChatContextDeps? deps;
+    try {
+      deps = await loadDeps();
+      if (deps == null) return const CaptureSummary.empty();
+      final provenance = _provenance(sourceConversationUuid, sourceMessageId);
 
       // ── Deterministic explicit name/nickname learning (whole-turn scoped) ──
       // "mi esposa se llama Celia" / "a mi papá le decimos Beto" upgrades the
       // relation's person node to a real named node (label + alias). The
       // clause(s) still fall through to the normal per-segment write below.
+      final naming = plan.naming;
       if (naming != null) {
         await deps.writer.learnPersonName(
           naming.relation,
@@ -242,7 +358,7 @@ class ChatContextBuilder {
       // ── Per-segment capture ────────────────────────────────────────────────
       // Medical readings are captured 100% deterministically on the segment's
       // resolved subject; every other clause becomes a fact on the right hub.
-      var hasNonHealthContent = false;
+      final segments = plan.segments;
       for (var i = 0; i < segments.length; i++) {
         final seg = segments[i];
 
@@ -265,33 +381,101 @@ class ChatContextBuilder {
               i,
             );
             await _indexIfPossible(deps, structured);
+            entries.add(CaptureEntry(
+              domainKey: parsed.domainKey,
+              title: parsed.title,
+              subject: parsed.subject,
+            ));
             continue; // this reading is owned deterministically.
           }
         }
 
         // Non-health clause → a fact on the correct hub/domain (or generic).
         hasNonHealthContent = true;
-        await _captureSegmentFact(deps, seg, provenance);
-      }
-
-      // ── Open-ended relation extraction (model-based complement) ────────────
-      // Only when the turn carried NON-health content the deterministic parsers
-      // could not fully own (a pure-medical turn returns without ever touching
-      // the model). When an on-device model is wired, ask it for the open-ended
-      // facts + subject-predicate-object relations the deterministic parsers
-      // can't catch. Best-effort; person routing + medical values NEVER depend
-      // on it, and isLoggedVital inside the extractor still guards every write.
-      final engine = deps.engine;
-      if (hasNonHealthContent && engine != null) {
-        await RelationExtractor(
-          engine: engine,
-          writer: deps.writer,
-          store: deps.store,
-          now: now,
-        ).extractAndWrite(userText, axiText);
+        final fact = await _captureSegmentFact(deps, seg, provenance);
+        if (fact != null) entries.add(fact);
       }
     } catch (_) {
-      // Best-effort memory write; a failure never surfaces to the user.
+      // Best-effort memory write; a failure never surfaces to the user. What
+      // WAS written up to here is still reported (and only that).
+    }
+    return CaptureSummary(
+      entries: await _resolveSubjectNames(deps, entries),
+      hasNonHealthContent: hasNonHealthContent,
+    );
+  }
+
+  /// Open-ended relation extraction (model-based complement). Runs ONLY when
+  /// the turn carried NON-health content the deterministic parsers could not
+  /// fully own (a pure-medical turn never touches the model). Callers fire this
+  /// AFTER the reply is on screen so the model can never delay it.
+  ///
+  /// Best-effort; person routing + medical values NEVER depend on it, and
+  /// isLoggedVital inside the extractor still guards every write.
+  Future<void> extractOpenEnded({
+    required String userText,
+    required String axiText,
+    required CaptureSummary summary,
+  }) async {
+    if (!summary.hasNonHealthContent) return;
+    try {
+      final deps = await loadDeps();
+      final engine = deps?.engine;
+      if (deps == null || engine == null) return;
+      await RelationExtractor(
+        engine: engine,
+        writer: deps.writer,
+        store: deps.store,
+        now: now,
+      ).extractAndWrite(userText, axiText);
+    } catch (_) {
+      // Best-effort model complement; a failure never surfaces to the user.
+    }
+  }
+
+  /// The model-free capture triage shared by [looksCapturable] and
+  /// [captureTurn]: segments + whole-turn naming, or null when the turn carries
+  /// no deterministic signal at all (no reading, no naming, no statement).
+  _CapturePlan? _planCapture(String userText) {
+    final segments = segmenter.segment(userText);
+    final naming = detectPersonNaming(userText);
+    final anyHealth = segments.any((s) => parseHealthCore(s.text) != null);
+    if (!anyHealth && naming == null && !_looksLikeStatement(userText)) {
+      return null;
+    }
+    return _CapturePlan(segments: segments, naming: naming);
+  }
+
+  /// PROVENANCE stamp for everything one turn writes (see [recordTurn]).
+  static Map<String, Object?> _provenance(
+    String? sourceConversationUuid,
+    String? sourceMessageId,
+  ) =>
+      <String, Object?>{
+        kSourceConversationKey: ?sourceConversationUuid,
+        kSourceMessageKey: ?sourceMessageId,
+      };
+
+  /// Map each entry's raw relation label ("esposa") to the person's DISPLAY name
+  /// ("Celia") using the person hub, so the acknowledgment names the person the
+  /// user knows. Best-effort: an unreachable hub keeps the relation label.
+  Future<List<CaptureEntry>> _resolveSubjectNames(
+    ChatContextDeps? deps,
+    List<CaptureEntry> entries,
+  ) async {
+    if (deps == null || entries.every((e) => e.subject == null)) return entries;
+    try {
+      final directory = PersonDirectory.fromNodes(
+        await deps.store.listNodesByKind('person'),
+      );
+      return <CaptureEntry>[
+        for (final e in entries)
+          e.subject == null
+              ? e
+              : e.withSubjectDisplay(directory.displayFor(e.subject)),
+      ];
+    } catch (_) {
+      return entries;
     }
   }
 
@@ -341,18 +525,22 @@ class ChatContextBuilder {
   /// no personal-recall vocabulary, no family subject) are skipped — the model
   /// extractor is the catch-all for open-ended content. Best-effort indexing
   /// follows so the fact is semantically recallable.
-  Future<void> _captureSegmentFact(
+  ///
+  /// Returns the [CaptureEntry] to CONFIRM to the user, or null when nothing
+  /// was written OR the clause landed WITHOUT a domain (a domainless fact has no
+  /// `Anotado en <Dominio>` to claim, so the model answers that turn instead).
+  Future<CaptureEntry?> _captureSegmentFact(
     ChatContextDeps deps,
     UtteranceSegment seg,
     Map<String, Object?> provenance,
   ) async {
     final text = seg.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty) return null;
     final domain = router.routeDomain(text);
     if (domain == null &&
         seg.subject == null &&
         !looksLikePersonalRecall(text)) {
-      return; // no deterministic signal → leave it to the model complement.
+      return null; // no deterministic signal → leave it to the model complement.
     }
     final label = renderLabel(rawUtterance: text) ?? text;
     final node = await deps.writer.writeFact(
@@ -365,6 +553,8 @@ class ChatContextBuilder {
       data: <String, dynamic>{'raw_utterance': text, ...provenance},
     );
     await _indexIfPossible(deps, node);
+    if (domain == null) return null;
+    return CaptureEntry(domainKey: domain, title: label, subject: seg.subject);
   }
 
   /// Best-effort RAG indexing of a freshly-written fact node, disposing the

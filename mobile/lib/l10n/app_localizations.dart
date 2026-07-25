@@ -1136,6 +1136,18 @@ abstract class AppLocalizations {
   /// **'Nice to meet you, {name}! How can I help?'**
   String chatOnboardingNameConfirm(String name);
 
+  /// Deterministic acknowledgment of ONE thing Axi recorded for the user (no subject). Mirrors the laptop's 'Anotado en Salud'.
+  ///
+  /// In en, this message translates to:
+  /// **'Recorded in {domain}: {detail}.'**
+  String chatCaptureAck(String domain, String detail);
+
+  /// Deterministic acknowledgment of ONE thing Axi recorded for another person (wife, dad…), named so mis-attribution is visible.
+  ///
+  /// In en, this message translates to:
+  /// **'Recorded in {domain} ({subject}): {detail}.'**
+  String chatCaptureAckSubject(String domain, String subject, String detail);
+
   /// No description provided for @chatStopReading.
   ///
   /// In en, this message translates to:

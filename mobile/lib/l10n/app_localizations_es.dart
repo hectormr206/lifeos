@@ -579,6 +579,16 @@ class AppLocalizationsEs extends AppLocalizations {
   }
 
   @override
+  String chatCaptureAck(String domain, String detail) {
+    return 'Anotado en $domain: $detail.';
+  }
+
+  @override
+  String chatCaptureAckSubject(String domain, String subject, String detail) {
+    return 'Anotado en $domain ($subject): $detail.';
+  }
+
+  @override
   String get chatStopReading => 'Detener lectura';
 
   @override

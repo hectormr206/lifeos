@@ -11,6 +11,7 @@ import '../../../core/graph/graph_providers.dart';
 import '../../../core/outbox/outbox.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/locale_providers.dart';
+import '../../domains/domain/domain_descriptor.dart';
 import '../../local_model/data/on_device_chat_repository.dart';
 import '../../memory/domain/user_naming.dart';
 import '../../reminders/domain/local_reminder.dart';
@@ -23,6 +24,7 @@ import '../../web_search/domain/web_search_settings.dart';
 import '../../web_search/presentation/web_search_providers.dart';
 import '../data/chat_history_repository.dart';
 import '../data/chat_repository.dart';
+import '../domain/chat_context_builder.dart';
 import '../domain/chat_message.dart';
 import 'chat_context_providers.dart';
 import 'chat_providers.dart';
@@ -341,13 +343,145 @@ class ChatNotifier extends Notifier<ChatUiState> {
         answeringNamePrompt: answeringNamePrompt,
       );
     }
-    return _sendTextToModel(trimmed, userMessage);
+    return _answer(trimmed, userMessage);
+  }
+
+  /// Answers one user turn [text] (typed, dictated, or re-routed): the
+  /// DETERMINISTIC capture gets first refusal, the model answers everything
+  /// else. Shared by every text-turn entry point so they never drift.
+  ///
+  /// The capture triage ([ChatContextBuilder.looksCapturable]) is SYNCHRONOUS,
+  /// model-free and store-free, so an ordinary message goes straight to the
+  /// model with no extra async hop or store read.
+  Future<void> _answer(String text, ChatMessage userMessage) {
+    if (_looksCapturable(text)) return _captureThenAnswer(text, userMessage);
+    return _sendTextToModel(text, userMessage);
+  }
+
+  /// Sync guard for [_answer]; a builder failure degrades to "not capturable"
+  /// so a broken/absent memory stack can never block a normal send.
+  bool _looksCapturable(String text) {
+    try {
+      return ref.read(chatContextBuilderProvider).looksCapturable(text);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// CONFIRM WHAT WAS RECORDED (laptop parity, `dashboard.py`: a structured
+  /// capture answers "Anotado en salud como vital: …" and short-circuits the
+  /// brain). Runs the DETERMINISTIC capture FIRST; when it wrote something, its
+  /// summary becomes Axi's reply — instant, no model call, and always exactly
+  /// what landed in the domains list, per domain AND per person. Nothing
+  /// captured → the ordinary model path answers the turn as before.
+  ///
+  /// Needs NO model, so it works with the on-device brain disabled or absent.
+  Future<void> _captureThenAnswer(String text, ChatMessage userMessage) async {
+    final conversationUuid = await _conversationUuid();
+    if (_disposed) return;
+    CaptureSummary summary;
+    try {
+      summary = await ref.read(chatContextBuilderProvider).captureTurn(
+            text,
+            sourceMessageId: userMessage.id,
+            sourceConversationUuid: conversationUuid,
+          );
+    } catch (_) {
+      summary = const CaptureSummary.empty(); // memory down → model answers.
+    }
+    if (_disposed) return;
+    if (summary.isEmpty) {
+      // Nothing to confirm → normal model reply. The capture already ran, so
+      // the write-back is handed its summary and never captures twice.
+      await _sendTextToModel(
+        text,
+        userMessage,
+        captured: summary,
+        conversationUuid: conversationUuid,
+      );
+      return;
+    }
+    _setStatus(userMessage.id, ChatMessageStatus.delivered);
+    final reply = ChatMessage(
+      id: 'capture-ack-${DateTime.now().microsecondsSinceEpoch}',
+      role: ChatRole.axi,
+      text: _captureAckText(summary),
+      timestamp: DateTime.now(),
+    );
+    state = state.copyWith(messages: [...state.messages, reply], sending: false);
+    _persist(reply);
+    // Store the exchange + run the MODEL-based open-ended extractor AFTER the
+    // ack is on screen (fire-and-forget), so the model never delays the reply.
+    _recordAfterReply(
+      text,
+      reply.text,
+      summary: summary,
+      sourceMessageId: userMessage.id,
+      conversationUuid: conversationUuid,
+    );
+  }
+
+  /// The deterministic acknowledgment text: one
+  /// `Anotado en <Dominio>[ (Persona)]: <lo anotado>.` line per captured entry,
+  /// grouped by domain so a multi-topic / multi-person turn shows the SEPARATION
+  /// the user needs to spot a mis-attribution. Terse and factual — nothing the
+  /// capture did not write.
+  String _captureAckText(CaptureSummary summary) {
+    final l10n = _l10n();
+    return _groupedByDomain(summary.entries).map((entry) {
+      final domain = _domainLabel(entry.domainKey);
+      final subject = entry.subject?.trim();
+      return subject == null || subject.isEmpty
+          ? l10n.chatCaptureAck(domain, entry.title)
+          : l10n.chatCaptureAckSubject(domain, subject, entry.title);
+    }).join('\n');
+  }
+
+  /// Entries grouped per domain, keeping each domain's FIRST-appearance order
+  /// and the capture order inside it (so the user's own reading precedes the one
+  /// he dictated for someone else, exactly as he said them).
+  static List<CaptureEntry> _groupedByDomain(List<CaptureEntry> entries) {
+    final byDomain = <String, List<CaptureEntry>>{};
+    for (final entry in entries) {
+      byDomain.putIfAbsent(entry.domainKey, () => <CaptureEntry>[]).add(entry);
+    }
+    return byDomain.values.expand((group) => group).toList();
+  }
+
+  /// The domain's display title from the shared registry (one source of truth
+  /// with the domains list / "Mi vida"); an unknown key degrades to itself.
+  static String _domainLabel(String domainKey) {
+    for (final descriptor in domainDescriptors) {
+      if (descriptor.key == domainKey) return descriptor.title;
+    }
+    return domainKey;
+  }
+
+  /// The persisted conversation's uuid (provenance stamp), best-effort: null
+  /// when no store is available — the write-back then goes unstamped and recall
+  /// still works.
+  Future<String?> _conversationUuid() async {
+    try {
+      final repo = await _history();
+      return repo == null ? null : await repo.conversationUuid();
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Normal model send for a text turn: the FIFO enqueue + C1 memory write-back
   /// (on-device only). Shared by the default path and the onboarding fall-through
   /// so the two never drift.
-  Future<void> _sendTextToModel(String trimmed, ChatMessage userMessage) {
+  ///
+  /// [captured] is the summary of a capture that ALREADY ran for this turn (see
+  /// [_captureThenAnswer]); passing it keeps the write-back from capturing the
+  /// same text twice.
+  Future<void> _sendTextToModel(
+    String trimmed,
+    ChatMessage userMessage, {
+    CaptureSummary? captured,
+    String? conversationUuid,
+  }) {
     return _enqueue(_OutgoingRequest(
       userMessageId: userMessage.id,
       run: () => ref.read(chatRepositoryProvider).sendMessage(trimmed),
@@ -357,8 +491,16 @@ class ChatNotifier extends Notifier<ChatUiState> {
       // Axi remembers next time. On-device only; best-effort and fire-and-forget
       // (see `_recordTurn`) so it never blocks or reorders the FIFO send flow.
       onReply: ref.read(localModelEnabledProvider)
-          ? (reply) =>
-              _recordTurn(trimmed, reply.text, sourceMessageId: userMessage.id)
+          ? (reply) => captured == null
+              ? _recordTurn(trimmed, reply.text,
+                  sourceMessageId: userMessage.id)
+              : _recordAfterReply(
+                  trimmed,
+                  reply.text,
+                  summary: captured,
+                  sourceMessageId: userMessage.id,
+                  conversationUuid: conversationUuid,
+                )
           : null,
     ));
   }
@@ -433,17 +575,10 @@ class ChatNotifier extends Notifier<ChatUiState> {
         recurrence: parsed.recurrence,
       );
     } catch (_) {
-      // Store not ready (no keystore / plain test) → normal model flow.
+      // Store not ready (no keystore / plain test) → normal answer flow (the
+      // deterministic capture still gets first refusal, then the model).
       if (_disposed) return;
-      await _enqueue(_OutgoingRequest(
-        userMessageId: userMessage.id,
-        run: () => ref.read(chatRepositoryProvider).sendMessage(original),
-        errorPrefix: 'No se pudo enviar el mensaje',
-        onReply: ref.read(localModelEnabledProvider)
-            ? (reply) => _recordTurn(original, reply.text,
-                sourceMessageId: userMessage.id)
-            : null,
-      ));
+      await _answer(original, userMessage);
       return;
     }
     if (_disposed) return;
@@ -502,6 +637,41 @@ class ChatNotifier extends Notifier<ChatUiState> {
               sourceMessageId: sourceMessageId,
               sourceConversationUuid: conversationUuid,
             );
+      } catch (_) {
+        // Disposed mid-flight / builder unavailable — best-effort by contract.
+      }
+    }());
+  }
+
+  /// Fire-and-forget write-back for a turn whose DETERMINISTIC capture already
+  /// ran ([_captureThenAnswer]): stores the exchange itself and then lets the
+  /// MODEL-based open-ended extractor run — after the reply is already on
+  /// screen, so it can never add latency to the acknowledgment. The extractor is
+  /// skipped unless the on-device brain is enabled (it is the only step here
+  /// that needs a model).
+  void _recordAfterReply(
+    String userText,
+    String axiText, {
+    required CaptureSummary summary,
+    String? sourceMessageId,
+    String? conversationUuid,
+  }) {
+    final modelEnabled = ref.read(localModelEnabledProvider);
+    unawaited(() async {
+      try {
+        final builder = ref.read(chatContextBuilderProvider);
+        await builder.recordConversationTurn(
+          userText: userText,
+          axiText: axiText,
+          sourceMessageId: sourceMessageId,
+          sourceConversationUuid: conversationUuid,
+        );
+        if (!modelEnabled) return;
+        await builder.extractOpenEnded(
+          userText: userText,
+          axiText: axiText,
+          summary: summary,
+        );
       } catch (_) {
         // Disposed mid-flight / builder unavailable — best-effort by contract.
       }
@@ -786,16 +956,10 @@ class ChatNotifier extends Notifier<ChatUiState> {
     // active repository stack (C1 context preamble + B4 web-search decorator
     // both live inside `chatRepositoryProvider.sendMessage`), delivery ticks
     // on the voice bubble, C1 memory write-back, and persistence of the reply.
+    // A dictated log ("122 77 55 pulsos") is confirmed deterministically here
+    // too — same `_answer` triage a typed turn takes.
     state = state.copyWith(sending: true, error: null);
-    await _enqueue(_OutgoingRequest(
-      userMessageId: note.id,
-      run: () => ref.read(chatRepositoryProvider).sendMessage(transcript),
-      errorPrefix: 'No se pudo enviar el mensaje',
-      onReply: ref.read(localModelEnabledProvider)
-          ? (reply) =>
-              _recordTurn(transcript, reply.text, sourceMessageId: note.id)
-          : null,
-    ));
+    await _answer(transcript, note);
   }
 
   /// Appends the neutral-Spanish fallback reply as a normal Axi text bubble.

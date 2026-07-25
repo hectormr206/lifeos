@@ -235,6 +235,23 @@
       "name": { "type": "String" }
     }
   },
+  "chatCaptureAck": "Recorded in {domain}: {detail}.",
+  "@chatCaptureAck": {
+    "description": "Deterministic acknowledgment of ONE thing Axi recorded for the user (no subject). Mirrors the laptop's 'Anotado en Salud'.",
+    "placeholders": {
+      "domain": { "type": "String" },
+      "detail": { "type": "String" }
+    }
+  },
+  "chatCaptureAckSubject": "Recorded in {domain} ({subject}): {detail}.",
+  "@chatCaptureAckSubject": {
+    "description": "Deterministic acknowledgment of ONE thing Axi recorded for another person (wife, dad…), named so mis-attribution is visible.",
+    "placeholders": {
+      "domain": { "type": "String" },
+      "subject": { "type": "String" },
+      "detail": { "type": "String" }
+    }
+  },
   "chatStopReading": "Stop reading",
   "chatListenReply": "Listen to reply",
   "chatMetricsTitle": "Response metrics",
