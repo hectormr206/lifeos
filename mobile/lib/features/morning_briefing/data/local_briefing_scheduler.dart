@@ -5,8 +5,10 @@ import '../../../core/notifications/app_notifications.dart';
 import '../domain/briefing_scheduler.dart';
 
 /// [BriefingScheduler] backed by `flutter_local_notifications.zonedSchedule`
-/// (an AlarmManager alarm on Android — no WorkManager, no background isolate,
-/// no new plugin).
+/// (an AlarmManager alarm on Android). Since the "Segundo plano" slice this is
+/// the FALLBACK reminder layer; the primary trigger is the WorkManager one-off
+/// ([WorkmanagerBriefingBackgroundWork]) that generates headless and removes
+/// this reminder when it succeeds first.
 ///
 /// Design notes:
 ///   - ONE-SHOT alarm, re-armed by the notifier on every app start / resume /

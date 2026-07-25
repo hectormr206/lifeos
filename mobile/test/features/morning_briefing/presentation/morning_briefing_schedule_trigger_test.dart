@@ -45,6 +45,7 @@ String _dated(DateTime now) {
   FakeMorningBriefingPreferences prefs,
   FakeBriefingNotifications notifications,
   FakeLocalLlmEngine engine,
+  FakeBriefingBackgroundWork backgroundWork,
 }) _harness({
   required DateTime now,
   BriefingSchedule? initialSchedule,
@@ -54,6 +55,7 @@ String _dated(DateTime now) {
   final engine = FakeLocalLlmEngine(installed: true);
   final scheduler = FakeBriefingScheduler();
   final notifications = FakeBriefingNotifications();
+  final backgroundWork = FakeBriefingBackgroundWork();
   final prefs = FakeMorningBriefingPreferences(
     initialSources: sources ?? ['https://a.com/rss'],
     initialBriefing: initialBriefing,
@@ -66,6 +68,7 @@ String _dated(DateTime now) {
       morningBriefingPreferencesProvider.overrideWithValue(prefs),
       briefingNotificationsProvider.overrideWithValue(notifications),
       briefingSchedulerProvider.overrideWithValue(scheduler),
+      briefingBackgroundWorkProvider.overrideWithValue(backgroundWork),
       clockProvider.overrideWithValue(_FixedClock(now)),
     ],
   );
@@ -78,6 +81,7 @@ String _dated(DateTime now) {
     prefs: prefs,
     notifications: notifications,
     engine: engine,
+    backgroundWork: backgroundWork,
   );
 }
 
@@ -95,6 +99,32 @@ void main() {
     expect(await h.prefs.schedule(), const BriefingSchedule(enabled: true, hour: 8, minute: 0));
     expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 8, 0),
         reason: 'reminder armed for today 8:00 (still ahead of 6:00)');
+    expect(h.backgroundWork.lastDelay, const Duration(hours: 2),
+        reason: 'the WorkManager one-off is armed for the SAME instant (6:00 → 8:00)');
+  });
+
+  test('arming also schedules the background one-off with the next-run delay', () async {
+    final h = _harness(now: morning, initialSchedule: const BriefingSchedule(enabled: true));
+    await h.notifier.ready;
+
+    expect(h.backgroundWork.lastDelay, const Duration(hours: 2),
+        reason: 'hydration arms the headless generation for today 8:00');
+
+    await h.notifier.setScheduleTime(9, 15);
+    expect(h.backgroundWork.lastDelay, const Duration(hours: 3, minutes: 15),
+        reason: 'a schedule change re-registers the work at the new instant');
+  });
+
+  test('disabling the schedule cancels the pending background work', () async {
+    final h = _harness(now: morning, initialSchedule: const BriefingSchedule(enabled: true));
+    await h.notifier.ready;
+    final armedBefore = h.backgroundWork.scheduledDelays.length;
+
+    await h.notifier.setScheduleEnabled(false);
+
+    expect(h.backgroundWork.cancelCount, greaterThan(0));
+    expect(h.backgroundWork.scheduledDelays.length, armedBefore,
+        reason: 'no new work registered after disabling');
   });
 
   test('changing the hour persists and re-arms the reminder', () async {

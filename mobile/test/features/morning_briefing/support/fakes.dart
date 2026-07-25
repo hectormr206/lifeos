@@ -1,3 +1,4 @@
+import 'package:lifeos/features/morning_briefing/domain/briefing_background_work.dart';
 import 'package:lifeos/features/morning_briefing/domain/briefing_notifications.dart';
 import 'package:lifeos/features/morning_briefing/domain/briefing_schedule.dart';
 import 'package:lifeos/features/morning_briefing/domain/briefing_scheduler.dart';
@@ -65,6 +66,22 @@ class FakeBriefingScheduler implements BriefingScheduler {
 
   @override
   Future<bool> launchedByTap() async => launched;
+}
+
+/// In-memory [BriefingBackgroundWork]: records scheduled one-off delays and
+/// cancellations. No workmanager plugin channel.
+class FakeBriefingBackgroundWork implements BriefingBackgroundWork {
+  final List<Duration> scheduledDelays = [];
+  int cancelCount = 0;
+
+  /// The most recently scheduled delay, or null.
+  Duration? get lastDelay => scheduledDelays.isEmpty ? null : scheduledDelays.last;
+
+  @override
+  Future<void> scheduleOneOff(Duration initialDelay) async => scheduledDelays.add(initialDelay);
+
+  @override
+  Future<void> cancel() async => cancelCount++;
 }
 
 /// In-memory [MorningBriefingPreferences]: no shared_preferences channel.

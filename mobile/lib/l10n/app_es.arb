@@ -266,7 +266,7 @@
   "briefingGeneratedAt": "Generado el {datetime}",
   "briefingLinkCopied": "Enlace copiado al portapapeles",
   "briefingScheduleTitle": "Boletín automático",
-  "briefingScheduleSubtitle": "Genera el boletín cada día a la hora elegida. Si la app está cerrada, recibirás un aviso para generarlo con un toque.",
+  "briefingScheduleSubtitle": "Genera el boletín cada día a la hora elegida, incluso con LifeOS cerrada. Si el sistema pospone la tarea, recibirás un aviso para generarlo con un toque.",
   "briefingScheduleTimeLabel": "Hora del boletín",
   "briefingOpenArticle": "Ver noticia completa →",
   "briefingFullSummary": "Ver resumen completo",

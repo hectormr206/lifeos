@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.9.18+1
+version: 0.9.19+1
 
 environment:
   sdk: ^3.12.2
@@ -198,6 +198,15 @@ dependencies:
   # (see android/.../MainActivity.kt) and the USE_BIOMETRIC permission
   # (AndroidManifest.xml). Purely on-device: no network.
   local_auth: ^3.0.2
+  # REAL background generation for the "Boletín automático" ("Segundo plano",
+  # user opt-in): a WorkManager one-off task fires at the scheduled hour with
+  # the app closed and runs the whole briefing pipeline headless — fetch +
+  # assemble + on-device translation when the ~2.6GB model file is already on
+  # disk (never downloads in background). Wrapped behind BriefingBackgroundWork
+  # (features/morning_briefing/domain) so tests inject a fake; the callback
+  # dispatcher lives in core/background/background_tasks.dart. No extra Android
+  # manifest work needed for one-off tasks on 0.9.x.
+  workmanager: ^0.9.0+3
 
 dev_dependencies:
   flutter_test:

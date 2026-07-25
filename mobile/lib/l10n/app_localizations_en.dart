@@ -693,7 +693,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get briefingScheduleSubtitle =>
-      'Generates the briefing every day at the chosen time. If the app is closed, you will get a notification to generate it with one tap.';
+      'Generates the briefing every day at the chosen time, even while LifeOS is closed. If the system postpones the task, you will get a notification to generate it with one tap.';
 
   @override
   String get briefingScheduleTimeLabel => 'Briefing time';

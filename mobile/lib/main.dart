@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:workmanager/workmanager.dart';
 
 import 'app.dart';
+import 'core/background/background_tasks.dart';
 import 'features/security/domain/app_lock_preferences.dart';
 import 'features/security/presentation/app_lock_providers.dart';
 
@@ -28,6 +30,15 @@ Future<void> main() async {
   // a successful "off" read; a FAILED read fails SAFE (locked) — see
   // [resolveInitialAppLockEnabled].
   WidgetsFlutterBinding.ensureInitialized();
+  // Background work ("Boletín automático" en segundo plano): register the
+  // WorkManager callback dispatcher so one-off tasks can run headless with the
+  // app closed. Must happen before any registerOneOffTask; best-effort so a
+  // platform without the plugin (host tests, desktop) never blocks startup.
+  try {
+    await Workmanager().initialize(backgroundTaskDispatcher);
+  } catch (_) {
+    // No WorkManager here — the reminder + generate-on-open fallback remains.
+  }
   final appLockEnabled =
       await resolveInitialAppLockEnabled(SharedPrefsAppLockPreferences());
   runApp(

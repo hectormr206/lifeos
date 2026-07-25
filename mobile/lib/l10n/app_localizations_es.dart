@@ -698,7 +698,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get briefingScheduleSubtitle =>
-      'Genera el boletín cada día a la hora elegida. Si la app está cerrada, recibirás un aviso para generarlo con un toque.';
+      'Genera el boletín cada día a la hora elegida, incluso con LifeOS cerrada. Si el sistema pospone la tarea, recibirás un aviso para generarlo con un toque.';
 
   @override
   String get briefingScheduleTimeLabel => 'Hora del boletín';

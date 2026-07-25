@@ -1,0 +1,146 @@
+import '../../local_model/domain/on_device_translator.dart';
+import '../data/source_content_extractor.dart';
+import 'morning_briefing.dart';
+
+/// Eager per-source title/brief translation of an assembled briefing — the
+/// SECOND stage of the pipeline, after fetch+assemble.
+///
+/// Extracted from the notifier so the SAME translation (same-language skip,
+/// `title ||| brief` packing, per-slot fallback, source de-duplication) runs
+/// both in the foreground (`MorningBriefingNotifier.generate`, with a
+/// progress-label callback) and in the headless WorkManager background task.
+///
+/// Contract: NEVER throws — a catastrophic failure returns the briefing it was
+/// given (original, untranslated text); a per-source failure keeps that
+/// source's native text while the rest are still translated.
+class BriefingTranslationPipeline {
+  const BriefingTranslationPipeline({required this.translator, required this.extractor});
+
+  final OnDeviceTranslator translator;
+  final SourceContentExtractor extractor;
+
+  /// Light sampling for the batched per-source TITLE/BRIEF translation: a low
+  /// temperature keeps the rendering faithful (translate, don't rewrite) while
+  /// staying above the degenerate-to-empty floor.
+  static const double translateTemperature = 0.3;
+  static const int translateTopK = 20;
+  static const double translateTopP = 0.9;
+
+  /// Translates EVERY source's titles + briefs into [languageCode] up front,
+  /// one batched model call per source, with PER-SOURCE isolation. [onSource]
+  /// fires before each source's model call (UI-progress seam).
+  Future<OnDeviceBriefing> translateAll(
+    OnDeviceBriefing assembled, {
+    required String languageCode,
+    void Function(int index, int total)? onSource,
+  }) async {
+    try {
+      // DE-DUPLICATED by name: [OnDeviceBriefing.groups] merges only
+      // CONSECUTIVE same-source runs, so a source name split across
+      // non-adjacent runs (feed+atom of one site, or two empty-title feeds on
+      // the same host label) would appear twice — and since [translateSource]
+      // selects by name across the WHOLE briefing, that meant a second FULL
+      // model call over the same articles. A Set keeps first-seen order while
+      // translating each source exactly once.
+      final sourceNames = assembled.groups
+          .map((g) => g.sourceName)
+          .toSet()
+          .toList(growable: false);
+      var briefing = assembled;
+      for (var i = 0; i < sourceNames.length; i++) {
+        onSource?.call(i, sourceNames.length);
+        briefing = await translateSource(briefing, sourceNames[i], languageCode);
+      }
+      return briefing;
+    } catch (_) {
+      // Any unexpected failure: keep the assembled (original-language) briefing.
+      return assembled;
+    }
+  }
+
+  /// Translates one source's articles inside [briefing], returning an updated
+  /// briefing. Cheap same-language sources are skipped (no model call). Each
+  /// description is re-cleaned of raw/escaped HTML before it reaches the model
+  /// (messy feeds like Simon Willison's ship escaped tags in `<description>`),
+  /// so the model gets plain text and translates reliably. Any per-slot miss
+  /// keeps that article's original text (never blank, never dropped).
+  Future<OnDeviceBriefing> translateSource(
+    OnDeviceBriefing briefing,
+    String sourceName,
+    String languageCode,
+  ) async {
+    final articles = briefing.articles.where((a) => a.sourceName == sourceName).toList();
+    if (articles.isEmpty) return briefing;
+
+    // Cheap same-language detection: skip feeds already in the target language.
+    final sample = articles.map((a) => '${a.title} ${a.description}').join('\n');
+    if (looksTargetLanguage(sample, languageCode)) return briefing;
+
+    // Pack each article as `title ||| cleanBrief` (brief omitted when empty),
+    // cleaning the brief of any raw/escaped HTML first.
+    final inputs = <String>[];
+    final cleaned = <String>[];
+    for (final a in articles) {
+      final brief = extractor.cleanBrief(a.description);
+      cleaned.add(brief);
+      inputs.add(brief.isNotEmpty ? '${a.title} ||| $brief' : a.title);
+    }
+
+    final translated = await translator.translate(
+      inputs,
+      languageCode: languageCode,
+      temperature: translateTemperature,
+      topK: translateTopK,
+      topP: translateTopP,
+    );
+
+    var updated = briefing;
+    for (var i = 0; i < articles.length; i++) {
+      final line = translated[i];
+      if (line == null) continue; // keep native text for this slot
+      final parts = line.split('|||');
+      final t = parts[0].trim();
+      if (t.isEmpty) continue; // never blank a title
+      final d = parts.length > 1 ? parts.sublist(1).join('|||').trim() : '';
+      final current = updated.articleForKey(articles[i].key);
+      if (current == null) continue;
+      updated = updated.replaceArticle(
+        current.key,
+        current.copyWith(
+          translatedTitle: t,
+          // Only carry a translated brief when the item actually had one.
+          translatedDescription: cleaned[i].isNotEmpty && d.isNotEmpty ? d : null,
+        ),
+      );
+    }
+    return updated;
+  }
+
+  /// Cheap language guess for the same-language skip. Returns true when [text]
+  /// already looks like [code]'s language, so no translation is needed. Biased
+  /// to translate when there is no positive evidence of the target language
+  /// (short English HN headlines have no Spanish signal → translate to es).
+  static bool looksTargetLanguage(String text, String code) {
+    final lower = text.toLowerCase();
+    if (lower.trim().isEmpty) return true; // nothing to translate
+    final hasEsChars = RegExp(r'[áéíóúñ¿¡]').hasMatch(lower);
+    final words = lower.split(RegExp(r'[^a-z]+')).where((w) => w.length > 1).toList();
+    var es = 0, en = 0;
+    for (final w in words) {
+      if (_esStop.contains(w)) es++;
+      if (_enStop.contains(w)) en++;
+    }
+    if (code == 'en') return !hasEsChars && en > es;
+    // Default target is Spanish.
+    return hasEsChars || es > en;
+  }
+
+  static const Set<String> _esStop = {
+    'de', 'la', 'el', 'que', 'en', 'los', 'del', 'las', 'por', 'una', 'para', 'con', 'su', 'al',
+    'un', 'como', 'más', 'pero', 'sus', 'le', 'ya', 'este', 'sí', 'porque', 'esta', 'son',
+  };
+  static const Set<String> _enStop = {
+    'the', 'of', 'and', 'to', 'in', 'for', 'is', 'on', 'with', 'that', 'it', 'as', 'are', 'at',
+    'by', 'an', 'be', 'this', 'from', 'or', 'was', 'how', 'why', 'new', 'your',
+  };
+}

@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/dio_source_fetcher.dart';
 import '../data/local_briefing_scheduler.dart';
 import '../data/source_content_extractor.dart';
+import '../data/workmanager_briefing_background_work.dart';
 import '../domain/briefing_assembler.dart';
+import '../domain/briefing_background_work.dart';
 import '../domain/briefing_notifications.dart';
 import '../domain/briefing_scheduler.dart';
 import '../domain/morning_briefing_preferences.dart';
@@ -37,3 +39,10 @@ final briefingNotificationsProvider =
 /// AlarmManager alarm posting the "toca aquí" reminder when the process is
 /// dead at the scheduled hour). Overridden with a fake in tests.
 final briefingSchedulerProvider = Provider<BriefingScheduler>((ref) => LocalBriefingScheduler());
+
+/// OS background-execution trigger ("Segundo plano", user opt-in): the
+/// WorkManager one-off task that generates the briefing FOR REAL with the app
+/// closed, at the same next-run instant the reminder above is armed for.
+/// Best-effort plugin wrapper; overridden with a fake in tests.
+final briefingBackgroundWorkProvider =
+    Provider<BriefingBackgroundWork>((ref) => WorkmanagerBriefingBackgroundWork());

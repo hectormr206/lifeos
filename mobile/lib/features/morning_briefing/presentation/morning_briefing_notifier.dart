@@ -11,11 +11,13 @@ import '../../local_model/domain/local_llm_engine.dart';
 import '../../local_model/domain/on_device_translator.dart';
 import '../../local_model/presentation/local_model_providers.dart';
 import '../data/source_content_extractor.dart';
-import '../domain/briefing_assembler.dart';
+import '../domain/briefing_harvester.dart';
 import '../domain/briefing_schedule.dart';
+import '../domain/briefing_translation.dart';
 import '../domain/morning_briefing.dart';
-import '../domain/source_fetcher.dart';
 import 'morning_briefing_providers.dart';
+
+export '../domain/briefing_harvester.dart' show hnFrontPageUrl, hnItemUrlPrefix;
 
 /// Where the on-device briefing pipeline currently is, so the UI can show a
 /// meaningful progress/loading state.
@@ -33,15 +35,6 @@ enum BriefingPhase {
   /// message.
   error,
 }
-
-/// Hacker News front-page candidates via the Algolia JSON API. Fetched with the
-/// same browser-like [SourceFetcher] as the feeds; parsed by
-/// [SourceContentExtractor.parseHackerNews]. Each item keeps its `objectID`, so
-/// the on-demand "Ver resumen de comentarios" action can fetch the thread.
-const String hnFrontPageUrl = 'https://hn.algolia.com/api/v1/search?tags=front_page';
-
-/// The HN Algolia single-item (comments thread) endpoint prefix.
-const String hnItemUrlPrefix = 'https://hn.algolia.com/api/v1/items/';
 
 /// Immutable UI state for the on-device "boletín matutino".
 class MorningBriefingState {
@@ -153,13 +146,6 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   static const int longsumTopK = 20;
   static const double longsumTopP = 0.9;
 
-  /// Light sampling for the batched per-source TITLE/BRIEF translation: a low
-  /// temperature keeps the rendering faithful (translate, don't rewrite) while
-  /// staying above the degenerate-to-empty floor.
-  static const double translateTemperature = 0.3;
-  static const int translateTopK = 20;
-  static const double translateTopP = 0.9;
-
   @override
   MorningBriefingState build() {
     ref.onDispose(() {
@@ -229,9 +215,10 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     await _armTriggers();
   }
 
-  /// (Re)arms BOTH triggers (OS reminder + in-app timer) for the current
-  /// schedule. Disabled → both cancelled. One-shot: every start/resume/run
-  /// re-arms for the NEXT occurrence.
+  /// (Re)arms ALL THREE triggers (WorkManager background generation + OS
+  /// reminder + in-app timer) for the current schedule. Disabled → all
+  /// cancelled. One-shot: every start/resume/run re-arms for the NEXT
+  /// occurrence.
   /// The manual-override [tz.Location] for schedule math, or `null` in AUTOMATIC
   /// mode (device-local, unchanged). Best-effort — failures degrade to local.
   Future<tz.Location?> _overrideLocation() async {
@@ -249,9 +236,11 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     _autoRunTimer?.cancel();
     _autoRunTimer = null;
     final scheduler = ref.read(briefingSchedulerProvider);
+    final backgroundWork = ref.read(briefingBackgroundWorkProvider);
     final schedule = state.schedule;
     if (!schedule.enabled) {
       await scheduler.cancelReminder();
+      await backgroundWork.cancel();
       return;
     }
     final location = await _overrideLocation();
@@ -263,6 +252,13 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       lastGeneratedAt: state.briefing?.generatedAt,
       location: location,
     );
+    // REAL background generation ("Segundo plano", user opt-in): a WorkManager
+    // one-off fires at the slot and generates with the app closed. The
+    // reminder below stays as the graceful floor (OS deferred/killed the
+    // task), and the in-app timer covers the app-open case — the shared
+    // already-generated-today guard keeps the three from double-generating.
+    await backgroundWork.scheduleOneOff(next.difference(base));
+    if (_disposed) return;
     await scheduler.scheduleReminder(next);
     if (_disposed) return;
     _autoRunTimer = Timer(next.difference(base), _onAutoRunTimer);
@@ -306,18 +302,20 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     final assembler = ref.read(briefingAssemblerProvider);
     final now = ref.read(clockProvider).now();
 
-    final harvests = <SourceHarvest>[];
-    final feeds = state.sources;
-    for (var i = 0; i < feeds.length; i++) {
-      state = state.copyWith(
+    // Shared fetch+parse stage (also the background task's) with UI progress.
+    final harvester = BriefingHarvester(fetcher: fetcher, extractor: extractor);
+    final harvests = await harvester.harvestAll(
+      state.sources,
+      onFeed: (i, total) => state = state.copyWith(
         phase: BriefingPhase.fetching,
-        progressLabel: 'Leyendo fuente ${i + 1} de ${feeds.length + 1}…',
-      );
-      harvests.add(await _harvestFeed(feeds[i], fetcher, extractor));
-    }
-    // Always add Hacker News (its own adapter), so the comments feature exists.
-    state = state.copyWith(phase: BriefingPhase.fetching, progressLabel: 'Leyendo Hacker News…');
-    harvests.add(await _harvestHackerNews(fetcher, extractor));
+        progressLabel: 'Leyendo fuente ${i + 1} de ${total + 1}…',
+      ),
+      // Always adds Hacker News (its own adapter), so the comments feature exists.
+      onHackerNews: () => state = state.copyWith(
+        phase: BriefingPhase.fetching,
+        progressLabel: 'Leyendo Hacker News…',
+      ),
+    );
 
     final assembled = assembler.assemble(harvests, now: now, generatedAt: now);
 
@@ -360,43 +358,6 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       await _armTriggers();
     } catch (_) {
       // Scheduling is best-effort; the briefing run itself already succeeded.
-    }
-  }
-
-  Future<SourceHarvest> _harvestFeed(
-    String url,
-    SourceFetcher fetcher,
-    SourceContentExtractor extractor,
-  ) async {
-    try {
-      final body = await fetcher.fetch(url);
-      final feed = extractor.parseFeed(body, url: url);
-      final name = feed.sourceTitle.trim().isEmpty ? _hostLabel(url) : feed.sourceTitle.trim();
-      return SourceHarvest(name: name, items: feed.items);
-    } catch (_) {
-      return SourceHarvest(name: _hostLabel(url), failed: true);
-    }
-  }
-
-  Future<SourceHarvest> _harvestHackerNews(
-    SourceFetcher fetcher,
-    SourceContentExtractor extractor,
-  ) async {
-    try {
-      final body = await fetcher.fetch(hnFrontPageUrl);
-      final feed = extractor.parseHackerNews(body);
-      return SourceHarvest(name: feed.sourceTitle, items: feed.items);
-    } catch (_) {
-      return SourceHarvest(name: 'Hacker News', failed: true);
-    }
-  }
-
-  String _hostLabel(String url) {
-    try {
-      final host = Uri.parse(url).host;
-      return host.isEmpty ? url : host;
-    } catch (_) {
-      return url;
     }
   }
 
@@ -475,131 +436,27 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   // ---------------------------------------------------------------------------
 
   /// Translates EVERY source's titles + briefs into the app language up front,
-  /// so the reader never has to tap to translate. Sources are translated one at
-  /// a time (one batched model call each) with PER-SOURCE isolation: a source
-  /// that fails, or already looks like the target language, keeps its original
-  /// text while the rest are still translated. Never throws — a catastrophic
-  /// failure degrades the whole briefing to its original (untranslated) text.
+  /// so the reader never has to tap to translate. Delegates to the shared
+  /// [BriefingTranslationPipeline] (also the background task's), adding only
+  /// the UI progress label. Never throws — a catastrophic failure degrades the
+  /// whole briefing to its original (untranslated) text.
   Future<OnDeviceBriefing> _translateAll(
     OnDeviceBriefing assembled,
     SourceContentExtractor extractor,
   ) async {
-    try {
-      final translator = OnDeviceTranslator(ref.read(localLlmEngineProvider));
-      final code = _languageCode;
-      // DE-DUPLICATED by name: [OnDeviceBriefing.groups] merges only
-      // CONSECUTIVE same-source runs, so a source name split across
-      // non-adjacent runs (feed+atom of one site, or two empty-title feeds on
-      // the same host label) would appear twice — and since [_translateSource]
-      // selects by name across the WHOLE briefing, that meant a second FULL
-      // model call over the same articles. A Set keeps first-seen order while
-      // translating each source exactly once.
-      final sourceNames = assembled.groups
-          .map((g) => g.sourceName)
-          .toSet()
-          .toList(growable: false);
-      var briefing = assembled;
-      for (var i = 0; i < sourceNames.length; i++) {
-        state = state.copyWith(
-          phase: BriefingPhase.fetching,
-          progressLabel: 'Traduciendo noticias ${i + 1} de ${sourceNames.length}…',
-        );
-        briefing = await _translateSource(briefing, sourceNames[i], translator, extractor, code);
-      }
-      return briefing;
-    } catch (_) {
-      // Any unexpected failure: keep the assembled (original-language) briefing.
-      return assembled;
-    }
-  }
-
-  /// Translates one source's articles inside [briefing], returning an updated
-  /// briefing. Cheap same-language sources are skipped (no model call). Each
-  /// description is re-cleaned of raw/escaped HTML before it reaches the model
-  /// (messy feeds like Simon Willison's ship escaped tags in `<description>`),
-  /// so the model gets plain text and translates reliably. Any per-slot miss
-  /// keeps that article's original text (never blank, never dropped).
-  Future<OnDeviceBriefing> _translateSource(
-    OnDeviceBriefing briefing,
-    String sourceName,
-    OnDeviceTranslator translator,
-    SourceContentExtractor extractor,
-    String code,
-  ) async {
-    final articles = briefing.articles.where((a) => a.sourceName == sourceName).toList();
-    if (articles.isEmpty) return briefing;
-
-    // Cheap same-language detection: skip feeds already in the target language.
-    final sample = articles.map((a) => '${a.title} ${a.description}').join('\n');
-    if (_looksTargetLanguage(sample, code)) return briefing;
-
-    // Pack each article as `title ||| cleanBrief` (brief omitted when empty),
-    // cleaning the brief of any raw/escaped HTML first.
-    final inputs = <String>[];
-    final cleaned = <String>[];
-    for (final a in articles) {
-      final brief = extractor.cleanBrief(a.description);
-      cleaned.add(brief);
-      inputs.add(brief.isNotEmpty ? '${a.title} ||| $brief' : a.title);
-    }
-
-    final translated = await translator.translate(
-      inputs,
-      languageCode: code,
-      temperature: translateTemperature,
-      topK: translateTopK,
-      topP: translateTopP,
+    final pipeline = BriefingTranslationPipeline(
+      translator: OnDeviceTranslator(ref.read(localLlmEngineProvider)),
+      extractor: extractor,
     );
-
-    var updated = briefing;
-    for (var i = 0; i < articles.length; i++) {
-      final line = translated[i];
-      if (line == null) continue; // keep native text for this slot
-      final parts = line.split('|||');
-      final t = parts[0].trim();
-      if (t.isEmpty) continue; // never blank a title
-      final d = parts.length > 1 ? parts.sublist(1).join('|||').trim() : '';
-      final current = updated.articleForKey(articles[i].key);
-      if (current == null) continue;
-      updated = updated.replaceArticle(
-        current.key,
-        current.copyWith(
-          translatedTitle: t,
-          // Only carry a translated brief when the item actually had one.
-          translatedDescription: cleaned[i].isNotEmpty && d.isNotEmpty ? d : null,
-        ),
-      );
-    }
-    return updated;
+    return pipeline.translateAll(
+      assembled,
+      languageCode: _languageCode,
+      onSource: (i, total) => state = state.copyWith(
+        phase: BriefingPhase.fetching,
+        progressLabel: 'Traduciendo noticias ${i + 1} de $total…',
+      ),
+    );
   }
-
-  /// Cheap language guess for the same-language skip. Returns true when [text]
-  /// already looks like [code]'s language, so no translation is needed. Biased
-  /// to translate when there is no positive evidence of the target language
-  /// (short English HN headlines have no Spanish signal → translate to es).
-  static bool _looksTargetLanguage(String text, String code) {
-    final lower = text.toLowerCase();
-    if (lower.trim().isEmpty) return true; // nothing to translate
-    final hasEsChars = RegExp(r'[áéíóúñ¿¡]').hasMatch(lower);
-    final words = lower.split(RegExp(r'[^a-z]+')).where((w) => w.length > 1).toList();
-    var es = 0, en = 0;
-    for (final w in words) {
-      if (_esStop.contains(w)) es++;
-      if (_enStop.contains(w)) en++;
-    }
-    if (code == 'en') return !hasEsChars && en > es;
-    // Default target is Spanish.
-    return hasEsChars || es > en;
-  }
-
-  static const Set<String> _esStop = {
-    'de', 'la', 'el', 'que', 'en', 'los', 'del', 'las', 'por', 'una', 'para', 'con', 'su', 'al',
-    'un', 'como', 'más', 'pero', 'sus', 'le', 'ya', 'este', 'sí', 'porque', 'esta', 'son',
-  };
-  static const Set<String> _enStop = {
-    'the', 'of', 'and', 'to', 'in', 'for', 'is', 'on', 'with', 'that', 'it', 'as', 'are', 'at',
-    'by', 'an', 'be', 'this', 'from', 'or', 'was', 'how', 'why', 'new', 'your',
-  };
 
   // --- per-item state transitions -------------------------------------------
 
