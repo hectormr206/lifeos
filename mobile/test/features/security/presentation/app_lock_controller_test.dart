@@ -15,12 +15,14 @@ ProviderContainer _container({
   required bool initialEnabled,
   required FakeBiometricAuthenticator auth,
   required FakeAppLockPreferences prefs,
+  FakeSecureScreenGateway? secure,
 }) {
   final container = ProviderContainer(
     overrides: [
       appLockInitialEnabledProvider.overrideWithValue(initialEnabled),
       biometricAuthenticatorProvider.overrideWithValue(auth),
       appLockPreferencesProvider.overrideWithValue(prefs),
+      if (secure != null) secureScreenGatewayProvider.overrideWithValue(secure),
     ],
   );
   addTearDown(container.dispose);
@@ -195,6 +197,71 @@ void main() {
       expect(result, BiometricAuthResult.unavailable);
       expect(prefs.writes, 0);
       expect(container.read(appLockControllerProvider), AppLockStatus.disabled);
+    });
+  });
+
+  group('native secure surface (FLAG_SECURE follows the toggle)', () {
+    test('armed on build when the lock is enabled', () async {
+      final secure = FakeSecureScreenGateway();
+      final container = _container(
+        initialEnabled: true,
+        auth: FakeBiometricAuthenticator(),
+        prefs: FakeAppLockPreferences(enabled: true),
+        secure: secure,
+      );
+      container.read(appLockControllerProvider);
+      await pumpEventQueue();
+
+      expect(secure.current, isTrue,
+          reason: 'the Recents snapshot must be protected while armed');
+    });
+
+    test('released on build when the lock is disabled (screenshots work)',
+        () async {
+      final secure = FakeSecureScreenGateway();
+      final container = _container(
+        initialEnabled: false,
+        auth: FakeBiometricAuthenticator(),
+        prefs: FakeAppLockPreferences(),
+        secure: secure,
+      );
+      container.read(appLockControllerProvider);
+      await pumpEventQueue();
+
+      expect(secure.current, isFalse);
+    });
+
+    test('enable() arms it; disable() releases it', () async {
+      final secure = FakeSecureScreenGateway();
+      final container = _container(
+        initialEnabled: false,
+        auth: FakeBiometricAuthenticator(result: BiometricAuthResult.success),
+        prefs: FakeAppLockPreferences(),
+        secure: secure,
+      );
+      final notifier = container.read(appLockControllerProvider.notifier);
+
+      await notifier.enable();
+      await pumpEventQueue();
+      expect(secure.current, isTrue);
+
+      await notifier.disable();
+      await pumpEventQueue();
+      expect(secure.current, isFalse);
+    });
+
+    test('a FAILED enable never arms the secure surface', () async {
+      final secure = FakeSecureScreenGateway();
+      final container = _container(
+        initialEnabled: false,
+        auth: FakeBiometricAuthenticator(result: BiometricAuthResult.failed),
+        prefs: FakeAppLockPreferences(),
+        secure: secure,
+      );
+      await container.read(appLockControllerProvider.notifier).enable();
+      await pumpEventQueue();
+
+      expect(secure.current, isFalse, reason: 'only the build-time release');
     });
   });
 

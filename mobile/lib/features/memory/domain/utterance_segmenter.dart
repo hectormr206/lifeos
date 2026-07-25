@@ -60,15 +60,42 @@ class UtteranceSegmenter {
   /// Digit lookarounds keep numeric measurement sequences INTACT: a comma or an
   /// " y " that sits between two digits ("120, 60", "120 y 80") is NOT a clause
   /// boundary, so a blood-pressure reading is never chopped mid-sequence.
+  /// Words that START a NEW metric phrase after a digit-adjacent " y ": metric
+  /// keywords (glucosa, presión, peso…) and the curated first-person preterite
+  /// verbs ([_firstPersonRe]'s list, accented AND folded because the boundary
+  /// scan runs on the RAW utterance). Deliberately EXCLUDES continuation words
+  /// of a reading already in progress — "pulso"/"pulsos"/"bpm"/"latidos" — so
+  /// "presión 122 77 y pulso 55" stays ONE clause (splitting it would divorce
+  /// the pulse from its blood pressure).
+  static const String _newMetricStarters =
+      r'presi[oó]n|tensi[oó]n|glucosa|glucemia|az[uú]car|peso|pes[eé]|'
+      r'temperatura|oxigenaci[oó]n|saturaci[oó]n|'
+      r'dorm[ií]|despert[eé]|corr[ií]|camin[eé]|entren[eé]|desayun[eé]|'
+      r'com[ií]|cen[eé]|tom[eé]|med[ií]|sal[ií]|llegu[eé]|fui|estuve|anduve|'
+      r'hice|tuve|rec[eé]|medit[eé]|trabaj[eé]|jugu[eé]|sent[ií]|gast[eé]|'
+      r'compr[eé]|pagu[eé]';
+
   static final RegExp _boundary = RegExp(
     <String>[
-      // A comma is a boundary UNLESS it sits between two digits (a reading like
-      // "120, 60, 49"): split only when a digit is NOT directly before it, or a
-      // digit does NOT follow it (skipping spaces). Lookarounds are anchored on
-      // the comma itself so a trailing space can't fool the digit check.
+      // A comma is a boundary UNLESS it sits between two digit groups of one
+      // reading ("120, 60, 49" — INCLUDING a dictated conjunction before the
+      // last group, "130, 85, y 60 pulsos"): split only when a digit is NOT
+      // directly before it, or a (possibly "y "/"e "-prefixed) digit does NOT
+      // follow it (skipping spaces). Lookarounds are anchored on the comma
+      // itself so a trailing space can't fool the digit check.
       r'(?<!\d),',
-      r',(?!\s*\d)',
+      r',(?!\s*(?:[ye]\s+)?\d)',
       r';', // semicolon is always a boundary
+      // A digit-adjacent " y " IS a boundary when what follows STARTS A NEW
+      // metric phrase ("presión 120/80 y dormí 7 horas", "…120/80 y glucosa
+      // 95") — otherwise only the first metric of the clause would ever be
+      // stored. A following number/unit ("120, 60 y 49 pulsos") or reading
+      // continuation ("… y pulso 55") keeps the sequence whole.
+      // (`(?=\s|$)` instead of `\b`: Dart's `\b` is ASCII-only and fails right
+      // after an accented final letter like the í of "dormí".)
+      r'(?<=\d)\s+y\s+(?=(?:yo\s+|me\s+|mi\s+|la\s+|el\s+|hoy\s+)?(?:' +
+          _newMetricStarters +
+          r')(?=\s|$))',
       r'(?<!\d)\s+y\s+(?!\d)', // " y " not between digits
       r'(?<!\d)\s+e\s+(?!\d)', // " e " not between digits
       r'\s+luego\s+',
@@ -127,7 +154,9 @@ class UtteranceSegmenter {
     String? running; // subject carried forward until the next marker
 
     for (final raw in _splitOutsideSleepPhrases(utterance)) {
-      final clause = raw.replaceFirst(_leadingConjunction, '').trim();
+      // Trim BEFORE stripping the leftover conjunction: a comma split leaves
+      // " y …" with a leading space, which the ^-anchored strip would miss.
+      final clause = raw.trim().replaceFirst(_leadingConjunction, '').trim();
       if (clause.isEmpty) continue;
 
       // Companion phrases ("con mi hermano") are blanked BEFORE marker

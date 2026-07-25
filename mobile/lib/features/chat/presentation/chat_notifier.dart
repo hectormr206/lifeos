@@ -401,13 +401,36 @@ class ChatNotifier extends Notifier<ChatUiState> {
       );
       return;
     }
-    _setStatus(userMessage.id, ChatMessageStatus.delivered);
     final reply = ChatMessage(
       id: 'capture-ack-${DateTime.now().microsecondsSinceEpoch}',
       role: ChatRole.axi,
       text: _captureAckText(summary),
       timestamp: DateTime.now(),
     );
+    // ORDERING: while a generation is draining (e.g. a message typed during a
+    // voice note's transcription), appending the ack directly would interleave
+    // it between that pending user turn and its model reply — breaking the
+    // "reply directly follows its user turn" invariant [pairedReplyOf] (and
+    // its delete cascade) relies on, and dropping the typing indicator early.
+    // Route the ack through the SAME FIFO as a no-model request that resolves
+    // instantly. When the queue is idle (the normal case) append directly, so
+    // the ack stays instant.
+    if (_draining || _queue.isNotEmpty) {
+      await _enqueue(_OutgoingRequest(
+        userMessageId: userMessage.id,
+        run: () async => reply,
+        errorPrefix: 'No se pudo confirmar la captura',
+        onReply: (r) => _recordAfterReply(
+          text,
+          r.text,
+          summary: summary,
+          sourceMessageId: userMessage.id,
+          conversationUuid: conversationUuid,
+        ),
+      ));
+      return;
+    }
+    _setStatus(userMessage.id, ChatMessageStatus.delivered);
     state = state.copyWith(messages: [...state.messages, reply], sending: false);
     _persist(reply);
     // Store the exchange + run the MODEL-based open-ended extractor AFTER the

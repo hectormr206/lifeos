@@ -55,6 +55,27 @@ void main() {
       expect(p.fields, {'systolic': 118, 'diastolic': 79});
       expect(p.title, 'presión 118/79');
     });
+
+    test('comma-dictated keyword BP with "y" pulse: "presión 122, 81, y 53 pulsos"', () {
+      // Regression: the comma between sys and dia (voice dictation) plus the
+      // conjunction before the pulse used to yield ZERO structured entries.
+      final p = parseHealthEntry('presión 122, 81, y 53 pulsos');
+      expect(p, isNotNull);
+      expect(p!.type, 'blood_pressure');
+      expect(p.fields, {'systolic': 122, 'diastolic': 81, 'pulse': 53});
+    });
+
+    test('comma-dictated keyword BP without pulse: "presión 122, 81"', () {
+      final p = parseHealthEntry('presión 122, 81');
+      expect(p!.type, 'blood_pressure');
+      expect(p.fields, {'systolic': 122, 'diastolic': 81});
+    });
+
+    test('bare comma reading with "y" pulse: "130, 85, y 60 pulsos"', () {
+      final p = parseHealthEntry('130, 85, y 60 pulsos');
+      expect(p, isNotNull);
+      expect(p!.fields, {'systolic': 130, 'diastolic': 85, 'pulse': 60});
+    });
   });
 
   group('range gates reject non-vital numbers (precision-first)', () {

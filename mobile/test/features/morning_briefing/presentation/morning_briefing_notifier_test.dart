@@ -316,6 +316,54 @@ void main() {
       expect(reloaded!.articles.first.translatedTitle, 'El futuro de la IA');
     });
 
+    test('a REPEATED source name (non-adjacent runs) is translated ONCE', () async {
+      // Regression: _translateAll iterated assembled.groups (consecutive
+      // same-source runs only), so a source title appearing in two
+      // NON-ADJACENT runs (feed + atom of the same site) triggered a second
+      // FULL model call over the exact same articles.
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        reply: (_) => '1. Título traducido ||| Resumen traducido\n'
+            '2. Otro título ||| Otro resumen',
+      );
+      final fetcher = FakeSourceFetcher(bodies: {
+        // Two DIFFERENT URLs whose channel <title> is identical…
+        'https://same.com/rss': _englishRss(
+          'Same Blog',
+          [('The Future of AI', 'A look ahead')],
+          today,
+        ),
+        'https://same.com/atom': _englishRss(
+          'Same Blog',
+          [('New Rust Release', 'Release notes')],
+          today,
+        ),
+        // …separated by a Spanish source so the runs are NOT adjacent.
+        'https://es.com/rss':
+            _datedRss('Fuente Española', 'La economía de España crece hoy', today),
+        hnFrontPageUrl: '{"hits":[]}',
+      });
+      final container = _container(
+        engine: engine,
+        fetcher: fetcher,
+        prefs: FakeMorningBriefingPreferences(initialSources: [
+          'https://same.com/rss',
+          'https://es.com/rss',
+          'https://same.com/atom',
+        ]),
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+
+      expect(engine.generateCount, 1,
+          reason: 'ONE batched call covers every "Same Blog" article — never a '
+              'duplicate full model pass over the same items');
+    });
+
     test('skips a source already in the target language (no model call)', () async {
       final engine = FakeLocalLlmEngine(installed: true);
       final fetcher = FakeSourceFetcher(bodies: {

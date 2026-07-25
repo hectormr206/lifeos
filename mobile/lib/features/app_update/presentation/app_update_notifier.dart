@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/apk_download_service.dart';
 import '../domain/apk_installer.dart';
+import '../domain/app_manifest.dart';
 import '../domain/app_update_preferences.dart';
 import '../domain/update_notification_policy.dart';
 import '../domain/update_status.dart';
@@ -20,6 +22,7 @@ class AppUpdateUiState {
     this.checking = false,
     this.downloadProgress,
     this.downloadedApkPath,
+    this.downloadedApkKey,
     this.installHintNeeded = false,
     this.installPending = false,
     this.error,
@@ -43,6 +46,12 @@ class AppUpdateUiState {
 
   /// Absolute path of a downloaded+verified APK ready to install, or null.
   final String? downloadedApkPath;
+
+  /// Identity of the manifest ([AppUpdateNotifier.manifestKey]:
+  /// `versionCode:sha256`) the downloaded APK was VERIFIED against. The path is
+  /// only ever installed while this matches the CURRENT manifest — a server
+  /// republish invalidates the stale file instead of installing it.
+  final String? downloadedApkKey;
 
   /// The user must enable "install unknown apps" before the installer can run.
   final bool installHintNeeded;
@@ -68,6 +77,7 @@ class AppUpdateUiState {
     bool clearDownloadProgress = false,
     String? downloadedApkPath,
     bool clearDownloadedApkPath = false,
+    String? downloadedApkKey,
     bool? installHintNeeded,
     bool? installPending,
     bool clearInstallPending = false,
@@ -84,6 +94,10 @@ class AppUpdateUiState {
             clearDownloadProgress ? null : (downloadProgress ?? this.downloadProgress),
         downloadedApkPath:
             clearDownloadedApkPath ? null : (downloadedApkPath ?? this.downloadedApkPath),
+        // The key lives and dies with the path: same clear flag, so they can
+        // never drift apart.
+        downloadedApkKey:
+            clearDownloadedApkPath ? null : (downloadedApkKey ?? this.downloadedApkKey),
         installHintNeeded: installHintNeeded ?? this.installHintNeeded,
         installPending: clearInstallPending ? false : (installPending ?? this.installPending),
         error: clearError ? null : (error ?? this.error),
@@ -168,14 +182,47 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
     }
   }
 
+  /// Stable identity of the manifest a downloaded APK is bound to.
+  static String manifestKey(AppManifest manifest) =>
+      '${manifest.versionCode}:${manifest.sha256.toLowerCase()}';
+
   Future<void> _onDownloadComplete(ApkDownloadService service) async {
-    final status = state.status;
-    if (status is! UpdateAvailable) return;
+    var status = state.status;
+    if (status is! UpdateAvailable) {
+      // The in-flight manifest lives only in state.status, and a concurrent
+      // check (resume-time auto-check hitting a network blip → UpdateUnknown)
+      // may have overwritten it mid-download. NEVER drop the completion
+      // silently — re-fetch the manifest so the finished file can be verified
+      // against the CURRENT server truth.
+      try {
+        final result = await ref.read(appUpdateServiceProvider).checkForUpdate();
+        state = state.copyWith(status: result);
+      } catch (_) {
+        // checkForUpdate never throws by contract; belt and suspenders.
+      }
+      status = state.status;
+      if (status is! UpdateAvailable) {
+        // Still no manifest to verify against → surface it (a visible retry
+        // beats a frozen progress bar wedged just under 100%).
+        state = state.copyWith(
+          error:
+              'La descarga terminó pero no se pudo confirmar la actualización. '
+              'Vuelve a buscar actualizaciones.',
+          clearDownloadProgress: true,
+          clearInstallPending: true,
+        );
+        return;
+      }
+    }
     try {
       final path = await service.apkFilePath(status.manifest);
       // SHA-256 gate still runs BEFORE the APK is ever handed to the installer.
       await service.verifyApk(path, status.manifest.sha256);
-      state = state.copyWith(downloadedApkPath: path, downloadProgress: 1);
+      state = state.copyWith(
+        downloadedApkPath: path,
+        downloadedApkKey: manifestKey(status.manifest),
+        downloadProgress: 1,
+      );
       // Tell the user it's ready — a tap routes to /settings/updates to install.
       await ref.read(updateNotificationsProvider).showUpdateReady(status.versionName);
       // One-tap flow in progress? Continue straight into the install.
@@ -249,8 +296,10 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
     final status = state.status;
     if (status is! UpdateAvailable) return;
     state = state.copyWith(installPending: true, clearError: true);
-    // Already verified on disk? Install straight away.
-    if (state.downloadedApkPath != null) {
+    // Already verified on disk FOR THIS manifest? Install straight away. A
+    // path bound to an older manifest never reaches the installer.
+    if (state.downloadedApkPath != null &&
+        state.downloadedApkKey == manifestKey(status.manifest)) {
       await _tryInstall();
       return;
     }
@@ -273,6 +322,21 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
     state = state.copyWith(status: result, checking: false);
 
     if (result is! UpdateAvailable) return;
+
+    // MANIFEST CHANGED while an older APK sat downloaded+verified? Drop the
+    // stale binding (and reclaim the file) so the NEW APK is downloaded and
+    // verified against the new sha — never install a file whose hash was only
+    // ever checked against a previous manifest.
+    if (state.downloadedApkPath != null &&
+        state.downloadedApkKey != manifestKey(result.manifest)) {
+      final stalePath = state.downloadedApkPath!;
+      state = state.copyWith(clearDownloadedApkPath: true, clearDownloadProgress: true);
+      try {
+        await File(stalePath).delete();
+      } catch (_) {
+        // Best effort — the cleared binding is what prevents the stale install.
+      }
+    }
 
     await _maybeNotify(result);
     if (state.settings.autoDownload) {
@@ -309,7 +373,18 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
   Future<void> downloadUpdate() async {
     final status = state.status;
     if (status is! UpdateAvailable) return;
-    if (state.downloadedApkPath != null) return; // already downloaded + verified
+    // Already downloaded + verified — but only when the file is bound to THIS
+    // manifest; a stale binding (older versionCode/sha) must not short-circuit
+    // the fresh download.
+    if (state.downloadedApkPath != null &&
+        state.downloadedApkKey == manifestKey(status.manifest)) {
+      return;
+    }
+    if (state.downloadedApkPath != null) {
+      // Defensive: check() normally clears this on a manifest change; if a
+      // stale binding survives, drop it here so the re-download can proceed.
+      state = state.copyWith(clearDownloadedApkPath: true);
+    }
     // Seed the bar to 0 only when starting fresh — a re-entry while a download
     // is already in flight must NOT reset visible progress back to zero.
     if (state.downloadProgress == null) {

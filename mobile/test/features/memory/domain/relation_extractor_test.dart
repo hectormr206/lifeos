@@ -135,6 +135,40 @@ void main() {
       expect(edges.single.dstUuid, dst.uuid);
     });
 
+    test('a DETERMINISTIC segment subject files the fact under that person',
+        () async {
+      // Regression: model-extracted facts were written with NO subject, so a
+      // family member's medication became the USER's own health fact.
+      await extractorWith(
+        '{"facts":[{"label":"mi esposa toma losartán 50 mg","domain":"health"}],'
+        '"relations":[]}',
+      ).extractAndWrite(
+        'mi esposa empezó a tomar losartán, corrí 5 km',
+        'ok',
+        subject: 'esposa',
+      );
+
+      final f = (await facts()).single;
+      expect(f.data['subject'], 'esposa');
+      // fact --involves--> the esposa person node (not just the user hub).
+      final person = (await people()).firstWhere((p) => p.data['role'] != 'user');
+      expect(person.data['relation'], 'esposa');
+      final involves = await store.edgesForNode(f.uuid, relation: 'involves');
+      expect(involves.single.dstUuid, person.uuid);
+    });
+
+    test('no segment subject → user attribution unchanged', () async {
+      await extractorWith(
+        '{"facts":[{"label":"Prefiere café sin azúcar","domain":"personal"}],'
+        '"relations":[]}',
+      ).extractAndWrite('me gusta el café sin azúcar', 'ok');
+
+      final f = (await facts()).single;
+      expect(f.data.containsKey('subject'), isFalse);
+      final involves = await store.edgesForNode(f.uuid, relation: 'involves');
+      expect(involves, isEmpty);
+    });
+
     test('malformed JSON → no-op, no crash', () async {
       await extractorWith('no hay json que valga').extractAndWrite('hola', 'ok');
       expect(await facts(), isEmpty);

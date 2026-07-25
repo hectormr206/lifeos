@@ -69,7 +69,10 @@ class DailyDigestService {
   /// Deterministic facts are always produced; the wrap-up is best-effort.
   Future<DailyDigest> generate({required DateTime now, tz.Location? location}) async {
     final data = await aggregate(now: now, location: location);
-    final facts = renderDigestFacts(data);
+    // Rendered in the SAME effective zone the today-window used, so the header
+    // date and per-entry times match the aggregated day (AUTOMATIC/null keeps
+    // device-local rendering unchanged).
+    final facts = renderDigestFacts(data, location: location);
 
     if (data.isEmpty) {
       return DailyDigest(

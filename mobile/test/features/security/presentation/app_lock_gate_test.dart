@@ -89,6 +89,50 @@ void main() {
     expect(auth.calls, 2);
   });
 
+  testWidgets(
+      're-lock keeps the child MOUNTED underneath (state survives, '
+      'content hidden)', (tester) async {
+    // Regression: the gate used to return LockScreen INSTEAD of the child,
+    // unmounting the whole Router on re-lock and losing navigation +
+    // in-progress state (chat drafts, scroll positions, recordings).
+    final auth = FakeBiometricAuthenticator(result: BiometricAuthResult.success);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        appLockInitialEnabledProvider.overrideWithValue(true),
+        biometricAuthenticatorProvider.overrideWithValue(auth),
+        appLockPreferencesProvider
+            .overrideWithValue(FakeAppLockPreferences(enabled: true)),
+      ],
+      child: MaterialApp(
+        locale: const Locale('es'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const AppLockGate(child: _StatefulProbe()),
+      ),
+    ));
+    await tester.pumpAndSettle(); // auto-prompt succeeds → unlocked.
+    expect(find.text('draft: hola'), findsOneWidget);
+
+    // Re-lock (app backgrounded). The probe's State must SURVIVE.
+    final element = tester.element(find.byType(AppLockGate));
+    final container = ProviderScope.containerOf(element, listen: false);
+    container.read(appLockControllerProvider.notifier).onBackground();
+    await tester.pump();
+
+    // Locked: content is hidden (offstage) and not hit-testable…
+    expect(find.text('draft: hola'), findsNothing);
+    expect(find.text('LifeOS está bloqueado'), findsOneWidget);
+    // …but the State is still alive underneath.
+    expect(_StatefulProbeState.disposeCount, 0,
+        reason: 're-lock must never dispose the app subtree');
+
+    // Unlock again → the exact same state (the draft) is restored.
+    await tester.tap(find.text('Desbloquear'));
+    await tester.pumpAndSettle();
+    expect(find.text('draft: hola'), findsOneWidget);
+    expect(_StatefulProbeState.disposeCount, 0);
+  });
+
   testWidgets('an unavailable device offers a disable escape (no hard brick)',
       (tester) async {
     final auth =
@@ -106,4 +150,27 @@ void main() {
     // Lock disabled → content revealed.
     expect(find.text('CONTENT'), findsOneWidget);
   });
+}
+
+/// A child holding mutable State — stands in for the Router subtree (chat
+/// composer draft, scroll positions). [disposeCount] proves survival.
+class _StatefulProbe extends StatefulWidget {
+  const _StatefulProbe();
+
+  @override
+  State<_StatefulProbe> createState() => _StatefulProbeState();
+}
+
+class _StatefulProbeState extends State<_StatefulProbe> {
+  static int disposeCount = 0;
+  final String draft = 'hola';
+
+  @override
+  void dispose() {
+    disposeCount++;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Text('draft: $draft');
 }

@@ -142,6 +142,53 @@ void main() {
       final out = seg.segment('corrí 5km luego recé el rosario');
       expect(out.map((s) => s.text), ['corrí 5km', 'recé el rosario']);
     });
+
+    test('a dictated ", y " INSIDE a reading is not a boundary', () {
+      // Regression: the comma before " y 53" used to match `,(?!\s*\d)` and
+      // chop the pulse off the blood pressure, destroying the whole vital.
+      final out = seg.segment('presión 122, 81, y 53 pulsos');
+      expect(out.length, 1, reason: 'the comma-dictated reading stays whole');
+      expect(out.single.text, 'presión 122, 81, y 53 pulsos');
+    });
+
+    test('"130, 85, y 60 pulsos" (no keyword) also stays whole', () {
+      final out = seg.segment('130, 85, y 60 pulsos');
+      expect(out.length, 1);
+      expect(out.single.text, '130, 85, y 60 pulsos');
+    });
+  });
+
+  group('digit-adjacent " y " BEFORE a NEW metric phrase IS a boundary', () {
+    test('"presión 120/80 y dormí 7 horas" splits into two metrics', () {
+      // Regression: the `(?<!\d)` lookbehind silently kept both metrics in ONE
+      // clause and only the first-checked one was ever stored.
+      final out = seg.segment('presión 120/80 y dormí 7 horas');
+      expect(out.map((s) => s.text), ['presión 120/80', 'dormí 7 horas']);
+    });
+
+    test('"presión 120/80 y glucosa 95" splits into two metrics', () {
+      final out = seg.segment('presión 120/80 y glucosa 95');
+      expect(out.map((s) => s.text), ['presión 120/80', 'glucosa 95']);
+    });
+
+    test('"glucosa 95 y presión 120/80" splits in the reverse order too', () {
+      final out = seg.segment('glucosa 95 y presión 120/80');
+      expect(out.map((s) => s.text), ['glucosa 95', 'presión 120/80']);
+    });
+
+    test('"120, 60 y 49 pulsos" (same-reading continuation) stays whole', () {
+      final out = seg.segment('120, 60 y 49 pulsos');
+      expect(out.length, 1);
+      expect(out.single.text, '120, 60 y 49 pulsos');
+    });
+
+    test('"presión 122 77 y pulso 55" (pulse continues the reading) stays whole', () {
+      // "pulso" is a CONTINUATION of the blood pressure, not a new metric —
+      // splitting would divorce the pulse from its reading.
+      final out = seg.segment('presión 122 77 y pulso 55');
+      expect(out.length, 1);
+      expect(out.single.text, 'presión 122 77 y pulso 55');
+    });
   });
 
   group('robustness (never crash, never lose content)', () {

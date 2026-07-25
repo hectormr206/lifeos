@@ -471,8 +471,21 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
         // while a biometric prompt is in flight (the guard inside
         // onBackground() prevents the prompt's own backgrounding from looping).
         ref.read(appLockControllerProvider.notifier).onBackground();
-      case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
+        // `hidden` = no longer visible (fires BEFORE `paused` on Android, and
+        // on iOS when entering the app switcher) → re-lock as early as
+        // possible so the lock state is set before the OS snapshots the task.
+        // Safe against prompt loops: the same _authenticating guard applies.
+        ref.read(appLockControllerProvider.notifier).onBackground();
+      case AppLifecycleState.inactive:
+        // Deliberately NOT a re-lock trigger: `inactive` fires for transient
+        // partial obscuring while the app is still visible — the biometric
+        // prompt itself, permission dialogs, the notification shade, split-
+        // screen focus loss. Re-locking here would fight the prompt (relock
+        // loops) and lock on harmless overlays. Full coverage comes from
+        // `hidden` + `paused`, plus the native FLAG_SECURE (armed while the
+        // lock is enabled), which keeps the task snapshot blank even in the
+        // window before `hidden` lands.
         break;
     }
   }

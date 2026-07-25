@@ -131,6 +131,58 @@ void main() {
     expect(involves.single.dstUuid, person.uuid);
   });
 
+  test('"presión 120/80 y dormí 7 horas" stores BOTH metrics', () async {
+    // Regression: the digit-adjacent " y " was never a clause boundary, so
+    // both metrics stayed in ONE clause and only the first-checked one landed.
+    final summary = await builder().captureTurn('presión 120/80 y dormí 7 horas');
+
+    final bp = (await repo.list('health', type: 'blood_pressure')).single;
+    expect(bp.data['systolic'], 120);
+    expect(bp.data['diastolic'], 80);
+    final sleep = (await repo.list('health', type: 'sleep_hours')).single;
+    expect(sleep.data['hours'], 7.0);
+    expect(summary.entries.length, 2, reason: 'the ack confirms BOTH readings');
+  });
+
+  test('"presión 122, 81, y 53 pulsos" (comma-dictated) stores the full vital',
+      () async {
+    // Regression: the comma before " y 53" split the pulse off the reading and
+    // the whole vital produced ZERO structured entries.
+    await builder().captureTurn('presión 122, 81, y 53 pulsos');
+
+    final e = (await repo.list('health', type: 'blood_pressure')).single;
+    expect(e.data['systolic'], 122);
+    expect(e.data['diastolic'], 81);
+    expect(e.data['pulse'], 53);
+  });
+
+  test('an unparsed but MEDICAL clause does not open the model-extractor gate',
+      () async {
+    // "120/80" (bare, no pulse keyword) misses the strict parser but is still
+    // a vital shape — it must not flip hasNonHealthContent and route medical
+    // values through the model.
+    final summary = await builder().captureTurn('de mi esposa 120/80');
+    expect(summary.hasNonHealthContent, isFalse);
+  });
+
+  test('a genuine non-health clause still opens the model-extractor gate',
+      () async {
+    final summary =
+        await builder().captureTurn('mi esposa empezó a tomar losartán');
+    expect(summary.hasNonHealthContent, isTrue);
+    // The DETERMINISTIC segment subject rides along for the extractor, so the
+    // wife's medication is never filed as the user's own fact.
+    expect(summary.nonHealthSubject, 'esposa');
+  });
+
+  test('mixed subjects keep the safe default (no extractor subject)', () async {
+    final summary = await builder()
+        .captureTurn('mi esposa empezó a tomar losartán, yo compré un libro');
+    expect(summary.hasNonHealthContent, isTrue);
+    expect(summary.nonHealthSubject, isNull,
+        reason: 'clauses belong to different people → user attribution');
+  });
+
   test('no parse → raw-fact behavior unchanged (never mis-file)', () async {
     // Filler between the keyword and the numbers → parser misses → raw fallback.
     await builder().recordTurn(

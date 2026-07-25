@@ -30,6 +30,67 @@ const _manifest = AppManifest(
   publishedAt: '',
 );
 
+/// Scriptable [FileDownloader] surface for the attach/resume logic — no
+/// platform channel. [known] seeds `allTasks` (active AND paused tasks, like
+/// the real merge); [resumable] controls which taskIds `resumeAll` accepts;
+/// [dropKnownAfterResumeAll] mimics the real `resume()` clearing a paused
+/// record even when the resume FAILS (no resume data).
+class _FakeFileDownloader extends Fake implements FileDownloader {
+  _FakeFileDownloader({
+    required List<String> known,
+    required this.resumable,
+    this.dropKnownAfterResumeAll = false,
+  }) : _known = List.of(known);
+
+  final List<String> _known;
+  final List<String> resumable;
+  final bool dropKnownAfterResumeAll;
+
+  int resumeAllCalls = 0;
+  final List<DownloadTask> enqueued = [];
+  final List<String> cancelledIds = [];
+
+  DownloadTask _task(String id) => DownloadTask(
+        taskId: id,
+        url: 'https://updates.example/lifeos/download',
+        group: 'app_updates',
+      );
+
+  @override
+  Future<List<Task>> allTasks({
+    String group = FileDownloader.defaultGroup,
+    bool includeTasksWaitingToRetry = true,
+    bool allGroups = false,
+  }) async =>
+      [for (final id in _known) _task(id)];
+
+  @override
+  Future<List<Task>> resumeAll({
+    Iterable<DownloadTask>? tasks,
+    String? group,
+    Duration interval = const Duration(milliseconds: 50),
+  }) async {
+    resumeAllCalls++;
+    final resumed = [for (final id in _known.where(resumable.contains)) _task(id)];
+    if (dropKnownAfterResumeAll) _known.clear();
+    return resumed;
+  }
+
+  @override
+  Future<bool> cancelTaskWithId(String taskId) async {
+    cancelledIds.add(taskId);
+    _known.remove(taskId);
+    return true;
+  }
+
+  @override
+  Future<bool> enqueue(Task task) async {
+    enqueued.add(task as DownloadTask);
+    _known.add(task.taskId);
+    return true;
+  }
+}
+
 void main() {
   late Directory tmp;
 
@@ -67,6 +128,65 @@ void main() {
       // Resumable: an interrupted transfer resumes rather than restarting.
       expect(task.allowPause, isTrue);
       expect(service().isUpdateTask(task), isTrue);
+    });
+  });
+
+  group('attach / resume (paused tasks are never a silent dead-end)', () {
+    test('attaching to a PAUSED task RESUMES it (returns false, no re-enqueue)', () async {
+      final downloader = _FakeFileDownloader(
+        known: ['app_update_apk'],
+        resumable: ['app_update_apk'],
+      );
+      final svc = ApkDownloadService(config: _configured, downloader: downloader);
+
+      final started = await svc.startDownload(_manifest);
+
+      expect(started, isFalse, reason: 'attached, not restarted');
+      expect(downloader.resumeAllCalls, 1, reason: 'the paused task was kicked');
+      expect(downloader.enqueued, isEmpty);
+      expect(downloader.cancelledIds, isEmpty);
+    });
+
+    test('a paused ORPHAN that refuses to resume is cancelled + re-enqueued', () async {
+      // Simulates the orphaned paused record: known to allTasks once, but
+      // resume fails (no resume data) and the failed attempt drops the record.
+      final downloader = _FakeFileDownloader(
+        known: ['app_update_apk'],
+        resumable: const [],
+        dropKnownAfterResumeAll: true,
+      );
+      final svc = ApkDownloadService(config: _configured, downloader: downloader);
+
+      final started = await svc.startDownload(_manifest);
+
+      expect(started, isTrue, reason: 'a fresh task replaces the dead record');
+      expect(downloader.cancelledIds, ['app_update_apk']);
+      expect(downloader.enqueued.single.taskId, 'app_update_apk');
+    });
+
+    test('a genuinely RUNNING task is left untouched (attach only)', () async {
+      final downloader = _FakeFileDownloader(
+        known: ['app_update_apk'],
+        resumable: const [], // resumeAll touches only paused tasks → no-op
+      );
+      final svc = ApkDownloadService(config: _configured, downloader: downloader);
+
+      final started = await svc.startDownload(_manifest);
+
+      expect(started, isFalse);
+      expect(downloader.enqueued, isEmpty, reason: 'never restart from zero');
+      expect(downloader.cancelledIds, isEmpty);
+    });
+
+    test('no existing task → fresh enqueue', () async {
+      final downloader = _FakeFileDownloader(known: const [], resumable: const []);
+      final svc = ApkDownloadService(config: _configured, downloader: downloader);
+
+      final started = await svc.startDownload(_manifest);
+
+      expect(started, isTrue);
+      expect(downloader.enqueued.single.taskId, 'app_update_apk');
+      expect(downloader.resumeAllCalls, 0);
     });
   });
 

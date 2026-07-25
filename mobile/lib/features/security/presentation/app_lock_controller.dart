@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/secure_screen_gateway.dart';
 import '../domain/app_lock_preferences.dart';
 import '../domain/biometric_authenticator.dart';
 import 'app_lock_providers.dart';
@@ -37,6 +40,7 @@ enum AppLockStatus {
 class AppLockController extends Notifier<AppLockStatus> {
   late final AppLockPreferences _prefs;
   late final BiometricAuthenticator _authenticator;
+  late final SecureScreenGateway _secureScreen;
 
   /// True while a system prompt is on screen. Guards [onBackground] so the
   /// prompt's own backgrounding never triggers a re-lock (which would loop).
@@ -46,6 +50,7 @@ class AppLockController extends Notifier<AppLockStatus> {
   AppLockStatus build() {
     _prefs = ref.read(appLockPreferencesProvider);
     _authenticator = ref.read(biometricAuthenticatorProvider);
+    _secureScreen = ref.read(secureScreenGatewayProvider);
     // The persisted flag is resolved BEFORE the first frame (main() awaits the
     // read and seeds [appLockInitialEnabledProvider]), so the initial state is
     // known synchronously here — no "checking" splash, and a lock-enabled user
@@ -53,6 +58,11 @@ class AppLockController extends Notifier<AppLockStatus> {
     // provider is not overridden (e.g. widget tests that don't exercise the
     // lock).
     final enabled = ref.read(appLockInitialEnabledProvider);
+    // FLAG_SECURE tracks the TOGGLE, not the momentary locked/unlocked state:
+    // while the lock is armed the Recents/task snapshot + screenshots must
+    // never capture content (the snapshot is taken before a re-lock frame can
+    // draw); with the lock off, screenshots keep working normally.
+    unawaited(_secureScreen.setSecure(enabled));
     return enabled ? AppLockStatus.locked : AppLockStatus.disabled;
   }
 
@@ -96,15 +106,19 @@ class AppLockController extends Notifier<AppLockStatus> {
     final result = await authenticate();
     if (result == BiometricAuthResult.success) {
       await _prefs.setEnabled(true);
+      // Arm the native secure surface for as long as the lock stays enabled.
+      unawaited(_secureScreen.setSecure(true));
       // authenticate() already set state = unlocked (lock armed, satisfied for
       // this foreground session).
     }
     return result;
   }
 
-  /// Turn the lock OFF and persist it. Reveals app content immediately.
+  /// Turn the lock OFF and persist it. Reveals app content immediately and
+  /// releases the native secure surface (screenshots work again).
   Future<void> disable() async {
     await _prefs.setEnabled(false);
+    unawaited(_secureScreen.setSecure(false));
     state = AppLockStatus.disabled;
   }
 }

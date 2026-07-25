@@ -142,6 +142,17 @@ class AppNotifications {
   /// When [location] is `null` the previous UTC behavior is kept as a safe
   /// fallback (a one-shot still fires on the right instant either way).
   ///
+  /// WALL-CLOCK RULE for daily repeats: [scheduledAt] is the user's pick,
+  /// produced and DISPLAYED as device-local wall time. The recurring anchor
+  /// must AGREE with that displayed time, so the picked wall-clock fields
+  /// (hour:minute) are re-interpreted IN the effective zone exactly once here
+  /// — "07:00" stays 07:00 in the zone the user chose, forever, across that
+  /// zone's DST transitions. Converting the INSTANT instead (the old
+  /// `TZDateTime.from`) anchored a 07:00 pick at e.g. 14:00 Madrid, which
+  /// silently drifted off the displayed time after Madrid's DST switch. In
+  /// AUTOMATIC mode the effective zone IS the device zone, so both readings
+  /// coincide and behavior is unchanged.
+  ///
   /// `AndroidScheduleMode.inexactAllowWhileIdle` is used deliberately: it
   /// needs NO `SCHEDULE_EXACT_ALARM` manifest permission (no native file
   /// changes) and minute-level precision is plenty for a personal reminder.
@@ -160,11 +171,12 @@ class AppNotifications {
     try {
       await _ensureInitialized();
       _ensureTimeZones();
-      // Build the alarm in the effective local zone (DST-aware) when known; the
-      // absolute instant is preserved either way, only the wall-clock fields
-      // (used by DateTimeComponents.time for a daily repeat) change.
-      final zone = location ?? tz.UTC;
-      final when = tz.TZDateTime.from(scheduledAt, zone);
+      final when = scheduleInstant(
+        scheduledAt: scheduledAt,
+        repeatDailyAtTime: repeatDailyAtTime,
+        location: location,
+      );
+      final zone = when.location;
       // A past one-shot would throw in the plugin; the caller decides how to
       // surface overdue reminders, so just skip scheduling. A daily repeat is
       // fine: DateTimeComponents.time matches the NEXT occurrence.
@@ -194,6 +206,31 @@ class AppNotifications {
       // No channel (test) / denied permission — scheduling is best-effort and
       // never breaks the caller's flow (same contract as [show]).
     }
+  }
+
+  /// The `TZDateTime` an alarm is built at — extracted pure so the wall-clock
+  /// rule is unit-testable without the plugin channel.
+  ///
+  ///  * One-shots (or no [location]): the absolute INSTANT of [scheduledAt] is
+  ///    preserved (`TZDateTime.from`), zone only re-labels the wall clock.
+  ///  * Daily repeats WITH a [location]: the picked device-local WALL-CLOCK
+  ///    fields are re-interpreted IN the effective zone (build, not convert) —
+  ///    a 07:00 pick anchors at 07:00 in the chosen zone and never drifts off
+  ///    the displayed time across that zone's DST transitions.
+  @visibleForTesting
+  static tz.TZDateTime scheduleInstant({
+    required DateTime scheduledAt,
+    required bool repeatDailyAtTime,
+    tz.Location? location,
+  }) {
+    final zone = location ?? tz.UTC;
+    if (repeatDailyAtTime && location != null) {
+      final wall = scheduledAt.toLocal();
+      return tz.TZDateTime(
+        zone, wall.year, wall.month, wall.day, wall.hour, wall.minute,
+      );
+    }
+    return tz.TZDateTime.from(scheduledAt, zone);
   }
 
   /// Cancel a previously scheduled notification by its [id]. Safe to call for

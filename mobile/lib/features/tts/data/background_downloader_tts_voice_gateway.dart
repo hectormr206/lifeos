@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:flutter/foundation.dart';
 
 import '../domain/tts_voice.dart';
 import '../domain/tts_voice_gateway.dart';
@@ -156,8 +157,13 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
   /// concurrent voice download already extracted the shared data (marker
   /// present), it skips re-extracting so two downloads never race on the dir.
   Future<void> _extractEspeakData(TtsVoicePaths paths, String group) async {
-    if (File('${paths.dataDir}/$_espeakMarker').existsSync()) return;
     final archivePath = await _taskFor(_config.espeakData, group).filePath();
+    if (await reclaimRedundantEspeakArchive(
+      markerPath: '${paths.dataDir}/$_espeakMarker',
+      archivePath: archivePath,
+    )) {
+      return;
+    }
     final modelDir = File(paths.model).parent;
     await extractTarGz(archivePath, modelDir);
     if (!File('${paths.dataDir}/$_espeakMarker').existsSync()) {
@@ -168,6 +174,25 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
     try {
       await File(archivePath).delete();
     } catch (_) {/* best effort — extraction already succeeded */}
+  }
+
+  /// Idempotency guard for the shared espeak data: when the marker already
+  /// exists (a concurrent sibling download extracted it first), OUR redundant
+  /// archive still landed on disk and no later code path would ever reclaim it
+  /// (`needsEspeak` is false from then on) — so it is deleted (best-effort)
+  /// BEFORE the extraction is skipped. Returns true when extraction should be
+  /// skipped. Extracted static + path-injected so the reclaim is unit-testable
+  /// without the downloader/platform channels.
+  @visibleForTesting
+  static Future<bool> reclaimRedundantEspeakArchive({
+    required String markerPath,
+    required String archivePath,
+  }) async {
+    if (!File(markerPath).existsSync()) return false;
+    try {
+      await File(archivePath).delete();
+    } catch (_) {/* best effort — the extraction we need already exists */}
+    return true;
   }
 
   /// Verify the file at [path] is at least [file.minBytes]. Deletes it and

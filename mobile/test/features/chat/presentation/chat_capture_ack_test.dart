@@ -13,6 +13,7 @@
 // In-memory graph store (the ffi backend never resolves under the FakeAsync test
 // zone) drives the context builder; a counting chat repo proves whether the
 // model was invoked.
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
@@ -171,11 +172,18 @@ class _InMemoryHistory implements ChatHistoryRepository {
 
 class _CountingChatRepository implements ChatRepository {
   int sendCalls = 0;
+
+  /// When set, [sendMessage] awaits this before replying — lets a test hold a
+  /// generation "in flight" to exercise the ack-vs-FIFO ordering.
+  Completer<void>? gate;
+
   @override
   Future<List<ChatMessage>> loadHistory() async => const [];
   @override
   Future<ChatMessage> sendMessage(String text) async {
     sendCalls++;
+    final pending = gate;
+    if (pending != null) await pending.future;
     return ChatMessage(
         id: 'axi-$sendCalls',
         role: ChatRole.axi,
@@ -389,6 +397,53 @@ void main() {
       es.chatCaptureAckSubject('Salud', 'Celia', 'dormí 8h (23:00–07:00)'),
     );
     expect(chatRepo.sendCalls, 0);
+  });
+
+  testWidgets(
+      'an ack landing while a generation drains goes through the FIFO — '
+      'never interleaved before the pending reply', (tester) async {
+    // Regression: _captureThenAnswer appended its ack directly (outside the
+    // queue), so an ack could slip BETWEEN a pending user message and its
+    // model reply — mispairing pairedReplyOf/delete cascades — and dropped the
+    // typing indicator while the generation was still running.
+    final container = buildContainer();
+    final notifier = await openChat(container);
+
+    chatRepo.gate = Completer<void>();
+    final joke = notifier.sendMessage('cuéntame un chiste');
+    await tester.pump();
+    await tester.pump(); // the generation is now in flight, held by the gate.
+
+    // A capture turn arrives mid-generation (the voice-note race).
+    final vital = notifier.sendMessage('122 77 55 pulsos');
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    var state = container.read(chatNotifierProvider);
+    expect(state.messages.where((m) => m.role == ChatRole.axi), isEmpty,
+        reason: 'the ack must WAIT for the in-flight reply, not jump the queue');
+    expect(state.sending, isTrue,
+        reason: 'the typing indicator stays up while the generation runs');
+
+    chatRepo.gate!.complete();
+    await joke;
+    // Frames for the queued ack request's endOfFrame handoff in _drain.
+    await tester.pump();
+    await tester.pump();
+    await vital;
+    await tester.pump();
+
+    state = container.read(chatNotifierProvider);
+    final axi = state.messages.where((m) => m.role == ChatRole.axi).toList();
+    expect(axi, hasLength(2));
+    expect(axi[0].text, 'modelo', reason: 'the model reply lands FIRST');
+    expect(
+      axi[1].text,
+      es.chatCaptureAck('Salud', 'presión 122/77, pulso 55'),
+      reason: 'the ack follows, in FIFO order',
+    );
+    expect(state.sending, isFalse);
   });
 
   testWidgets('the ack still works with the on-device model disabled',

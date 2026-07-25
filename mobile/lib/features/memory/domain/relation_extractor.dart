@@ -223,7 +223,18 @@ class RelationExtractor {
 
   /// Extract facts + relations from the turn and persist them. Best-effort: a
   /// model failure or malformed JSON is a silent no-op (never throws).
-  Future<void> extractAndWrite(String userText, String axiText) async {
+  ///
+  /// [subject] is the DETERMINISTIC segment subject (canonical relation label,
+  /// e.g. "esposa") when the whole extractable content of the turn belongs to
+  /// one family member; extracted facts are then written with that subject
+  /// (data.subject + the fact--involves-->person edge) instead of defaulting
+  /// to the user. It comes ONLY from the utterance segmenter — the model never
+  /// chooses who a fact is about. Null keeps the user attribution.
+  Future<void> extractAndWrite(
+    String userText,
+    String axiText, {
+    String? subject,
+  }) async {
     Extraction? extraction;
     try {
       await engine.load();
@@ -250,6 +261,10 @@ class RelationExtractor {
           label: f.label,
           // occurred_at = now for EVERY extracted fact.
           occurredAt: at,
+          // Deterministic segment subject (or null = the user) — see
+          // [extractAndWrite]. Keeps a family member's fact off the user's
+          // own record.
+          subject: subject,
           data: <String, Object?>{
             'source': 'relation_extractor',
             ...f.data,

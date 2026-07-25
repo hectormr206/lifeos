@@ -19,20 +19,39 @@ class TtsPreview {
   final PiperSpeechSynthesizer _synthesizer;
   final TtsPlayback _playback;
 
+  /// Monotonic request counter (same pattern as the main speak path's `_epoch`
+  /// in `sherpa_piper_tts_gateway.dart`): each [play] takes a ticket, and any
+  /// await-point re-check discards a STALE request. Without it, a slow first
+  /// preview finishing late would stop and replace the voice the user tapped
+  /// LAST — they would hear the wrong voice for the row they chose.
+  int _epoch = 0;
+
   /// Synthesizes [text] with [voice] and plays it, stopping any previous
-  /// preview first (one sample at a time).
+  /// preview first (one sample at a time). Only the MOST RECENTLY requested
+  /// preview ever reaches the speaker; a late-finishing older one is dropped.
   Future<void> play({
     required TtsVoicePaths voice,
     required String text,
     double speed = 1.0,
   }) async {
     if (text.trim().isEmpty) return;
+    final ticket = ++_epoch;
     final audio = await _synthesizer.synthesize(voice: voice, text: text, speed: speed);
+    // A newer preview (or stop) was requested while synthesizing → this result
+    // is stale; do NOT cut off the newest playback to play an old sample.
+    if (ticket != _epoch) return;
     await _playback.stop();
+    if (ticket != _epoch) return;
     await _playback.play(pcmFloat32ToWav16(audio.samples, audio.sampleRate));
   }
 
-  Future<void> stop() => _playback.stop();
+  Future<void> stop() {
+    _epoch++; // invalidate any in-flight synthesis so it can't play late.
+    return _playback.stop();
+  }
 
-  Future<void> dispose() => _playback.dispose();
+  Future<void> dispose() {
+    _epoch++;
+    return _playback.dispose();
+  }
 }

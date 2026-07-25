@@ -1,7 +1,29 @@
 import 'dart:async';
 
+import 'package:lifeos/features/security/data/secure_screen_gateway.dart';
 import 'package:lifeos/features/security/domain/app_lock_preferences.dart';
 import 'package:lifeos/features/security/domain/biometric_authenticator.dart';
+
+/// Records every FLAG_SECURE toggle the lock controller requests — no
+/// MethodChannel. [current] is the last requested value (null = never set).
+class FakeSecureScreenGateway implements SecureScreenGateway {
+  final List<bool> calls = [];
+  bool? get current => calls.isEmpty ? null : calls.last;
+
+  @override
+  Future<void> setSecure(bool enabled) async => calls.add(enabled);
+}
+
+/// An [AppLockPreferences] whose read THROWS — the broken-persistence case the
+/// pre-frame flag resolution must fail CLOSED on.
+class ThrowingAppLockPreferences implements AppLockPreferences {
+  @override
+  Future<bool> isEnabled() async => throw StateError('prefs store broken');
+
+  @override
+  Future<void> setEnabled(bool value) async =>
+      throw StateError('prefs store broken');
+}
 
 /// In-memory [AppLockPreferences] for tests (no shared_preferences channel).
 class FakeAppLockPreferences implements AppLockPreferences {

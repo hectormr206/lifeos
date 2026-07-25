@@ -78,8 +78,11 @@ class ParsedEntry {
 const String _bpKw = r'presion(?:\s+arterial)?|p\.?a\.?|blood\s+pressure|bp';
 const String _pulseKw =
     r'pulsos?|pulse|fc|frecuencia\s+cardiaca|hr|heart\s+rate';
-// Separator between systolic and diastolic: "/", "over" (EN), or plain space.
-const String _bpSep = r'(?:/\s*|\s+over\s+|\s+)';
+// Separator between systolic and diastolic: "/", "over" (EN), a dictated comma
+// ("presión 122, 81" — commas are how voice dictation renders the pauses of a
+// spoken reading; safe here because these shapes are keyword-anchored), or
+// plain space.
+const String _bpSep = r'(?:/\s*|\s+over\s+|\s*,\s*|\s+)';
 
 // Keyword BP + optional pulse: "presión 120/80 pulso 72" / "presión 122 81, 53
 // pulsos". Keyword-anchored, so it searches anywhere and is trusted (no gate).
@@ -117,8 +120,10 @@ final RegExp _bpPulseBareRe = RegExp(
   ].join(),
   caseSensitive: false,
 );
+// The optional "y " before the last group covers the dictated conjunction of
+// a comma-read vital: "130, 85, y 60 pulsos" (same reading, spoken naturally).
 final RegExp _bpPulseTrailingRe = RegExp(
-  r'(?<![0-9])(\d{2,3})\s*[,/ ]\s*(\d{2,3})\s*[,/ ]\s*(\d{2,3})\s*pulsos?\b',
+  r'(?<![0-9])(\d{2,3})\s*[,/ ]\s*(\d{2,3})\s*[,/ ]\s*(?:y\s+)?(\d{2,3})\s*pulsos?\b',
   caseSensitive: false,
 );
 final RegExp _bpPulseDePulsoWordRe = RegExp(

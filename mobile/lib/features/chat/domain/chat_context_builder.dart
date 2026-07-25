@@ -118,12 +118,21 @@ class CaptureSummary {
   const CaptureSummary({
     this.entries = const <CaptureEntry>[],
     this.hasNonHealthContent = false,
+    this.nonHealthSubject,
   });
 
   const CaptureSummary.empty() : this();
 
   final List<CaptureEntry> entries;
   final bool hasNonHealthContent;
+
+  /// The DETERMINISTIC segment subject (canonical relation label, "esposa")
+  /// shared by ALL the non-health clauses of the turn, or null when they are
+  /// the user's own (or mixed). Passed to the model-based extractor so a fact
+  /// it surfaces from a subject-tagged turn ("mi esposa empezó a tomar
+  /// losartán") is filed under that person, never as the user's own. The model
+  /// NEVER chooses the subject — only the segmenter's resolution flows here.
+  final String? nonHealthSubject;
 
   bool get isEmpty => entries.isEmpty;
   bool get isNotEmpty => entries.isNotEmpty;
@@ -348,6 +357,7 @@ class ChatContextBuilder {
 
     final entries = <CaptureEntry>[];
     var hasNonHealthContent = false;
+    final nonHealthSubjects = <String?>{};
     ChatContextDeps? deps;
     try {
       deps = await loadDeps();
@@ -403,8 +413,15 @@ class ChatContextBuilder {
           }
         }
 
-        // Non-health clause → a fact on the correct hub/domain (or generic).
-        hasNonHealthContent = true;
+        // Unparsed clause. If it still LOOKS medical (vital keywords/numbers
+        // the health parser owns — [isLoggedVital] — even though this exact
+        // shape missed), it must NOT by itself open the model-extractor gate:
+        // a purely medical turn never touches the model. The clause is still
+        // written as a raw fact below, so nothing is lost.
+        if (!isLoggedVital(seg.text)) {
+          hasNonHealthContent = true;
+          nonHealthSubjects.add(seg.subject);
+        }
         final fact = await _captureSegmentFact(deps, seg, provenance);
         if (fact != null) entries.add(fact);
       }
@@ -415,6 +432,10 @@ class ChatContextBuilder {
     return CaptureSummary(
       entries: await _resolveSubjectNames(deps, entries),
       hasNonHealthContent: hasNonHealthContent,
+      // Deterministic subject for the extractor: only when EVERY non-health
+      // clause resolved to the SAME family member. Mixed or user-owned → null
+      // (user attribution, the safe default).
+      nonHealthSubject: nonHealthSubjects.length == 1 ? nonHealthSubjects.single : null,
     );
   }
 
@@ -440,7 +461,13 @@ class ChatContextBuilder {
         writer: deps.writer,
         store: deps.store,
         now: now,
-      ).extractAndWrite(userText, axiText);
+      ).extractAndWrite(
+        userText,
+        axiText,
+        // Deterministic segment subject (never model-chosen): facts from a
+        // subject-tagged turn are filed under that person.
+        subject: summary.nonHealthSubject,
+      );
     } catch (_) {
       // Best-effort model complement; a failure never surfaces to the user.
     }

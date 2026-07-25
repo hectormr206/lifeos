@@ -78,10 +78,14 @@ class ApkDownloadService {
       );
 
   /// Start — or ATTACH to — the background download of the APK described by
-  /// [manifest]. If a task for the update is already enqueued/running/paused it
-  /// is LEFT UNTOUCHED (never reset/cancelled) and this returns `false`; the
-  /// shared [updates] listener is already carrying its progress. Otherwise a
-  /// fresh task is enqueued and this returns `true`.
+  /// [manifest]. If a task for the update is already enqueued/running it is
+  /// LEFT UNTOUCHED (never reset/cancelled) and this returns `false`; the
+  /// shared [updates] listener is already carrying its progress. A PAUSED task
+  /// is RESUMED on attach (a paused record never progresses on its own — no
+  /// other code path resumes, so counting it as "running" without resuming was
+  /// a silent 0% dead-end); if the paused record refuses to resume (no resume
+  /// data) it is cancelled and a fresh task is enqueued. Otherwise a fresh
+  /// task is enqueued and this returns `true`.
   ///
   /// Unlike the old convenience `download(...)` call, this does NOT await the
   /// transfer — progress and completion arrive asynchronously on [updates], so
@@ -90,9 +94,19 @@ class ApkDownloadService {
     if (!_config.isConfigured) {
       throw ApkDownloadException('Origen de actualizaciones no configurado.');
     }
-    // Already in flight? Attach — do NOT reset an active/paused task (that was
-    // the bug: re-entering the flow cancelled and restarted from zero).
-    if (await _isAlreadyRunning()) return false;
+    // Already known to the downloader? Attach — do NOT reset an active task
+    // (that was the bug: re-entering the flow cancelled and restarted from
+    // zero) — but DO kick a paused one back to life.
+    if (await _isAlreadyRunning()) {
+      if (await _resumeOurPausedTask()) return false; // paused → resumed
+      if (await _isAlreadyRunning()) return false; // genuinely running
+      // A paused orphan that refused to resume: its record was already
+      // dropped by the failed resume; cancel defensively and re-enqueue fresh
+      // below so the flow never dead-ends silently.
+      try {
+        await _downloader.cancelTaskWithId(_taskId);
+      } catch (_) {/* opportunistic — enqueue below is the real recovery */}
+    }
 
     final task = buildDownloadTask(manifest);
     final enqueued = await _downloader.enqueue(task);
@@ -100,6 +114,21 @@ class ApkDownloadService {
       throw ApkDownloadException('No se pudo iniciar la descarga.');
     }
     return true;
+  }
+
+  /// Resume our update task IF it is paused. `resumeAll(group:)` only touches
+  /// PAUSED tasks, so a running task is never disturbed. Returns true when the
+  /// paused task accepted the resume (it is now (re-)enqueued and its progress
+  /// flows on [updates]); false when nothing paused was resumed — either the
+  /// task is genuinely running, or its paused record had no resume data (the
+  /// failed attempt also clears that record, unwedging the next enqueue).
+  Future<bool> _resumeOurPausedTask() async {
+    try {
+      final resumed = await _downloader.resumeAll(group: _group);
+      return resumed.any((t) => t.taskId == _taskId);
+    } catch (_) {
+      return false;
+    }
   }
 
   /// True when our update task is already known to the native downloader

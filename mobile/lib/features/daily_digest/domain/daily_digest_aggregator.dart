@@ -84,8 +84,16 @@ DateTime _localDay(DateTime t, [tz.Location? location]) {
 /// Render the deterministic facts as a readable neutral-Spanish block. This is
 /// the FACTUAL content (exact, aggregated) that the digest always shows and
 /// that the model narration is grounded on.
-String renderDigestFacts(DailyDigestData data) {
-  final date = _formatDate(data.generatedAt.toLocal());
+///
+/// TIMEZONE: [location] must be the SAME effective zone the today-window was
+/// aggregated in (null = AUTOMATIC = device-local, unchanged). Rendering with
+/// the device zone while the window used a manual override printed the wrong
+/// date/times ("Resumen de hoy — 02/01" for entries selected for the LA day
+/// 01/01) — and the model narration, grounded on this text, repeated them.
+String renderDigestFacts(DailyDigestData data, {tz.Location? location}) {
+  DateTime inZone(DateTime t) =>
+      location == null ? t.toLocal() : tz.TZDateTime.from(t, location);
+  final date = _formatDate(inZone(data.generatedAt));
   final buffer = StringBuffer('Resumen de hoy — $date\n');
   if (data.isEmpty) {
     buffer.write('\nHoy todavía no registraste nada en tus dominios.');
@@ -97,7 +105,7 @@ String renderDigestFacts(DailyDigestData data) {
     for (final group in section.people) {
       buffer.writeln('  • ${group.personLabel}: ${_plural(group.entries.length, "registro", "registros")}');
       for (final entry in group.entries) {
-        buffer.writeln('    - ${entry.label} (${_formatTime(entry.timestamp.toLocal())})');
+        buffer.writeln('    - ${entry.label} (${_formatTime(inZone(entry.timestamp))})');
       }
     }
   }

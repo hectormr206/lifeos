@@ -132,5 +132,31 @@ void main() {
       );
       expect(data.totalEntries, 1);
     });
+
+    test('renderDigestFacts formats date + times in the SAME override zone', () {
+      // Regression: the window was computed in the override zone but the text
+      // rendered with toLocal() (device zone) — wrong day + wrong times, and
+      // the model narration (grounded on this text) repeated them.
+      final la = tz.getLocation('America/Los_Angeles');
+      // 2026-01-02 05:00Z = 2026-01-01 21:00 LA (previous day in LA).
+      final generatedAt = DateTime.utc(2026, 1, 2, 5);
+      // 2026-01-01 17:00Z = 09:00 LA.
+      final entryAt = DateTime.utc(2026, 1, 1, 17);
+      final data = aggregateDailyDigest(
+        {
+          'health': [_entry('h1', 'Presión 120/80', entryAt, type: 'blood_pressure')],
+        },
+        now: generatedAt,
+        directory: directory,
+        location: la,
+      );
+      expect(data.totalEntries, 1, reason: 'the entry is in the LA day');
+
+      final facts = renderDigestFacts(data, location: la);
+      expect(facts, contains('01/01/2026'),
+          reason: 'the header shows the LA calendar day the window used');
+      expect(facts, contains('(09:00)'),
+          reason: 'entry times render as LA wall time, not device time');
+    });
   });
 }

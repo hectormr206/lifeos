@@ -487,8 +487,17 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     try {
       final translator = OnDeviceTranslator(ref.read(localLlmEngineProvider));
       final code = _languageCode;
-      final sourceNames =
-          assembled.groups.map((g) => g.sourceName).toList(growable: false);
+      // DE-DUPLICATED by name: [OnDeviceBriefing.groups] merges only
+      // CONSECUTIVE same-source runs, so a source name split across
+      // non-adjacent runs (feed+atom of one site, or two empty-title feeds on
+      // the same host label) would appear twice — and since [_translateSource]
+      // selects by name across the WHOLE briefing, that meant a second FULL
+      // model call over the same articles. A Set keeps first-seen order while
+      // translating each source exactly once.
+      final sourceNames = assembled.groups
+          .map((g) => g.sourceName)
+          .toSet()
+          .toList(growable: false);
       var briefing = assembled;
       for (var i = 0; i < sourceNames.length; i++) {
         state = state.copyWith(

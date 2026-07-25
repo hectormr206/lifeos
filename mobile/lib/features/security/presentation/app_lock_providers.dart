@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/local_auth_biometric_authenticator.dart';
+import '../data/secure_screen_gateway.dart';
 import '../domain/app_lock_preferences.dart';
 import '../domain/biometric_authenticator.dart';
 import 'app_lock_controller.dart';
@@ -17,6 +18,11 @@ final appLockPreferencesProvider =
 /// any code path that builds the app WITHOUT overriding it (e.g. widget tests
 /// that don't exercise the lock) simply gets a transparent pass-through.
 final appLockInitialEnabledProvider = Provider<bool>((ref) => false);
+
+/// Native secure-surface toggle (Android FLAG_SECURE while the lock is
+/// enabled). Best-effort on other platforms/tests; overridable with a fake.
+final secureScreenGatewayProvider =
+    Provider<SecureScreenGateway>((ref) => MethodChannelSecureScreenGateway());
 
 /// Platform biometric/credential authenticator (local_auth). Overridden with a
 /// fake in tests so the flow never touches a platform channel.
