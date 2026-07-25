@@ -10,6 +10,7 @@ import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../daily_digest/domain/daily_digest_preferences.dart';
 import '../../morning_briefing/domain/morning_briefing_preferences.dart';
 import '../domain/wipe_registry.dart';
 
@@ -97,6 +98,34 @@ class BriefingDataWipeTarget implements WipeTarget {
 
   @override
   String get id => 'briefing-prefs';
+
+  @override
+  Future<void> purge() async {
+    final prefs = await _preferences();
+    for (final key in purgedKeys) {
+      await prefs.remove(key);
+    }
+  }
+}
+
+/// Purges the daily-digest USER CONTENT from shared_preferences: the last
+/// generated digest (a model narration over the user's people, facts and day)
+/// must not survive a full wipe. The digest SCHEDULE (enabled/hour/minute) is
+/// an app setting and is deliberately kept — wipeKeepsBody promises settings
+/// survive, and a schedule contains no user data.
+class DailyDigestDataWipeTarget implements WipeTarget {
+  DailyDigestDataWipeTarget({Future<SharedPreferences> Function()? preferences})
+    : _preferences = preferences ?? SharedPreferences.getInstance;
+
+  final Future<SharedPreferences> Function() _preferences;
+
+  /// Only the CONTENT key — never the schedule settings keys.
+  static const List<String> purgedKeys = [
+    SharedPrefsDailyDigestPreferences.lastDigestKey,
+  ];
+
+  @override
+  String get id => 'daily-digest-prefs';
 
   @override
   Future<void> purge() async {

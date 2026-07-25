@@ -42,6 +42,40 @@ void main() {
     test('"soy ingeniero" is rejected (profession, not a name)', () {
       expect(parseUserName('soy ingeniero', bareAllowed: false), isNull);
     });
+
+    test('"soy diabético" is rejected (condition, not a name)', () {
+      expect(parseUserName('soy diabético', bareAllowed: false), isNull);
+      expect(parseUserName('soy hipertenso', bareAllowed: false), isNull);
+    });
+
+    test('"soy de Monterrey" is rejected (place clause, not a name)', () {
+      expect(parseUserName('soy de Monterrey', bareAllowed: false), isNull);
+    });
+
+    test('"dime la hora" is rejected (command, not a name)', () {
+      expect(parseUserName('dime la hora', bareAllowed: false), isNull);
+    });
+
+    test('a long "soy el que…" clause is rejected (token count on FULL tail)', () {
+      expect(
+        parseUserName('soy el que te dijo ayer lo del gasto', bareAllowed: false),
+        isNull,
+      );
+    });
+
+    test('weak prefix requires capitalization: "soy juan" is not captured', () {
+      // "soy …" also introduces predicates; only a capitalized proper name
+      // ("Soy Juan") is accepted through it.
+      expect(parseUserName('soy juan', bareAllowed: false), isNull);
+      expect(parseUserName('soy Juan', bareAllowed: false), 'Juan');
+    });
+
+    test('"me llamo Juan Pablo" → Juan Pablo (compound, strong prefix)', () {
+      expect(
+        parseUserName('me llamo Juan Pablo', bareAllowed: false),
+        'Juan Pablo',
+      );
+    });
   });
 
   group('bare answer (bareAllowed = true)', () {
@@ -67,6 +101,21 @@ void main() {
 
     test('a question is rejected', () {
       expect(parseUserName('¿qué puedes hacer?', bareAllowed: true), isNull);
+    });
+
+    test('a LONG sentence is rejected — the guard counts the FULL reply', () {
+      // Regression: _clean used to truncate to 3 tokens BEFORE the 1–3-token
+      // guard, so any sentence slipped through as a fake "name".
+      expect(
+        parseUserName('dame consejos para dormir mejor', bareAllowed: true),
+        isNull,
+      );
+      expect(parseUserName('hablemos de mi trabajo', bareAllowed: true), isNull);
+      expect(parseUserName('puedes hablar español', bareAllowed: true), isNull);
+      expect(
+        parseUserName('pon una alarma a las ocho', bareAllowed: true),
+        isNull,
+      );
     });
 
     test('an empty / whitespace message is null', () {

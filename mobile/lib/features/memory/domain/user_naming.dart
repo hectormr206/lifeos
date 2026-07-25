@@ -25,7 +25,12 @@ import 'subject.dart';
 /// Leading phrases that explicitly introduce the user's own name, folded +
 /// lowercased (matching runs on folded text). Longest-first so "me puedes decir"
 /// wins over "me".
-const List<String> _namePrefixes = <String>[
+/// STRONG prefixes semantically introduce a NAME and nothing else ("me llamo
+/// diabético" is not Spanish), so a lowercase dictated name after them is
+/// accepted. WEAK prefixes ("soy …", "dime …") also introduce predicates and
+/// commands ("soy diabético", "dime la hora"), so their candidate must ALSO
+/// look like a proper name (every token capitalized in the original text).
+const List<String> _strongPrefixes = <String>[
   'me puedes decir',
   'puedes llamarme',
   'puedes decirme',
@@ -34,12 +39,20 @@ const List<String> _namePrefixes = <String>[
   'me dicen',
   'me llaman',
   'llamame',
+];
+
+const List<String> _weakPrefixes = <String>[
   'dime',
   'soy',
 ];
 
-final RegExp _prefixRe = RegExp(
-  '^\\s*(?:${_namePrefixes.map(RegExp.escape).join('|')})\\s+(.+)\$',
+final RegExp _strongPrefixRe = RegExp(
+  '^\\s*(?:${_strongPrefixes.map(RegExp.escape).join('|')})\\s+(.+)\$',
+  caseSensitive: false,
+);
+
+final RegExp _weakPrefixRe = RegExp(
+  '^\\s*(?:${_weakPrefixes.map(RegExp.escape).join('|')})\\s+(.+)\$',
   caseSensitive: false,
 );
 
@@ -53,13 +66,29 @@ const Set<String> _notNameWords = <String>{
   'ayuda', 'ayudame', 'quiero', 'necesito', 'cuenta', 'cuentame', 'chiste',
   'broma', 'recuerda', 'recuerdame', 'comprar', 'llamar', 'tomar', 'presion',
   'pulso', 'pulsos', 'peso', 'hoy', 'ayer', 'manana', 'ok', 'vale', 'claro',
-  'feliz', 'cansado', 'triste', 'enojado', 'ingeniero', 'programador',
-  'medico', 'doctor', 'gato', 'perro', 'usted', 'ella',
+  'feliz', 'cansado', 'cansada', 'triste', 'enojado', 'enojada',
+  'ingeniero', 'ingeniera', 'programador', 'programadora',
+  'medico', 'medica', 'doctor', 'doctora', 'gato', 'perro', 'usted', 'ella',
+  // ES — conditions / states / professions / demonyms a "soy …" often carries
+  // (they must NEVER be stored as the user's name).
+  'diabetico', 'diabetica', 'hipertenso', 'hipertensa', 'enfermo', 'enferma',
+  'alergico', 'alergica', 'asmatico', 'asmatica', 'soltero', 'soltera',
+  'casado', 'casada', 'viudo', 'viuda', 'jubilado', 'jubilada',
+  'maestro', 'maestra', 'abogado', 'abogada', 'enfermero', 'enfermera',
+  'contador', 'contadora', 'arquitecto', 'arquitecta', 'estudiante',
+  'mexicano', 'mexicana', 'nuevo', 'nueva',
+  // ES — articles / pronouns / common command-object words so "dime la hora" /
+  // "soy el que…" never parse as names.
+  'el', 'la', 'los', 'las', 'un', 'una', 'de', 'del', 'yo', 'tu', 'mi',
+  'hora', 'fecha', 'alarma', 'recordatorio', 'consejo', 'consejos',
+  'puedes', 'quieres', 'dame', 'pon', 'hazme', 'hablemos', 'hablar',
+  'espanol', 'ingles', 'favor', 'por', 'aqui', 'alla',
   // EN
   'yes', 'hi', 'hello', 'what', 'how', 'when', 'where', 'who', 'thanks',
   'nothing', 'help', 'tell', 'joke', 'buy', 'call', 'remind', 'blood',
   'pulse', 'weight', 'today', 'sure', 'you', 'name', 'happy', 'tired',
-  'engineer', 'programmer',
+  'engineer', 'programmer', 'diabetic', 'sick', 'single', 'married',
+  'nurse', 'teacher', 'lawyer', 'student', 'the', 'time',
 };
 
 /// A single name token: a letter (incl. accented) followed by letters, an
@@ -80,13 +109,30 @@ String? parseUserName(String? text, {required bool bareAllowed}) {
   if (original.isEmpty) return null;
   final folded = foldAccents(original);
 
-  final m = _prefixRe.firstMatch(folded);
-  if (m != null) {
+  final strong = _strongPrefixRe.firstMatch(folded);
+  if (strong != null) {
     // The captured group runs to end-of-string, so its start offset in the
-    // (length-preserving) folded text maps 1:1 onto the original.
-    final tailStart = m.end - m.group(1)!.length;
+    // (length-preserving) folded text maps 1:1 onto the original. Strong
+    // prefixes only ever introduce a name, so a lowercase dictated "me llamo
+    // hector" is still accepted (shape + stop-list guarded).
+    final tailStart = strong.end - strong.group(1)!.length;
     final candidate = _clean(original.substring(tailStart));
     if (_looksLikeName(candidate)) return _titleCase(candidate);
+    return null;
+  }
+
+  final weak = _weakPrefixRe.firstMatch(folded);
+  if (weak != null) {
+    // Weak prefixes ("soy …", "dime …") also introduce predicates and commands
+    // ("soy diabético", "dime la hora"), so beyond the shape/stop-list guard
+    // every token must be CAPITALIZED in the original text — "Soy Héctor" is a
+    // name, "soy cansado" is not. This path never falls through to the bare
+    // path: a prefixed sentence whose tail is not a name is simply no name.
+    final tailStart = weak.end - weak.group(1)!.length;
+    final candidate = _clean(original.substring(tailStart));
+    if (_looksLikeName(candidate) && _allTokensCapitalized(candidate)) {
+      return _titleCase(candidate);
+    }
     return null;
   }
 
@@ -96,29 +142,50 @@ String? parseUserName(String? text, {required bool bareAllowed}) {
   return null;
 }
 
-/// Trim surrounding punctuation/space, collapse inner whitespace, and cap to the
-/// first 3 tokens / 40 chars so a trailing clause can't bloat the stored name.
+/// Trim surrounding punctuation/space and collapse inner whitespace. The
+/// candidate is deliberately NOT truncated here: the 1–3-token precision guard
+/// in [_looksLikeName] must count the FULL reply, so a long sentence ("dame
+/// consejos para dormir mejor") is rejected instead of silently shortened into
+/// a fake 3-token "name".
 String _clean(String raw) {
   var s = raw.trim();
   // Strip leading/trailing punctuation (keep inner hyphens/apostrophes).
   s = s.replaceAll(RegExp(r'''^[\s.,;:!?¿¡"'`()\[\]{}]+'''), '');
   s = s.replaceAll(RegExp(r'''[\s.,;:!?¿¡"'`()\[\]{}]+$'''), '');
-  s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
-  final tokens = s.split(' ').where((t) => t.isNotEmpty).take(3).toList();
-  s = tokens.join(' ');
-  return s.length <= 40 ? s : s.substring(0, 40).trim();
+  return s.replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
-/// True when [candidate] is 1–3 clean, letter-only name tokens and none is an
-/// obvious non-name word — the precision guard for the bare-answer path.
+/// Name particles ("María de Lourdes", "Juan de la Cruz") — allowed INSIDE a
+/// multi-token name, but never as its first token ("de Monterrey" is a place,
+/// "el que te dijo…" is a clause).
+const Set<String> _nameParticles = <String>{'de', 'del', 'la', 'los', 'las'};
+
+/// True when [candidate] is 1–3 clean, letter-only name tokens, at most
+/// 40 chars, and none is an obvious non-name word — the precision guard shared
+/// by every capture path. Runs on the UNtruncated candidate.
 bool _looksLikeName(String candidate) {
-  if (candidate.isEmpty) return false;
+  if (candidate.isEmpty || candidate.length > 40) return false;
   if (candidate.contains(RegExp(r'[0-9]'))) return false;
   final tokens = candidate.split(' ').where((t) => t.isNotEmpty).toList();
   if (tokens.isEmpty || tokens.length > 3) return false;
-  for (final tok in tokens) {
+  for (var i = 0; i < tokens.length; i++) {
+    final tok = tokens[i];
     if (!_nameTokenRe.hasMatch(tok)) return false;
-    if (_notNameWords.contains(foldAccents(tok.toLowerCase()))) return false;
+    final low = foldAccents(tok.toLowerCase());
+    // A particle is tolerated mid-name only.
+    if (i > 0 && _nameParticles.contains(low)) continue;
+    if (_notNameWords.contains(low)) return false;
+  }
+  return true;
+}
+
+/// True when every token of [candidate] starts with an uppercase letter in the
+/// ORIGINAL text — the proper-name signal the weak-prefix path requires.
+bool _allTokensCapitalized(String candidate) {
+  final tokens = candidate.split(' ').where((t) => t.isNotEmpty);
+  for (final tok in tokens) {
+    final first = tok.substring(0, 1);
+    if (first.toLowerCase() == first) return false;
   }
   return true;
 }

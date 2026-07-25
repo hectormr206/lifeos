@@ -16,6 +16,8 @@ import 'package:lifeos/features/stt/domain/stt_model.dart';
 import 'package:lifeos/features/stt/presentation/stt_providers.dart';
 import 'package:lifeos/features/tts/domain/tts_voice.dart';
 import 'package:lifeos/features/tts/presentation/tts_providers.dart';
+import 'package:lifeos/features/voice_settings/domain/voice_catalog.dart';
+import 'package:lifeos/features/voice_settings/presentation/voice_catalog_providers.dart';
 import 'package:lifeos/l10n/locale_providers.dart';
 
 import '../../embedding/embed_model_warmup_test.dart' show FakeEmbedModelGateway;
@@ -124,6 +126,52 @@ void main() {
 
       expect(c.read(lifeOsModelsReadyProvider), isFalse);
       expect(c.read(requiredModelsSummaryProvider).readyCount, 0);
+    });
+
+    test(
+        'the SYSTEM-voice sentinel satisfies the TTS slot — deleting the last '
+        'voice never locks chat behind "Preparando LifeOS"', () async {
+      // Brain + STT + embed installed; NO neural voice on disk and the
+      // selection fell back to the system sentinel after a delete.
+      final c = _container(
+        brainInstalled: true,
+        sttInstalled: _sttPaths,
+        ttsInstalled: null,
+        embedInstalled: _embedPaths,
+      );
+      await c
+          .read(selectedVoiceProvider.notifier)
+          .fallbackTo(VoiceCatalog.systemVoiceId);
+      await _settle(c);
+
+      final summary = c.read(requiredModelsSummaryProvider);
+      final tts = summary.models.firstWhere((m) => m.id == RequiredModelId.tts);
+      expect(tts.isInstalled, isTrue,
+          reason: 'the device voice needs no download — the slot is satisfied');
+      expect(tts.usesSystemVoice, isTrue,
+          reason: 'the UI renders it as "voz del sistema", not pending');
+      expect(c.read(lifeOsModelsReadyProvider), isTrue,
+          reason: 'chat must stay usable after deleting the last voice');
+    });
+
+    test('Descargar todo never tries to download the system sentinel', () async {
+      final ttsGateway = FakeTtsVoiceGateway();
+      final c = _container(
+        brainInstalled: true,
+        sttInstalled: _sttPaths,
+        ttsGateway: ttsGateway,
+        embedInstalled: _embedPaths,
+      );
+      await c
+          .read(selectedVoiceProvider.notifier)
+          .fallbackTo(VoiceCatalog.systemVoiceId);
+      await _settle(c);
+
+      await c.read(requiredModelsDownloadProvider.notifier).downloadAll();
+
+      expect(ttsGateway.downloadCalls, isEmpty,
+          reason: '"system" is not a downloadable catalog voice');
+      expect(c.read(lifeOsModelsReadyProvider), isTrue);
     });
   });
 

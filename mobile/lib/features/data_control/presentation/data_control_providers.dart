@@ -64,6 +64,10 @@ final wipeRegistryProvider = Provider<WipeRegistry>((ref) {
     // RecordAudioRecorderGateway) as `voice-<micros>.wav`.
     ..register(VoiceNotesWipeTarget(directory: getTemporaryDirectory))
     ..register(BriefingDataWipeTarget())
+    // The last daily digest is model-generated USER CONTENT (a narration over
+    // the user's facts/people/day) persisted in shared_preferences — it must
+    // die with the wipe. Its schedule keys are settings and survive.
+    ..register(DailyDigestDataWipeTarget())
     ..register(
       ScheduledNotificationsWipeTarget(
         cancelAll: () => AppNotifications.instance.cancelAllScheduled(),

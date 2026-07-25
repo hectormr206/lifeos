@@ -399,14 +399,17 @@ class MemoryWriter {
   }
 
   /// Merge any non-hub person node whose label equals [label] (case-insensitive)
-  /// into [canonicalUuid].
+  /// into [canonicalUuid] — RELATION-COMPATIBLE nodes only (see
+  /// [_relationCompatible]): "mi hermana Beto" must never swallow a "Beto" who
+  /// is the user's papá just because they share the nickname.
   Future<void> _mergeDuplicatesLabelled(String canonicalUuid, String label) async {
     final low = label.toLowerCase();
+    final canonical = await _store.getNodeByUuid(canonicalUuid);
     for (final p in await _store.listNodesByKind('person')) {
       if (p.uuid == canonicalUuid || p.data['role'] == 'user') continue;
-      if (p.label.toLowerCase() == low) {
-        await _mergeInto(canonicalUuid, p.uuid);
-      }
+      if (p.label.toLowerCase() != low) continue;
+      if (!_relationCompatible(canonical?.data, p.data)) continue;
+      await _mergeInto(canonicalUuid, p.uuid);
     }
   }
 
@@ -414,9 +417,17 @@ class MemoryWriter {
   /// [name] into [canonicalUuid]. DETERMINISTIC (token Jaccard + edit ratio) —
   /// SEAM: an optional E2B confirmation-only path for the 0.7–0.9 band is left
   /// for a later slice; this slice never calls a model.
+  ///
+  /// RELATION GUARD (never-corrupt-user-data): a candidate is only merged when
+  /// its relation is COMPATIBLE with the canonical node's ([_relationCompatible]).
+  /// First names repeat inside a family — naming "mi esposa" María must NEVER
+  /// collapse her into an existing "María" who is the user's hermana. Two nodes
+  /// carrying DIFFERENT relations are two real people and both survive.
   Future<void> _corefMerge(String canonicalUuid, String name) async {
+    final canonical = await _store.getNodeByUuid(canonicalUuid);
     for (final p in await _store.listNodesByKind('person')) {
       if (p.uuid == canonicalUuid || p.data['role'] == 'user') continue;
+      if (!_relationCompatible(canonical?.data, p.data)) continue;
       final names = <String>[p.label, ..._aliasList(p.data)];
       final best = names.fold<double>(0, (m, n) {
         final s = _corefScore(name, n);
@@ -424,6 +435,20 @@ class MemoryWriter {
       });
       if (best >= 0.9) await _mergeInto(canonicalUuid, p.uuid);
     }
+  }
+
+  /// True when two person nodes may be auto-merged: same canonical relation
+  /// (synonym-aware — "mujer" ≡ "esposa"), or at least one side carries NO
+  /// relation yet (an unanchored alias/extracted node adopting an anchored
+  /// identity). Two DIFFERENT relations are never merged automatically.
+  static bool _relationCompatible(
+    Map<String, Object?>? a,
+    Map<String, Object?>? b,
+  ) {
+    final relA = (a?['relation'] as String?)?.trim() ?? '';
+    final relB = (b?['relation'] as String?)?.trim() ?? '';
+    if (relA.isEmpty || relB.isEmpty) return true;
+    return _relationTerms(relA).intersection(_relationTerms(relB)).isNotEmpty;
   }
 
   // ── Relation synonyms (folded) — ported from identity._RELATION_SYNONYMS ────

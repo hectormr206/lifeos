@@ -155,6 +155,9 @@ class VoiceCatalogController extends Notifier<Map<String, TtsVoiceStatus>> {
   /// Downloads [voiceId], streaming progress into its entry. No-op when a
   /// download for it is already in flight; when it is already on disk it just
   /// lands Ready without fetching. Never throws — a failure lands Failed.
+  /// The non-catalog `system` sentinel is an explicit no-op: the device voice
+  /// has nothing to download (and the required-models gate treats it as
+  /// satisfied, so no UI ever needs this call to "fix" a system selection).
   Future<void> download(String voiceId) async {
     if (!VoiceCatalog.contains(voiceId) || _inFlight.contains(voiceId)) return;
     _inFlight.add(voiceId);

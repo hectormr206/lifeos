@@ -116,6 +116,10 @@ class _RequiredModelTile extends StatelessWidget {
     };
 
     final statusText = switch (view.phase) {
+      // The TTS slot satisfied by the device voice reads "voz del sistema"
+      // instead of "instalado" — nothing was (or needs to be) downloaded.
+      RequiredModelPhase.installed when view.usesSystemVoice =>
+        l10n.voiceStatusAbsent,
       RequiredModelPhase.installed => l10n.requiredModelStatusInstalled,
       RequiredModelPhase.downloading =>
         l10n.requiredModelStatusDownloading((view.progress.clamp(0.0, 1.0) * 100).round()),

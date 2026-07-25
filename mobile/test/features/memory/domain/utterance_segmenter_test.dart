@@ -70,6 +70,54 @@ void main() {
     });
   });
 
+  group('FIRST-PERSON RESET (a family marker never swallows my own readings)', () {
+    test('"me tomé la presión" after a mamá clause files the BP to the USER', () {
+      final out = seg.segment(
+        'mi mamá se siente mal, me tomé la presión 130 85 60 pulsos',
+      );
+      expect(out.length, 2);
+      expect(out[0].subject, 'mamá');
+      expect(out[0].text, 'se siente mal');
+      // The reflexive first-person "me tomé" RESETS the running subject: the
+      // reading is MINE, not my mother's.
+      expect(out[1].subject, isNull);
+      expect(out[1].text, contains('130 85 60 pulsos'));
+    });
+
+    test('an explicit "yo" resets after a family reading', () {
+      final out = seg.segment('de mi esposa 120/80, yo dormí 7 horas');
+      expect(out.length, 2);
+      expect(out[0].subject, 'esposa');
+      expect(out[0].text, contains('120/80'));
+      expect(out[1].subject, isNull, reason: '"yo dormí" is the USER sleeping');
+      expect(out[1].text, contains('dormí 7 horas'));
+    });
+
+    test('"con mi <rel>" is a COMPANION, not a subject transfer', () {
+      // Doing something WITH a family member stays the USER's activity, and the
+      // following unmarked reading is the USER's too.
+      final out = seg.segment('salí con mi hermano a correr, 122 77 55 pulsos');
+      expect(out.length, 2);
+      expect(out[0].subject, isNull);
+      expect(out[1].subject, isNull);
+      expect(out[1].text, '122 77 55 pulsos');
+    });
+
+    test('a first-person possessive "mi" (non-relation) resets too', () {
+      final out = seg.segment('de mi papá 130 85, revisé mi glucosa 95');
+      expect(out.length, 2);
+      expect(out[0].subject, 'papá');
+      expect(out[1].subject, isNull);
+    });
+
+    test('a neutral clause still INHERITS the family subject (no over-reset)', () {
+      final out = seg.segment('de mi papá 130 85 70 pulsos, glucosa 190');
+      expect(out.length, 2);
+      expect(out[1].subject, 'papá',
+          reason: 'no first-person marker → forward propagation intact');
+    });
+  });
+
   group('clause splitting preserves numeric sequences', () {
     test('commas INSIDE a reading are not clause boundaries', () {
       final out = seg.segment('120, 60, 49 pulsos');

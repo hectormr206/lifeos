@@ -24,6 +24,7 @@ import '../../stt/domain/stt_model.dart';
 import '../../stt/presentation/stt_providers.dart';
 import '../../tts/domain/tts_voice.dart';
 import '../../tts/presentation/tts_providers.dart';
+import '../../voice_settings/domain/voice_catalog.dart';
 import '../../voice_settings/presentation/voice_catalog_providers.dart';
 import 'local_model_notifier.dart';
 
@@ -42,10 +43,16 @@ class RequiredModelView {
     required this.id,
     required this.phase,
     this.progress = 0,
+    this.usesSystemVoice = false,
   });
 
   final RequiredModelId id;
   final RequiredModelPhase phase;
+
+  /// TTS slot only: true when the requirement is satisfied by the DEVICE/system
+  /// voice (the `system` sentinel after the last neural voice was deleted) —
+  /// nothing to download, so the slot reads "voz del sistema", not "pending".
+  final bool usesSystemVoice;
 
   /// Download progress in `0.0..1.0` (meaningful only while [phase] is
   /// [RequiredModelPhase.downloading]).
@@ -94,6 +101,11 @@ class RequiredModelsSummary {
 /// readiness at rest still needs this direct seam.
 final ttsVoiceInstalledProbeProvider = FutureProvider<bool>((ref) async {
   final voiceId = ref.watch(selectedVoiceProvider);
+  // The system-voice sentinel needs NO files on disk: after the last neural
+  // voice is deleted, speech falls back to the device TTS, so the requirement
+  // is satisfied — probing for a "system.onnx" would report false forever and
+  // lock chat behind "Preparando LifeOS" with nothing left to download.
+  if (voiceId == VoiceCatalog.systemVoiceId) return true;
   try {
     final voice = await ref.watch(ttsVoiceGatewayProvider).installedVoice(voiceId);
     return voice != null;
@@ -120,6 +132,7 @@ final requiredModelsSummaryProvider = Provider<RequiredModelsSummary>((ref) {
   final brain = ref.watch(localModelManagerProvider);
   final stt = ref.watch(sttModelDownloadProvider);
   final selectedVoice = ref.watch(selectedVoiceProvider);
+  final ttsIsSystem = selectedVoice == VoiceCatalog.systemVoiceId;
   final tts = ref.watch(voiceCatalogControllerProvider)[selectedVoice] ?? const TtsVoiceAbsent();
   final ttsProbeInstalled = ref.watch(ttsVoiceInstalledProbeProvider).value ?? false;
   final embed = ref.watch(embedModelWarmupProvider);
@@ -128,7 +141,7 @@ final requiredModelsSummaryProvider = Provider<RequiredModelsSummary>((ref) {
   return RequiredModelsSummary([
     _brainView(brain),
     _sttView(stt),
-    _ttsView(tts, ttsProbeInstalled),
+    _ttsView(tts, ttsProbeInstalled, ttsIsSystem),
     _embedView(embed, embedProbeInstalled),
   ]);
 });
@@ -169,7 +182,16 @@ RequiredModelView _sttView(SttModelStatus s) => switch (s) {
         const RequiredModelView(id: RequiredModelId.stt, phase: RequiredModelPhase.available),
     };
 
-RequiredModelView _ttsView(TtsVoiceStatus s, bool probeInstalled) {
+RequiredModelView _ttsView(TtsVoiceStatus s, bool probeInstalled, bool isSystemVoice) {
+  if (isSystemVoice) {
+    // The system sentinel is a VALID satisfied speech configuration: the device
+    // TTS needs no download, so the gate must never hold chat hostage for it.
+    return const RequiredModelView(
+      id: RequiredModelId.tts,
+      phase: RequiredModelPhase.installed,
+      usesSystemVoice: true,
+    );
+  }
   if (s is TtsVoiceReady || probeInstalled) {
     return const RequiredModelView(id: RequiredModelId.tts, phase: RequiredModelPhase.installed);
   }
@@ -273,6 +295,11 @@ class RequiredModelsDownloadNotifier extends Notifier<bool> {
 
   Future<void> _ensureTts() async {
     final voiceId = ref.read(selectedVoiceProvider);
+    // The system-voice sentinel is not a downloadable catalog voice — the
+    // requirement is already satisfied by the device TTS, so this is an
+    // explicit no-op (VoiceCatalogController.download would silently ignore
+    // the unknown id anyway; being explicit keeps the invariant readable).
+    if (voiceId == VoiceCatalog.systemVoiceId) return;
     if (ref.read(voiceCatalogControllerProvider)[voiceId] is TtsVoiceReady) return;
     // download() itself checks installedVoice and lands Ready without fetching
     // when the voice is already on disk, so this never re-downloads either.

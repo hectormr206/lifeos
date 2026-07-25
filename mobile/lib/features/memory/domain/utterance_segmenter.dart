@@ -86,6 +86,39 @@ class UtteranceSegmenter {
     caseSensitive: false,
   );
 
+  /// COMPANION phrase: `con mi <relation>` / `with my <relation>`. Doing
+  /// something *with* a family member is NOT a subject transfer — "salí con mi
+  /// hermano a correr" is the USER's outing, not the brother's. Matched on
+  /// accent-FOLDED text (fold is length-preserving, so offsets stay valid).
+  static final RegExp _companionRe = RegExp(
+    r'\b(?:con|with)\s+(?:mi|my)\s+(?:' + relationAlternation + r')\b',
+    caseSensitive: false,
+  );
+
+  /// FIRST-PERSON markers that RESET the running family subject back to the
+  /// USER. Deterministic, precision-first — evaluated on accent-FOLDED,
+  /// lowercased text (so "tomé" reads "tome"), and ONLY for clauses that carry
+  /// no family-subject marker of their own:
+  ///   * an explicit "yo" / "conmigo";
+  ///   * a possessive "mi" NOT followed by a relation word ("mi presión",
+  ///     "a mí" — never the "mi esposa" of a family marker);
+  ///   * a reflexive/dative "me" + verb whose folded form ends in -e/-i
+  ///     (first-person preterite "me tomé"/"me pesé"/"me dormí"; the ambiguous
+  ///     -o endings like "me dijo"/"me tomó" are deliberately NOT matched);
+  ///   * a common first-person preterite verb on its own ("dormí 7 horas",
+  ///     "corrí 5km") from a curated folded list — never a bare suffix guess.
+  static final RegExp _firstPersonRe = RegExp(
+    <String>[
+      r'\b(?:yo|conmigo)\b',
+      r'\bmi\b(?!\s+(?:' + relationAlternation + r')\b)',
+      r'\bme\s+[a-z]+[ei]\b',
+      r'\b(?:dormi|desperte|corri|camine|entrene|desayune|comi|cene|tome'
+          r'|medi|pese|sali|llegue|fui|estuve|anduve|hice|tuve|rece|medite'
+          r'|trabaje|jugue|senti|gaste|compre|pague)\b',
+    ].join('|'),
+    caseSensitive: false,
+  );
+
   /// Split [utterance] into subject-attributed clauses (empty for blank input).
   List<UtteranceSegment> segment(String utterance) {
     if (utterance.trim().isEmpty) return const <UtteranceSegment>[];
@@ -97,14 +130,28 @@ class UtteranceSegmenter {
       final clause = raw.replaceFirst(_leadingConjunction, '').trim();
       if (clause.isEmpty) continue;
 
-      final marker = detectSubject(clause) ?? detectSubjectLoose(clause);
+      // Companion phrases ("con mi hermano") are blanked BEFORE marker
+      // detection so they can never transfer the subject; detection runs on
+      // the blanked copy while the emitted text keeps the original clause.
+      final folded = foldAccents(clause);
+      final hadCompanion = _companionRe.hasMatch(folded);
+      final detectable = hadCompanion ? _blankCompanions(clause) : clause;
+
+      final marker = detectSubject(detectable) ?? detectSubjectLoose(detectable);
       if (marker != null) {
         // A marker RE-ANCHORS the running subject for this clause and forward.
         running = marker.subject;
         out.add(UtteranceSegment(
-          text: _strippedText(clause, marker),
+          text: _strippedText(detectable, marker),
           subject: marker.subject,
         ));
+      } else if (hadCompanion || _firstPersonRe.hasMatch(folded.toLowerCase())) {
+        // FIRST-PERSON RESET: a clause the user explicitly anchors to
+        // themself ("yo dormí 7 horas", "me tomé la presión", "salí con mi
+        // hermano") returns the running subject to the USER — a preceding
+        // family marker must never swallow the user's own readings.
+        running = null;
+        out.add(UtteranceSegment(text: clause));
       } else {
         // No marker → inherit the current subject (null = the user).
         out.add(UtteranceSegment(text: clause, subject: running));
@@ -144,14 +191,34 @@ class UtteranceSegmenter {
     return parts;
   }
 
+  /// [clause] with every companion phrase replaced by spaces. The fold is
+  /// length-preserving, so match offsets from the folded copy map 1:1 onto the
+  /// original — the replacement keeps the string length (and thus any later
+  /// slicing) stable.
+  static String _blankCompanions(String clause) {
+    final folded = foldAccents(clause);
+    final buffer = StringBuffer();
+    var cursor = 0;
+    for (final m in _companionRe.allMatches(folded)) {
+      buffer.write(clause.substring(cursor, m.start));
+      buffer.write(' ' * (m.end - m.start));
+      cursor = m.end;
+    }
+    buffer.write(clause.substring(cursor));
+    return buffer.toString();
+  }
+
   /// The clause text with the marker phrase removed, preferring the plain
   /// remainder, then the verb-stripped remainder, then the whole clause (never
-  /// empty — the numbers must survive for the health parser).
+  /// empty — the numbers must survive for the health parser). Whitespace is
+  /// collapsed because companion blanking may leave internal space runs.
   static String _strippedText(String clause, SubjectMatch marker) {
     final remainder = marker.remainder.trim();
-    if (remainder.isNotEmpty) return remainder;
+    if (remainder.isNotEmpty) return _collapse(remainder);
     final noVerb = marker.remainderNoVerb?.trim() ?? '';
-    if (noVerb.isNotEmpty) return noVerb;
-    return clause;
+    if (noVerb.isNotEmpty) return _collapse(noVerb);
+    return _collapse(clause);
   }
+
+  static String _collapse(String s) => s.replaceAll(RegExp(r'\s+'), ' ').trim();
 }

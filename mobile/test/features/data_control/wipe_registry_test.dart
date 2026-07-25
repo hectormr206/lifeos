@@ -209,6 +209,30 @@ void main() {
     });
   });
 
+  group('DailyDigestDataWipeTarget', () {
+    test('removes the last digest CONTENT, keeps the schedule settings', () async {
+      SharedPreferences.setMockInitialValues({
+        // USER CONTENT: the model narration over the user's facts/people/day.
+        'daily_digest_last': '{"deterministicText":"Resumen de hoy…"}',
+        // App settings: the digest schedule survives (wipeKeepsBody promise).
+        'daily_digest_schedule_enabled': true,
+        'daily_digest_schedule_hour': 21,
+        'daily_digest_schedule_minute': 0,
+      });
+
+      final target = DailyDigestDataWipeTarget();
+      await target.purge();
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(target.id, 'daily-digest-prefs');
+      expect(prefs.containsKey('daily_digest_last'), isFalse,
+          reason: 'the pre-wipe digest narration must not survive a full wipe');
+      expect(prefs.getBool('daily_digest_schedule_enabled'), isTrue);
+      expect(prefs.getInt('daily_digest_schedule_hour'), 21);
+      expect(prefs.getInt('daily_digest_schedule_minute'), 0);
+    });
+  });
+
   group('ScheduledNotificationsWipeTarget', () {
     test('cancels every pending scheduled notification', () async {
       var cancelled = false;

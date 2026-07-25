@@ -5,11 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../chat/presentation/chat_notifier.dart';
+import '../../daily_digest/presentation/daily_digest_notifier.dart';
 import '../../domains/presentation/local_domain_notifier.dart';
 import '../../graph/presentation/local_graph_notifier.dart';
 import '../../insights/presentation/prediction_providers.dart';
 import '../../mi_vida/presentation/mi_vida_notifier.dart';
 import '../../morning_briefing/presentation/morning_briefing_notifier.dart';
+import '../../reminders/presentation/local_reminders_notifier.dart';
 import '../domain/backup_info.dart';
 import '../domain/wipe_confirm_gate.dart';
 import 'data_control_providers.dart';
@@ -107,6 +109,8 @@ class _DangerZoneScreenState extends ConsumerState<DangerZoneScreen> {
       ref.invalidate(miVidaNotifierProvider); // "Mi vida" aggregation
       ref.invalidate(localDomainNotifierProvider); // per-domain local lists
       ref.invalidate(predictionPatternsProvider); // "Patrones" insights
+      ref.invalidate(dailyDigestNotifierProvider); // "Resumen del día" card
+      ref.invalidate(localRemindersNotifierProvider); // reminders list
       // Cerebro 3D (brain3dPayloadProvider) is autoDispose and re-reads the
       // store on each screen entry, so it needs no explicit invalidation here.
       if (!mounted) return;

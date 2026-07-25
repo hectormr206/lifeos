@@ -97,6 +97,58 @@ void main() {
     expect(one.data['aliases'], contains('Cely'));
   });
 
+  test('coref NEVER merges two relatives with DIFFERENT relations sharing a name',
+      () async {
+    // "mi hija se llama Ana" → daughter node named Ana.
+    final hija = await writer.learnPersonName('hija', name: 'Ana');
+    // The sister exists unnamed from an earlier reading ("de mi hermana …").
+    await writer.ensurePerson('hermana');
+    // "mi hermana se llama Ana" — SAME first name, DIFFERENT relation: the
+    // daughter must survive as her own person (names repeat in a family).
+    final hermana = await writer.learnPersonName('hermana', name: 'Ana');
+
+    final people = await otherPeople();
+    expect(people.length, 2, reason: 'hija and hermana are two real people');
+    expect(hermana, isNot(hija));
+    final byUuid = {for (final p in people) p.uuid: p};
+    expect(byUuid[hija]!.data['relation'], 'hija');
+    expect(byUuid[hermana]!.data['relation'], 'hermana');
+
+    // The typed hub edges still point at the RIGHT nodes.
+    final hub = (await store.listNodesByKind('person'))
+        .firstWhere((p) => p.data['role'] == 'user');
+    expect((await store.edgesForNode(hub.uuid, relation: 'hija')).single.dstUuid, hija);
+    expect(
+      (await store.edgesForNode(hub.uuid, relation: 'hermana')).single.dstUuid,
+      hermana,
+    );
+  });
+
+  test('registerAlias NEVER swallows a person with a DIFFERENT relation', () async {
+    // "mi hermano se llama Beto" → brother named Beto.
+    final hermano = await writer.learnPersonName('hermano', name: 'Beto');
+    // "a mi papá le decimos Beto" — same nickname, different relation.
+    await writer.ensurePerson('papá');
+    final papa = await writer.learnPersonName('papá', alias: 'Beto');
+
+    expect((await otherPeople()).length, 2,
+        reason: 'the brother must not be merged into papá over a shared alias');
+    expect(papa, isNot(hermano));
+  });
+
+  test('coref still merges an UNANCHORED node (no relation) into the named one',
+      () async {
+    final celia = await writer.learnPersonName('esposa', name: 'Celia');
+    // A stray extractor-created person with NO relation — a true alias node.
+    await store.createNode(kind: 'person', label: 'Celia');
+
+    await writer.learnPersonName('esposa', name: 'Celia');
+
+    expect((await otherPeople()).length, 1,
+        reason: 'an unanchored same-name node is a legitimate coref merge');
+    expect((await otherPeople()).single.uuid, celia);
+  });
+
   test('fuzzy coref (≥0.9) auto-merges a near-duplicate name', () async {
     final celia = await writer.learnPersonName('esposa', name: 'Celia');
     await store.createNode(kind: 'person', label: 'Celiaa'); // 1-char dup
