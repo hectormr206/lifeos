@@ -13,8 +13,10 @@ library;
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:timezone/timezone.dart' as tz;
 
 import '../../../core/clock/clock.dart';
+import '../../../core/timezone/timezone_providers.dart';
 import '../../../core/graph/graph_providers.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../embedding/domain/rag_service.dart';
@@ -66,5 +68,24 @@ final chatContextBuilderProvider = Provider<ChatContextBuilder>((ref) {
     },
     languageCode: () => ref.read(appLanguageCodeProvider),
     now: () => ref.read(clockProvider).now(),
+    // Wall clock for the DETERMINISTIC sleep clock-math ("me dormí a las 12 am y
+    // acabo de despertar"): the same instant, but reinterpreted in the user's
+    // effective zone when they PINNED an override, so a 00:00 bedtime is
+    // measured against the hour the user is actually living.
+    //
+    // Read SYNCHRONOUSLY off the already-resolved FutureProvider value: the
+    // capture triage is sync, and until the zone resolves (or in AUTOMATIC mode)
+    // device-local time is exactly the right answer — never a blocking await.
+    wallClockNow: () {
+      final base = ref.read(clockProvider).now();
+      tz.Location? location;
+      try {
+        location =
+            ref.read(effectiveTimezoneProvider).asData?.value.overrideLocation;
+      } catch (_) {
+        location = null; // Timezone stack unavailable → device-local.
+      }
+      return location == null ? base : tz.TZDateTime.from(base, location);
+    },
   );
 });

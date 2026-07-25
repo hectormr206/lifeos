@@ -11,10 +11,14 @@
 /// (80≤sys≤220, 40≤dia≤130, 30≤pulse≤220, 25≤kg≤300, 0.5≤sleep≤16) are what make
 /// a number BLOOD PRESSURE vs an accounting figure — they are ported faithfully.
 ///
-/// Ported metric shapes (BP / glucose / weight / sleep-hours). DEFERRED as TODO:
-///   * the bare-scale-sequence dictation (`_try_bare_scale_sequence`), and
-///   * the natural-language clock-math sleep (`_try_natural_sleep` /
-///     "me dormí a la una y desperté ahorita") — both need a clock/config seam.
+/// Ported metric shapes (BP / glucose / weight / sleep-hours + the
+/// natural-language clock-math sleep of [parseSleepWindow], which runs FIRST so
+/// "me dormí a las 12 am y acabo de despertar" computes a real duration instead
+/// of losing to the simpler "dormí N horas" shape — laptop `_PARSERS` order).
+/// The natural sleep shape needs a CLOCK, which callers inject as [now] (the
+/// wall clock of the effective timezone); the parser never reads [DateTime.now].
+/// DEFERRED as TODO: the bare-scale-sequence dictation
+/// (`_try_bare_scale_sequence`) — it still needs a config seam.
 ///
 /// SUBJECT: [parseHealthEntry] runs the same STRIP-then-parse convention as the
 /// laptop `parse_health`: a family-subject marker (precise leading/trailing via
@@ -29,6 +33,7 @@
 /// numbers, so the stored label keeps its proper Spanish accents ("presión").
 library;
 
+import 'sleep_parser.dart';
 import 'subject.dart';
 
 /// A parsed structured health entry, ready to be stored as a typed domain entry.
@@ -156,11 +161,32 @@ String _fmt(num v) {
 /// Parse a health metric from ALREADY subject-stripped [text]. Returns the first
 /// matching typed entry, or null (caller falls back to raw-fact behavior).
 ///
-/// Order mirrors the laptop `_try_vital`: glucose, then blood pressure (keyword
-/// shapes before bare shapes), then weight, then sleep-hours.
-ParsedEntry? parseHealthCore(String text) {
+/// Order mirrors the laptop `_PARSERS` + `_try_vital`: natural-language SLEEP
+/// CLOCK-MATH first, then glucose, then blood pressure (keyword shapes before
+/// bare shapes), then weight, then the explicit sleep-hours shape.
+///
+/// [now] is the wall clock ("me dormí a las 12 am y acabo de despertar" needs it
+/// to resolve the implicit wake time). Callers pass the current time in the
+/// EFFECTIVE timezone; a null [now] simply disables the implicit-now shapes —
+/// the parser never invents a time and never reads [DateTime.now] itself.
+ParsedEntry? parseHealthCore(String text, {DateTime? now}) {
   if (text.trim().isEmpty) return null;
   final t = foldAccents(text.toLowerCase());
+
+  // ── Natural-language sleep clock-math — BEFORE everything else, so the
+  // computed duration wins over the simpler "dormí N horas" shape (laptop
+  // precedence). 100% deterministic: the model never does this arithmetic.
+  // The 0.5-16 h gate lives inside [parseSleepWindow]; a miss falls through.
+  final window = parseSleepWindow(text, now: now);
+  if (window != null) {
+    return ParsedEntry(
+      domainKey: 'health',
+      type: 'sleep_hours',
+      fields: <String, Object?>{'hours': window.hours},
+      // AUDITABLE title: the user can verify the math in the capture ack.
+      title: 'dormí ${_fmt(window.hours)}h (${window.range})',
+    );
+  }
 
   // ── Glucose (no numeric gate beyond the 2-3 digit shape, per laptop) ──────
   final g = _glucoseRe.firstMatch(t);
@@ -267,14 +293,14 @@ ParsedEntry _bp(int sys, int dia, int? pulse) => ParsedEntry(
 ///   2. Loose possessive-anywhere marker ([detectSubjectLoose]) → parse the
 ///      marker-stripped text; again, a marker present but unparsed → null.
 ///   3. No marker → the entry is the user's own (subject == null).
-ParsedEntry? parseHealthEntry(String text) {
+ParsedEntry? parseHealthEntry(String text, {DateTime? now}) {
   if (text.trim().isEmpty) return null;
 
   final precise = detectSubject(text);
   if (precise != null) {
     for (final cand in <String?>[precise.remainder, precise.remainderNoVerb]) {
       if (cand == null || cand.trim().isEmpty) continue;
-      final core = parseHealthCore(cand);
+      final core = parseHealthCore(cand, now: now);
       if (core != null) return core.withSubject(precise.subject);
     }
     // Precise marker present but remainder didn't parse — fall through to the
@@ -285,11 +311,12 @@ ParsedEntry? parseHealthEntry(String text) {
   if (loose != null) {
     final core = parseHealthCore(
       loose.remainder.trim().isNotEmpty ? loose.remainder : text,
+      now: now,
     );
     // Marker present → attribute to the relation or, on a parse miss, give up
     // (never mis-file a family reading as the user's own).
     return core?.withSubject(loose.subject);
   }
 
-  return parseHealthCore(text);
+  return parseHealthCore(text, now: now);
 }

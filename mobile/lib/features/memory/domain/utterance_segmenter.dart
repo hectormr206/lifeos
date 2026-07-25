@@ -30,6 +30,7 @@
 /// grammar across the app.
 library;
 
+import 'sleep_parser.dart';
 import 'subject.dart';
 
 /// One resolved clause of an utterance: its (marker-stripped) text plus the
@@ -92,7 +93,7 @@ class UtteranceSegmenter {
     final out = <UtteranceSegment>[];
     String? running; // subject carried forward until the next marker
 
-    for (final raw in utterance.split(_boundary)) {
+    for (final raw in _splitOutsideSleepPhrases(utterance)) {
       final clause = raw.replaceFirst(_leadingConjunction, '').trim();
       if (clause.isEmpty) continue;
 
@@ -117,6 +118,30 @@ class UtteranceSegmenter {
       out.add(UtteranceSegment(text: utterance.trim()));
     }
     return out;
+  }
+
+  /// [utterance] split on [_boundary], EXCEPT where the boundary sits inside a
+  /// natural sleep phrase ([sleepPhraseSpans]).
+  ///
+  /// Same precision principle as the digit lookarounds above: "me dormí a las 12
+  /// am **y** acabo de despertar" is ONE clause, because cutting it at the " y "
+  /// would hand the parser a bedtime with no wake time (and a wake time with no
+  /// bedtime) — the clock math would be impossible and the line would fall back
+  /// to raw text, which is exactly the bug this guard removes.
+  static List<String> _splitOutsideSleepPhrases(String utterance) {
+    final protected = sleepPhraseSpans(utterance);
+    if (protected.isEmpty) return utterance.split(_boundary);
+    final parts = <String>[];
+    var cursor = 0;
+    for (final m in _boundary.allMatches(utterance)) {
+      final inside = protected
+          .any((span) => m.start >= span.start && m.start < span.end);
+      if (inside) continue;
+      parts.add(utterance.substring(cursor, m.start));
+      cursor = m.end;
+    }
+    parts.add(utterance.substring(cursor));
+    return parts;
   }
 
   /// The clause text with the marker phrase removed, preferring the plain

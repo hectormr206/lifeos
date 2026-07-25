@@ -145,6 +145,7 @@ class ChatContextBuilder {
     required this.loadDeps,
     required this.languageCode,
     required this.now,
+    this.wallClockNow,
     this.router = const DomainRouter(),
     this.segmenter = const UtteranceSegmenter(),
     this.recallK = 8,
@@ -153,6 +154,17 @@ class ChatContextBuilder {
   final ChatContextDepsLoader loadDeps;
   final String Function() languageCode;
   final DateTime Function() now;
+
+  /// "What time is it on the wall RIGHT NOW", in the user's EFFECTIVE timezone
+  /// (`EffectiveTimezone.overrideLocation` applied), used ONLY for deterministic
+  /// clock math — today the natural-language sleep duration ("me dormí a las 12
+  /// am y acabo de despertar" → the hours until now).
+  ///
+  /// Deliberately SEPARATE from [now]: [now] is the instant that timestamps what
+  /// we store, and it must stay device-local/UTC-consistent, while clock math
+  /// needs the user's wall-clock HOUR. Null → falls back to [now].
+  final DateTime Function()? wallClockNow;
+
   final DomainRouter router;
 
   /// Splits a single dictated turn into subject-attributed clauses so a
@@ -366,7 +378,8 @@ class ChatContextBuilder {
         // entry (visible in the domains list) plus its graph fact, attributed to
         // THIS clause's subject (122 → me, 120 → Celia). Medical numbers are
         // NEVER routed through the model.
-        final parsed = parseHealthCore(seg.text)?.withSubject(seg.subject);
+        final parsed =
+            parseHealthCore(seg.text, now: _wallNow())?.withSubject(seg.subject);
         if (parsed != null) {
           final entryType = localEntryTypeFor(parsed.domainKey, parsed.type);
           if (entryType != null) {
@@ -433,13 +446,19 @@ class ChatContextBuilder {
     }
   }
 
+  /// The wall clock for deterministic clock math: [wallClockNow] when the
+  /// timezone-aware seam is wired, else the plain [now].
+  DateTime _wallNow() => (wallClockNow ?? now)();
+
   /// The model-free capture triage shared by [looksCapturable] and
   /// [captureTurn]: segments + whole-turn naming, or null when the turn carries
   /// no deterministic signal at all (no reading, no naming, no statement).
   _CapturePlan? _planCapture(String userText) {
     final segments = segmenter.segment(userText);
     final naming = detectPersonNaming(userText);
-    final anyHealth = segments.any((s) => parseHealthCore(s.text) != null);
+    final wall = _wallNow();
+    final anyHealth =
+        segments.any((s) => parseHealthCore(s.text, now: wall) != null);
     if (!anyHealth && naming == null && !_looksLikeStatement(userText)) {
       return null;
     }

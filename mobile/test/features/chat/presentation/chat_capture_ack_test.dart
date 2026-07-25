@@ -342,6 +342,55 @@ void main() {
     expect(state.sending, isFalse);
   });
 
+  testWidgets('natural-language SLEEP is acked with the COMPUTED hours, and '
+      'the model never does the arithmetic', (tester) async {
+    // Bedtime 00:00 + "acabo de despertar" against a wall clock of 07:30 → 7.5h.
+    // The whole point: the ack shows the DURATION, never the raw text.
+    builder = ChatContextBuilder(
+      loadDeps: () async => ChatContextDeps(store: store, writer: writer),
+      languageCode: () => 'es',
+      now: () => now,
+      wallClockNow: () => DateTime(2026, 7, 24, 7, 30),
+    );
+    final container = buildContainer();
+    final notifier = await openChat(container);
+
+    final send = notifier.sendMessage('me dormi a las 12 am y acabo de despertar');
+    await tester.pump();
+    await tester.pump();
+    await send;
+    await tester.pump();
+
+    expect(
+      container.read(chatNotifierProvider).messages.last.text,
+      es.chatCaptureAck('Salud', 'dormí 7.5h (00:00–07:30)'),
+    );
+    // ADR-4: the duration is Dart arithmetic — the model was never invoked.
+    expect(chatRepo.sendCalls, 0);
+    final facts = store.nodes.values.where((n) => n.kind == 'fact').toList();
+    expect(facts.single.label, 'dormí 7.5h (00:00–07:30)');
+  });
+
+  testWidgets("a family member's sleep is acked on the right person",
+      (tester) async {
+    await writer.learnPersonName('esposa', name: 'Celia');
+    final container = buildContainer();
+    final notifier = await openChat(container);
+
+    final send = notifier
+        .sendMessage('mi esposa se durmió a las 11 y despertó a las 7');
+    await tester.pump();
+    await tester.pump();
+    await send;
+    await tester.pump();
+
+    expect(
+      container.read(chatNotifierProvider).messages.last.text,
+      es.chatCaptureAckSubject('Salud', 'Celia', 'dormí 8h (23:00–07:00)'),
+    );
+    expect(chatRepo.sendCalls, 0);
+  });
+
   testWidgets('the ack still works with the on-device model disabled',
       (tester) async {
     final container = buildContainer(localModel: false);
