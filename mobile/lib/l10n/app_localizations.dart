@@ -1715,7 +1715,7 @@ abstract class AppLocalizations {
   /// No description provided for @defaultAssistantSettingsFailed.
   ///
   /// In en, this message translates to:
-  /// **'Couldn't open assistant settings.'**
+  /// **'Couldn\'t open assistant settings.'**
   String get defaultAssistantSettingsFailed;
 }
 

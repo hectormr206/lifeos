@@ -896,15 +896,16 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get appLockUnavailableToast =>
-
       'Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo.';
 
   @override
   String get defaultAssistantTitle => 'Asistente predeterminado';
 
   @override
-  String get defaultAssistantSubtitle => 'Elige LifeOS como tu asistente de Android.';
+  String get defaultAssistantSubtitle =>
+      'Elige LifeOS como tu asistente de Android.';
 
   @override
-  String get defaultAssistantSettingsFailed => 'No se pudo abrir la configuración del asistente.';
+  String get defaultAssistantSettingsFailed =>
+      'No se pudo abrir la configuración del asistente.';
 }
