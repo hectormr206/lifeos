@@ -48,7 +48,8 @@ class GraphDatabaseWipeTarget implements WipeTarget {
   }
 }
 
-/// Deletes every recorded voice-note clip (`voice-*.wav`) from the directory
+/// Deletes every recorded voice-note clip (`voice-*.wav` legacy and
+/// `voice-*.wav.lifeos` encrypted) from the directory
 /// the recorder writes to. Other files there (e.g. downloaded model blobs,
 /// caches) are NOT touched — models always survive a wipe.
 class VoiceNotesWipeTarget implements WipeTarget {
@@ -56,7 +57,9 @@ class VoiceNotesWipeTarget implements WipeTarget {
 
   final Future<Directory> Function() _directory;
 
-  static final RegExp _voiceFilePattern = RegExp(r'^voice-\d+\.wav$');
+  static final RegExp _voiceFilePattern = RegExp(
+    r'^voice-\d+\.wav(?:\.lifeos)?$',
+  );
 
   @override
   String get id => 'voice-notes';

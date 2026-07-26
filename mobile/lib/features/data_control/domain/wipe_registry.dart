@@ -14,7 +14,7 @@
 ///   * graph DB          — nodes/edges/vectors/chat/reminders/facts: file
 ///                         deleted + SQLCipher key rotated + fresh DB lazily
 ///                         recreated on next open;
-///   * voice notes       — the recorded `voice-*.wav` clips on disk;
+///   * voice notes       — encrypted recorded `voice-*.wav.lifeos` clips;
 ///   * briefing prefs    — last generated briefing + schedule + sources
 ///                         (shared_preferences, back to defaults);
 ///   * scheduled alarms  — every pending local notification (reminders +

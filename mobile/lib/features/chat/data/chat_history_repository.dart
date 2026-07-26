@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import '../../../core/security/voice_note_file_store.dart';
 import '../../../core/graph/graph_records.dart';
 import '../../../core/graph/local_graph_store.dart';
 import '../../local_model/domain/generation_metrics.dart';
@@ -34,13 +35,16 @@ class ChatHistoryRepository {
     this._store, {
     this.conversationSlug = 'default',
     Future<void> Function(String path)? deleteAudioFile,
-  }) : _deleteAudioFile = deleteAudioFile ?? _defaultDeleteAudioFile;
+    VoiceNoteFileStore? voiceNotes,
+  }) : _deleteAudioFile = deleteAudioFile ?? _defaultDeleteAudioFile,
+       _voiceNotes = voiceNotes ?? VoiceNoteFileStore();
 
   final LocalGraphStore _store;
 
   /// Deletes a voice-note clip from disk during a cascade delete. Injectable
   /// so host tests exercise the cascade against temp files.
   final Future<void> Function(String path) _deleteAudioFile;
+  final VoiceNoteFileStore _voiceNotes;
 
   static Future<void> _defaultDeleteAudioFile(String path) async {
     final file = File(path);
@@ -114,7 +118,26 @@ class ChatHistoryRepository {
     // Insertion order (== chat order) is the autoincrement rowid; edges come
     // back newest-first, so re-sort by localId ascending.
     nodes.sort((a, b) => (a.localId ?? 0).compareTo(b.localId ?? 0));
-    return nodes.map(_decode).toList();
+    final messages = <ChatMessage>[];
+    for (final node in nodes) {
+      final migrated = await _migrateLegacyVoicePath(node);
+      messages.add(_decode(migrated));
+    }
+    return messages;
+  }
+
+  Future<GraphNodeRecord> _migrateLegacyVoicePath(GraphNodeRecord node) async {
+    final path = node.data['audioPath'];
+    if (path is! String || path.isEmpty || _voiceNotes.isEncryptedPath(path)) {
+      return node;
+    }
+    final migratedPath = await _voiceNotes.migrateLegacy(path);
+    if (migratedPath == path) return node;
+    final data = Map<String, Object?>.from(node.data)
+      ..['audioPath'] = migratedPath;
+    final updated = await _store.upsertNode(node.copyWith(data: data));
+    await _voiceNotes.deleteLegacy(path);
+    return updated;
   }
 
   /// Clears the default conversation: soft-deletes every message node (which
@@ -215,29 +238,33 @@ class ChatHistoryRepository {
   // --- serialization -------------------------------------------------------
 
   Map<String, Object?> _encode(ChatMessage m) => <String, Object?>{
-        'id': m.id,
-        'role': m.role.name,
-        'text': m.text,
-        'kind': m.kind.name,
-        'createdAt': m.timestamp.toUtc().millisecondsSinceEpoch,
-        'transcriptionPending': m.transcriptionPending,
-        if (m.transcription != null) 'transcription': m.transcription,
-        if (m.status != null) 'status': m.status!.name,
-        if (m.audioPath != null) 'audioPath': m.audioPath,
-        if (m.audioDuration != null) 'audioDurationMs': m.audioDuration!.inMilliseconds,
-        // Images by REFERENCE only — never the bytes. Keep a count + per-image
-        // byte length so the reload has a marker of what was attached.
-        if (m.images.isNotEmpty) 'imageCount': m.images.length,
-        if (m.images.isNotEmpty)
-          'imageByteLengths': m.images.map((b) => b.length).toList(),
-        if (m.metrics != null) 'metrics': _encodeMetrics(m.metrics!),
-      };
+    'id': m.id,
+    'role': m.role.name,
+    'text': m.text,
+    'kind': m.kind.name,
+    'createdAt': m.timestamp.toUtc().millisecondsSinceEpoch,
+    'transcriptionPending': m.transcriptionPending,
+    if (m.transcription != null) 'transcription': m.transcription,
+    if (m.status != null) 'status': m.status!.name,
+    if (m.audioPath != null) 'audioPath': m.audioPath,
+    if (m.audioDuration != null)
+      'audioDurationMs': m.audioDuration!.inMilliseconds,
+    // Images by REFERENCE only — never the bytes. Keep a count + per-image
+    // byte length so the reload has a marker of what was attached.
+    if (m.images.isNotEmpty) 'imageCount': m.images.length,
+    if (m.images.isNotEmpty)
+      'imageByteLengths': m.images.map((b) => b.length).toList(),
+    if (m.metrics != null) 'metrics': _encodeMetrics(m.metrics!),
+  };
 
   ChatMessage _decode(GraphNodeRecord node) {
     final d = node.data;
     final createdAt = d['createdAt'];
     final timestamp = createdAt is num
-        ? DateTime.fromMillisecondsSinceEpoch(createdAt.toInt(), isUtc: true).toLocal()
+        ? DateTime.fromMillisecondsSinceEpoch(
+            createdAt.toInt(),
+            isUtc: true,
+          ).toLocal()
         : (node.occurredAt ?? node.createdAt).toLocal();
     final audioMs = d['audioDurationMs'];
     return ChatMessage(
@@ -247,7 +274,9 @@ class ChatHistoryRepository {
       timestamp: timestamp,
       kind: _kindFrom(d['kind']),
       audioPath: d['audioPath'] as String?,
-      audioDuration: audioMs is num ? Duration(milliseconds: audioMs.toInt()) : null,
+      audioDuration: audioMs is num
+          ? Duration(milliseconds: audioMs.toInt())
+          : null,
       transcription: d['transcription'] as String?,
       transcriptionPending: d['transcriptionPending'] == true,
       // History-loaded messages carry no delivery checkmark (mobile-chat
@@ -267,7 +296,8 @@ class ChatHistoryRepository {
     return ChatMessageKind.text;
   }
 
-  static Map<String, Object?> _encodeMetrics(GenerationMetrics m) => <String, Object?>{
+  static Map<String, Object?> _encodeMetrics(GenerationMetrics m) =>
+      <String, Object?>{
         'totalMs': m.totalMs,
         'tokensOut': m.tokensOut,
         'backend': m.backend.name,

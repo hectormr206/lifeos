@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import '../domain/audio_recorder_gateway.dart';
+import '../../../core/security/voice_note_file_store.dart';
 
 /// [AudioRecorderGateway] backed by the real `record` package.
 ///
@@ -20,9 +21,14 @@ import '../domain/audio_recorder_gateway.dart';
 /// wrapped in a WAV container (with the RIFF header), which both sherpa-onnx
 /// AND the audioplayers playback path read directly. One file per recording.
 class RecordAudioRecorderGateway implements AudioRecorderGateway {
-  RecordAudioRecorderGateway([AudioRecorder? recorder]) : _recorder = recorder ?? AudioRecorder();
+  RecordAudioRecorderGateway([
+    AudioRecorder? recorder,
+    VoiceNoteFileStore? voiceNotes,
+  ]) : _recorder = recorder ?? AudioRecorder(),
+       _voiceNotes = voiceNotes ?? VoiceNoteFileStore();
 
   final AudioRecorder _recorder;
+  final VoiceNoteFileStore _voiceNotes;
   // The file the current take is being written to, so [cancel] can delete it.
   String? _currentPath;
 
@@ -42,7 +48,8 @@ class RecordAudioRecorderGateway implements AudioRecorderGateway {
   @override
   Future<String> start() async {
     final dir = await getTemporaryDirectory();
-    final path = '${dir.path}/voice-${DateTime.now().microsecondsSinceEpoch}.wav';
+    final path =
+        '${dir.path}/voice-${DateTime.now().microsecondsSinceEpoch}.wav';
     await _recorder.start(sttRecordConfig, path: path);
     _currentPath = path;
     return path;
@@ -52,7 +59,7 @@ class RecordAudioRecorderGateway implements AudioRecorderGateway {
   Future<String?> stop() async {
     final path = await _recorder.stop();
     _currentPath = null;
-    return path;
+    return path == null ? null : _voiceNotes.sealRecording(path);
   }
 
   @override
