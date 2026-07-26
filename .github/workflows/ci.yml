@@ -18,7 +18,7 @@ jobs:
   # artifact the Dart client is generated from. Deterministic, sub-second —
   # fails fast when a v1 route changes without regenerating the contract.
   contract-drift:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -28,7 +28,11 @@ jobs:
       # pyaudio (a core engine dep) builds against portaudio's C headers,
       # which a bare runner lacks (this laptop already has them).
       - name: Install system build deps (portaudio)
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+        run: |
+          # Skip when headers are preinstalled (self-hosted runner image).
+          if [ ! -e /usr/include/portaudio.h ]; then
+            sudo apt-get update && sudo apt-get install -y portaudio19-dev
+          fi
       - name: Sync axi deps
         working-directory: axi
         run: uv sync --python 3.12
@@ -39,7 +43,7 @@ jobs:
   # REQUIRED gate: the mobile/API surface this SDD builds on — headless-safe
   # suites, must stay green on every change.
   mobile-surface-tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -49,7 +53,11 @@ jobs:
       # pyaudio (a core engine dep) builds against portaudio's C headers,
       # which a bare runner lacks (this laptop already has them).
       - name: Install system build deps (portaudio)
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+        run: |
+          # Skip when headers are preinstalled (self-hosted runner image).
+          if [ ! -e /usr/include/portaudio.h ]; then
+            sudo apt-get update && sudo apt-get install -y portaudio19-dev
+          fi
       - name: Sync axi deps
         working-directory: axi
         run: uv sync --python 3.12
@@ -71,7 +79,7 @@ jobs:
   # (java + npx openapi-generator + jq + sd) provisioned on the runner first,
   # exactly the kind of "works on my laptop" coupling this CI exists to expose.
   mobile-app:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Flutter 3.44.6
@@ -96,7 +104,7 @@ jobs:
   # debt: an env-marker pass (@pytest.mark.hardware or equivalent) will make
   # this job required. Until then it reports but never blocks.
   engine-full-suite:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vps]
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +113,11 @@ jobs:
       - name: Set up Python 3.12
         run: uv python install 3.12
       - name: Install system build deps (portaudio)
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+        run: |
+          # Skip when headers are preinstalled (self-hosted runner image).
+          if [ ! -e /usr/include/portaudio.h ]; then
+            sudo apt-get update && sudo apt-get install -y portaudio19-dev
+          fi
       - name: Sync axi deps
         working-directory: axi
         run: uv sync --python 3.12
