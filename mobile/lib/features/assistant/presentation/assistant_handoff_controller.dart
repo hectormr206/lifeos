@@ -9,8 +9,9 @@ class AssistantHandoffController {
   AssistantHandoffController({
     required void Function() navigateToChat,
     required bool Function() isCurrentChatRoute,
-  })  : _navigateToChat = navigateToChat,
-        _isCurrentChatRoute = isCurrentChatRoute;
+  }) : this._(navigateToChat, isCurrentChatRoute);
+
+  AssistantHandoffController._(this._navigateToChat, this._isCurrentChatRoute);
 
   void Function() _navigateToChat;
   bool Function() _isCurrentChatRoute;

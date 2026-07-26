@@ -18,7 +18,9 @@ abstract class ThemeModePreferences {
 
 /// [ThemeModePreferences] backed by `shared_preferences`.
 class SharedPrefsThemeModePreferences implements ThemeModePreferences {
-  SharedPrefsThemeModePreferences({SharedPreferences? prefs}) : _prefs = prefs;
+  SharedPrefsThemeModePreferences({SharedPreferences? prefs}) : this._(prefs);
+
+  SharedPrefsThemeModePreferences._(this._prefs);
 
   static const String modeKey = 'theme_mode';
 

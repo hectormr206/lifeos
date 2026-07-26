@@ -54,7 +54,9 @@ abstract class TimezonePreferences {
 
 /// [TimezonePreferences] backed by `shared_preferences`.
 class SharedPrefsTimezonePreferences implements TimezonePreferences {
-  SharedPrefsTimezonePreferences({SharedPreferences? prefs}) : _prefs = prefs;
+  SharedPrefsTimezonePreferences({SharedPreferences? prefs}) : this._(prefs);
+
+  SharedPrefsTimezonePreferences._(this._prefs);
 
   /// Stores the IANA override id. ABSENT (or empty) → AUTOMATIC. Switching back
   /// to AUTOMATIC removes the key rather than storing a sentinel, keeping the

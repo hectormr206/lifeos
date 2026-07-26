@@ -123,7 +123,7 @@ class FakeTextToSpeechGateway implements TextToSpeechGateway {
 
 /// In-memory [VoiceReplyPreferences] — no shared_preferences channel.
 class FakeVoiceReplyPreferences implements VoiceReplyPreferences {
-  FakeVoiceReplyPreferences({bool enabled = false}) : _enabled = enabled;
+  FakeVoiceReplyPreferences({bool enabled = false}) : _enabled = enabled; // ignore: prefer_initializing_formals
 
   bool _enabled;
   int writes = 0;

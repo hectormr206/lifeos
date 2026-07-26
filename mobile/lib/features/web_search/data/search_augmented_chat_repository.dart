@@ -21,9 +21,9 @@ class SearchAugmentedChatRepository implements ChatRepository {
     required ChatRepository inner,
     required WebSearchPipeline pipeline,
     required String Function() sourcesLabel,
-  })  : _inner = inner,
-        _pipeline = pipeline,
-        _sourcesLabel = sourcesLabel;
+  }) : this._(inner, pipeline, sourcesLabel);
+
+  SearchAugmentedChatRepository._(this._inner, this._pipeline, this._sourcesLabel);
 
   final ChatRepository _inner;
   final WebSearchPipeline _pipeline;

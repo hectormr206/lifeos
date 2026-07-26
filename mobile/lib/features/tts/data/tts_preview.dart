@@ -13,8 +13,9 @@ import 'wav_encoder.dart';
 /// and trivially fakeable in tests.
 class TtsPreview {
   TtsPreview({required PiperSpeechSynthesizer synthesizer, required TtsPlayback playback})
-      : _synthesizer = synthesizer,
-        _playback = playback;
+      : this._(synthesizer, playback);
+
+  TtsPreview._(this._synthesizer, this._playback);
 
   final PiperSpeechSynthesizer _synthesizer;
   final TtsPlayback _playback;

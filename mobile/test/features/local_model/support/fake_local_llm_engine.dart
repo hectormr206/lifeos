@@ -23,7 +23,7 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     String Function(String prompt)? imageReply,
     GenerationMetrics? metrics,
     GenerationMetrics? imageMetrics,
-  })  : _installed = installed,
+  })  : _installed = installed, // ignore: prefer_initializing_formals
         downloadProgress = downloadProgress ?? const [0.25, 0.5, 1.0],
         reply = reply ?? ((prompt) => 'eco: $prompt'),
         imageReply = imageReply ?? ((prompt) => 'veo la imagen: $prompt'),
@@ -212,7 +212,7 @@ class FakeNotificationPermissionGateway implements NotificationPermissionGateway
 
 /// In-memory [LocalModelPreferences] for tests (no shared_preferences channel).
 class FakeLocalModelPreferences implements LocalModelPreferences {
-  FakeLocalModelPreferences({bool enabled = false}) : _enabled = enabled;
+  FakeLocalModelPreferences({bool enabled = false}) : _enabled = enabled; // ignore: prefer_initializing_formals
 
   bool _enabled;
   int writes = 0;

@@ -21,7 +21,9 @@ abstract class AppLockPreferences {
 
 /// [AppLockPreferences] backed by `shared_preferences`.
 class SharedPrefsAppLockPreferences implements AppLockPreferences {
-  SharedPrefsAppLockPreferences({SharedPreferences? prefs}) : _prefs = prefs;
+  SharedPrefsAppLockPreferences({SharedPreferences? prefs}) : this._(prefs);
+
+  AppLockPreferences._(this._prefs);
 
   static const String enabledKey = 'app_lock_enabled';
 

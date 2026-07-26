@@ -54,10 +54,11 @@ class WebSearchPipeline {
     required WebSearchBackend search,
     required SourceFetcher fetcher,
     SourceContentExtractor? extractor,
-    this.maxPages = 3,
-  })  : _search = search,
-        _fetcher = fetcher,
-        _extractor = extractor ?? const SourceContentExtractor();
+    int maxPages = 3,
+  }) : this._(search, fetcher, extractor, maxPages);
+
+  WebSearchPipeline._(this._search, this._fetcher, SourceContentExtractor? extractor, this.maxPages)
+      : _extractor = extractor ?? const SourceContentExtractor();
 
   /// Neutral-Spanish signal prepended when the search could not run — the model
   /// is told to answer from what it already knows rather than inventing links.

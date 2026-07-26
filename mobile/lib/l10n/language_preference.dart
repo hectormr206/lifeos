@@ -26,7 +26,9 @@ abstract class LanguagePreferences {
 
 /// [LanguagePreferences] backed by `shared_preferences`.
 class SharedPrefsLanguagePreferences implements LanguagePreferences {
-  SharedPrefsLanguagePreferences({SharedPreferences? prefs}) : _prefs = prefs;
+  SharedPrefsLanguagePreferences({SharedPreferences? prefs}) : this._(prefs);
+
+  SharedPrefsLanguagePreferences._(this._prefs);
 
   static const String languageKey = 'app_language';
 

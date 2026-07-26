@@ -14,7 +14,9 @@ abstract class OnboardingPreferences {
 
 /// [OnboardingPreferences] backed by `shared_preferences`.
 class SharedPrefsOnboardingPreferences implements OnboardingPreferences {
-  SharedPrefsOnboardingPreferences({SharedPreferences? prefs}) : _prefs = prefs;
+  SharedPrefsOnboardingPreferences({SharedPreferences? prefs}) : this._(prefs);
+
+  OnboardingPreferences._(this._prefs);
 
   /// The shared_preferences key gating the one-time onboarding screen.
   static const String doneKey = 'onboarding_permissions_done';

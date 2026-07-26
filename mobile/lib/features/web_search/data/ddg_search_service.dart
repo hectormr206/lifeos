@@ -95,8 +95,9 @@ class DdgResultParser {
 /// engine base URL, auth, or TLS pinning.
 class DuckDuckGoBackend implements WebSearchBackend {
   DuckDuckGoBackend({required SourceFetcher fetcher, DdgResultParser? parser})
-      : _fetcher = fetcher,
-        _parser = parser ?? const DdgResultParser();
+      : this._(fetcher, parser ?? const DdgResultParser());
+
+  DuckDuckGoBackend._(this._fetcher, this._parser);
 
   static const String _endpoint = 'https://lite.duckduckgo.com/lite/';
 

@@ -33,7 +33,7 @@ void main() {
         label: label,
         timestamp: now,
         type: 'blood_pressure',
-        data: {'type': 'blood_pressure', if (subject != null) 'subject': subject},
+        data: {'type': 'blood_pressure', 'subject': ?subject},
       );
 
   testWidgets('renders domain sections grouped by person', (tester) async {
