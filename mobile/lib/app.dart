@@ -8,6 +8,7 @@ import 'core/outbox/sync_service.dart';
 import 'l10n/app_localizations.dart';
 import 'l10n/locale_providers.dart';
 import 'features/app_update/presentation/app_update_notifier.dart';
+import 'features/assistant/presentation/assistant_providers.dart';
 import 'features/app_update/presentation/app_update_providers.dart';
 import 'features/app_update/presentation/app_updates_screen.dart';
 import 'features/body/presentation/body_screen.dart';
@@ -50,6 +51,7 @@ import 'features/permissions/presentation/permissions_screen.dart';
 import 'features/reminders/data/reminder_notifications.dart';
 import 'features/reminders/presentation/local_reminders_providers.dart';
 import 'features/reminders/presentation/reminders_screen.dart';
+import 'features/security/presentation/app_lock_controller.dart';
 import 'features/security/presentation/app_lock_gate.dart';
 import 'features/security/presentation/app_lock_providers.dart';
 import 'features/settings/presentation/settings_hub_screen.dart';
@@ -267,12 +269,14 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
   /// published while the user keeps LifeOS open (never backgrounding it) still
   /// surfaces the in-app banner — the resume check alone missed that case.
   Timer? _foregroundUpdateTimer;
+  ProviderSubscription<AppLockStatus>? _assistantLockSubscription;
   static const Duration _foregroundCheckInterval = Duration(minutes: 5);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _wireAssistantBridge();
     // Self-hosted OTA update: wire the system update-notification tap to the
     // Actualizaciones screen. Done after the first frame so the router is
     // ready, and covers both a tap while running and a cold-start launch.
@@ -302,9 +306,40 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
 
   @override
   void dispose() {
+    _assistantLockSubscription?.close();
+    _assistantLockSubscription = null;
     _stopForegroundUpdatePolling();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  void _wireAssistantBridge() {
+    final router = ref.read(goRouterProvider);
+    final handoff = ref.read(assistantHandoffControllerProvider);
+    handoff.bind(
+      navigateToChat: () {
+        router.go('/chat');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) handoff.onRouteSettled();
+        });
+      },
+      isCurrentChatRoute: () => router.routerDelegate.currentConfiguration.uri.path == '/chat',
+    );
+    _assistantLockSubscription = ref.listenManual<AppLockStatus>(
+      appLockControllerProvider,
+      (_, status) => handoff.updateLock(status),
+      fireImmediately: true,
+    );
+    unawaited(_startAssistantBridge());
+  }
+
+  Future<void> _startAssistantBridge() async {
+    try {
+      final handoff = ref.read(assistantHandoffControllerProvider);
+      await ref.read(assistantGatewayProvider).start((activation) => handoff.receive(activation.id));
+    } catch (_) {
+      // The platform edge is optional outside Android and must never block startup.
+    }
   }
 
   void _startForegroundUpdatePolling() {

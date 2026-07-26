@@ -7,6 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/pending_sync_banner.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../assistant/presentation/assistant_providers.dart';
+import '../../connection/domain/connection_status.dart';
+import '../../connection/presentation/connection_notifier.dart';
 import '../../local_model/domain/generation_metrics.dart';
 import '../../local_model/domain/local_llm_engine.dart' show LocalModelConfig;
 import '../../local_model/presentation/local_model_load_notifier.dart';
@@ -87,6 +90,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     // opening (see [didChangeMetrics]).
     WidgetsBinding.instance.addObserver(this);
     _speech = ref.read(speechControllerProvider.notifier);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final eligible = ref.read(connectionNotifierProvider) is ConnectionPaired ||
+          ref.read(localModelEnabledProvider);
+      ref.read(assistantHandoffControllerProvider).claimMountedChat(
+            eligible: eligible,
+            armMicrophone: _startAssistantRecording,
+          );
+    });
   }
 
   // When the soft keyboard opens (or grows), the Scaffold resizes the message
@@ -289,6 +301,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       // Start still in flight: remember the slide intent, not a forced discard.
       _releaseCancel = _willCancel;
     }
+  }
+
+  Future<void> _startAssistantRecording() async {
+    if (_recording || _startFuture != null) return;
+    _pointerDown = true;
+    _willCancel = false;
+    _releaseCancel = false;
+    await _startRecording();
   }
 
   Future<void> _startRecording() async {
