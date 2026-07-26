@@ -11,14 +11,19 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/outbox/outbox.dart';
+import 'package:lifeos/core/security/encrypted_file_cipher.dart';
 
 void main() {
   group('isNetworkFailure', () {
     test('true for a connection error (no response reached the client)', () {
       final options = RequestOptions(path: '/api/v1/chat/ask');
-      final error = DioException.connectionError(requestOptions: options, reason: 'no route to host');
+      final error = DioException.connectionError(
+        requestOptions: options,
+        reason: 'no route to host',
+      );
 
       expect(isNetworkFailure(error), isTrue);
     });
@@ -50,9 +55,17 @@ void main() {
     test('enqueue then list returns entries in FIFO order', () async {
       final outbox = InMemoryOutbox();
 
-      await outbox.enqueue(httpMethod: 'POST', path: '/api/v1/chat/ask', jsonBody: {'text': 'first'});
+      await outbox.enqueue(
+        httpMethod: 'POST',
+        path: '/api/v1/chat/ask',
+        jsonBody: {'text': 'first'},
+      );
       await outbox.enqueue(httpMethod: 'DELETE', path: '/api/v1/reminders/r1');
-      await outbox.enqueue(httpMethod: 'POST', path: '/api/v1/chat/ask', jsonBody: {'text': 'third'});
+      await outbox.enqueue(
+        httpMethod: 'POST',
+        path: '/api/v1/chat/ask',
+        jsonBody: {'text': 'third'},
+      );
 
       final entries = await outbox.list();
       expect(entries, hasLength(3));
@@ -65,25 +78,35 @@ void main() {
       final outbox = InMemoryOutbox();
       final before = DateTime.now();
 
-      final entry = await outbox.enqueue(httpMethod: 'POST', path: '/x', kind: 'chat_ask');
+      final entry = await outbox.enqueue(
+        httpMethod: 'POST',
+        path: '/x',
+        kind: 'chat_ask',
+      );
 
       expect(entry.id, isNotEmpty);
       expect(entry.kind, 'chat_ask');
-      expect(entry.createdAt.isAfter(before.subtract(const Duration(seconds: 1))), isTrue);
+      expect(
+        entry.createdAt.isAfter(before.subtract(const Duration(seconds: 1))),
+        isTrue,
+      );
     });
 
-    test('remove(id) drops only the matching entry, preserving order of the rest', () async {
-      final outbox = InMemoryOutbox();
-      final a = await outbox.enqueue(httpMethod: 'POST', path: '/a');
-      final b = await outbox.enqueue(httpMethod: 'POST', path: '/b');
-      await outbox.enqueue(httpMethod: 'POST', path: '/c');
+    test(
+      'remove(id) drops only the matching entry, preserving order of the rest',
+      () async {
+        final outbox = InMemoryOutbox();
+        final a = await outbox.enqueue(httpMethod: 'POST', path: '/a');
+        final b = await outbox.enqueue(httpMethod: 'POST', path: '/b');
+        await outbox.enqueue(httpMethod: 'POST', path: '/c');
 
-      await outbox.remove(b.id);
+        await outbox.remove(b.id);
 
-      final entries = await outbox.list();
-      expect(entries.map((e) => e.path), ['/a', '/c']);
-      expect(entries.first.id, a.id);
-    });
+        final entries = await outbox.list();
+        expect(entries.map((e) => e.path), ['/a', '/c']);
+        expect(entries.first.id, a.id);
+      },
+    );
   });
 
   group('FileOutbox', () {
@@ -100,53 +123,119 @@ void main() {
     });
 
     test('is empty before anything is enqueued', () async {
-      final outbox = FileOutbox(directoryProvider: () async => tempDir);
+      final outbox = FileOutbox(
+        directoryProvider: () async => tempDir,
+        cipher: _testCipher(),
+      );
 
       expect(await outbox.list(), isEmpty);
     });
 
-    test('enqueued entries survive a reload (new FileOutbox instance, same directory)', () async {
-      final first = FileOutbox(directoryProvider: () async => tempDir);
-      await first.enqueue(
-        httpMethod: 'POST',
-        path: '/api/v1/chat/ask',
-        jsonBody: {'text': 'recuérdame llamar al doctor'},
-        kind: 'chat_ask',
-      );
-      await first.enqueue(httpMethod: 'DELETE', path: '/api/v1/reminders/r1', kind: 'reminder_cancel');
+    test(
+      'enqueued entries survive a reload (new FileOutbox instance, same directory)',
+      () async {
+        final first = FileOutbox(
+          directoryProvider: () async => tempDir,
+          cipher: _testCipher(),
+        );
+        await first.enqueue(
+          httpMethod: 'POST',
+          path: '/api/v1/chat/ask',
+          jsonBody: {'text': 'recuérdame llamar al doctor'},
+          kind: 'chat_ask',
+        );
+        await first.enqueue(
+          httpMethod: 'DELETE',
+          path: '/api/v1/reminders/r1',
+          kind: 'reminder_cancel',
+        );
 
-      // Simulates an app restart: a brand-new FileOutbox pointed at the same
-      // on-disk directory must see both previously-queued entries, in order.
-      final reloaded = FileOutbox(directoryProvider: () async => tempDir);
-      final entries = await reloaded.list();
+        // Simulates an app restart: a brand-new FileOutbox pointed at the same
+        // on-disk directory must see both previously-queued entries, in order.
+        final reloaded = FileOutbox(
+          directoryProvider: () async => tempDir,
+          cipher: _testCipher(),
+        );
+        final entries = await reloaded.list();
 
-      expect(entries, hasLength(2));
-      expect(entries[0].path, '/api/v1/chat/ask');
-      expect(entries[0].jsonBody?['text'], 'recuérdame llamar al doctor');
-      expect(entries[1].path, '/api/v1/reminders/r1');
-      expect(entries[1].kind, 'reminder_cancel');
-    });
+        expect(entries, hasLength(2));
+        expect(entries[0].path, '/api/v1/chat/ask');
+        expect(entries[0].jsonBody?['text'], 'recuérdame llamar al doctor');
+        expect(entries[1].path, '/api/v1/reminders/r1');
+        expect(entries[1].kind, 'reminder_cancel');
+      },
+    );
 
     test('remove() persists across a reload too', () async {
-      final first = FileOutbox(directoryProvider: () async => tempDir);
+      final first = FileOutbox(
+        directoryProvider: () async => tempDir,
+        cipher: _testCipher(),
+      );
       final entry = await first.enqueue(httpMethod: 'POST', path: '/a');
       await first.enqueue(httpMethod: 'POST', path: '/b');
 
       await first.remove(entry.id);
 
-      final reloaded = FileOutbox(directoryProvider: () async => tempDir);
+      final reloaded = FileOutbox(
+        directoryProvider: () async => tempDir,
+        cipher: _testCipher(),
+      );
       final entries = await reloaded.list();
       expect(entries, hasLength(1));
       expect(entries.first.path, '/b');
     });
 
-    test('a corrupt outbox file degrades to an empty list instead of throwing', () async {
-      final outbox = FileOutbox(directoryProvider: () async => tempDir);
-      await outbox.enqueue(httpMethod: 'POST', path: '/a');
-      final file = File('${tempDir.path}/outbox/outbox.json');
-      await file.writeAsString('{not valid json');
+    test('never leaves queued mutation bodies readable at rest', () async {
+      final outbox = FileOutbox(
+        directoryProvider: () async => tempDir,
+        cipher: _testCipher(),
+      );
+      const sensitive = 'recuérdame llamar al doctor';
+      await outbox.enqueue(
+        httpMethod: 'POST',
+        path: '/chat',
+        jsonBody: {'text': sensitive},
+      );
 
-      expect(await outbox.list(), isEmpty);
+      final raw = await File(
+        '${tempDir.path}/outbox/outbox.json',
+      ).readAsBytes();
+      expect(_containsBytes(raw, sensitive.codeUnits), isFalse);
+      expect((await outbox.list()).single.jsonBody?['text'], sensitive);
     });
+
+    test(
+      'a corrupt outbox file degrades to an empty list instead of throwing',
+      () async {
+        final outbox = FileOutbox(
+          directoryProvider: () async => tempDir,
+          cipher: _testCipher(),
+        );
+        await outbox.enqueue(httpMethod: 'POST', path: '/a');
+        final file = File('${tempDir.path}/outbox/outbox.json');
+        await file.writeAsString('{not valid json');
+
+        expect(await outbox.list(), isEmpty);
+      },
+    );
   });
+}
+
+EncryptedFileCipher _testCipher() => EncryptedFileCipher(
+  keyProvider: () async => SecretKey(List<int>.filled(32, 7)),
+);
+
+bool _containsBytes(List<int> haystack, List<int> needle) {
+  if (needle.isEmpty) return true;
+  for (var start = 0; start <= haystack.length - needle.length; start++) {
+    var matches = true;
+    for (var index = 0; index < needle.length; index++) {
+      if (haystack[start + index] != needle[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
 }

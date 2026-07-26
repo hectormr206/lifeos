@@ -109,6 +109,11 @@ dependencies:
   # core/tls/ca_fingerprint.dart). Was already resolved transitively; made
   # direct because we import it explicitly now.
   crypto: ^3.0.6
+  # AES-256-GCM for file-backed user data that cannot live in the SQLCipher
+  # graph database (offline cache/outbox and recorded voice notes). The key is
+  # kept separately in Android Keystore / iOS Keychain via flutter_secure_storage.
+  cryptography: ^2.9.0
+  cryptography_flutter: ^2.3.4
 
   # Markdown rendering for Axi's chat replies (spec mobile-chat: "MUST
   # support ... markdown rendering"). `flutter_markdown` (the official

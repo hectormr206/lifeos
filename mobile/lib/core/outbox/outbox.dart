@@ -6,6 +6,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../security/encrypted_file_cipher.dart';
+
 /// True when [error] represents a network-class failure — a connection
 /// error, timeout, or similar transport-level break where the request never
 /// reached the engine — as opposed to a definite server response (any
@@ -39,13 +41,13 @@ class OutboxEntry {
   final String? kind;
 
   Map<String, Object?> toJson() => {
-        'id': id,
-        'httpMethod': httpMethod,
-        'path': path,
-        'jsonBody': jsonBody,
-        'createdAt': createdAt.toIso8601String(),
-        'kind': kind,
-      };
+    'id': id,
+    'httpMethod': httpMethod,
+    'path': path,
+    'jsonBody': jsonBody,
+    'createdAt': createdAt.toIso8601String(),
+    'kind': kind,
+  };
 
   /// Any missing/malformed field degrades to a safe default rather than
   /// throwing — a single corrupt row must never break decoding the rest of
@@ -58,14 +60,19 @@ class OutboxEntry {
       httpMethod: json['httpMethod'] as String? ?? 'POST',
       path: json['path'] as String? ?? '',
       jsonBody: rawBody is Map ? Map<String, Object?>.from(rawBody) : null,
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime.now(),
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+          DateTime.now(),
       kind: json['kind'] as String?,
     );
   }
 
   @override
   bool operator ==(Object other) =>
-      other is OutboxEntry && other.id == id && other.httpMethod == httpMethod && other.path == path;
+      other is OutboxEntry &&
+      other.id == id &&
+      other.httpMethod == httpMethod &&
+      other.path == path;
 
   @override
   int get hashCode => Object.hash(id, httpMethod, path);
@@ -79,7 +86,8 @@ final _idRandom = Random();
 /// Timestamp + random suffix — unique enough for a locally-queued mutation
 /// without pulling in a uuid dependency (pure-Dart constraint, same
 /// rationale as the rest of this slice).
-String _newOutboxId() => '${DateTime.now().microsecondsSinceEpoch}-${_idRandom.nextInt(1 << 32)}';
+String _newOutboxId() =>
+    '${DateTime.now().microsecondsSinceEpoch}-${_idRandom.nextInt(1 << 32)}';
 
 /// Offline write outbox abstraction (M3 slice 2: "losing the phone must
 /// never mean losing your life" — the write half of M3 slice 1's read
@@ -144,10 +152,14 @@ class InMemoryOutbox implements Outbox {
 /// as `core/cache/response_cache.dart`'s `FileResponseCache`, for the same
 /// testability reason (no path_provider platform channel needed in tests).
 class FileOutbox implements Outbox {
-  FileOutbox({Future<Directory> Function()? directoryProvider})
-      : _directoryProvider = directoryProvider ?? getApplicationSupportDirectory;
+  FileOutbox({
+    Future<Directory> Function()? directoryProvider,
+    EncryptedFileCipher? cipher,
+  }) : _directoryProvider = directoryProvider ?? getApplicationSupportDirectory,
+       _cipher = cipher ?? EncryptedFileCipher();
 
   final Future<Directory> Function() _directoryProvider;
+  final EncryptedFileCipher _cipher;
 
   static const _subdir = 'outbox';
   static const _fileName = 'outbox.json';
@@ -192,10 +204,18 @@ class FileOutbox implements Outbox {
     try {
       final file = await _file();
       if (!await file.exists()) return [];
-      final content = await file.readAsString();
-      final decoded = jsonDecode(content);
+      final raw = await file.readAsBytes();
+      final plaintext = await _cipher.openOrLegacy(raw);
+      if (plaintext == null) return [];
+      final decoded = jsonDecode(utf8.decode(plaintext));
       if (decoded is! List) return [];
-      return decoded.whereType<Map>().map((row) => OutboxEntry.fromJson(Map<String, Object?>.from(row))).toList();
+      final entries = decoded
+          .whereType<Map>()
+          .map((row) => OutboxEntry.fromJson(Map<String, Object?>.from(row)))
+          .toList();
+      // Legacy plaintext becomes encrypted as soon as it is read successfully.
+      if (!_cipher.isEncrypted(raw)) await _writeEntries(entries);
+      return entries;
     } catch (_) {
       return [];
     }
@@ -203,7 +223,10 @@ class FileOutbox implements Outbox {
 
   Future<void> _writeEntries(List<OutboxEntry> entries) async {
     final file = await _file();
-    await file.writeAsString(jsonEncode(entries.map((entry) => entry.toJson()).toList()));
+    await _cipher.writeSealed(
+      file,
+      utf8.encode(jsonEncode(entries.map((entry) => entry.toJson()).toList())),
+    );
   }
 
   Future<File> _file() async {
@@ -242,7 +265,8 @@ class NoopPendingSyncReporter implements PendingSyncReporter {
 /// sincronizar" indicator. Updated by repositories on enqueue and by
 /// [SyncService] as it drains — one app-wide count, not per-feature, same
 /// design decision as [ConnectivityNotifier].
-class PendingSyncCountNotifier extends Notifier<int> implements PendingSyncReporter {
+class PendingSyncCountNotifier extends Notifier<int>
+    implements PendingSyncReporter {
   @override
   int build() => 0;
 
@@ -250,4 +274,7 @@ class PendingSyncCountNotifier extends Notifier<int> implements PendingSyncRepor
   void reportPendingCount(int count) => state = count;
 }
 
-final pendingSyncCountProvider = NotifierProvider<PendingSyncCountNotifier, int>(PendingSyncCountNotifier.new);
+final pendingSyncCountProvider =
+    NotifierProvider<PendingSyncCountNotifier, int>(
+      PendingSyncCountNotifier.new,
+    );

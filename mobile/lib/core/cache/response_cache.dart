@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../security/encrypted_file_cipher.dart';
+
 /// Offline read cache abstraction (M3 slice 1: "losing the phone must never
 /// mean losing your life"). Repositories write-through the last successful
 /// engine response here and read-through it when the network fails, so the
@@ -57,10 +59,14 @@ class _CacheEntry {
 /// `path_provider`'s `getApplicationSupportDirectory`) so this stays testable
 /// without a platform channel — tests inject a plain temp `Directory`.
 class FileResponseCache implements ResponseCache {
-  FileResponseCache({Future<Directory> Function()? directoryProvider})
-      : _directoryProvider = directoryProvider ?? getApplicationSupportDirectory;
+  FileResponseCache({
+    Future<Directory> Function()? directoryProvider,
+    EncryptedFileCipher? cipher,
+  }) : _directoryProvider = directoryProvider ?? getApplicationSupportDirectory,
+       _cipher = cipher ?? EncryptedFileCipher();
 
   final Future<Directory> Function() _directoryProvider;
+  final EncryptedFileCipher _cipher;
 
   static const _subdir = 'response_cache';
 
@@ -71,7 +77,7 @@ class FileResponseCache implements ResponseCache {
       'fetchedAt': DateTime.now().toIso8601String(),
       'body': json,
     };
-    await file.writeAsString(jsonEncode(entry));
+    await _cipher.writeSealed(file, utf8.encode(jsonEncode(entry)));
   }
 
   @override
@@ -95,9 +101,17 @@ class FileResponseCache implements ResponseCache {
     try {
       final file = await _fileFor(key);
       if (!await file.exists()) return null;
-      final content = await file.readAsString();
-      final decoded = jsonDecode(content);
-      if (decoded is Map) return Map<String, Object?>.from(decoded);
+      final raw = await file.readAsBytes();
+      final plaintext = await _cipher.openOrLegacy(raw);
+      if (plaintext == null) return null;
+      final decoded = jsonDecode(utf8.decode(plaintext));
+      if (decoded is Map) {
+        // One-shot, read-through migration for builds that wrote plaintext.
+        if (!_cipher.isEncrypted(raw)) {
+          await _cipher.writeSealed(file, plaintext);
+        }
+        return Map<String, Object?>.from(decoded);
+      }
       return null;
     } catch (_) {
       return null;
@@ -116,11 +130,14 @@ class FileResponseCache implements ResponseCache {
   /// Cache keys use `:` as a namespace separator (e.g.
   /// `"domains:health:entries"`), which is unsafe/inconsistent across
   /// filesystems — replaced with `_` for the on-disk filename.
-  String _sanitize(String key) => key.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+  String _sanitize(String key) =>
+      key.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
 }
 
 /// The active [ResponseCache] used app-wide: file-backed in prod so the
 /// last-known data survives a process restart, overridden with
 /// [InMemoryResponseCache] in tests (same pattern as [tokenStoreProvider] in
 /// `core/api/api_providers.dart`).
-final responseCacheProvider = Provider<ResponseCache>((ref) => FileResponseCache());
+final responseCacheProvider = Provider<ResponseCache>(
+  (ref) => FileResponseCache(),
+);

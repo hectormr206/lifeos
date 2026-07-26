@@ -6,7 +6,9 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:lifeos/core/cache/response_cache.dart';
+import 'package:lifeos/core/security/encrypted_file_cipher.dart';
 
 void main() {
   group('InMemoryResponseCache', () {
@@ -38,7 +40,10 @@ void main() {
 
       final fetchedAt = await cache.fetchedAt('body:organs');
       expect(fetchedAt, isNotNull);
-      expect(fetchedAt!.isAfter(before.subtract(const Duration(seconds: 1))), isTrue);
+      expect(
+        fetchedAt!.isAfter(before.subtract(const Duration(seconds: 1))),
+        isTrue,
+      );
     });
 
     test('a later put overwrites the previous value and fetchedAt', () async {
@@ -60,7 +65,10 @@ void main() {
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp('response_cache_test_');
-      cache = FileResponseCache(directoryProvider: () async => tempDir);
+      cache = FileResponseCache(
+        directoryProvider: () async => tempDir,
+        cipher: _testCipher(),
+      );
     });
 
     tearDown(() async {
@@ -86,10 +94,29 @@ void main() {
     });
 
     test('put then get round-trips a JSON map through disk', () async {
-      await cache.put('insights:daily', {'cadence': 'daily', 'body': 'resumen'});
+      await cache.put('insights:daily', {
+        'cadence': 'daily',
+        'body': 'resumen',
+      });
 
       final value = await cache.get('insights:daily');
       expect(value, {'cadence': 'daily', 'body': 'resumen'});
+    });
+
+    test('never leaves the cached response readable at rest', () async {
+      cache = FileResponseCache(
+        directoryProvider: () async => tempDir,
+        cipher: _testCipher(),
+      );
+      const sensitive = 'la presión de Ana fue 120/80';
+      await cache.put('health:latest', {'note': sensitive});
+
+      final raw = await (await _fileForKey(
+        tempDir,
+        'health:latest',
+      )).readAsBytes();
+      expect(_containsBytes(raw, sensitive.codeUnits), isFalse);
+      expect(await cache.get('health:latest'), {'note': sensitive});
     });
 
     test('fetchedAt survives a round-trip through disk', () async {
@@ -98,17 +125,23 @@ void main() {
 
       final fetchedAt = await cache.fetchedAt('body:organs');
       expect(fetchedAt, isNotNull);
-      expect(fetchedAt!.isAfter(before.subtract(const Duration(seconds: 1))), isTrue);
+      expect(
+        fetchedAt!.isAfter(before.subtract(const Duration(seconds: 1))),
+        isTrue,
+      );
     });
 
-    test('a corrupt cache file degrades to a cache miss instead of throwing', () async {
-      await cache.put('domains:health:entries', [1, 2, 3]);
-      final file = await _fileForKey(tempDir, 'domains:health:entries');
-      await file.writeAsString('{not valid json');
+    test(
+      'a corrupt cache file degrades to a cache miss instead of throwing',
+      () async {
+        await cache.put('domains:health:entries', [1, 2, 3]);
+        final file = await _fileForKey(tempDir, 'domains:health:entries');
+        await file.writeAsString('{not valid json');
 
-      expect(await cache.get('domains:health:entries'), isNull);
-      expect(await cache.fetchedAt('domains:health:entries'), isNull);
-    });
+        expect(await cache.get('domains:health:entries'), isNull);
+        expect(await cache.fetchedAt('domains:health:entries'), isNull);
+      },
+    );
 
     test('keys with colons are sanitized into a safe filename', () async {
       await cache.put('domains:health:entries', {'ok': true});
@@ -118,6 +151,25 @@ void main() {
       expect(await cache.get('domains:health:entries'), {'ok': true});
     });
   });
+}
+
+EncryptedFileCipher _testCipher() => EncryptedFileCipher(
+  keyProvider: () async => SecretKey(List<int>.filled(32, 7)),
+);
+
+bool _containsBytes(List<int> haystack, List<int> needle) {
+  if (needle.isEmpty) return true;
+  for (var start = 0; start <= haystack.length - needle.length; start++) {
+    var matches = true;
+    for (var index = 0; index < needle.length; index++) {
+      if (haystack[start + index] != needle[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
 }
 
 Future<File> _fileForKey(Directory root, String key) async {
