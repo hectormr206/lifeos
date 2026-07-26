@@ -19,7 +19,7 @@ abstract class LocalModelPreferences {
 class SharedPrefsLocalModelPreferences implements LocalModelPreferences {
   SharedPrefsLocalModelPreferences({SharedPreferences? prefs}) : this._(prefs);
 
-  LocalModelPreferences._(this._prefs);
+  SharedPrefsLocalModelPreferences._(this._prefs);
 
   static const String enabledKey = 'local_model_enabled';
 
