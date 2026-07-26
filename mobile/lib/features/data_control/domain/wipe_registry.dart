@@ -17,6 +17,9 @@
 ///   * voice notes       — encrypted recorded `voice-*.wav.lifeos` clips;
 ///   * briefing prefs    — last generated briefing + schedule + sources
 ///                         (shared_preferences, back to defaults);
+///   * daily digest      — encrypted graph node (via graph DB) plus any
+///                         legacy plaintext prefs fallback; its schedule is
+///                         an app setting and survives;
 ///   * scheduled alarms  — every pending local notification (reminders +
 ///                         briefing schedule) cancelled.
 /// Deliberately NOT registered (survives a wipe): downloaded model files

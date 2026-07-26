@@ -39,13 +39,12 @@ class DailyDigestState {
     DailyDigest? digest,
     DailyDigestPhase? phase,
     String? error,
-  }) =>
-      DailyDigestState(
-        schedule: schedule ?? this.schedule,
-        digest: digest ?? this.digest,
-        phase: phase ?? this.phase,
-        error: error,
-      );
+  }) => DailyDigestState(
+    schedule: schedule ?? this.schedule,
+    digest: digest ?? this.digest,
+    phase: phase ?? this.phase,
+    error: error,
+  );
 }
 
 /// Runs the ON-DEVICE daily-digest pipeline and owns its UI state, scheduling,
@@ -84,14 +83,28 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
 
   Future<void> _hydrate() async {
     try {
-      final prefs = ref.read(dailyDigestPreferencesProvider);
-      final schedule = await prefs.schedule();
-      final last = await prefs.lastDigest();
-      state = state.copyWith(schedule: schedule, digest: last);
+      final schedule = await ref
+          .read(dailyDigestPreferencesProvider)
+          .schedule();
+      state = state.copyWith(schedule: schedule);
     } catch (_) {
       // Persistence unavailable (no platform channel in a widget test) — keep
       // the safe defaults (schedule ON).
     }
+    try {
+      // Digest CONTENT hydrates from the ENCRYPTED store (graph DB), separate
+      // from the plain-prefs schedule so a failing store never loses the
+      // schedule hydration above.
+      final contentStore = await ref.read(
+        dailyDigestContentStoreProvider.future,
+      );
+      final last = await contentStore.lastDigest();
+      if (_disposed) return;
+      state = state.copyWith(digest: last);
+    } catch (_) {
+      // Encrypted store unavailable — no digest to show yet.
+    }
+    if (_disposed) return;
     await _armTriggers();
   }
 
@@ -120,7 +133,9 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
   /// to read the effective zone degrades to device-local.
   Future<tz.Location?> _overrideLocation() async {
     try {
-      return (await ref.read(effectiveTimezoneProvider.future)).overrideLocation;
+      return (await ref.read(
+        effectiveTimezoneProvider.future,
+      )).overrideLocation;
     } catch (_) {
       return null;
     }
@@ -186,7 +201,10 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
       final digest = await service.generate(now: clock(), location: location);
       state = state.copyWith(digest: digest, phase: DailyDigestPhase.done);
       try {
-        await ref.read(dailyDigestPreferencesProvider).saveLastDigest(digest);
+        final contentStore = await ref.read(
+          dailyDigestContentStoreProvider.future,
+        );
+        await contentStore.saveLastDigest(digest);
       } catch (_) {
         // In-memory digest still shown even if persistence failed.
       }
@@ -213,4 +231,6 @@ class DailyDigestNotifier extends Notifier<DailyDigestState> {
 }
 
 final dailyDigestNotifierProvider =
-    NotifierProvider<DailyDigestNotifier, DailyDigestState>(DailyDigestNotifier.new);
+    NotifierProvider<DailyDigestNotifier, DailyDigestState>(
+      DailyDigestNotifier.new,
+    );

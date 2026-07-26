@@ -157,23 +157,29 @@ void main() {
   });
 
   group('VoiceNotesWipeTarget', () {
-    test('deletes voice-*.wav only; other files (models) survive', () async {
-      final tempDir = await Directory.systemTemp.createTemp('lifeos-voice-');
-      addTearDown(() => tempDir.delete(recursive: true));
-      final voice1 = File('${tempDir.path}/voice-1234.wav')..createSync();
-      final voice2 = File('${tempDir.path}/voice-99999999.wav')..createSync();
-      final model = File('${tempDir.path}/whisper-small.bin')..createSync();
-      final other = File('${tempDir.path}/notes.txt')..createSync();
+    test(
+      'deletes legacy and encrypted voice notes only; other files (models) survive',
+      () async {
+        final tempDir = await Directory.systemTemp.createTemp('lifeos-voice-');
+        addTearDown(() => tempDir.delete(recursive: true));
+        final voice1 = File('${tempDir.path}/voice-1234.wav')..createSync();
+        final voice2 = File('${tempDir.path}/voice-99999999.wav')..createSync();
+        final encryptedVoice = File('${tempDir.path}/voice-555.wav.lifeos')
+          ..createSync();
+        final model = File('${tempDir.path}/whisper-small.bin')..createSync();
+        final other = File('${tempDir.path}/notes.txt')..createSync();
 
-      final target = VoiceNotesWipeTarget(directory: () async => tempDir);
-      await target.purge();
+        final target = VoiceNotesWipeTarget(directory: () async => tempDir);
+        await target.purge();
 
-      expect(target.id, 'voice-notes');
-      expect(voice1.existsSync(), isFalse);
-      expect(voice2.existsSync(), isFalse);
-      expect(model.existsSync(), isTrue);
-      expect(other.existsSync(), isTrue);
-    });
+        expect(target.id, 'voice-notes');
+        expect(voice1.existsSync(), isFalse);
+        expect(voice2.existsSync(), isFalse);
+        expect(encryptedVoice.existsSync(), isFalse);
+        expect(model.existsSync(), isTrue);
+        expect(other.existsSync(), isTrue);
+      },
+    );
 
     test('is a no-op when the directory does not exist', () async {
       final target = VoiceNotesWipeTarget(
@@ -210,27 +216,35 @@ void main() {
   });
 
   group('DailyDigestDataWipeTarget', () {
-    test('removes the last digest CONTENT, keeps the schedule settings', () async {
-      SharedPreferences.setMockInitialValues({
-        // USER CONTENT: the model narration over the user's facts/people/day.
-        'daily_digest_last': '{"deterministicText":"Resumen de hoy…"}',
-        // App settings: the digest schedule survives (wipeKeepsBody promise).
-        'daily_digest_schedule_enabled': true,
-        'daily_digest_schedule_hour': 21,
-        'daily_digest_schedule_minute': 0,
-      });
+    test(
+      'purges the LEGACY plain digest copy, keeps the schedule settings',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          // LEGACY plaintext copy of the digest (pre-encryption builds). The
+          // encrypted copy dies with the graph-db target; this one is purged
+          // defensively for devices that wipe before the migration ran.
+          'daily_digest_last': '{"deterministicText":"Resumen de hoy…"}',
+          // App settings: the digest schedule survives (wipeKeepsBody promise).
+          'daily_digest_schedule_enabled': true,
+          'daily_digest_schedule_hour': 21,
+          'daily_digest_schedule_minute': 0,
+        });
 
-      final target = DailyDigestDataWipeTarget();
-      await target.purge();
+        final target = DailyDigestDataWipeTarget();
+        await target.purge();
 
-      final prefs = await SharedPreferences.getInstance();
-      expect(target.id, 'daily-digest-prefs');
-      expect(prefs.containsKey('daily_digest_last'), isFalse,
-          reason: 'the pre-wipe digest narration must not survive a full wipe');
-      expect(prefs.getBool('daily_digest_schedule_enabled'), isTrue);
-      expect(prefs.getInt('daily_digest_schedule_hour'), 21);
-      expect(prefs.getInt('daily_digest_schedule_minute'), 0);
-    });
+        final prefs = await SharedPreferences.getInstance();
+        expect(target.id, 'daily-digest-prefs');
+        expect(
+          prefs.containsKey('daily_digest_last'),
+          isFalse,
+          reason: 'the pre-wipe digest narration must not survive a full wipe',
+        );
+        expect(prefs.getBool('daily_digest_schedule_enabled'), isTrue);
+        expect(prefs.getInt('daily_digest_schedule_hour'), 21);
+        expect(prefs.getInt('daily_digest_schedule_minute'), 0);
+      },
+    );
   });
 
   group('ScheduledNotificationsWipeTarget', () {

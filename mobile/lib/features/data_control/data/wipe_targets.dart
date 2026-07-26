@@ -111,20 +111,23 @@ class BriefingDataWipeTarget implements WipeTarget {
   }
 }
 
-/// Purges the daily-digest USER CONTENT from shared_preferences: the last
-/// generated digest (a model narration over the user's people, facts and day)
-/// must not survive a full wipe. The digest SCHEDULE (enabled/hour/minute) is
-/// an app setting and is deliberately kept — wipeKeepsBody promises settings
-/// survive, and a schedule contains no user data.
+/// Purges the LEGACY plain-prefs copy of the last daily digest. The digest
+/// CONTENT now lives ENCRYPTED in the graph DB (`GraphDailyDigestContentStore`
+/// node), so [GraphDatabaseWipeTarget] already destroys it — this target only
+/// removes the pre-encryption `shared_preferences` key DEFENSIVELY, for a
+/// device that wipes before the one-shot migration ever ran. The digest
+/// SCHEDULE (enabled/hour/minute) is an app setting and is deliberately kept —
+/// wipeKeepsBody promises settings survive, and a schedule contains no user
+/// data.
 class DailyDigestDataWipeTarget implements WipeTarget {
   DailyDigestDataWipeTarget({Future<SharedPreferences> Function()? preferences})
     : _preferences = preferences ?? SharedPreferences.getInstance;
 
   final Future<SharedPreferences> Function() _preferences;
 
-  /// Only the CONTENT key — never the schedule settings keys.
+  /// Only the legacy CONTENT key — never the schedule settings keys.
   static const List<String> purgedKeys = [
-    SharedPrefsDailyDigestPreferences.lastDigestKey,
+    SharedPrefsDailyDigestPreferences.legacyLastDigestKey,
   ];
 
   @override

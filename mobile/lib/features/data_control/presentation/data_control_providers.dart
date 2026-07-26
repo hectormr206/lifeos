@@ -64,9 +64,10 @@ final wipeRegistryProvider = Provider<WipeRegistry>((ref) {
     // RecordAudioRecorderGateway) as `voice-<micros>.wav`.
     ..register(VoiceNotesWipeTarget(directory: getTemporaryDirectory))
     ..register(BriefingDataWipeTarget())
-    // The last daily digest is model-generated USER CONTENT (a narration over
-    // the user's facts/people/day) persisted in shared_preferences — it must
-    // die with the wipe. Its schedule keys are settings and survive.
+    // The last daily digest now lives ENCRYPTED in the graph DB (covered by
+    // the graph-db target above); this target defensively purges the LEGACY
+    // plain-prefs copy on devices that wipe before the migration ran. The
+    // schedule keys are settings and survive.
     ..register(DailyDigestDataWipeTarget())
     ..register(
       ScheduledNotificationsWipeTarget(
