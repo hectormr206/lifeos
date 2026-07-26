@@ -17,7 +17,7 @@ class AssistantHandoffController {
   final List<String> _pending = <String>[];
   final Set<String> _acknowledged = <String>{};
   final Set<String> _discarded = <String>{};
-  AppLockStatus _lock = AppLockStatus.disabled;
+  AppLockStatus? _lock;
   bool _routing = false;
   bool _disposed = false;
 
@@ -85,6 +85,9 @@ class AssistantHandoffController {
     _routing = false;
   }
 
+  // An activation observed before the lock provider reports its initial state
+  // must wait. Treating the unknown state as unlocked would navigate before
+  // AppLockGate has become authoritative.
   bool get _isUnlocked => _lock == AppLockStatus.disabled || _lock == AppLockStatus.unlocked;
 
   bool _isTerminal(String id) => _acknowledged.contains(id) || _discarded.contains(id);
