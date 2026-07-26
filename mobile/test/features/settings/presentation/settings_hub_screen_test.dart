@@ -1,6 +1,7 @@
 // Proves the Settings hub renders every section, the appearance selector
 // changes + persists ThemeMode, and "Acerca de" shows the app version
 // (app-shell slice).
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
