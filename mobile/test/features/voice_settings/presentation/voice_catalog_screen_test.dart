@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/tts/domain/tts_voice.dart';
 import 'package:lifeos/features/tts/presentation/tts_providers.dart';
-import 'package:lifeos/features/voice_settings/domain/selected_voice.dart';
 import 'package:lifeos/features/voice_settings/presentation/voice_catalog_providers.dart';
 import 'package:lifeos/features/voice_settings/presentation/voice_catalog_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';

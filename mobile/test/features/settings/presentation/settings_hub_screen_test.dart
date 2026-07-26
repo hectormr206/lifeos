@@ -1,7 +1,6 @@
 // Proves the Settings hub renders every section, the appearance selector
 // changes + persists ThemeMode, and "Acerca de" shows the app version
 // (app-shell slice).
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -43,6 +42,7 @@ Widget _app({
   FakeLanguagePreferences? languagePrefs,
   AssistantGateway? assistantGateway,
   Locale locale = const Locale('es'),
+  TargetPlatform platform = TargetPlatform.android,
 }) =>
     ProviderScope(
       overrides: [
@@ -56,6 +56,7 @@ Widget _app({
       // (the test host's device locale would otherwise resolve to English).
       child: MaterialApp.router(
         routerConfig: _router(),
+        theme: ThemeData(platform: platform),
         locale: locale,
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
@@ -66,15 +67,11 @@ void main() {
   // The hub is a long scrolling list; give tests a tall viewport so every
   // section is laid out (a ListView only builds visible children).
   setUp(() {
-    debugDefaultTargetPlatformOverride = null;
     final view = TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.views.first;
     view.physicalSize = const Size(1000, 3200);
     view.devicePixelRatio = 1.0;
   });
   tearDown(() {
-    // Restore the global platform override before Flutter's widget-test
-    // invariants run, including when a test body fails an assertion.
-    debugDefaultTargetPlatformOverride = null;
     final view = TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.views.first;
     view.resetPhysicalSize();
     view.resetDevicePixelRatio();
@@ -250,9 +247,7 @@ void main() {
   });
 
   testWidgets('does not show the default assistant affordance on non-Android platforms', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-
-    await tester.pumpWidget(_app());
+    await tester.pumpWidget(_app(platform: TargetPlatform.iOS));
     await tester.pumpAndSettle();
 
     expect(find.text('Asistente predeterminado'), findsNothing);

@@ -5,14 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
-import 'package:lifeos/features/app_update/domain/app_version_info.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_providers.dart';
 import 'package:lifeos/features/security/domain/biometric_authenticator.dart';
 import 'package:lifeos/features/security/presentation/app_lock_controller.dart';
 import 'package:lifeos/features/security/presentation/app_lock_providers.dart';
 import 'package:lifeos/features/settings/presentation/settings_hub_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
-import 'package:lifeos/l10n/language_preference.dart';
 import 'package:lifeos/l10n/locale_providers.dart';
 import 'package:lifeos/theme/theme_providers.dart';
 
