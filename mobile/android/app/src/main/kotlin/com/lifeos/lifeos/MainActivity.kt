@@ -3,6 +3,7 @@ package com.lifeos.lifeos
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import java.util.UUID
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -18,8 +19,64 @@ import io.flutter.plugin.common.MethodChannel
 // existing dictation MethodChannel below is unchanged.
 class MainActivity : FlutterFragmentActivity() {
 
+    private val assistantBridgeState = AssistantBridgeState()
+    private var assistantChannel: MethodChannel? = null
+
+    private fun isAssistIntent(intent: Intent?): Boolean =
+        intent?.action == Intent.ACTION_ASSIST
+
+    private fun assistantActivationId(intent: Intent): String =
+        intent.getStringExtra("lifeos.assistant.ACTIVATION_ID") ?: UUID.randomUUID().toString()
+
+    private fun receiveAssistantIntent(intent: Intent) {
+        if (!isAssistIntent(intent)) return
+        val id = assistantActivationId(intent)
+        val channel = assistantChannel
+        if (channel == null) {
+            assistantBridgeState.enqueue(id)
+        } else if (assistantBridgeState.markDelivered(id)) {
+            channel.invokeMethod("assistLaunch", mapOf("id" to id))
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        receiveAssistantIntent(intent)
+    }
+
+    private fun openAssistantSettings(): Boolean {
+        val intents = listOf(
+            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
+            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
+        )
+        for (settingsIntent in intents) {
+            if (settingsIntent.resolveActivity(packageManager) == null) continue
+            try {
+                startActivity(settingsIntent)
+                return true
+            } catch (_: Exception) {
+                // Try the next OEM-compatible settings target.
+            }
+        }
+        return false
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        assistantChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "lifeos/assistant",
+        ).apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "consumeAssistLaunches" -> result.success(assistantBridgeState.consumeAll())
+                    "openAssistantSettings" -> result.success(openAssistantSettings())
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        receiveAssistantIntent(intent)
         // APP LOCK secure-surface toggle: while the optional biometric app lock
         // is ENABLED, the Dart lock controller turns FLAG_SECURE on so Android's
         // Recents/task snapshot (captured around onPause, BEFORE the Dart-side

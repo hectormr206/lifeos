@@ -70,6 +70,10 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
         </activity>
         <!-- AXI KEYBOARD (IME): system-wide on-device dictation. The service
              binds as an input method (BIND_INPUT_METHOD is a system-signature
