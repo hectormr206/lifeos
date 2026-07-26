@@ -8,9 +8,44 @@ plugins {
 }
 
 val keystoreProperties = Properties()
-val keystorePropertiesFile = rootProject.file("key.properties")
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+val releaseSigningPropertiesFile = providers.gradleProperty("releaseSigningPropertiesFile")
+    .orNull
+    ?.let(::file)
+    ?: rootProject.file("key.properties")
+if (releaseSigningPropertiesFile.isFile && releaseSigningPropertiesFile.canRead()) {
+    FileInputStream(releaseSigningPropertiesFile).use(keystoreProperties::load)
+}
+
+val requiredReleaseSigningProperties = listOf(
+    "storeFile",
+    "storePassword",
+    "keyAlias",
+    "keyPassword",
+)
+val releaseSigningValues = requiredReleaseSigningProperties.associateWith { propertyName ->
+    keystoreProperties.getProperty(propertyName)?.trim()?.takeIf(String::isNotEmpty)
+}
+val releaseStoreFile = releaseSigningValues["storeFile"]?.let { storeFile ->
+    File(releaseSigningPropertiesFile.parentFile, storeFile)
+}
+val invalidReleaseSigningInputs = buildList {
+    requiredReleaseSigningProperties.filterTo(this) { releaseSigningValues[it] == null }
+    if (releaseStoreFile != null &&
+        (!releaseStoreFile.isFile || !releaseStoreFile.canRead()) &&
+        "storeFile" !in this
+    ) {
+        add("storeFile")
+    }
+}
+val releaseSigningIsValid = invalidReleaseSigningInputs.isEmpty()
+
+val validateReleaseSigning = tasks.register("validateReleaseSigning") {
+    doLast {
+        check(releaseSigningIsValid) {
+            "Release signing configuration is required for release builds. " +
+                "Missing or invalid inputs: ${invalidReleaseSigningInputs.joinToString(", ")}."
+        }
+    }
 }
 
 android {
@@ -46,18 +81,28 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
-            storeFile = keystoreProperties["storeFile"]?.let { file(it) }
-            storePassword = keystoreProperties["storePassword"] as String
+        if (releaseSigningIsValid) {
+            create("release") {
+                keyAlias = releaseSigningValues.getValue("keyAlias")
+                keyPassword = releaseSigningValues.getValue("keyPassword")
+                storeFile = releaseStoreFile
+                storePassword = releaseSigningValues.getValue("storePassword")
+            }
         }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseSigningIsValid) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
+    }
+}
+
+tasks.configureEach {
+    if (name.matches(Regex("pre.*ReleaseBuild"))) {
+        dependsOn(validateReleaseSigning)
     }
 }
 
