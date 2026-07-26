@@ -331,5 +331,8 @@
   "appLockUnavailableBody": "Este dispositivo ya no puede verificar tu identidad (sin huella, rostro ni PIN configurados). Desactiva el bloqueo para entrar.",
   "appLockDisableButton": "Desactivar bloqueo",
   "appLockEnableFailed": "No se pudo verificar. El bloqueo sigue desactivado.",
-  "appLockUnavailableToast": "Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo."
+  "appLockUnavailableToast": "Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo.",
+  "defaultAssistantTitle": "Asistente predeterminado",
+  "defaultAssistantSubtitle": "Elige LifeOS como tu asistente de Android.",
+  "defaultAssistantSettingsFailed": "No se pudo abrir la configuración del asistente."
 }

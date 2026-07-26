@@ -889,5 +889,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get appLockUnavailableToast =>
+
       'Set up a fingerprint, face or PIN on your device to turn the lock on.';
+
+  @override
+  String get defaultAssistantTitle => 'Default assistant';
+
+  @override
+  String get defaultAssistantSubtitle => 'Choose LifeOS as your Android assistant.';
+
+  @override
+  String get defaultAssistantSettingsFailed => "Couldn't open assistant settings.";
 }

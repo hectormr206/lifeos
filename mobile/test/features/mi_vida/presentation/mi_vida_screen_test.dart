@@ -79,4 +79,29 @@ void main() {
     // Both entries render, each with an actions menu (edit/delete).
     expect(find.byType(PopupMenuButton<String>), findsNWidgets(2));
   });
+
+  testWidgets('keeps digest actions within a 320px viewport', (tester) async {
+    final view = TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.views.first;
+    view.physicalSize = const Size(320, 800);
+    view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      view.resetPhysicalSize();
+      view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          miVidaNotifierProvider.overrideWith(() => _FixedMiVida(const MiVidaState(loading: false))),
+          dailyDigestNotifierProvider.overrideWith(_FixedDigest.new),
+        ],
+        child: const MaterialApp(home: MiVidaScreen()),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Generar ahora'), findsOneWidget);
+    expect(find.text('Ver / gestionar'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

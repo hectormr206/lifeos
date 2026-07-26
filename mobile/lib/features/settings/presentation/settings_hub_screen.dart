@@ -10,6 +10,7 @@ import '../../../theme/lifeos_theme.dart';
 import '../../../theme/theme_providers.dart';
 import '../../app_update/domain/app_version_info.dart';
 import '../../app_update/presentation/app_update_providers.dart';
+import '../../assistant/presentation/assistant_providers.dart';
 import '../../security/domain/biometric_authenticator.dart';
 import '../../security/presentation/app_lock_providers.dart';
 
@@ -130,6 +131,25 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/voice'),
           ),
+          if (defaultTargetPlatform == TargetPlatform.android)
+            ListTile(
+              leading: const Icon(Icons.assistant_outlined),
+              title: Text(l10n.defaultAssistantTitle),
+              subtitle: Text(l10n.defaultAssistantSubtitle),
+              trailing: const Icon(Icons.open_in_new),
+              onTap: () async {
+                bool opened;
+                try {
+                  opened = await ref.read(assistantGatewayProvider).openAssistantSettings();
+                } catch (_) {
+                  opened = false;
+                }
+                if (opened || !context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(l10n.defaultAssistantSettingsFailed)),
+                );
+              },
+            ),
           const Divider(),
           _SectionHeader(l10n.sectionAdvanced),
           ListTile(

@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lifeos/features/app_update/domain/app_version_info.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_providers.dart';
+import 'package:lifeos/features/assistant/domain/assistant_gateway.dart';
+import 'package:lifeos/features/assistant/presentation/assistant_providers.dart';
 import 'package:lifeos/features/settings/presentation/settings_hub_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 import 'package:lifeos/l10n/language_preference.dart';
@@ -38,6 +40,8 @@ Widget _app({
   ThemeModePreferences? prefs,
   AppVersionInfo? version,
   FakeLanguagePreferences? languagePrefs,
+  AssistantGateway? assistantGateway,
+  Locale locale = const Locale('es'),
 }) =>
     ProviderScope(
       overrides: [
@@ -45,12 +49,13 @@ Widget _app({
         languagePreferencesProvider.overrideWithValue(languagePrefs ?? FakeLanguagePreferences()),
         appVersionInfoProvider
             .overrideWithValue(version ?? FakeAppVersionInfo(code: 10, name: '1.0.0')),
+        assistantGatewayProvider.overrideWithValue(assistantGateway ?? _FakeAssistantGateway()),
       ],
       // Pin Spanish so the localized hub renders its es strings deterministically
       // (the test host's device locale would otherwise resolve to English).
       child: MaterialApp.router(
         routerConfig: _router(),
-        locale: const Locale('es'),
+        locale: locale,
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
       ),
@@ -192,6 +197,83 @@ void main() {
     expect(container.read(languageProvider), AppLanguage.en);
     expect(languagePrefs.stored, AppLanguage.en);
   });
+
+  testWidgets('opens Android default assistant settings from the localized affordance', (tester) async {
+    final assistantGateway = _FakeAssistantGateway(openSettingsResult: true);
+    await tester.pumpWidget(_app(assistantGateway: assistantGateway));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Asistente predeterminado'));
+    await tester.pumpAndSettle();
+
+    expect(assistantGateway.openSettingsCalls, 1);
+    expect(find.text('No se pudo abrir la configuración del asistente.'), findsNothing);
+  });
+
+  testWidgets('reports default assistant settings failures without leaving Settings', (tester) async {
+    final assistantGateway = _FakeAssistantGateway(openSettingsResult: false);
+    await tester.pumpWidget(_app(assistantGateway: assistantGateway));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Asistente predeterminado'));
+    await tester.pumpAndSettle();
+
+    expect(assistantGateway.openSettingsCalls, 1);
+    expect(find.text('No se pudo abrir la configuración del asistente.'), findsOneWidget);
+    expect(find.text('Ajustes'), findsOneWidget);
+  });
+
+  testWidgets('contains platform errors from default assistant settings', (tester) async {
+    final assistantGateway = _FakeAssistantGateway(throwsOnOpen: true);
+    await tester.pumpWidget(_app(assistantGateway: assistantGateway));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Asistente predeterminado'));
+    await tester.pumpAndSettle();
+
+    expect(assistantGateway.openSettingsCalls, 1);
+    expect(find.text('No se pudo abrir la configuración del asistente.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('uses the English default assistant copy', (tester) async {
+    await tester.pumpWidget(_app(locale: const Locale('en')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Default assistant'), findsOneWidget);
+    expect(find.text('Choose LifeOS as your Android assistant.'), findsOneWidget);
+  });
+
+  testWidgets('does not show the default assistant affordance on non-Android platforms', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Asistente predeterminado'), findsNothing);
+  });
+}
+
+class _FakeAssistantGateway implements AssistantGateway {
+  _FakeAssistantGateway({this.openSettingsResult = true, this.throwsOnOpen = false});
+
+  final bool openSettingsResult;
+  final bool throwsOnOpen;
+  int openSettingsCalls = 0;
+
+  @override
+  Future<void> dispose() async {}
+
+  @override
+  Future<bool> openAssistantSettings() async {
+    openSettingsCalls++;
+    if (throwsOnOpen) throw StateError('unavailable');
+    return openSettingsResult;
+  }
+
+  @override
+  Future<void> start(void Function(AssistantActivation activation) onActivation) async {}
 }
 
 /// Records launched URLs so the "Acerca de" link can be verified without a

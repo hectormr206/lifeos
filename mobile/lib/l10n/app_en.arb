@@ -370,5 +370,8 @@
   "appLockUnavailableBody": "This device can no longer verify your identity (no fingerprint, face or PIN set up). Turn the lock off to get in.",
   "appLockDisableButton": "Turn off lock",
   "appLockEnableFailed": "Could not verify. The lock stays off.",
-  "appLockUnavailableToast": "Set up a fingerprint, face or PIN on your device to turn the lock on."
+  "appLockUnavailableToast": "Set up a fingerprint, face or PIN on your device to turn the lock on.",
+  "defaultAssistantTitle": "Default assistant",
+  "defaultAssistantSubtitle": "Choose LifeOS as your Android assistant.",
+  "defaultAssistantSettingsFailed": "Couldn't open assistant settings."
 }

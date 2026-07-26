@@ -307,14 +307,15 @@ class _DigestCard extends ConsumerWidget {
               ),
             ],
             const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 TextButton(
                   onPressed: state.isGenerating ? null : notifier.generate,
                   child: Text(state.isGenerating ? 'Preparando…' : 'Generar ahora'),
                 ),
-                const SizedBox(width: 8),
                 FilledButton.tonal(
                   onPressed: () => context.push('/settings/daily-digest'),
                   child: const Text('Ver / gestionar'),

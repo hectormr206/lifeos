@@ -1699,6 +1699,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Set up a fingerprint, face or PIN on your device to turn the lock on.'**
   String get appLockUnavailableToast;
+
+  /// No description provided for @defaultAssistantTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Default assistant'**
+  String get defaultAssistantTitle;
+
+  /// No description provided for @defaultAssistantSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose LifeOS as your Android assistant.'**
+  String get defaultAssistantSubtitle;
+
+  /// No description provided for @defaultAssistantSettingsFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn't open assistant settings.'**
+  String get defaultAssistantSettingsFailed;
 }
 
 class _AppLocalizationsDelegate
