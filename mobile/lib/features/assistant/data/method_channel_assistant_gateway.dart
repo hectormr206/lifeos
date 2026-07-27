@@ -64,6 +64,7 @@ class MethodChannelAssistantGateway implements AssistantGateway {
         // The native queue remains authoritative; retry once before yielding.
       }
     }
+    _deliveredIds.remove(id);
     return false;
   }
 

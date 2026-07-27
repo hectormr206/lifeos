@@ -42,7 +42,15 @@ class AssistantHandoffController {
   }
 
   void receive(String id) {
-    if (_disposed || id.isEmpty || _isTerminal(id) || _pending.contains(id)) return;
+    if (_disposed || id.isEmpty || _pending.contains(id)) return;
+    if (_acknowledged.contains(id)) {
+      _terminalize(id, AssistantTerminalOutcome.acknowledged);
+      return;
+    }
+    if (_discarded.contains(id)) {
+      _terminalize(id, AssistantTerminalOutcome.discarded);
+      return;
+    }
     _pending.add(id);
     _advance();
   }

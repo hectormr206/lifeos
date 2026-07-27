@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/assistant/domain/assistant_gateway.dart';
 import 'package:lifeos/features/assistant/presentation/assistant_handoff_controller.dart';
 import 'package:lifeos/features/security/presentation/app_lock_controller.dart';
 
@@ -86,7 +87,7 @@ void main() {
   });
 
 // Assistant activation is navigation-only: mounted Chat resolves every queued ID without audio.
-test('mounted chat acknowledges each queued activation without microphone control', () {
+  test('mounted chat acknowledges each queued activation without microphone control', () {
   final controller = AssistantHandoffController(
     navigateToChat: () {},
     isCurrentChatRoute: () => true,
@@ -97,5 +98,24 @@ test('mounted chat acknowledges each queued activation without microphone contro
   controller.claimMountedChat(eligible: true);
   controller.receive('second');
   expect(controller.acknowledgedIds, {'first', 'second'});
+  });
+
+  test('retries a terminal ID without navigating or changing local state', () {
+    final completions = <AssistantTerminalOutcome>[];
+    final controller = AssistantHandoffController(
+      navigateToChat: () {},
+      isCurrentChatRoute: () => true,
+    );
+    controller.bind(
+      navigateToChat: () {},
+      isCurrentChatRoute: () => true,
+      terminalize: (_, outcome) => completions.add(outcome),
+    );
+    controller.updateLock(AppLockStatus.unlocked);
+    controller.receive('retry');
+    controller.claimMountedChat(eligible: true);
+    controller.receive('retry');
+    expect(completions, [AssistantTerminalOutcome.acknowledged, AssistantTerminalOutcome.acknowledged]);
+    expect(controller.acknowledgedIds, {'retry'});
   });
 }

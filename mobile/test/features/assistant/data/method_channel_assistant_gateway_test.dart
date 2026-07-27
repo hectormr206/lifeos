@@ -78,4 +78,27 @@ void main() {
     expect(attempts, 2);
     await gateway.dispose();
   });
+
+  test('redelivers after two failed completions for a later terminal retry', () async {
+    var attempts = 0;
+    final ids = <String>[];
+    final gateway = MethodChannelAssistantGateway(channel: channel);
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'assistantReadyAndDrain') return <String>['retry'];
+      if (call.method == 'drainAssistLaunches') return <String>['retry'];
+      if (call.method == 'completeAssistLaunch') return ++attempts == 3;
+      return null;
+    });
+    await gateway.start((activation) => ids.add(activation.id));
+    expect(await gateway.complete('retry', AssistantTerminalOutcome.acknowledged), isFalse);
+    await messenger.handlePlatformMessage(
+      channel.name,
+      channel.codec.encodeMethodCall(const MethodCall('assistAvailable')),
+      (_) {},
+    );
+    expect(ids, ['retry', 'retry']);
+    expect(await gateway.complete('retry', AssistantTerminalOutcome.acknowledged), isTrue);
+    expect(attempts, 3);
+    await gateway.dispose();
+  });
 }
