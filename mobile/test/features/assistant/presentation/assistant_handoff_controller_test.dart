@@ -78,7 +78,7 @@ void main() {
       controller.claimMountedChat(eligible: true);
       controller.claimMountedChat(eligible: true);
 
-      expect(routes, ['/chat']);
+      expect(routes, isEmpty);
       expect(microphoneCalls, 0);
       expect(controller.acknowledgedIds, {'eligible-1'});
       expect(controller.pendingIds, isEmpty);
