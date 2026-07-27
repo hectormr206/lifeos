@@ -13,7 +13,7 @@ void main() {
     controller.updateLock(AppLockStatus.disabled);
     controller.receive('chat-claim-1');
     controller.onRouteSettled();
-    controller.claimMountedChat(eligible: false, armMicrophone: () => microphoneCalls++);
+    controller.claimMountedChat(eligible: false);
 
     expect(controller.discardedIds, {'chat-claim-1'});
     expect(controller.acknowledgedIds, isEmpty);
@@ -32,7 +32,7 @@ void main() {
     controller.receive('chat-race-1');
     currentChat = false;
     controller.onRouteSettled();
-    controller.claimMountedChat(eligible: true, armMicrophone: () => microphoneCalls++);
+    controller.claimMountedChat(eligible: true);
 
     expect(controller.discardedIds, {'chat-race-1'});
     expect(controller.acknowledgedIds, isEmpty);

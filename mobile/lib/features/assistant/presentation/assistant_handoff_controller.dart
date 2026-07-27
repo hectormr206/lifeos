@@ -1,4 +1,5 @@
 import '../../security/presentation/app_lock_controller.dart';
+import '../domain/assistant_gateway.dart';
 
 /// Owns the one-shot lifecycle from an Android assistant activation to Chat.
 ///
@@ -15,10 +16,12 @@ class AssistantHandoffController {
 
   void Function() _navigateToChat;
   bool Function() _isCurrentChatRoute;
+  void Function(String, AssistantTerminalOutcome) _terminalize = (_, _) {};
   final List<String> _pending = <String>[];
   final Set<String> _acknowledged = <String>{};
   final Set<String> _discarded = <String>{};
   AppLockStatus? _lock;
+  bool? _mountedEligible;
   bool _routing = false;
   bool _disposed = false;
 
@@ -26,10 +29,15 @@ class AssistantHandoffController {
   Set<String> get acknowledgedIds => Set<String>.unmodifiable(_acknowledged);
   Set<String> get discardedIds => Set<String>.unmodifiable(_discarded);
 
-  void bind({required void Function() navigateToChat, required bool Function() isCurrentChatRoute}) {
+  void bind({
+    required void Function() navigateToChat,
+    required bool Function() isCurrentChatRoute,
+    void Function(String, AssistantTerminalOutcome)? terminalize,
+  }) {
     if (_disposed) return;
     _navigateToChat = navigateToChat;
     _isCurrentChatRoute = isCurrentChatRoute;
+    if (terminalize != null) _terminalize = terminalize;
     _advance();
   }
 
@@ -54,34 +62,43 @@ class AssistantHandoffController {
     }
   }
 
-  /// Atomically consumes the active request only from the currently mounted,
-  /// eligible Chat screen. The acknowledgement is recorded before mic startup,
-  /// so permission denial never makes the Android activation replayable.
-  void claimMountedChat({required bool eligible, required void Function() armMicrophone}) {
+  /// Resolves every queued activation from mounted, eligible Chat. Assistant
+  /// navigation never arms audio; recording remains an explicit Chat gesture.
+  void claimMountedChat({required bool eligible}) {
+    _mountedEligible = eligible;
     if (_disposed || _pending.isEmpty || _routing || !_isUnlocked) return;
     if (!_isCurrentChatRoute() || !eligible) {
       discardCurrent();
       return;
     }
-    final id = _pending.removeAt(0);
-    _acknowledged.add(id);
-    armMicrophone();
+    while (_pending.isNotEmpty) {
+      final id = _pending.removeAt(0);
+      _acknowledged.add(id);
+      _terminalize(id, AssistantTerminalOutcome.acknowledged);
+    }
     _advance();
   }
+
+  void unclaimMountedChat() => _mountedEligible = null;
 
   /// Authentication denial/cancellation, disposal, route failure, or redirect
   /// is terminal. A later unlock or duplicate platform delivery cannot revive it.
   void discardCurrent() {
     if (_pending.isEmpty) return;
     _routing = false;
-    _discarded.add(_pending.removeAt(0));
+    final id = _pending.removeAt(0);
+    _discarded.add(id);
+    _terminalize(id, AssistantTerminalOutcome.discarded);
     _advance();
   }
 
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    _discarded.addAll(_pending);
+    for (final id in _pending) {
+      _discarded.add(id);
+      _terminalize(id, AssistantTerminalOutcome.discarded);
+    }
     _pending.clear();
     _routing = false;
   }
@@ -95,6 +112,10 @@ class AssistantHandoffController {
 
   void _advance() {
     if (_disposed || _pending.isEmpty || !_isUnlocked || _routing) return;
+    if (_isCurrentChatRoute()) {
+      if (_mountedEligible != null) claimMountedChat(eligible: _mountedEligible!);
+      return;
+    }
     _routing = true;
     _navigateToChat();
   }

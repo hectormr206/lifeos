@@ -324,6 +324,7 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
         });
       },
       isCurrentChatRoute: () => router.routerDelegate.currentConfiguration.uri.path == '/chat',
+      terminalize: (id, outcome) => unawaited(ref.read(assistantGatewayProvider).complete(id, outcome)),
     );
     _assistantLockSubscription = ref.listenManual<AppLockStatus>(
       appLockControllerProvider,

@@ -14,7 +14,7 @@ void main() {
 
       controller.updateLock(AppLockStatus.locked);
       controller.receive('locked-1');
-      controller.claimMountedChat(eligible: true, armMicrophone: () => microphoneCalls++);
+      controller.claimMountedChat(eligible: true);
 
       expect(routes, isEmpty);
       expect(microphoneCalls, 0);
@@ -36,7 +36,7 @@ void main() {
       controller.discardCurrent();
       controller.receive('denied-1');
       controller.updateLock(AppLockStatus.unlocked);
-      controller.claimMountedChat(eligible: true, armMicrophone: () => microphoneCalls++);
+      controller.claimMountedChat(eligible: true);
 
       expect(routes, isEmpty);
       expect(microphoneCalls, 0);
@@ -56,7 +56,7 @@ void main() {
       controller.updateLock(AppLockStatus.disabled);
       controller.receive('redirect-1');
       controller.onRouteSettled();
-      controller.claimMountedChat(eligible: true, armMicrophone: () => microphoneCalls++);
+      controller.claimMountedChat(eligible: true);
 
       expect(routes, ['/chat']);
       expect(microphoneCalls, 0);
@@ -64,7 +64,7 @@ void main() {
       expect(controller.acknowledgedIds, isEmpty);
     });
 
-    test('only the current eligible mounted chat can atomically acknowledge and arm once', () {
+    test('only the current eligible mounted chat acknowledges without arming audio', () {
       final routes = <String>[];
       var microphoneCalls = 0;
       final controller = AssistantHandoffController(
@@ -75,13 +75,27 @@ void main() {
       controller.updateLock(AppLockStatus.unlocked);
       controller.receive('eligible-1');
       controller.onRouteSettled();
-      controller.claimMountedChat(eligible: true, armMicrophone: () => microphoneCalls++);
-      controller.claimMountedChat(eligible: true, armMicrophone: () => microphoneCalls++);
+      controller.claimMountedChat(eligible: true);
+      controller.claimMountedChat(eligible: true);
 
       expect(routes, ['/chat']);
-      expect(microphoneCalls, 1);
+      expect(microphoneCalls, 0);
       expect(controller.acknowledgedIds, {'eligible-1'});
       expect(controller.pendingIds, isEmpty);
     });
   });
 }
+
+// Assistant activation is navigation-only: mounted Chat resolves every queued ID without audio.
+test('mounted chat acknowledges each queued activation without microphone control', () {
+  final controller = AssistantHandoffController(
+    navigateToChat: () {},
+    isCurrentChatRoute: () => true,
+  );
+  controller.updateLock(AppLockStatus.unlocked);
+  controller.receive('first');
+  controller.onRouteSettled();
+  controller.claimMountedChat(eligible: true);
+  controller.receive('second');
+  expect(controller.acknowledgedIds, {'first', 'second'});
+});

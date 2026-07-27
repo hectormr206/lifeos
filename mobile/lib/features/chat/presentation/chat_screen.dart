@@ -96,7 +96,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
           ref.read(localModelEnabledProvider);
       ref.read(assistantHandoffControllerProvider).claimMountedChat(
             eligible: eligible,
-            armMicrophone: _startAssistantRecording,
           );
     });
   }
@@ -301,14 +300,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       // Start still in flight: remember the slide intent, not a forced discard.
       _releaseCancel = _willCancel;
     }
-  }
-
-  Future<void> _startAssistantRecording() async {
-    if (_recording || _startFuture != null) return;
-    _pointerDown = true;
-    _willCancel = false;
-    _releaseCancel = false;
-    await _startRecording();
   }
 
   Future<void> _startRecording() async {
