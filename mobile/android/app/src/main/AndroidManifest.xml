@@ -70,6 +70,20 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- DEVICE ASSISTANT (Etapa 1): handling ACTION_ASSIST makes LifeOS
+                 selectable in Ajustes → Apps predeterminadas → Asistente
+                 digital, so long-pressing power / the assistant gesture opens
+                 Axi's chat with the mic armed. The assist-role button/gesture
+                 only needs this activity filter (a full VoiceInteractionService
+                 is system-app territory and NOT required for the role). The
+                 activity is singleTask, so a warm launch arrives via
+                 onNewIntent and a cold launch via the onCreate intent — both
+                 are funneled to Flutter through the lifeos/assistant channel
+                 in MainActivity. -->
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
         </activity>
         <!-- AXI KEYBOARD (IME): system-wide on-device dictation. The service
              binds as an input method (BIND_INPUT_METHOD is a system-signature

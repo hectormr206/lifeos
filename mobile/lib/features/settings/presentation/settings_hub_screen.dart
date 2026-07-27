@@ -10,6 +10,7 @@ import '../../../theme/lifeos_theme.dart';
 import '../../../theme/theme_providers.dart';
 import '../../app_update/domain/app_version_info.dart';
 import '../../app_update/presentation/app_update_providers.dart';
+import '../../assistant/presentation/assistant_providers.dart';
 import '../../security/domain/biometric_authenticator.dart';
 import '../../security/presentation/app_lock_providers.dart';
 
@@ -99,6 +100,13 @@ class SettingsHubScreen extends ConsumerWidget {
             subtitle: Text(l10n.permissionsNavSubtitle),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/permissions'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.assistant_outlined),
+            title: const Text('Asistente digital'),
+            subtitle: const Text('Configurar Axi como asistente predeterminado del teléfono'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => ref.read(assistantChannelProvider).openAssistantSettings(),
           ),
           const Divider(),
           // Optional biometric app lock. Offline-reachable, opt-in, default OFF.

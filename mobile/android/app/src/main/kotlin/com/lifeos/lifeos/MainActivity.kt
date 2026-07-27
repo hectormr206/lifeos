@@ -2,6 +2,7 @@ package com.lifeos.lifeos
 
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
@@ -18,8 +19,80 @@ import io.flutter.plugin.common.MethodChannel
 // existing dictation MethodChannel below is unchanged.
 class MainActivity : FlutterFragmentActivity() {
 
+    // DEVICE ASSISTANT (Etapa 1): when the user sets LifeOS as the digital
+    // assistant, long-pressing power / the assistant gesture delivers
+    // ACTION_ASSIST here. Two arrival paths (the activity is singleTask):
+    //   * COLD START (process dead): the assist intent is the launch intent —
+    //     onCreate sees it, but Dart is not up yet, so we only latch
+    //     [pendingAssistLaunch]; Flutter pulls it once via
+    //     "consumeAssistLaunch" after its first frame.
+    //   * WARM RESUME (app backgrounded): onNewIntent fires with the engine
+    //     alive — push the event straight to Dart over [assistantChannel]
+    //     (no latch, so a later cold-start pull can't double-fire).
+    // Dart then routes to /chat with the mic armed; the app-lock gate wraps
+    // every route on the Flutter side, so an assist launch NEVER bypasses auth.
+    private var assistantChannel: MethodChannel? = null
+    private var pendingAssistLaunch = false
+
+    private fun isAssistIntent(intent: Intent?): Boolean =
+        intent?.action == Intent.ACTION_ASSIST
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (isAssistIntent(intent)) pendingAssistLaunch = true
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (isAssistIntent(intent)) {
+            val channel = assistantChannel
+            if (channel != null) {
+                channel.invokeMethod("assistLaunch", null)
+            } else {
+                pendingAssistLaunch = true
+            }
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // DEVICE ASSISTANT channel: cold-start pull ("consumeAssistLaunch"),
+        // warm-resume push ("assistLaunch" — invoked from onNewIntent above),
+        // and the Ajustes deep-link to the system default-assistant screen.
+        assistantChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "lifeos/assistant",
+        ).apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    // One-shot: was this launch (cold start) an assist launch?
+                    "consumeAssistLaunch" -> {
+                        val pending = pendingAssistLaunch
+                        pendingAssistLaunch = false
+                        result.success(pending)
+                    }
+                    // Ajustes → "Usar a Axi como asistente del teléfono":
+                    // open the system screen where the default assistant is
+                    // chosen. ACTION_VOICE_INPUT_SETTINGS lands closest on
+                    // most OEMs; fall back to the default-apps manager.
+                    "openAssistantSettings" -> {
+                        val opened = try {
+                            startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+                            true
+                        } catch (_: Exception) {
+                            try {
+                                startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+                                true
+                            } catch (_: Exception) {
+                                false
+                            }
+                        }
+                        result.success(opened)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
         // APP LOCK secure-surface toggle: while the optional biometric app lock
         // is ENABLED, the Dart lock controller turns FLAG_SECURE on so Android's
         // Recents/task snapshot (captured around onPause, BEFORE the Dart-side

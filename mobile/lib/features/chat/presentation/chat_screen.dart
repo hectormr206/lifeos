@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/pending_sync_banner.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../assistant/presentation/assistant_providers.dart';
 import '../../local_model/domain/generation_metrics.dart';
 import '../../local_model/domain/local_llm_engine.dart' show LocalModelConfig;
 import '../../local_model/presentation/local_model_load_notifier.dart';
@@ -87,6 +88,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     // opening (see [didChangeMetrics]).
     WidgetsBinding.instance.addObserver(this);
     _speech = ref.read(speechControllerProvider.notifier);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkAssistantArmMic());
   }
 
   // When the soft keyboard opens (or grows), the Scaffold resizes the message
@@ -120,6 +122,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     // leaves the chat. Fire-and-forget: dispose can't await.
     _speech.stop();
     super.dispose();
+  }
+
+  void _checkAssistantArmMic() {
+    if (!mounted) return;
+    final armMic = ref.read(chatAssistantArmMicProvider);
+    if (armMic) {
+      ref.read(chatAssistantArmMicProvider.notifier).consume();
+      _pointerDown = true;
+      _startRecording();
+    }
   }
 
   void _onTextChanged() => setState(() {});

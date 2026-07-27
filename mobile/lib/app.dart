@@ -10,6 +10,7 @@ import 'l10n/locale_providers.dart';
 import 'features/app_update/presentation/app_update_notifier.dart';
 import 'features/app_update/presentation/app_update_providers.dart';
 import 'features/app_update/presentation/app_updates_screen.dart';
+import 'features/assistant/presentation/assistant_providers.dart';
 import 'features/body/presentation/body_screen.dart';
 import 'features/briefings/presentation/briefings_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
@@ -297,6 +298,8 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // none exists for today (retention-capped). Fire-and-forget: a backup
     // must never block or break startup.
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoBackup());
+    // Device Assistant (ACTION_ASSIST): wire assistant launches (cold + warm).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _wireAssistantLaunch());
     _startForegroundUpdatePolling();
   }
 
@@ -378,6 +381,27 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     } catch (_) {
       // Best-effort: no store yet / no platform channel — never block startup.
     }
+  }
+
+  /// Device Assistant (ACTION_ASSIST): wire warm-resume assistant triggers and
+  /// check for a cold-start assist launch. Routes directly to `/chat` with the
+  /// mic armed.
+  Future<void> _wireAssistantLaunch() async {
+    final assistant = ref.read(assistantChannelProvider);
+    try {
+      assistant.registerAssistHandler(_onAssistTriggered);
+      if (await assistant.consumeAssistLaunch()) {
+        _onAssistTriggered();
+      }
+    } catch (_) {
+      // Channel handling is best-effort — never block app startup.
+    }
+  }
+
+  void _onAssistTriggered() {
+    if (!mounted) return;
+    ref.read(chatAssistantArmMicProvider.notifier).arm();
+    ref.read(goRouterProvider).go('/chat');
   }
 
   void _openRemindersScreen() {
