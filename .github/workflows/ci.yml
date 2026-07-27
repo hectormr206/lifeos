@@ -127,3 +127,37 @@ jobs:
           uv run --python 3.12 pytest tests/ -q
           --deselect tests/test_briefing.py::test_agentic_forces_final_synthesis
           --deselect tests/test_store.py::test_concurrent_writes_no_corruption
+
+  # AUTO-DEPLOY: after the mobile-app gate passes on main, build the signed
+  # release APK and publish it to the OTA server so paired Pixel devices
+  # auto-update without any manual intervention.
+  mobile-ota-publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [mobile-app]
+    runs-on: [self-hosted, vps]
+    env:
+      FLUTTER_ROOT: /home/hectormr/development/flutter
+      ANDROID_HOME: /home/hectormr/Android/Sdk
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so git rev-list --count is accurate
+      - name: Add Flutter & Android SDK to PATH
+        run: |
+          echo "$FLUTTER_ROOT/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+      - name: Verify signing keystore exists
+        run: |
+          if [[ ! -f /home/hectormr/development/lifeos-release.jks ]]; then
+            echo "::error::Release keystore not found at ~/development/lifeos-release.jks"
+            exit 1
+          fi
+          echo "✓ Keystore present"
+      - name: flutter pub get
+        working-directory: mobile
+        run: flutter pub get
+      - name: Build & publish OTA update
+        working-directory: mobile
+        run: |
+          COMMIT_MSG="$(git log -1 --format='%h %s')"
+          ./tools/publish-to-vps.sh "$COMMIT_MSG"
