@@ -66,4 +66,16 @@ void main() {
     expect(await gateway.openAssistantSettings(), isFalse);
     await gateway.dispose();
   });
+
+  test('retries one failed terminal completion before returning success', () async {
+    var attempts = 0;
+    final gateway = MethodChannelAssistantGateway(channel: channel);
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'completeAssistLaunch') return ++attempts == 2;
+      return null;
+    });
+    expect(await gateway.complete('retry', AssistantTerminalOutcome.discarded), isTrue);
+    expect(attempts, 2);
+    await gateway.dispose();
+  });
 }

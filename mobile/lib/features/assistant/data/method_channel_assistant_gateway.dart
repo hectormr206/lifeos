@@ -50,16 +50,21 @@ class MethodChannelAssistantGateway implements AssistantGateway {
 
   @override
   Future<bool> complete(String id, AssistantTerminalOutcome outcome) async {
-    try {
-      final completed = await _channel.invokeMethod<bool>('completeAssistLaunch', {
-        'id': id,
-        'outcome': outcome.name,
-      });
-      if (completed == true) _deliveredIds.remove(id);
-      return completed ?? false;
-    } catch (_) {
-      return false;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final completed = await _channel.invokeMethod<bool>('completeAssistLaunch', {
+          'id': id,
+          'outcome': outcome.name,
+        });
+        if (completed == true) {
+          _deliveredIds.remove(id);
+          return true;
+        }
+      } catch (_) {
+        // The native queue remains authoritative; retry once before yielding.
+      }
     }
+    return false;
   }
 
   @override
