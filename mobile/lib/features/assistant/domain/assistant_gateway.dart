@@ -5,10 +5,14 @@ class AssistantActivation {
   final String id;
 }
 
+enum AssistantTerminalOutcome { acknowledged, discarded }
+
 /// Boundary around Android's assistant platform channel.
 abstract interface class AssistantGateway {
   /// Registers warm delivery before consuming any cold-start activations.
   Future<void> start(void Function(AssistantActivation activation) onActivation);
+
+  Future<bool> complete(String id, AssistantTerminalOutcome outcome);
 
   /// Opens Android's default-assistant settings when the platform supports it.
   Future<bool> openAssistantSettings();

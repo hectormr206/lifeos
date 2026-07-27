@@ -24,12 +24,7 @@ class MethodChannelAssistantGateway implements AssistantGateway {
     _channel.setMethodCallHandler(_handlePlatformCall);
 
     try {
-      final pending = await _channel.invokeMethod<List<dynamic>>(
-        'consumeAssistLaunches',
-      );
-      for (final id in pending ?? const <dynamic>[]) {
-        if (id is String) _deliver(id);
-      }
+      await _drain('assistantReadyAndDrain');
     } catch (_) {
       // Non-Android and teardown hosts have no native bridge. A future warm
       // callback remains harmlessly unavailable rather than breaking app boot.
@@ -37,17 +32,34 @@ class MethodChannelAssistantGateway implements AssistantGateway {
   }
 
   Future<dynamic> _handlePlatformCall(MethodCall call) async {
-    if (call.method != 'assistLaunch') return null;
-    final arguments = call.arguments;
-    if (arguments is Map && arguments['id'] is String) {
-      _deliver(arguments['id'] as String);
-    }
+    if (call.method == 'assistAvailable') await _drain('drainAssistLaunches');
     return null;
+  }
+
+  Future<void> _drain(String method) async {
+    final pending = await _channel.invokeMethod<List<dynamic>>(method);
+    for (final id in pending ?? const <dynamic>[]) {
+      if (id is String) _deliver(id);
+    }
   }
 
   void _deliver(String id) {
     if (!_started || !_deliveredIds.add(id)) return;
     _onActivation?.call(AssistantActivation(id));
+  }
+
+  @override
+  Future<bool> complete(String id, AssistantTerminalOutcome outcome) async {
+    try {
+      final completed = await _channel.invokeMethod<bool>('completeAssistLaunch', {
+        'id': id,
+        'outcome': outcome.name,
+      });
+      if (completed == true) _deliveredIds.remove(id);
+      return completed ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override

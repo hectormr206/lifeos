@@ -265,6 +265,9 @@ class _FakeAssistantGateway implements AssistantGateway {
   Future<void> dispose() async {}
 
   @override
+  Future<bool> complete(String id, AssistantTerminalOutcome outcome) async => true;
+
+  @override
   Future<bool> openAssistantSettings() async {
     openSettingsCalls++;
     if (throwsOnOpen) throw StateError('unavailable');

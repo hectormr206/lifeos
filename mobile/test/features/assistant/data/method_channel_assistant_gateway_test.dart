@@ -15,18 +15,25 @@ void main() {
   test('registers the warm callback before it consumes cold activations', () async {
     final calls = <String>[];
     final activations = <String>[];
+    Map? completion;
     final gateway = MethodChannelAssistantGateway(channel: channel);
 
     messenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call.method);
-      if (call.method == 'consumeAssistLaunches') return <String>['cold-1'];
+      if (call.method == 'assistantReadyAndDrain') return <String>['cold-1'];
+      if (call.method == 'completeAssistLaunch') {
+        completion = call.arguments as Map;
+        return true;
+      }
       return null;
     });
 
     await gateway.start((activation) => activations.add(activation.id));
 
-    expect(calls, ['consumeAssistLaunches']);
+    expect(calls, ['assistantReadyAndDrain']);
     expect(activations, ['cold-1']);
+    expect(await gateway.complete('cold-1', AssistantTerminalOutcome.acknowledged), isTrue);
+    expect(completion, {'id': 'cold-1', 'outcome': 'acknowledged'});
     await gateway.dispose();
   });
 
@@ -35,21 +42,15 @@ void main() {
     final gateway = MethodChannelAssistantGateway(channel: channel);
 
     messenger.setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'consumeAssistLaunches') {
-        await messenger.handlePlatformMessage(
-          channel.name,
-          channel.codec.encodeMethodCall(const MethodCall('assistLaunch', {'id': 'same'})),
-          (_) {},
-        );
-        return <String>['same', 'next'];
-      }
+      if (call.method == 'assistantReadyAndDrain') return <String>['same', 'next'];
+      if (call.method == 'drainAssistLaunches') return <String>['same', 'later'];
       return null;
     });
 
     await gateway.start((activation) => activations.add(activation.id));
     await messenger.handlePlatformMessage(
       channel.name,
-      channel.codec.encodeMethodCall(const MethodCall('assistLaunch', {'id': 'later'})),
+      channel.codec.encodeMethodCall(const MethodCall('assistAvailable')),
       (_) {},
     );
 

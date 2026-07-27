@@ -7,25 +7,30 @@ import org.junit.Test
 
 class AssistantBridgeStateTest {
     @Test
-    fun `cold and warm IDs are retained once and drained in arrival order`() {
-        val state = AssistantBridgeState()
-
-        assertTrue(state.enqueue("cold-1"))
-        assertFalse(state.enqueue("cold-1"))
-        assertTrue(state.enqueue("warm-2"))
-
-        assertEquals(listOf("cold-1", "warm-2"), state.consumeAll())
-        assertEquals(emptyList<String>(), state.consumeAll())
+    fun `drain retains IDs until one terminal completion`() {
+        val state = AssistantBridgeState(clock = { 0L })
+        assertTrue(state.enqueue("cold"))
+        assertEquals(listOf("cold"), state.drain())
+        assertEquals(listOf("cold"), state.drain())
+        assertTrue(state.complete("cold", "acknowledged"))
+        assertTrue(state.complete("cold", "acknowledged"))
+        assertFalse(state.complete("cold", "discarded"))
+        assertEquals(emptyList<String>(), state.drain())
     }
 
     @Test
-    fun `a delivered warm ID is not retained for a later cold drain`() {
-        val state = AssistantBridgeState()
-
-        assertTrue(state.markDelivered("warm-1"))
-        assertFalse(state.enqueue("warm-1"))
-        assertTrue(state.enqueue("next-2"))
-
-        assertEquals(listOf("next-2"), state.consumeAll())
+    fun `capacity and expiry terminalize IDs deterministically`() {
+        var now = 0L
+        val state = AssistantBridgeState(
+            clock = { now },
+            pendingCapacity = 1,
+            pendingExpiryMillis = 10L,
+        )
+        assertTrue(state.enqueue("first"))
+        assertFalse(state.enqueue("excess"))
+        assertEquals(listOf("first"), state.drain())
+        now = 11L
+        assertEquals(emptyList<String>(), state.drain())
+        assertFalse(state.enqueue("first"))
     }
 }

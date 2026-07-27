@@ -21,6 +21,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     private val assistantBridgeState = AssistantBridgeState()
     private var assistantChannel: MethodChannel? = null
+    private var dartReady = false
 
     private fun isAssistIntent(intent: Intent?): Boolean =
         intent?.action == Intent.ACTION_ASSIST
@@ -31,12 +32,8 @@ class MainActivity : FlutterFragmentActivity() {
     private fun receiveAssistantIntent(intent: Intent) {
         if (!isAssistIntent(intent)) return
         val id = assistantActivationId(intent)
-        val channel = assistantChannel
-        if (channel == null) {
-            assistantBridgeState.enqueue(id)
-        } else if (assistantBridgeState.markDelivered(id)) {
-            channel.invokeMethod("assistLaunch", mapOf("id" to id))
-        }
+        assistantBridgeState.enqueue(id)
+        if (dartReady) assistantChannel?.invokeMethod("assistAvailable", null)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -70,7 +67,15 @@ class MainActivity : FlutterFragmentActivity() {
         ).apply {
             setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "consumeAssistLaunches" -> result.success(assistantBridgeState.consumeAll())
+                    "assistantReadyAndDrain" -> {
+                        dartReady = true
+                        result.success(assistantBridgeState.drain())
+                    }
+                    "drainAssistLaunches" -> result.success(assistantBridgeState.drain())
+                    "completeAssistLaunch" -> {
+                        val args = call.arguments as? Map<*, *>
+                        result.success(assistantBridgeState.complete(args?.get("id") as? String ?: "", args?.get("outcome") as? String ?: ""))
+                    }
                     "openAssistantSettings" -> result.success(openAssistantSettings())
                     else -> result.notImplemented()
                 }
