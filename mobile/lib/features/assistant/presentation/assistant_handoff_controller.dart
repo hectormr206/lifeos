@@ -116,8 +116,6 @@ class AssistantHandoffController {
   // AppLockGate has become authoritative.
   bool get _isUnlocked => _lock == AppLockStatus.disabled || _lock == AppLockStatus.unlocked;
 
-  bool _isTerminal(String id) => _acknowledged.contains(id) || _discarded.contains(id);
-
   void _advance() {
     if (_disposed || _pending.isEmpty || !_isUnlocked || _routing) return;
     if (_isCurrentChatRoute()) {
