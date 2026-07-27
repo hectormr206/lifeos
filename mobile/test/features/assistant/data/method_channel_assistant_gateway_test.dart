@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/assistant/data/method_channel_assistant_gateway.dart';
+import 'package:lifeos/features/assistant/domain/assistant_gateway.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
