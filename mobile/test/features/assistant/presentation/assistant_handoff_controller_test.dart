@@ -84,7 +84,6 @@ void main() {
       expect(controller.pendingIds, isEmpty);
     });
   });
-}
 
 // Assistant activation is navigation-only: mounted Chat resolves every queued ID without audio.
 test('mounted chat acknowledges each queued activation without microphone control', () {
@@ -98,4 +97,5 @@ test('mounted chat acknowledges each queued activation without microphone contro
   controller.claimMountedChat(eligible: true);
   controller.receive('second');
   expect(controller.acknowledgedIds, {'first', 'second'});
-});
+  });
+}
