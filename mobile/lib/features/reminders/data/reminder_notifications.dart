@@ -14,9 +14,8 @@ import '../domain/reminder_scheduler.dart';
 class NotificationReminderScheduler implements ReminderScheduler {
   NotificationReminderScheduler({
     AppNotifications? notifications,
-    Future<tz.Location?> Function()? locationResolver,
-  })  : _notifications = notifications ?? AppNotifications.instance,
-        _locationResolver = locationResolver;
+    this._locationResolver,
+  }) : _notifications = notifications ?? AppNotifications.instance;
 
   final AppNotifications _notifications;
 

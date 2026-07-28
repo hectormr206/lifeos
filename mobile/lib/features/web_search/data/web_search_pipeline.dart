@@ -51,13 +51,11 @@ class WebSearchResult {
 /// pipeline is backend-agnostic.
 class WebSearchPipeline {
   WebSearchPipeline({
-    required WebSearchBackend search,
-    required SourceFetcher fetcher,
+    required this._search,
+    required this._fetcher,
     SourceContentExtractor? extractor,
     this.maxPages = 3,
-  })  : _search = search,
-        _fetcher = fetcher,
-        _extractor = extractor ?? const SourceContentExtractor();
+  }) : _extractor = extractor ?? const SourceContentExtractor();
 
   /// Neutral-Spanish signal prepended when the search could not run — the model
   /// is told to answer from what it already knows rather than inventing links.

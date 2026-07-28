@@ -27,7 +27,7 @@ class ThrowingAppLockPreferences implements AppLockPreferences {
 
 /// In-memory [AppLockPreferences] for tests (no shared_preferences channel).
 class FakeAppLockPreferences implements AppLockPreferences {
-  FakeAppLockPreferences({bool enabled = false}) : _enabled = enabled;
+  FakeAppLockPreferences({this._enabled = false});
 
   bool _enabled;
   int writes = 0;

@@ -11,7 +11,7 @@ import 'package:lifeos/features/local_model/domain/notification_permission.dart'
 /// the host without a device.
 class FakeLocalLlmEngine implements LocalLlmEngine {
   FakeLocalLlmEngine({
-    bool installed = false,
+    this._installed = false,
     List<double>? downloadProgress,
     this.downloadShouldFail = false,
     this.generateShouldFail = false,
@@ -23,8 +23,7 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     String Function(String prompt)? imageReply,
     GenerationMetrics? metrics,
     GenerationMetrics? imageMetrics,
-  })  : _installed = installed,
-        downloadProgress = downloadProgress ?? const [0.25, 0.5, 1.0],
+  })  : downloadProgress = downloadProgress ?? const [0.25, 0.5, 1.0],
         reply = reply ?? ((prompt) => 'eco: $prompt'),
         imageReply = imageReply ?? ((prompt) => 'veo la imagen: $prompt'),
         metrics = metrics ?? defaultMetrics,
@@ -212,7 +211,7 @@ class FakeNotificationPermissionGateway implements NotificationPermissionGateway
 
 /// In-memory [LocalModelPreferences] for tests (no shared_preferences channel).
 class FakeLocalModelPreferences implements LocalModelPreferences {
-  FakeLocalModelPreferences({bool enabled = false}) : _enabled = enabled;
+  FakeLocalModelPreferences({this._enabled = false});
 
   bool _enabled;
   int writes = 0;

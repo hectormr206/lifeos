@@ -18,12 +18,10 @@ import 'web_search_pipeline.dart';
 /// toggle is on, so the FIFO/persistence/metrics paths never change.
 class SearchAugmentedChatRepository implements ChatRepository {
   SearchAugmentedChatRepository({
-    required ChatRepository inner,
-    required WebSearchPipeline pipeline,
-    required String Function() sourcesLabel,
-  })  : _inner = inner,
-        _pipeline = pipeline,
-        _sourcesLabel = sourcesLabel;
+    required this._inner,
+    required this._pipeline,
+    required this._sourcesLabel,
+  });
 
   final ChatRepository _inner;
   final WebSearchPipeline _pipeline;

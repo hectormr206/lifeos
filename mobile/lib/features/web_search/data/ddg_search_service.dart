@@ -94,9 +94,8 @@ class DdgResultParser {
 /// bounded timeouts + a plain UA), so the DDG request never inherits the paired
 /// engine base URL, auth, or TLS pinning.
 class DuckDuckGoBackend implements WebSearchBackend {
-  DuckDuckGoBackend({required SourceFetcher fetcher, DdgResultParser? parser})
-      : _fetcher = fetcher,
-        _parser = parser ?? const DdgResultParser();
+  DuckDuckGoBackend({required this._fetcher, DdgResultParser? parser})
+      : _parser = parser ?? const DdgResultParser();
 
   static const String _endpoint = 'https://lite.duckduckgo.com/lite/';
 

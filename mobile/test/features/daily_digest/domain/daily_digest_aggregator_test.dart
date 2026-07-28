@@ -24,7 +24,7 @@ LocalDomainEntry _entry(String uuid, String label, DateTime ts, {String? subject
       label: label,
       timestamp: ts,
       type: type,
-      data: {if (subject != null) 'subject': subject, if (type != null) 'type': type},
+      data: {'subject': ?subject, 'type': ?type},
     );
 
 void main() {

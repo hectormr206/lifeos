@@ -66,7 +66,7 @@ abstract class AppUpdatePreferences {
 
 /// [AppUpdatePreferences] backed by `shared_preferences`.
 class SharedPrefsAppUpdatePreferences implements AppUpdatePreferences {
-  SharedPrefsAppUpdatePreferences({SharedPreferences? prefs}) : _prefs = prefs;
+  SharedPrefsAppUpdatePreferences({this._prefs});
 
   static const String autoCheckKey = 'app_update_auto_check';
   static const String notifyKey = 'app_update_notify';
