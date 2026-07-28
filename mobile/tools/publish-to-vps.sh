@@ -78,11 +78,18 @@ print(json.dumps({
 PY
 
 # ── Upload + repoint current.apk on the VPS ─────────────────────────────────
-echo "→ Subiendo a $VPS_SSH:$VPS_DIR/ …"
-scp -o ConnectTimeout=20 "$LOCAL_COPY" "$VPS_SSH:$VPS_DIR/$FN"
-scp -o ConnectTimeout=20 "$MANIFEST"  "$VPS_SSH:$VPS_DIR/manifest.json"
-# current.apk is a symlink the server serves at /download; repoint it atomically.
-ssh "$VPS_SSH" "cd '$VPS_DIR' && ln -sfn '$FN' current.apk"
+if [[ "$VPS_SSH" == "local" || -d "$HOME/$VPS_DIR" ]]; then
+  echo "→ Copiando directamente a $HOME/$VPS_DIR/ …"
+  cp "$LOCAL_COPY" "$HOME/$VPS_DIR/$FN"
+  cp "$MANIFEST" "$HOME/$VPS_DIR/manifest.json"
+  (cd "$HOME/$VPS_DIR" && ln -sfn "$FN" current.apk)
+else
+  echo "→ Subiendo a $VPS_SSH:$VPS_DIR/ …"
+  scp -o ConnectTimeout=20 "$LOCAL_COPY" "$VPS_SSH:$VPS_DIR/$FN"
+  scp -o ConnectTimeout=20 "$MANIFEST"  "$VPS_SSH:$VPS_DIR/manifest.json"
+  # current.apk is a symlink the server serves at /download; repoint it atomically.
+  ssh "$VPS_SSH" "cd '$VPS_DIR' && ln -sfn '$FN' current.apk"
+fi
 rm -f "$MANIFEST"
 
 # ── Verify the live endpoint now advertises this version ─────────────────────
