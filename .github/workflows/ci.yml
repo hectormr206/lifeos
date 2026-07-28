@@ -82,10 +82,12 @@ jobs:
     runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Flutter 3.44.6
+      # Must match the VPS-local SDK that mobile-ota-publish builds the shipped
+      # APK with, otherwise the gate validates a different Flutter than we ship.
+      - name: Set up Flutter 3.44.8
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.44.6
+          flutter-version: 3.44.8
           channel: stable
           cache: true
       - name: pub get
