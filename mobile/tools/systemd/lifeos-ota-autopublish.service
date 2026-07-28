@@ -1,0 +1,17 @@
+[Unit]
+Description=Publish a LifeOS OTA update when CI goes green on main
+Documentation=file:///home/hectormr/dev/gama/lifeos/lifeos-app/mobile/tools/ota-autopublish.sh
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/hectormr/dev/gama/lifeos/lifeos-app
+Environment=ANDROID_HOME=/home/hectormr/Android/Sdk
+Environment=PATH=/home/hectormr/development/flutter/bin:/home/hectormr/Android/Sdk/cmdline-tools/latest/bin:/home/hectormr/Android/Sdk/platform-tools:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/hectormr/dev/gama/lifeos/lifeos-app/mobile/tools/ota-autopublish.sh
+
+# A release build is long and CPU-hungry, and this box also hosts the CI
+# runner: stay out of the way of interactive work and of the runner's jobs.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=45min

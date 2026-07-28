@@ -1,0 +1,13 @@
+[Unit]
+Description=Check for a green CI run on main and publish the OTA update
+
+[Timer]
+# First check shortly after boot, then every 10 minutes. The script itself is
+# idempotent and cheap when there is nothing to do, so a short period only
+# shortens the delay between a merge and the phone seeing the update.
+OnBootSec=5min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
