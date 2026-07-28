@@ -9,15 +9,31 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege for GITHUB_TOKEN: nothing here writes back to the repo.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# This repository is PUBLIC and every job below runs on a NON-EPHEMERAL
+# self-hosted runner that has passwordless sudo. Without a guard, anyone could
+# open a pull request from a fork and execute arbitrary code — as root — on the
+# VPS. Each job therefore carries the same-repository condition below. It is
+# repeated per job because the `env` context is not available in a job-level
+# `if:`. Fork pull requests stay reviewable; a maintainer runs them by pushing
+# the branch to this repository.
+#
+#   if: github.event_name != 'pull_request'
+#       || github.event.pull_request.head.repo.full_name == github.repository
 
 jobs:
   # Fast parity gate: the /api/v1 OpenAPI contract must match the committed
   # artifact the Dart client is generated from. Deterministic, sub-second —
   # fails fast when a v1 route changes without regenerating the contract.
   contract-drift:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +59,7 @@ jobs:
   # REQUIRED gate: the mobile/API surface this SDD builds on — headless-safe
   # suites, must stay green on every change.
   mobile-surface-tests:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +96,7 @@ jobs:
   # (java + npx openapi-generator + jq + sd) provisioned on the runner first,
   # exactly the kind of "works on my laptop" coupling this CI exists to expose.
   mobile-app:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v4
@@ -106,6 +124,7 @@ jobs:
   # debt: an env-marker pass (@pytest.mark.hardware or equivalent) will make
   # this job required. Until then it reports but never blocks.
   engine-full-suite:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, vps]
     continue-on-error: true
     steps:
@@ -130,36 +149,10 @@ jobs:
           --deselect tests/test_briefing.py::test_agentic_forces_final_synthesis
           --deselect tests/test_store.py::test_concurrent_writes_no_corruption
 
-  # AUTO-DEPLOY: after the mobile-app gate passes on main, build the signed
-  # release APK and publish it to the OTA server so paired Pixel devices
-  # auto-update without any manual intervention.
-  mobile-ota-publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [mobile-app]
-    runs-on: [self-hosted, vps]
-    env:
-      FLUTTER_ROOT: /home/hectormr/development/flutter
-      ANDROID_HOME: /home/hectormr/Android/Sdk
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # full history so git rev-list --count is accurate
-      - name: Add Flutter & Android SDK to PATH
-        run: |
-          echo "$FLUTTER_ROOT/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-      - name: Verify signing keystore exists
-        run: |
-          if [[ ! -f /home/hectormr/development/lifeos-release.jks ]]; then
-            echo "::error::Release keystore not found at ~/development/lifeos-release.jks"
-            exit 1
-          fi
-          echo "✓ Keystore present"
-      - name: flutter pub get
-        working-directory: mobile
-        run: flutter pub get
-      - name: Build & publish OTA update
-        working-directory: mobile
-        run: |
-          COMMIT_MSG="$(git log -1 --format='%h %s')"
-          ./tools/publish-to-vps.sh "$COMMIT_MSG"
+  # OTA publishing deliberately does NOT run here. The jobs above execute in a
+  # container that cannot see the host's Flutter SDK, Android SDK, keystore or
+  # ~/lifeos-updates — and putting the release keystore within reach of a
+  # public repository's CI would expose the key the installed app trusts.
+  # Signing and publishing therefore run on the host, driven by the
+  # lifeos-ota-autopublish systemd timer, which waits for this workflow to go
+  # green on main. See mobile/tools/ota-autopublish.sh.
