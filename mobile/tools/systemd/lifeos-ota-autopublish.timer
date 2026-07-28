@@ -2,12 +2,18 @@
 Description=Check for a green CI run on main and publish the OTA update
 
 [Timer]
-# First check shortly after boot, then every 10 minutes. The script itself is
-# idempotent and cheap when there is nothing to do, so a short period only
-# shortens the delay between a merge and the phone seeing the update.
-OnBootSec=5min
-OnUnitActiveSec=10min
+# Every 10 minutes on the wall clock. Deliberately NOT OnBootSec/
+# OnUnitActiveSec: those schedule relative to boot and to the last service
+# activation *after the timer started*, so restarting the timer once the
+# boot offset has long passed leaves it with no reference and no next
+# trigger at all. OnCalendar always has one.
+#
+# The script is idempotent and cheap when there is nothing to do, so a short
+# period only shortens the delay between a merge and the phone seeing it.
+OnCalendar=*:0/10
 Persistent=true
+# Avoid every timer on the box firing on the exact same second.
+RandomizedDelaySec=30
 
 [Install]
 WantedBy=timers.target
