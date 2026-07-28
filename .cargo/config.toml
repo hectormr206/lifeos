@@ -1,0 +1,6 @@
+# Cargo defaults to one build job per core. On the 12-core VPS shared with
+# production containers a full rebuild saturated the machine, and rustc holds
+# hundreds of MB per job, so parallel jobs are a memory risk as much as a CPU
+# one. Capping keeps compiles from starving the production containers.
+[build]
+jobs = 4
