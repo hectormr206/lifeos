@@ -39,9 +39,20 @@
          offers the device credential (PIN/pattern/password) as a fallback, so
          no separate legacy USE_FINGERPRINT is required. Opt-in, default OFF. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <!-- LifeOS keeps personal data on the user's own devices. Android Auto
+         Backup defaults to ON and would copy app files — including the
+         encrypted graph database — to the user's Google Drive without them
+         choosing it. That contradicts the product's core promise, and it is
+         not even a usable backup: the SQLCipher key lives in the Android
+         Keystore, which is never included, so a restored database cannot be
+         opened. Backups are the user's explicit action, to a destination
+         they pick. -->
     <application
         android:label="LifeOS"
         android:name="${applicationName}"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher">
         <!-- Roadmap SLICE 1: OpenCL / vendor GPU libs used by flutter_gemma's
              GPU backend. All optional (required="false") so devices without

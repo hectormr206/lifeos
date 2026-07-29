@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ (API 31) replacement for the allowBackup/fullBackupContent pair.
+  Both paths are denied on purpose:
+
+  - cloud-backup: Google Drive. LifeOS keeps personal data on the user's own
+    devices; shipping it to a third party is exactly what the product exists
+    not to do.
+  - device-transfer: phone-to-phone migration. The graph is encrypted with a
+    SQLCipher key held in the Android Keystore, which never transfers, so the
+    copy would arrive unreadable — a restore that silently produces an empty
+    app is worse than no restore at all.
+
+  Recovery is an explicit user action to a destination the user chooses.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>
