@@ -12,6 +12,7 @@ import '../../../core/security/passphrase_backup_sealer.dart';
 import '../data/backup_service.dart';
 import '../domain/backup_host_diagnosis.dart';
 import 'passphrase_dialog.dart';
+import 'remote_backup_picker.dart';
 
 /// "Respaldos" screen: point the app at the backup server the user runs, check
 /// the connection, and see exactly what is missing when it does not work.
@@ -143,9 +144,12 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
         _say('No hay respaldos guardados en el servidor.');
         return;
       }
-      // Newest first, and that is what we offer: restoring almost always
-      // means "the last one".
-      final chosen = available.first;
+      // Newest first is the usual intent — but recovering from a mistake
+      // means reaching for a copy from BEFORE it, so the user chooses.
+      final chosen = available.length == 1
+          ? available.single
+          : await RemoteBackupPicker.show(context, backups: available);
+      if (chosen == null || !mounted) return;
 
       final passphrase = await PassphraseDialog.show(
         context,

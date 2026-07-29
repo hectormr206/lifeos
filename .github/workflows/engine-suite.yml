@@ -36,34 +36,61 @@ jobs:
         uses: astral-sh/setup-uv@v5
       - name: Set up Python 3.12
         run: uv python install 3.12
+      # The runner image is FEDORA, not Debian — `apt-get` does not exist on
+      # it. The portaudio step below has always been written against apt and
+      # has never once run, because its guard finds the headers preinstalled;
+      # that is why nobody noticed. Detect the package manager instead of
+      # assuming one.
       - name: Install system build deps (portaudio)
         run: |
-          # Skip when headers are preinstalled (self-hosted runner image).
-          if [ ! -e /usr/include/portaudio.h ]; then
-            sudo apt-get update && sudo apt-get install -y portaudio19-dev
+          if [ -e /usr/include/portaudio.h ]; then
+            echo "portaudio headers already present."
+            exit 0
           fi
-      # Runtime binaries the full suite shells out to. Best-effort: the runner
-      # image may ship without sudo or a usable apt, and provisioning that
-      # fails must degrade to the failures we already have, never take the
-      # whole job down at setup.
+          if command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y portaudio-devel
+          elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y portaudio19-dev
+          else
+            echo "::error::no supported package manager found"
+            exit 1
+          fi
+      # Runtime binaries the full suite shells out to; without them, behavioural
+      # tests fail as environment errors ('ffmpeg not installed', libGL.so.1),
+      # which is noise rather than signal.
+      #
+      # Best-effort: provisioning that fails must degrade to the failures we
+      # already have, never take the whole job down at setup — which is exactly
+      # what the previous apt-only version did, in nine seconds.
       - name: Install full-suite runtime deps
         continue-on-error: true
         run: |
-          missing=()
-          command -v ffmpeg >/dev/null 2>&1 || missing+=(ffmpeg)
-          ldconfig -p 2>/dev/null | grep -q 'libGL\.so\.1' || missing+=(libgl1)
-          if [ ${#missing[@]} -eq 0 ]; then
+          need_ffmpeg=false
+          need_gl=false
+          command -v ffmpeg >/dev/null 2>&1 || need_ffmpeg=true
+          ldconfig -p 2>/dev/null | grep -q 'libGL\.so\.1' || need_gl=true
+          if ! $need_ffmpeg && ! $need_gl; then
             echo "All runtime deps already present."
             exit 0
           fi
-          echo "Missing: ${missing[*]}"
-          if ! command -v sudo >/dev/null 2>&1; then
-            echo "::warning::sudo unavailable; leaving ${missing[*]} uninstalled"
-            exit 0
+
+          if command -v dnf >/dev/null 2>&1; then
+            # ffmpeg-free is the Fedora main-repo build; plain `ffmpeg` lives in
+            # RPM Fusion, which this image does not enable.
+            pkgs=""
+            $need_ffmpeg && pkgs="$pkgs ffmpeg-free"
+            $need_gl && pkgs="$pkgs mesa-libGL"
+            sudo dnf install -y $pkgs \
+              || echo "::warning::could not install$pkgs; related tests will fail"
+          elif command -v apt-get >/dev/null 2>&1; then
+            pkgs=""
+            $need_ffmpeg && pkgs="$pkgs ffmpeg"
+            $need_gl && pkgs="$pkgs libgl1"
+            sudo apt-get update && sudo apt-get install -y $pkgs \
+              || echo "::warning::could not install$pkgs; related tests will fail"
+          else
+            echo "::warning::no package manager found; leaving deps uninstalled"
           fi
-          sudo apt-get update \
-            && sudo apt-get install -y "${missing[@]}" \
-            || echo "::warning::could not install ${missing[*]}; related tests will fail"
       - name: Sync axi deps
         working-directory: axi
         run: uv sync --python 3.12
