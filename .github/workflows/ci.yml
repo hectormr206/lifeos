@@ -39,7 +39,7 @@ jobs:
   # fails fast when a v1 route changes without regenerating the contract.
   contract-drift:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, vps]
+    runs-on: [self-hosted, ci]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -65,7 +65,7 @@ jobs:
   # suites, must stay green on every change.
   mobile-surface-tests:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, vps]
+    runs-on: [self-hosted, ci]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -102,7 +102,7 @@ jobs:
   # exactly the kind of "works on my laptop" coupling this CI exists to expose.
   mobile-app:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, vps]
+    runs-on: [self-hosted, ci]
     steps:
       - uses: actions/checkout@v4
       # Must match the VPS-local SDK that mobile-ota-publish builds the shipped
@@ -137,7 +137,7 @@ jobs:
     # even when a gate above it fails — its whole point is reporting.
     needs: [contract-drift, mobile-surface-tests, mobile-app]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, vps]
+    runs-on: [self-hosted, ci]
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
