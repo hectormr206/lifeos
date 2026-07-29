@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess as _subprocess
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -359,23 +360,29 @@ def fresh_db(tmp_path, monkeypatch):
     # ~/.config/axi/config.json — this is what kept silently resetting user_name
     # (e.g. to a stray "x") on every suite run.
     #
-    # COPY the real config into the temp dir first (when it exists) so tests read
-    # the SAME values they always did — only writes are redirected. Starting from
-    # empty schema defaults instead would change routing/tool behavior in the many
-    # tests that (pre-existing) rely on the ambient config's non-default values.
+    # Seed the temp config from the COMMITTED fixture, never from the developer's
+    # ~/.config/axi/config.json. Many tests rely on non-default routing/tool
+    # values, so reading the ambient config made the suite pass on a machine that
+    # had one and fail on a machine that did not: CI reported 42 failures that
+    # reproduce with an empty config and vanish with this fixture, on the very
+    # same checkout. A test result must not depend on who is running it.
+    #
+    # Keep the fixture in sync when a new setting changes behavior under test.
     import shutil as _shutil
     from axi import config as _config
     # Use a DEDICATED subdir (not tmp_path root) so this never collides with tests
     # that manage their own config at tmp_path/config.json (e.g. config_schema).
     _cfg_dir = tmp_path / "_axi_config"
     _cfg_dir.mkdir(exist_ok=True)
-    _real_config = _config.CONFIG_PATH
+    _fixture_config = Path(__file__).parent / "fixtures" / "config.json"
     _tmp_config = _cfg_dir / "config.json"
-    try:
-        if _real_config.exists():
-            _shutil.copy(_real_config, _tmp_config)
-    except OSError:
-        pass
+    if not _fixture_config.exists():
+        raise RuntimeError(
+            f"missing test config fixture at {_fixture_config}. It pins the "
+            "settings the suite asserts on; without it results depend on the "
+            "developer's ~/.config/axi/config.json."
+        )
+    _shutil.copy(_fixture_config, _tmp_config)
     # Force single_writer OFF in the test config. Once it is enabled in the
     # developer's real config (production flip), the copy above would otherwise
     # carry single_writer=True into every test — tripping store.init_db()'s
