@@ -15,7 +15,12 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseding a branch's in-flight run is free; superseding main's is not.
+  # A main run is what the OTA publisher gates on, and a full run takes longer
+  # than a busy merge cadence, so cancelling here can leave every commit on
+  # main unverified and stop publishing silently — which is exactly what
+  # happened on 2026-07-28.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # This repository is PUBLIC and every job below runs on a NON-EPHEMERAL
 # self-hosted runner that has passwordless sudo. Without a guard, anyone could
