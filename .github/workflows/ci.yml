@@ -23,9 +23,10 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # This repository is PUBLIC and every job below runs on a NON-EPHEMERAL
-# self-hosted runner that has passwordless sudo. Without a guard, anyone could
-# open a pull request from a fork and execute arbitrary code — as root — on the
-# VPS. Each job therefore carries the same-repository condition below. It is
+# self-hosted runner — now the `ci` pool (Proxmox + laptop) rather than the
+# VPS. Without a guard, anyone could open a pull request from a fork and
+# execute arbitrary code on those machines; several steps also invoke sudo.
+# Each job therefore carries the same-repository condition below. It is
 # repeated per job because the `env` context is not available in a job-level
 # `if:`. Fork pull requests stay reviewable; a maintainer runs them by pushing
 # the branch to this repository.
@@ -129,12 +130,13 @@ jobs:
   # debt: an env-marker pass (@pytest.mark.hardware or equivalent) will make
   # this job required. Until then it reports but never blocks.
   engine-full-suite:
-    # Runs AFTER the required gates rather than beside them. This runner is
-    # shared with other repositories on a 12-core box, and four parallel jobs
-    # drove the load average to 32, which starved the runner process until it
-    # lost contact with GitHub and failed mobile-app mid-analyze. This job is
-    # observability, so it is the one that waits. `always()` keeps it running
-    # even when a gate above it fails — its whole point is reporting.
+    # Runs AFTER the required gates rather than beside them. When all four ran
+    # in parallel on one shared box the load average hit 32, starving the
+    # runner process until it lost contact with GitHub and failed mobile-app
+    # mid-analyze. Moving to the `ci` pool relieves that, but this job is
+    # 21 minutes of observability against gates that finish in under five, so
+    # it stays the one that waits. `always()` keeps it running even when a gate
+    # above it fails — its whole point is reporting.
     needs: [contract-drift, mobile-surface-tests, mobile-app]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, ci]
