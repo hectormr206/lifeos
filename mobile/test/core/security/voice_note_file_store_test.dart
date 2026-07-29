@@ -1,3 +1,12 @@
+// TIMEOUT, calibrated not padded. These cases perform real AES-GCM sealing
+// against a real temp directory. That takes ~3 s on an idle machine, but this
+// suite also runs on a box shared with model inference and other projects'
+// builds, where it has repeatedly exceeded the framework's generic 30 s
+// default and failed CI with timeouts that reproduce nowhere else. A genuine
+// hang still fails here — just later; every assertion is unchanged.
+@Timeout(Duration(minutes: 2))
+library;
+
 import 'dart:io';
 
 import 'package:cryptography/cryptography.dart';
