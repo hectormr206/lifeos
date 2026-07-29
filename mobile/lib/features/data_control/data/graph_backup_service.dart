@@ -100,6 +100,37 @@ class GraphBackupService {
     );
   }
 
+  /// Lands an archive that came from OUTSIDE this device (downloaded from the
+  /// user's server and already decrypted) as an ordinary manual backup.
+  ///
+  /// It deliberately stops there rather than restoring: the existing restore
+  /// flow snapshots the CURRENT data before overwriting, so routing an
+  /// imported archive through it keeps the operation reversible. Writing the
+  /// live database directly from a download would not be.
+  ///
+  /// Written to a temporary file and renamed into place, so an interrupted
+  /// import never leaves a truncated file that looks like a whole backup.
+  Future<BackupInfo> importArchive(
+    List<int> bytes, {
+    required String name,
+  }) async {
+    final dir = await _dirFor(BackupKind.manual);
+    final createdAt = _now();
+    final path =
+        '${dir.path}/graph-imported-${createdAt.millisecondsSinceEpoch}.db';
+    final temporary = File('$path.part');
+    await temporary.writeAsBytes(bytes, flush: true);
+    await temporary.rename(path);
+    return BackupInfo(
+      path: path,
+      kind: BackupKind.manual,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(
+        createdAt.millisecondsSinceEpoch,
+      ),
+      sizeBytes: bytes.length,
+    );
+  }
+
   /// Daily automatic backup: create one if none exists for TODAY yet.
   /// Returns true when a backup was created. Called fire-and-forget on app
   /// open; the caller swallows failures (a backup must never block startup).

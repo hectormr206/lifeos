@@ -45,6 +45,20 @@ class BackupHostDiagnosis {
   bool get isReady => state == BackupHostState.ready;
 }
 
+/// One sealed archive as the server reports it. Deliberately thin: the server
+/// cannot describe the contents, only the envelope.
+class RemoteBackup {
+  const RemoteBackup({
+    required this.name,
+    required this.sizeBytes,
+    required this.modifiedAt,
+  });
+
+  final String name;
+  final int sizeBytes;
+  final DateTime modifiedAt;
+}
+
 class BackupHostException implements Exception {
   const BackupHostException(this.state, this.message);
 

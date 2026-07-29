@@ -206,6 +206,54 @@ void main() {
     });
   });
 
+  group('list and download', () {
+    test('lists what the server holds, newest first', () async {
+      final client = _clientFor((_) => _json(200, {
+            'backups': [
+              {
+                'name': 'lifeos-20260728-0900.lifeos',
+                'sizeBytes': 10,
+                'modifiedAt': '2026-07-28T09:00:00Z',
+              },
+              {
+                'name': 'lifeos-20260729-1830.lifeos',
+                'sizeBytes': 20,
+                'modifiedAt': '2026-07-29T18:30:00Z',
+              },
+            ],
+          }));
+
+      final entries = await client.list(_config);
+
+      // Newest first: restoring almost always means "the last one".
+      expect(entries.first.name, 'lifeos-20260729-1830.lifeos');
+      expect(entries.first.sizeBytes, 20);
+      expect(entries.last.name, 'lifeos-20260728-0900.lifeos');
+    });
+
+    test('downloads the sealed bytes unchanged', () async {
+      final payload = Uint8List.fromList([0x4c, 0x4f, 0x53, 0x01, 0x99]);
+      final client = _clientFor(
+        (_) => ResponseBody.fromBytes(payload, 200),
+      );
+
+      final got = await client.download(_config, name: 'a.lifeos');
+
+      expect(got, payload);
+    });
+
+    test('a missing archive is a clear failure, not empty bytes', () async {
+      // Empty bytes would sail into the unsealer and surface as "wrong
+      // passphrase", sending the user to debug the one thing that was fine.
+      final client = _clientFor((_) => _json(404, {'error': 'no such backup'}));
+
+      expect(
+        () => client.download(_config, name: 'gone.lifeos'),
+        throwsA(isA<BackupHostException>()),
+      );
+    });
+  });
+
   group('config', () {
     test('is incomplete until both fields are set', () {
       expect(const BackupHostConfig(baseUrl: '', accessKey: '').isComplete,

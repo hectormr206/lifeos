@@ -1,16 +1,24 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
 
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../data_control/domain/backup_info.dart';
+import '../../data_control/presentation/data_control_providers.dart';
 import '../data/backup_host_client.dart';
 import '../data/backup_host_config_store.dart';
 import '../domain/backup_host_config.dart';
+import '../../../core/security/passphrase_backup_sealer.dart';
+import '../data/backup_service.dart';
 import '../domain/backup_host_diagnosis.dart';
+import 'passphrase_dialog.dart';
 
 /// "Respaldos" screen: point the app at the backup server the user runs, check
 /// the connection, and see exactly what is missing when it does not work.
 ///
 /// The check reports WHICH rung failed rather than a generic error, because
 /// each has a different fix and the user is the only one who can apply it.
-class BackupSettingsScreen extends StatefulWidget {
+class BackupSettingsScreen extends ConsumerStatefulWidget {
   const BackupSettingsScreen({
     super.key,
     // Private initializing formals: callers still pass `store:` and `client:`
@@ -23,10 +31,11 @@ class BackupSettingsScreen extends StatefulWidget {
   final BackupHostClient? _client;
 
   @override
-  State<BackupSettingsScreen> createState() => _BackupSettingsScreenState();
+  ConsumerState<BackupSettingsScreen> createState() =>
+      _BackupSettingsScreenState();
 }
 
-class _BackupSettingsScreenState extends State<BackupSettingsScreen> {
+class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
   late final BackupHostConfigStore _store =
       widget._store ?? BackupHostConfigStore();
   late final BackupHostClient _client = widget._client ?? BackupHostClient();
@@ -37,6 +46,9 @@ class _BackupSettingsScreenState extends State<BackupSettingsScreen> {
   BackupHostDiagnosis? _diagnosis;
   bool _checking = false;
   bool _loading = true;
+
+  /// Serializes upload/restore: one operation against the store at a time.
+  bool _busy = false;
 
   @override
   void initState() {
@@ -77,6 +89,93 @@ class _BackupSettingsScreenState extends State<BackupSettingsScreen> {
       _diagnosis = diagnosis;
       _checking = false;
     });
+  }
+
+  void _say(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _backUpNow() async {
+    final passphrase = await PassphraseDialog.show(
+      context,
+      title: 'Frase de recuperación',
+      actionLabel: 'Respaldar',
+      confirm: true,
+    );
+    if (passphrase == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final graphBackups = ref.read(graphBackupServiceProvider);
+      final service = BackupService(
+        uploader: HostUploader(client: _client),
+        // A FRESH consistent copy, not whatever happens to be on disk:
+        // VACUUM INTO snapshots the live DB transactionally.
+        readArchive: () async {
+          final local = await graphBackups.createBackup(
+            kind: BackupKind.manual,
+          );
+          return File(local.path).readAsBytes();
+        },
+      );
+      final name = await service.backUp(_current, passphrase: passphrase);
+      _say('Respaldo guardado: $name');
+    } on BackupHostException catch (error) {
+      // Say what went wrong, not "error". The user is the only one who can
+      // fix any of these.
+      _say(error.message);
+    } catch (error) {
+      _say('No se pudo respaldar: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _restoreFromServer() async {
+    setState(() => _busy = true);
+    try {
+      final graphBackups = ref.read(graphBackupServiceProvider);
+      final available = await _client.list(_current);
+      if (!mounted) return;
+      if (available.isEmpty) {
+        _say('No hay respaldos guardados en el servidor.');
+        return;
+      }
+      // Newest first, and that is what we offer: restoring almost always
+      // means "the last one".
+      final chosen = available.first;
+
+      final passphrase = await PassphraseDialog.show(
+        context,
+        title: 'Abrir «${chosen.name}»',
+        actionLabel: 'Restaurar',
+      );
+      if (passphrase == null || !mounted) return;
+
+      final sealed = await _client.download(_current, name: chosen.name);
+      final opened = await PassphraseBackupSealer()
+          .open(sealed, passphrase: passphrase);
+      if (opened == null) {
+        _say('Esa frase no abre el respaldo. Revisala e intentá de nuevo.');
+        return;
+      }
+
+      // Land it as an ordinary local backup and hand the user to the existing
+      // restore flow rather than swapping the live database from here. That
+      // flow already snapshots the CURRENT data first, so a restore stays
+      // reversible — a property worth more than saving one tap.
+      final landed = await graphBackups.importArchive(opened, name: chosen.name);
+      _say('Descargado y descifrado (${landed.sizeBytes} bytes). '
+          'Restauralo desde «Copias de seguridad».');
+    } on BackupHostException catch (error) {
+      _say(error.message);
+    } catch (error) {
+      _say('No se pudo restaurar: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -134,6 +233,25 @@ class _BackupSettingsScreenState extends State<BackupSettingsScreen> {
           if (_diagnosis != null) ...[
             const SizedBox(height: 16),
             _DiagnosisCard(diagnosis: _diagnosis!),
+          ],
+          // Only offered once the host has actually answered as ready. An
+          // upload button that appears before the connection is proven invites
+          // a user to believe a backup happened when nothing could have.
+          if (_diagnosis?.isReady ?? false) ...[
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: _busy ? null : _backUpNow,
+              icon: const Icon(Icons.cloud_upload_outlined),
+              label: const Text('Respaldar ahora'),
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: _busy ? null : _restoreFromServer,
+              icon: const Icon(Icons.settings_backup_restore),
+              label: const Text('Restaurar desde el servidor'),
+            ),
           ],
         ],
       ),

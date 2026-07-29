@@ -160,6 +160,85 @@ class BackupHostClient {
     );
   }
 
+  /// What the server currently holds, newest first — restoring almost always
+  /// means "the last one", so that is what should be at the top.
+  Future<List<RemoteBackup>> list(BackupHostConfig config) async {
+    final Response<dynamic> response;
+    try {
+      response = await _dio.getUri(
+        Uri.parse(config.endpoint('/v1/backups')),
+        options: _readable({_keyHeader: config.accessKey}),
+      );
+    } on DioException {
+      throw const BackupHostException(
+        BackupHostState.unreachable,
+        'No se pudo contactar el servidor. ¿Estás en la VPN?',
+      );
+    }
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      throw const BackupHostException(
+        BackupHostState.keyRejected,
+        'El servidor rechazó la clave de acceso.',
+      );
+    }
+
+    final raw = _asMap(response.data)['backups'];
+    final entries = <RemoteBackup>[
+      if (raw is List)
+        for (final item in raw)
+          if (item is Map)
+            RemoteBackup(
+              name: '${item['name']}',
+              sizeBytes: _asInt(item['sizeBytes']) ?? 0,
+              modifiedAt:
+                  DateTime.tryParse('${item['modifiedAt']}')?.toLocal() ??
+                      DateTime.fromMillisecondsSinceEpoch(0),
+            ),
+    ]..sort((a, b) => b.modifiedAt.compareTo(a.modifiedAt));
+    return entries;
+  }
+
+  /// The sealed bytes, exactly as stored. Throws rather than returning empty
+  /// on a miss: empty bytes would sail into the unsealer and surface as
+  /// "wrong passphrase", sending the user to debug the one thing that was fine.
+  Future<Uint8List> download(
+    BackupHostConfig config, {
+    required String name,
+  }) async {
+    final Response<List<int>> response;
+    try {
+      response = await _dio.getUri<List<int>>(
+        Uri.parse(config.endpoint('/v1/backups/$name')),
+        options: Options(
+          headers: {_keyHeader: config.accessKey},
+          responseType: ResponseType.bytes,
+          validateStatus: (status) => status != null && status < 600,
+        ),
+      );
+    } on DioException {
+      throw const BackupHostException(
+        BackupHostState.unreachable,
+        'Se cortó la descarga. El archivo NO se recuperó completo.',
+      );
+    }
+
+    final status = response.statusCode ?? 0;
+    if (status == 401 || status == 403) {
+      throw const BackupHostException(
+        BackupHostState.keyRejected,
+        'El servidor rechazó la clave de acceso.',
+      );
+    }
+    final bytes = response.data;
+    if (status != 200 || bytes == null || bytes.isEmpty) {
+      throw BackupHostException(
+        BackupHostState.notABackupHost,
+        'El servidor no devolvió el archivo «$name» (HTTP $status).',
+      );
+    }
+    return Uint8List.fromList(bytes);
+  }
+
   /// Only a host that identifies itself counts. Anything else answering the
   /// port — a router page, a proxy, a captive portal — is not a backup host,
   /// and saying "connected" about it would mislead the user into trusting it.
