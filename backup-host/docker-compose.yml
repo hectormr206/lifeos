@@ -35,15 +35,13 @@ services:
     # disk; it has no database, no cache and no background work. The limits
     # below are generous for that, and they cap the blast radius if a request
     # ever behaves unexpectedly.
-    deploy:
-      resources:
-        limits:
-          cpus: "0.50"
-          memory: 256M
-        reservations:
-          cpus: "0.05"
-          memory: 64M
-    # Compose v2 standalone honours these rather than deploy.resources.
+    #
+    # Expressed ONLY in the flat form. A `deploy.resources` block alongside
+    # these is not redundant — Compose treats the two as aliases and refuses
+    # the project outright when they disagree ("can't set distinct values on
+    # 'pids_limit' and 'deploy.resources.limits.pids'"). The flat keys are
+    # also the ones plain `docker compose` honours; `deploy.resources` needs
+    # Swarm, which almost nobody self-hosting this will be running.
     mem_limit: 256m
     mem_reservation: 64m
     cpus: 0.5
