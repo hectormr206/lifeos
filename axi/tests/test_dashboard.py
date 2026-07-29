@@ -519,6 +519,10 @@ def test_pair_activate_4b_writes_vt_model_and_restarts_llama_vt(client, monkeypa
     # Stub out the heavy calls
     monkeypatch.setattr(models_manager, "set_active", lambda entry: True)
     monkeypatch.setattr(models_manager, "wait_for_llama_health", lambda url=None, timeout=60.0: True)
+    # The endpoint refuses with 409 unless every file of the bundle is on disk.
+    # This test is about the VT sibling being started, not about installation,
+    # and the model weights only exist on a machine that downloaded them.
+    monkeypatch.setattr(models_manager, "is_installed", lambda entry: True)
 
     vt_written = {}
     def _fake_write_vt(entry):
@@ -567,6 +571,10 @@ def test_pair_activate_35b_stops_vt_before_primary_restart(client, monkeypatch, 
         return True
     monkeypatch.setattr(models_manager, "set_active", _fake_set_active)
     monkeypatch.setattr(models_manager, "wait_for_llama_health", lambda url=None, timeout=60.0: True)
+    # The endpoint refuses with 409 unless every file of the bundle is on disk.
+    # This test is about VRAM ordering, not about installation, and the model
+    # weights only exist on a machine that downloaded them.
+    monkeypatch.setattr(models_manager, "is_installed", lambda entry: True)
 
     r = client.post("/api/models/qwen36-35b-a3b/activate")
     assert r.status_code == 200
