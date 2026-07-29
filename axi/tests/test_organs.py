@@ -42,6 +42,11 @@ def calm(monkeypatch):
     monkeypatch.setattr(organs, "_daemon_cmd", lambda *a, **k: "active")
     monkeypatch.setattr(organs, "_body_snapshot", lambda: _healthy_body())
     monkeypatch.setattr(feet, "network_snapshot", lambda: _healthy_net())
+    # The eyes reader probes real hardware (/dev/video0, the `spectacle`
+    # binary) and is the ONLY caller of shutil.which in organs.py, so this
+    # stays scoped to it. Without it "every service healthy" silently depended
+    # on the machine having a webcam: headless runners reported 10/11.
+    monkeypatch.setattr(organs.shutil, "which", lambda name: f"/usr/bin/{name}")
     return organs
 
 

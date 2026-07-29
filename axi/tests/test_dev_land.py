@@ -1097,18 +1097,25 @@ def test_ship_run_no_run(tmp_path, monkeypatch):
 def test_no_autonomous_caller_of_ship_run():
     """SAFETY: no autonomous/daemon path calls ship_run — only the dashboard
     endpoint may. Grep the whole package for ship_run references."""
-    import subprocess as _sp
+    import re as _re
     from pathlib import Path as _P
 
     src = _P(__file__).resolve().parents[1] / "src" / "axi"
     # Match actual references (call/def syntax `ship_run(`), NOT prose mentions
     # in comments/docstrings — otherwise a passing mention of the name in an
     # engine-file comment would spuriously fail this safety check.
-    proc = _sp.run(
-        ["rg", "-n", r"ship_run\s*\(", str(src)],
-        capture_output=True, text=True,
-    )
-    hits = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    #
+    # Scanned in Python rather than shelled out to ripgrep: a safety check must
+    # not depend on a binary that may be absent from the machine running it.
+    _pat = _re.compile(r"ship_run\s*\(")
+    hits = [
+        f"{path}:{lineno}:{line}"
+        for path in sorted(src.rglob("*.py"))
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+        )
+        if _pat.search(line)
+    ]
     # Only dev_land.py (the definition) and dashboard.py (the human endpoint)
     # may reference ship_run. The autonomous engine files must NOT.
     forbidden = ("self_improve.py", "daemon.py", "dev_director.py",
