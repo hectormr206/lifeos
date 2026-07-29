@@ -1,0 +1,29 @@
+[Unit]
+Description=VPN-only host for passphrase-sealed LifeOS backups
+Documentation=file:///home/hectormr/dev/gama/lifeos/lifeos-app/backup-host/README.md
+# wg0 must exist before the bind, otherwise startup fails on a missing address.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Holds LIFEOS_BACKUP_KEY. Gitignored, chmod 600 — never committed.
+EnvironmentFile=/home/hectormr/dev/gama/lifeos/lifeos-app/backup-host/backup-host.env
+ExecStart=/usr/bin/python3 /home/hectormr/dev/gama/lifeos/lifeos-app/backup-host/server.py \
+    --host 10.66.66.1 \
+    --port 8099 \
+    --root /home/hectormr/lifeos-backups/mobile
+Restart=on-failure
+RestartSec=10
+
+# The service reads and writes exactly one directory and needs no network
+# reach of its own beyond the socket it binds.
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/hectormr/lifeos-backups/mobile
+NoNewPrivileges=true
+PrivateDevices=true
+
+[Install]
+WantedBy=default.target

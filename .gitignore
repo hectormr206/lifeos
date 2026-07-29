@@ -28,3 +28,6 @@ docs/funding/
 
 # OTA publish secrets (never commit)
 mobile/tools/ota-publish.env
+
+# Backup-host access key (never commit)
+backup-host/backup-host.env
