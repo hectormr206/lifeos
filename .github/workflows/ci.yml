@@ -10,6 +10,12 @@ on:
   pull_request:
 
 # Least privilege for GITHUB_TOKEN: nothing here writes back to the repo.
+# The suite asserts local-time formatting (e.g. "20:00 UTC = 14:00 CDT"), which
+# matches the host timezone in production. Runner containers default to UTC, so
+# the timezone is pinned here rather than left to whichever machine picks up the job.
+env:
+  TZ: America/Mexico_City
+
 permissions:
   contents: read
 
