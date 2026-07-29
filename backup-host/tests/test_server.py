@@ -130,11 +130,93 @@ class ServerTestCase(unittest.TestCase):
                 status, _ = self.request("PUT", f"/v1/backups/{name}", body=b"x")
                 self.assertIn(status, (400, 404))
 
+    # ----------------------------------------------------------- diagnostics
+    # The app must be able to tell a user WHICH step is broken, not just that
+    # something is. Three rungs: reachable, authorised, usable.
+    def test_health_answers_without_a_key(self):
+        # Rung 1 — "is anything listening?" must be answerable before the user
+        # has typed a key, otherwise a wrong key and a wrong address look the
+        # same in the app.
+        status, body = self.request("GET", "/v1/health", token=None)
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["service"], "lifeos-backup-host")
+        self.assertIn("version", payload)
+
+    def test_health_leaks_nothing_about_the_stored_backups(self):
+        self.request("PUT", "/v1/backups/secreto-medico.lifeos", body=b"x")
+
+        _, body = self.request("GET", "/v1/health", token=None)
+
+        self.assertNotIn("secreto", body.decode())
+        self.assertNotIn("backups", json.loads(body))
+
+    def test_status_requires_the_key(self):
+        # Rung 2 — proves the key is right.
+        status, _ = self.request("GET", "/v1/status", token=None)
+        self.assertEqual(status, 401)
+
+    def test_status_reports_whether_the_store_is_usable(self):
+        # Rung 3 — reachable and authorised still is not enough: a read-only
+        # or full volume must surface before the user trusts it with a backup.
+        self.request("PUT", "/v1/backups/one.lifeos", body=b"abc")
+
+        status, body = self.request("GET", "/v1/status")
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["writable"])
+        self.assertEqual(payload["backups"], 1)
+        self.assertEqual(payload["maxUploadBytes"], 1024 * 1024)
+        self.assertGreater(payload["freeBytes"], 0)
+
+    def test_status_reports_a_read_only_store_as_not_writable(self):
+        # Restored inline rather than via addCleanup: that runs after
+        # tearDown, by which point the directory no longer exists.
+        self.root.chmod(0o500)
+        try:
+            _, body = self.request("GET", "/v1/status")
+        finally:
+            self.root.chmod(0o700)
+
+        self.assertFalse(json.loads(body)["writable"])
+
     # ----------------------------------------------------------------- store
     def test_store_rejects_traversal_directly(self):
         store = BackupStore(self.root, max_bytes=1024)
         with self.assertRaises(ValueError):
             store.path_for("../evil")
+
+    def test_settings_come_from_the_environment_for_containers(self):
+        # A container configures through env vars, not argv. Defaults must
+        # follow them, and explicit flags must still win for a host run.
+        from server import resolve_settings
+
+        env = {
+            "LIFEOS_BACKUP_HOST": "0.0.0.0",
+            "LIFEOS_BACKUP_PORT": "9000",
+            "LIFEOS_BACKUP_ROOT": "/data",
+            "LIFEOS_BACKUP_MAX_BYTES": "123",
+            "LIFEOS_BACKUP_KEY": "k" * 32,
+        }
+
+        settings = resolve_settings([], env=env)
+        self.assertEqual(settings.host, "0.0.0.0")
+        self.assertEqual(settings.port, 9000)
+        self.assertEqual(str(settings.root), "/data")
+        self.assertEqual(settings.max_bytes, 123)
+
+        override = resolve_settings(["--port", "7000"], env=env)
+        self.assertEqual(override.port, 7000)
+
+    def test_a_weak_key_is_refused_at_startup(self):
+        from server import resolve_settings
+
+        for key in ("", "short", "x" * 31):
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError):
+                    resolve_settings([], env={"LIFEOS_BACKUP_KEY": key})
 
     def test_store_rejects_names_no_client_could_send(self):
         store = BackupStore(self.root, max_bytes=1024)

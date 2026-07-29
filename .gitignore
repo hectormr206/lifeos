@@ -30,4 +30,4 @@ docs/funding/
 mobile/tools/ota-publish.env
 
 # Backup-host access key (never commit)
-backup-host/backup-host.env
+backup-host/.env

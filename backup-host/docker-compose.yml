@@ -1,0 +1,82 @@
+# Self-hosted LifeOS backup store.
+#
+# Deploy this on YOUR server. It holds backups your phone has already sealed
+# with your passphrase, so the machine running it — and anyone who reads its
+# disk — cannot open them. That is the point: you get a copy that survives
+# losing the phone, without handing anyone the contents.
+services:
+  backup-host:
+    build: .
+    image: lifeos/backup-host:1
+    container_name: lifeos-backup-host
+    restart: unless-stopped
+
+    environment:
+      # REQUIRED. At least 32 characters; the service refuses to start on
+      # anything weaker. Generate one with:
+      #   head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+      LIFEOS_BACKUP_KEY: ${LIFEOS_BACKUP_KEY:?set LIFEOS_BACKUP_KEY in .env}
+      # Largest single archive accepted. 512 MiB fits a very large graph with
+      # room to spare; lower it if your volume is small.
+      LIFEOS_BACKUP_MAX_BYTES: ${LIFEOS_BACKUP_MAX_BYTES:-536870912}
+
+    ports:
+      # Bound to a private address by default so the store is NOT exposed to
+      # the internet. Put your VPN/WireGuard address here, or 127.0.0.1 if a
+      # reverse proxy in front of it terminates TLS.
+      # Publishing this on 0.0.0.0 puts your backups on the public internet
+      # behind a single header — don't.
+      - "${LIFEOS_BACKUP_BIND:-127.0.0.1}:8099:8099"
+
+    volumes:
+      - backups:/data
+
+    # GUARDRAILS. This service parses small HTTP requests and copies bytes to
+    # disk; it has no database, no cache and no background work. The limits
+    # below are generous for that, and they cap the blast radius if a request
+    # ever behaves unexpectedly.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.05"
+          memory: 64M
+    # Compose v2 standalone honours these rather than deploy.resources.
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.5
+    pids_limit: 128
+
+    # Hardening: the app writes only to its volume, needs no privileges, and
+    # gains nothing from a writable root filesystem.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8099/v1/health', timeout=4).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+    logging:
+      # Backups are personal data; do not accumulate unbounded logs about them.
+      # The service already omits paths from its log lines.
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  backups:

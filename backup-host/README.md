@@ -35,27 +35,37 @@ temporary file and `os.replace`d into position, so a reader never sees a
 half-uploaded archive and a failed upload leaves nothing that could later be
 restored as if it were whole.
 
-## Install
+## Diagnostics
 
-    cp systemd/lifeos-backup-host.service ~/.config/systemd/user/
-    printf 'LIFEOS_BACKUP_KEY=%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
-        > backup-host.env
-    chmod 600 backup-host.env
-    systemctl --user daemon-reload
-    systemctl --user enable --now lifeos-backup-host.service
+Three rungs, so a setup screen can say WHICH step is broken rather than just
+"failed":
 
-`backup-host.env` is gitignored. The service refuses to start with a key
-shorter than 32 characters rather than exposing the store behind a weak one.
+| Method | Path | Auth | Answers |
+| --- | --- | --- | --- |
+| `GET` | `/v1/health` | no | "is a LifeOS backup host here?" — tells a wrong address from a wrong key |
+| `GET` | `/v1/status` | yes | `{writable, backups, freeBytes, maxUploadBytes}` — reachable and authorised is still not usable |
 
-## Verify
+`writable` is probed by actually writing a temporary file. Checking permission
+bits would answer a different question: a full disk, a read-only remount, or a
+volume mounted `ro` all pass a permission check and still lose the backup.
 
-    # From the VPN — expect 201 then a listing
-    curl -X PUT --data-binary @archive.lifeos \
-        -H "X-LifeOS-Backup-Key: $KEY" \
-        http://10.66.66.1:8099/v1/backups/archive.lifeos
+`/v1/health` is deliberately empty of everything else — it reveals nothing
+about what is stored beyond what an open TCP port already reveals.
 
-    # From the public interface — expect a refused connection
-    curl -m 5 http://<public-ip>:8099/v1/backups
+## Run it
+
+It ships as a container; see [SELF-HOSTING.md](SELF-HOSTING.md) for the full
+walkthrough. In short:
+
+    printf 'LIFEOS_BACKUP_KEY=%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" > .env
+    echo 'LIFEOS_BACKUP_BIND=10.66.66.1' >> .env   # your private address
+    docker compose up -d
+
+Capped at 0.5 CPU / 256 MB, read-only root filesystem, all capabilities
+dropped, running as an unprivileged user.
+
+Nothing is installed on the host: the same image users deploy on their own
+servers is the one that runs here.
 
 ## Tests
 
