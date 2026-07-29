@@ -129,7 +129,14 @@ jobs:
   # debt: an env-marker pass (@pytest.mark.hardware or equivalent) will make
   # this job required. Until then it reports but never blocks.
   engine-full-suite:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Runs AFTER the required gates rather than beside them. This runner is
+    # shared with other repositories on a 12-core box, and four parallel jobs
+    # drove the load average to 32, which starved the runner process until it
+    # lost contact with GitHub and failed mobile-app mid-analyze. This job is
+    # observability, so it is the one that waits. `always()` keeps it running
+    # even when a gate above it fails — its whole point is reporting.
+    needs: [contract-drift, mobile-surface-tests, mobile-app]
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, vps]
     continue-on-error: true
     steps:
@@ -147,15 +154,29 @@ jobs:
       # Runtime binaries the full suite shells out to. Their absence turns
       # behavioral tests into environment errors ('ffmpeg not installed',
       # FileNotFoundError: 'rg', libGL.so.1), which is noise, not signal.
+      #
+      # Best-effort on purpose. The runner image may ship without sudo, or
+      # without a usable apt: provisioning that fails must degrade to the
+      # failures we already have, never take down the whole job at setup.
       - name: Install full-suite runtime deps
+        continue-on-error: true
         run: |
           missing=()
-          command -v ffmpeg >/dev/null || missing+=(ffmpeg)
-          command -v rg >/dev/null || missing+=(ripgrep)
-          [ -e /usr/lib/x86_64-linux-gnu/libGL.so.1 ] || missing+=(libgl1)
-          if [ ${#missing[@]} -gt 0 ]; then
-            sudo apt-get update && sudo apt-get install -y "${missing[@]}"
+          command -v ffmpeg >/dev/null 2>&1 || missing+=(ffmpeg)
+          command -v rg >/dev/null 2>&1 || missing+=(ripgrep)
+          ldconfig -p 2>/dev/null | grep -q 'libGL\.so\.1' || missing+=(libgl1)
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "All runtime deps already present."
+            exit 0
           fi
+          echo "Missing: ${missing[*]}"
+          if ! command -v sudo >/dev/null 2>&1; then
+            echo "::warning::sudo unavailable; leaving ${missing[*]} uninstalled"
+            exit 0
+          fi
+          sudo apt-get update \
+            && sudo apt-get install -y "${missing[@]}" \
+            || echo "::warning::could not install ${missing[*]}; related tests will fail"
       - name: Sync axi deps
         working-directory: axi
         run: uv sync --python 3.12
