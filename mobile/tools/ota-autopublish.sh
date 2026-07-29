@@ -73,6 +73,15 @@ esac
 # ── Fast-forward to the reviewed commit and ship it ─────────────────────────
 git merge --ff-only "origin/$BRANCH"
 
+# The CI verdict above was fetched for REMOTE_SHA, so that is the only tree we
+# may ship. A local branch that sits AHEAD of origin makes the merge a silent
+# no-op, which would otherwise publish commits CI never saw.
+HEAD_SHA="$(git rev-parse HEAD)"
+if [[ "$HEAD_SHA" != "$REMOTE_SHA" ]]; then
+  log "→ HEAD (${HEAD_SHA:0:8}) no es origin/$BRANCH (${REMOTE_SHA:0:8}). No publico."
+  exit 0
+fi
+
 cd "$REPO_ROOT/mobile"
 flutter pub get
 NOTES="$(git -C "$REPO_ROOT" log -1 --format='%h %s')"
