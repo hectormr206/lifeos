@@ -1,0 +1,75 @@
+name: Engine suite
+
+# OBSERVABILITY, deliberately OUTSIDE the CI workflow.
+#
+# This is a ~21-minute run against gates that finish in under five. While it
+# lived in CI it decided when that workflow concluded, and the OTA publisher
+# only ships a commit whose CI run concluded successfully — so every release
+# waited on a suite that is explicitly allowed to fail. Worse, main runs queue
+# rather than supersede each other (see ci.yml's concurrency note), so a second
+# push sat pending behind the first for over an hour.
+#
+# Split out, it reports on the same commits without gating anything.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Superseding IS right here: this reports on a commit, it does not gate one,
+# so only the newest result is interesting.
+concurrency:
+  group: engine-suite-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine-full-suite:
+    # Same fork guard as ci.yml: this repository is PUBLIC and the job runs on
+    # a non-ephemeral self-hosted runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, ci]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install system build deps (portaudio)
+        run: |
+          # Skip when headers are preinstalled (self-hosted runner image).
+          if [ ! -e /usr/include/portaudio.h ]; then
+            sudo apt-get update && sudo apt-get install -y portaudio19-dev
+          fi
+      # Runtime binaries the full suite shells out to. Best-effort: the runner
+      # image may ship without sudo or a usable apt, and provisioning that
+      # fails must degrade to the failures we already have, never take the
+      # whole job down at setup.
+      - name: Install full-suite runtime deps
+        continue-on-error: true
+        run: |
+          missing=()
+          command -v ffmpeg >/dev/null 2>&1 || missing+=(ffmpeg)
+          ldconfig -p 2>/dev/null | grep -q 'libGL\.so\.1' || missing+=(libgl1)
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "All runtime deps already present."
+            exit 0
+          fi
+          echo "Missing: ${missing[*]}"
+          if ! command -v sudo >/dev/null 2>&1; then
+            echo "::warning::sudo unavailable; leaving ${missing[*]} uninstalled"
+            exit 0
+          fi
+          sudo apt-get update \
+            && sudo apt-get install -y "${missing[@]}" \
+            || echo "::warning::could not install ${missing[*]}; related tests will fail"
+      - name: Sync axi deps
+        working-directory: axi
+        run: uv sync --python 3.12
+      - name: pytest (full suite)
+        working-directory: axi
+        run: >
+          uv run --python 3.12 pytest tests/ -q
+          --deselect tests/test_briefing.py::test_agentic_forces_final_synthesis
+          --deselect tests/test_store.py::test_concurrent_writes_no_corruption

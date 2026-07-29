@@ -124,75 +124,7 @@ jobs:
         working-directory: mobile
         run: flutter test
 
-  # OBSERVABILITY (non-blocking): the full engine suite on a bare runner.
-  # First real run: 2878 passed / 56 failed — all failures are tests coupled
-  # to the laptop environment (audio stack, local tz, hardware). Tracked
-  # debt: an env-marker pass (@pytest.mark.hardware or equivalent) will make
-  # this job required. Until then it reports but never blocks.
-  engine-full-suite:
-    # Runs AFTER the required gates rather than beside them. When all four ran
-    # in parallel on one shared box the load average hit 32, starving the
-    # runner process until it lost contact with GitHub and failed mobile-app
-    # mid-analyze. Moving to the `ci` pool relieves that, but this job is
-    # 21 minutes of observability against gates that finish in under five, so
-    # it stays the one that waits. `always()` keeps it running even when a gate
-    # above it fails — its whole point is reporting.
-    needs: [contract-drift, mobile-surface-tests, mobile-app]
-    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, ci]
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-      - name: Set up Python 3.12
-        run: uv python install 3.12
-      - name: Install system build deps (portaudio)
-        run: |
-          # Skip when headers are preinstalled (self-hosted runner image).
-          if [ ! -e /usr/include/portaudio.h ]; then
-            sudo apt-get update && sudo apt-get install -y portaudio19-dev
-          fi
-      # Runtime binaries the full suite shells out to. Their absence turns
-      # behavioral tests into environment errors ('ffmpeg not installed',
-      # FileNotFoundError: 'rg', libGL.so.1), which is noise, not signal.
-      #
-      # Best-effort on purpose. The runner image may ship without sudo, or
-      # without a usable apt: provisioning that fails must degrade to the
-      # failures we already have, never take down the whole job at setup.
-      - name: Install full-suite runtime deps
-        continue-on-error: true
-        run: |
-          missing=()
-          command -v ffmpeg >/dev/null 2>&1 || missing+=(ffmpeg)
-          command -v rg >/dev/null 2>&1 || missing+=(ripgrep)
-          ldconfig -p 2>/dev/null | grep -q 'libGL\.so\.1' || missing+=(libgl1)
-          if [ ${#missing[@]} -eq 0 ]; then
-            echo "All runtime deps already present."
-            exit 0
-          fi
-          echo "Missing: ${missing[*]}"
-          if ! command -v sudo >/dev/null 2>&1; then
-            echo "::warning::sudo unavailable; leaving ${missing[*]} uninstalled"
-            exit 0
-          fi
-          sudo apt-get update \
-            && sudo apt-get install -y "${missing[@]}" \
-            || echo "::warning::could not install ${missing[*]}; related tests will fail"
-      - name: Sync axi deps
-        working-directory: axi
-        run: uv sync --python 3.12
-      - name: pytest (full suite, non-blocking)
-        working-directory: axi
-        run: >
-          uv run --python 3.12 pytest tests/ -q
-          --deselect tests/test_briefing.py::test_agentic_forces_final_synthesis
-          --deselect tests/test_store.py::test_concurrent_writes_no_corruption
-
-  # OTA publishing deliberately does NOT run here. The jobs above execute in a
-  # container that cannot see the host's Flutter SDK, Android SDK, keystore or
-  # ~/lifeos-updates — and putting the release keystore within reach of a
-  # public repository's CI would expose the key the installed app trusts.
-  # Signing and publishing therefore run on the host, driven by the
-  # lifeos-ota-autopublish systemd timer, which waits for this workflow to go
-  # green on main. See mobile/tools/ota-autopublish.sh.
+  # The full engine suite lives in .github/workflows/engine-suite.yml, not
+  # here. It is ~21 minutes of non-blocking observability, and while it sat in
+  # this workflow it decided when CI concluded — which is what the OTA
+  # publisher gates on, so every release waited on a suite allowed to fail.
