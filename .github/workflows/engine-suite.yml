@@ -9,11 +9,21 @@ name: Engine suite
 # rather than supersede each other (see ci.yml's concurrency note), so a second
 # push sat pending behind the first for over an hour.
 #
-# Split out, it reports on the same commits without gating anything.
+# It reports on the same commits without gating any of them.
+#
+# Triggered by CI FINISHING, not by the push. The first attempt at this split
+# fired both workflows on the same push, so they ran CONCURRENTLY — worse than
+# the ordering it replaced. The shared box reached load 12 and the disk-heavy
+# mobile tests timed out at the framework's 30 s default, failing CI and
+# stalling the OTA. `needs:` cannot cross workflows; `workflow_run` can.
+#
+# `branches: [main]` also keeps fork pull requests from triggering it, which
+# matters because workflow_run runs in the base repository's context.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-  pull_request:
 
 permissions:
   contents: read
@@ -26,12 +36,16 @@ concurrency:
 
 jobs:
   engine-full-suite:
-    # Same fork guard as ci.yml: this repository is PUBLIC and the job runs on
-    # a non-ephemeral self-hosted runner.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # workflow_run + `branches: [main]` already excludes fork pull requests.
+    # This repository is PUBLIC and the job runs on a non-ephemeral
+    # self-hosted runner, so the constraint is deliberate, not incidental.
     runs-on: [self-hosted, ci]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # workflow_run defaults to the default branch. Report on the exact
+          # commit CI ran, or the result describes something else entirely.
+          ref: ${{ github.event.workflow_run.head_sha }}
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Set up Python 3.12
