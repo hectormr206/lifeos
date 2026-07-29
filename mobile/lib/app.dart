@@ -30,6 +30,7 @@ import 'features/domains/domain/domain_descriptor.dart';
 import 'features/domains/presentation/domain_list_screen.dart';
 import 'features/domains/presentation/domains_hub_screen.dart';
 import 'features/brain3d/presentation/brain3d_screen.dart';
+import 'features/backup/presentation/backup_settings_screen.dart';
 import 'features/graph/presentation/graph_browser_screen.dart';
 import 'features/graph/presentation/graph_node_screen.dart';
 import 'features/graph/presentation/local_graph_browser_screen.dart';
@@ -222,6 +223,14 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // DATA-CONTROL KIT: on-device backups + the protected full wipe. Both
       // operate on LOCAL data only, so neither is pairing-gated.
       GoRoute(path: '/settings/backups', builder: (context, state) => const BackupsScreen()),
+      // Where those backups go OFF the device. Reached from the screen above,
+      // because "my backups" and "where they are kept" are one subject to a
+      // user. Ungated for the same reason as its parent, and additionally
+      // because it talks to the user's own host over their VPN — nothing to
+      // do with the paired engine.
+      GoRoute(
+          path: '/settings/backups/server',
+          builder: (context, state) => const BackupSettingsScreen()),
       GoRoute(
           path: '/settings/danger-zone',
           builder: (context, state) => const DangerZoneMenuScreen()),

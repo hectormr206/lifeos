@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../domain/backup_info.dart';
@@ -119,6 +120,23 @@ class _BackupsScreenState extends ConsumerState<BackupsScreen> {
                   label: Text(l10n.backupsCreateNow),
                 ),
               ),
+              // Everything above this line lives on the phone, and dies with
+              // it. Offer the off-device destination right here rather than in
+              // a distant settings entry: a user looking at their backups is
+              // exactly the user who should learn these copies are not safe
+              // from losing the device.
+              // TODO(i18n): hardcoded neutral Spanish pending the i18n sweep.
+              ListTile(
+                leading: const Icon(Icons.cloud_upload_outlined),
+                title: const Text('Guardar en mi servidor'),
+                subtitle: const Text(
+                  'Estas copias viven solo en este teléfono. Enviá una copia '
+                  'cifrada a un servidor tuyo.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/settings/backups/server'),
+              ),
+              const Divider(),
               if (all.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(16),
