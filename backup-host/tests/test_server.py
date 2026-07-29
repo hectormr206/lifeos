@@ -109,6 +109,18 @@ class ServerTestCase(unittest.TestCase):
         self.assertEqual(status, 413)
         self.assertEqual(list(self.root.glob("*")), [])
 
+    def test_an_unwritable_store_answers_507_not_an_empty_reply(self):
+        # A client that gets no reply cannot tell "rejected" from "the network
+        # died mid-upload", and may well conclude the backup succeeded. Say so.
+        self.root.chmod(0o500)
+        try:
+            status, body = self.request("PUT", "/v1/backups/x.lifeos", body=b"data")
+        finally:
+            self.root.chmod(0o700)
+
+        self.assertEqual(status, 507)
+        self.assertIn("error", json.loads(body))
+
     def test_missing_backup_is_404_not_an_error_page(self):
         status, _ = self.request("GET", "/v1/backups/absent.lifeos")
         self.assertEqual(status, 404)

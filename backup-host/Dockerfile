@@ -10,6 +10,13 @@ RUN adduser -D -u 10001 lifeos
 WORKDIR /app
 COPY server.py /app/server.py
 
+# Create the data directory OWNED BY THE RUNTIME USER before declaring the
+# volume. Docker seeds a fresh named volume from the image path, ownership
+# included; without this the volume arrives root-owned and the unprivileged
+# process cannot write to it — the service starts, reports healthy, and only
+# fails when a backup is actually uploaded.
+RUN mkdir -p /data && chown lifeos:lifeos /data
+
 USER lifeos
 
 ENV LIFEOS_BACKUP_ROOT=/data \

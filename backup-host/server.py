@@ -219,7 +219,17 @@ def make_handler(*, store: BackupStore, token: str):
                 return self._json(HTTPStatus.BAD_REQUEST, {"error": "bad name"})
 
             payload = self.rfile.read(length) if length else b""
-            store.write(name, payload)
+            try:
+                store.write(name, payload)
+            except OSError as exc:
+                # A read-only volume or a full disk must produce a REPLY. An
+                # aborted connection is indistinguishable from a network drop,
+                # and a client that cannot tell them apart may conclude the
+                # backup landed.
+                return self._json(
+                    HTTPStatus.INSUFFICIENT_STORAGE,
+                    {"error": "could not write to the store", "detail": exc.strerror},
+                )
             return self._json(
                 HTTPStatus.CREATED, {"name": name, "sizeBytes": len(payload)}
             )
