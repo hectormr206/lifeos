@@ -144,6 +144,18 @@ jobs:
           if [ ! -e /usr/include/portaudio.h ]; then
             sudo apt-get update && sudo apt-get install -y portaudio19-dev
           fi
+      # Runtime binaries the full suite shells out to. Their absence turns
+      # behavioral tests into environment errors ('ffmpeg not installed',
+      # FileNotFoundError: 'rg', libGL.so.1), which is noise, not signal.
+      - name: Install full-suite runtime deps
+        run: |
+          missing=()
+          command -v ffmpeg >/dev/null || missing+=(ffmpeg)
+          command -v rg >/dev/null || missing+=(ripgrep)
+          [ -e /usr/lib/x86_64-linux-gnu/libGL.so.1 ] || missing+=(libgl1)
+          if [ ${#missing[@]} -gt 0 ]; then
+            sudo apt-get update && sudo apt-get install -y "${missing[@]}"
+          fi
       - name: Sync axi deps
         working-directory: axi
         run: uv sync --python 3.12

@@ -92,4 +92,8 @@ lifeos = { path = "../lifeos", editable = true }
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    # openwakeword imports pkg_resources at runtime, which ships with
+    # setuptools — absent by default on Python 3.12. Without it the whole
+    # wakeword suite errors out on import rather than on behavior.
+    "setuptools>=70",
 ]
