@@ -8,5 +8,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-uv.lock
+# uv.lock is COMMITTED on purpose: this is an application, not a library, and
+# CI resolving its own dependency set is how the full suite ended up 54 tests
+# redder than the same commit on a developer machine (fastapi 0.136 vs 0.140).
 .env
