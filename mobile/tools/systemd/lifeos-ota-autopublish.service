@@ -7,7 +7,12 @@ After=network-online.target
 Type=oneshot
 WorkingDirectory=/home/hectormr/dev/gama/lifeos/lifeos-app
 Environment=ANDROID_HOME=/home/hectormr/Android/Sdk
-Environment=PATH=/home/hectormr/development/flutter/bin:/home/hectormr/Android/Sdk/cmdline-tools/latest/bin:/home/hectormr/Android/Sdk/platform-tools:/usr/local/bin:/usr/bin:/bin
+# A systemd service does not read the login shell's profile, so every binary
+# publish-to-vps.sh calls must resolve from this list. ~/.local/bin matters:
+# `fd` lives there, and because the script runs under `set -o pipefail` a
+# missing binary kills it with 127 before it can print its own diagnostic —
+# which is exactly how a successful 20-minute build got thrown away once.
+Environment=PATH=/home/hectormr/development/flutter/bin:/home/hectormr/Android/Sdk/cmdline-tools/latest/bin:/home/hectormr/Android/Sdk/platform-tools:/home/hectormr/.local/bin:/home/hectormr/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/hectormr/dev/gama/lifeos/lifeos-app/mobile/tools/ota-autopublish.sh
 
 # A release build is long and CPU-hungry, and this box also hosts the CI
