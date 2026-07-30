@@ -20,7 +20,14 @@ import pytest
 # correct value. Without this, the embed-worker / events-writer / brain-metric
 # threads race against monkeypatch DB_PATH swaps (TOCTOU) and produce HMAC
 # mismatches on the wrong SQLCipher key → SIGBUS.
-os.environ.setdefault("AXI_DISABLE_BG_WORKERS", "1")
+#
+# ASSIGNED, not setdefault. Those readers treat anything other than
+# 1/true/yes as "workers enabled", so an inherited `AXI_DISABLE_BG_WORKERS=0`
+# — from a shell, a CI job, or a parent process — would leave setdefault
+# satisfied and the guard silently OFF. The suite would then be running the
+# very race this line exists to prevent, and would say nothing about it.
+# A test run does not get to opt into live background writers.
+os.environ["AXI_DISABLE_BG_WORKERS"] = "1"
 
 log = logging.getLogger(__name__)
 
