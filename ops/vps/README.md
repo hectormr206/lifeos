@@ -12,9 +12,30 @@ production was bounded and development was not — and it was development that
 starved production.
 
 Measured on 2026-07-29: load 27 on 12 cores, with `ollama` at its 4-CPU cap and
-unbounded host-side TypeScript builds on top. CI failed twice with 30-second
-timeouts in tests that take 3 seconds on an idle machine, and both times the
-first read of the evidence blamed the code.
+unbounded host-side TypeScript builds on top.
+
+## What this does NOT fix
+
+The same day's CI timeouts were attributed to this contention. That was wrong,
+and the correction matters more than the original claim.
+
+`mobile-app` runs on the `ci` runner pool — Proxmox and the laptop — neither of
+which is this box. This quota bounds work on the VPS: its own `vps`-labelled
+runner, the OTA build, Coolify's services. It does nothing for a job that
+never executes here.
+
+The Proxmox timeouts have a different cause. That host is a Ryzen 5 5500U, a
+low-power mobile part, with 6 physical cores and twelve runner listeners across
+nine repositories. Core count and disk throughput were both ruled out (PR #165),
+and AES-NI was measured on both machines and ruled out too — Proxmox does 1090
+MB/s of AES-256-CBC against the laptop's 1707, hardware-accelerated on both, far
+from the 10x a 3-second test needs to cross 30 seconds. What remains is
+single-thread performance under runner contention, on the slower of the two
+machines.
+
+So this file fixes a real problem — production being starved by development on
+the VPS — and is not the fix for the CI timeouts, which PR #165 addressed by
+pinning the job to the faster runner.
 
 Development work cannot be "moved into Coolify": Claude Code runs ON this box
 by design, so the builds a session launches are host-side by construction. What

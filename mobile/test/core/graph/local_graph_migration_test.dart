@@ -1,9 +1,19 @@
-// TIMEOUT, calibrated not padded. These cases perform real AES-GCM sealing
-// against a real temp directory. That takes ~3 s on an idle machine, but this
-// suite also runs on a box shared with model inference and other projects'
-// builds, where it has repeatedly exceeded the framework's generic 30 s
-// default and failed CI with timeouts that reproduce nowhere else. A genuine
-// hang still fails here — just later; every assertion is unchanged.
+// TIMEOUT, calibrated not padded. These cases perform real cryptographic work
+// (AES-GCM or SQLCipher) against a real temp directory: ~3 s on an idle
+// machine, and repeatedly past the framework's generic 30 s default on the
+// Proxmox runner.
+//
+// The cause is that runner, not this code. It is a Ryzen 5 5500U — a low-power
+// mobile part with 6 physical cores — carrying twelve runner listeners for nine
+// repositories. Ruled out by measurement: core count and disk throughput
+// (PR #165), and AES-NI, which both CI machines have and which differs by only
+// 1.6x between them. What is left is single-thread speed under contention.
+//
+// An earlier version of this comment blamed contention on the VPS. These jobs
+// do not run on the VPS.
+//
+// A genuine hang still fails here, two minutes later instead of thirty seconds.
+// Every assertion is unchanged.
 @Timeout(Duration(minutes: 2))
 library;
 

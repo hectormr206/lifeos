@@ -90,6 +90,17 @@ shape repeats and it is hard to see from the inside.
 | "The VPS has no firewall; the Coolify panel answers from the internet" | `ufw` active, policy deny, a `PUBLIC-IN` chain dropping everything from the public interface except Cloudflare on 80/443 | `ip route get <public-ip>` on the laptop → `dev wglifeos`. The "internet" test had gone through the VPN tunnel the whole time |
 | "The runner image ships without a usable `sudo`" | It has `sudo` and runs as root. The image is **Fedora**, so `apt-get` does not exist | Running `command -v sudo` and `/etc/os-release` inside the actual image |
 | "Splitting the workflows caused the CI timeouts" | The split did create concurrency, and fixing it was right — but the load was dominated by model inference at 394% CPU and other projects' builds | `ps --sort=-pcpu` and `docker stats` on the box, at load 27 |
+| "VPS contention causes the CI timeouts" — the correction to the row above, and also wrong | `mobile-app` runs on the `ci` pool (Proxmox + laptop) and never executes on the VPS. The measurement was real; it described a machine the job does not use | `runs-on:` in ci.yml, against the runner labels from the Actions API |
+| "Proxmox lacks AES-NI, so crypto tests crawl there" | Both CI machines have AES-NI and differ by 1.6x in AES throughput — far from the 10x needed | `openssl speed -evp aes-256-cbc` on both hosts |
+
+The last two are worth separating from the rest. The VPS-contention claim was
+itself a *correction* to an earlier wrong claim, and it was wrong in the same
+way: a real measurement, of the wrong subject. Fixing a bad diagnosis with
+another confident one is the failure mode repeating, not ending.
+
+The AES-NI row is the counter-example, and the point of keeping it. It was a
+hypothesis, it was measured before being reported, and it died. That costs two
+minutes and no credibility.
 
 Two of these were worse than merely wrong. The firewall claim was used to
 justify a design decision, and the "no sudo" claim shaped a workflow step that
@@ -145,13 +156,27 @@ one of them was. That sentence sent triage down the wrong path for weeks.
    is not a gate anyone will keep. The box hosts model inference and several
    repositories' runners, so the gap is probably contention rather than the
    suite, which is the same root cause as follow-up 3.
-3. **This machine is structurally contended.** Load reached 27 on 12 cores
-   with `ollama` alone at 394% CPU. Three encryption-plus-disk test files now
-   carry a two-minute timeout instead of the framework's 30 s default — a
-   calibration to that reality, taken only AFTER measuring what consumed the
-   CPU. Raising a timeout before knowing why something is slow is the masking
-   this document argues against; raising it afterwards is not. Worth revisiting
-   if CI ever moves off a shared box.
+3. **Two machines are contended, and the first attempt fixed the wrong one.**
+   The VPS reached load 27 on 12 cores with `ollama` at its 4-CPU cap and
+   unbounded host-side builds on top; `ops/vps/` now caps host-side work so
+   development cannot starve production there. That was worth doing and it is
+   NOT what caused the CI timeouts: `mobile-app` runs on the `ci` pool —
+   Proxmox and the laptop — and never touches the VPS.
+
+   The Proxmox host is a Ryzen 5 5500U, six physical cores, carrying twelve
+   runner listeners for nine repositories. Ruled out by measurement: core
+   count and disk throughput (PR #165), and AES-NI — both CI machines have it
+   and they differ by 1.6x, nowhere near the 10x a 3-second test needs to cross
+   30 seconds. What remains is single-thread speed under runner contention.
+   PR #165 pinned the job to the faster runner, which beats waiting longer on
+   the slower one.
+
+   The three encryption-plus-disk files carry a two-minute timeout. That
+   remains defensible, but the reasoning first committed with it named the
+   wrong machine — a measurement of the VPS used to justify a change about
+   Proxmox. Corrected in place. Raising a timeout before knowing why something
+   is slow is the masking this document argues against; raising it after
+   measuring the wrong host is not much better.
 
 Known and accepted: a SQLCipher TOCTOU race between the `DB_PATH` monkeypatch
 and background writer threads, documented in `conftest.py`, surfaces
