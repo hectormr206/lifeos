@@ -301,6 +301,21 @@ int _resolveHour24(int h, String period, String ampm, {bool wake = false}) {
   if (p == 'tarde') return h < 12 ? h + 12 : h;
   if (p == 'manana') return h <= 12 ? h : 0; // "12 de la mañana" = noon.
   if (wake) return h; // 1-12 assumed AM; 13-23 already 24 h.
-  // Sleep-onset heuristic: h ≤ 6 → madrugada (AM), else evening (PM).
-  return h <= 6 ? h : (h < 12 ? h + 12 : h);
+  // Sleep-onset heuristic: h ≤ 6 → madrugada (AM), else evening (PM), and a
+  // BARE 12 → midnight.
+  //
+  // That last case used to fall through to noon, which every other branch here
+  // already treats as midnight ('am', 'madrugada', 'noche' all map 12 → 0).
+  // The result was that "me dormí 12:30 y me desperté a las 06:30" computed an
+  // 18.5 h window, failed the 16 h gate, and stored NOTHING — the user saw the
+  // message silently ignored. Nobody reports going to bed at noon and waking at
+  // half past six; the neighbouring hour is already assumed to be night.
+  //
+  // "12 de la mañana" keeps meaning noon: it carries a period word, so it never
+  // reaches this line. 13-23 are already unambiguous 24-hour notation and pass
+  // through untouched — an earlier version of this fix sent everything ≥ 12 to
+  // midnight and broke "me dormí a las 23 y desperté a las 7".
+  if (h <= 6) return h;
+  if (h < 12) return h + 12;
+  return h == 12 ? 0 : h;
 }

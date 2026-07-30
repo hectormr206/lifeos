@@ -263,4 +263,50 @@ void main() {
       expect(sleepPhraseSpans('122 77 55 pulsos, corrí 5km'), isEmpty);
     });
   });
+
+  // Reported from the phone: "me dormi 12:30 y me desperte a las 06:30" was not
+  // captured at all. The onset heuristic resolved a BARE 12 to NOON — every
+  // other branch in _resolveHour24 maps 12 to midnight — so the window became
+  // 12:00→06:30, an 18.5 h duration that the 16 h gate then rejected. The user
+  // saw nothing stored and no reason why.
+  group('midnight bedtime stated as a bare 12', () {
+    test('the reported utterance computes six hours', () {
+      final w = parseSleepWindow(
+        'me dormi 12:30 y me desperte a las 06:30',
+        now: now,
+      );
+
+      expect(w, isNotNull);
+      expect(w!.hours, 6.0);
+      expect(w.range, '00:30–06:30');
+    });
+
+    test('a bare 12 onset is midnight, like every other branch resolves it',
+        () {
+      expect(parseSleepWindow('me acoste a las 12 y me levante a las 6',
+              now: now)!.hours,
+          6.0);
+      // Consistent with the neighbouring hour, which already assumed night.
+      expect(parseSleepWindow('me acoste a las 11 y me levante a las 6',
+              now: now)!.hours,
+          7.0);
+    });
+
+    test('an explicit "12 am" still means midnight', () {
+      expect(parseSleepWindow('me dormi a las 12 am y me desperte a las 6',
+              now: now)!.hours,
+          6.0);
+    });
+
+    test('"12 de la mañana" still means noon, and is refused as a bedtime', () {
+      // Noon→06:30 is 18.5 h, outside the 0.5-16 gate: nothing is stored,
+      // which is the correct outcome for a genuinely odd claim.
+      expect(
+        parseSleepWindow(
+            'me dormi a las 12 de la manana y me desperte a las 6:30',
+            now: now),
+        isNull,
+      );
+    });
+  });
 }
