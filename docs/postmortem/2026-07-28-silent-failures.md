@@ -74,6 +74,43 @@ Applied here:
 - The `ship_run` safety check scans in Python rather than shelling out to
   `ripgrep`, which could make a security test pass by being absent.
 
+## The same failure, one level up: inference dressed as measurement
+
+The rule above is about the system. It applies just as exactly to the person
+diagnosing it, and that is where most of the time went.
+
+Four causes were stated as established fact during this work. All four were
+inferences from reading code or from one convenient test, and all four were
+wrong. They are recorded here with what actually disproved them, because the
+shape repeats and it is hard to see from the inside.
+
+| Claimed | Actually | What disproved it |
+| --- | --- | --- |
+| "All 54 failures are coupled to the laptop environment (audio, tz, hardware)" — inherited from a workflow comment and repeated | Exactly one was. The rest were the developer's ambient config | Emptying `~/.config/axi/config.json` on the developer's own machine: 36 of 39 failed |
+| "The VPS has no firewall; the Coolify panel answers from the internet" | `ufw` active, policy deny, a `PUBLIC-IN` chain dropping everything from the public interface except Cloudflare on 80/443 | `ip route get <public-ip>` on the laptop → `dev wglifeos`. The "internet" test had gone through the VPN tunnel the whole time |
+| "The runner image ships without a usable `sudo`" | It has `sudo` and runs as root. The image is **Fedora**, so `apt-get` does not exist | Running `command -v sudo` and `/etc/os-release` inside the actual image |
+| "Splitting the workflows caused the CI timeouts" | The split did create concurrency, and fixing it was right — but the load was dominated by model inference at 394% CPU and other projects' builds | `ps --sort=-pcpu` and `docker stats` on the box, at load 27 |
+
+Two of these were worse than merely wrong. The firewall claim was used to
+justify a design decision, and the "no sudo" claim shaped a workflow step that
+then failed in nine seconds for an entirely different reason. A confident
+wrong diagnosis does not just waste the time spent on it; it sends the next
+decision in the wrong direction.
+
+The tell, in every case, was the same: **the conclusion arrived without a
+measurement attached.** "The image has no sudo" came from noticing that a
+sudo-using step never ran — which is evidence about the step, not the image.
+"No firewall" came from a request that reached the host, without checking
+which interface it arrived on.
+
+So: state the measurement, or state the uncertainty. "I have no external
+vantage point, so this is rule-based reasoning, not a network test" is a
+complete and useful answer. "There is no firewall" was neither.
+
+Verifying is cheap here — `ps`, `ip route get`, one `docker run` — and every
+one of these took under a minute once actually attempted. The cost was never
+the measurement. It was the confidence that made it seem unnecessary.
+
 ## Corollaries
 
 **Test what you ship.** The gate ran a different Flutter than the OTA build
@@ -99,13 +136,22 @@ one of them was. That sentence sent triage down the wrong path for weeks.
 
 ## Open follow-ups
 
-1. **`ffmpeg` and `libgl1` are missing from the runner image.** The last two
-   failures. The workflow attempts a best-effort install, but that image has
-   no usable `sudo`. Needs root on the runner. Until then `engine-full-suite`
-   stays non-blocking.
+1. ~~**`ffmpeg` and `libgl1` are missing from the runner image.**~~ Resolved,
+   though not for the reason recorded here first: the image is Fedora, so the
+   step needed `dnf` with `ffmpeg-free` and `mesa-libGL`, not root. The
+   original entry blamed a missing `sudo` — see the inference table above.
 2. **The engine suite takes 58 minutes on the runner and 7 on a laptop.**
    Understand that 8× gap before making the job required; an hour per merge
-   is not a gate anyone will keep.
+   is not a gate anyone will keep. The box hosts model inference and several
+   repositories' runners, so the gap is probably contention rather than the
+   suite, which is the same root cause as follow-up 3.
+3. **This machine is structurally contended.** Load reached 27 on 12 cores
+   with `ollama` alone at 394% CPU. Three encryption-plus-disk test files now
+   carry a two-minute timeout instead of the framework's 30 s default — a
+   calibration to that reality, taken only AFTER measuring what consumed the
+   CPU. Raising a timeout before knowing why something is slow is the masking
+   this document argues against; raising it afterwards is not. Worth revisiting
+   if CI ever moves off a shared box.
 
 Known and accepted: a SQLCipher TOCTOU race between the `DB_PATH` monkeypatch
 and background writer threads, documented in `conftest.py`, surfaces
