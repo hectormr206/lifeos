@@ -17,8 +17,9 @@
 /// of losing to the simpler "dormí N horas" shape — laptop `_PARSERS` order).
 /// The natural sleep shape needs a CLOCK, which callers inject as [now] (the
 /// wall clock of the effective timezone); the parser never reads [DateTime.now].
-/// DEFERRED as TODO: the bare-scale-sequence dictation
-/// (`_try_bare_scale_sequence`) — it still needs a config seam.
+/// The bare-scale-sequence dictation ([parseScaleSequence]) is ported too:
+/// the cycle order is INJECTED rather than read from config, which is the
+/// seam its earlier TODO was waiting on.
 ///
 /// SUBJECT: [parseHealthEntry] runs the same STRIP-then-parse convention as the
 /// laptop `parse_health`: a family-subject marker (precise leading/trailing via
@@ -34,6 +35,7 @@
 library;
 
 import 'sleep_parser.dart';
+import 'scale_sequence_parser.dart';
 import 'subject.dart';
 
 /// A parsed structured health entry, ready to be stored as a typed domain entry.
@@ -190,6 +192,22 @@ ParsedEntry? parseHealthCore(String text, {DateTime? now}) {
       fields: <String, Object?>{'hours': window.hours},
       // AUDITABLE title: the user can verify the math in the capture ack.
       title: 'dormí ${_fmt(window.hours)}h (${window.range})',
+    );
+  }
+
+  // ── Bare scale dictation — numbers only, no labels ───────────────────────
+  // Runs BEFORE the bare-number blood-pressure shapes: a six-number cycle is
+  // unmistakably a scale, and the parser refuses anything it cannot assign to
+  // exactly one rotation, so BP readings (2-3 numbers) never reach it.
+  final scale = parseScaleSequence(text);
+  if (scale != null) {
+    return ParsedEntry(
+      domainKey: 'health',
+      type: 'body_composition',
+      fields: Map<String, Object?>.from(scale.fields),
+      // AUDITABLE: the ack shows which number became which metric, so a wrong
+      // assignment is visible immediately rather than discovered months later.
+      title: scale.title,
     );
   }
 

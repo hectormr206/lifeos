@@ -84,6 +84,28 @@ String _sleepLabel(Map<String, Object?> v) => _withNote('Sueño ${_s(v['hours'])
 
 String _titleLabel(Map<String, Object?> v) => _withNote(_s(v['title']), v);
 
+/// Lists only the metrics actually present: a dictation that started mid-cycle
+/// covers part of the scale's readings, and showing empty slots would suggest
+/// the reading was incomplete rather than partial by nature.
+String _bodyCompositionLabel(Map<String, Object?> v) {
+  const order = <String, String>{
+    'weight_kg': 'peso %s kg',
+    'body_fat_pct': 'grasa %s%',
+    'visceral_fat': 'visceral %s',
+    'muscle_pct': 'músculo %s%',
+    'basal_metabolic_rate': 'RM %s',
+    'bmi': 'IMC %s',
+  };
+  final parts = <String>[
+    for (final e in order.entries)
+      if (v[e.key] != null) e.value.replaceFirst('%s', _s(v[e.key])),
+  ];
+  return _withNote(
+    parts.isEmpty ? 'Composición corporal' : 'Báscula: ${parts.join(', ')}',
+    v,
+  );
+}
+
 String _expenseLabel(Map<String, Object?> v) {
   final category = v['category'];
   final base = 'Gasto \$${_s(v['amount'])}';
@@ -186,6 +208,34 @@ const Map<String, List<LocalEntryType>> localEntryTypesByDomain = {
       fields: [
         DomainFieldSpec(
             key: 'hours', label: 'Horas de sueño', type: DomainFieldType.number, required: true, min: 0, max: 24, unitHint: 'h'),
+        tsField,
+        _noteField,
+      ],
+    ),
+    // A smart-scale reading: six metrics captured in one go.
+    //
+    // Only weight is required, and `required` governs the MANUAL FORM only —
+    // it keeps someone from saving an empty entry by hand. The dictation path
+    // writes a ParsedEntry directly and is not validated against these specs,
+    // so a reading that starts mid-cycle still stores the subset the user
+    // actually read rather than being refused for the metrics they skipped.
+    LocalEntryType(
+      type: 'body_composition',
+      label: 'Composición corporal',
+      labelBuilder: _bodyCompositionLabel,
+      fields: [
+        DomainFieldSpec(
+            key: 'weight_kg', label: 'Peso', type: DomainFieldType.number, required: true, min: 20, max: 300, unitHint: 'kg'),
+        DomainFieldSpec(
+            key: 'body_fat_pct', label: 'Grasa corporal', type: DomainFieldType.number, min: 0, max: 70, unitHint: '%'),
+        DomainFieldSpec(
+            key: 'visceral_fat', label: 'Grasa visceral', type: DomainFieldType.integer, min: 0, max: 40),
+        DomainFieldSpec(
+            key: 'muscle_pct', label: 'Músculo', type: DomainFieldType.number, min: 0, max: 70, unitHint: '%'),
+        DomainFieldSpec(
+            key: 'basal_metabolic_rate', label: 'Metabolismo en reposo', type: DomainFieldType.number, min: 500, max: 5000, unitHint: 'kcal'),
+        DomainFieldSpec(
+            key: 'bmi', label: 'IMC', type: DomainFieldType.number, min: 5, max: 70),
         tsField,
         _noteField,
       ],
