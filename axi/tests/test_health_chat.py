@@ -334,3 +334,25 @@ def test_health_update_bp_regenerates_title(monkeypatch):
     health_chat._update_fields("H2", {"systolic": 130, "diastolic": 85})
     assert captured["title"] == "presión 130/85"
     assert captured["data"]["systolic"] == 130
+
+def test_extract_prompt_tells_the_model_to_compute_sleep_from_a_time_range():
+    """The user reports bedtime and wake time, not a duration.
+
+    Without an explicit rule the classifier left sleep_hours null and the
+    message fell through to the note fallback, which stored the raw sentence:
+    "anotado en salud: me dormi 12:30 y me desperte a las 6:30" instead of a
+    6-hour sleep vital. The storage path was always fine; the prompt never
+    asked for the subtraction.
+
+    This is a contract test on the prompt, not on the model: it cannot prove
+    the model complies (that was verified against the real 4B), only that the
+    instruction is still there for it to follow.
+    """
+    prompt = health_chat._EXTRACT_SYSTEM
+
+    assert "sleep_hours" in prompt
+    # The rule itself, and the midnight-crossing case that makes it non-obvious.
+    assert "CALCULA" in prompt.upper()
+    assert "medianoche" in prompt.lower()
+    # The exact shape the user reports, kept as a worked example.
+    assert "12:30" in prompt and "06:30" in prompt

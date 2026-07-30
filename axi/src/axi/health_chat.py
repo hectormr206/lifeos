@@ -59,6 +59,17 @@ Reglas de extracción (solo para intent="register"):
   deja los campos numéricos en null.
 - NUNCA inventes valores que el usuario no dijo.
 
+SUEÑO — el usuario casi nunca dice las horas ya calculadas. Si da la hora de
+acostarse y la de levantarse, CALCULA TÚ la duración y ponla en sleep_hours;
+nunca dejes sleep_hours en null porque venga como rango. Si la hora de despertar
+es menor o igual a la de dormir, cruzó la medianoche: suma 24 h antes de restar.
+- "me dormí 12:30 y me desperté a las 06:30" → sleep_hours=6
+  (00:30 + 24 = 24:30; 30:30 − 24:30 = 6 … o simplemente 06:30 − 00:30 = 6)
+- "dormí de 23:00 a 7:00" → sleep_hours=8
+- "me acosté a las 11 y me levanté a las 6" → sleep_hours=7
+- "dormí 7 horas" → sleep_hours=7 (ya viene calculado, úsalo tal cual)
+Usa decimales cuando corresponda: "de 23:15 a 6:45" → sleep_hours=7.5.
+
 Devuelve SOLO el JSON, sin texto adicional."""
 
 
