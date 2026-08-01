@@ -127,6 +127,17 @@ String _stepsLabel(Map<String, Object?> v) => _withNote('${_s(v['steps'])} pasos
 
 String _interactionLabel(Map<String, Object?> v) => _withNote('Interacción con ${_s(v['person'])}', v);
 
+/// Names the person and, when known, how they relate — the relation is what
+/// makes a birthday reminder worth reading.
+String _personLabel(Map<String, Object?> v) {
+  final relation = v['relation'];
+  final base = _s(v['name']);
+  return _withNote(
+    relation is String && relation.trim().isNotEmpty ? '$base — ${relation.trim()}' : base,
+    v,
+  );
+}
+
 String _studyLabel(Map<String, Object?> v) {
   final base = 'Estudio: ${_s(v['topic'])}';
   final minutes = v['duration_minutes'];
@@ -312,6 +323,33 @@ const Map<String, List<LocalEntryType>> localEntryTypesByDomain = {
     ),
   ],
   'relationships': [
+    // A PERSON, not a note about one. The friends feature needs people to be
+    // entities with a birth date and a stated relation, so a reminder can say
+    // "Sofía (hija de Juan) cumple 7" — something to reach out ABOUT — rather
+    // than counting days since the last message, which is only guilt.
+    //
+    // The DATE is stored, never an age: an age is wrong within a year and the
+    // app would keep repeating it confidently.
+    LocalEntryType(
+      type: 'person',
+      label: 'Persona',
+      labelBuilder: _personLabel,
+      fields: [
+        DomainFieldSpec(key: 'name', label: 'Nombre', type: DomainFieldType.text, required: true),
+        DomainFieldSpec(
+            key: 'relation', label: 'Relación', type: DomainFieldType.text, unitHint: 'ej. hija de Juan'),
+        DomainFieldSpec(key: 'birth_date', label: 'Fecha de nacimiento', type: DomainFieldType.date),
+        DomainFieldSpec(
+            key: 'contact_every_days',
+            label: 'Recordarme escribirle cada',
+            type: DomainFieldType.integer,
+            min: 1,
+            max: 3650,
+            unitHint: 'días'),
+        tsField,
+        _noteField,
+      ],
+    ),
     LocalEntryType(
       type: 'interaction',
       label: 'Interacción',
