@@ -148,11 +148,53 @@ def _migration_003_interactions(conn: sqlcipher3.Connection) -> None:
 # Raw-capture for the interactions table is version 004.
 _migration_004_raw_capture = make_raw_capture_migration("interactions")
 
+
+def _migration_005_people_graph(conn: sqlcipher3.Connection) -> None:
+    """Birth dates, contact cadence, and links BETWEEN people.
+
+    `birth_date` stores the DATE, never an age: an age is wrong within a year
+    and the assistant would state it confidently. `contact_cadence_days` is the
+    "talk every six weeks" interval — the due date it implies is computed from
+    the last real interaction, never stored, so an unplanned message cannot
+    leave a stale schedule behind.
+
+    `person_links` carries friend→wife, friend→child, so a friend's family is
+    part of the same picture. Stored ONE row per pair with the kind as seen
+    from `from_id`; the inverse is derived on read, which keeps the two
+    directions from ever disagreeing.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(people)")}
+    if "birth_date" not in cols:
+        conn.execute("ALTER TABLE people ADD COLUMN birth_date TEXT")  # ISO date
+    if "contact_cadence_days" not in cols:
+        conn.execute("ALTER TABLE people ADD COLUMN contact_cadence_days INTEGER")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS person_links (
+            from_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+            to_id      TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+            kind       TEXT NOT NULL,   -- partner|child|parent|sibling|friend|...
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (from_id, to_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_person_links_to ON person_links(to_id)"
+    )
+    # Birthday scans read every person with a date; keep that one index-only.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_people_birth_date "
+        "ON people(birth_date) WHERE birth_date IS NOT NULL AND deleted_at IS NULL"
+    )
+
+
 MIGRATIONS: list[Migration] = [
     _migration_001_schema_version,
     _migration_002_people,
     _migration_003_interactions,
     _migration_004_raw_capture,
+    _migration_005_people_graph,
 ]
 
 
