@@ -60,7 +60,10 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
       final preset = initial[field.key];
       switch (field.type) {
         case DomainFieldType.date:
-          _values[field.key] = _asDateTime(preset) ?? DateTime.now();
+          // "Now" is the right default for a REQUIRED timestamp — when the
+          // thing happened. For an optional date it is a claim the user never
+          // made, and one they would have to notice to correct.
+          _values[field.key] = _asDateTime(preset) ?? (field.required ? DateTime.now() : null);
         case DomainFieldType.enumType:
           _values[field.key] = (preset is String && field.enumOptions!.contains(preset))
               ? preset
@@ -132,10 +135,20 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
     final date = await showDatePicker(
       context: context,
       initialDate: current,
-      firstDate: DateTime(2000),
+      // A birth date is decades in the past. A 2000 floor silently excludes
+      // most adults from a feature whose whole point is remembering people.
+      firstDate: field.dateOnly ? DateTime(1900) : DateTime(2000),
       lastDate: DateTime(2100),
     );
     if (date == null || !mounted) return;
+
+    // Nobody knows a friend's daughter's time of birth, and asking makes the
+    // field feel broken.
+    if (field.dateOnly) {
+      setState(() => _values[field.key] = DateTime(date.year, date.month, date.day));
+      return;
+    }
+
     final time = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(current));
     if (!mounted) return;
     setState(() {
@@ -189,14 +202,24 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
           onChanged: (value) => setState(() => _values[field.key] = value),
         );
       case DomainFieldType.date:
-        final current = _values[field.key] as DateTime? ?? DateTime.now();
+        final current = _values[field.key] as DateTime?;
+        final text = current == null
+            ? 'Sin definir'
+            : (field.dateOnly ? _formatDateOnly(current) : _formatDate(current));
         return InkWell(
           onTap: () => _pickDate(field),
           child: InputDecorator(
             decoration: InputDecoration(labelText: field.label, border: const OutlineInputBorder()),
             child: Row(
               children: [
-                Expanded(child: Text(_formatDate(current))),
+                Expanded(
+                  child: Text(
+                    text,
+                    style: current == null
+                        ? TextStyle(color: Theme.of(context).hintColor)
+                        : null,
+                  ),
+                ),
                 const Icon(Icons.calendar_today),
               ],
             ),
@@ -231,5 +254,12 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
     final local = dt.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(local.day)}/${two(local.month)}/${local.year} ${two(local.hour)}:${two(local.minute)}';
+  }
+
+  /// No time of day, and no `toLocal()` — a date-only value carries local
+  /// calendar fields already, and converting it can move it a day.
+  String _formatDateOnly(DateTime dt) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(dt.day)}/${two(dt.month)}/${dt.year}';
   }
 }

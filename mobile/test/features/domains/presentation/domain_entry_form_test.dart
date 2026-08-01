@@ -129,6 +129,111 @@ void main() {
     expect(submitted!.containsKey('duration_minutes'), isFalse);
   });
 
+  // A BIRTH DATE IS NOT A TIMESTAMP. The `ts` field above defaults to now
+  // because "now" is the right answer for when something happened. For a birth
+  // date it is the worst possible answer: it is optional, it is always in the
+  // past, and it carries no time of day. Defaulting it to now means every
+  // person saved without touching the field is recorded as born today — and
+  // the birthday and age logic then produces confident nonsense from it.
+  group('an optional date field (a birth date)', () {
+    const spec = [
+      DomainFieldSpec(key: 'name', label: 'Nombre', type: DomainFieldType.text, required: true),
+      DomainFieldSpec(key: 'birth_date', label: 'Fecha de nacimiento', type: DomainFieldType.date, dateOnly: true),
+      DomainFieldSpec(key: 'ts', label: 'Fecha y hora', type: DomainFieldType.date, required: true),
+    ];
+
+    testWidgets('starts empty instead of silently claiming today', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: SingleChildScrollView(child: DomainEntryForm(spec: spec, onSubmit: (_) {}))),
+      ));
+
+      expect(find.text('Fecha de nacimiento'), findsOneWidget);
+      // The empty state says so, rather than showing a date nobody entered.
+      expect(find.text('Sin definir'), findsOneWidget);
+    });
+
+    testWidgets('is omitted from the body when the user never sets it', (tester) async {
+      Map<String, Object?>? submitted;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(child: DomainEntryForm(spec: spec, onSubmit: (body) => submitted = body)),
+        ),
+      ));
+
+      await tester.enterText(find.widgetWithText(TextFormField, 'Nombre'), 'Juan');
+      await tester.tap(find.widgetWithText(FilledButton, 'Guardar'));
+      await tester.pump();
+
+      expect(submitted, isNotNull);
+      // Absent, not today. An absent birth date is a fact the app can handle;
+      // a wrong one it cannot.
+      expect(submitted!.containsKey('birth_date'), isFalse);
+      expect(submitted!['ts'], isA<String>());
+    });
+
+    testWidgets('an initial value from a stored entry is shown, not overwritten', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: DomainEntryForm(
+              spec: spec,
+              onSubmit: (_) {},
+              initialValues: const {'name': 'Sofía', 'birth_date': '2019-03-10'},
+            ),
+          ),
+        ),
+      ));
+
+      expect(find.text('10/03/2019'), findsOneWidget);
+    });
+  });
+
+  group('a date-only field', () {
+    const spec = [
+      DomainFieldSpec(key: 'birth_date', label: 'Fecha de nacimiento', type: DomainFieldType.date, dateOnly: true),
+    ];
+
+    testWidgets('renders without a time of day', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: DomainEntryForm(
+              spec: spec,
+              onSubmit: (_) {},
+              initialValues: const {'birth_date': '1984-11-02'},
+            ),
+          ),
+        ),
+      ));
+
+      expect(find.text('02/11/1984'), findsOneWidget);
+      expect(find.textContaining('00:00'), findsNothing);
+    });
+
+    testWidgets('serialises as a plain calendar date, never a UTC instant', (tester) async {
+      // A birth date shifted by a timezone conversion lands on the wrong day
+      // for anyone east of UTC — and the app would then wish them happy
+      // birthday one day early, forever.
+      Map<String, Object?>? submitted;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: DomainEntryForm(
+              spec: spec,
+              onSubmit: (body) => submitted = body,
+              initialValues: const {'birth_date': '1984-11-02'},
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Guardar'));
+      await tester.pump();
+
+      expect(submitted!['birth_date'], '1984-11-02');
+    });
+  });
+
   testWidgets('shows an external error message when errorText is set', (tester) async {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(

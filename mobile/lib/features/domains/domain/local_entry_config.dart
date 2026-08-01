@@ -338,7 +338,8 @@ const Map<String, List<LocalEntryType>> localEntryTypesByDomain = {
         DomainFieldSpec(key: 'name', label: 'Nombre', type: DomainFieldType.text, required: true),
         DomainFieldSpec(
             key: 'relation', label: 'Relación', type: DomainFieldType.text, unitHint: 'ej. hija de Juan'),
-        DomainFieldSpec(key: 'birth_date', label: 'Fecha de nacimiento', type: DomainFieldType.date),
+        DomainFieldSpec(
+            key: 'birth_date', label: 'Fecha de nacimiento', type: DomainFieldType.date, dateOnly: true),
         DomainFieldSpec(
             key: 'contact_every_days',
             label: 'Recordarme escribirle cada',

@@ -23,6 +23,7 @@ class DomainFieldSpec {
     this.min,
     this.max,
     this.dataKey,
+    this.dateOnly = false,
   });
 
   /// The POST body key (top-level), UNLESS [dataKey] is set, in which case
@@ -58,6 +59,15 @@ class DomainFieldSpec {
   /// `{"data": {"systolic": 120, "diastolic": 80}}`, matching
   /// `health_entries.create(data=...)`'s free-form JSON dict).
   final String? dataKey;
+
+  /// A calendar date with no time of day — a birth date, not a timestamp.
+  ///
+  /// The two differ in more than presentation. A timestamp is an instant and
+  /// converts to UTC correctly; a birth date converted to UTC lands on the
+  /// PREVIOUS DAY for anyone east of it, and the app would then celebrate the
+  /// birthday a day early forever. So a [dateOnly] value serialises as a plain
+  /// `YYYY-MM-DD` string and is never asked for a time.
+  final bool dateOnly;
 }
 
 const _kindLabel = 'Tipo';
@@ -268,7 +278,9 @@ Map<String, Object?> buildDomainEntryBody(List<DomainFieldSpec> spec, Map<String
   for (final field in spec) {
     final value = values[field.key];
     if (value == null) continue;
-    final encoded = field.type == DomainFieldType.date && value is DateTime ? value.toUtc().toIso8601String() : value;
+    final encoded = field.type == DomainFieldType.date && value is DateTime
+        ? (field.dateOnly ? _plainDate(value) : value.toUtc().toIso8601String())
+        : value;
     if (field.dataKey != null) {
       data[field.dataKey!] = encoded;
     } else {
@@ -278,3 +290,9 @@ Map<String, Object?> buildDomainEntryBody(List<DomainFieldSpec> spec, Map<String
   if (data.isNotEmpty) body['data'] = data;
   return body;
 }
+
+/// `YYYY-MM-DD` from the LOCAL calendar fields — deliberately no timezone
+/// conversion. See [DomainFieldSpec.dateOnly].
+String _plainDate(DateTime value) => '${value.year.toString().padLeft(4, '0')}-'
+    '${value.month.toString().padLeft(2, '0')}-'
+    '${value.day.toString().padLeft(2, '0')}';
