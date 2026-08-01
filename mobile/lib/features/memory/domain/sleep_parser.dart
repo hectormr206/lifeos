@@ -68,6 +68,12 @@ String _hourFrag(String h, String minDigits, String minWord) =>
 String _periodFrag(String period, String ampm) =>
     r'\s*(?:' '$_periodPrefix(?<$period>$_periodWordAlt)|(?<$ampm>am|pm))?';
 
+/// The hedges people actually put in front of a time — "como a las 11", "tipo
+/// 11", "a eso de las 11". Every part is optional, including the preposition
+/// itself, because "me acosté 11:30" is how people write when they are tired.
+const String _approxPrefix =
+    r'(?:(?:como|tipo)\s+)?(?:a\s+|at\s+)?(?:eso\s+de\s+)?(?:la\s+|las\s+)?';
+
 /// Onset verbs: "me dormí", "me acosté", "me fui a dormir/a la cama", the
 /// third-person forms (subject-stripped family readings), and the EN shapes.
 const String _onsetVerb = r'(?:me|se)\s+(?:durmio|dormi|acost[eo])'
@@ -87,16 +93,21 @@ const String _wakeVerb = r'(?:despert[eo]|(?:me|se)\s+levant[eo]'
 /// despertar") means "now", which is exactly the reported bug.
 final RegExp sleepFromToRe = RegExp(
   r'\b(?:' '$_onsetVerb' r')\s*'
-  r'(?:como\s+)?(?:a\s+|at\s+)?(?:la\s+|las\s+)?'
+  '$_approxPrefix'
   '${_hourFrag('startH', 'startMin', 'startMinWord')}'
   '${_periodFrag('period', 'ampm')}'
   r'.{1,120}?'
   '$_wakeVerb'
-  r'(?:.{0,40}?(?:(?<now>ahorita|ya|recien|just\s+now)'
-  r'|(?:a|at)\s+(?:la\s+|las\s+)?'
+  r'(?:.{0,40}?(?<now>ahorita|ya|recien|just\s+now)'
+  // Two ways to reach a stated wake time. WITH a preposition ("a las 7") the
+  // words in between are allowed; WITHOUT one ("desperté 7 y media") the time
+  // must sit directly against the verb, so a stray number further along the
+  // sentence can never be mistaken for a clock reading.
+  r'|(?:.{0,40}?(?:(?:como|tipo)\s+)?\b(?<endPrep>a|at)\s+(?:eso\s+de\s+)?(?:la\s+|las\s+)?'
+  r'|\s+(?:(?:como|tipo)\s+)?)'
   '${_hourFrag('endH', 'endMin', 'endMinWord')}'
   '${_periodFrag('endPeriod', 'endAmpm')}'
-  '))?',
+  ')?',
   caseSensitive: false,
   dotAll: true,
 );
@@ -169,7 +180,7 @@ SleepWindow? parseSleepWindow(String text, {DateTime? now}) {
 
   int eh24;
   int em;
-  final endToken = m.namedGroup('endH');
+  final endToken = _statedWakeToken(m, t);
   if (endToken != null) {
     final endH = _parseHourToken(endToken);
     if (endH == null) return null;
@@ -187,6 +198,35 @@ SleepWindow? parseSleepWindow(String text, {DateTime? now}) {
     em = now.minute;
   }
   return _window(sh24, startMin, eh24, em);
+}
+
+/// The stated wake-hour token, or null when what matched is not credibly a time.
+///
+/// WHY THIS EXISTS. Dropping the mandatory preposition is what lets "me desperté
+/// 7 y media" be understood at all — but it also puts every bare number after a
+/// wake verb within reach, and "me desperté 3 veces en la noche" must never
+/// become 03:00.
+///
+/// So a BARE number (no "a las" in front) counts as a time only when it carries
+/// its own evidence: minutes ("7 y media", "7:30"), a day period ("7 de la
+/// mañana", "7 am"), or nothing at all after it — the end of the thought. A
+/// bare number followed by more words is a quantity, not a clock, and the
+/// parser falls back to the implicit-now path rather than inventing an hour.
+String? _statedWakeToken(RegExpMatch m, String text) {
+  final token = m.namedGroup('endH');
+  if (token == null) return null;
+  if (m.namedGroup('endPrep') != null) return token; // "a las 7" — explicit.
+
+  final hasOwnEvidence = m.namedGroup('endMin') != null ||
+      m.namedGroup('endMinWord') != null ||
+      m.namedGroup('endPeriod') != null ||
+      m.namedGroup('endAmpm') != null;
+  if (hasOwnEvidence) return token;
+
+  // Nothing but punctuation may follow a bare, unqualified hour.
+  final rest = text.substring(m.end).trim();
+  final endsTheThought = rest.isEmpty || RegExp(r'^[.,;!?]').hasMatch(rest);
+  return endsTheThought ? token : null;
 }
 
 /// The window of an explicit start+end match ("dormí de 11 a 7").

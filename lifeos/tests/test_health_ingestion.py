@@ -1431,3 +1431,82 @@ def test_heart_rate_does_not_shadow_blood_pressure() -> None:
     assert h.data["systolic"] == 116
     assert h.data["diastolic"] == 82
     assert h.data["pulse_bpm"] == 55
+
+
+# ── A wake time stated WITHOUT the preposition ──────────────────────────────
+#
+# Reported by the user: "Ayer me dormí como a la 11 y media y me desperté 7 y
+# media" was stored as 23:30–08:25 — 08:25 being when the MESSAGE was sent, not
+# when he woke. The stated wake time was dropped.
+#
+# Cause: the end-time branch required "a las". Without it the group never
+# matched and the parser fell through to its implicit-now path, silently
+# substituting the clock for something the user had explicitly said.
+#
+# The damage is not a crash: it writes a WRONG number and reports success.
+
+def test_natural_sleep_wake_without_preposition() -> None:
+    """The exact reported sentence: 8.0h, never 8.92h to the send time."""
+    from datetime import datetime
+    from lifeos.health.ingestion import parse_health
+    h = parse_health(
+        "Ayer me dormí como a la 11 y media y me desperté 7 y media",
+        now=datetime(2026, 7, 31, 8, 25),
+    )
+    assert h is not None
+    assert h.data["value"] == 8.0
+    assert h.data["end_hour_24"] == 7
+    assert h.data["end_minute"] == 30
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "me dormí a las 11 y media y me desperté 7 y media",
+        "me dormí 11 y media y desperté 7 y media",
+        "me acosté 11:30 y me levanté 7:30",
+        "me dormí a las 11 y desperté 7",
+        "me dormí como a las 11 y me desperté como 7",
+        "me dormí tipo 11 y me desperté tipo 7",
+        "me dormí a eso de las 11 y me desperté a eso de las 7",
+        "me dormí a las once y media y me desperté siete y media",
+        "me acosté once y me levanté siete",
+        "me dormí 23:30 y me desperté 07:30",
+        "me dormí 11 de la noche y me desperté 7 de la mañana",
+        "dormí de 11 y media a 7 y media",
+    ],
+)
+def test_natural_sleep_many_phrasings(sentence: str) -> None:
+    """The user's point: he can say this many ways and each must be understood."""
+    from datetime import datetime
+    from lifeos.health.ingestion import parse_health
+    h = parse_health(sentence, now=datetime(2026, 7, 31, 8, 25))
+    assert h is not None, f"not parsed: {sentence}"
+    assert h.data["value"] == 8.0, f"wrong duration for: {sentence}"
+    # Whatever it read, it must not be the send time.
+    assert h.data["end_minute"] != 25, f"clock leaked into: {sentence}"
+
+
+def test_natural_sleep_bare_wake_verb_still_means_now() -> None:
+    """'acabo de despertar' has no stated time; the clock is correct there."""
+    from datetime import datetime
+    from lifeos.health.ingestion import parse_health
+    h = parse_health(
+        "me dormí a las 11 y media y acabo de despertar",
+        now=datetime(2026, 7, 31, 7, 30),
+    )
+    assert h is not None
+    assert h.data["value"] == 8.0
+
+
+def test_natural_sleep_a_count_is_not_a_clock() -> None:
+    """'desperté 3 veces' is a quantity, not 03:00 — precision guard."""
+    from datetime import datetime
+    from lifeos.health.ingestion import parse_health
+    h = parse_health(
+        "me dormí a las 11 y media y desperté con 3 llamadas perdidas",
+        now=datetime(2026, 7, 31, 7, 30),
+    )
+    assert h is not None
+    assert h.data["end_hour_24"] == 7
+    assert h.data["end_minute"] == 30

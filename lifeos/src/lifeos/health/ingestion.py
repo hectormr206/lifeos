@@ -403,7 +403,10 @@ _SLEEP_FROM_TO_RE = re.compile(
     # EN: "went to bed", "went to sleep", "fell asleep"
     r"\b(?:me\s+(?:dorm[íi]|acost[eé])|me\s+fui\s+a\s+(?:dormir|la\s+cama)"
     r"|went\s+to\s+(?:bed|sleep)|fell\s+asleep)\s*"
-    r"(?:como\s+)?(?:a\s+|at\s+)?(?:la\s+|las\s+)?"
+    # The hedges people actually put in front of a time — "como a las 11",
+    # "tipo 11", "a eso de las 11". Every part is optional, including the
+    # preposition: "me acosté 11:30" is how people write when they are tired.
+    r"(?:(?:como|tipo)\s+)?(?:a\s+|at\s+)?(?:eso\s+de\s+)?(?:la\s+|las\s+)?"
     rf"(?P<start_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
     r"(?:"
     r"  :(?P<start_min>\d{2})"
@@ -415,17 +418,23 @@ _SLEEP_FROM_TO_RE = re.compile(
     # EN: woke up, got up
     r"(?:desp[eé]rt[éo]|me\s+levant[éo]|acabo\s+de\s+(?:despertar(?:me)?|levantarme)"
     r"|woke\s+up|got\s+up)"
-    r"(?:.{0,40}?"
     r"(?:"
-    r"  (?P<now>ahorita|ya|reci[eé]n|just\s+now)"
-    r"  | (?:a|at)\s+(?:la\s+|las\s+)?"
+    r"  .{0,40}?(?P<now>ahorita|ya|reci[eé]n|just\s+now)"
+    # Two ways to reach a stated wake time. WITH a preposition ("a las 7") the
+    # words in between are allowed; WITHOUT one ("desperté 7 y media") the time
+    # must sit directly against the verb, so a stray number further along the
+    # sentence can never be mistaken for a clock reading.
+    r"  | (?:"
+    r"      .{0,40}?(?:(?:como|tipo)\s+)?\b(?P<end_prep>a|at)\s+(?:eso\s+de\s+)?(?:la\s+|las\s+)?"
+    r"      | \s+(?:(?:como|tipo)\s+)?"
+    r"    )"
     rf"   (?P<end_h>\d{{1,2}}|{_HOUR_WORD_ALT})"
     r"  (?:"
     r"    :(?P<end_min>\d{2})"
     r"    | \s+y\s+(?P<end_min_word>media|cuarto|\d{1,2})"
     r"  )?"
     rf"  (?:\s*(?:{_PERIOD_PREFIX}(?P<end_period>{_PERIOD_WORD_ALT})|(?P<end_ampm>am|pm)))?"
-    r"))?",
+    r")?",
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
 )
 
@@ -920,6 +929,38 @@ def _validate_amount(raw_text: str | None, nano_amount: float | None) -> float |
     return v
 
 
+def _stated_wake_token(m: re.Match[str], text: str) -> str | None:
+    """The stated wake-hour token, or None when it is not credibly a time.
+
+    WHY THIS EXISTS. Dropping the mandatory preposition is what lets "me
+    desperté 7 y media" be understood at all — but it also puts every bare
+    number after a wake verb within reach, and "me desperté 3 veces en la
+    noche" must never become 03:00.
+
+    So a BARE number (no "a las" in front) counts as a time only when it
+    carries its own evidence: minutes ("7 y media", "7:30"), a day period
+    ("7 de la mañana", "7 am"), or nothing at all after it — the end of the
+    thought. A bare number followed by more words is a quantity, not a clock,
+    and the caller falls back to the implicit-now path rather than inventing
+    an hour.
+    """
+    token = m.group("end_h")
+    if not token:
+        return None
+    if m.group("end_prep"):  # "a las 7" — explicit.
+        return token
+
+    has_own_evidence = any(
+        m.group(g) for g in ("end_min", "end_min_word", "end_period", "end_ampm")
+    )
+    if has_own_evidence:
+        return token
+
+    # Nothing but punctuation may follow a bare, unqualified hour.
+    rest = text[m.end():].strip()
+    return token if (not rest or rest[0] in ".,;!?") else None
+
+
 def _try_natural_sleep(
     text: str,
     now: "datetime | None" = None,  # injectable for tests and dashboard
@@ -992,7 +1033,7 @@ def _try_natural_sleep(
     period = (m.group("period") or "").lower()
     ampm = (m.group("ampm") or "").lower()
     end_phrase = (m.group("now") or "").lower()
-    end_h_token = m.group("end_h")
+    end_h_token = _stated_wake_token(m, text)
     end_min_str = m.group("end_min")
     end_min_word = m.group("end_min_word")
 
