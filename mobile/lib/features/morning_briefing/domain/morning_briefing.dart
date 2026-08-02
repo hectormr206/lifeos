@@ -23,6 +23,7 @@ class BriefingArticle {
     this.commentsSummary,
     this.translatedTitle,
     this.translatedDescription,
+    this.generatedBrief,
   });
 
   /// Human-readable source name (feed/channel title or "Hacker News").
@@ -61,6 +62,16 @@ class BriefingArticle {
   /// or when the feed carried no brief). Persisted additively.
   final String? translatedDescription;
 
+  /// A SHORT brief written on-device for an item whose feed carried none.
+  ///
+  /// Some feeds ship a headline and nothing else (Hugging Face's blog has only
+  /// guid/link/pubDate/title; Hacker News has no body at all), so there is no
+  /// description to read. The laptop's briefing never had this gap because it
+  /// does not READ a summary — it WRITES one. This is the phone doing the same,
+  /// and it is stored separately from [description] so the feed's own words are
+  /// never overwritten by a model's.
+  final String? generatedBrief;
+
   bool get isHackerNews => (hnObjectId ?? '').isNotEmpty;
 
   /// The headline to render: the cached translation when present, else the
@@ -70,10 +81,17 @@ class BriefingArticle {
 
   /// The brief to render: the cached translation when present, else the
   /// feed-native [description].
-  String get displayDescription =>
-      (translatedDescription != null && translatedDescription!.trim().isNotEmpty)
-          ? translatedDescription!
-          : description;
+  /// The brief to render, in preference order: the cached translation, the
+  /// feed's own words, then the on-device brief written for feeds that carried
+  /// none. The feed always outranks the model — a real summary beats a
+  /// generated one.
+  String get displayDescription {
+    if (translatedDescription != null && translatedDescription!.trim().isNotEmpty) {
+      return translatedDescription!;
+    }
+    if (description.trim().isNotEmpty) return description;
+    return generatedBrief ?? '';
+  }
 
   /// Stable identity for caching/pending-state lookups across state rebuilds.
   String get key => url.isNotEmpty ? url : '$sourceName::$title';
@@ -83,6 +101,7 @@ class BriefingArticle {
     String? commentsSummary,
     String? translatedTitle,
     String? translatedDescription,
+    String? generatedBrief,
   }) =>
       BriefingArticle(
         sourceName: sourceName,
@@ -95,6 +114,7 @@ class BriefingArticle {
         commentsSummary: commentsSummary ?? this.commentsSummary,
         translatedTitle: translatedTitle ?? this.translatedTitle,
         translatedDescription: translatedDescription ?? this.translatedDescription,
+        generatedBrief: generatedBrief ?? this.generatedBrief,
       );
 
   Map<String, dynamic> toJson() => {
@@ -108,6 +128,7 @@ class BriefingArticle {
         if (commentsSummary != null) 'commentsSummary': commentsSummary,
         if (translatedTitle != null) 'translatedTitle': translatedTitle,
         if (translatedDescription != null) 'translatedDescription': translatedDescription,
+        if (generatedBrief != null) 'generatedBrief': generatedBrief,
       };
 
   factory BriefingArticle.fromJson(Map<String, dynamic> json) => BriefingArticle(
@@ -121,6 +142,7 @@ class BriefingArticle {
         commentsSummary: json['commentsSummary'] as String?,
         translatedTitle: json['translatedTitle'] as String?,
         translatedDescription: json['translatedDescription'] as String?,
+        generatedBrief: json['generatedBrief'] as String?,
       );
 
   @override

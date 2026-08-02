@@ -18,6 +18,21 @@
 ///
 /// Abstract so the notifier depends on the interface and tests inject a fake
 /// (no flutter_local_notifications channel, no timezone plumbing).
+/// How long the automatic run gets before the fallback reminder is allowed to
+/// speak.
+///
+/// The reminder and the background work used to be scheduled for the SAME
+/// instant, so they raced — and when the reminder won, the user was told "tu
+/// boletín está listo para generarse" while nothing had been built yet, and
+/// tapping it started the build in the foreground. The notification announced
+/// work instead of reporting it.
+///
+/// With a grace period the normal morning has exactly one notification, the
+/// truthful one: "tu boletín está listo". The reminder survives ONLY for the
+/// case it was written for — the OS starving the task — and that case must
+/// stay loud rather than leave the user with no briefing and no explanation.
+const Duration kBriefingReminderGrace = Duration(minutes: 45);
+
 abstract class BriefingScheduler {
   /// Schedule (replacing any previous one) the OS reminder notification for
   /// [when] (device-local time). Best-effort: failures must not throw.

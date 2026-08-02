@@ -6,6 +6,7 @@
 // fired "toca aquí" reminder is removed, and the next-day chain (reminder +
 // one-off work) is re-armed after EVERY outcome. No plugins, no network.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/morning_briefing/domain/briefing_scheduler.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/morning_briefing/background/briefing_background_runner.dart';
 import 'package:lifeos/features/morning_briefing/data/source_content_extractor.dart';
@@ -102,7 +103,7 @@ void main() {
     expect(h.fetcher.fetched, isEmpty, reason: 'guard fires BEFORE any network work');
     expect(h.prefs.saveCount, 0);
     expect(h.notifications.shown, 0);
-    expect(h.reminder.lastScheduled, DateTime(2026, 7, 23, 8, 0));
+    expect(h.reminder.lastScheduled, DateTime(2026, 7, 23, 8, 0).add(kBriefingReminderGrace));
     expect(h.work.lastDelay, DateTime(2026, 7, 23, 8, 0).difference(atSlot),
         reason: 'next one-off armed for tomorrow — the chain is self-perpetuating');
   });
@@ -165,7 +166,7 @@ void main() {
     expect(ok, isTrue, reason: 'WorkManager must never retry-loop a failed generation');
     expect(h.prefs.saveCount, 0, reason: 'an empty briefing is not persisted');
     expect(h.notifications.shown, 0);
-    expect(h.reminder.lastScheduled, DateTime(2026, 7, 23, 8, 0),
+    expect(h.reminder.lastScheduled, DateTime(2026, 7, 23, 8, 0).add(kBriefingReminderGrace),
         reason: 'chain re-armed even after a bad day');
     expect(h.work.scheduledDelays, isNotEmpty);
   });
@@ -188,7 +189,7 @@ void main() {
     await runMorningBriefingBackgroundTask(h.deps);
 
     expect(h.prefs.saveCount, 0);
-    expect(h.reminder.lastScheduled, DateTime(2026, 7, 22, 8, 0));
+    expect(h.reminder.lastScheduled, DateTime(2026, 7, 22, 8, 0).add(kBriefingReminderGrace));
     expect(h.work.lastDelay, const Duration(minutes: 30));
   });
 

@@ -5,6 +5,7 @@ import 'package:timezone/timezone.dart' as tz;
 import '../../local_model/domain/local_llm_engine.dart';
 import '../../local_model/domain/on_device_translator.dart';
 import '../domain/briefing_assembler.dart';
+import '../domain/briefing_brief_writer.dart';
 import '../domain/briefing_background_work.dart';
 import '../domain/briefing_harvester.dart';
 import '../domain/briefing_notifications.dart';
@@ -141,6 +142,15 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
         extractor: deps.harvester.extractor,
       );
       briefing = await pipeline.translateAll(assembled, languageCode: await deps.languageCode());
+      // Then write the briefs the feeds never carried, while the model is
+      // still loaded. Both stages finish BEFORE the notification below, so
+      // "tu boletín está listo" is only ever said about a finished briefing —
+      // translated, and with every card carrying text.
+      briefing = await BriefingBriefWriter(
+        engine: engine,
+        fetcher: deps.harvester.fetcher,
+        extractor: deps.harvester.extractor,
+      ).fillMissing(briefing);
     } catch (_) {
       briefing = assembled; // keep originals — never lose the fetched news
     } finally {
@@ -182,7 +192,7 @@ Future<void> _rearm(
   final nowInZone = location == null ? base : tz.TZDateTime.from(base, location);
   final next =
       schedule.nextRun(nowInZone, lastGeneratedAt: lastGeneratedAt, location: location);
-  await deps.reminderScheduler.scheduleReminder(next);
+  await deps.reminderScheduler.scheduleReminder(next.add(kBriefingReminderGrace));
   await deps.backgroundWork.scheduleOneOff(next.difference(base));
 }
 

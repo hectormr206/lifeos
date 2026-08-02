@@ -75,8 +75,8 @@ class LocalBriefingScheduler implements BriefingScheduler {
     try {
       await _plugin.zonedSchedule(
         id: notificationId,
-        title: 'Tu boletín está listo para generarse',
-        body: 'Toca aquí y Axi preparará tu boletín matutino en el dispositivo.',
+        title: 'Tu boletín no se generó solo',
+        body: 'El sistema pospuso la tarea. Toca aquí para prepararlo ahora.',
         scheduledDate: scheduledDate,
         notificationDetails: details,
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
@@ -88,8 +88,8 @@ class LocalBriefingScheduler implements BriefingScheduler {
       try {
         await _plugin.zonedSchedule(
           id: notificationId,
-          title: 'Tu boletín está listo para generarse',
-          body: 'Toca aquí y Axi preparará tu boletín matutino en el dispositivo.',
+          title: 'Tu boletín no se generó solo',
+          body: 'El sistema pospuso la tarea. Toca aquí para prepararlo ahora.',
           scheduledDate: scheduledDate,
           notificationDetails: details,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,

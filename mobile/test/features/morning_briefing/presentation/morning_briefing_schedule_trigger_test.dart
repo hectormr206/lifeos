@@ -6,6 +6,7 @@
 // next occurrence. Frozen clock, no alarms, no platform channels.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/morning_briefing/domain/briefing_scheduler.dart';
 import 'package:lifeos/core/clock/clock.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/morning_briefing/domain/briefing_schedule.dart';
@@ -97,7 +98,7 @@ void main() {
     expect(h.container.read(morningBriefingNotifierProvider).schedule.enabled, isTrue);
     expect(h.prefs.saveScheduleCount, 1);
     expect(await h.prefs.schedule(), const BriefingSchedule(enabled: true, hour: 8, minute: 0));
-    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 8, 0),
+    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 8, 0).add(kBriefingReminderGrace),
         reason: 'reminder armed for today 8:00 (still ahead of 6:00)');
     expect(h.backgroundWork.lastDelay, const Duration(hours: 2),
         reason: 'the WorkManager one-off is armed for the SAME instant (6:00 → 8:00)');
@@ -134,7 +135,7 @@ void main() {
     await h.notifier.setScheduleTime(9, 15);
 
     expect(await h.prefs.schedule(), const BriefingSchedule(enabled: true, hour: 9, minute: 15));
-    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 9, 15));
+    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 9, 15).add(kBriefingReminderGrace));
   });
 
   test('disabling cancels the OS reminder and stops scheduling', () async {
@@ -153,7 +154,7 @@ void main() {
     final h = _harness(now: morning, initialSchedule: const BriefingSchedule(enabled: true));
     await h.notifier.ready;
 
-    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 8, 0));
+    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 8, 0).add(kBriefingReminderGrace));
   });
 
   test('maybeAutoGenerate runs the pipeline when due and re-arms for tomorrow', () async {
@@ -171,7 +172,7 @@ void main() {
     expect(h.notifications.shown, 1, reason: '"listo" notification posted as in Phase 1');
     expect(h.scheduler.cancelCount, greaterThan(0),
         reason: 'the pending "toca aquí" reminder is removed once we generate');
-    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 23, 8, 0),
+    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 23, 8, 0).add(kBriefingReminderGrace),
         reason: 're-armed for tomorrow after generating');
   });
 
@@ -193,7 +194,7 @@ void main() {
     expect(state.briefing!.generatedAt, DateTime(2026, 7, 22, 8, 1),
         reason: 'existing briefing untouched');
     expect(h.notifications.shown, 0, reason: 'pipeline never ran (guard)');
-    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 23, 8, 0),
+    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 23, 8, 0).add(kBriefingReminderGrace),
         reason: 'still re-armed for tomorrow');
   });
 
@@ -217,12 +218,12 @@ void main() {
       initialSchedule: const BriefingSchedule(enabled: true),
     );
     await h.notifier.ready;
-    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 8, 0));
+    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 8, 0).add(kBriefingReminderGrace));
 
     await h.notifier.generate(); // manual FAB run at 7:50
 
     expect(h.container.read(morningBriefingNotifierProvider).phase, BriefingPhase.done);
-    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 23, 8, 0),
+    expect(h.scheduler.lastScheduled, DateTime(2026, 7, 23, 8, 0).add(kBriefingReminderGrace),
         reason: 'the 8:00 reminder would nag for an already-generated briefing');
   });
 }

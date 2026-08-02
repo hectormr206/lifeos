@@ -13,6 +13,8 @@ import '../../local_model/presentation/local_model_providers.dart';
 import '../data/source_content_extractor.dart';
 import '../domain/briefing_harvester.dart';
 import '../domain/briefing_schedule.dart';
+import '../domain/briefing_brief_writer.dart';
+import '../domain/briefing_scheduler.dart';
 import '../domain/briefing_translation.dart';
 import '../domain/morning_briefing.dart';
 import 'morning_briefing_providers.dart';
@@ -259,7 +261,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     // already-generated-today guard keeps the three from double-generating.
     await backgroundWork.scheduleOneOff(next.difference(base));
     if (_disposed) return;
-    await scheduler.scheduleReminder(next);
+    await scheduler.scheduleReminder(next.add(kBriefingReminderGrace));
     if (_disposed) return;
     _autoRunTimer = Timer(next.difference(base), _onAutoRunTimer);
   }
@@ -331,7 +333,14 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     // (in the background scheduler / "Generar ahora" wait), so the reader never
     // taps to translate. Best-effort + per-source isolation — a failing source
     // keeps its original text and the briefing still completes with the rest.
-    final briefing = await _translateAll(assembled, extractor);
+    var briefing = await _translateAll(assembled, extractor);
+
+    // THIRD stage: write a short brief for the items whose feed carried none
+    // (Hugging Face ships only a title; Hacker News has no body at all). The
+    // laptop never had this gap because it WRITES summaries instead of reading
+    // them — this is the phone doing the same. Runs BEFORE the notification,
+    // so "tu boletín está listo" is only ever said about a finished briefing.
+    briefing = await _writeMissingBriefs(briefing);
 
     state = state.copyWith(
       briefing: briefing,
@@ -367,6 +376,28 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
 
   /// Fetches [article]'s page and summarizes it on-device (LONGSUM sampling),
   /// caching the result on the article. No-op when already cached or in flight.
+  /// Fills in the briefs the feeds did not provide. Best-effort by contract:
+  /// a failure here leaves those cards with their hint and never costs the
+  /// user the briefing itself.
+  Future<OnDeviceBriefing> _writeMissingBriefs(OnDeviceBriefing briefing) async {
+    try {
+      final writer = BriefingBriefWriter(
+        engine: ref.read(localLlmEngineProvider),
+        fetcher: ref.read(sourceFetcherProvider),
+        extractor: ref.read(sourceContentExtractorProvider),
+      );
+      return await writer.fillMissing(
+        briefing,
+        onItem: (i, total) {
+          if (_disposed) return;
+          state = state.copyWith(progressLabel: 'Resumiendo noticias ${i + 1} de $total…');
+        },
+      );
+    } catch (_) {
+      return briefing;
+    }
+  }
+
   Future<void> summarizeArticle(BriefingArticle article) async {
     final briefing = state.briefing;
     if (briefing == null) return;
