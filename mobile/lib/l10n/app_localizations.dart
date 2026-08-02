@@ -1340,6 +1340,24 @@ abstract class AppLocalizations {
   /// **'Link copied to clipboard'**
   String get briefingLinkCopied;
 
+  /// No description provided for @briefingOpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t open the article.'**
+  String get briefingOpenFailed;
+
+  /// No description provided for @briefingCopyLinkAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy link'**
+  String get briefingCopyLinkAction;
+
+  /// No description provided for @briefingCopyFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t copy the link.'**
+  String get briefingCopyFailed;
+
   /// No description provided for @briefingScheduleTitle.
   ///
   /// In en, this message translates to:

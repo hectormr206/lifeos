@@ -11,6 +11,8 @@ import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
 import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_providers.dart';
 import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
+import 'package:plugin_platform_interface/plugin_platform_interface.dart';
+import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
 import '../support/fakes.dart';
@@ -150,4 +152,84 @@ void main() {
     expect(find.text('Historia de última hora'), findsOneWidget);
     expect(find.textContaining('Sin resumen'), findsOneWidget);
   });
+
+  // THE REPORTED BUG. The link reads "Ver noticia completa →" and the user taps
+  // it expecting the article. It copied the URL to the clipboard instead —
+  // leaving them to paste it somewhere by hand. A label that names an action
+  // must perform that action.
+  testWidgets('"Ver noticia completa" OPENS the article, it does not copy it',
+      (tester) async {
+    final launcher = _FakeUrlLauncher();
+    UrlLauncherPlatform.instance = launcher;
+
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fuente A (2)'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Ver noticia completa →').first);
+    await tester.pumpAndSettle();
+
+    expect(launcher.launched, ['https://a.com/1']);
+    // And no "link copied" consolation prize.
+    expect(find.textContaining('opiad'), findsNothing);
+  });
+
+  testWidgets('it opens in the EXTERNAL browser, never an in-app webview',
+      (tester) async {
+    final launcher = _FakeUrlLauncher();
+    UrlLauncherPlatform.instance = launcher;
+
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fuente A (2)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ver noticia completa →').first);
+    await tester.pumpAndSettle();
+
+    expect(launcher.lastUseWebView, isFalse);
+  });
+
+  testWidgets('when the article cannot be opened, it SAYS so and offers to copy',
+      (tester) async {
+    // Silence is the wrong answer: a tap that does nothing looks like a frozen
+    // app. Copying is a genuine fallback, but only when announced.
+    final launcher = _FakeUrlLauncher(canOpen: false);
+    UrlLauncherPlatform.instance = launcher;
+
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fuente A (2)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ver noticia completa →').first);
+    await tester.pumpAndSettle();
+
+    expect(launcher.launched, isEmpty);
+    // Says so out loud, and offers copying as an explicit choice rather than
+    // doing it silently.
+    expect(find.text('No se pudo abrir la noticia.'), findsOneWidget);
+    expect(find.text('Copiar enlace'), findsOneWidget);
+  });
+
+}
+
+/// Records launched URLs so the article link can be verified without a real
+/// browser. [canOpen] false simulates a device with nothing able to handle it.
+class _FakeUrlLauncher extends Fake with MockPlatformInterfaceMixin implements UrlLauncherPlatform {
+  _FakeUrlLauncher({this.canOpen = true});
+
+  final bool canOpen;
+  final List<String> launched = [];
+  bool? lastUseWebView;
+
+  @override
+  Future<bool> canLaunch(String url) async => canOpen;
+
+  @override
+  Future<bool> launchUrl(String url, LaunchOptions options) async {
+    if (!canOpen) return false;
+    launched.add(url);
+    lastUseWebView = options.mode == PreferredLaunchMode.inAppWebView;
+    return true;
+  }
 }

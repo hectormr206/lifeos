@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -359,7 +360,7 @@ class _ArticleCardState extends State<_ArticleCard> {
             if (article.url.isNotEmpty) ...[
               const SizedBox(height: 12),
               InkWell(
-                onTap: () => _copyLink(context, article.url, l10n),
+                onTap: () => _openArticle(context, article.url, l10n),
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
@@ -422,11 +423,55 @@ class _ArticleCardState extends State<_ArticleCard> {
     }
   }
 
-  Future<void> _copyLink(BuildContext context, String url, AppLocalizations l10n) async {
-    await Clipboard.setData(ClipboardData(text: url));
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(l10n.briefingLinkCopied)));
+  /// Opens the article in the EXTERNAL browser — the action the link's own
+  /// label promises.
+  ///
+  /// It used to copy the URL to the clipboard instead, leaving the user to
+  /// paste it somewhere by hand. A control that says "Ver noticia completa"
+  /// and quietly does something else is worse than one that fails: the user
+  /// cannot tell it went wrong.
+  ///
+  /// When nothing on the device can handle the link, it SAYS so and offers
+  /// copying as an explicit action. The message is shown BEFORE any clipboard
+  /// work — telling the user must never sit behind an await that can hang, or
+  /// a stuck clipboard swallows the explanation too and the tap looks dead.
+  Future<void> _openArticle(BuildContext context, String url, AppLocalizations l10n) async {
+    final uri = Uri.tryParse(url);
+    var opened = false;
+    if (uri != null) {
+      try {
+        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (_) {
+        opened = false; // No handler, or the platform refused it.
+      }
+    }
+    if (opened || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(l10n.briefingOpenFailed),
+        action: SnackBarAction(
+          label: l10n.briefingCopyLinkAction,
+          onPressed: () => _copyLink(messenger, url, l10n),
+        ),
+      ),
+    );
+  }
+
+  /// Copies the link on the user's explicit request, and confirms it.
+  Future<void> _copyLink(
+    ScaffoldMessengerState messenger,
+    String url,
+    AppLocalizations l10n,
+  ) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: url));
+      messenger.showSnackBar(SnackBar(content: Text(l10n.briefingLinkCopied)));
+    } catch (_) {
+      // Even the clipboard refused: say that rather than claim a copy.
+      messenger.showSnackBar(SnackBar(content: Text(l10n.briefingCopyFailed)));
+    }
   }
 
   static String _formatDate(DateTime dtUtc) {

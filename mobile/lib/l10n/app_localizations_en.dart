@@ -689,6 +689,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get briefingLinkCopied => 'Link copied to clipboard';
 
   @override
+  String get briefingOpenFailed => 'Couldn\'t open the article.';
+
+  @override
+  String get briefingCopyLinkAction => 'Copy link';
+
+  @override
+  String get briefingCopyFailed => 'Couldn\'t copy the link.';
+
+  @override
   String get briefingScheduleTitle => 'Automatic briefing';
 
   @override
