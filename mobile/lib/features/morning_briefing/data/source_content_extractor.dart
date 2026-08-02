@@ -314,6 +314,14 @@ class SourceContentExtractor {
     return s.replaceAll(_whitespace, ' ').trim();
   }
 
+  /// Removes invisible non-whitespace and normalises surrounding space.
+  ///
+  /// For text that did NOT come from a feed — a small on-device model's output,
+  /// for instance — where there are no tags to strip but the same invisible
+  /// characters can still appear and indent the card for no visible reason.
+  String stripInvisible(String s) =>
+      s.replaceAll(_invisible, '').replaceAll(_whitespace, ' ').trim();
+
   /// Cleans + caps a per-item BRIEF description for the card. Handles feeds that
   /// double-encode HTML (escaped tags like `&lt;p&gt;` that only reappear AFTER
   /// entity decoding): strips tags, decodes entities, strips the revealed tags,
@@ -325,22 +333,49 @@ class SourceContentExtractor {
     s = _decodeEntities(s); // escaped tags/entities reappear
     s = s.replaceAll(_anyTag, ' '); // strip the now-revealed tags
     s = _decodeEntities(s); // decode any remaining nested entities
+    // Drop invisible non-whitespace BEFORE collapsing, so what is left is
+    // ordinary space that collapse+trim can actually remove.
+    s = s.replaceAll(_invisible, '');
     s = s.replaceAll(_whitespace, ' ').trim();
     if (s.length <= briefMaxChars) return s;
     return '${s.substring(0, briefMaxChars).trimRight()}…';
   }
 
-  String _decodeEntities(String s) => s
-      .replaceAll('&amp;', '&')
-      .replaceAll('&lt;', '<')
-      .replaceAll('&gt;', '>')
-      .replaceAll('&quot;', '"')
-      .replaceAll('&#39;', "'")
-      .replaceAll('&apos;', "'")
-      .replaceAll('&nbsp;', ' ')
-      .replaceAll('&#8217;', "'")
-      .replaceAll('&#8220;', '"')
-      .replaceAll('&#8221;', '"');
+  /// Characters that are INVISIBLE but are not Unicode whitespace, so neither
+  /// [String.trim] nor `\s` removes them. A feed (or a small on-device model)
+  /// that emits one at the start of a brief produces a card that looks
+  /// mysteriously indented, with nothing in the text to explain it.
+  static final RegExp _invisible = RegExp(r'[\u200B-\u200D\u2060\uFEFF\u180E\u2800]');
+
+  /// `&#160;` / `&#xA0;` — numeric entities of every codepoint. The named list
+  /// below only ever covered a handful, so a numeric non-breaking space reached
+  /// the card as the literal text "&#160;" instead of becoming a space that
+  /// collapsing and trimming could then remove.
+  static final RegExp _numericEntity = RegExp(r'&#(x[0-9a-fA-F]+|[0-9]+);');
+
+  String _decodeEntities(String s) {
+    var out = s
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&apos;', "'")
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&#8217;', "'")
+        .replaceAll('&#8220;', '"')
+        .replaceAll('&#8221;', '"');
+    out = out.replaceAllMapped(_numericEntity, (m) {
+      final raw = m.group(1)!;
+      final code = raw.startsWith('x') || raw.startsWith('X')
+          ? int.tryParse(raw.substring(1), radix: 16)
+          : int.tryParse(raw);
+      // Out-of-range or unparseable: leave it alone rather than corrupt text.
+      if (code == null || code < 0x20 || code > 0x10FFFF) return m.group(0)!;
+      return String.fromCharCode(code);
+    });
+    return out;
+  }
 
   String _cap(String s) => s.length <= maxChars ? s : '${s.substring(0, maxChars)}…';
 

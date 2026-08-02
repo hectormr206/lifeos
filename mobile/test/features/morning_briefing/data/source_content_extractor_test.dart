@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/morning_briefing/data/source_content_extractor.dart';
 
 void main() {
+  _blankSpaceGuards();
   const extractor = SourceContentExtractor(maxItems: 3, maxChars: 500);
 
   test('extracts channel title + item titles/summaries from an RSS feed', () {
@@ -61,5 +62,55 @@ void main() {
     final longBody = '<html><body><p>${'a' * 5000}</p></body></html>';
     final result = extractor.extract(longBody, url: 'https://ejemplo.com');
     expect(result.text.length, lessThanOrEqualTo(501), reason: 'maxChars 500 + ellipsis');
+  });
+}
+
+// REPORTED: some briefing items render with a blank gap before the text —
+// "arranca corrido", with nothing visible causing it.
+//
+// `trim()` and `\s+` between them handle ordinary whitespace, so anything that
+// survives to the screen is a character that is NOT Unicode White_Space and
+// therefore invisible to both. Feeds and small on-device models emit these:
+// zero-width spaces, byte-order marks, braille blanks. They cannot be seen in
+// the source, only in the rendering — which is exactly why this went unnoticed.
+//
+// Numeric HTML entities are the other half: the decoder handled a fixed list of
+// named ones, so `&#160;` (a non-breaking space) reached the card as literal
+// text instead of becoming a space that could then be trimmed.
+void _blankSpaceGuards() {
+  group('invisible leading blanks are stripped', () {
+    final extractor = SourceContentExtractor();
+
+    test('a zero-width space before the text does not indent the card', () {
+      expect(extractor.cleanBrief('​Un vistazo al futuro'), 'Un vistazo al futuro');
+    });
+
+    test('a byte-order mark is not text', () {
+      expect(extractor.cleanBrief('﻿Un vistazo'), 'Un vistazo');
+    });
+
+    test('a braille blank — invisible, and not Unicode whitespace', () {
+      expect(extractor.cleanBrief('⠀⠀Un vistazo'), 'Un vistazo');
+    });
+
+    test('numeric entities become spaces, not literal text', () {
+      expect(extractor.cleanBrief('&#160;&#160;Un vistazo'), 'Un vistazo');
+      expect(extractor.cleanBrief('&#xA0;Un vistazo'), 'Un vistazo');
+    });
+
+    test('a mix of the above, as a real feed ships it', () {
+      expect(
+        extractor.cleanBrief('<p>​&#160; <img src="x.jpg"> Un vistazo al futuro</p>'),
+        'Un vistazo al futuro',
+      );
+    });
+
+    test('an entity INSIDE the text still decodes (no over-stripping)', () {
+      expect(extractor.cleanBrief('Caf&#233; y t&#233;'), 'Café y té');
+    });
+
+    test('ordinary text is untouched', () {
+      expect(extractor.cleanBrief('Un vistazo al futuro'), 'Un vistazo al futuro');
+    });
   });
 }

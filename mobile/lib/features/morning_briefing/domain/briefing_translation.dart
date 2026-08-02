@@ -99,9 +99,14 @@ class BriefingTranslationPipeline {
       final line = translated[i];
       if (line == null) continue; // keep native text for this slot
       final parts = line.split('|||');
-      final t = parts[0].trim();
+      // Model output gets the same invisible-character scrub as feed text: a
+      // small model can emit a zero-width space or a stray BOM, and the card
+      // then renders with a blank gap nothing in the text explains.
+      final t = extractor.stripInvisible(parts[0]);
       if (t.isEmpty) continue; // never blank a title
-      final d = parts.length > 1 ? parts.sublist(1).join('|||').trim() : '';
+      final d = parts.length > 1
+          ? extractor.cleanBrief(parts.sublist(1).join('|||'))
+          : '';
       final current = updated.articleForKey(articles[i].key);
       if (current == null) continue;
       updated = updated.replaceArticle(
