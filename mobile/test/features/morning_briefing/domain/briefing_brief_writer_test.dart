@@ -15,7 +15,6 @@
 // win, a failure never costs the user the briefing, and the model is asked only
 // for items that are genuinely blank.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lifeos/features/local_model/domain/generation_metrics.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/morning_briefing/data/source_content_extractor.dart';
 import 'package:lifeos/features/morning_briefing/domain/briefing_brief_writer.dart';
@@ -25,9 +24,11 @@ import 'package:lifeos/features/morning_briefing/domain/source_fetcher.dart';
 import '../../local_model/support/fake_local_llm_engine.dart';
 
 class _FakeFetcher implements SourceFetcher {
-  _FakeFetcher({this.body = '<html><body><p>El cuerpo del artículo.</p></body></html>', this.fails = false});
+  _FakeFetcher({this.fails = false});
 
-  final String body;
+  /// Enough HTML for the extractor to produce readable text.
+  static const String body = '<html><body><p>El cuerpo del artículo.</p></body></html>';
+
   final bool fails;
   final List<String> fetched = [];
 
@@ -45,7 +46,6 @@ class _FakeEngine extends FakeLocalLlmEngine {
 
   final String answer;
   final bool failsLoad;
-  final List<String> prompts = [];
   int loads = 0;
 
   @override
