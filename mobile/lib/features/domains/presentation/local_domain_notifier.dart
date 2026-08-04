@@ -1,3 +1,5 @@
+import 'package:lifeos/core/clock/clock.dart';
+import 'package:lifeos/features/memory/domain/relationship_reminders.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/graph/graph_providers.dart';
@@ -29,6 +31,7 @@ class LocalDomainUiState {
     this.period = LocalEntryPeriod.todo,
     this.query = '',
     this.summary,
+    this.reminders,
   });
 
   final List<LocalDomainEntry> entries;
@@ -45,6 +48,12 @@ class LocalDomainUiState {
   /// the whole period's picture).
   final FinanceSummary? summary;
 
+  /// Relaciones only: the birthdays and contact nudges derived from EVERY
+  /// person on the phone — deliberately independent of the period/search/chip
+  /// filters above. A birthday next week does not stop mattering because the
+  /// user is currently looking at "Hoy".
+  final RelationshipReminders? reminders;
+
   LocalDomainUiState copyWith({
     List<LocalDomainEntry>? entries,
     bool? loading,
@@ -53,6 +62,7 @@ class LocalDomainUiState {
     LocalEntryPeriod? period,
     String? query,
     Object? summary = _unset,
+    Object? reminders = _unset,
   }) =>
       LocalDomainUiState(
         entries: entries ?? this.entries,
@@ -62,6 +72,8 @@ class LocalDomainUiState {
         period: period ?? this.period,
         query: query ?? this.query,
         summary: identical(summary, _unset) ? this.summary : summary as FinanceSummary?,
+        reminders:
+            identical(reminders, _unset) ? this.reminders : reminders as RelationshipReminders?,
       );
 }
 
@@ -101,7 +113,22 @@ class LocalDomainNotifier extends Notifier<LocalDomainUiState> {
       if (descriptor.key == 'finance') {
         summary = financeSummaryOf(await repo.list(descriptor.key, period: state.period));
       }
-      state = state.copyWith(entries: entries, loading: false, summary: summary);
+      // Relationship reminders: read over ALL entries, never the filtered ones.
+      // Whose birthday is coming up is not a function of the period the user
+      // happens to be browsing.
+      RelationshipReminders? reminders;
+      if (descriptor.key == 'relationships') {
+        reminders = relationshipReminders(
+          await repo.list(descriptor.key),
+          now: ref.read(clockProvider).now(),
+        );
+      }
+      state = state.copyWith(
+        entries: entries,
+        loading: false,
+        summary: summary,
+        reminders: reminders,
+      );
     } catch (_) {
       state = state.copyWith(
         loading: false,

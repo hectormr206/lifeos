@@ -1,5 +1,7 @@
 // TODO(i18n): hardcoded neutral Spanish pending the i18n sweep (the domains
 // screens are not localized yet — they localize together in a later pass).
+import 'package:lifeos/theme/lifeos_theme.dart';
+import 'package:lifeos/features/memory/domain/relationship_reminders.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -154,6 +156,8 @@ class _LocalDomainTabState extends ConsumerState<LocalDomainTab> {
             ),
           if (widget.descriptor.key == 'finance' && state.summary != null)
             _FinanceSummaryTiles(summary: state.summary!),
+          if (state.reminders != null && !state.reminders!.isEmpty)
+            _RelationshipReminders(reminders: state.reminders!),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: TextField(
@@ -395,6 +399,99 @@ class _ScrollableCenter extends StatelessWidget {
         children: [
           SizedBox(height: constraints.maxHeight, child: Center(child: child)),
         ],
+      ),
+    );
+  }
+}
+
+
+/// Relaciones: the birthdays coming up and the people worth writing to.
+///
+/// This is the point of recording a person at all. Until now the app could
+/// store one and then never mention them again — the birthday and nudge rules
+/// existed but nothing called them, so the feature was invisible.
+///
+/// TWO QUESTIONS, ANSWERED ONCE EACH. A nudge answers "who should I write to",
+/// and the birthday behind it is its reason; the birthday list answers "what is
+/// coming up". A birthday that is already a nudge's reason is therefore NOT
+/// repeated in the list below — printing the same sentence twice reads as a
+/// bug, and makes the user hunt for a difference that is not there.
+///
+/// The reason is always a reason, never a countdown. "Hace 45 días que no
+/// hablas con Juan" is administrative guilt and gets muted within a week;
+/// "Sofía cumple 7 el 10" is something to write about. The day count decides
+/// who appears here and is never rendered.
+class _RelationshipReminders extends StatelessWidget {
+  const _RelationshipReminders({required this.reminders});
+
+  final RelationshipReminders reminders;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final hint = Theme.of(context).hintColor;
+
+    // Birthdays already carried by a nudge, so they are not printed twice.
+    final claimed = <String>{
+      for (final d in reminders.due)
+        if (d.context != null) '${d.context!.person.name}::${d.context!.on}',
+    };
+    final unclaimed = [
+      for (final b in reminders.birthdays)
+        if (!claimed.contains('${b.person.name}::${b.on}')) b,
+    ];
+
+    if (reminders.due.isEmpty && unclaimed.isEmpty) return const SizedBox.shrink();
+
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final d in reminders.due)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.waving_hand_outlined, size: 18, color: LifeOSColors.teal),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // WHO to write to. The reason alone left the user
+                          // reading a birthday with no idea whose it made
+                          // relevant, or what they were meant to do about it.
+                          Text('Escríbele a ${d.person.name}',
+                              style: textTheme.bodyMedium
+                                  ?.copyWith(fontWeight: FontWeight.w600)),
+                          Text(d.message(),
+                              style: textTheme.bodySmall?.copyWith(color: hint)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (reminders.due.isNotEmpty && unclaimed.isNotEmpty)
+              Divider(height: 16, color: hint.withValues(alpha: 0.2)),
+            for (final b in unclaimed)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.cake_outlined, size: 18, color: LifeOSColors.teal),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(b.describe(), style: textTheme.bodyMedium)),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

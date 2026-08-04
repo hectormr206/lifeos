@@ -278,4 +278,114 @@ void main() {
     expect(find.text('Editar'), findsNothing);
     expect(find.text('Eliminar'), findsOneWidget);
   });
+
+  // RELACIONES: the point of recording a person at all.
+  //
+  // Until now the app could store someone and then never mention them again —
+  // the birthday and nudge rules existed as tested functions that nothing
+  // called, so the whole feature was invisible on screen. These prove it is
+  // not any more.
+  group('Relaciones surfaces the people you recorded', () {
+    testWidgets('an upcoming birthday appears above the list', (tester) async {
+      final soon = DateTime.now().add(const Duration(days: 5));
+      await repository.create('relationships', type('relationships', 'person'), {
+        'name': 'Juan',
+        'birth_date': '1988-${soon.month.toString().padLeft(2, '0')}-'
+            '${soon.day.toString().padLeft(2, '0')}',
+        'ts': DateTime.now(),
+      });
+
+      await tester.pumpWidget(host('relationships'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Juan cumple'), findsOneWidget);
+    });
+
+    testWidgets('someone overdue is surfaced with a REASON, never a day count',
+        (tester) async {
+      final soon = DateTime.now().add(const Duration(days: 5));
+      final mm = soon.month.toString().padLeft(2, '0');
+      final dd = soon.day.toString().padLeft(2, '0');
+      await repository.create('relationships', type('relationships', 'person'), {
+        'name': 'Juan',
+        'contact_every_days': 30,
+        'ts': DateTime.now().subtract(const Duration(days: 200)),
+      });
+      await repository.create('relationships', type('relationships', 'person'), {
+        'name': 'Sofía',
+        'relation': 'hija de Juan',
+        'birth_date': '2019-$mm-$dd',
+        'ts': DateTime.now(),
+      });
+
+      await tester.pumpWidget(host('relationships'));
+      await tester.pumpAndSettle();
+
+      // It says WHO to write to — the reason alone left the user reading a
+      // birthday with no idea what to do about it.
+      expect(find.text('Escríbele a Juan'), findsOneWidget);
+      // ...and why, which is a reason rather than a countdown.
+      expect(find.textContaining('Sofía'), findsWidgets);
+      expect(find.textContaining('200 días'), findsNothing);
+    });
+
+    testWidgets('the birthday behind a nudge is not printed twice', (tester) async {
+      // The same sentence rendered twice reads as a bug and sends the user
+      // hunting for a difference that is not there.
+      final soon = DateTime.now().add(const Duration(days: 5));
+      final mm = soon.month.toString().padLeft(2, '0');
+      final dd = soon.day.toString().padLeft(2, '0');
+      await repository.create('relationships', type('relationships', 'person'), {
+        'name': 'Juan',
+        'contact_every_days': 30,
+        'ts': DateTime.now().subtract(const Duration(days: 200)),
+      });
+      await repository.create('relationships', type('relationships', 'person'), {
+        'name': 'Sofía',
+        'relation': 'hija de Juan',
+        'birth_date': '2019-$mm-$dd',
+        'ts': DateTime.now(),
+      });
+
+      await tester.pumpWidget(host('relationships'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('cumple'), findsOneWidget);
+    });
+
+    testWidgets('nothing to say → no card at all, not an empty one', (tester) async {
+      await repository.create('relationships', type('relationships', 'person'),
+          {'name': 'Juan', 'ts': DateTime.now()});
+
+      await tester.pumpWidget(host('relationships'));
+      await tester.pumpAndSettle();
+
+      // Juan is on the list, but with no birthday and no cadence there is
+      // nothing to remind about — and silence must look like silence.
+      expect(find.textContaining('cumple'), findsNothing);
+      expect(find.textContaining('Hace tiempo'), findsNothing);
+    });
+
+    testWidgets('the reminders survive changing the period filter', (tester) async {
+      // A birthday next week does not stop mattering because the user tapped
+      // "Hoy": the reminders read every person, not the filtered rows.
+      final soon = DateTime.now().add(const Duration(days: 5));
+      await repository.create('relationships', type('relationships', 'person'), {
+        'name': 'Juan',
+        'birth_date': '1988-${soon.month.toString().padLeft(2, '0')}-'
+            '${soon.day.toString().padLeft(2, '0')}',
+        'ts': DateTime.now().subtract(const Duration(days: 90)),
+      });
+
+      await tester.pumpWidget(host('relationships'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Juan cumple'), findsOneWidget);
+
+      await tester.tap(find.text('Hoy').first);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Juan cumple'), findsOneWidget);
+    });
+  });
+
 }
