@@ -19,9 +19,11 @@
 /// new text; deletes drop it too (soft-delete cascade incl. vector).
 library;
 
+import '../../../core/graph/graph_records.dart';
 import '../../../core/graph/local_graph_store.dart';
 import '../../memory/data/memory_writer.dart';
 import '../../memory/domain/domain_router.dart' show graphDomainForKey;
+import '../../memory/domain/person_identity.dart';
 import '../../memory/domain/subject.dart' show foldAccents;
 import '../domain/local_domain_entry.dart';
 import '../domain/local_entry_config.dart';
@@ -211,4 +213,133 @@ class LocalDomainRepository {
     }
     return foldAccents(haystack.toString().toLowerCase()).contains(foldedQuery);
   }
+
+  // ── Person identity (relationships-robustness, Slice 2) ──────────────────
+  //
+  // NEW graph-node kind, kept OUT of the `kind:'fact'` entry registry on
+  // purpose (see design.md): identity is a derived system record, never a
+  // user-authored entry, so it must never surface in the legacy entry list
+  // or gain an edit/delete form.
+  //
+  // DEVIATION FROM design.md, flagged explicitly: the design specifies
+  // `kind:'person'` for this node. That kind is ALREADY the chat-memory
+  // "known person" node (`MemoryWriter`'s hub, `PersonDirectory`,
+  // `chat_context_builder.dart`, `daily_digest_service.dart`,
+  // `mi_vida_notifier.dart`, the graph browser's "Personas" bucket) — a
+  // collision the design didn't anticipate. Reusing it would silently inject
+  // non-conforming rows into every one of those readers'
+  // `listNodesByKind('person')` calls. `person_identity` is used instead.
+  static const String kPersonIdentityKind = 'person_identity';
+
+  /// One-time, additive, IDEMPOTENT migration: groups every existing
+  /// `relationships`/`person` fact entry by TODAY's folded-name rule
+  /// (characterized in Slice 1) and mints one [kPersonIdentityKind] node per
+  /// group not already covered by an existing identity. NEVER rewrites or
+  /// deletes the original `kind:'fact'` entries — the real data on the
+  /// user's phone stays exactly as recorded.
+  ///
+  /// Entries that carry no usable name are named in the returned
+  /// [PersonMigrationResult.incompleteEntryUuids] rather than silently
+  /// skipped — a partial migration presented as complete is exactly the
+  /// silent failure this feature exists to avoid.
+  Future<PersonMigrationResult> migratePersonIdentities() async {
+    final existingIdentities = await _store.listNodesByKind(kPersonIdentityKind);
+    final existingKeys = <String>{
+      for (final n in existingIdentities) ..._identityFromNode(n).foldedKeys,
+    };
+
+    final factNodes = await _store.listNodesByKind('fact');
+    final occurrences = <NameOccurrence>[];
+    final incomplete = <String>[];
+    for (final node in factNodes) {
+      if (node.data['type'] != 'person') continue;
+      final name = node.data['name'];
+      if (name is! String || name.trim().isEmpty) {
+        incomplete.add(node.uuid);
+        continue;
+      }
+      occurrences.add(NameOccurrence(name: name, recordedAt: node.occurredAt ?? node.createdAt));
+    }
+
+    final groups = groupForMigration(occurrences, mintId: () => mintUlid(now: _now));
+    var minted = 0;
+    for (final identity in groups) {
+      if (identity.foldedKeys.any(existingKeys.contains)) continue; // idempotent skip
+      await _store.createNode(
+        kind: kPersonIdentityKind,
+        label: identity.canonicalName,
+        data: {
+          'person_id': identity.personId,
+          'canonical_name': identity.canonicalName,
+          'folded_keys': identity.foldedKeys,
+        },
+      );
+      minted++;
+    }
+
+    return PersonMigrationResult(mintedCount: minted, incompleteEntryUuids: incomplete);
+  }
+
+  /// Renames a person: `person_id` is unchanged (the whole point of the
+  /// identity surviving a typo fix); the new folded key is appended, never
+  /// replacing the old one, so a link made before the rename still resolves.
+  /// Returns null when [personId] does not exist.
+  Future<GraphNodeRecord?> renamePersonIdentity(String personId, String newName) async {
+    final node = await _findIdentityNode(personId);
+    if (node == null) return null;
+    final result = renamed(_identityFromNode(node), newName);
+    return _store.upsertNode(node.copyWith(
+      label: result.canonicalName,
+      data: {
+        ...node.data,
+        'canonical_name': result.canonicalName,
+        'folded_keys': result.foldedKeys,
+        'unnamed': result.unnamed,
+      },
+    ));
+  }
+
+  /// Every `person_id` whose folded name matches a DIFFERENT identity's
+  /// folded name — detection only, per the proposal's binding answer
+  /// (merge/split tooling is explicitly out of scope). Never blocks a save
+  /// and never merges two records.
+  Future<List<String>> collidingPersonIds() async {
+    final identities = (await _store.listNodesByKind(kPersonIdentityKind)).map(_identityFromNode).toList();
+    return [
+      for (final identity in identities)
+        if (foldedKeyCollidesWithOther(identity, identities)) identity.personId,
+    ];
+  }
+
+  Future<GraphNodeRecord?> _findIdentityNode(String personId) async {
+    for (final n in await _store.listNodesByKind(kPersonIdentityKind)) {
+      if (n.data['person_id'] == personId) return n;
+    }
+    return null;
+  }
+
+  static PersonIdentity _identityFromNode(GraphNodeRecord node) => PersonIdentity(
+        personId: node.data['person_id'] as String? ?? '',
+        canonicalName: node.data['canonical_name'] as String? ?? node.label,
+        foldedKeys: (node.data['folded_keys'] as List?)?.cast<String>() ?? const <String>[],
+        unnamed: node.data['unnamed'] == true,
+        deceased: node.data['deceased'] == true,
+      );
+}
+
+/// Outcome of [LocalDomainRepository.migratePersonIdentities]: how many new
+/// identities were minted this run, and which existing entries could not be
+/// migrated — named explicitly, never silently dropped.
+class PersonMigrationResult {
+  const PersonMigrationResult({required this.mintedCount, required this.incompleteEntryUuids});
+
+  final int mintedCount;
+
+  /// Fact-node uuids that carried no usable name. A non-empty list is the
+  /// "migration incomplete" state the spec requires: loud, naming the
+  /// affected entries, never a silent partial migration presented as
+  /// complete.
+  final List<String> incompleteEntryUuids;
+
+  bool get isComplete => incompleteEntryUuids.isEmpty;
 }

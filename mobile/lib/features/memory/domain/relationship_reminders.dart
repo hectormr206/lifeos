@@ -21,6 +21,7 @@ import '../../domains/domain/local_domain_entry.dart';
 import 'birthdays.dart';
 import 'contact_nudge.dart';
 import 'love_languages.dart';
+import 'person_identity.dart' show foldPersonName;
 
 /// What the Relaciones screen needs to show, in one pass over the entries.
 class RelationshipReminders {
@@ -231,18 +232,12 @@ String? _relationTarget(String? relation) {
 
 /// Case- and accent-insensitive identity for a person's name, so "Sofía" and
 /// "sofia" are the same human.
-String _key(String name) {
-  const from = 'áàäâéèëêíìïîóòöôúùüûñ';
-  const to = 'aaaaeeeeiiiioooouuuun';
-  final lower = name.trim().toLowerCase();
-  final buffer = StringBuffer();
-  for (final rune in lower.runes) {
-    final ch = String.fromCharCode(rune);
-    final i = from.indexOf(ch);
-    buffer.write(i >= 0 ? to[i] : ch);
-  }
-  return buffer.toString();
-}
+///
+/// Delegates to [foldPersonName] (`person_identity.dart`), the single source
+/// of truth for this rule now that Slice 2's identity layer keys ULIDs by
+/// the same fold — kept here as a thin alias so this file's existing 54+
+/// characterization tests need no changes.
+String _key(String name) => foldPersonName(name);
 
 String _string(Object? v) => (v as String?)?.trim() ?? '';
 
