@@ -386,6 +386,49 @@ void main() {
 
       expect(find.textContaining('Juan cumple'), findsOneWidget);
     });
+
+    testWidgets('the couple observation appears, quiet and last', (tester) async {
+      Future<void> act(String what, String side) => repository.create(
+            'relationships',
+            type('relationships', 'couple_act'),
+            {'what': what, 'side': side, 'ts': DateTime.now()},
+          );
+      await act('le lavé el coche', 'gave');
+      await act('le arreglé la puerta', 'gave');
+      await act('le hice el desayuno', 'gave');
+      await act('extraña que salgamos solos', 'valued');
+      await act('quiere que platiquemos sin teléfonos', 'valued');
+      await act('le gustó la caminata juntos', 'valued');
+
+      await tester.pumpWidget(host('relationships'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('actos de servicio'), findsOneWidget);
+      expect(find.textContaining('tiempo de calidad'), findsOneWidget);
+    });
+
+    testWidgets('with both speaking the same language it says nothing at all',
+        (tester) async {
+      // Silence is the correct output far more often than not, and a feature
+      // that speaks up anyway is the one that gets muted.
+      Future<void> act(String what, String side) => repository.create(
+            'relationships',
+            type('relationships', 'couple_act'),
+            {'what': what, 'side': side, 'ts': DateTime.now()},
+          );
+      await act('le lavé el coche', 'gave');
+      await act('le arreglé la puerta', 'gave');
+      await act('le hice el desayuno', 'gave');
+      await act('le encanta cuando le arreglo cosas', 'valued');
+      await act('agradeció que le hiciera el desayuno', 'valued');
+      await act('dijo que le ayudó que lavara el coche', 'valued');
+
+      await tester.pumpWidget(host('relationships'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Lo que más registras dar'), findsNothing);
+    });
+
   });
 
 }

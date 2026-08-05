@@ -41,6 +41,15 @@ LocalDomainEntry _interaction(String person, DateTime when) => LocalDomainEntry(
       data: {'person': person},
     );
 
+
+LocalDomainEntry _act(String what, {required String side, DateTime? when}) => LocalDomainEntry(
+      uuid: 'a::$what',
+      label: what,
+      timestamp: when ?? DateTime(2026, 8, 1),
+      type: 'couple_act',
+      data: {'what': what, 'side': side},
+    );
+
 void main() {
   final today = DateTime(2026, 8, 4);
 
@@ -241,4 +250,120 @@ void main() {
       expect(r.birthdays, isEmpty);
     });
   });
+
+  // THE COUPLE OBSERVATION. Chapman's actual insight is not "learn the five
+  // languages" — it is that each person GIVES love in their own, and their
+  // partner may not receive it in that one. Two people genuinely trying,
+  // neither feeling loved. Software can notice that mismatch; it cannot fix it,
+  // and it must not turn affection into a chore.
+  //
+  // Which is why most of these tests are about SILENCE.
+  group('the couple observation', () {
+    test('names the mismatch between what is given and what is valued', () {
+      final r = relationshipReminders([
+        _act('le lavé el coche', side: 'gave'),
+        _act('le arreglé la puerta', side: 'gave'),
+        _act('le hice el desayuno', side: 'gave'),
+        _act('dijo que extraña que salgamos solos', side: 'valued'),
+        _act('me pidió que platicáramos sin teléfonos', side: 'valued'),
+        _act('le gustó nuestra caminata juntos', side: 'valued'),
+      ], now: today);
+
+      expect(r.loveLanguages, isNotNull);
+      final text = r.loveLanguages!.describe();
+      expect(text, contains('actos de servicio'));
+      expect(text, contains('tiempo de calidad'));
+    });
+
+    test('reads as an observation, never as an instruction', () {
+      final r = relationshipReminders([
+        _act('le lavé el coche', side: 'gave'),
+        _act('le arreglé la puerta', side: 'gave'),
+        _act('le hice el desayuno', side: 'gave'),
+        _act('extraña que salgamos solos', side: 'valued'),
+        _act('quiere que platiquemos sin teléfonos', side: 'valued'),
+        _act('le gustó la caminata juntos', side: 'valued'),
+      ], now: today);
+
+      final text = r.loveLanguages!.describe().toLowerCase();
+      for (final imperative in ['deberías', 'tienes que', 'recuerda', 'haz ']) {
+        expect(text, isNot(contains(imperative)));
+      }
+      for (final gamified in ['%', 'racha', 'puntos', 'meta']) {
+        expect(text, isNot(contains(gamified)));
+      }
+    });
+
+    test('says nothing on thin evidence', () {
+      // Two data points are an anecdote, and announcing a pattern from an
+      // anecdote is how software earns distrust on something this personal.
+      final r = relationshipReminders([
+        _act('le lavé el coche', side: 'gave'),
+        _act('extraña que salgamos solos', side: 'valued'),
+      ], now: today);
+
+      expect(r.loveLanguages, isNull);
+    });
+
+    test('says nothing when only one side was recorded', () {
+      final r = relationshipReminders([
+        _act('le lavé el coche', side: 'gave'),
+        _act('le arreglé la puerta', side: 'gave'),
+        _act('le hice el desayuno', side: 'gave'),
+        _act('le llené el tanque', side: 'gave'),
+      ], now: today);
+
+      expect(r.loveLanguages, isNull);
+    });
+
+    test('says nothing when both already speak the same language', () {
+      final r = relationshipReminders([
+        _act('le lavé el coche', side: 'gave'),
+        _act('le arreglé la puerta', side: 'gave'),
+        _act('le hice el desayuno', side: 'gave'),
+        _act('dijo que le encanta cuando le arreglo cosas', side: 'valued'),
+        _act('agradeció que le hiciera el desayuno', side: 'valued'),
+        _act('dijo que le ayudó que lavara el coche', side: 'valued'),
+      ], now: today);
+
+      expect(r.loveLanguages, isNull);
+    });
+
+    test('an act it cannot read is skipped, never guessed', () {
+      final r = relationshipReminders([
+        _act('fuimos al súper', side: 'gave'),
+        _act('pasó algo', side: 'valued'),
+      ], now: today);
+
+      expect(r.loveLanguages, isNull);
+    });
+
+    test('an act with no text is not an act', () {
+      final r = relationshipReminders([
+        LocalDomainEntry(
+          uuid: 'x',
+          label: '',
+          timestamp: DateTime(2026, 8, 1),
+          type: 'couple_act',
+          data: const {'side': 'gave'},
+        ),
+      ], now: today);
+
+      expect(r.loveLanguages, isNull);
+      expect(r.isEmpty, isTrue);
+    });
+
+    test('couple acts do not become people, birthdays or nudges', () {
+      // Different entry type, different meaning — a recorded act is not
+      // someone to write to.
+      final r = relationshipReminders([
+        _act('le lavé el coche', side: 'gave'),
+        _act('extraña que salgamos solos', side: 'valued'),
+      ], now: today);
+
+      expect(r.birthdays, isEmpty);
+      expect(r.due, isEmpty);
+    });
+  });
+
 }

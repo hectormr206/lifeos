@@ -20,10 +20,15 @@ library;
 import '../../domains/domain/local_domain_entry.dart';
 import 'birthdays.dart';
 import 'contact_nudge.dart';
+import 'love_languages.dart';
 
 /// What the Relaciones screen needs to show, in one pass over the entries.
 class RelationshipReminders {
-  const RelationshipReminders({required this.birthdays, required this.due});
+  const RelationshipReminders({
+    required this.birthdays,
+    required this.due,
+    this.loveLanguages,
+  });
 
   /// Birthdays close enough to be worth mentioning, soonest first.
   final List<UpcomingBirthday> birthdays;
@@ -31,7 +36,15 @@ class RelationshipReminders {
   /// People whose chosen cadence has elapsed, most overdue first.
   final List<ContactDue> due;
 
-  bool get isEmpty => birthdays.isEmpty && due.isEmpty;
+  /// The couple mismatch, when the recorded acts show one — usually null.
+  ///
+  /// Silence is the correct answer far more often than not: on thin evidence,
+  /// on one-sided evidence, and when both already speak the same language, the
+  /// rule says nothing rather than manufacture a finding about someone's
+  /// marriage.
+  final LoveLanguageObservation? loveLanguages;
+
+  bool get isEmpty => birthdays.isEmpty && due.isEmpty && loveLanguages == null;
 }
 
 /// How far ahead the screen looks for birthdays.
@@ -58,8 +71,20 @@ RelationshipReminders relationshipReminders(
       withinDays: kBirthdayHorizonDays,
     ),
     due: contactsDue(people, now: now),
+    loveLanguages: observeLoveLanguages(_actsFrom(entries)),
   );
 }
+
+/// The couple acts the user recorded, in the two directions that matter: what
+/// they gave, and what their partner said they valued.
+List<Act> _actsFrom(Iterable<LocalDomainEntry> entries) => [
+      for (final e in entries)
+        if (e.type == 'couple_act' && _string(e.data['what']).isNotEmpty)
+          Act(
+            text: _string(e.data['what']),
+            by: _string(e.data['side']) == 'valued' ? Side.partner : Side.user,
+          ),
+    ];
 
 /// The people the user has recorded, with their families linked and their last
 /// contact derived from the interaction log.

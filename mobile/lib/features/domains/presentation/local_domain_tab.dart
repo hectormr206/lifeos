@@ -441,7 +441,9 @@ class _RelationshipReminders extends StatelessWidget {
         if (!claimed.contains('${b.person.name}::${b.on}')) b,
     ];
 
-    if (reminders.due.isEmpty && unclaimed.isEmpty) return const SizedBox.shrink();
+    if (reminders.due.isEmpty && unclaimed.isEmpty && reminders.loveLanguages == null) {
+      return const SizedBox.shrink();
+    }
 
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -490,6 +492,36 @@ class _RelationshipReminders extends StatelessWidget {
                   ],
                 ),
               ),
+            // THE COUPLE OBSERVATION, set apart on purpose.
+            //
+            // It is not a reminder and must not read like one: nothing to do,
+            // no one to write to, no date. It is a thing to sit with — the
+            // one thing a person cannot see from inside, because from inside
+            // it is obvious you are showing love. You are. Just in your own
+            // language. Rendered quiet and last so it never competes with the
+            // actionable rows above.
+            if (reminders.loveLanguages != null) ...[
+              Divider(height: 16, color: hint.withValues(alpha: 0.2)),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.favorite_outline, size: 18, color: hint),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        reminders.loveLanguages!.describe(),
+                        style: textTheme.bodySmall?.copyWith(
+                          color: hint,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),

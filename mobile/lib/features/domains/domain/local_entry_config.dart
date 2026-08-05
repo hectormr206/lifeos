@@ -127,6 +127,20 @@ String _stepsLabel(Map<String, Object?> v) => _withNote('${_s(v['steps'])} pasos
 
 String _interactionLabel(Map<String, Object?> v) => _withNote('Interacción con ${_s(v['person'])}', v);
 
+/// A couple act reads back as the sentence the user wrote, prefixed by whose
+/// side it was — "Di: le lavé el coche" / "Valoró: que saliéramos solos".
+/// The verb matters: one is what he DID, the other what she SAID she valued,
+/// and the whole observation depends on not confusing the two.
+String _coupleActLabel(Map<String, Object?> v) {
+  final side = _s(v['side']) == 'valued' ? 'Valoró' : 'Di';
+  return _withNote('$side: ${_s(v['what'])}', v);
+}
+
+const Map<String, String> _coupleActSideLabels = {
+  'gave': 'Lo que yo di',
+  'valued': 'Lo que ella valoró',
+};
+
 /// Names the person and, when known, how they relate — the relation is what
 /// makes a birthday reminder worth reading.
 String _personLabel(Map<String, Object?> v) {
@@ -357,6 +371,36 @@ const Map<String, List<LocalEntryType>> localEntryTypesByDomain = {
       labelBuilder: _interactionLabel,
       fields: [
         DomainFieldSpec(key: 'person', label: 'Persona', type: DomainFieldType.text, required: true),
+        tsField,
+        _noteField,
+      ],
+    ),
+    // ONE act, in the user's own words, and whose side it was.
+    //
+    // Deliberately NOT a quiz. Asking someone to pick their partner's love
+    // language from five options gets a guess, and the guess then drives
+    // everything downstream. What people can actually report is what they did
+    // and what she said she liked — so that is all this asks for. The pattern
+    // is read from the accumulation, never declared up front.
+    LocalEntryType(
+      type: 'couple_act',
+      label: 'Pareja',
+      labelBuilder: _coupleActLabel,
+      fields: [
+        DomainFieldSpec(
+          key: 'side',
+          label: '¿De quién?',
+          type: DomainFieldType.enumType,
+          required: true,
+          enumOptions: ['gave', 'valued'],
+          enumLabels: _coupleActSideLabels,
+        ),
+        DomainFieldSpec(
+            key: 'what',
+            label: '¿Qué pasó?',
+            type: DomainFieldType.text,
+            required: true,
+            unitHint: 'ej. le lavé el coche'),
         tsField,
         _noteField,
       ],
