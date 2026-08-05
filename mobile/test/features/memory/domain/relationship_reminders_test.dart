@@ -11,6 +11,7 @@
 // "Sofía (hija de Juan) cumple 7 el 10" is something to write about.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/domains/domain/local_domain_entry.dart';
+import 'package:lifeos/features/memory/domain/birthdays.dart';
 import 'package:lifeos/features/memory/domain/relationship_reminders.dart';
 
 LocalDomainEntry _person(
@@ -454,6 +455,94 @@ void main() {
         expect(r.due.single.context, isNull, reason: standalone);
       });
     }
+  });
+
+
+  // YOU DO NOT SAY EVERYTHING AT ONCE.
+  //
+  // You record "Oscar García, cumpleaños 10/07" today, and next week you
+  // remember he is your brother-in-law and record that. Two entries, one human.
+  //
+  // The old behaviour took the NEWEST RECORD whole, so the second entry — which
+  // carried a relation and no birth date — quietly erased the birthday. Nothing
+  // failed, nothing warned: the date simply stopped existing, and the reminder
+  // it fed stopped appearing. Measured before fixing: 0 birthdays survived.
+  group('a person told in pieces keeps every piece', () {
+    // list() hands back newest-first; the tests mirror that.
+    LocalDomainEntry oscar(DateTime when, {String? relation, String? birth, int? cadence}) =>
+        LocalDomainEntry(
+          uuid: 'oscar-$when',
+          label: 'Oscar García',
+          timestamp: when,
+          type: 'person',
+          data: {
+            'name': 'Oscar García',
+            'relation': ?relation,
+            'birth_date': ?birth,
+            'contact_every_days': ?cadence,
+          },
+        );
+
+    test('adding the relation later does not erase the birthday', () {
+      final r = relationshipReminders([
+        oscar(DateTime(2026, 8, 5), relation: 'mi cuñado'),
+        oscar(DateTime(2026, 8, 4), birth: '2026-08-10'),
+      ], now: today);
+
+      expect(r.birthdays, hasLength(1));
+      expect(r.birthdays.single.person.relation, 'mi cuñado');
+    });
+
+    test('adding the birthday later does not erase the relation', () {
+      final r = relationshipReminders([
+        oscar(DateTime(2026, 8, 5), birth: '2026-08-10'),
+        oscar(DateTime(2026, 8, 4), relation: 'mi cuñado'),
+      ], now: today);
+
+      expect(r.birthdays.single.person.relation, 'mi cuñado');
+      expect(r.birthdays.single.on, DateTime(2026, 8, 10));
+    });
+
+    test('a correction wins — the newest value of a field is the one meant', () {
+      final r = relationshipReminders([
+        oscar(DateTime(2026, 8, 5), relation: 'mi cuñado'),
+        oscar(DateTime(2026, 8, 4), relation: 'mi primo', birth: '2026-08-10'),
+      ], now: today);
+
+      expect(r.birthdays.single.person.relation, 'mi cuñado');
+      // ...and the field he did not correct survives untouched.
+      expect(r.birthdays.single.on, DateTime(2026, 8, 10));
+    });
+
+    test('a cadence added later starts nudging, keeping the rest', () {
+      final r = relationshipReminders([
+        oscar(DateTime(2026, 8, 5), cadence: 30),
+        oscar(DateTime(2020, 1, 1), relation: 'mi cuñado', birth: '2026-08-10'),
+      ], now: today);
+
+      expect(r.due, hasLength(1));
+      expect(r.due.single.person.name, 'Oscar García');
+      expect(r.birthdays, hasLength(1));
+    });
+
+    test('the person is still ONE person, not two', () {
+      final r = relationshipReminders([
+        oscar(DateTime(2026, 8, 5), relation: 'mi cuñado'),
+        oscar(DateTime(2026, 8, 4), birth: '2026-08-10'),
+      ], now: today);
+
+      expect(r.birthdays, hasLength(1));
+    });
+
+    test('order of arrival does not change the result', () {
+      List<UpcomingBirthday> run(List<LocalDomainEntry> e) =>
+          relationshipReminders(e, now: today).birthdays;
+
+      final a = oscar(DateTime(2026, 8, 5), relation: 'mi cuñado');
+      final b = oscar(DateTime(2026, 8, 4), birth: '2026-08-10');
+
+      expect(run([a, b]).single.describe(), run([b, a]).single.describe());
+    });
   });
 
 }

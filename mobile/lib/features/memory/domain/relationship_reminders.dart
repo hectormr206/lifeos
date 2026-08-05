@@ -114,12 +114,34 @@ List<TrackedPerson> trackedPeopleFrom(Iterable<LocalDomainEntry> entries) {
     }
   }
 
-  // A person recorded twice (edited, re-added) should not appear twice; the
-  // first-seen record wins, since [LocalDomainRepository.list] returns newest
-  // first and the newest is the one the user last meant.
+  // A PERSON TOLD IN PIECES IS STILL ONE PERSON.
+  //
+  // You record "Oscar García, cumpleaños 10/07" today and remember next week
+  // that he is your brother-in-law. Two entries, one human — and taking the
+  // newest RECORD whole silently erased the birthday, because the second entry
+  // carried a relation and no date. Nothing failed and nothing warned: the date
+  // simply stopped existing, along with the reminder it fed.
+  //
+  // So the merge is per FIELD: the newest value the user gave for each field
+  // wins, and a field they never mentioned again survives untouched. A
+  // correction still overrides, because the newest value is the one they meant.
   final byKey = <String, _Person>{};
-  for (final p in persons) {
-    byKey.putIfAbsent(_key(p.name), () => p);
+  final ordered = persons.toList()..sort((a, b) => b.knownSince.compareTo(a.knownSince));
+  for (final p in ordered) {
+    final key = _key(p.name);
+    final known = byKey[key];
+    byKey[key] = known == null
+        ? p
+        : _Person(
+            // The name as most recently written, so a corrected spelling shows.
+            name: known.name,
+            // ...but known since the FIRST time they were recorded: that is
+            // when this person entered your life, not when you last edited them.
+            knownSince: p.knownSince,
+            relation: known.relation ?? p.relation,
+            birthDate: known.birthDate ?? p.birthDate,
+            contactEveryDays: known.contactEveryDays ?? p.contactEveryDays,
+          );
   }
 
   return [
