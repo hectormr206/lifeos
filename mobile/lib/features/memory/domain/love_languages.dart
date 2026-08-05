@@ -1,4 +1,24 @@
-/// The couple observation, after Gary Chapman's five love languages.
+/// The couple observation.
+///
+/// ATTRIBUTION AND SCOPE. The underlying idea — that people express affection
+/// in different ways, and may not receive it in the way their partner offers
+/// it — is a widely discussed one, popularised by Gary Chapman. Ideas and
+/// systems are not what copyright protects; expression is. So nothing of his
+/// expression is reproduced here: no text, no examples, and above all NO
+/// QUESTIONNAIRE. His assessment is the part someone would actually be copying,
+/// and it is deliberately absent — see the note below on why the quiz was the
+/// wrong build anyway.
+///
+/// The category names below are ordinary descriptive Spanish phrases used to
+/// label what the vocabulary matches. The vocabulary itself is original, written
+/// from how people in Mexico actually speak.
+///
+/// This project is not affiliated with, endorsed by, or connected to Gary
+/// Chapman or his publishers, and must never present itself as such. The
+/// trademarked title is not used as a product, feature or marketing name
+/// anywhere the user can see — a guard test enforces that, because a future
+/// contributor reaching for the "obvious" label is exactly how that line gets
+/// crossed by accident.
 ///
 /// WHAT THIS DELIBERATELY IS NOT. The obvious build is: quiz the user for the
 /// five languages, store the partner's, then remind him to "perform an act of
