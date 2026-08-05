@@ -24,6 +24,7 @@ import '../../../core/graph/local_graph_store.dart';
 import '../../memory/data/memory_writer.dart';
 import '../../memory/domain/domain_router.dart' show graphDomainForKey;
 import '../../memory/domain/person_identity.dart';
+import '../../memory/domain/relation_links.dart';
 import '../../memory/domain/subject.dart' show foldAccents;
 import '../domain/local_domain_entry.dart';
 import '../domain/local_entry_config.dart';
@@ -116,6 +117,13 @@ class LocalDomainRepository {
       ..addAll(extraData ?? const <String, Object?>{})
       ..['entryId'] = entryId ??
           '$domainKey:${entryType.type}:${_now().toUtc().microsecondsSinceEpoch}-${_entrySeq++}';
+    // Slice 5 (relationships-robustness): a couple_act with no explicit
+    // partner scoping attaches to the CURRENT partner by default — zero extra
+    // taps. An explicitly given `partner_id` (e.g. a future partner picker)
+    // is never overridden.
+    if (entryType.type == 'couple_act' && data['partner_id'] == null) {
+      data['partner_id'] = await currentPartnerId();
+    }
     final node = await _writer.writeFact(
       domain: domainKey,
       label: label ?? renderLocalEntryLabel(entryType, values),
@@ -325,6 +333,159 @@ class LocalDomainRepository {
         unnamed: node.data['unnamed'] == true,
         deceased: node.data['deceased'] == true,
       );
+
+  // ── Relation links (relationships-robustness, Slice 3) ───────────────────
+  //
+  // Structured multi-edge `(kind, target person_id)` links, kept OUT of the
+  // `kind:'fact'` entry registry for the same reason identity is (see
+  // Slice 2 above): these are derived/system records, never a user-authored
+  // entry with its own edit/delete form. `kind:'person_link'` was checked
+  // against the same collision the design missed for `kind:'person'` — no
+  // existing reader in this codebase uses `person_link`, so no reconciliation
+  // was needed here.
+  static const String kPersonLinkKind = 'person_link';
+
+  /// Records that [toPersonId] is the [linkKind] of [fromPersonId].
+  /// APPEND-ONLY: always mints a NEW node — a second recorded role between
+  /// the same two people (e.g. "jefe" then later "amigo") never overwrites
+  /// the first. [optLabel] preserves the original free-text phrase for
+  /// display even though the edge is now structured.
+  Future<GraphNodeRecord> createPersonLink({
+    required String fromPersonId,
+    required String toPersonId,
+    required String linkKind,
+    String? label,
+  }) {
+    return _store.createNode(
+      kind: kPersonLinkKind,
+      label: label ?? linkKind,
+      data: {
+        'from_person_id': fromPersonId,
+        'to_person_id': toPersonId,
+        'link_kind': linkKind,
+        'label': ?label,
+      },
+    );
+  }
+
+  /// Every stored [RelationLink], across all people.
+  Future<List<RelationLink>> listPersonLinks() async {
+    final nodes = await _store.listNodesByKind(kPersonLinkKind);
+    return nodes.map(_linkFromNode).toList();
+  }
+
+  /// The ONLY accessor callers should use to browse [personId]'s relations:
+  /// derives reciprocity at THIS read, over whatever links are currently
+  /// stored — nothing is ever written for the reverse direction, so it can
+  /// never drift from the stored edges.
+  Future<List<LinkedPerson>> linksBothWaysFor(String personId) async {
+    final links = await listPersonLinks();
+    return linksBothWays(links, personId);
+  }
+
+  /// Resolves a free-text [relation] phrase ("hija de Juan") against every
+  /// stored identity, excluding [excludePersonId] (a person never resolves to
+  /// themselves). Precision over reach: an exact one-match resolves; zero or
+  /// ambiguous matches return the explicit "unlinked" status, never a guess.
+  Future<RelationTargetResolution> resolveRelationTargetFor(
+    String? relation, {
+    required String excludePersonId,
+  }) async {
+    final identities = (await _store.listNodesByKind(kPersonIdentityKind)).map(_identityFromNode).toList();
+    return resolveRelationTarget(relation, identities, excludePersonId: excludePersonId);
+  }
+
+  static RelationLink _linkFromNode(GraphNodeRecord node) => RelationLink(
+        linkId: node.uuid,
+        fromPersonId: node.data['from_person_id'] as String? ?? '',
+        linkKind: node.data['link_kind'] as String? ?? node.label,
+        toPersonId: node.data['to_person_id'] as String? ?? '',
+        label: node.data['label'] as String?,
+      );
+
+  // ── Couple-partner scoping (relationships-robustness, Slice 5) ───────────
+  //
+  // Per the binding user answer, the current partner is not yet named — the
+  // system must NOT guess/invent a name. It is minted as an
+  // `unnamed: true` `kind:'person_identity'` node the FIRST time it is
+  // needed, flagged `is_current_partner: true` so there is a single pointer
+  // to resolve. Naming it later is a RENAME (`renamePersonIdentity`, Slice
+  // 2) — zero re-attribution of already-recorded acts.
+
+  /// The current partner's `person_id`, minting the unnamed placeholder
+  /// identity the first time this is called. Idempotent: subsequent calls
+  /// return the SAME id until [mintNewCurrentPartner] moves the pointer.
+  Future<String> currentPartnerId() async {
+    final existing = await _currentPartnerNode();
+    if (existing != null) return existing.data['person_id'] as String;
+
+    final id = mintUlid(now: _now);
+    await _store.createNode(
+      kind: kPersonIdentityKind,
+      label: '',
+      data: {
+        'person_id': id,
+        'canonical_name': '',
+        'folded_keys': const <String>[],
+        'unnamed': true,
+        'is_current_partner': true,
+      },
+    );
+    return id;
+  }
+
+  /// Partner change: mints a NEW unnamed identity and moves the
+  /// `is_current_partner` pointer to it. The PREVIOUS partner keeps existing
+  /// as an ordinary identity (nameable independently); acts already recorded
+  /// against them keep their `partner_id` — nothing is deleted or
+  /// reattributed. Returns the new partner's `person_id`.
+  Future<String> mintNewCurrentPartner() async {
+    final previous = await _currentPartnerNode();
+    if (previous != null) {
+      await _store.upsertNode(previous.copyWith(
+        data: {...previous.data, 'is_current_partner': false},
+      ));
+    }
+
+    final id = mintUlid(now: _now);
+    await _store.createNode(
+      kind: kPersonIdentityKind,
+      label: '',
+      data: {
+        'person_id': id,
+        'canonical_name': '',
+        'folded_keys': const <String>[],
+        'unnamed': true,
+        'is_current_partner': true,
+      },
+    );
+    return id;
+  }
+
+  /// One-time, additive, IDEMPOTENT batch: attaches the CURRENT partner's
+  /// `person_id` to every existing `couple_act` fact entry that carries no
+  /// `partner_id` yet (acts recorded before this slice shipped). Every other
+  /// field on the entry is preserved untouched — this is a field addition,
+  /// never a rewrite. Returns how many entries were backfilled.
+  Future<int> backfillCoupleActsToCurrentPartner() async {
+    final partnerId = await currentPartnerId();
+    final factNodes = await _store.listNodesByKind('fact');
+    var backfilled = 0;
+    for (final node in factNodes) {
+      if (node.data['type'] != 'couple_act') continue;
+      if (node.data['partner_id'] != null) continue;
+      await _store.upsertNode(node.copyWith(data: {...node.data, 'partner_id': partnerId}));
+      backfilled++;
+    }
+    return backfilled;
+  }
+
+  Future<GraphNodeRecord?> _currentPartnerNode() async {
+    for (final n in await _store.listNodesByKind(kPersonIdentityKind)) {
+      if (n.data['is_current_partner'] == true) return n;
+    }
+    return null;
+  }
 }
 
 /// Outcome of [LocalDomainRepository.migratePersonIdentities]: how many new

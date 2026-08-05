@@ -1,15 +1,100 @@
 # Apply Progress: Relationships Robustness
 
-Scope for this run (explicit user instruction): **Slice 1** (parity/characterization
-harness) and **Slice 2** (2a-i, 2a-ii, 2b — ULID person identity + additive
-migration + rename + collision detection) only. Slices 3-7 are **NOT started**
-in this run.
-
 ## Status
 
 - **Slice 1 — Characterization + parity harness: DONE.**
 - **Slice 2 — person-identity (2a-i, 2a-ii, 2b): DONE.**
-- Slices 3, 4, 5, 6, 7: not started (out of scope this run, untouched).
+- **Slice 3 — relation-links (storage/write/derived reciprocity): DONE this
+  run (domain + repository layer; UI wiring deferred, see below).**
+- **Slice 5 — couple-partner-scoping (5a unnamed identity, 5b partner change,
+  5c repository backfill): DONE this run (domain + repository layer; widget
+  UI deferred, see below).**
+- Slice 4 (reciprocity wired into `relationship_reminders.dart`), Slice 6
+  (dates/deceased), Slice 7 (contact-clock kind parity): NOT started (out of
+  scope this run, per explicit user instruction — untouched).
+
+## Files changed this run (Slices 3 and 5)
+
+- `mobile/lib/features/memory/domain/relation_links.dart` (NEW) — pure:
+  `RelationLink` (append-only multi-edge `(kind, target person_id)` model),
+  `linksBothWays()` (the single derive-at-read reciprocity accessor the design
+  names — implemented this run per the user's explicit scope grant, even
+  though tasks.md files it under Slice 4; NOT wired into
+  `relationship_reminders.dart`'s reminder computation, which stays
+  Slice 4's own task and untouched), `resolveRelationTarget()` (precision-first:
+  exact one-match resolves, zero/ambiguous matches return an explicit
+  "unlinked" status without dropping the free-text label).
+  `mobile/test/features/memory/domain/relation_links_test.dart` (NEW) —
+  11 tests, TDD RED→GREEN.
+- `mobile/lib/features/domains/data/local_domain_repository.dart` (MODIFIED)
+  — added `createPersonLink()` (append-only: always mints a new
+  `kind:'person_link'` node, so a second recorded role never overwrites the
+  first), `listPersonLinks()`, `linksBothWaysFor()`, `resolveRelationTargetFor()`
+  (resolves against stored `person_identity` nodes).
+  `mobile/test/features/domains/data/local_domain_repository_relation_links_test.dart`
+  (NEW) — 6 tests, TDD RED→GREEN.
+- `mobile/lib/features/memory/domain/couple_partner.dart` (NEW) — pure:
+  `couplePartnerDisplayLabel()` + `kUnnamedPartnerPrompt` — the binding user
+  answer says the partner's name has not been supplied, so this is the one
+  place that rule is enforced: never invents a name, never blank.
+  `mobile/test/features/memory/domain/couple_partner_test.dart` (NEW) —
+  3 tests, TDD RED→GREEN.
+- `mobile/lib/features/domains/data/local_domain_repository.dart` (MODIFIED
+  further) — added `currentPartnerId()` (lazily mints ONE `unnamed: true`
+  `kind:'person_identity'` node flagged `is_current_partner: true`, idempotent
+  thereafter), `mintNewCurrentPartner()` (partner change: mints a new unnamed
+  identity, moves the pointer, unsets the previous one's flag — old acts keep
+  their old `partner_id`, nothing reattributed), `backfillCoupleActsToCurrentPartner()`
+  (additive, idempotent batch: attaches the current partner's id to every
+  `couple_act` fact entry that has none yet, preserving every other field —
+  never touches an act that already carries a `partner_id`). `create()` now
+  defaults a new `couple_act`'s `partner_id` to the current partner when the
+  caller doesn't supply one (zero extra taps per spec), and never overrides
+  an explicitly given one.
+  `mobile/test/features/domains/data/local_domain_repository_couple_partner_test.dart`
+  (NEW) — 10 tests, TDD RED→GREEN.
+
+## Deferred this run (flagged, not silent — same precedent as Slice 2's banner)
+
+- **Slice 3's UI wiring** (task 4's confirmation-UI half in
+  `local_entry_config.dart`/`domain_entry_form.dart`): the storage/resolution
+  layer is complete and tested; no widget yet shows the "unlinked" state to
+  the user. tasks.md's own line-budget note already anticipated splitting
+  this task.
+- **Slice 4** (wiring `linksBothWays()` into `relationship_reminders.dart`'s
+  reminder computation): explicitly out of scope this run per the user's
+  instruction ("Do NOT touch slices 4, 6 or 7"). `relation_links.dart`'s
+  `linksBothWays()` itself IS implemented (the user's scope description named
+  it explicitly as part of "Slice 3" for this run), but nothing calls it from
+  the reminder pipeline yet — that remains Slice 4's own task.
+- **Slice 5's widget UI** (task 6/7's "unassigned" / "name your partner"
+  prompt on the Relaciones screen, `local_domain_tab_test.dart`): the domain
+  rule (`couplePartnerDisplayLabel`) and the repository-level backfill are
+  built and tested; no screen calls them yet.
+- Slices 6 and 7: untouched, per explicit user instruction.
+
+## Verification performed (this run)
+
+- `flutter analyze` (whole project): clean (0 issues) after every change,
+  confirmed again at the end.
+- Full `mobile` `flutter test`: **1632 → 1662 passing, zero regressions**
+  (30 new tests: 11 + 6 + 3 + 10). The 54 `relationship_reminders_test.dart`
+  tests and every other pre-existing suite are green and unmodified.
+- No Python files touched this run (Slices 3/5 are phone-only capabilities);
+  the Python parity suite from Slice 1 was not re-run since nothing on that
+  side changed.
+
+## Rollback (this run's additions)
+
+- `kind:'person_link'` nodes are new and additive — revert the PR, old
+  readers never see them, free-text `relation` labels remain exactly as
+  recorded pre-slice.
+- The current-partner identity is a new, additive `kind:'person_identity'`
+  node; `backfillCoupleActsToCurrentPartner()` only ADDS a `partner_id` field
+  to existing `couple_act` entries (every other field, and the entry itself,
+  is preserved) — reverting the PR stops new code from reading/writing that
+  field; the field's presence on old rows is harmless to code that predates
+  it (mirrors Slice 2's "additive field, not a destructive rewrite" pattern).
 
 ## Files changed
 

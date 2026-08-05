@@ -135,6 +135,17 @@ either).
 
 ## Slice 3 — Capability: relation-links (storage, write path, loud unresolved state)
 
+**[x] STATUS: DONE this run (tasks 1–3, partial task 4).** See
+`apply-progress.md`. `relation_links.dart` (model, `linksBothWays()` derived
+reciprocity per the user's explicit scope grant this run, `resolveRelationTarget()`
+precision-first resolution) + `local_domain_repository.dart`'s
+`createPersonLink()`/`listPersonLinks()`/`linksBothWaysFor()`/
+`resolveRelationTargetFor()`, all TDD RED→GREEN. **DEFERRED (like Slice 2's
+migration banner)**: the `local_entry_config.dart`/`domain_entry_form.dart` UI
+wiring (task 4's confirmation-UI half) — the domain/storage layer is complete
+and tested, but no widget surfaces the "unlinked" flag yet. Not a task-list
+item skipped silently: flagged here, same precedent as Slice 2.
+
 Satisfies: Spec Slice 3. Depends on Slice 2 (needs `person_id` to target).
 
 Sequential.
@@ -212,6 +223,18 @@ reads over Slice 3's already-additive storage — no data path removed.
 ---
 
 ## Slice 5 — Capability: couple-partner-scoping
+
+**[x] STATUS: 5a, 5b, and the repository half of 5c DONE this run.** See
+`apply-progress.md`. `couple_partner.dart` (pure `couplePartnerDisplayLabel()`,
+never invents a name) + `local_domain_repository.dart`'s `currentPartnerId()`
+(lazy, idempotent unnamed-partner mint), `create()`'s new couple_act default
+to the current partner, `mintNewCurrentPartner()` (partner change, old acts
+keep old `partner_id`), `backfillCoupleActsToCurrentPartner()` (legacy batch,
+additive field write, idempotent). All TDD RED→GREEN. **DEFERRED (like Slice
+2's migration banner and Slice 3's confirm-UI)**: the `local_domain_tab_test.dart`
+widget-visible "unassigned"/"name your partner" prompt (task 6/7's UI half) —
+the domain rule (`couplePartnerDisplayLabel`) is built and tested, but no
+screen calls it yet.
 
 Satisfies: Spec Slice 5. Depends on Slice 2 (needs identity layer for the
 unnamed-partner identity per design). Can run in parallel with Slice 4.
