@@ -366,4 +366,94 @@ void main() {
     });
   });
 
+
+  // NAMES CARRY SURNAMES, AND PEOPLE DO NOT REPEAT THEM.
+  //
+  // You record a friend the way a contact list wants it — "Juan Pérez García" —
+  // and then record his daughter the way you would SAY it: "hija de Juan". The
+  // exact-match link never fired, so the two silently stayed unconnected and
+  // the whole point of families (a child's birthday as a reason to write to the
+  // parent) quietly did nothing.
+  group('names with surnames still link', () {
+    test('a first name in the relation finds the person recorded in full', () {
+      final r = relationshipReminders([
+        _person('Juan Pérez García', knownSince: DateTime(2020, 1, 1), contactEveryDays: 30),
+        _person('Sofía', knownSince: DateTime(2020, 1, 1), relation: 'hija de Juan', birthDate: '2019-08-10'),
+      ], now: today);
+
+      expect(r.due.single.context, isNotNull);
+      expect(r.due.single.message(), contains('Sofía'));
+    });
+
+    test('a full name in the relation finds the person recorded short', () {
+      final r = relationshipReminders([
+        _person('Juan', knownSince: DateTime(2020, 1, 1), contactEveryDays: 30),
+        _person('Sofía', knownSince: DateTime(2020, 1, 1),
+            relation: 'hija de Juan Pérez García', birthDate: '2019-08-10'),
+      ], now: today);
+
+      expect(r.due.single.context, isNotNull);
+    });
+
+    test('the exact full name still matches', () {
+      final r = relationshipReminders([
+        _person('Juan Pérez García', knownSince: DateTime(2020, 1, 1), contactEveryDays: 30),
+        _person('Sofía', knownSince: DateTime(2020, 1, 1),
+            relation: 'hija de Juan Pérez García', birthDate: '2019-08-10'),
+      ], now: today);
+
+      expect(r.due.single.context, isNotNull);
+    });
+
+    test('TWO Juanes → no link at all, rather than the wrong one', () {
+      // Precision over reach. Guessing which Juan would put someone else's
+      // daughter in your friend's picture, and the user would have no way to
+      // tell it was wrong.
+      final r = relationshipReminders([
+        _person('Juan Pérez', knownSince: DateTime(2020, 1, 1), contactEveryDays: 30),
+        _person('Juan Ramírez', knownSince: DateTime(2020, 1, 1), contactEveryDays: 30),
+        _person('Sofía', knownSince: DateTime(2020, 1, 1), relation: 'hija de Juan', birthDate: '2019-08-10'),
+      ], now: today);
+
+      for (final due in r.due) {
+        expect(due.context, isNull, reason: 'ambiguous "Juan" must not be resolved');
+      }
+    });
+
+    test('a partial word is not a name match', () {
+      // "Juana" is not "Juan".
+      final r = relationshipReminders([
+        _person('Juana', knownSince: DateTime(2020, 1, 1), contactEveryDays: 30),
+        _person('Sofía', knownSince: DateTime(2020, 1, 1), relation: 'hija de Juan', birthDate: '2019-08-10'),
+      ], now: today);
+
+      expect(r.due.single.context, isNull);
+    });
+  });
+
+  group('every kind of relationship people actually write', () {
+    for (final word in ['primo', 'prima', 'tío', 'tía', 'abuelo', 'abuela', 'hermano',
+                        'sobrina', 'compañero', 'colega', 'cuñada', 'suegra']) {
+      test('"$word de Juan" links to Juan', () {
+        final r = relationshipReminders([
+          _person('Juan', knownSince: DateTime(2020, 1, 1), contactEveryDays: 30),
+          _person('X', knownSince: DateTime(2020, 1, 1), relation: '$word de Juan', birthDate: '2019-08-10'),
+        ], now: today);
+
+        expect(r.due.single.context, isNotNull, reason: word);
+      });
+    }
+
+    for (final standalone in ['amigo', 'amiga', 'vecina', 'colega del trabajo', 'compañera de la oficina']) {
+      test('"$standalone" names nobody, so it links to nobody', () {
+        final r = relationshipReminders([
+          _person('Juan', knownSince: DateTime(2020, 1, 1), contactEveryDays: 30),
+          _person('X', knownSince: DateTime(2020, 1, 1), relation: standalone, birthDate: '2019-08-10'),
+        ], now: today);
+
+        expect(r.due.single.context, isNull, reason: standalone);
+      });
+    }
+  });
+
 }

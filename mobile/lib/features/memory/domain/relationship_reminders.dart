@@ -131,19 +131,59 @@ List<TrackedPerson> trackedPeopleFrom(Iterable<LocalDomainEntry> entries) {
         birthDate: p.birthDate,
         contactEveryDays: p.contactEveryDays,
         lastContact: lastContact[_key(p.name)],
-        family: _familyOf(p, byKey),
+        family: _familyOf(p, byKey, _resolveTargets(byKey)),
       ),
   ];
 }
 
+/// Each person's relation phrase resolved to the person it NAMES, or null when
+/// it names nobody — or names more than one.
+///
+/// Ambiguity resolves to nothing on purpose. Two Juanes and a "hija de Juan"
+/// could be guessed at, and a wrong guess puts someone else's daughter in your
+/// friend's picture with no way for the user to tell it is wrong. No link is a
+/// visible absence; the wrong link is a silent lie.
+Map<String, String?> _resolveTargets(Map<String, _Person> byKey) {
+  final out = <String, String?>{};
+  for (final entry in byKey.entries) {
+    final target = _relationTarget(entry.value.relation);
+    if (target == null) {
+      out[entry.key] = null;
+      continue;
+    }
+    final matches = [
+      for (final other in byKey.keys)
+        if (other != entry.key && _sameHuman(other, target)) other,
+    ];
+    out[entry.key] = matches.length == 1 ? matches.single : null;
+  }
+  return out;
+}
+
+/// Whether two written names refer to the same person.
+///
+/// People record a contact in full — "Juan Pérez García" — and then describe
+/// his daughter the way they would SAY it: "hija de Juan". Requiring an exact
+/// match meant that pairing silently never linked, which is the common case
+/// rather than the edge one.
+///
+/// The match is on WHOLE leading words, never a prefix of a word: "Juana" is
+/// not "Juan".
+bool _sameHuman(String a, String b) => a == b || a.startsWith('$b ') || b.startsWith('$a ');
+
 /// The people whose `relation` points AT [owner] — "hija de Juan" belongs to
 /// Juan's picture, and their birthdays are usually the better reason to write.
-List<TrackedPerson> _familyOf(_Person owner, Map<String, _Person> byKey) {
+List<TrackedPerson> _familyOf(
+  _Person owner,
+  Map<String, _Person> byKey,
+  Map<String, String?> targets,
+) {
   final ownerKey = _key(owner.name);
   final out = <TrackedPerson>[];
   for (final other in byKey.values) {
-    if (_key(other.name) == ownerKey) continue;
-    if (_relationTarget(other.relation) != ownerKey) continue;
+    final otherKey = _key(other.name);
+    if (otherKey == ownerKey) continue;
+    if (targets[otherKey] != ownerKey) continue;
     out.add(TrackedPerson(
       name: other.name,
       knownSince: other.knownSince,
