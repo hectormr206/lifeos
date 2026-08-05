@@ -1,3 +1,4 @@
+import 'package:lifeos/core/network/heavy_download_policy.dart';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
@@ -42,7 +43,9 @@ class BackgroundDownloaderSttModelGateway implements SttModelGateway {
         group: _group,
         baseDirectory: BaseDirectory.applicationSupport,
         directory: _directory,
-        updates: Updates.statusAndProgress,
+        // Automatic and heavy: Wi-Fi only, held by the OS until then.
+        // See core/network/heavy_download_policy.dart.
+        requiresWiFi: kHeavyDownloadsRequireWiFi,
       );
 
   @override

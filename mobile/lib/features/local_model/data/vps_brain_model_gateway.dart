@@ -1,3 +1,4 @@
+import 'package:lifeos/core/network/heavy_download_policy.dart';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
@@ -79,6 +80,9 @@ class VpsBrainModelGateway implements BrainModelUpdateGateway {
         baseDirectory: BaseDirectory.applicationSupport,
         directory: _directory,
         updates: Updates.statusAndProgress,
+        // Automatic and heavy: Wi-Fi only, held by the OS until then.
+        // See core/network/heavy_download_policy.dart.
+        requiresWiFi: kHeavyDownloadsRequireWiFi,
         // Resume support for the 2.6GB fetch: pausable tasks resume from the
         // partial temp file instead of restarting, and transient network
         // failures are retried before surfacing an error.
