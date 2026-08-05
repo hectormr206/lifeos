@@ -107,14 +107,45 @@
         (<span x-text="leader && leader.roles_counted"></span> roles)
       </div>
 
-      <div id="audit-matrix" class="panel p-2 overflow-x-auto">
+      <style>
+        /* The matrix is the ONLY thing that scrolls sideways.
+           Without min-width:0 a wide table pushes its flex/grid parent open and
+           the whole WINDOW scrolls, which drags the sidebar and the header off
+           screen — the table has to be free to overflow inside its own box. */
+        #audit-matrix { max-width: 100%; min-width: 0; overflow: auto;
+                        max-height: calc(100vh - 22rem); }
+        /* Sticky needs a scroll CONTAINER, which is why the max-height above is
+           not cosmetic: without a bounded height the header sticks to the page
+           instead of to the table. */
+        #audit-matrix thead th { position: sticky; top: 0; z-index: 3;
+                                 background: var(--panel); }
+        /* Rank + model stay put while the 17 role columns slide underneath.
+           Reading a score is useless if you cannot see whose score it is. */
+        #audit-matrix th.freeze-1, #audit-matrix td.freeze-1 {
+          position: sticky; left: 0; z-index: 2; background: var(--panel); }
+        #audit-matrix th.freeze-2, #audit-matrix td.freeze-2 {
+          position: sticky; left: 2.5rem; z-index: 2; background: var(--panel); }
+        /* The two corners are sticky in BOTH axes, so they outrank everything. */
+        #audit-matrix thead th.freeze-1, #audit-matrix thead th.freeze-2 { z-index: 4; }
+        /* A top-3 row paints its own background; the frozen cells must repaint
+           it or the sliding columns show through them. */
+        #audit-matrix tr[data-top] td.freeze-1,
+        #audit-matrix tr[data-top] td.freeze-2 { background: var(--panel2); }
+        /* Visible edge where the frozen block ends. */
+        #audit-matrix th.freeze-2, #audit-matrix td.freeze-2 {
+          box-shadow: 1px 0 0 0 var(--border, rgba(255,255,255,.12)); }
+      </style>
+
+      <div id="audit-matrix" class="panel p-2">
         <table class="w-full text-sm border-collapse">
           <thead>
             <tr>
-              <th class="text-left p-2 muted text-xs">#</th>
-              <th class="text-left p-2 muted text-xs">Modelo</th>
+              <th class="text-left p-2 muted text-xs freeze-1">#</th>
+              <th class="text-left p-2 muted text-xs freeze-2">Modelo</th>
               <th class="text-right p-2 muted text-xs cursor-pointer select-none"
                   @click="sortBy('overall')">General</th>
+              <th class="text-right p-2 muted text-xs cursor-pointer select-none"
+                  @click="sortBy('footprint')" title="VRAM medida al cargar, ya incluye el contexto">tamaño</th>
               <template x-for="col in columns" :key="col.role">
                 <th class="text-right p-2 muted text-xs cursor-pointer select-none"
                     @click="sortBy(col.role)"
@@ -124,9 +155,10 @@
           </thead>
           <tbody>
             <template x-for="row in sortedRows()" :key="row.label + ':' + row.tier">
-              <tr :style="row.overallRank <= 3 ? 'background: var(--panel2)' : ''">
-                <td class="p-2 text-xs" x-text="medal(row.overallRank) + row.overallRank"></td>
-                <td class="p-2">
+              <tr :data-top="row.overallRank <= 3 ? '1' : null"
+                  :style="row.overallRank <= 3 ? 'background: var(--panel2)' : ''">
+                <td class="p-2 text-xs freeze-1" x-text="medal(row.overallRank) + row.overallRank"></td>
+                <td class="p-2 freeze-2">
                   <div class="flex items-center gap-2">
                     <span class="font-medium" x-text="row.label"></span>
                     <span class="px-2 py-0.5 text-xs rounded-full panel2" x-text="row.tier"></span>
@@ -136,6 +168,7 @@
                   </div>
                 </td>
                 <td class="text-right p-2" :style="cellStyle(row.overall, 0, 1)" x-text="fmtPct(row.overall)"></td>
+                <td class="text-right p-2 text-xs muted" x-text="fmtFootprint(row)"></td>
                 <template x-for="col in columns" :key="col.role">
                   <td class="text-right p-2"
                       :style="col.role === 'speed' ? cellStyle(row.role_summary[col.role], speedRange().min, speedRange().max) : cellStyle(row.role_summary[col.role], 0, 1)"
@@ -255,6 +288,26 @@
         if (v === null || v === undefined) return '—';
         return v.toFixed(1) + ' tok/s';
       },
+
+      // What the model ACTUALLY costs to run, not what its file weighs.
+      //
+      // A 1-bit file can be small on disk and still take more memory loaded
+      // than a bigger one, because the KV cache at the recipe's ctx is part of
+      // the bill. This is the MEASURED VRAM delta from Stage A at that exact
+      // ctx, so the context is already inside the number — which is the whole
+      // point of showing it next to the score.
+      footprintMib(row) {
+        const v = row && row.recipe && row.recipe.scores
+          ? row.recipe.scores.stage_a_vram_delta_mib : null;
+        return (typeof v === 'number' && v > 0) ? v : null;
+      },
+      fmtFootprint(row) {
+        const mib = this.footprintMib(row);
+        // A row whose winning cell was pure CPU has no VRAM figure. Say so with
+        // a dash rather than printing 0, which would read as "costs nothing".
+        if (mib === null) return '—';
+        return (mib / 1024).toFixed(1) + ' GB';
+      },
       generatedAtLabel() {
         if (!this.generatedAt) return '—';
         try { return new Date(this.generatedAt).toLocaleTimeString(); }
@@ -286,12 +339,19 @@
           .filter(r => this.hardwareFilter === 'all'
                        || this.rowFingerprint(r) === this.hardwareFilter);
         rows.sort((a, b) => {
-          const av = field === 'overall' ? a.overall : a.role_summary[field];
-          const bv = field === 'overall' ? b.overall : b.role_summary[field];
+          const pick = (r) => field === 'overall' ? r.overall
+                            : field === 'footprint' ? this.footprintMib(r)
+                            : r.role_summary[field];
+          const av = pick(a);
+          const bv = pick(b);
           if (av === null || av === undefined) return 1;   // nulls always last
           if (bv === null || bv === undefined) return -1;
           // dir=-1 means DESC (higher first): av>bv must sort a before b.
-          return dir * (av - bv);
+          // Footprint inverts it: for memory, LESS is the better result, so the
+          // default click puts the cheapest model on top like every other
+          // column puts the best one there.
+          const sign = field === 'footprint' ? -1 : 1;
+          return dir * sign * (av - bv);
         });
         return rows;
       },
