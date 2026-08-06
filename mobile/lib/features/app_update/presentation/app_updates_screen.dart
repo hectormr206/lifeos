@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../domain/update_status.dart';
+import '../../../core/platform/app_platform.dart';
+import '../../../core/platform/platform_providers.dart';
 import 'app_update_notifier.dart';
 
 /// "Actualizaciones de la app" screen (route `/settings/updates`, self-hosted
@@ -20,6 +22,7 @@ class AppUpdatesScreen extends ConsumerWidget {
     final state = ref.watch(appUpdateNotifierProvider);
     final notifier = ref.read(appUpdateNotifierProvider.notifier);
     final status = state.status;
+    final isDesktop = isDesktopPlatform(ref.watch(hostOperatingSystemProvider));
 
     return Scaffold(
       appBar: AppBar(title: const Text('Actualizaciones de la app')),
@@ -41,13 +44,16 @@ class AppUpdatesScreen extends ConsumerWidget {
             onPressed: state.checking ? null : () => notifier.check(),
             icon: state.checking
                 ? const SizedBox(
-                    width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Icon(Icons.refresh),
             label: const Text('Buscar actualizaciones'),
           ),
           if (status is UpdateAvailable) ...[
             const SizedBox(height: 16),
-            _UpdateActions(state: state, notifier: notifier),
+            _UpdateActions(state: state, notifier: notifier, isDesktop: isDesktop),
           ],
           const Divider(height: 32),
           Text('Preferencias', style: Theme.of(context).textTheme.titleMedium),
@@ -65,13 +71,17 @@ class AppUpdatesScreen extends ConsumerWidget {
             value: state.settings.notify,
             onChanged: notifier.setNotify,
           ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Descargar automáticamente'),
-            subtitle: const Text('Descarga el APK sin preguntar (siempre pides instalar).'),
-            value: state.settings.autoDownload,
-            onChanged: notifier.setAutoDownload,
-          ),
+          // APK-only. On desktop the systemd updater owns downloading, on its
+          // own hourly schedule, so a switch here would control nothing —
+          // and a control that is shown is a control that works.
+          if (!isDesktop)
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Descargar automáticamente'),
+              subtitle: const Text('Descarga el APK sin preguntar (siempre pides instalar).'),
+              value: state.settings.autoDownload,
+              onChanged: notifier.setAutoDownload,
+            ),
           if (state.error != null) ...[
             const SizedBox(height: 16),
             Text(state.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
@@ -110,14 +120,20 @@ class _LatestTile extends StatelessWidget {
 }
 
 class _UpdateActions extends StatelessWidget {
-  const _UpdateActions({required this.state, required this.notifier});
+  const _UpdateActions({required this.state, required this.notifier, required this.isDesktop});
 
   final AppUpdateUiState state;
   final AppUpdateNotifier notifier;
 
+  /// Desktop updates run as a root systemd service, so this screen shows a
+  /// request and its outcome — never a download bar or an installer prompt,
+  /// because neither happens in this process.
+  final bool isDesktop;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    if (isDesktop) return _desktopActions(context);
     final downloading = state.downloadProgress != null && state.downloadedApkPath == null;
     final ready = state.downloadedApkPath != null;
     final pct = ((state.downloadProgress ?? 0) * 100).round();
@@ -162,6 +178,42 @@ class _UpdateActions extends StatelessWidget {
             icon: const Icon(Icons.install_mobile),
             label: const Text('Instalar ahora'),
           ),
+      ],
+    );
+  }
+
+  /// Desktop: one button that asks the system updater to run, and an honest
+  /// account of what happened afterwards. The app cannot report progress —
+  /// the updater is a different process, running as root, and it replaces the
+  /// release this very app is executing from.
+  Widget _desktopActions(BuildContext context) {
+    if (state.desktopUpdateRequested) {
+      return Row(
+        children: [
+          Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'Actualización solicitada. El sistema la instala en segundo '
+              'plano; se aplica la próxima vez que abras LifeOS.',
+            ),
+          ),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FilledButton.icon(
+          onPressed: notifier.startUpdate,
+          icon: const Icon(Icons.system_update),
+          label: const Text('Actualizar ahora'),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'LifeOS también se actualiza solo cada hora, sin abrir la terminal.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
       ],
     );
   }

@@ -16,6 +16,7 @@
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/platform/platform_providers.dart';
 import 'package:lifeos/features/app_update/domain/app_manifest.dart';
 import 'package:lifeos/features/app_update/domain/update_status.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_notifier.dart';
@@ -44,6 +45,10 @@ const _manifest = AppManifest(
   final installer = FakeApkInstaller();
   final c = ProviderContainer(
     overrides: [
+      // The APK flow is Android's. Pinned rather than inherited: this suite
+      // runs on a Linux host, where startUpdate() correctly takes the systemd
+      // route — without this the test would stop covering the phone.
+      hostOperatingSystemProvider.overrideWithValue('android'),
       appUpdateInitialStatusProvider.overrideWithValue(const UpdateAvailable(manifest: _manifest)),
       appVersionInfoProvider.overrideWithValue(FakeAppVersionInfo(code: 10, name: '1.0.0')),
       appUpdatePreferencesProvider.overrideWithValue(FakeAppUpdatePreferences()),

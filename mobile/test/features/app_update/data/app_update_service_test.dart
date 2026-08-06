@@ -61,12 +61,21 @@ class _UnreachableAdapter implements HttpClientAdapter {
 Dio _dioWith(HttpClientAdapter adapter) =>
     Dio(BaseOptions(baseUrl: 'https://updates.example/lifeos'))..httpClientAdapter = adapter;
 
+// The platform is pinned rather than inherited from the host: the widget
+// suite runs on Linux, so without this every one of these Android-contract
+// tests would silently start asserting the DESKTOP manifest path and stop
+// covering the phone — which is where the user's real data lives.
 AppUpdateService _service(
   HttpClientAdapter adapter,
   AppVersionInfoStub version, {
   UpdateSourceConfig config = _configured,
+  String operatingSystem = 'android',
+  String architecture = 'x64',
 }) =>
-    AppUpdateService(_dioWith(adapter), version, config: config);
+    AppUpdateService(_dioWith(adapter), version,
+        config: config,
+        operatingSystem: operatingSystem,
+        architecture: architecture);
 
 typedef AppVersionInfoStub = FakeAppVersionInfo;
 
@@ -101,6 +110,36 @@ void main() {
       expect(adapter.lastRequest, isNotNull);
       expect(adapter.lastRequest!.path, '/manifest');
       expect(adapter.lastRequest!.headers[kUpdateAccessKeyHeader], 'test-key-123');
+    });
+
+    test('Linux GETs the per-architecture desktop manifest, not the APK one',
+        () async {
+      // A laptop comparing itself against the phone's versionCode would either
+      // offer a package it cannot install or claim to be up to date when it is
+      // five desktop releases behind.
+      final adapter = _FixedResponseAdapter(200, _manifest(12));
+      final service = _service(adapter, FakeAppVersionInfo(code: 10),
+          operatingSystem: 'linux');
+      final result = await service.checkForUpdate();
+      expect(result, isA<UpdateAvailable>());
+      expect(adapter.lastRequest!.path, '/linux/x64/manifest.json');
+    });
+
+    test('an arm64 laptop asks for the arm64 build', () async {
+      final adapter = _FixedResponseAdapter(200, _manifest(12));
+      final service = _service(adapter, FakeAppVersionInfo(code: 10),
+          operatingSystem: 'linux', architecture: 'aarch64');
+      await service.checkForUpdate();
+      expect(adapter.lastRequest!.path, '/linux/arm64/manifest.json');
+    });
+
+    test('a platform that publishes nothing never hits the network', () async {
+      final adapter = _FixedResponseAdapter(200, _manifest(12));
+      final service = _service(adapter, FakeAppVersionInfo(code: 10),
+          operatingSystem: 'web');
+      expect(await service.checkForUpdate(), isA<UpdateUnknown>());
+      expect(adapter.lastRequest, isNull,
+          reason: 'no manifest exists for it — asking would be a bogus request');
     });
 
     test('UpToDate when manifest versionCode equals the running build', () async {

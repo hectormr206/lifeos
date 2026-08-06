@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/platform/platform_providers.dart';
 import 'package:lifeos/features/app_update/domain/app_manifest.dart';
 import 'package:lifeos/features/app_update/domain/app_update_preferences.dart';
 import 'package:lifeos/features/app_update/domain/update_status.dart';
@@ -33,6 +34,10 @@ Future<void> _pump(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        // This screen's APK controls are Android's. Pinned because the suite
+        // runs on Linux, where they are deliberately absent — see
+        // app_updates_screen_desktop_test.dart for that surface.
+        hostOperatingSystemProvider.overrideWithValue('android'),
         appUpdateInitialStatusProvider.overrideWithValue(initial),
         appVersionInfoProvider.overrideWithValue(FakeAppVersionInfo(code: 10, name: '1.0.0')),
         appUpdatePreferencesProvider

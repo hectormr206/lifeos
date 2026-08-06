@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/apk_download_service.dart';
 import '../data/app_update_service.dart';
 import '../domain/apk_installer.dart';
+import '../domain/desktop_update_trigger.dart';
 import '../domain/app_update_preferences.dart';
 import '../domain/app_version_info.dart';
 import '../domain/update_notifications.dart';
@@ -45,6 +46,11 @@ final appUpdateServiceProvider = Provider<AppUpdateService>((ref) {
 final apkDownloadServiceProvider = Provider<ApkDownloadService>((ref) {
   return ApkDownloadService(config: ref.watch(updateSourceConfigProvider));
 });
+
+/// Asks systemd to perform the desktop update. On Android this is never read
+/// (the APK installer path applies instead). Faked in tests.
+final desktopUpdateTriggerProvider =
+    Provider<DesktopUpdateTrigger>((ref) => const SystemdPathUpdateTrigger());
 
 /// Test seam: an initial [UpdateStatus] the notifier starts from (default
 /// null → `UpdateUnknown`). Lets widget tests render a specific state (e.g.

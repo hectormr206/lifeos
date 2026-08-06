@@ -1,7 +1,9 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/platform/app_platform.dart';
 import '../domain/app_manifest.dart';
 import '../domain/app_version_info.dart';
+import '../domain/update_manifest_path.dart';
 import '../domain/update_source_config.dart';
 import '../domain/update_status.dart';
 
@@ -23,11 +25,19 @@ class AppUpdateService {
     this._dio,
     this._versionInfo, {
     this._config = const UpdateSourceConfig.fromEnvironment(),
+    this._operatingSystem,
+    this._architecture,
   });
 
   final Dio _dio;
   final AppVersionInfo _versionInfo;
   final UpdateSourceConfig _config;
+
+  /// Injected in tests so a Linux host can assert the ANDROID path is still
+  /// requested — the phone carries the real data, so "it did not regress" has
+  /// to be provable rather than assumed. Null means "ask the host".
+  final String? _operatingSystem;
+  final String? _architecture;
 
   /// GET the manifest and compare its `versionCode` against the running build.
   Future<UpdateStatus> checkForUpdate() async {
@@ -46,9 +56,21 @@ class AppUpdateService {
       return const UpdateUnknown('Actualizaciones no configuradas todavía.');
     }
 
+    // WHICH manifest depends on the platform: Android publishes one APK for
+    // every device, desktop publishes a tarball per architecture. Asking for
+    // the wrong one would compare a laptop against the phone's versionCode.
+    final os = _operatingSystem ?? currentOperatingSystem();
+    final arch = updateArchFor(_architecture ?? currentArchitecture());
+    final manifestPath =
+        arch == null ? null : updateManifestPathFor(os, arch: arch);
+    if (manifestPath == null) {
+      return const UpdateUnknown(
+          'Esta plataforma no recibe actualizaciones automáticas.');
+    }
+
     try {
       final response = await _dio.get<Map<String, Object?>>(
-        '/manifest',
+        manifestPath,
         options: Options(headers: {kUpdateAccessKeyHeader: _config.accessKey}),
       );
       final data = response.data;

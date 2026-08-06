@@ -12,6 +12,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/platform/platform_providers.dart';
 import 'package:lifeos/features/app_update/data/app_update_service.dart';
 import 'package:lifeos/features/app_update/domain/app_manifest.dart';
 import 'package:lifeos/features/app_update/domain/update_status.dart';
@@ -65,6 +66,10 @@ class _MutableUpdateService extends AppUpdateService {
   final service = _MutableUpdateService(initial);
   final c = ProviderContainer(
     overrides: [
+      // The APK flow is Android's. Pinned rather than inherited: this suite
+      // runs on a Linux host, where startUpdate() correctly takes the systemd
+      // route — without this the test would stop covering the phone.
+      hostOperatingSystemProvider.overrideWithValue('android'),
       appUpdateInitialStatusProvider.overrideWithValue(initial),
       appUpdateServiceProvider.overrideWithValue(service),
       appVersionInfoProvider.overrideWithValue(FakeAppVersionInfo(code: 10, name: '1.0.0')),

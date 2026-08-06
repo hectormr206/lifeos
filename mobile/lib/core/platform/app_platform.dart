@@ -82,3 +82,8 @@ bool supportsDictation(String operatingSystem) => switch (operatingSystem) {
 /// does not exist at all). Resolved through the same conditional-import pattern
 /// `core/tray/tray_platform.dart` and `core/tls/tls_adapter_factory.dart` use.
 String currentOperatingSystem() => host.currentOperatingSystem();
+
+/// The host CPU architecture in the naming the update server publishes under
+/// (`x64`, `arm64`), or `'web'` in a browser build. Paired with
+/// `updateArchFor` so an unrecognised value never becomes a wrong download.
+String currentArchitecture() => host.currentArchitecture();

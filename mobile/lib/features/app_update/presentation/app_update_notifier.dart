@@ -5,7 +5,10 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/apk_download_service.dart';
+import '../../../core/platform/app_platform.dart';
+import '../../../core/platform/platform_providers.dart';
 import '../domain/apk_installer.dart';
+import '../domain/desktop_update_trigger.dart';
 import '../domain/app_manifest.dart';
 import '../domain/app_update_preferences.dart';
 import '../domain/update_notification_policy.dart';
@@ -25,6 +28,7 @@ class AppUpdateUiState {
     this.downloadedApkKey,
     this.installHintNeeded = false,
     this.installPending = false,
+    this.desktopUpdateRequested = false,
     this.error,
   });
 
@@ -62,6 +66,12 @@ class AppUpdateUiState {
   /// can auto-continue the install without a second manual tap.
   final bool installPending;
 
+  /// The desktop updater has been ASKED to run (the systemd trigger file was
+  /// created). Not "the update finished": the updater runs as a separate root
+  /// process and replaces this release out from under the running app, so
+  /// there is nothing further this process can honestly report.
+  final bool desktopUpdateRequested;
+
   /// A user-facing error (download/verify/install failure), or null.
   final String? error;
 
@@ -81,6 +91,7 @@ class AppUpdateUiState {
     bool? installHintNeeded,
     bool? installPending,
     bool clearInstallPending = false,
+    bool? desktopUpdateRequested,
     String? error,
     bool clearError = false,
   }) =>
@@ -100,6 +111,7 @@ class AppUpdateUiState {
             clearDownloadedApkPath ? null : (downloadedApkKey ?? this.downloadedApkKey),
         installHintNeeded: installHintNeeded ?? this.installHintNeeded,
         installPending: clearInstallPending ? false : (installPending ?? this.installPending),
+        desktopUpdateRequested: desktopUpdateRequested ?? this.desktopUpdateRequested,
         error: clearError ? null : (error ?? this.error),
       );
 }
@@ -295,6 +307,13 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
   Future<void> startUpdate() async {
     final status = state.status;
     if (status is! UpdateAvailable) return;
+    // DESKTOP TAKES A DIFFERENT ROUTE ENTIRELY. There is no APK and no package
+    // installer; the release is root-owned. Asking systemd is the only path
+    // that needs no privilege from the app and no terminal from the user.
+    if (isDesktopPlatform(ref.read(hostOperatingSystemProvider))) {
+      await _requestDesktopUpdate();
+      return;
+    }
     state = state.copyWith(installPending: true, clearError: true);
     // Already verified on disk FOR THIS manifest? Install straight away. A
     // path bound to an older manifest never reaches the installer.
@@ -308,6 +327,25 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
     // sees [installPending] and continues into _tryInstall — so the flow no
     // longer depends on this method staying awaited on the Updates screen.
     await downloadUpdate();
+  }
+
+  /// Ask the system updater to run. The app never installs anything itself
+  /// here — it creates one file and systemd, already root, takes over.
+  Future<void> _requestDesktopUpdate() async {
+    state = state.copyWith(clearError: true);
+    try {
+      await ref.read(desktopUpdateTriggerProvider).requestUpdate();
+      state = state.copyWith(desktopUpdateRequested: true);
+    } on DesktopUpdateUnavailableException catch (e) {
+      // Fail loudly: a silent no-op here means the user waits forever for an
+      // update nobody is going to perform.
+      state = state.copyWith(error: e.message, desktopUpdateRequested: false);
+    } catch (_) {
+      state = state.copyWith(
+        error: 'No se pudo pedir la actualización al sistema.',
+        desktopUpdateRequested: false,
+      );
+    }
   }
 
   /// Run an update check. [auto] distinguishes a launch/background check from
