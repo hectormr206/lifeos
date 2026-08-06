@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import '../domain/brain_model_manifest.dart';
 import '../domain/brain_model_update_gateway.dart';
 import 'brain_model_source_config.dart';
+import '../../app_update/domain/update_source_config.dart';
 
 /// [BrainModelUpdateGateway] backed by Dio (manifest) + `background_downloader`
 /// (weights) — the same stack as the APK OTA (`AppUpdateService` +
@@ -74,6 +75,12 @@ class VpsBrainModelGateway implements BrainModelUpdateGateway {
   /// wiring without touching the network.
   @visibleForTesting
   DownloadTask buildDownloadTask(BrainModelManifest manifest) => DownloadTask(
+        // The update source's access key, exactly as the APK download sends
+        // it. Harmless today: /model/, /stt/, /tts/ and /embed/ are still
+        // open. It is here so they CAN be closed — gating them while any
+        // device still omitted the header would break model downloads on that
+        // device, so the header has to ship and propagate first.
+        headers: {kUpdateAccessKeyHeader: kUpdateAccessKey},
         url: _joinUrl(config.baseUrl, manifest.filename),
         filename: partFileName,
         group: _group,

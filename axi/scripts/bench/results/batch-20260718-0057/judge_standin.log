@@ -1,0 +1,12 @@
+0.00.012.032 E ggml_cuda_init: failed to initialize CUDA: no CUDA-capable device is detected
+0.00.012.993 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.013.197 W srv  llama_server: -----------------
+0.00.013.198 W srv  llama_server: CORS is set to allow all origins ('*') and no API key is set
+0.00.013.198 W srv  llama_server: this can be a security risk (cross-origin attacks)
+0.00.013.198 W srv  llama_server: more info: https://github.com/ggml-org/llama.cpp/pull/25655
+0.00.013.198 W srv  llama_server: -----------------
+0.00.014.418 I srv    load_model: loading model '/home/hectormr/LifeOS/models/qwen35-4b/Qwen3.5-4B-Q4_K_M.gguf'
+0.02.016.138 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 16384, kv_unified = 'false'
+0.02.026.504 I srv  llama_server: model loaded
+0.02.026.508 I srv  llama_server: listening on http://127.0.0.1:8080
+0.16.479.572 I srv    operator(): operator(): cleaning up before exit...

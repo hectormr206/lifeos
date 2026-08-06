@@ -1,0 +1,583 @@
+Audit: qwen36-27b | tiers=['vram12'] | roles=['speed', 'brain', 'extraction', 'domain', 'toolcall', 'codereview', 'vision', 'codegen', 'conversation', 'recordsqa', 'narration', 'longsum', 'parsejson', 'agentic', 'proactive', 'visionclass', 'devplan', 'toolstress'] | moe=False | vram baseline=333 MiB
+
+######################################################################
+#  TIER vram12
+######################################################################
+[recipe] using saved recipe from /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+  Spawning: /usr/bin/llama-server -m Qwen3.6-27B-Q4_K_M.gguf ...
+[stage C] role speed
+  [speed] warmup (discarded)...
+  [speed 1/10] ttft=702.0ms decode=4.4tok/s
+  [speed 2/10] ttft=2278.3ms decode=4.34tok/s
+  [speed 3/10] ttft=2637.0ms decode=4.32tok/s
+  [speed 4/10] ttft=2321.7ms decode=4.3tok/s
+  [speed 5/10] ttft=2170.2ms decode=4.27tok/s
+  [speed 6/10] ttft=3100.9ms decode=4.19tok/s
+  [speed 7/10] ttft=2501.1ms decode=4.25tok/s
+  [speed 8/10] ttft=2567.6ms decode=4.33tok/s
+  [speed 9/10] ttft=2351.7ms decode=4.29tok/s
+  [speed 10/10] ttft=2088.8ms decode=4.37tok/s
+[stage C] role brain
+  [brain] 35 cases (6 rubric), max_tokens=200
+  [brain 1/35] conv_001: PASS
+  [brain 2/35] conv_002: PASS
+  [brain 3/35] conv_003: PASS
+  [brain 4/35] conv_004: FAIL
+  [brain 5/35] remind_001: PASS
+  [brain 6/35] remind_002: FAIL
+  [brain 7/35] remind_003: PASS
+  [brain 8/35] remind_004: PASS
+  [brain 9/35] remind_005: PASS
+  [brain 10/35] intent_001: PASS
+  [brain 11/35] intent_002: PASS
+  [brain 12/35] intent_003: PASS
+  [brain 13/35] summ_001: PASS
+  [brain 14/35] summ_002: FAIL
+  [brain 15/35] summ_003: FAIL
+  [brain 16/35] summ_004: PASS
+  [brain 17/35] summ_005: FAIL
+  [brain 18/35] reason_001: FAIL
+  [brain 19/35] reason_002: PASS
+  [brain 20/35] reason_003: PASS
+  [brain 21/35] reason_004: PASS
+  [brain 22/35] instruct_001: PASS
+  [brain 23/35] instruct_002: PASS
+  [brain 24/35] instruct_003: PASS
+  [brain 25/35] instruct_004: PASS
+  [brain 26/35] refusal_001: FAIL
+  [brain 27/35] refusal_002: PASS
+  [brain 28/35] refusal_003: PASS
+  [brain 29/35] fluency_001: FAIL
+  [brain 30/35] fluency_002: FAIL
+  [brain 31/35] fluency_003: FAIL
+  [brain 32/35] hard_001: PASS
+  [brain 33/35] hard_002: FAIL
+  [brain 34/35] hard_003: PASS
+  [brain 35/35] hard_004: PASS
+[stage C] role extraction
+  [extraction] 69 cases via nano endpoint http://127.0.0.1:18080
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30092ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30028ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+  [extraction 10/69]
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30008ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed after 2 attempt(s) (timed out, 60038ms)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30038ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+  [extraction 20/69]
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30007ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30016ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+  [extraction 30/69]
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+  [extraction 40/69]
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30026ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30021ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+  [extraction 50/69]
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30028ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30017ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+  [extraction 60/69]
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+[stage C] role domain
+  [domain] 36 cases via http://127.0.0.1:18080
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+  [domain 15/36]
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30004ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30025ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+  [domain 30/36]
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30004ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30030ms) — retry 1/1 (timeout=60s)
+nano extractor: call failed (timed out, 30029ms) — retry 1/1 (timeout=60s)
+[stage C] role toolcall
+  [toolcall] 12 cases
+  [toolcall] tool=100% args=100% false-call=0%
+[stage C] role codereview
+  [codereview] 8 cases
+  [codereview] detect=100% false-pos=0%
+[stage C] role vision
+  [vision] 8 cases
+  [vision] pass=100%
+[stage C] role codegen
+  [codegen] 8 cases
+  [codegen] cg01: PASS
+  [codegen] cg02: PASS
+  [codegen] cg03: PASS
+  [codegen] cg04: PASS
+  [codegen] cg05: PASS
+  [codegen] cg06: PASS
+  [codegen] cg07: PASS
+  [codegen] cg08: PASS
+  [codegen] pass=100% compile=100%
+[stage C] role conversation
+  [conversation] 8 cases
+  [conversation] cq01: es=True sane=True judge=0.805
+  [conversation] cq02: es=True sane=True judge=0.84
+  [conversation] cq03: es=True sane=True judge=0.92
+  [conversation] cq04: es=True sane=True judge=0.445
+  [conversation] cq05: es=True sane=True judge=0.63
+  [conversation] cq06: es=True sane=True judge=0.76
+  [conversation] cq07: es=True sane=True judge=0.945
+  [conversation] cq08: es=True sane=True judge=0.845
+  [conversation] judge=0.7738 spanish=100%
+[stage C] role recordsqa
+  [recordsqa] 10 cases
+  [recordsqa] rq-01: PASS
+  [recordsqa] rq-02: PASS
+  [recordsqa] rq-03: PASS
+  [recordsqa] rq-04: PASS
+  [recordsqa] rq-05: PASS
+  [recordsqa] rq-06: PASS
+  [recordsqa] rq-07: PASS
+  [recordsqa] rq-08-trap: PASS
+  [recordsqa] rq-09-trap: PASS
+  [recordsqa] rq-10-trap: PASS
+  [recordsqa] pass=100% fabrication=0%
+[stage C] role narration
+  [narration] 8 cases
+  [narration] dn-01: fidelity=True structure=True judge=0.92
+  [narration] dn-02: fidelity=True structure=True judge=0.85
+  [narration] dn-03: fidelity=True structure=True judge=0.59
+  [narration] dn-04: fidelity=False structure=True judge=0.92
+  [narration] dn-05: fidelity=True structure=True judge=0.85
+  [narration] dn-06: fidelity=True structure=True judge=0.87
+  [narration] dn-07: fidelity=True structure=True judge=0.92
+  [narration] dn-08: fidelity=True structure=True judge=0.87
+  [narration] fidelity=88% structure=100%
+[stage C] role longsum
+  [longsum] 6 cases (ctx=32768)
+  [longsum] ls-01-window: recall=1.0 structure=True PASS
+  [longsum] ls-02-window: recall=1.0 structure=True PASS
+  [longsum] ls-03-exec: recall=0.0 structure=False FAIL
+  [longsum] ls-04-exec: recall=0.0 structure=False FAIL
+  [longsum] ls-05-chat: recall=1.0 structure=True PASS
+  [longsum] ls-06-chat: recall=1.0 structure=True PASS
+  [longsum] atom_recall=67% pass=67%
+[stage C] role parsejson
+  [parsejson] 14 cases
+  [parsejson] sp-when-01: PASS
+  [parsejson] sp-when-02: PASS
+  [parsejson] sp-when-03-neg: PASS
+  [parsejson] sp-sched-01: PASS
+  [parsejson] sp-sched-02: PASS
+  [parsejson] sp-sched-03: PASS
+  [parsejson] sp-sched-04-neg: PASS
+  [parsejson] sp-voice-01: PASS
+  [parsejson] sp-voice-02: PASS
+  [parsejson] sp-voice-03-neg: PASS
+  [parsejson] sp-facts-01: FAIL
+  [parsejson] sp-facts-02-neg: PASS
+  [parsejson] sp-coref-01: PASS
+  [parsejson] sp-coref-02-neg: PASS
+  [parsejson] pass=93% negatives=100% json=100%
+[stage C] role agentic
+  [agentic] 12 cases (max 5 tool rounds, prod sampling {'temperature': 0.7, 'top_p': 0.8, 'top_k': 20}, max_tokens=4096)
+  [agentic] ag-news-01: rounds=3 tools=True json=True PASS
+  [agentic] ag-fetch-01: rounds=1 tools=True json=True PASS
+  [agentic] ag-clima-01: rounds=4 tools=True json=False FAIL missing=['24', '70']
+  [agentic] ag-multi-01: rounds=5 tools=True json=True PASS
+  [agentic] ag-modelos-01: rounds=5 tools=True json=True PASS
+  [agentic] ag-chain-01: rounds=4 tools=True json=False FAIL missing=['3.2', 'espectr']
+  [agentic] ag-multitopic-01: rounds=5 tools=True json=True PASS
+  [agentic] ag-reformulate-01: rounds=5 tools=True json=True PASS
+  [agentic] ag-distractor-01: rounds=5 tools=True json=True PASS
+  [agentic] ag-distractor-02: rounds=4 tools=True json=True PASS
+  [agentic] ag-links-01: rounds=3 tools=True json=True PASS
+  [agentic] ag-noolt-01: rounds=2 tools=True json=True PASS
+  [agentic] pass=83% tools=100% json=83% rounds=3.83
+[stage C] role proactive
+  [proactive] 12 cases
+  [proactive] pt-restraint-01: verdict=esperar PASS
+  [proactive] pt-restraint-02: verdict=esperar PASS
+  [proactive] pt-restraint-03: verdict=nada PASS
+  [proactive] pt-restraint-04: verdict=msg FAIL
+  [proactive] pt-speak-01: verdict=msg PASS
+  [proactive] pt-speak-02: verdict=esperar FAIL
+  [proactive] pt-speak-03: verdict=msg PASS
+  [proactive] pt-speak-04: verdict=esperar FAIL
+  [proactive] pt-restraint-05: verdict=esperar PASS
+  [proactive] pt-restraint-06: verdict=nada PASS
+  [proactive] pt-speak-05: verdict=esperar FAIL
+  [proactive] pt-speak-06: verdict=msg PASS
+  [proactive] restraint=83% speak=50% pass=67%
+[stage C] role visionclass
+  [visionclass] 6 cases
+  [visionclass] vc-good-01: json=True label=True PASS
+  [visionclass] vc-slouched-01: json=True label=True PASS
+  [visionclass] vc-forward-01: json=True label=True PASS
+  [visionclass] vc-leaning-01: json=True label=False FAIL
+  [visionclass] vc-empty-01: json=True label=True PASS
+  [visionclass] vc-good-02: json=True label=True PASS
+  [visionclass] label=83% json=100% pass=83%
+[stage C] role devplan
+  [devplan] 8 cases
+  [devplan] dp-instr-01 (instruction): FAIL
+  [devplan] dp-instr-02 (instruction): PASS
+  [devplan] dp-instr-03 (instruction): PASS
+  [devplan] dp-rev-01 (review): PASS
+  [devplan] dp-rev-02 (review): PASS
+  [devplan] dp-rev-03 (review): PASS
+  [devplan] dp-rev-04 (review): PASS
+  [devplan] dp-rev-05 (review): PASS
+  [devplan] instr=67% review=100% pass=88%
+[stage C] role toolstress
+  [toolstress] 10 cases (max 6 tool rounds, 13 tools offered)
+  [toolstress] ts-sel-reminder-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-memory-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-health-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-message-01 (selection): rounds=1 PASS
+  [toolstress] ts-nest-export-01 (nested_args): rounds=1 PASS
+  [toolstress] ts-nest-config-01 (nested_args): rounds=1 PASS
+  [toolstress] ts-err-export-01 (error_recovery): rounds=2 PASS
+  [toolstress] ts-err-event-01 (error_recovery): rounds=2 PASS
+  [toolstress] ts-proc-expense-01 (procedure): rounds=3 PASS
+  [toolstress] ts-proc-healthreport-01 (procedure): rounds=3 PASS
+  [toolstress] pass=100% sel=100% args=100% recov=100% proc=100%
+==============================================================================
+  AUDIT REPORT — qwen36-27b  [tier vram12]  2026-07-18T04:06:00.945025+00:00
+==============================================================================
+  gguf       : /home/hectormr/LifeOS/models/qwen36-27b/Qwen3.6-27B-Q4_K_M.gguf
+  server_bin : /usr/bin/llama-server
+  recipe     : {
+    "launch": {
+      "ngl": 24,
+      "cpu_moe": false,
+      "ctx": 32768,
+      "cell_name": "gpu-ngl24-q8_0-b8192",
+      "extra_flags": [
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q8_0",
+        "-fa",
+        "on",
+        "-b",
+        "8192",
+        "-ub",
+        "4096",
+        "-t",
+        "8"
+      ]
+    },
+    "sampling": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "thinking": "off",
+    "scores": {
+      "stage_a_decode_toks_s": 3.98,
+      "stage_a_ttft_ms": 2499.6,
+      "stage_a_vram_delta_mib": 8649,
+      "stage_b_det": 0.8333
+    },
+    "timestamp_utc": "2026-07-17T10:45:12.804295+00:00",
+    "role_configs": {
+      "brain": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "toolcall": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "codereview": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "vision": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "codegen": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "conversation": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "recordsqa": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "narration": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "longsum": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.6667,
+        "variants_tried": 6
+      },
+      "parsejson": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.8333,
+        "variants_tried": 6
+      },
+      "proactive": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.8333,
+        "variants_tried": 6
+      },
+      "visionclass": {
+        "sampling": {
+          "temperature": 0.2,
+          "top_p": 0.9,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.8333,
+        "variants_tried": 6
+      },
+      "devplan": {
+        "sampling": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "toolstress": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      }
+    }
+  }
+  role config (headline metric + sampling it was earned with):
+  role          headline  sampling used
+  --------------------------------------------------------------------------
+  speed             4.32  T=- top_p=- top_k=- seed=n/a think=n/a
+  brain            0.751  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  extraction      0.8696  T=0.0 top_p=- top_k=- seed=fixed-0 think=n/a
+  domain          0.9722  T=0.0 top_p=- top_k=- seed=fixed-0 think=n/a
+  toolcall             1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  codereview           1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  vision               1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  codegen              1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  conversation    0.7738  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  recordsqa            1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  narration        0.875  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  longsum         0.6667  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  parsejson       0.9286  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  agentic         0.8333  T=0.7 top_p=0.8 top_k=20 seed=per-case-crc32 think=off
+  proactive       0.6667  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  visionclass     0.8333  T=0.2 top_p=0.9 top_k=20 seed=per-case-crc32 think=off
+  devplan          0.875  T=0.7 top_p=0.8 top_k=20 seed=per-case-crc32 think=off
+  toolstress           1  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  role speed      : {"n_runs": 10, "ttft_p50_ms": 2351.7, "ttft_p95_ms": 3100.9, "decode_p50_toks_s": 4.32, "decode_mean_toks_s": 4.31, "vram_before_mib": 10106, "vram_after_mib": 10118, "vram_total_mib": 12227, "idle_rss_mb": 11838.7, "sampling_used": {"temperature": null, "top_p": null, "top_k": null, "seed_policy": "n/a", "thinking": "n/a"}}
+  role brain      : {"det": 0.6857, "subj": 0.9033, "final": 0.751, "note": null, "n_cases": 35, "n_rubric": 6, "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role extraction : {"case_pass_rate": 0.8696, "field_accuracy": {"domain": 0.9706, "kind": 0.8723, "systolic": 1.0, "diastolic": 1.0, "pulse_bpm": 1.0, "people": 1.0, "dates_text": 0.9388, "sleep_hours": 1.0, "weight_kg": 1.0, "glucose_mg_dl": 1.0, "amount": 0.9787, "currency": 0.9375, "items": 0.8571, "merchant": 0.8, "duration_minutes": 1.0}, "total": 69, "sampling_used": {"temperature": 0.0, "top_p": null, "top_k": null, "seed_policy": "fixed-0", "thinking": "n/a"}}
+  role domain     : {"overall_accuracy": 0.9722, "nano_accuracy": 0.9583, "per_layer": {"overall": 0.9722, "guard": 1.0, "nano": 0.9583, "regex": 1.0}, "n": 36, "sampling_used": {"temperature": 0.0, "top_p": null, "top_k": null, "seed_policy": "fixed-0", "thinking": "n/a"}}
+  role toolcall   : {"n": 12, "correct_tool_rate": 1.0, "arg_accuracy": 1.0, "false_call_rate": 0.0, "score": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role codereview : {"n": 8, "detection_rate": 1.0, "false_positive_rate": 0.0, "score": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role vision     : {"n": 8, "pass_rate": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role codegen    : {"n": 8, "pass_rate": 1.0, "compile_rate": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role conversation: {"n": 8, "judge_score": 0.7738, "spanish_rate": 1.0, "sane_rate": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role recordsqa  : {"n": 10, "pass_rate": 1.0, "fabrication_rate": 0.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role narration  : {"n": 8, "numeric_fidelity_rate": 0.875, "structure_rate": 1.0, "judge_score": 0.8488, "failed_ids": ["dn-04"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role longsum    : {"n": 6, "atom_recall": 0.6667, "structure_rate": 0.6667, "pass_rate": 0.6667, "failed_ids": ["ls-03-exec", "ls-04-exec"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role parsejson  : {"n": 14, "pass_rate": 0.9286, "negative_pass_rate": 1.0, "json_valid_rate": 1.0, "failed_ids": ["sp-facts-01"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role agentic    : {"n": 12, "pass_rate": 0.8333, "tool_correct_rate": 1.0, "json_valid_rate": 0.8333, "mean_rounds": 3.83, "failed_ids": ["ag-clima-01", "ag-chain-01"], "sampling_used": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role proactive  : {"n": 12, "restraint_rate": 0.8333, "speak_pass_rate": 0.5, "pass_rate": 0.6667, "failed_ids": ["pt-restraint-04", "pt-speak-02", "pt-speak-04", "pt-speak-05"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role visionclass: {"n": 6, "label_accuracy": 0.8333, "json_valid_rate": 1.0, "pass_rate": 0.8333, "failed_ids": ["vc-leaning-01"], "sampling_used": {"temperature": 0.2, "top_p": 0.9, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role devplan    : {"n": 8, "instruction_pass_rate": 0.6667, "review_accuracy": 1.0, "pass_rate": 0.875, "judge_score": 0.8067, "failed_ids": ["dp-instr-01"], "sampling_used": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role toolstress : {"n": 10, "pass_rate": 1.0, "tool_selection_rate": 1.0, "arg_exactness_rate": 1.0, "recovery_rate": 1.0, "procedure_rate": 1.0, "failed_ids": [], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+==============================================================================
+
+======================================================================================================================================================================================================================
+  MODEL AUDIT MATRIX  (newest audit per label+tier)
+======================================================================================================================================================================================================================
+  Label                tier     brain  extr%   dom%  tool%   vis%   rev%  code%   conv recQA%   narr  lsum% parse% agent% proact%  vcls%   dev% tstress%  dbench%  ctxK   tok/s  VRAM MiB thinking 
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  bonsai-1bit          cpu     - - - - - - - - - - - - - - - - - -     -     7.6         0 none     
+  bonsai-1bit          vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      5569 off      
+  bonsai-1bit          vram4   - - - - - - - - - - - - - - - - - -   85k     9.6      2551 none     
+  bonsai-1bit          vram8   - - - - - - - - - - - - - - - - - -   55k    54.8      6561 none     
+  bonsai-ternary       cpu     - - - - - - - - - - - - - - - - - -     -     2.7         0 none     
+  bonsai-ternary       vram12  - - - - - - - - - - - - - - - - - -   66k -      9615 off      
+  gemma4-26b           cpu     - - - - - - - - - - - - - - - - - -     -    13.5         0 none     
+  gemma4-26b           vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      6265 off      
+  gemma4-26b           vram4   - - - - - - - - - - - - - - - - - -   47k    24.8      3429 none     
+  gemma4-26b           vram8   - - - - - - - - - - - - - - - - - -   71k    33.2      6265 none     
+  gemma4-e2b           cpu     - - - - - - - - - - - - - - - - - -     -    27.4         0 none     
+  gemma4-e2b           vram12  - - - - - - - - - - - - - - - - - - 1354k -      2035 off      
+  gemma4-e2b           vram4   - - - - - - - - - - - - - - - - - -   64k   197.3      3141 none     
+  gemma4-e2b           vram8   - - - - - - - - - - - - - - - - - -  356k   201.8      3141 none     
+  gemma4-e4b           cpu     - - - - - - - - - - - - - - - - - -     -    15.4         0 none     
+  gemma4-e4b           vram12  - - - - - - - - - - - - - - - - - -  465k -      3889 off      
+  gemma4-e4b           vram4   - - - - - - - - - - - - - - - - - -  167k    30.0      2369 none     
+  gemma4-e4b           vram8   - - - - - - - - - - - - - - - - - -  142k   105.7      5007 none     
+  laguna-xs-2.1        cpu     - - - - - - - - - - - - - - - - - -     -    19.9         0 none     
+  laguna-xs-2.1        vram12  - - - - - - - - - - - - - - - - - -  177k -      4287 off      
+  nemotron-cascade2-30b cpu     - - - - - - - - - - - - - - - - - -     -    16.5         0 none     
+  nemotron-cascade2-30b vram12  - - - - - - - - - - - - - - - - - -  596k -      3495 on       
+  nemotron-cascade2-30b vram4   - - - - - - - - - - - - - - - - - -   38k    31.6      3495 none     
+  nemotron-cascade2-30b vram8   - - - - - - - - - - - - - - - - - -  336k    31.1      3495 none     
+  qwen25-coder-3b      cpu     - - - - - - - - - - - - - - - - - -     -    25.4         0 none     
+  qwen25-coder-3b      vram12  - - - - - - - - - - - - - - - - - -  194k -      4043 off      
+  qwen3-omni-30b       cpu     - - - - - - - - - - - - - - - - - -     -    18.6         0 none     
+  qwen3-omni-30b       vram12  - - - -  87.5% - - - - - - - - -  16.7% - - -     - -      4363 on       
+  qwen35-0_8b          cpu     - - - - - - - - - - - - - - - - - -     -    55.8         0 none     
+  qwen35-0_8b          vram12  - - - - - - - - - - - - - - - - - -  803k -      1219 off      
+  qwen35-2b            cpu     - - - - - - - - - - - - - - - - - -     -    32.5         0 none     
+  qwen35-2b            vram12  - - - - - - - - - - - - - - - - - -  746k -      1937 off      
+  qwen35-4b            cpu     - - - - - - - - - - - - - - - - - -     -    15.7         0 none     
+  qwen35-4b            vram12  - - - - - - - - - - - - - - - - - -  246k -      4119 off      
+  qwen36-27b           cpu     - - - - - - - - - - - - - - - - - -     -     3.1         0 none     
+  qwen36-27b           vram12   0.751  87.0%  97.2% 100.0% 100.0% 100.0% 100.0%  0.774 100.0%  87.5%  66.7%  92.9%  83.3%   66.7%  83.3%  87.5%   100.0% -     -     4.3      8649 off      
+  qwen36-35b           cpu     - - - - - - - - - - - - - - - - - -     -    13.4         0 none     
+  qwen36-35b           vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      3623 off      
+  qwen36-35b           vram4   - - - - - - - - - - - - - - - - - -   54k    31.1      3323 none     
+  qwen36-35b           vram8   - - - - - - - - - - - - - - - - - -  154k    31.1      4255 none     
+  vibethinker-3b       cpu     - - - - - - - - - - - - - - - - - -     -    24.6         0 none     
+  vibethinker-3b       vram12  - - - - - - - - - - - - - - - - - -  246k -      3283 on       
+======================================================================================================================================================================================================================

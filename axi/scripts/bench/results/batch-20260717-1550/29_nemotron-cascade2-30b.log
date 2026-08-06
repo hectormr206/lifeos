@@ -1,0 +1,159 @@
+Audit: nemotron-cascade2-30b | tiers=['vram4'] | roles=['speed', 'ctxprobe'] | moe=True | vram baseline=333 MiB
+
+######################################################################
+#  TIER vram4
+######################################################################
+[stage A] tier=vram4 — sweeping 8 cells
+  [stage A] cell gpu-ngl999-cpumoe-q8_0-b2048 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> decode=26.82 tok/s ttft=438.2ms vramΔ=3495
+  [stage A] cell gpu-ngl999-cpumoe-q8_0-b8192 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> decode=27.19 tok/s ttft=461.5ms vramΔ=4055
+  [stage A] cell gpu-ngl999-cpumoe-f16-b2048 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> decode=26.77 tok/s ttft=440.2ms vramΔ=3583
+  [stage A] cell gpu-ngl999-cpumoe-f16-b8192 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> decode=27.31 tok/s ttft=444.4ms vramΔ=4143
+  [stage A] cell gpu-ngl999-q8_0-b2048 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+  [stage A] cell gpu-ngl999-q8_0-b8192 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+  [stage A] cell gpu-ngl999-f16-b2048 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+  [stage A] cell gpu-ngl999-f16-b8192 ...
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+    -> FAILED: health timeout (OOM or unsupported flags)
+[stage B] 1 variants x 12 fast cases
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+  [stage B] house-think_none: det=0.5
+[recipe] saved peak recipe for nemotron-cascade2-30b/vram4 → /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+[stage C] role speed
+  [speed] warmup (discarded)...
+  [speed 1/10] ttft=151.3ms decode=31.91tok/s
+  [speed 2/10] ttft=403.7ms decode=31.05tok/s
+  [speed 3/10] ttft=416.0ms decode=31.84tok/s
+  [speed 4/10] ttft=399.8ms decode=31.95tok/s
+  [speed 5/10] ttft=401.0ms decode=31.87tok/s
+  [speed 6/10] ttft=498.7ms decode=30.17tok/s
+  [speed 7/10] ttft=409.9ms decode=30.8tok/s
+  [speed 8/10] ttft=450.1ms decode=31.56tok/s
+  [speed 9/10] ttft=397.3ms decode=30.6tok/s
+  [speed 10/10] ttft=375.7ms decode=31.19tok/s
+[stage C] role ctxprobe (two separate KV-probe spawns)
+  [ctxprobe] spawn at ctx=8192
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+  [ctxprobe] spawn at ctx=32768
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+  [ctxprobe] slope=13.428 MiB/1k tok, weights≈2985.0 MiB, ctx_max={'vram4': 38353, 'vram8': 336244, 'vram12': 596898}
+==============================================================================
+  AUDIT REPORT — nemotron-cascade2-30b  [tier vram4]  2026-07-18T00:18:24.625633+00:00
+==============================================================================
+  gguf       : /home/hectormr/LifeOS/models/nemotron-cascade2-30b/Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf
+  server_bin : /usr/bin/llama-server
+  recipe     : {
+    "launch": {
+      "ngl": 999,
+      "cpu_moe": true,
+      "ctx": 32768,
+      "cell_name": "gpu-ngl999-cpumoe-q8_0-b2048",
+      "extra_flags": [
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q8_0",
+        "-fa",
+        "on",
+        "-b",
+        "2048",
+        "-ub",
+        "512",
+        "-t",
+        "8"
+      ]
+    },
+    "sampling": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "thinking": "none",
+    "scores": {
+      "stage_a_decode_toks_s": 26.82,
+      "stage_a_ttft_ms": 438.2,
+      "stage_a_vram_delta_mib": 3495,
+      "stage_b_det": 0.5
+    },
+    "timestamp_utc": "2026-07-18T00:16:42.588581+00:00"
+  }
+  role config (headline metric + sampling it was earned with):
+  role          headline  sampling used
+  --------------------------------------------------------------------------
+  speed            31.56  T=- top_p=- top_k=- seed=n/a think=n/a
+  ctxprobe     3.835e+04  T=- top_p=- top_k=- seed=n/a think=n/a
+  role speed      : {"n_runs": 10, "ttft_p50_ms": 403.7, "ttft_p95_ms": 498.7, "decode_p50_toks_s": 31.56, "decode_mean_toks_s": 31.29, "vram_before_mib": 3758, "vram_after_mib": 3828, "vram_total_mib": 12227, "idle_rss_mb": 25941.9, "sampling_used": {"temperature": null, "top_p": null, "top_k": null, "seed_policy": "n/a", "thinking": "n/a"}}
+  role ctxprobe   : {"vram_lo_mib": 3095.0, "vram_hi_mib": 3425.0, "slope_mib_per_1k_tokens": 13.428, "weights_vram_mib": 2985.0, "ctx_max": {"vram4": 38353, "vram8": 336244, "vram12": 596898}, "ctx_max_current": 38353, "sampling_used": {"temperature": null, "top_p": null, "top_k": null, "seed_policy": "n/a", "thinking": "n/a"}}
+  stage A    : 8 cells swept
+    - gpu-ngl999-cpumoe-q8_0-b2048 ok   decode=26.82 ttft=438.2 vramΔ=3495
+    - gpu-ngl999-cpumoe-q8_0-b8192 ok   decode=27.19 ttft=461.5 vramΔ=4055
+    - gpu-ngl999-cpumoe-f16-b2048  ok   decode=26.77 ttft=440.2 vramΔ=3583
+    - gpu-ngl999-cpumoe-f16-b8192  ok   decode=27.31 ttft=444.4 vramΔ=4143
+    - gpu-ngl999-q8_0-b2048        FAIL (health timeout (OOM or unsupported flags)) decode=None ttft=None vramΔ=None
+    - gpu-ngl999-q8_0-b8192        FAIL (health timeout (OOM or unsupported flags)) decode=None ttft=None vramΔ=None
+    - gpu-ngl999-f16-b2048         FAIL (health timeout (OOM or unsupported flags)) decode=None ttft=None vramΔ=None
+    - gpu-ngl999-f16-b8192         FAIL (health timeout (OOM or unsupported flags)) decode=None ttft=None vramΔ=None
+  stage B    : 1 variants scored
+    - house-think_none         det=0.5
+==============================================================================
+
+======================================================================================================================================================================================================================
+  MODEL AUDIT MATRIX  (newest audit per label+tier)
+======================================================================================================================================================================================================================
+  Label                tier     brain  extr%   dom%  tool%   vis%   rev%  code%   conv recQA%   narr  lsum% parse% agent% proact%  vcls%   dev% tstress%  dbench%  ctxK   tok/s  VRAM MiB thinking 
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  bonsai-1bit          cpu     - - - - - - - - - - - - - - - - - -     -     7.6         0 none     
+  bonsai-1bit          vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      5569 off      
+  bonsai-1bit          vram4   - - - - - - - - - - - - - - - - - -   85k     9.6      2551 none     
+  bonsai-1bit          vram8   - - - - - - - - - - - - - - - - - -   55k    54.8      6561 none     
+  bonsai-ternary       cpu     - - - - - - - - - - - - - - - - - -     -     2.7         0 none     
+  bonsai-ternary       vram12  - - - - - - - - - - - - - - - - - -   66k -      9615 off      
+  gemma4-26b           cpu     - - - - - - - - - - - - - - - - - -     -    13.5         0 none     
+  gemma4-26b           vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      6265 off      
+  gemma4-26b           vram4   - - - - - - - - - - - - - - - - - -   47k    24.8      3429 none     
+  gemma4-26b           vram8   - - - - - - - - - - - - - - - - - -   71k    33.2      6265 none     
+  gemma4-e2b           cpu     - - - - - - - - - - - - - - - - - -     -    27.4         0 none     
+  gemma4-e2b           vram12  - - - - - - - - - - - - - - - - - - 1354k -      2035 off      
+  gemma4-e2b           vram8   - - - - - - - - - - - - - - - - - -  356k   201.8      3141 none     
+  gemma4-e4b           cpu     - - - - - - - - - - - - - - - - - -     -    15.4         0 none     
+  gemma4-e4b           vram12  - - - - - - - - - - - - - - - - - -  465k -      3889 off      
+  gemma4-e4b           vram4   - - - - - - - - - - - - - - - - - -  167k    30.0      2369 none     
+  gemma4-e4b           vram8   - - - - - - - - - - - - - - - - - -  142k   105.7      5007 none     
+  laguna-xs-2.1        cpu     - - - - - - - - - - - - - - - - - -     -    19.9         0 none     
+  laguna-xs-2.1        vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      4287 off      
+  nemotron-cascade2-30b cpu     - - - - - - - - - - - - - - - - - -     -    16.5         0 none     
+  nemotron-cascade2-30b vram12  - - - - - - - - - - - - - - - - - -  596k -      3495 on       
+  nemotron-cascade2-30b vram4   - - - - - - - - - - - - - - - - - -   38k    31.6      3495 none     
+  nemotron-cascade2-30b vram8   - - - - - - - - - - - - - - - - - -  336k    31.1      3495 none     
+  qwen25-coder-3b      vram12  - - - - - - - - - - - - - - - - - -  194k -      4043 off      
+  qwen3-omni-30b       cpu     - - - - - - - - - - - - - - - - - -     -    18.6         0 none     
+  qwen3-omni-30b       vram12  - - - -  87.5% - - - - - - - - -  16.7% - - -     - -      4363 on       
+  qwen35-0_8b          cpu     - - - - - - - - - - - - - - - - - -     -    55.8         0 none     
+  qwen35-0_8b          vram12  - - - - - - - - - - - - - - - - - -  803k -      1219 off      
+  qwen35-2b            cpu     - - - - - - - - - - - - - - - - - -     -    32.5         0 none     
+  qwen35-2b            vram12  - - - - - - - - - - - - - - - - - -  746k -      1937 off      
+  qwen35-4b            cpu     - - - - - - - - - - - - - - - - - -     -    15.7         0 none     
+  qwen35-4b            vram12  - - - - - - - - - - - - - - - - - -  246k -      4119 off      
+  qwen36-27b           cpu     - - - - - - - - - - - - - - - - - -     -     3.1         0 none     
+  qwen36-27b           vram12   0.771  87.0%  97.2% 100.0% 100.0% 100.0% 100.0%  0.759 100.0%  87.5%  66.7%  92.9%  83.3%   66.7%  50.0%  87.5%   100.0% -     -     4.3      8649 off      
+  qwen36-35b           cpu     - - - - - - - - - - - - - - - - - -     -    13.4         0 none     
+  qwen36-35b           vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      3623 off      
+  qwen36-35b           vram4   - - - - - - - - - - - - - - - - - -   54k    31.1      3323 none     
+  qwen36-35b           vram8   - - - - - - - - - - - - - - - - - -  154k    31.1      4255 none     
+  vibethinker-3b       cpu     - - - - - - - - - - - - - - - - - -     -    24.6         0 none     
+  vibethinker-3b       vram12  - - - - - - - - - - - - - - - - - -  246k -      3283 on       
+======================================================================================================================================================================================================================

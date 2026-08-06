@@ -1,0 +1,25 @@
+{
+  "notes": "e4b vision backfill (mmproj was missing at audit time).",
+  "jobs": [
+    {
+      "label": "gemma4-e4b",
+      "gguf": "/home/hectormr/LifeOS/models/gemma4-e4b-it/gemma-4-E4B-it-Q4_K_M.gguf",
+      "mmproj": "/home/hectormr/LifeOS/models/gemma4-e4b-it/mmproj-F16.gguf",
+      "tiers": [
+        "vram12"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "roles": [
+        "vision",
+        "visionclass"
+      ],
+      "use_recipe": true,
+      "extra_flags": [
+        "--reasoning",
+        "off"
+      ]
+    }
+  ]
+}

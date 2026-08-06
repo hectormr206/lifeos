@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/widgets/offline_banner.dart';
 import '../domain/meeting.dart';
 import 'meetings_notifier.dart';
+import 'meeting_recorder_tile.dart';
 
 /// Read-only meetings list — laptop `/meetings` parity. The phone is not
 /// the recorder in v1 (spec meetings-viewer): just a faithful viewer of
@@ -22,6 +23,15 @@ class MeetingsScreen extends ConsumerWidget {
       body: Column(
         children: [
           const OfflineBanner(),
+          // The recorder sits at the top of the list it produces: this is
+          // where someone is when they think about meetings, so it is where
+          // "Iniciar reunión" belongs. Renders as nothing when the paired
+          // engine has no recorder, which keeps the read-only phone view
+          // exactly as it was.
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: MeetingRecorderTile(),
+          ),
           Expanded(
             child: RefreshIndicator(
               onRefresh: () => ref.read(meetingsNotifierProvider.notifier).refresh(),

@@ -82,6 +82,12 @@ def capabilities() -> dict[str, Any]:
             # control instead of showing one that frees nothing. `available` is
             # the whole point of reporting it.
             "gameMode": {"v": 1, **_game_mode_capability()},
+            # Recording needs the mic, the system-audio monitor and the screen
+            # OF THIS MACHINE. Whether that exists is a property of the box,
+            # not of the app, so it is negotiated rather than assumed — and the
+            # phone, which pairs with this engine but is not where the meeting
+            # is happening, gets a truthful answer instead of a button.
+            "meetingRecorder": {"v": 1, **_meeting_recorder_capability()},
         },
     }
 
@@ -100,6 +106,62 @@ def _game_mode_capability() -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - a broken probe is "unavailable", not a 500
         return {"available": False, "gpu": None, "reason": "No se pudo consultar la GPU."}
     return {k: ready[k] for k in ("available", "gpu", "reason")}
+
+
+def _meeting_recorder_capability() -> dict[str, Any]:
+    """Whether this engine can record a meeting, never raising into the payload."""
+    from axi import meeting_control  # lazy: keep this module import-light
+
+    try:
+        state = meeting_control.status()
+    except Exception:  # noqa: BLE001 - a broken probe is "unavailable", not a 500
+        return {"available": False, "reason": "No se pudo consultar al daemon."}
+    return {"available": state["available"], "reason": state["reason"]}
+
+
+# ────────────────────────────── Meeting recorder ─────────────────────────────
+
+
+class MeetingRequest(BaseModel):
+    """Body of `POST /api/v1/meeting`.
+
+    The TARGET state, not a toggle: the tray and the app can disagree about
+    whether one is running, and a toggle would then stop the meeting the user
+    meant to start.
+    """
+
+    active: bool
+
+
+@router.get("/meeting")
+def meeting_status() -> dict[str, Any]:
+    """Whether a meeting can be recorded here, and whether one is running.
+
+    Reads only. A meeting that started on its own would be recording a room
+    nobody agreed to record.
+    """
+    from axi import meeting_control
+
+    return meeting_control.status()
+
+
+@router.post("/meeting")
+def meeting_set(body: MeetingRequest) -> dict[str, Any]:
+    """Start or stop the recording.
+
+    409 when no daemon answers: this machine has nothing that records, and
+    saying so beats a request that hangs. 500 when the daemon refused — a full
+    disk is a real refusal meeting.py makes on purpose, and reporting success
+    would leave the user believing a meeting is being captured when none is.
+    """
+    from axi import meeting_control
+
+    try:
+        return meeting_control.set_active(body.active)
+    except meeting_control.MeetingControlUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except meeting_control.MeetingControlFailed as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ────────────────────────────── Game mode ────────────────────────────────────

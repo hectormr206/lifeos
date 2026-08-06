@@ -1,0 +1,152 @@
+{
+  "notes": "Resume-3 (post-SIGTERM): remaining cpu speeds + probes + laguna quality. Runs as systemd transient unit, immune to session deaths.",
+  "jobs": [
+    {
+      "label": "gemma4-26b",
+      "gguf": "/home/hectormr/LifeOS/models/gemma4-26b-a4b/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+      "tiers": [
+        "cpu"
+      ],
+      "roles": [
+        "speed"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "moe": "on",
+      "extra_flags": [
+        "--reasoning",
+        "off"
+      ]
+    },
+    {
+      "label": "qwen3-omni-30b",
+      "gguf": "/home/hectormr/LifeOS/models/qwen3-omni-30b/Qwen3-Omni-30B-A3B-Instruct-Q4_K_M.gguf",
+      "tiers": [
+        "cpu"
+      ],
+      "roles": [
+        "speed"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "moe": "on"
+    },
+    {
+      "label": "nemotron-cascade2-30b",
+      "gguf": "/home/hectormr/LifeOS/models/nemotron-cascade2-30b/Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf",
+      "tiers": [
+        "cpu"
+      ],
+      "roles": [
+        "speed"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "moe": "on"
+    },
+    {
+      "label": "qwen36-35b",
+      "gguf": "/home/hectormr/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf",
+      "tiers": [
+        "cpu"
+      ],
+      "roles": [
+        "speed"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "moe": "on"
+    },
+    {
+      "label": "qwen36-27b",
+      "gguf": "/home/hectormr/LifeOS/models/qwen36-27b/Qwen3.6-27B-Q4_K_M.gguf",
+      "tiers": [
+        "cpu"
+      ],
+      "roles": [
+        "speed"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "moe": "off"
+    },
+    {
+      "label": "bonsai-1bit",
+      "gguf": "/home/hectormr/LifeOS/models/bonsai-27b/Bonsai-27B-Q1_0.gguf",
+      "server_bin": "/home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server",
+      "tiers": [
+        "vram12"
+      ],
+      "roles": [
+        "ctxprobe"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "use_recipe": true
+    },
+    {
+      "label": "gemma4-26b",
+      "gguf": "/home/hectormr/LifeOS/models/gemma4-26b-a4b/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+      "tiers": [
+        "vram12"
+      ],
+      "roles": [
+        "ctxprobe"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "moe": "on",
+      "use_recipe": true
+    },
+    {
+      "label": "qwen3-omni-30b",
+      "gguf": "/home/hectormr/LifeOS/models/qwen3-omni-30b/Qwen3-Omni-30B-A3B-Instruct-Q4_K_M.gguf",
+      "tiers": [
+        "vram12"
+      ],
+      "roles": [
+        "ctxprobe"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "moe": "on",
+      "use_recipe": true
+    },
+    {
+      "label": "qwen36-35b",
+      "gguf": "/home/hectormr/LifeOS/models/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-MXFP4_MOE.gguf",
+      "tiers": [
+        "vram12"
+      ],
+      "roles": [
+        "ctxprobe"
+      ],
+      "thinking_modes": [
+        "none"
+      ],
+      "moe": "on",
+      "use_recipe": true
+    },
+    {
+      "label": "laguna-xs-2.1",
+      "gguf": "/home/hectormr/LifeOS/models/laguna-xs-2.1/Laguna-XS-2.1-Q4_K_M.gguf",
+      "tiers": [
+        "vram12"
+      ],
+      "thinking_modes": [
+        "off",
+        "on"
+      ],
+      "moe": "on",
+      "server_bin": "/home/hectormr/LifeOS/laguna-llama.cpp/build/bin/llama-server"
+    }
+  ]
+}

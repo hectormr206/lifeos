@@ -6,12 +6,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_providers.dart';
 import '../../../core/api/capabilities.dart';
+import '../../home/presentation/home_providers.dart';
 import '../data/game_mode_repository.dart';
 import '../domain/game_mode_availability.dart';
 
 /// The paired engine's capabilities, or null when unpaired / not yet fetched.
-/// Overridden in tests and by whatever already holds this in the app.
-final gameModeCapabilitiesProvider = Provider<Capabilities?>((ref) => null);
+///
+/// Reads the shared engine payload rather than fetching its own: one capability
+/// call per app, not one per feature that cares. Overridden in tests.
+final gameModeCapabilitiesProvider = Provider<Capabilities?>(
+    (ref) => ref.watch(engineCapabilitiesProvider).value);
 
 final gameModeRepositoryProvider = Provider<GameModeRepository>(
     (ref) => GameModeRepository(ref.watch(dioProvider)));

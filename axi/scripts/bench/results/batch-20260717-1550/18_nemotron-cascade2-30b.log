@@ -1,0 +1,216 @@
+Audit: nemotron-cascade2-30b | tiers=['vram12'] | roles=['ctxprobe'] | moe=True | vram baseline=333 MiB
+
+######################################################################
+#  TIER vram12
+######################################################################
+[recipe] using saved recipe from /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+[stage C] role ctxprobe (two separate KV-probe spawns)
+  [ctxprobe] spawn at ctx=8192
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+  [ctxprobe] spawn at ctx=32768
+  Spawning: /usr/bin/llama-server -m Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf ...
+  [ctxprobe] slope=13.428 MiB/1k tok, weights≈2985.0 MiB, ctx_max={'vram4': 38353, 'vram8': 336244, 'vram12': 596898}
+==============================================================================
+  AUDIT REPORT — nemotron-cascade2-30b  [tier vram12]  2026-07-17T22:16:53.852712+00:00
+==============================================================================
+  gguf       : /home/hectormr/LifeOS/models/nemotron-cascade2-30b/Nemotron-Cascade-2-30B-A3B-Q4_K_M.gguf
+  server_bin : /usr/bin/llama-server
+  recipe     : {
+    "launch": {
+      "ngl": 999,
+      "cpu_moe": true,
+      "ctx": 32768,
+      "cell_name": "gpu-ngl999-cpumoe-q8_0-b2048",
+      "extra_flags": [
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q8_0",
+        "-fa",
+        "on",
+        "-b",
+        "2048",
+        "-ub",
+        "512",
+        "-t",
+        "8"
+      ]
+    },
+    "sampling": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "thinking": "on",
+    "scores": {
+      "stage_a_decode_toks_s": 25.16,
+      "stage_a_ttft_ms": 537.0,
+      "stage_a_vram_delta_mib": 3495,
+      "stage_b_det": 0.75
+    },
+    "timestamp_utc": "2026-07-17T06:11:42.861726+00:00",
+    "role_configs": {
+      "brain": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.8333,
+        "variants_tried": 6
+      },
+      "toolcall": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "codereview": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "codegen": {
+        "sampling": {
+          "temperature": 0.2,
+          "top_p": 0.9,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "conversation": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "recordsqa": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "narration": {
+        "sampling": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.5,
+        "variants_tried": 6
+      },
+      "longsum": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.3333,
+        "variants_tried": 6
+      },
+      "parsejson": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "proactive": {
+        "sampling": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.5,
+        "variants_tried": 6
+      },
+      "devplan": {
+        "sampling": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "toolstress": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "on",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      }
+    }
+  }
+  role config (headline metric + sampling it was earned with):
+  role          headline  sampling used
+  --------------------------------------------------------------------------
+  ctxprobe     5.969e+05  T=- top_p=- top_k=- seed=n/a think=n/a
+  role ctxprobe   : {"vram_lo_mib": 3095.0, "vram_hi_mib": 3425.0, "slope_mib_per_1k_tokens": 13.428, "weights_vram_mib": 2985.0, "ctx_max": {"vram4": 38353, "vram8": 336244, "vram12": 596898}, "ctx_max_current": 596898, "sampling_used": {"temperature": null, "top_p": null, "top_k": null, "seed_policy": "n/a", "thinking": "n/a"}}
+==============================================================================
+
+======================================================================================================================================================================================================================
+  MODEL AUDIT MATRIX  (newest audit per label+tier)
+======================================================================================================================================================================================================================
+  Label                tier     brain  extr%   dom%  tool%   vis%   rev%  code%   conv recQA%   narr  lsum% parse% agent% proact%  vcls%   dev% tstress%  dbench%  ctxK   tok/s  VRAM MiB thinking 
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  bonsai-1bit          cpu     - - - - - - - - - - - - - - - - - -     -     7.6         0 none     
+  bonsai-1bit          vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      5569 off      
+  bonsai-ternary       cpu     - - - - - - - - - - - - - - - - - -     -     2.7         0 none     
+  bonsai-ternary       vram12  - - - - - - - - - - - - - - - - - -   66k -      9615 off      
+  gemma4-26b           cpu     - - - - - - - - - - - - - - - - - -     -    13.5         0 none     
+  gemma4-26b           vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      6265 off      
+  gemma4-e2b           cpu     - - - - - - - - - - - - - - - - - -     -    27.4         0 none     
+  gemma4-e2b           vram12  - - - - - - - - - - - - - - - - - - 1354k -      2035 off      
+  gemma4-e4b           cpu     - - - - - - - - - - - - - - - - - -     -    15.4         0 none     
+  gemma4-e4b           vram12  - - - - - - - - - - - - - - - - - -  465k -      3889 off      
+  laguna-xs-2.1        cpu     - - - - - - - - - - - - - - - - - -     -    19.9         0 none     
+  laguna-xs-2.1        vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      4287 off      
+  nemotron-cascade2-30b cpu     - - - - - - - - - - - - - - - - - -     -    16.5         0 none     
+  nemotron-cascade2-30b vram12  - - - - - - - - - - - - - - - - - -  596k -      3495 on       
+  qwen25-coder-3b      vram12  - - - - - - - - - - - - - - - - - -  194k -      4043 off      
+  qwen3-omni-30b       cpu     - - - - - - - - - - - - - - - - - -     -    18.6         0 none     
+  qwen3-omni-30b       vram12  - - - -  87.5% - - - - - - - - -  16.7% - - -     - -      4363 on       
+  qwen35-0_8b          cpu     - - - - - - - - - - - - - - - - - -     -    55.8         0 none     
+  qwen35-0_8b          vram12  - - - - - - - - - - - - - - - - - -  803k -      1219 off      
+  qwen35-2b            cpu     - - - - - - - - - - - - - - - - - -     -    32.5         0 none     
+  qwen35-2b            vram12  - - - - - - - - - - - - - - - - - -  746k -      1937 off      
+  qwen35-4b            cpu     - - - - - - - - - - - - - - - - - -     -    15.7         0 none     
+  qwen35-4b            vram12  - - - - - - - - - - - - - - - - - -  246k -      4119 off      
+  qwen36-27b           cpu     - - - - - - - - - - - - - - - - - -     -     3.1         0 none     
+  qwen36-27b           vram12   0.771  87.0%  97.2% 100.0% 100.0% 100.0% 100.0%  0.759 100.0%  87.5%  66.7%  92.9%  83.3%   66.7%  50.0%  87.5%   100.0% -     -     4.3      8649 off      
+  qwen36-35b           cpu     - - - - - - - - - - - - - - - - - -     -    13.4         0 none     
+  qwen36-35b           vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      3623 off      
+  vibethinker-3b       cpu     - - - - - - - - - - - - - - - - - -     -    24.6         0 none     
+  vibethinker-3b       vram12  - - - - - - - - - - - - - - - - - -  246k -      3283 on       
+======================================================================================================================================================================================================================

@@ -1,0 +1,471 @@
+Audit: qwen3-omni-30b | tiers=['vram12'] | roles=['codereview', 'codegen', 'devplan', 'longsum', 'recordsqa', 'toolstress', 'routing', 'vision'] | moe=True | vram baseline=170 MiB
+
+######################################################################
+#  TIER vram12
+######################################################################
+[recipe] using saved recipe from /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+  Spawning: /usr/bin/llama-server -m Qwen3-Omni-30B-A3B-Instruct-Q4_K_M.gguf ...
+[stage C] role codereview
+  [codereview] 42 cases
+  [codereview] detect=88% false-pos=0%
+[stage C] role codegen
+  [codegen] 44 cases
+  [codegen] cg01: PASS
+  [codegen] cg02: PASS
+  [codegen] cg03: FAIL
+  [codegen] cg04: PASS
+  [codegen] cg05: PASS
+  [codegen] cg06: PASS
+  [codegen] cg07: PASS
+  [codegen] cg08: FAIL
+  [codegen] cg09: PASS
+  [codegen] cg10: PASS
+  [codegen] cg11: FAIL
+  [codegen] cg12: PASS
+  [codegen] cg13: PASS
+  [codegen] cg14: PASS
+  [codegen] cg15: PASS
+  [codegen] cg16: PASS
+  [codegen] cg17: PASS
+  [codegen] cg18: PASS
+  [codegen] cg19: PASS
+  [codegen] cg20: PASS
+  [codegen] cg21: PASS
+  [codegen] cg22: PASS
+  [codegen] cg23: PASS
+  [codegen] cg24: PASS
+  [codegen] cg25: PASS
+  [codegen] cg26: PASS
+  [codegen] cg27: PASS
+  [codegen] cg28: PASS
+  [codegen] cg29: PASS
+  [codegen] cg30: PASS
+  [codegen] cg31: PASS
+  [codegen] cg32: PASS
+  [codegen] cg33: PASS
+  [codegen] cg34: PASS
+  [codegen] cg35: PASS
+  [codegen] cg36: PASS
+  [codegen] cg37: PASS
+  [codegen] cg38: PASS
+  [codegen] cg39: PASS
+  [codegen] cg40: PASS
+  [codegen] cg41: PASS
+  [codegen] cg42: PASS
+  [codegen] cg43: PASS
+  [codegen] cg44: PASS
+  [codegen] pass=93% compile=100%
+[stage C] role devplan
+  [devplan] 40 cases
+  [devplan] dp-instr-01 (instruction): PASS
+  [devplan] dp-instr-02 (instruction): PASS
+  [devplan] dp-instr-03 (instruction): FAIL
+  [devplan] dp-rev-01 (review): PASS
+  [devplan] dp-rev-02 (review): FAIL
+  [devplan] dp-rev-03 (review): PASS
+  [devplan] dp-rev-04 (review): PASS
+  [devplan] dp-rev-05 (review): FAIL
+  [devplan] dp-instr-04 (instruction): FAIL
+  [devplan] dp-instr-05 (instruction): FAIL
+  [devplan] dp-instr-06 (instruction): FAIL
+  [devplan] dp-instr-07 (instruction): FAIL
+  [devplan] dp-instr-08 (instruction): FAIL
+  [devplan] dp-instr-09 (instruction): FAIL
+  [devplan] dp-instr-10 (instruction): PASS
+  [devplan] dp-instr-11 (instruction): FAIL
+  [devplan] dp-instr-12 (instruction): FAIL
+  [devplan] dp-instr-13 (instruction): FAIL
+  [devplan] dp-instr-14 (instruction): FAIL
+  [devplan] dp-rev-06 (review): FAIL
+  [devplan] dp-rev-07 (review): PASS
+  [devplan] dp-rev-08 (review): PASS
+  [devplan] dp-rev-09 (review): FAIL
+  [devplan] dp-rev-10 (review): PASS
+  [devplan] dp-rev-11 (review): FAIL
+  [devplan] dp-rev-12 (review): FAIL
+  [devplan] dp-rev-13 (review): PASS
+  [devplan] dp-rev-14 (review): PASS
+  [devplan] dp-rev-15 (review): PASS
+  [devplan] dp-rev-16 (review): FAIL
+  [devplan] dp-rev-17 (review): PASS
+  [devplan] dp-rev-18 (review): PASS
+  [devplan] dp-rev-19 (review): PASS
+  [devplan] dp-rev-20 (review): FAIL
+  [devplan] dp-rev-21 (review): PASS
+  [devplan] dp-rev-22 (review): FAIL
+  [devplan] dp-rev-23 (review): FAIL
+  [devplan] dp-rev-24 (review): FAIL
+  [devplan] dp-rev-25 (review): PASS
+  [devplan] dp-rev-26 (review): FAIL
+  [devplan] instr=21% review=54% pass=42%
+[stage C] role longsum
+  [longsum] 36 cases (ctx=32768)
+  [longsum] ls-01-window: recall=1.0 structure=True PASS
+  [longsum] ls-02-window: recall=1.0 structure=True PASS
+  [longsum] ls-03-exec: recall=1.0 structure=True PASS
+  [longsum] ls-04-exec: recall=1.0 structure=True PASS
+  [longsum] ls-05-chat: recall=1.0 structure=True PASS
+  [longsum] ls-06-chat: recall=1.0 structure=True PASS
+  [longsum] ls-07-window: recall=1.0 structure=True FAIL
+  [longsum] ls-08-window: recall=0.8 structure=True FAIL
+  [longsum] ls-09-window: recall=1.0 structure=True FAIL
+  [longsum] ls-10-window: recall=1.0 structure=True PASS
+  [longsum] ls-11-window: recall=1.0 structure=True PASS
+  [longsum] ls-12-window: recall=1.0 structure=True PASS
+  [longsum] ls-13-window: recall=1.0 structure=True PASS
+  [longsum] ls-14-window: recall=1.0 structure=True FAIL
+  [longsum] ls-15-window: recall=1.0 structure=True PASS
+  [longsum] ls-16-window: recall=1.0 structure=True PASS
+  [longsum] ls-17-exec: recall=1.0 structure=True PASS
+  [longsum] ls-18-exec: recall=1.0 structure=True PASS
+  [longsum] ls-19-exec: recall=1.0 structure=True PASS
+  [longsum] ls-20-exec: recall=1.0 structure=True PASS
+  [longsum] ls-21-exec: recall=0.0 structure=False FAIL
+  [longsum] ls-22-exec: recall=1.0 structure=True PASS
+  [longsum] ls-23-exec: recall=0.8 structure=True FAIL
+  [longsum] ls-24-exec: recall=1.0 structure=True PASS
+  [longsum] ls-25-chat: recall=1.0 structure=True PASS
+  [longsum] ls-26-chat: recall=1.0 structure=True PASS
+  [longsum] ls-27-chat: recall=1.0 structure=True PASS
+  [longsum] ls-28-chat: recall=1.0 structure=True PASS
+  [longsum] ls-29-chat: recall=0.8 structure=True FAIL
+  [longsum] ls-30-chat: recall=1.0 structure=True PASS
+  [longsum] ls-31-chat: recall=1.0 structure=True PASS
+  [longsum] ls-32-chat: recall=1.0 structure=True PASS
+  [longsum] ls-33-chat: recall=0.8 structure=True FAIL
+  [longsum] ls-34-chat: recall=1.0 structure=True PASS
+  [longsum] ls-35-chat: recall=1.0 structure=True PASS
+  [longsum] ls-36-chat: recall=1.0 structure=True PASS
+  [longsum] atom_recall=95% pass=78%
+[stage C] role recordsqa
+  [recordsqa] 39 cases
+  [recordsqa] rq-01: PASS
+  [recordsqa] rq-02: PASS
+  [recordsqa] rq-03: PASS
+  [recordsqa] rq-04: PASS
+  [recordsqa] rq-05: PASS
+  [recordsqa] rq-06: PASS
+  [recordsqa] rq-07: PASS
+  [recordsqa] rq-08-trap: PASS
+  [recordsqa] rq-09-trap: PASS
+  [recordsqa] rq-10-trap: PASS
+  [recordsqa] rq-11: PASS
+  [recordsqa] rq-12: PASS
+  [recordsqa] rq-13: FAIL
+  [recordsqa] rq-14: PASS
+  [recordsqa] rq-15-agg: PASS
+  [recordsqa] rq-16-agg: FAIL
+  [recordsqa] rq-17-agg: FAIL
+  [recordsqa] rq-18: PASS
+  [recordsqa] rq-19-disambig: FAIL
+  [recordsqa] rq-20-temporal: FAIL
+  [recordsqa] rq-21-temporal: PASS
+  [recordsqa] rq-22-temporal: PASS
+  [recordsqa] rq-23-agg: PASS
+  [recordsqa] rq-24-agg: PASS
+  [recordsqa] rq-25-multihop: FAIL
+  [recordsqa] rq-26-multihop: PASS
+  [recordsqa] rq-27-multihop: PASS
+  [recordsqa] rq-28: PASS
+  [recordsqa] rq-29: PASS
+  [recordsqa] rq-30: PASS
+  [recordsqa] rq-31: PASS
+  [recordsqa] rq-32-trap: PASS
+  [recordsqa] rq-33-trap: PASS
+  [recordsqa] rq-34-trap: PASS
+  [recordsqa] rq-35-trap: PASS
+  [recordsqa] rq-36-trap: FAIL
+  [recordsqa] rq-37-trap: PASS
+  [recordsqa] rq-38-trap: PASS
+  [recordsqa] rq-39-trap: PASS
+  [recordsqa] pass=82% fabrication=0%
+[stage C] role toolstress
+  [toolstress] 46 cases (max 6 tool rounds, 13 tools offered)
+  [toolstress] ts-sel-reminder-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-memory-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-health-01 (selection): rounds=6 PASS
+  [toolstress] ts-sel-message-01 (selection): rounds=1 PASS
+  [toolstress] ts-nest-export-01 (nested_args): rounds=1 PASS
+  [toolstress] ts-nest-config-01 (nested_args): rounds=2 FAIL
+  [toolstress] ts-err-export-01 (error_recovery): rounds=1 FAIL
+  [toolstress] ts-err-event-01 (error_recovery): rounds=2 FAIL
+  [toolstress] ts-proc-expense-01 (procedure): rounds=1 FAIL
+  [toolstress] ts-proc-healthreport-01 (procedure): rounds=3 PASS
+  [toolstress] ts-sel-task-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-summary-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-web-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-files-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-notify-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-message-02 (selection): rounds=1 PASS
+  [toolstress] ts-sel-expense-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-trap-01 (selection): rounds=1 PASS
+  [toolstress] ts-sel-trap-02 (selection): rounds=1 PASS
+  [toolstress] ts-sel-trap-03 (selection): rounds=1 PASS
+  [toolstress] ts-inj-memory-01 (selection): rounds=1 PASS
+  [toolstress] ts-inj-message-01 (selection): rounds=1 PASS
+  [toolstress] ts-inj-web-01 (selection): rounds=1 PASS
+  [toolstress] ts-inj-health-01 (selection): rounds=1 PASS
+  [toolstress] ts-nest-export-02 (nested_args): rounds=1 PASS
+  [toolstress] ts-nest-entries-01 (nested_args): rounds=6 PASS
+  [toolstress] ts-nest-reminder-01 (nested_args): rounds=1 FAIL
+  [toolstress] ts-nest-task-01 (nested_args): rounds=1 PASS
+  [toolstress] ts-nest-config-02 (nested_args): rounds=1 PASS
+  [toolstress] ts-nest-event-01 (nested_args): rounds=1 FAIL
+  [toolstress] ts-nest-notify-01 (nested_args): rounds=1 PASS
+  [toolstress] ts-err-expense-01 (error_recovery): rounds=1 FAIL
+  [toolstress] ts-err-config-01 (error_recovery): rounds=2 FAIL
+  [toolstress] ts-err-entries-01 (error_recovery): rounds=2 PASS
+  [toolstress] ts-err-notify-01 (error_recovery): rounds=2 FAIL
+  [toolstress] ts-err-event-02 (error_recovery): rounds=1 FAIL
+  [toolstress] ts-err-export-02 (error_recovery): rounds=2 FAIL
+  [toolstress] ts-proc-share-01 (procedure): rounds=4 PASS
+  [toolstress] ts-proc-sleep-01 (procedure): rounds=1 FAIL
+  [toolstress] ts-proc-contact-01 (procedure): rounds=4 PASS
+  [toolstress] ts-proc-bday-01 (procedure): rounds=3 FAIL
+  [toolstress] ts-proc-audit-01 (procedure): rounds=1 FAIL
+  [toolstress] ts-noop-chitchat-01 (no_call): rounds=1 FAIL
+  [toolstress] ts-noop-knowledge-01 (no_call): rounds=0 PASS
+  [toolstress] ts-noop-clarify-01 (no_call): rounds=0 PASS
+  [toolstress] ts-noop-clarify-02 (no_call): rounds=1 FAIL
+  [toolstress] pass=65% sel=100% args=67% recov=12% proc=43% noop=50%
+[stage C] role routing
+  [routing] 60 cases
+  [routing] tool=92% args=92% false-call=0%
+[stage C] role vision
+  [vision] 42 cases
+  [vision] pass=88%
+==============================================================================
+  AUDIT REPORT — qwen3-omni-30b  [tier vram12]  2026-07-22T06:10:27.237203+00:00
+==============================================================================
+  gguf       : /home/hectormr/LifeOS/models/qwen3-omni-30b/Qwen3-Omni-30B-A3B-Instruct-Q4_K_M.gguf
+  server_bin : /usr/bin/llama-server
+  recipe     : {
+    "launch": {
+      "ngl": 999,
+      "cpu_moe": true,
+      "ctx": 32768,
+      "cell_name": "gpu-ngl999-cpumoe-f16-b2048",
+      "extra_flags": [
+        "--cache-type-k",
+        "f16",
+        "--cache-type-v",
+        "f16",
+        "-fa",
+        "on",
+        "-b",
+        "2048",
+        "-ub",
+        "512",
+        "-t",
+        "8"
+      ]
+    },
+    "sampling": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "thinking": "on",
+    "scores": {
+      "stage_a_decode_toks_s": 27.95,
+      "stage_a_ttft_ms": 286.0,
+      "stage_a_vram_delta_mib": 4363,
+      "stage_b_det": 0.6667
+    },
+    "timestamp_utc": "2026-07-17T04:55:27.398178+00:00",
+    "role_configs": {
+      "brain": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "toolcall": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "codereview": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.75,
+        "variants_tried": 6
+      },
+      "codegen": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "on",
+        "subset_score": 0.75,
+        "variants_tried": 6
+      },
+      "conversation": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "on",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "recordsqa": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "narration": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "on",
+        "subset_score": 0.5,
+        "variants_tried": 6
+      },
+      "longsum": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      },
+      "parsejson": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.8333,
+        "variants_tried": 6
+      },
+      "proactive": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "on",
+        "subset_score": 0.8333,
+        "variants_tried": 6
+      },
+      "devplan": {
+        "sampling": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 0.5,
+        "variants_tried": 6
+      },
+      "toolstress": {
+        "sampling": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "thinking": "off",
+        "subset_score": 1.0,
+        "variants_tried": 6
+      }
+    }
+  }
+  role config (headline metric + sampling it was earned with):
+  role          headline  sampling used
+  --------------------------------------------------------------------------
+  codereview      0.9048  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  codegen         0.9318  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  devplan          0.425  T=0.7 top_p=0.8 top_k=20 seed=per-case-crc32 think=off
+  longsum         0.7778  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  recordsqa       0.8205  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  toolstress      0.6522  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=off
+  routing           0.95  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  vision           0.881  T=0.6 top_p=0.95 top_k=20 seed=per-case-crc32 think=on
+  role codereview : {"n": 42, "detection_rate": 0.8788, "false_positive_rate": 0.0, "score": 0.9048, "failed_ids": ["cr07", "cr24", "cr25", "cr28"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role codegen    : {"n": 44, "pass_rate": 0.9318, "compile_rate": 1.0, "failed_ids": ["cg03", "cg08", "cg11"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role devplan    : {"n": 40, "instruction_pass_rate": 0.2143, "review_accuracy": 0.5385, "pass_rate": 0.425, "judge_score": 0.25, "failed_ids": ["dp-instr-03", "dp-rev-02", "dp-rev-05", "dp-instr-04", "dp-instr-05", "dp-instr-06", "dp-instr-07", "dp-instr-08", "dp-instr-09", "dp-instr-11", "dp-instr-12", "dp-instr-13", "dp-instr-14", "dp-rev-06", "dp-rev-09", "dp-rev-11", "dp-rev-12", "dp-rev-16", "dp-rev-20", "dp-rev-22", "dp-rev-23", "dp-rev-24", "dp-rev-26"], "sampling_used": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role longsum    : {"n": 36, "atom_recall": 0.95, "structure_rate": 0.9722, "pass_rate": 0.7778, "failed_ids": ["ls-07-window", "ls-08-window", "ls-09-window", "ls-14-window", "ls-21-exec", "ls-23-exec", "ls-29-chat", "ls-33-chat"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role recordsqa  : {"n": 39, "pass_rate": 0.8205, "fabrication_rate": 0.0, "failed_ids": ["rq-13", "rq-16-agg", "rq-17-agg", "rq-19-disambig", "rq-20-temporal", "rq-25-multihop", "rq-36-trap"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role toolstress : {"n": 46, "pass_rate": 0.6522, "tool_selection_rate": 1.0, "arg_exactness_rate": 0.6667, "recovery_rate": 0.125, "procedure_rate": 0.4286, "abstention_rate": 0.5, "failed_ids": ["ts-nest-config-01", "ts-err-export-01", "ts-err-event-01", "ts-proc-expense-01", "ts-nest-reminder-01", "ts-nest-event-01", "ts-err-expense-01", "ts-err-config-01", "ts-err-notify-01", "ts-err-event-02", "ts-err-export-02", "ts-proc-sleep-01", "ts-proc-bday-01", "ts-proc-audit-01", "ts-noop-chitchat-01", "ts-noop-clarify-02"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "off"}}
+  role routing    : {"n": 60, "correct_tool_rate": 0.9167, "arg_accuracy": 0.9167, "false_call_rate": 0.0, "score": 0.95, "failed_ids": ["rt28", "rt30", "rt33"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+  role vision     : {"n": 42, "pass_rate": 0.881, "failed_ids": ["vq04", "vq23", "vq26", "vq41", "vq44"], "sampling_used": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "seed_policy": "per-case-crc32", "thinking": "on"}}
+==============================================================================
+
+======================================================================================================================================================================================================================
+  MODEL AUDIT MATRIX  (newest audit per label+tier)
+======================================================================================================================================================================================================================
+  Label                tier     brain  extr%   dom%  tool%   vis%   rev%  code%   conv recQA%   narr  lsum% parse% agent% proact%  vcls%   dev% tstress%  dbench%  ctxK   tok/s  VRAM MiB thinking 
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  bonsai-1bit          cpu     - - - - - - - - - - - - - - - - - -     -     7.6         0 none     
+  bonsai-1bit          vram12  - - - -  95.2%  83.3%  90.9% -  71.8% -  50.0% - - - -  60.0%    89.1% -     - -      5569 off      
+  bonsai-1bit          vram4   - - - - - - - - - - - - - - - - - -   85k     9.6      2551 none     
+  bonsai-1bit          vram8   - - - - - - - - - - - - - - - - - -   55k    54.8      6561 none     
+  bonsai-ternary       cpu     - - - - - - - - - - - - - - - - - -     -     2.7         0 none     
+  bonsai-ternary       vram12  - - - - 100.0%  78.6%  93.2% -  87.2% -  58.3% - - - -  65.0%    89.1% -     - -      9615 off      
+  gemma4-26b           cpu     - - - - - - - - - - - - - - - - - -     -    13.5         0 none     
+  gemma4-26b           vram12  - - - - 100.0%  95.2% 100.0% -  97.4% -  83.3% - - - -  72.5%    87.0% -     - -      6265 off      
+  gemma4-26b           vram4   - - - - - - - - - - - - - - - - - -   47k    24.8      3429 none     
+  gemma4-26b           vram8   - - - - - - - - - - - - - - - - - -   71k    33.2      6265 none     
+  gemma4-e2b           cpu     - - - - - - - - - - - - - - - - - -     -    27.4         0 none     
+  gemma4-e2b           vram12  - - - -  92.9%  90.5%  95.5% -  79.5% -  86.1% - - - -  72.5%    73.9% -     - -      2035 off      
+  gemma4-e2b           vram4   - - - - - - - - - - - - - - - - - -   64k   197.3      3141 none     
+  gemma4-e2b           vram8   - - - - - - - - - - - - - - - - - -  356k   201.8      3141 none     
+  gemma4-e4b           cpu     - - - - - - - - - - - - - - - - - -     -    15.4         0 none     
+  gemma4-e4b           vram12  - - - -  95.2%  85.7%  97.7% -  82.0% -  66.7% - - - -  72.5%    80.4% -     - -      3889 off      
+  gemma4-e4b           vram4   - - - - - - - - - - - - - - - - - -  167k    30.0      2369 none     
+  gemma4-e4b           vram8   - - - - - - - - - - - - - - - - - -  142k   105.7      5007 none     
+  laguna-xs-2.1        cpu     - - - - - - - - - - - - - - - - - -     -    19.9         0 none     
+  laguna-xs-2.1        vram12  - - - - - - - - - - - - - - - - - -  177k -      4287 off      
+  lfm2_5-230m          vram12  -   2.9%  50.0%  16.7% - - - - - - -  21.4% - - - - - -     -   964.7       765 none     
+  lfm2_5-350m          vram12  - - - - - - - - - - - - - - - - - -     - -       711 none     
+  nemotron-cascade2-30b cpu     - - - - - - - - - - - - - - - - - -     -    16.5         0 none     
+  nemotron-cascade2-30b vram12  - - - - - - - - - - - - - - - - - -  596k -      3495 on       
+  nemotron-cascade2-30b vram4   - - - - - - - - - - - - - - - - - -   38k    31.6      3495 none     
+  nemotron-cascade2-30b vram8   - - - - - - - - - - - - - - - - - -  336k    31.1      3495 none     
+  north-mini-code      cpu     - - - - - - - - - - - - - - - - - -     -    16.4         0 none     
+  north-mini-code      vram12  - - - - - - - - - - - - - - - - - -  167k -      4104 on       
+  qwen25-coder-3b      cpu     - - - - - - - - - - - - - - - - - -     -    25.4         0 none     
+  qwen25-coder-3b      vram12  - - - - -  23.8%  79.5% -  56.4% -  33.3% - - - -  42.5%     8.7% -     - -      4043 off      
+  qwen3-omni-30b       cpu     - - - - - - - - - - - - - - - - - -     -    18.6         0 none     
+  qwen3-omni-30b       vram12  - - - -  88.1%  90.5%  93.2% -  82.0% -  77.8% - - - -  42.5%    65.2% -     - -      4363 on       
+  qwen35-0_8b          cpu     - - - - - - - - - - - - - - - - - -     -    55.8         0 none     
+  qwen35-0_8b          vram12  - - - -  76.2%  66.7%  13.6% -  53.8% -  36.1% - - - -  37.5%    56.5% -     - -      1219 off      
+  qwen35-2b            cpu     - - - - - - - - - - - - - - - - - -     -    32.5         0 none     
+  qwen35-2b            vram12  - - - -  90.5%  76.2%  56.8% -  74.4% -  50.0% - - - -  50.0%    84.8% -     - -      1937 off      
+  qwen35-4b            cpu     - - - - - - - - - - - - - - - - - -     -    15.7         0 none     
+  qwen35-4b            vram12  - - - -  97.6%  92.9%  84.1% -  79.5% -  66.7% - - - -  57.5%    91.3% -     - -      4119 off      
+  qwen36-27b           cpu     - - - - - - - - - - - - - - - - - -     -     3.1         0 none     
+  qwen36-27b           vram12   0.751  87.0%  97.2% 100.0% 100.0% 100.0% 100.0%  0.774 100.0%  87.5%  66.7%  92.9%  83.3%   66.7%  83.3%  87.5%   100.0% -     -     4.3      8649 off      
+  qwen36-35b           cpu     - - - - - - - - - - - - - - - - - -     -    13.4         0 none     
+  qwen36-35b           vram12  - - - - - - - - - - - - - - - - -   100.0%     - -      3623 off      
+  qwen36-35b           vram4   - - - - - - - - - - - - - - - - - -   54k    31.1      3323 none     
+  qwen36-35b           vram8   - - - - - - - - - - - - - - - - - -  154k    31.1      4255 none     
+  vibethinker-3b       cpu     - - - - - - - - - - - - - - - - - -     -    24.6         0 none     
+  vibethinker-3b       vram12  - - - - -  90.5%  38.6% -  48.7% -  11.1% - - - -  42.5%     8.7% -     - -      3283 on       
+======================================================================================================================================================================================================================

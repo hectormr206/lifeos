@@ -9,6 +9,7 @@ import '../domain/tts_voice_gateway.dart';
 import 'piper_tokens.dart';
 import 'tar_gz_extractor.dart';
 import 'tts_voice_source_config.dart';
+import '../../app_update/domain/update_source_config.dart';
 
 /// Raised when a voice download cannot be completed or verified.
 class TtsVoiceDownloadException implements Exception {
@@ -58,6 +59,12 @@ class BackgroundDownloaderTtsVoiceGateway implements TtsVoiceGateway {
       '${_group}_${voiceId.replaceAll(RegExp('[^A-Za-z0-9]'), '_')}';
 
   DownloadTask _taskFor(TtsVoiceFile file, String group) => DownloadTask(
+        // The update source's access key, exactly as the APK download sends
+        // it. Harmless today: /model/, /stt/, /tts/ and /embed/ are still
+        // open. It is here so they CAN be closed — gating them while any
+        // device still omitted the header would break model downloads on that
+        // device, so the header has to ship and propagate first.
+        headers: {kUpdateAccessKeyHeader: kUpdateAccessKey},
         url: _joinUrl(_config.baseUrl, file.name),
         filename: file.name,
         group: group,

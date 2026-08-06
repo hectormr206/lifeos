@@ -15,6 +15,7 @@ import '../../app_update/presentation/app_update_providers.dart';
 import '../../assistant/presentation/assistant_providers.dart';
 import '../../security/domain/biometric_authenticator.dart';
 import '../../security/presentation/app_lock_providers.dart';
+import '../../game_mode/presentation/game_mode_tile.dart';
 
 /// The Settings hub (app-shell slice) — the gear on the home screen lands
 /// here. A grouped, branded list of ALL app configuration: appearance
@@ -148,6 +149,17 @@ class SettingsHubScreen extends ConsumerWidget {
             subtitle: Text(l10n.voiceNavSubtitle),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/voice'),
+          ),
+          // MODO JUEGO — an inline switch, not a row that pushes a screen.
+          //
+          // It is flipped at one specific moment (right before playing) and
+          // flipped back after, which makes two taps and a screen transition
+          // the wrong shape for it. It also renders as NOTHING unless the
+          // paired engine reports a GPU, so on the Pixel-only setup this costs
+          // no space at all.
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: GameModeTile(),
           ),
           const Divider(),
           _SectionHeader(l10n.sectionAdvanced),

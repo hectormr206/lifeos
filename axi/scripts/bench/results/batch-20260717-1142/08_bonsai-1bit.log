@@ -1,0 +1,108 @@
+Audit: bonsai-1bit | tiers=['cpu'] | roles=['speed'] | moe=False | vram baseline=333 MiB
+
+######################################################################
+#  TIER cpu
+######################################################################
+[stage A] tier=cpu — sweeping 3 cells
+  [stage A] cell cpu-t4 ...
+  Spawning: /home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server -m Bonsai-27B-Q1_0.gguf ...
+    -> decode=4.03 tok/s ttft=4568.6ms vramΔ=0
+  [stage A] cell cpu-t8 ...
+  Spawning: /home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server -m Bonsai-27B-Q1_0.gguf ...
+    -> decode=6.35 tok/s ttft=2703.1ms vramΔ=0
+  [stage A] cell cpu-t16 ...
+  Spawning: /home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server -m Bonsai-27B-Q1_0.gguf ...
+    -> decode=6.78 tok/s ttft=2128.9ms vramΔ=0
+[stage B] 1 variants x 12 fast cases
+  Spawning: /home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server -m Bonsai-27B-Q1_0.gguf ...
+  [stage B] house-think_none: det=0.0
+[recipe] saved peak recipe for bonsai-1bit/cpu → /home/hectormr/LifeOS/lifeos/axi/scripts/bench/results/model_recipes.json
+  Spawning: /home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server -m Bonsai-27B-Q1_0.gguf ...
+[stage C] role speed
+  [speed] warmup (discarded)...
+  [speed 1/10] ttft=2588.0ms decode=7.35tok/s
+  [speed 2/10] ttft=1888.6ms decode=7.51tok/s
+  [speed 3/10] ttft=2182.0ms decode=7.59tok/s
+  [speed 4/10] ttft=1791.3ms decode=7.57tok/s
+  [speed 5/10] ttft=1615.6ms decode=7.56tok/s
+  [speed 6/10] ttft=2642.7ms decode=7.27tok/s
+  [speed 7/10] ttft=1936.7ms decode=7.44tok/s
+  [speed 8/10] ttft=2147.2ms decode=7.53tok/s
+  [speed 9/10] ttft=1760.8ms decode=7.61tok/s
+  [speed 10/10] ttft=1638.1ms decode=7.63tok/s
+==============================================================================
+  AUDIT REPORT — bonsai-1bit  [tier cpu]  2026-07-17T18:33:52.898877+00:00
+==============================================================================
+  gguf       : /home/hectormr/LifeOS/models/bonsai-27b/Bonsai-27B-Q1_0.gguf
+  server_bin : /home/hectormr/LifeOS/PrismML-llama.cpp/build/bin/llama-server
+  recipe     : {
+    "launch": {
+      "ngl": 0,
+      "cpu_moe": false,
+      "ctx": 32768,
+      "cell_name": "cpu-t16",
+      "extra_flags": [
+        "-b",
+        "512",
+        "-ub",
+        "256",
+        "-t",
+        "16",
+        "--no-mmap"
+      ]
+    },
+    "sampling": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "thinking": "none",
+    "scores": {
+      "stage_a_decode_toks_s": 6.78,
+      "stage_a_ttft_ms": 2128.9,
+      "stage_a_vram_delta_mib": 0,
+      "stage_b_det": 0.0
+    },
+    "timestamp_utc": "2026-07-17T18:27:36.996078+00:00"
+  }
+  role config (headline metric + sampling it was earned with):
+  role          headline  sampling used
+  --------------------------------------------------------------------------
+  speed             7.56  T=- top_p=- top_k=- seed=n/a think=n/a
+  role speed      : {"n_runs": 10, "ttft_p50_ms": 1936.7, "ttft_p95_ms": 2642.7, "decode_p50_toks_s": 7.56, "decode_mean_toks_s": 7.51, "vram_before_mib": 333, "vram_after_mib": 333, "vram_total_mib": 12227, "idle_rss_mb": 9941.5, "sampling_used": {"temperature": null, "top_p": null, "top_k": null, "seed_policy": "n/a", "thinking": "n/a"}}
+  stage A    : 3 cells swept
+    - cpu-t4                       ok   decode=4.03 ttft=4568.6 vramΔ=0
+    - cpu-t8                       ok   decode=6.35 ttft=2703.1 vramΔ=0
+    - cpu-t16                      ok   decode=6.78 ttft=2128.9 vramΔ=0
+  stage B    : 1 variants scored
+    - house-think_none         det=0.0
+==============================================================================
+
+======================================================================================================================================================================================================================
+  MODEL AUDIT MATRIX  (newest audit per label+tier)
+======================================================================================================================================================================================================================
+  Label                tier     brain  extr%   dom%  tool%   vis%   rev%  code%   conv recQA%   narr  lsum% parse% agent% proact%  vcls%   dev% tstress%  dbench%  ctxK   tok/s  VRAM MiB thinking 
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  bonsai-1bit          cpu     - - - - - - - - - - - - - - - - - -     -     7.6         0 none     
+  bonsai-1bit          vram12   0.636  89.9% 100.0% 100.0% 100.0% 100.0%  75.0%  0.681  90.0%  75.0%  66.7%  85.7%  83.3%   41.7%  50.0%  87.5%    90.0% -     -    52.0      5569 off      
+  bonsai-ternary       vram12   0.698  88.4%  97.2% 100.0% 100.0% 100.0%  87.5%  0.738 100.0%  75.0% 100.0%  92.9%  91.7%   41.7%  66.7%  75.0%   100.0% -     -    44.2      9615 off      
+  gemma4-26b           vram12   0.757  87.0% 100.0% 100.0% 100.0% 100.0% 100.0%  0.793 100.0% 100.0% 100.0%  85.7%  75.0%   83.3%  33.3%  87.5%   100.0% -     -    30.1      6265 off      
+  gemma4-e2b           cpu     - - - - - - - - - - - - - - - - - -     -    27.4         0 none     
+  gemma4-e2b           vram12   0.735  82.6% 100.0%  91.7% 100.0% 100.0%  87.5%  0.794  90.0%  87.5% 100.0%  78.6%  16.7%   50.0%  16.7% 100.0%    80.0% -     -   210.4      2035 off      
+  gemma4-e4b           cpu     - - - - - - - - - - - - - - - - - -     -    15.4         0 none     
+  gemma4-e4b           vram12   0.718  87.0% 100.0% 100.0% - 100.0% 100.0%  0.753  90.0%  87.5%  83.3%  85.7%  75.0%   66.7% - 100.0%    90.0% -     -    97.3      3889 off      
+  laguna-xs-2.1        cpu     - - - - - - - - - - - - - - - - - -     -    19.9         0 none     
+  nemotron-cascade2-30b vram12   0.626  78.3%  97.2% 100.0% - 100.0% 100.0%  0.748  90.0%  50.0%  33.3%  85.7%  75.0%   58.3% -  87.5%   100.0% -     -    29.3      3495 on       
+  qwen25-coder-3b      vram12   0.565  68.1% 100.0%  25.0% -  12.5%  37.5%  0.417  50.0%  75.0%  66.7%  78.6%   8.3%   33.3% -  87.5%     0.0% -     -   188.8      4043 off      
+  qwen3-omni-30b       vram12   0.745  82.6% 100.0%  91.7% -  87.5%  75.0%  0.797 100.0%  62.5% 100.0%  85.7%  66.7%   75.0% -  62.5%    70.0% -     -    28.9      4363 on       
+  qwen35-0_8b          cpu     - - - - - - - - - - - - - - - - - -     -    55.8         0 none     
+  qwen35-0_8b          vram12   0.407  60.9%  94.4%  58.3%  87.5%  87.5%  12.5%  0.331  70.0%  50.0%  66.7%  35.7%  16.7%   33.3%  16.7%  62.5%    60.0%    20.0%     -   362.1      1219 off      
+  qwen35-2b            cpu     - - - - - - - - - - - - - - - - - -     -    32.5         0 none     
+  qwen35-2b            vram12   0.596  72.5%  97.2% 100.0% 100.0%  87.5%  37.5%  0.531  80.0%  50.0%  66.7%  64.3%  58.3%   41.7%  16.7%  75.0%   100.0% -     -   217.7      1937 off      
+  qwen35-4b            cpu     - - - - - - - - - - - - - - - - - -     -    15.7         0 none     
+  qwen35-4b            vram12   0.627  87.0% 100.0% 100.0% 100.0% 100.0%  75.0%  0.768  90.0%  87.5% 100.0%  78.6%  75.0%   50.0%  50.0%  87.5%   100.0% -     -   110.4      4119 off      
+  qwen36-27b           vram12   0.771  87.0%  97.2% 100.0% 100.0% 100.0% 100.0%  0.759 100.0%  87.5%  66.7%  92.9%  83.3%   66.7%  50.0%  87.5%   100.0% -     -     4.3      8649 off      
+  qwen36-35b           vram12   0.750  88.4% 100.0% 100.0% - 100.0% 100.0%  0.782  90.0%  87.5%  83.3%  92.9%  58.3%   41.7% -  87.5%    90.0% -     -    28.9      3623 off      
+  vibethinker-3b       cpu     - - - - - - - - - - - - - - - - - -     -    24.6         0 none     
+  vibethinker-3b       vram12   0.472  23.2%  44.4%  25.0% - 100.0%  25.0%  0.115  40.0% 100.0%  50.0%   7.1%   0.0%    0.0% -  50.0%     0.0% -     -   189.5      3283 on       
+======================================================================================================================================================================================================================
