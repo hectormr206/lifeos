@@ -39,7 +39,7 @@ void main() {
     });
 
     test('every organ key in the avatar asset has an entry in the map', () {
-      // Keep in sync with assets/axi/axi_avatar.html tap(...) calls.
+      // Keep in sync with kAxiOrganHitOrder in axi_avatar_geometry.dart.
       const assetKeys = {
         'ears', 'lungs', 'hands', 'feet', 'immune', 'memory', 'brain',
         'eyes', 'smell', 'mouth', 'heart', 'mind',

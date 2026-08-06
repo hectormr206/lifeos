@@ -49,7 +49,11 @@ void main() {
 
     await tester.pumpWidget(
         UncontrolledProviderScope(container: container, child: const LifeOSApp()));
-    await tester.pumpAndSettle();
+    // NOT pumpAndSettle: the home screen carries Axi's avatar, which animates
+    // forever, so the tree never settles. Two pumps let the router and the
+    // onboarding gate's future resolve, which is all this test is about.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
 
     expect(
       find.text('Permisos de LifeOS'),
@@ -65,7 +69,11 @@ void main() {
 
     await tester.pumpWidget(
         UncontrolledProviderScope(container: container, child: const LifeOSApp()));
-    await tester.pumpAndSettle();
+    // NOT pumpAndSettle: the home screen carries Axi's avatar, which animates
+    // forever, so the tree never settles. Two pumps let the router and the
+    // onboarding gate's future resolve, which is all this test is about.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('Permisos de LifeOS'), findsNothing);
   });

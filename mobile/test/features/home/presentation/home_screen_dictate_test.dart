@@ -31,6 +31,13 @@ Widget _app({required String operatingSystem}) => ProviderScope(
       ],
       child: MaterialApp.router(
         locale: const Locale('es'),
+        // Axi's avatar animates forever, so a tree containing it never
+        // settles. disableAnimations is the same flag the widget already
+        // honours for prefers-reduced-motion.
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(disableAnimations: true),
+          child: child ?? const SizedBox.shrink(),
+        ),
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         routerConfig: GoRouter(

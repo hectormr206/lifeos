@@ -36,6 +36,15 @@ Widget _localized(GoRouter router) => MaterialApp.router(
       locale: const Locale('es'),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
+      // Axi's avatar animates forever, so a tree containing it NEVER settles
+      // and pumpAndSettle times out. These tests are about routing and copy,
+      // not about the mascot: disableAnimations is the same flag the widget
+      // already honours for prefers-reduced-motion, so it stops the loop
+      // through the real code path rather than through a test-only stub.
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: true),
+        child: child ?? const SizedBox.shrink(),
+      ),
     );
 
 void main() {

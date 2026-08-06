@@ -330,9 +330,6 @@ flutter:
   # App-shell slice: the Axi mark, shown in Settings > Acerca de.
   assets:
     - assets/branding/
-    # Axi's animated body (home) — the laptop dashboard's SVG+CSS avatar,
-    # served offline into a WebView. See lib/features/axi_body/.
-    - assets/axi/
     # Cerebro 3D — the laptop's vendored 3d-force-graph bundle (three.js
     # included, NO CDN at runtime) + the local HTML shell that renders the
     # on-device graph. See lib/features/brain3d/.

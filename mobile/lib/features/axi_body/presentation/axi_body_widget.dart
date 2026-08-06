@@ -1,22 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../domain/axi_organ_actions.dart';
+import 'axi_avatar_animation.dart';
+import 'axi_avatar_geometry.dart';
+import 'axi_avatar_painter.dart';
 
 /// Axi's animated body on the home screen — the laptop dashboard's living
-/// avatar, ported faithfully: the SAME SVG + CSS keyframes run inside an
-/// offline WebView backed by a bundled asset (assets/axi/axi_avatar.html).
+/// avatar, drawn NATIVELY by Flutter.
 ///
-/// Organ taps arrive through the `Axi` JavaScript channel and are resolved
-/// by [kAxiOrganRoutes]; organs without a mobile equivalent yet show a
-/// localized "próximamente" snackbar.
+/// It used to be the same SVG running inside a WebView backed by a bundled
+/// asset. That worked on Android and iOS and nowhere else: `webview_flutter`
+/// has no Linux implementation, so the desktop build fell through to a static
+/// PNG of Axi's head — a motionless mascot on the very machine the assistant
+/// is developed on. A [CustomPainter] has no such gap: Android, Linux and
+/// later Windows/macOS/web all get the same moving Axi with no extra work and
+/// no embedded browser.
 ///
-/// On platforms without a WebView implementation (host widget tests, Linux
-/// desktop) it degrades to a static branding image so the home screen never
-/// breaks — [WebViewPlatform.instance] is only set by the Android/iOS
-/// plugin registrars.
+/// The drawing lives in [AxiAvatarPainter], the idle motion in
+/// [axiAvatarPoseAt] and the organ shapes in [axiOrganAtViewBox] — all
+/// transcribed from the original SVG and its CSS keyframes.
+///
+/// Organ taps are resolved by [kAxiOrganRoutes]; organs without a mobile
+/// equivalent yet show a localized "próximamente" snackbar.
 class AxiBodyWidget extends StatefulWidget {
   const AxiBodyWidget({super.key});
 
@@ -27,27 +34,48 @@ class AxiBodyWidget extends StatefulWidget {
   State<AxiBodyWidget> createState() => _AxiBodyWidgetState();
 }
 
-class _AxiBodyWidgetState extends State<AxiBodyWidget> {
-  WebViewController? _controller;
+class _AxiBodyWidgetState extends State<AxiBodyWidget>
+    with SingleTickerProviderStateMixin {
+  /// Ticks over one full body loop; see [kAxiAvatarLoop] for why that period.
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: kAxiAvatarLoop,
+  );
+
+  bool _reduceMotion = false;
 
   @override
   void initState() {
     super.initState();
-    if (WebViewPlatform.instance != null) {
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setBackgroundColor(Colors.transparent)
-        ..addJavaScriptChannel(
-          'Axi',
-          onMessageReceived: (message) => _onOrganTap(message.message),
-        )
-        ..loadFlutterAsset('assets/axi/axi_avatar.html');
+    _controller.repeat();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The asset honoured `@media (prefers-reduced-motion: reduce)`; the
+    // platform flag behind it is MediaQuery's `disableAnimations`.
+    final reduce = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (reduce == _reduceMotion) return;
+    _reduceMotion = reduce;
+    if (reduce) {
+      _controller.stop();
+    } else {
+      _controller.repeat();
     }
   }
 
-  void _onOrganTap(String organKey) {
-    if (!mounted) return;
-    final route = axiOrganRoute(organKey);
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onTapUp(TapUpDetails details, Size size) {
+    final organ = axiOrganAtViewBox(axiViewBoxPoint(details.localPosition, size));
+    if (organ == null) return;
+
+    final route = axiOrganRoute(organ);
     if (route != null) {
       context.push(route);
       return;
@@ -66,17 +94,31 @@ class _AxiBodyWidgetState extends State<AxiBodyWidget> {
       label: l10n.axiAvatarLabel,
       child: SizedBox(
         height: AxiBodyWidget.height,
-        child: _controller != null
-            ? WebViewWidget(controller: _controller!)
-            // Fallback (tests / platforms without WebView): the static mark.
-            : Center(
-                child: Image.asset(
-                  'assets/branding/axi-512.png',
-                  height: 180,
-                  errorBuilder: (_, _, _) =>
-                      const Icon(Icons.pets, size: 96, color: Color(0xFFFE8FAF)),
-                ),
+        child: Center(
+          child: SizedBox.fromSize(
+            size: kAxiAvatarIntrinsicSize,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (details) => _onTapUp(details, kAxiAvatarIntrinsicSize),
+              child: AnimatedBuilder(
+                animation: _controller,
+                builder: (context, _) {
+                  final seconds =
+                      _controller.value * kAxiAvatarLoop.inMilliseconds / 1000;
+                  return CustomPaint(
+                    size: kAxiAvatarIntrinsicSize,
+                    painter: AxiAvatarPainter(
+                      elapsedSeconds: seconds,
+                      pose: _reduceMotion
+                          ? kAxiAvatarRestPose
+                          : axiAvatarPoseAt(seconds),
+                    ),
+                  );
+                },
               ),
+            ),
+          ),
+        ),
       ),
     );
   }
