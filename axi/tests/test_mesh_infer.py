@@ -112,7 +112,7 @@ def test_valid_signed_enrolled_request_is_forwarded(mesh):
         _make_req(mesh["node_priv"], mesh["cert"], _infer_body(), now=now),
         root_pubkey_hex=mesh["root_pubkey"],
         served=_served(),
-        nonce_cache=cache,
+        is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=cache,
         now=now,
         http_post=rec,
     )
@@ -126,6 +126,99 @@ def test_valid_signed_enrolled_request_is_forwarded(mesh):
     assert "role" not in fwd
 
 
+# ─────────────────────────── revocation (fail-closed) ───────────────────
+
+
+def test_handle_request_requires_is_revoked_kwarg(mesh):
+    """`is_revoked` has NO default on `handle_request` — omitting it must fail
+    LOUDLY (TypeError) at the call site, not silently skip revocation."""
+    now = 10_000
+    req = _make_req(mesh["node_priv"], mesh["cert"], _infer_body(), now=now)
+    with pytest.raises(TypeError):
+        mesh_infer.handle_request(
+            req,
+            root_pubkey_hex=mesh["root_pubkey"],
+            served=_served(),
+            nonce_cache=mesh_infer.NonceCache(600),
+            now=now,
+            http_post=_Recorder(),
+        )
+
+
+def test_authenticate_requires_is_revoked_kwarg(mesh):
+    """Same contract one layer down: `authenticate` also has no default."""
+    now = 10_000
+    payload = mesh_trust.build_signed_payload({"op": "x"}, now=now)
+    sig = mesh_trust.sign_request(mesh["node_priv"], payload)
+    with pytest.raises(TypeError):
+        mesh_infer.authenticate(
+            payload, sig, mesh["cert"], mesh["root_pubkey"],
+            now=now, nonce_cache=mesh_infer.NonceCache(600),
+        )
+
+
+def test_handle_request_accepts_no_revocation_check_sentinel(mesh):
+    """The explicit opt-out sentinel is accepted and behaves like the old
+    (pre-hardening) no-revocation-check default."""
+    now = 10_000
+    rec = _Recorder()
+    out = mesh_infer.handle_request(
+        _make_req(mesh["node_priv"], mesh["cert"], _infer_body(), now=now),
+        root_pubkey_hex=mesh["root_pubkey"],
+        served=_served(),
+        nonce_cache=mesh_infer.NonceCache(600),
+        now=now,
+        http_post=rec,
+        is_revoked=mesh_trust.NO_REVOCATION_CHECK,
+    )
+    assert out == rec.resp
+
+
+def test_handle_request_rejects_when_is_revoked_reports_revoked(mesh):
+    """`is_revoked` is threaded end-to-end from `handle_request` through
+    `authenticate` into `mesh_trust.verify_request` — an otherwise-valid
+    signed request from a revoked node must be rejected 401."""
+    now = 10_000
+    req = _make_req(mesh["node_priv"], mesh["cert"], _infer_body(), now=now)
+    with pytest.raises(mesh_infer.InferError) as ei:
+        mesh_infer.handle_request(
+            req,
+            root_pubkey_hex=mesh["root_pubkey"],
+            served=_served(),
+            nonce_cache=mesh_infer.NonceCache(600),
+            now=now,
+            http_post=_Recorder(),
+            is_revoked=lambda pk: True,
+        )
+    assert ei.value.status_code == 401
+
+
+def test_default_is_revoked_bridges_store_revocation(monkeypatch):
+    """`default_is_revoked` (wired at the live `/api/v1/infer` endpoint) reads
+    `devices.revoked_at` via `store.device_get_by_pubkey` keyed on the mesh
+    cert's `node_pubkey`."""
+    from axi import store
+
+    calls = {"pubkey": None}
+
+    def fake_lookup(pubkey):
+        calls["pubkey"] = pubkey
+        return {"revoked_at": 123.0}
+
+    monkeypatch.setattr(store, "device_get_by_pubkey", fake_lookup)
+    assert mesh_infer.default_is_revoked("some-node-pubkey") is True
+    assert calls["pubkey"] == "some-node-pubkey"
+
+
+def test_default_is_revoked_unmatched_pubkey_is_not_revoked(monkeypatch):
+    """A mesh node with no matching `devices` row (e.g. enrolled via the
+    owner passphrase, not paired as a phone) is treated as NOT revoked."""
+    from axi import store
+
+    monkeypatch.setattr(store, "device_get_by_pubkey", lambda pk: None)
+    assert mesh_infer.default_is_revoked("unmatched-pubkey") is False
+
+
 # ─────────────────────────── auth rejection ───────────────────────────
 
 
@@ -137,7 +230,7 @@ def test_unenrolled_cert_is_rejected(mesh):
             req,
             root_pubkey_hex=mesh["root_pubkey"],
             served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600),
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600),
             now=now,
             http_post=_Recorder(),
         )
@@ -153,7 +246,7 @@ def test_forged_cert_is_rejected(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
         )
     assert ei.value.status_code == 401
     assert rec.calls == []  # never forwarded
@@ -168,7 +261,7 @@ def test_expired_cert_is_rejected(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=_Recorder(),
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=_Recorder(),
         )
     assert ei.value.status_code == 401
 
@@ -185,7 +278,7 @@ def test_cross_mesh_cert_is_rejected(mesh, tmp_path):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=_Recorder(),
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=_Recorder(),
         )
     assert ei.value.status_code == 401
 
@@ -203,7 +296,7 @@ def test_tampered_params_break_the_signature(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             good, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
         )
     assert ei.value.status_code == 401
     assert rec.calls == []
@@ -218,7 +311,7 @@ def test_replay_same_request_twice_second_is_rejected(mesh):
     req = _make_req(mesh["node_priv"], mesh["cert"], _infer_body(), now=now, nonce="rp-1")
     rec = _Recorder()
     common = dict(root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-                  nonce_cache=cache, now=now, http_post=rec)
+                  is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=cache, now=now, http_post=rec)
     # First time: authentic + fresh -> forwarded.
     mesh_infer.handle_request(req, **common)
     # Second time: same nonce inside the window -> replay, rejected.
@@ -235,7 +328,7 @@ def test_stale_timestamp_outside_window_is_rejected(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now,
             skew_seconds=300, http_post=_Recorder(),
         )
     assert ei.value.status_code == 401
@@ -247,7 +340,7 @@ def test_future_timestamp_outside_window_is_rejected(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now,
             skew_seconds=300, http_post=_Recorder(),
         )
     assert ei.value.status_code == 401
@@ -274,7 +367,7 @@ def test_role_not_served_here_is_404(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served("brain"),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
         )
     assert ei.value.status_code == 404
     assert rec.calls == []
@@ -290,7 +383,7 @@ def test_caller_cannot_inject_arbitrary_host(mesh):
     rec = _Recorder()
     mesh_infer.handle_request(
         req, root_pubkey_hex=mesh["root_pubkey"], served=_served("brain", 8080),
-        nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
+        is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
     )
     url, fwd, _ = rec.calls[0]
     assert url == "http://127.0.0.1:8080/v1/chat/completions"
@@ -307,7 +400,7 @@ def test_mismatched_model_id_is_404(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served("brain", 8080, "qwen-brain"),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=_Recorder(),
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=_Recorder(),
         )
     assert ei.value.status_code == 404
 
@@ -322,7 +415,7 @@ def test_max_tokens_is_clamped_to_ceiling(mesh):
     rec = _Recorder()
     mesh_infer.handle_request(
         req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-        nonce_cache=mesh_infer.NonceCache(600), now=now,
+        is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now,
         max_tokens_ceiling=4096, http_post=rec,
     )
     _, fwd, _ = rec.calls[0]
@@ -335,7 +428,7 @@ def test_oversized_body_is_rejected(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now,
             max_body_bytes=10, http_post=_Recorder(),
         )
     assert ei.value.status_code == 413
@@ -351,7 +444,7 @@ def test_local_server_timeout_is_502(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
         )
     assert ei.value.status_code == 502
 
@@ -363,7 +456,7 @@ def test_local_server_connection_error_is_502(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
         )
     assert ei.value.status_code == 502
 
@@ -375,7 +468,7 @@ def test_local_server_non_200_is_502(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
         )
     assert ei.value.status_code == 502
 
@@ -462,7 +555,7 @@ def test_bad_envelope_rejected_before_any_disk_read(mesh):
             {"payload_b64": "eyJhIjoxfQ==", "cert_token": "c"},  # sig_hex missing
             root_pubkey_hex=root_spy,
             served=served_spy,
-            nonce_cache=mesh_infer.NonceCache(600),
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600),
             now=now,
             http_post=rec,
         )
@@ -483,7 +576,7 @@ def test_unauthenticated_request_never_reads_served_catalog(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=root_spy, served=served_spy,
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=_Recorder(),
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=_Recorder(),
         )
     assert ei.value.status_code == 401
     assert served_spy.calls == 0
@@ -499,7 +592,7 @@ def test_lazy_providers_invoked_on_valid_request(mesh):
     out = mesh_infer.handle_request(
         _make_req(mesh["node_priv"], mesh["cert"], _infer_body(), now=now),
         root_pubkey_hex=root_spy, served=served_spy,
-        nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
+        is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
     )
     assert out == rec.resp
     assert root_spy.calls == 1
@@ -519,7 +612,7 @@ def test_node_at_concurrency_cap_gets_429(mesh):
     with pytest.raises(mesh_infer.InferError) as ei:
         mesh_infer.handle_request(
             req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-            nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec, inflight=reg,
+            is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec, inflight=reg,
         )
     assert ei.value.status_code == 429
     assert rec.calls == []  # never forwarded while at cap
@@ -532,7 +625,7 @@ def test_slot_released_after_completion(mesh):
     reg = mesh_infer.InflightRegistry(max_inflight=1)
     rec = _Recorder()
     common = dict(root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-                  nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec, inflight=reg)
+                  is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec, inflight=reg)
     mesh_infer.handle_request(
         _make_req(mesh["node_priv"], mesh["cert"], _infer_body(), now=now, nonce="c1"), **common)
     mesh_infer.handle_request(
@@ -546,7 +639,7 @@ def test_slot_released_even_on_local_server_error(mesh):
     now = 10_000
     reg = mesh_infer.InflightRegistry(max_inflight=1)
     common = dict(root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-                  nonce_cache=mesh_infer.NonceCache(600), now=now, inflight=reg)
+                  is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, inflight=reg)
     boom = _Recorder(exc=httpx.ConnectError("refused"))
     with pytest.raises(mesh_infer.InferError):
         mesh_infer.handle_request(
@@ -572,7 +665,7 @@ def test_concurrency_cap_is_per_node(mesh):
     mesh_infer.handle_request(
         _make_req(priv_b, cert_b, _infer_body(), now=now, nonce="b-1"),
         root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-        nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec, inflight=reg,
+        is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec, inflight=reg,
     )
     assert len(rec.calls) == 1  # node B forwarded despite node A at cap
 
@@ -591,7 +684,7 @@ def test_disallowed_generation_params_are_stripped(mesh):
     rec = _Recorder()
     mesh_infer.handle_request(
         req, root_pubkey_hex=mesh["root_pubkey"], served=_served(),
-        nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
+        is_revoked=mesh_trust.NO_REVOCATION_CHECK, nonce_cache=mesh_infer.NonceCache(600), now=now, http_post=rec,
     )
     _, fwd, _ = rec.calls[0]
     # Cost-multiplying / unsafe params dropped.
@@ -630,7 +723,12 @@ def test_cli_init_then_enroll_roundtrip(tmp_path):
     )
     assert rc == 0
     token = out2[-1].strip()
-    assert mesh_trust.verify_membership(token, root_pub) is True
+    assert (
+        mesh_trust.verify_membership(
+            token, root_pub, is_revoked=mesh_trust.NO_REVOCATION_CHECK
+        )
+        is True
+    )
 
 
 def test_cli_enroll_wrong_passphrase_fails(tmp_path):

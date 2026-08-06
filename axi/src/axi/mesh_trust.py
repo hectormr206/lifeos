@@ -87,20 +87,21 @@ silently weakening the trust model:
 * The AESGCM tag check is the sole passphrase validation gate; there is no
   stored hash to compare against.  Adding a secondary check (e.g. HMAC over
   a sentinel) would weaken the fail-closed guarantee — don't.
-* Revocation (not yet implemented, see roadmap §5 R13) will need to be added
-  as an additional check inside :func:`verify_membership`, not as a separate
-  passphrase operation.
+* Revocation (roadmap §5 R13) is an INJECTED, fail-closed ``is_revoked``
+  callback checked inside :func:`verify_membership` — not a separate
+  passphrase operation, and never cached across calls.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -129,17 +130,45 @@ _KEK_LEN = 32  # AES-256
 _SALT_LEN = 16
 _NONCE_LEN = 12  # 96-bit GCM nonce
 _DEFAULT_TTL_SECONDS = 90 * 24 * 3600  # 90-day membership cert
-# NOTE: expiry is currently the ONLY way a membership cert stops being honoured
-# — there is no revocation list yet (see verify_membership + roadmap §5 R13).
-# The TTL was shortened from 1 year to 90 days as a partial mitigation so a
-# leaked/compromised node key self-heals sooner. Real revocation is a pending
-# follow-up.
+# NOTE: expiry stops honouring a cert on its own; verify_membership's injected
+# `is_revoked` callback (roadmap §5 R13) gives IMMEDIATE revocation for
+# callers that wire one (see mesh_infer.default_is_revoked). The 90-day TTL
+# (shortened from 1 year) remains a defense-in-depth backstop for callers
+# that don't have revocation state attached.
 _SCHEMA_VERSION = 1
 
 # argon2id params (used only when argon2-cffi is available).
 _ARGON2_TIME = 3
 _ARGON2_MEMORY_KIB = 64 * 1024
 _ARGON2_PARALLELISM = 1
+
+
+log = logging.getLogger("axi.mesh_trust")
+
+
+class NoRevocationCheck:
+    """Sentinel type — see :data:`NO_REVOCATION_CHECK`."""
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid only
+        return "NO_REVOCATION_CHECK"
+
+
+NO_REVOCATION_CHECK = NoRevocationCheck()
+"""The ONLY way to opt out of revocation checking in :func:`verify_membership`
+/ :func:`verify_request` — pass this explicitly instead of a callback.
+
+``is_revoked`` has NO default. A parameter that can be silently skipped by
+forgetting a keyword argument is exactly the failure mode fail-closed
+revocation exists to prevent: a caller (or a future one, added carelessly)
+must never end up performing NO revocation check without anyone noticing.
+Requiring either a real ``Callable[[str], bool]`` or this sentinel makes the
+choice explicit and greppable — ``rg NO_REVOCATION_CHECK`` lists every place
+that has consciously decided it has no revocation source to wire (e.g. a
+synthetic unit test, or a documented call site outside the live request
+path). It is never correct to reach for this sentinel just to make a
+`TypeError` go away without asking WHY that call site has no revocation
+state.
+"""
 
 
 class MeshTrustError(Exception):
@@ -498,16 +527,31 @@ def verify_membership(
     cert_token: str,
     root_pubkey_hex: str,
     *,
+    is_revoked: Callable[[str], bool] | NoRevocationCheck,
     now: float | None = None,
 ) -> bool:
-    """Return True iff ``cert_token`` is a valid, unexpired membership cert
-    signed by the root behind ``root_pubkey_hex`` for THIS mesh.
+    """Return True iff ``cert_token`` is a valid, unexpired, non-revoked
+    membership cert signed by the root behind ``root_pubkey_hex`` for THIS
+    mesh.
 
     Checks (all must pass, any failure -> False, never raises on bad input):
       1. token decodes and has the required cert fields;
       2. the root Ed25519 signature over the canonical cert verifies;
       3. ``cert.mesh_id`` equals ``sha256(root_pubkey)`` (binds cert to mesh);
-      4. the cert is not expired (``now < expires_at``).
+      4. the cert is not expired (``now < expires_at``);
+      5. (only when ``is_revoked`` is a real callback, not the sentinel) the
+         cert's ``node_pubkey`` is not revoked — checked LAST and on EVERY
+         call (never cached).
+
+    ``is_revoked`` is REQUIRED and has no default: pass either an INJECTED,
+    fail-closed revocation callback (roadmap §5 R13) — called with
+    ``cert["node_pubkey"]`` only after the cheap signature/mesh/expiry checks
+    above pass — or :data:`NO_REVOCATION_CHECK`, the explicit, greppable
+    opt-out (see its docstring for why this can't be a default). A callback
+    that RAISES means the revocation source could not be read; that must
+    never be silently treated as "not revoked" — we reject and log loudly
+    instead of falling through to the generic tamper/decode ``except`` below,
+    which would swallow it silently.
     """
     try:
         cert, sig = _decode_token(cert_token)
@@ -520,20 +564,29 @@ def verify_membership(
         # (2) root signature over the canonical cert.
         _pub_from_hex(root_pubkey_hex).verify(sig, _canonical(cert))
         # (4) expiry.
-        # TODO(revocation): membership is honoured until the cert EXPIRES —
-        # there is no revocation list, so a compromised/decommissioned node
-        # cannot be kicked before its cert lapses. Inference-proxy access
-        # (`mesh_infer`) currently relies on expiry ONLY. Real revocation
-        # (signed revocation list / short-lived certs + renewal) is a pending
-        # follow-up tracked in roadmap §5 R13; the 90-day TTL is a partial
-        # stopgap. Add the revocation check HERE when it lands.
         ts = now if now is not None else time.time()
         if ts >= float(cert["expires_at"]):
             return False
-        return True
     except Exception:
         # Any tamper / decode error / signature mismatch -> reject.
         return False
+
+    # (5) revocation — re-checked on EVERY call, never cached. See the
+    # docstring: a callback that raises fails CLOSED, not silently open.
+    if is_revoked is not NO_REVOCATION_CHECK:
+        try:
+            if is_revoked(cert["node_pubkey"]):
+                return False
+        except Exception:
+            log.error(
+                "verify_membership: revocation check (is_revoked) raised for "
+                "node_pubkey=%s; failing CLOSED (rejecting membership)",
+                cert.get("node_pubkey", "<unknown>"),
+                exc_info=True,
+            )
+            return False
+
+    return True
 
 
 # ─────────────────────────── peer request auth ───────────────────────────
@@ -568,24 +621,51 @@ def verify_request(
     cert_token: str,
     root_pubkey_hex: str,
     *,
+    is_revoked: Callable[[str], bool] | NoRevocationCheck,
     now: float | None = None,
 ) -> bool:
     """Return True iff the request is authentic for this mesh.
 
     Two independent gates, BOTH required:
-      1. the membership cert is valid for ``root_pubkey_hex``
+      1. the membership cert is valid for ``root_pubkey_hex``, INCLUDING
+         revocation unless ``is_revoked`` is :data:`NO_REVOCATION_CHECK`
          (:func:`verify_membership`); and
       2. ``sig_hex`` is a valid Ed25519 signature over ``payload_bytes`` by the
          cert's ``node_pubkey`` (the request signer IS the enrolled node).
 
+    ``is_revoked`` is REQUIRED (no default) and forwarded to
+    :func:`verify_membership` unchanged — see its docstring for the
+    fail-closed contract and the sentinel opt-out.
+
     Any tamper / cross-mesh cert / wrong signer / decode error -> False.
     """
     try:
-        if not verify_membership(cert_token, root_pubkey_hex, now=now):
+        if not verify_membership(
+            cert_token, root_pubkey_hex, is_revoked=is_revoked, now=now
+        ):
             return False
         cert, _sig = _decode_token(cert_token)
         node_pub = _pub_from_hex(cert["node_pubkey"])
         node_pub.verify(bytes.fromhex(sig_hex), payload_bytes)
+        return True
+    except Exception:
+        return False
+
+
+def verify_signature(pubkey_hex: str, payload_bytes: bytes, sig_hex: str) -> bool:
+    """Return True iff ``sig_hex`` is a valid detached Ed25519 signature over
+    ``payload_bytes`` by ``pubkey_hex``.
+
+    A generic building block for proof-of-possession checks OUTSIDE the mesh
+    membership flow (e.g. pairing PoP for ``device_pubkey`` — design "PoP
+    reuses the existing Ed25519 request scheme"): no cert, no mesh binding,
+    just "does this key hold the private half". Reuses the same Ed25519
+    primitive as :func:`verify_request`/:func:`verify_membership` — no second
+    crypto scheme. Any tamper/decode error/malformed hex -> False, never
+    raises.
+    """
+    try:
+        _pub_from_hex(pubkey_hex).verify(bytes.fromhex(sig_hex), payload_bytes)
         return True
     except Exception:
         return False

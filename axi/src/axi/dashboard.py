@@ -825,6 +825,11 @@ async def remote_infer(request: Request):
             served=mesh_infer.served_roles,
             nonce_cache=mesh_infer._nonce_cache(),
             inflight=mesh_infer._inflight(),
+            # Fail-closed revocation (roadmap §5 R13): the live endpoint is the
+            # ONE place that wires the real store-backed lookup — unit tests
+            # inject their own fakes or leave it unset (mesh_trust.py, design
+            # "Revocation as an injected fail-closed callback").
+            is_revoked=mesh_infer.default_is_revoked,
         )
     except mesh_infer.InferError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)

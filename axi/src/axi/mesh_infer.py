@@ -179,22 +179,34 @@ def authenticate(
     *,
     now: float,
     nonce_cache: NonceCache,
+    is_revoked: Callable[[str], bool] | mesh_trust.NoRevocationCheck,
     verify_request: Callable[..., bool] = mesh_trust.verify_request,
     skew_seconds: float = SKEW_SECONDS,
 ) -> dict[str, Any]:
     """Authenticate + freshness-check a signed request; return its inner body.
 
     Gates, in order (each failure raises :class:`InferError` 401):
-      1. :func:`mesh_trust.verify_request` — enrolled node of THIS mesh + the
-         signature covers ``payload_bytes`` exactly (tamper-evident params);
+      1. :func:`mesh_trust.verify_request` — enrolled node of THIS mesh, NOT
+         revoked (unless ``is_revoked`` is ``mesh_trust.NO_REVOCATION_CHECK`` —
+         see :func:`default_is_revoked` and the live endpoint in
+         ``dashboard.py``), and the signature covers ``payload_bytes`` exactly
+         (tamper-evident params);
       2. timestamp WINDOW — ``abs(now - ts) <= skew_seconds``;
       3. nonce CACHE — reject a ``(node_pubkey, nonce)`` seen within the window.
 
     The nonce is recorded ONLY after (1) and (2) pass, so unsigned/stale requests
-    can never poison the cache.
+    can never poison the cache. ``is_revoked`` has NO default — every caller
+    must pass either a real callback or ``mesh_trust.NO_REVOCATION_CHECK``
+    (see that sentinel's docstring: a revocation check that can be skipped by
+    forgetting a keyword argument is exactly the silent degradation this
+    module exists to prevent).
     """
-    # (1) cryptographic identity + integrity (reuses the trust core).
-    if not verify_request(payload_bytes, sig_hex, cert_token, root_pubkey_hex, now=now):
+    # (1) cryptographic identity + integrity + revocation (reuses the trust
+    # core; is_revoked is forwarded unchanged — see mesh_trust.verify_request).
+    if not verify_request(
+        payload_bytes, sig_hex, cert_token, root_pubkey_hex,
+        is_revoked=is_revoked, now=now,
+    ):
         raise InferError(401, "authentication failed")
 
     # Decode the signed envelope: {body, ts, nonce}.
@@ -335,6 +347,7 @@ def handle_request(
     root_pubkey_hex: str | Callable[[], str],
     served: dict[str, dict[str, Any]] | Callable[[], dict[str, dict[str, Any]]],
     nonce_cache: NonceCache,
+    is_revoked: Callable[[str], bool] | mesh_trust.NoRevocationCheck,
     now: float | None = None,
     verify_request: Callable[..., bool] = mesh_trust.verify_request,
     http_post: Callable[..., tuple[int, Any]] | None = None,
@@ -357,6 +370,10 @@ def handle_request(
     cheap envelope validation (and, for ``served``, after authentication) — so a
     malformed / unauthenticated request triggers no on-disk reads (pre-auth I/O
     amplification guard). ``inflight`` enforces the per-node concurrency cap.
+    ``is_revoked`` is REQUIRED (no default) and forwarded to :func:`authenticate`
+    unchanged; the live endpoint wires :func:`default_is_revoked`, unit tests
+    that genuinely don't care must pass ``mesh_trust.NO_REVOCATION_CHECK``
+    explicitly — see that sentinel's docstring.
     """
     import time as _time
 
@@ -392,6 +409,7 @@ def handle_request(
         payload_bytes, sig_hex, cert_token, _resolve_provider(root_pubkey_hex),
         now=now, nonce_cache=nonce_cache,
         verify_request=verify_request, skew_seconds=skew_seconds,
+        is_revoked=is_revoked,
     )
 
     # Authenticated: enforce the per-node concurrency cap before touching the
@@ -416,6 +434,24 @@ def handle_request(
 # These module-level seams are what the dashboard `/api/v1/infer` route calls.
 # They are trivially monkeypatchable in tests so the HTTP endpoint can be driven
 # without a real mesh on disk or a real llama-server.
+
+
+def default_is_revoked(node_pubkey: str) -> bool:
+    """Store-backed revocation lookup, wired at the live ``/api/v1/infer``
+    endpoint (design "Revocation as an injected fail-closed callback").
+
+    Bridges the mesh cert's ``node_pubkey`` to ``devices.revoked_at`` via
+    :func:`axi.store.device_get_by_pubkey`. A mesh node enrolled with the
+    owner passphrase (not a paired phone) simply has no matching device row
+    -> not revoked. A DB read failure PROPAGATES (this function must never
+    swallow it into ``False``) so :func:`mesh_trust.verify_membership`'s
+    fail-closed ``except`` around the callback rejects instead of silently
+    treating an unreadable revocation source as "fine".
+    """
+    from axi import store  # lazy: mirrors served_roles()'s lazy federation import
+
+    device = store.device_get_by_pubkey(node_pubkey)
+    return bool(device and device.get("revoked_at") is not None)
 
 
 def node_root_pubkey() -> str:

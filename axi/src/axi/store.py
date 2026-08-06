@@ -1088,6 +1088,9 @@ def init_db() -> None:
         _create_domain_node_map(c)
         # M0: devices table (mobile pairing — bearer-token auth, design D5).
         _create_devices_table(c)
+        # PoP hardening: pubkey_proven column for pre-existing DBs (no-op on
+        # a fresh DB — CREATE TABLE above already has the column).
+        migrate_devices_pubkey_proven()
         # Event-date column: stores the real event timestamp (vs. insertion time).
         migrate_nodes_occurred_at()
         # Conversation source ('chat' | 'voice') so the chat view can hide voice.
@@ -2604,6 +2607,7 @@ def _create_devices_table(conn) -> None:
             name           TEXT NOT NULL,
             token_hash     TEXT NOT NULL UNIQUE,
             device_pubkey  TEXT,
+            pubkey_proven  INTEGER NOT NULL DEFAULT 0,
             created_at     REAL NOT NULL,
             last_seen_at   REAL,
             revoked_at     REAL
@@ -2613,6 +2617,27 @@ def _create_devices_table(conn) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_devices_token_hash ON devices(token_hash)"
     )
+
+
+def migrate_devices_pubkey_proven() -> None:
+    """Idempotent migration: add `pubkey_proven` to a pre-existing `devices`
+    table (proof-of-possession hardening, spec `mesh-trust-hardening`).
+
+    A fresh DB already has the column via `_create_devices_table`'s
+    `CREATE TABLE IF NOT EXISTS` — this only fires for a DB created BEFORE
+    this change. `ALTER TABLE ... DEFAULT 0` backfills every EXISTING row to
+    0 in the same statement (SQLite applies the column default to all rows),
+    which is exactly the migration's contract: a pre-change stored
+    `device_pubkey` was never proven, so it MUST be recorded unproven — any
+    future sealed-box consumer treats it as absent until re-pair (see
+    `device_sealing_pubkey`). Safe to call multiple times.
+    """
+    c = _connect()
+    existing = {r[1] for r in c.execute("PRAGMA table_info(devices)").fetchall()}
+    if "pubkey_proven" not in existing:
+        c.execute(
+            "ALTER TABLE devices ADD COLUMN pubkey_proven INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def hash_device_token(token: str) -> str:
@@ -2626,7 +2651,7 @@ def hash_device_token(token: str) -> str:
 
 
 _DEVICE_COLUMNS = (
-    "device_id, name, device_pubkey, created_at, last_seen_at, revoked_at"
+    "device_id, name, device_pubkey, pubkey_proven, created_at, last_seen_at, revoked_at"
 )
 
 
@@ -2635,8 +2660,16 @@ def device_add(
     name: str,
     token: str,
     device_pubkey: str | None = None,
+    pubkey_proven: bool = False,
 ) -> None:
     """Insert a new paired device, storing only the SHA-256 hash of *token*.
+
+    `pubkey_proven` records whether `device_pubkey` was accompanied by a
+    verified proof of possession at pairing time (spec `mesh-trust-hardening`
+    — the caller, `api_v1.pair`, verifies the Ed25519 signature BEFORE
+    calling this; `device_add` only records the outcome, it does not verify).
+    Defaults False so a caller that forgets to pass it never accidentally
+    claims a key is proven.
 
     Raises sqlcipher3.dbapi2.IntegrityError if device_id or the token hash
     already exists — a collision must never silently overwrite another
@@ -2649,14 +2682,18 @@ def device_add(
         "name": name,
         "token": token,
         "device_pubkey": device_pubkey,
+        "pubkey_proven": pubkey_proven,
     })
     if routed:
         return _res
     with _tx() as c:
         c.execute(
-            "INSERT INTO devices(device_id, name, token_hash, device_pubkey, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (device_id, name, hash_device_token(token), device_pubkey, time.time()),
+            "INSERT INTO devices(device_id, name, token_hash, device_pubkey, "
+            "pubkey_proven, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                device_id, name, hash_device_token(token), device_pubkey,
+                int(pubkey_proven), time.time(),
+            ),
         )
 
 
@@ -2687,6 +2724,45 @@ def device_get_by_token_hash(token_hash: str) -> dict[str, Any] | None:
         (token_hash,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def device_get_by_pubkey(device_pubkey: str) -> dict[str, Any] | None:
+    """Look up a device row by its stored ``device_pubkey``.
+
+    Pure lookup, mirrors :func:`device_get_by_token_hash`. This bridges the
+    mesh trust core's revocation check — a membership cert only carries
+    ``node_pubkey``, never ``device_id`` — to ``devices.revoked_at`` (see
+    ``mesh_infer.default_is_revoked``, design "Revocation as an injected
+    fail-closed callback"). A mesh node enrolled via the owner passphrase
+    (not a paired phone) simply has no matching row here -> ``None``, which
+    the caller treats as "not revoked", not as a lookup failure.
+    """
+    c = _connect()
+    row = c.execute(
+        f"SELECT {_DEVICE_COLUMNS} FROM devices WHERE device_pubkey = ?",
+        (device_pubkey,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def device_sealing_pubkey(device_id: str) -> str | None:
+    """Return ``device_pubkey`` for *device_id* ONLY if it has proof of
+    possession on record (``pubkey_proven``); otherwise ``None``.
+
+    Design "PoP reuses the existing Ed25519 request scheme" — migration
+    note: any FUTURE sealed-box (K_sync) consumer MUST call this instead of
+    reading ``device_pubkey`` directly. A key stored before PoP enforcement
+    (or never proven) is treated as ABSENT — never used to seal data — until
+    the device re-pairs with a valid proof of possession.
+    """
+    c = _connect()
+    row = c.execute(
+        "SELECT device_pubkey, pubkey_proven FROM devices WHERE device_id = ?",
+        (device_id,),
+    ).fetchone()
+    if row is None or not row["pubkey_proven"]:
+        return None
+    return row["device_pubkey"]
 
 
 def device_touch_last_seen(device_id: str) -> None:

@@ -135,6 +135,182 @@ def test_device_touch_last_seen_updates_timestamp():
     assert fetched["last_seen_at"] is not None
 
 
+# ──────────────── proof-of-possession migration (pubkey_proven) ─────────────
+
+
+def test_device_add_defaults_pubkey_proven_false():
+    """A freshly-paired device with no PoP is stored unproven by default."""
+    store.device_add("dev-unproven", "New Phone", "tok-unproven", device_pubkey="pk-u")
+    fetched = store.device_get_by_token_hash(store.hash_device_token("tok-unproven"))
+    assert fetched["pubkey_proven"] == 0
+
+
+def test_device_add_records_pubkey_proven_true_when_pop_verified():
+    store.device_add(
+        "dev-proven", "Proven Phone", "tok-proven",
+        device_pubkey="pk-p", pubkey_proven=True,
+    )
+    fetched = store.device_get_by_token_hash(store.hash_device_token("tok-proven"))
+    assert fetched["pubkey_proven"] == 1
+
+
+def test_pre_existing_row_migrated_pubkey_proven_defaults_zero():
+    """Scenario: migration marks pre-existing unproven keys as unproven.
+
+    A row inserted BEFORE this migration lands (no pubkey_proven column in
+    the INSERT) still gets pubkey_proven=0 via the column DEFAULT — the
+    ALTER TABLE default applies to every pre-existing row automatically."""
+    c = store._connect()
+    c.execute(
+        "INSERT INTO devices(device_id, name, token_hash, device_pubkey, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("dev-legacy", "Legacy Phone", "legacy-hash", "pk-legacy", 0.0),
+    )
+    fetched = store.device_get_by_token_hash("legacy-hash")
+    assert fetched["pubkey_proven"] == 0
+    # And the sealed-box guard must treat this key as ABSENT, not usable.
+    assert store.device_sealing_pubkey("dev-legacy") is None
+
+
+def test_device_get_by_pubkey_round_trip():
+    store.device_add("dev-bypk", "By Pubkey", "tok-bypk", device_pubkey="pk-bypk")
+    fetched = store.device_get_by_pubkey("pk-bypk")
+    assert fetched is not None
+    assert fetched["device_id"] == "dev-bypk"
+
+
+def test_device_get_by_pubkey_unknown_returns_none():
+    assert store.device_get_by_pubkey("no-such-pubkey") is None
+
+
+def test_device_sealing_pubkey_returns_key_only_when_proven():
+    store.device_add(
+        "dev-seal-proven", "Sealed OK", "tok-seal-proven",
+        device_pubkey="pk-seal", pubkey_proven=True,
+    )
+    store.device_add(
+        "dev-seal-unproven", "Sealed No", "tok-seal-unproven",
+        device_pubkey="pk-seal-2", pubkey_proven=False,
+    )
+    assert store.device_sealing_pubkey("dev-seal-proven") == "pk-seal"
+    assert store.device_sealing_pubkey("dev-seal-unproven") is None
+
+
+def test_migrate_devices_pubkey_proven_alters_a_pre_change_table():
+    """Exercise the ACTUAL `ALTER TABLE` branch — the one that runs on the
+    owner's real machine, not the `CREATE TABLE IF NOT EXISTS` shortcut every
+    other test takes for granted (fresh test DBs are already migrated, so
+    that branch never executes in the suite otherwise).
+
+    Rebuilds `devices` with the EXACT pre-change DDL (no `pubkey_proven`),
+    inserts a row representing an already-paired device (the owner's Pixel,
+    paired before this change shipped), then runs the migration against it.
+    """
+    c = store._connect()
+    # `fresh_db` already ran init_db(), so `devices` currently has the NEW
+    # column. Rebuild it exactly as `_create_devices_table` looked BEFORE
+    # this change, to force the migration down its real, untested path.
+    c.execute("DROP TABLE devices")
+    c.execute(
+        """
+        CREATE TABLE devices (
+            device_id      TEXT PRIMARY KEY,
+            name           TEXT NOT NULL,
+            token_hash     TEXT NOT NULL UNIQUE,
+            device_pubkey  TEXT,
+            created_at     REAL NOT NULL,
+            last_seen_at   REAL,
+            revoked_at     REAL
+        )
+        """
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_devices_token_hash ON devices(token_hash)"
+    )
+    raw_token = "already-paired-pixel-token"
+    token_hash = store.hash_device_token(raw_token)
+    c.execute(
+        "INSERT INTO devices(device_id, name, token_hash, device_pubkey, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("dev-pixel-legacy", "Héctor's Pixel", token_hash, "pk-pixel-legacy", 1000.0),
+    )
+    columns_before = {r[1] for r in c.execute("PRAGMA table_info(devices)").fetchall()}
+    assert "pubkey_proven" not in columns_before  # sanity: genuinely pre-change
+
+    store.migrate_devices_pubkey_proven()
+
+    columns_after = {r[1] for r in c.execute("PRAGMA table_info(devices)").fetchall()}
+    assert "pubkey_proven" in columns_after
+
+    fetched = store.device_get_by_token_hash(token_hash)
+    assert fetched is not None
+    # The pre-existing row SURVIVED with its data intact.
+    assert fetched["device_id"] == "dev-pixel-legacy"
+    assert fetched["name"] == "Héctor's Pixel"
+    assert fetched["device_pubkey"] == "pk-pixel-legacy"
+    assert fetched["created_at"] == 1000.0
+    assert fetched["revoked_at"] is None
+    # And it is recorded UNPROVEN — it never went through PoP.
+    assert fetched["pubkey_proven"] == 0
+
+    # Idempotent: calling it again on an already-migrated table is a no-op,
+    # not an error (ALTER TABLE ADD COLUMN on an existing column would raise).
+    store.migrate_devices_pubkey_proven()
+    fetched_again = store.device_get_by_token_hash(token_hash)
+    assert fetched_again["pubkey_proven"] == 0
+    assert fetched_again["device_id"] == "dev-pixel-legacy"
+
+
+def test_legacy_device_still_authenticates_after_migration(monkeypatch):
+    """The migration must never lock out an already-paired device: its
+    bearer token keeps working through `api_auth.BearerAuthMiddleware`
+    exactly as before, even though its row predates `pubkey_proven`."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from axi import config
+    from axi.api_auth import install_auth_middleware
+
+    c = store._connect()
+    c.execute("DROP TABLE devices")
+    c.execute(
+        """
+        CREATE TABLE devices (
+            device_id      TEXT PRIMARY KEY,
+            name           TEXT NOT NULL,
+            token_hash     TEXT NOT NULL UNIQUE,
+            device_pubkey  TEXT,
+            created_at     REAL NOT NULL,
+            last_seen_at   REAL,
+            revoked_at     REAL
+        )
+        """
+    )
+    raw_token = "legacy-pixel-bearer-token"
+    token_hash = store.hash_device_token(raw_token)
+    c.execute(
+        "INSERT INTO devices(device_id, name, token_hash, device_pubkey, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("dev-pixel-auth", "Legacy Pixel", token_hash, "pk-pixel-auth", 1000.0),
+    )
+
+    store.migrate_devices_pubkey_proven()
+
+    app = FastAPI()
+
+    @app.get("/api/v1/whoami")
+    def whoami():
+        return {"ok": True}
+
+    install_auth_middleware(app)
+    config.save({"api_auth_enabled": True})
+    client = TestClient(app, client=("203.0.113.5", 51000))  # non-loopback
+
+    r = client.get("/api/v1/whoami", headers={"Authorization": f"Bearer {raw_token}"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+
 # ─────────────────── write_router.maybe_forward wiring (D10) ────────────────
 
 

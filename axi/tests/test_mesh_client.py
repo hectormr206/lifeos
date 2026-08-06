@@ -38,7 +38,8 @@ def test_peer_inference_uses_configured_peer_and_signs_exact_payload(tmp_path):
     assert url == "http://100.64.0.9:8765/api/v1/infer"
     payload = base64.b64decode(envelope["payload_b64"])
     assert mesh_trust.verify_request(payload, envelope["sig_hex"], cert,
-                                     mesh_trust.root_pubkey(tmp_path))
+                                     mesh_trust.root_pubkey(tmp_path),
+                                     is_revoked=mesh_trust.NO_REVOCATION_CHECK)
     assert json.loads(payload)["body"] == {
         "role": "brain", "id": "model-x",
         "messages": [{"role": "user", "content": "hello"}],

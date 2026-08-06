@@ -13,6 +13,7 @@ no bearer token even once `api_auth_enabled=true`.
 """
 from __future__ import annotations
 
+import base64
 import secrets
 import uuid
 from typing import Any
@@ -214,17 +215,65 @@ def game_mode_set(body: GameModeRequest) -> dict[str, Any]:
 
 
 class PairRequest(BaseModel):
-    """Body of `POST /api/v1/pair` (design D6).
+    """Body of `POST /api/v1/pair` (design D6, hardened by spec
+    `mesh-trust-hardening`).
 
-    `device_pubkey` is optional and currently stored verbatim (opaque
-    string) for a later milestone (M3 sync, D9's sealed-box K_sync
-    transport) to consume — this batch does not seal or use it for
-    anything yet, per the M0-5 scope (device-token exchange only).
+    `device_pubkey` is optional, stored verbatim (opaque string) for a later
+    milestone (M3 sync, D9's sealed-box K_sync transport) to consume — this
+    batch does not seal or use it for anything yet. When `device_pubkey` IS
+    given, `pubkey_proof` + `pubkey_proof_payload` are REQUIRED: proof the
+    caller holds the matching private key, reusing the mesh trust core's
+    Ed25519 scheme (`mesh_trust.build_signed_payload`/`sign_request`) rather
+    than inventing a second one.
+
+    `pubkey_proof_payload` is the base64 of the exact
+    `build_signed_payload({"code": code, "device_pubkey": device_pubkey})`
+    bytes the caller signed (server can't reconstruct it — it embeds a
+    caller-chosen nonce); `pubkey_proof` is the hex Ed25519 signature over
+    those bytes by `device_pubkey`.
     """
 
     code: str
     device_name: str = "Unnamed device"
     device_pubkey: str | None = None
+    pubkey_proof: str | None = None
+    pubkey_proof_payload: str | None = None
+
+
+def _verify_pubkey_proof(body: "PairRequest") -> None:
+    """Enforce PoP for `device_pubkey` (spec `mesh-trust-hardening`,
+    "Pairing requires proof of possession of device_pubkey").
+
+    Raises 400 with a PoP-failure reason on any missing/malformed/invalid
+    proof. A `device_pubkey` without valid PoP MUST NOT be accepted — no
+    device is created in that case (the caller in `pair()` never reaches
+    `store.device_add`).
+    """
+    import json
+
+    from axi import mesh_trust  # lazy: keep router import-light
+
+    if not (body.pubkey_proof and body.pubkey_proof_payload):
+        raise HTTPException(
+            status_code=400, detail="device_pubkey requires proof of possession"
+        )
+    try:
+        payload_bytes = base64.b64decode(
+            body.pubkey_proof_payload.encode("ascii"), validate=True
+        )
+        envelope = json.loads(payload_bytes)
+    except Exception as exc:  # noqa: BLE001 — malformed proof payload
+        raise HTTPException(
+            status_code=400, detail="proof of possession failed: malformed payload"
+        ) from exc
+    # The signed bytes must be EXACTLY the {code, device_pubkey} pair for
+    # THIS pairing attempt — not a proof recycled from a different one.
+    if envelope.get("body") != {"code": body.code, "device_pubkey": body.device_pubkey}:
+        raise HTTPException(
+            status_code=400, detail="proof of possession failed: payload mismatch"
+        )
+    if not mesh_trust.verify_signature(body.device_pubkey, payload_bytes, body.pubkey_proof):
+        raise HTTPException(status_code=400, detail="proof of possession failed")
 
 
 @router.post("/pair")
@@ -241,9 +290,16 @@ def pair(body: PairRequest) -> dict[str, Any]:
 
     Raises 410 if the code is missing/unknown/expired/already-used — no
     device is created and no token is issued in that case (spec: "Expired
-    code rejected").
+    code rejected"). Raises 400 if `device_pubkey` is given without valid
+    proof of possession (spec `mesh-trust-hardening`) — checked BEFORE the
+    code is redeemed so a failed-PoP attempt never burns the single-use code.
     """
     from axi import pairing, store  # lazy: keep router import-light
+
+    pubkey_proven = False
+    if body.device_pubkey is not None:
+        _verify_pubkey_proof(body)
+        pubkey_proven = True
 
     if not pairing.redeem_code(body.code):
         raise HTTPException(status_code=410, detail="pairing code invalid or expired")
@@ -255,6 +311,7 @@ def pair(body: PairRequest) -> dict[str, Any]:
         body.device_name,
         token,
         device_pubkey=body.device_pubkey,
+        pubkey_proven=pubkey_proven,
     )
     return {
         "device_id": device_id,

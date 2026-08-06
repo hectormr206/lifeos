@@ -137,16 +137,135 @@ def test_pair_raw_token_never_persisted(client):
     assert "token_hash" not in device
 
 
-def test_pair_optional_device_pubkey_stored(client):
+def _pop_fields(code: str, device_priv: str, device_pub: str) -> dict:
+    """Build the on-the-wire PoP fields for `device_pubkey`: sign
+    `{"code", "device_pubkey"}` with the DEVICE's own key (reuses
+    `build_signed_payload`/`sign_request`, spec `mesh-trust-hardening`)."""
+    from axi import mesh_trust
+
+    payload = mesh_trust.build_signed_payload({"code": code, "device_pubkey": device_pub})
+    sig = mesh_trust.sign_request(device_priv, payload)
+    return {
+        "device_pubkey": device_pub,
+        "pubkey_proof": sig,
+        "pubkey_proof_payload": base64.b64encode(payload).decode("ascii"),
+    }
+
+
+def test_pair_device_pubkey_without_pop_is_refused(client):
+    """Scenario: pairing with an unproven device_pubkey is refused."""
     code = _mint_code(client)
-    body = client.post(
+    r = client.post(
         "/api/v1/pair",
-        json={"code": code, "device_name": "Pubkey Phone", "device_pubkey": "abc123"},
-    ).json()
+        json={"code": code, "device_name": "No Proof", "device_pubkey": "abc123"},
+    )
+    assert r.status_code == 400
+    assert "proof" in r.json()["detail"].lower()
+    assert store.device_list() == []
+
+
+def test_pair_device_pubkey_with_valid_pop_succeeds(client):
+    """Scenario: pairing with a valid PoP succeeds (as today) and the key is
+    recorded proven."""
+    from axi import mesh_trust
+
+    device_priv, device_pub = mesh_trust.new_node_keypair()
+    code = _mint_code(client)
+    r = client.post(
+        "/api/v1/pair",
+        json={
+            "code": code,
+            "device_name": "Proven Phone",
+            **_pop_fields(code, device_priv, device_pub),
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
     match = next(
         d for d in store.device_list() if d["device_id"] == body["device_id"]
     )
-    assert match["device_pubkey"] == "abc123"
+    assert match["device_pubkey"] == device_pub
+    assert match["pubkey_proven"] == 1
+
+
+def test_pair_pop_signed_by_wrong_key_is_refused(client):
+    """A proof signed by a DIFFERENT key than the claimed device_pubkey must
+    fail — proving possession of SOME key is not proving possession of THIS
+    key."""
+    from axi import mesh_trust
+
+    device_priv, _device_pub = mesh_trust.new_node_keypair()
+    _other_priv, claimed_pub = mesh_trust.new_node_keypair()
+    code = _mint_code(client)
+    fields = _pop_fields(code, device_priv, claimed_pub)  # signed by the WRONG key
+    r = client.post(
+        "/api/v1/pair",
+        json={"code": code, "device_name": "Mismatched", **fields},
+    )
+    assert r.status_code == 400
+    assert store.device_list() == []
+
+
+def test_pair_failed_pop_does_not_burn_the_pairing_code(client):
+    """Anti-code-burning: a rejected PoP attempt must NOT consume the
+    single-use pairing code — a retry with the SAME code and a VALID proof
+    must still succeed. This is the exact situation a real user hits when
+    their first attempt has a bug/mismatch: without this guarantee they'd be
+    told to generate a brand new code for no reason, with no explanation."""
+    from axi import mesh_trust
+
+    device_priv, device_pub = mesh_trust.new_node_keypair()
+    code = _mint_code(client)
+
+    # First attempt: INVALID proof (garbage signature) -> refused, code
+    # must survive.
+    bad = client.post(
+        "/api/v1/pair",
+        json={
+            "code": code,
+            "device_name": "Retry Phone",
+            "device_pubkey": device_pub,
+            "pubkey_proof": "00" * 64,  # well-formed hex, wrong signature
+            "pubkey_proof_payload": _pop_fields(code, device_priv, device_pub)[
+                "pubkey_proof_payload"
+            ],
+        },
+    )
+    assert bad.status_code == 400
+    assert store.device_list() == []
+
+    # Second attempt: SAME code, this time with a VALID proof -> succeeds.
+    good = client.post(
+        "/api/v1/pair",
+        json={
+            "code": code,
+            "device_name": "Retry Phone",
+            **_pop_fields(code, device_priv, device_pub),
+        },
+    )
+    assert good.status_code == 200
+    body = good.json()
+    match = next(
+        d for d in store.device_list() if d["device_id"] == body["device_id"]
+    )
+    assert match["device_pubkey"] == device_pub
+    assert match["pubkey_proven"] == 1
+
+
+def test_pair_no_device_pubkey_is_unaffected_legacy_path(client):
+    """Scenario: pairing with no device_pubkey is unaffected (legacy path) —
+    no proof required, pairing proceeds unchanged."""
+    code = _mint_code(client)
+    r = client.post(
+        "/api/v1/pair", json={"code": code, "device_name": "Legacy Phone"}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    match = next(
+        d for d in store.device_list() if d["device_id"] == body["device_id"]
+    )
+    assert match["device_pubkey"] is None
+    assert match["pubkey_proven"] == 0
 
 
 def test_pair_invalid_code_rejected(client):
