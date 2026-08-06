@@ -144,7 +144,11 @@ if [[ "$VPS_SSH" == "local" || -d "$HOME/$VPS_DIR" ]]; then
   mkdir -p "$HOME/$REMOTE_DIR"
   cp "$TARBALL" "$HOME/$REMOTE_DIR/$FN"
   install -m 0755 "$MOBILE_DIR/tools/install-linux.sh" "$HOME/$VPS_DIR/linux/install-linux.sh"
-  cp "$MANIFEST" "$HOME/$REMOTE_DIR/manifest.json"
+  # install -m 0644, not cp: the manifest is written to a mktemp file whose
+  # 0600 mode cp faithfully preserves, and nginx runs as another user — the
+  # tarball served fine while the manifest 403'd, which reads like a routing
+  # bug and is not one.
+  install -m 0644 "$MANIFEST" "$HOME/$REMOTE_DIR/manifest.json"
 else
   echo "→ Subiendo a $VPS_SSH:$REMOTE_DIR/ …"
   # shellcheck disable=SC2029  # $REMOTE_DIR is ours and must expand locally.
@@ -155,6 +159,8 @@ else
   scp -o ConnectTimeout=20 "$MOBILE_DIR/tools/install-linux.sh" \
       "$VPS_SSH:$VPS_DIR/linux/install-linux.sh"
   scp -o ConnectTimeout=20 "$MANIFEST" "$VPS_SSH:$REMOTE_DIR/manifest.json"
+  # scp preserves the temp file's 0600 too — see the note on the local branch.
+  ssh -o ConnectTimeout=20 "$VPS_SSH" "chmod 0644 '$REMOTE_DIR/manifest.json'"
 fi
 rm -f "$MANIFEST"
 
