@@ -268,6 +268,7 @@ dependencies:
   # it worked (core/tray/tray_service.dart).
   tray_manager: ^0.5.3
   window_manager: ^0.5.2
+  hotkey_manager: ^0.2.3
 
 dev_dependencies:
   flutter_test:

@@ -9,6 +9,7 @@ import '../domain/voice_catalog.dart';
 import '../domain/voice_settings.dart';
 import 'voice_catalog_providers.dart';
 import 'voice_settings_providers.dart';
+import '../../dictation/presentation/dictation_hotkey_tile.dart';
 
 /// Settings → "Voz": the DELIBERATELY MINIMAL speak-aloud screen. One curated
 /// neural voice (Piper es_MX / en_US, following the app language), a good
@@ -71,6 +72,12 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
+          // Desktop only; renders as nothing on the phones, where a global
+          // shortcut does not exist (the assistant gesture is that surface).
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: DictationHotkeyTile(),
+          ),
           SwitchListTile(
             secondary: const Icon(Icons.record_voice_over_outlined),
             title: Text(l10n.voiceAutoSpeakTitle),

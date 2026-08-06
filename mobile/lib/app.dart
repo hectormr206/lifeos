@@ -68,6 +68,7 @@ import 'features/settings/presentation/timezone_settings_screen.dart';
 import 'features/voice_settings/presentation/voice_catalog_screen.dart';
 import 'features/voice_settings/presentation/voice_settings_screen.dart';
 import 'features/web_search/presentation/web_search_settings_screen.dart';
+import 'features/dictation/presentation/dictation_hotkey_notifier.dart';
 import 'theme/lifeos_theme.dart';
 import 'theme/theme_providers.dart';
 
@@ -589,6 +590,11 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // Self-hosted OTA update: fires a launch-time update check as soon as the
     // device is (or becomes) paired, honoring the auto-check preference.
     ref.watch(appUpdateLaunchCheckProvider);
+    // Desktop global shortcut for dictation (default Super+Space). Watched
+    // here so it is registered for the app's whole lifetime rather than only
+    // while the Dictar screen is open — the point of a GLOBAL shortcut is that
+    // it works with LifeOS hidden in the tray. A no-op on the phones.
+    ref.watch(dictationHotkeyProvider);
     // Desktop tray: follow the language selector. `TrayService.start` re-labels
     // an already-installed icon rather than adding a second one, so this is
     // safe to fire on every change and is a no-op wherever there is no tray.

@@ -251,6 +251,13 @@ pkg_for() { # $1 = soname/binary token -> package name for the detected PM
     apk:libayatana-appindicator3.so.1)          echo libayatana-appindicator ;;
     xbps-install:libayatana-appindicator3.so.1) echo libayatana-appindicator ;;
 
+    pacman:libkeybinder-3.0.so.0)       echo libkeybinder3 ;;
+    apt-get:libkeybinder-3.0.so.0)      echo libkeybinder-3.0-0 ;;
+    dnf:libkeybinder-3.0.so.0)          echo keybinder3 ;;
+    zypper:libkeybinder-3.0.so.0)       echo libkeybinder-3_0-0 ;;
+    apk:libkeybinder-3.0.so.0)          echo keybinder3 ;;
+    xbps-install:libkeybinder-3.0.so.0) echo keybinder3 ;;
+
     pacman:libsecret-1.so.0)         echo libsecret ;;
     apt-get:libsecret-1.so.0)        echo libsecret-1-0 ;;
     dnf:libsecret-1.so.0)            echo libsecret ;;
@@ -286,8 +293,14 @@ check_deps() {
   #                   it and the dynamic loader fails the WHOLE process at
   #                   startup if it is absent. A missing tray icon would be a
   #                   warning; an app that will not launch is an error.
+  #   libkeybinder    hotkey_manager_linux (the Super+Space dictation shortcut).
+  #                   REQUIRED for the same reason libayatana is: its
+  #                   linux/CMakeLists.txt sets `bundled_libraries ""`, so the
+  #                   .so is NOT shipped inside the release. The plugin links
+  #                   against it, and the dynamic loader fails the WHOLE
+  #                   process at startup when it is absent.
   for lib in libgtk-3.so.0 libgstreamer-1.0.so.0 libgstapp-1.0.so.0 libsecret-1.so.0 \
-             libayatana-appindicator3.so.1; do
+             libayatana-appindicator3.so.1 libkeybinder-3.0.so.0; do
     have_lib "$lib" || missing_required="$missing_required $(pkg_for "$lib")"
   done
 
@@ -459,7 +472,19 @@ do_install() {
       "Later runs reuse the values saved in $CONF_FILE."
   BASE_URL="${BASE_URL%/}"
 
-  [ "$MODE" = "update" ] || check_deps
+  # The unattended path checks the REQUIRED libraries too, and it must.
+  #
+  # Until now skipping it here was harmless, because the shared libraries a
+  # release needs never changed between releases. The moment one is ADDED
+  # (keybinder, for the dictation shortcut), the hourly timer would happily
+  # swap in a build the machine cannot start — and the user would simply find
+  # LifeOS dead, with no message, having done nothing. That is precisely the
+  # silent degradation this project forbids.
+  #
+  # check_deps dies on a missing required library, which ABORTS before the
+  # release is swapped: the working install stays exactly where it is. Quiet
+  # mode only suppresses the routine chatter, never the failure.
+  check_deps
 
   command -v curl >/dev/null 2>&1 || die "curl is required and was not found." \
       "  $(pm_install_cmd curl)"

@@ -77,6 +77,18 @@ bool supportsDictation(String operatingSystem) => switch (operatingSystem) {
       _ => false,
     };
 
+/// Whether a shortcut can be registered with the OS so it fires from anywhere,
+/// even while LifeOS is hidden in the tray.
+///
+/// Desktop only, and not for lack of trying elsewhere: Android and iOS have no
+/// concept of an application claiming a system-wide key combination. The phone's
+/// equivalent already exists and is a different mechanism entirely — the
+/// assistant gesture (`ACTION_ASSIST`), wired through
+/// `MethodChannel('lifeos/assistant')`. So the Settings row that configures a
+/// hotkey is ABSENT on the phone rather than shown and inert.
+bool supportsGlobalHotkeys(String operatingSystem) =>
+    isDesktopPlatform(operatingSystem);
+
 /// The operating-system name of the host this process is running on, with
 /// `'web'` as the sentinel for a browser build (where `dart:io`'s `Platform`
 /// does not exist at all). Resolved through the same conditional-import pattern
