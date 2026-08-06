@@ -906,4 +906,21 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get appLockUnavailableToast =>
       'Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo.';
+
+  @override
+  String get trayTooltip => 'LifeOS está funcionando';
+
+  @override
+  String get trayMenuShowWindow => 'Abrir LifeOS';
+
+  @override
+  String get trayMenuQuit => 'Salir de LifeOS';
+
+  @override
+  String get trayUnavailableTitle => 'Sin icono en la barra del sistema';
+
+  @override
+  String trayUnavailableMessage(String details) {
+    return 'No se pudo poner el icono de LifeOS en la barra del sistema. La app sigue funcionando y la ventana se cierra como siempre. Detalle: $details';
+  }
 }

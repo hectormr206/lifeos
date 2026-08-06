@@ -123,6 +123,7 @@ Required — the app will not start without them:
 | `libgstreamer-1.0.so.0` | `audioplayers_linux` | `gstreamer` | `libgstreamer1.0-0` | `gstreamer1` |
 | `libgstapp-1.0.so.0` | `audioplayers_linux` | `gst-plugins-base-libs` | `libgstreamer-plugins-base1.0-0` | `gstreamer1-plugins-base` |
 | `libsecret-1.so.0` | `flutter_secure_storage_linux` | `libsecret` | `libsecret-1-0` | `libsecret` |
+| `libayatana-appindicator3.so.1` | `tray_manager` (system-tray icon) | `libayatana-appindicator` | `libayatana-appindicator3-1` | `libayatana-appindicator-gtk3` |
 
 Optional — the app starts, but voice input will not work:
 
@@ -135,12 +136,24 @@ Optional — the app starts, but voice input will not work:
 kwallet). The library alone stores nothing; without a daemon LifeOS cannot keep
 its pairing token between launches. The installer warns when it finds neither.
 
+`libayatana-appindicator3` is **required, not optional**: `tray_manager` sets
+`tray_manager_bundled_libraries ""`, so the library is not shipped inside the
+release and the dynamic loader fails the whole process at startup if it is
+missing. Like libsecret, having the library is not enough — something on the
+session bus has to *host* a `StatusNotifierItem`. KDE, Xfce, Cinnamon and most
+tray applets do; **GNOME Shell does not by default** and needs the
+`gnome-shell-extension-appindicator` extension, which the installer warns about
+when it sees `gnome-shell`. If no host answers, LifeOS still runs and says
+*"Sin icono en la barra del sistema"* in-app rather than silently showing
+nothing.
+
 ### Building from source on this box
 
 ```bash
 sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev \
   liblzma-dev libstdc++-12-dev libgstreamer1.0-dev \
-  libgstreamer-plugins-base1.0-dev libsecret-1-dev libjsoncpp-dev
+  libgstreamer-plugins-base1.0-dev libsecret-1-dev libjsoncpp-dev \
+  libayatana-appindicator3-dev
 cd mobile && flutter build linux --release
 ```
 
@@ -260,6 +273,9 @@ Verified present in the release bundle at
   Secret Service daemon).
 - **File picker, URL launcher, timezone** — `file_selector_linux`,
   `url_launcher_linux`, `flutter_timezone`.
+- **System tray** — `tray_manager` (icon + menu) and `window_manager`
+  (show/focus/hide, close-to-tray). Desktop only: neither declares an
+  android/ios plugin platform, so nothing is registered on the phone.
 - **Version info, paths, preferences** — `package_info_plus`,
   `path_provider`, `shared_preferences` (all Dart-side Linux support).
 

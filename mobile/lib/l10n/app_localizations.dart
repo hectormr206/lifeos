@@ -1717,6 +1717,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Set up a fingerprint, face or PIN on your device to turn the lock on.'**
   String get appLockUnavailableToast;
+
+  /// No description provided for @trayTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'LifeOS is running'**
+  String get trayTooltip;
+
+  /// No description provided for @trayMenuShowWindow.
+  ///
+  /// In en, this message translates to:
+  /// **'Open LifeOS'**
+  String get trayMenuShowWindow;
+
+  /// No description provided for @trayMenuQuit.
+  ///
+  /// In en, this message translates to:
+  /// **'Quit LifeOS'**
+  String get trayMenuQuit;
+
+  /// No description provided for @trayUnavailableTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No system tray icon'**
+  String get trayUnavailableTitle;
+
+  /// No description provided for @trayUnavailableMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'LifeOS could not put its icon in the system tray. The app keeps working and the window closes as usual. Details: {details}'**
+  String trayUnavailableMessage(String details);
 }
 
 class _AppLocalizationsDelegate

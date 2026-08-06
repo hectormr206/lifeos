@@ -7,9 +7,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// non-secret UI preference that MUST survive with no engine connection / no
 /// pairing. Mirrors `LocalModelPreferences`: abstracted so the notifier
 /// depends on the interface and tests inject a fake without the platform
-/// channel. Defaults to [ThemeMode.light] when never set.
+/// channel. Defaults to [ThemeMode.system] when never set — the app should
+/// look like the rest of the machine before the user has said anything.
 abstract class ThemeModePreferences {
-  /// The persisted mode; [ThemeMode.light] when never set.
+  /// The persisted mode; [ThemeMode.system] when never set.
   Future<ThemeMode> load();
 
   /// Persists [mode].
@@ -45,6 +46,6 @@ class SharedPrefsThemeModePreferences implements ThemeModePreferences {
         'dark' => ThemeMode.dark,
         'system' => ThemeMode.system,
         // Unknown / never-set → the app default is LIGHT.
-        _ => ThemeMode.light,
+        _ => ThemeMode.system,
       };
 }

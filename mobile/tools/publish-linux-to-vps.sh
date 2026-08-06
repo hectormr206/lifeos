@@ -67,6 +67,26 @@ VN="$(rg -o '^version:\s*([0-9]+\.[0-9]+\.[0-9]+)' -r '$1' "$MOBILE_DIR/pubspec.
 [[ -n "$VN" ]] || { echo "ERROR: no pude leer 'version:' de pubspec.yaml" >&2; exit 1; }
 NOTES="${1:-$(git -C "$REPO_ROOT" log -1 --format='%h %s' 2>/dev/null || echo "release $BUILD_NUMBER")}"
 
+# Build-time preflight for the system-tray plugin. tray_manager's
+# linux/CMakeLists.txt aborts with a FATAL_ERROR when neither
+# ayatana-appindicator3-0.1 nor appindicator3-0.1 is present, and it does so
+# deep inside the CMake configure step where the message is easy to miss. Say
+# it here instead, before a multi-minute build fails, and name the package.
+if command -v pkg-config >/dev/null 2>&1; then
+  if ! pkg-config --exists ayatana-appindicator3-0.1 \
+     && ! pkg-config --exists appindicator3-0.1; then
+    echo "ERROR: falta la dependencia de compilación del icono de bandeja." >&2
+    echo "       tray_manager necesita ayatana-appindicator3-0.1 (o appindicator3-0.1)." >&2
+    echo "       Debian/Ubuntu:  sudo apt-get install -y libayatana-appindicator3-dev" >&2
+    echo "       Arch:           sudo pacman -S --needed libayatana-appindicator" >&2
+    echo "       Fedora:         sudo dnf install -y libayatana-appindicator-gtk3-devel" >&2
+    exit 1
+  fi
+else
+  echo "AVISO: no hay pkg-config; no pude verificar ayatana-appindicator3-0.1." >&2
+  echo "       Si el build falla en tray_manager, instala libayatana-appindicator3-dev." >&2
+fi
+
 echo "→ Building release Linux bundle ($ARCH, versionCode $BUILD_NUMBER)…"
 flutter build linux --release \
   --build-number="$BUILD_NUMBER" \
@@ -100,6 +120,13 @@ for unit in lifeos-updater.service lifeos-updater.timer lifeos-updater.path; do
   cp "$src" "$ROOT/share/systemd/$unit"
 done
 install -m 0755 "$MOBILE_DIR/tools/install-linux.sh" "$ROOT/bin/install-linux.sh"
+# Stamp the server this copy is published to, so `curl … | sudo sh` works with
+# no flags. The repo copy stays empty: a checkout must never carry somebody
+# else's server baked in.
+# NOTE the ROOT url, not $BASE_URL: the installer appends "linux/<arch>/"
+# itself (see install-linux.sh MANIFEST_URL), so stamping the /linux suffix
+# here produced .../linux/linux/x64/manifest.json and a 404.
+sed -i "s|^LIFEOS_BASE_URL=.*|LIFEOS_BASE_URL=\"\${LIFEOS_BASE_URL:-$UPDATE_BASE_URL}\"|" "$ROOT/bin/install-linux.sh"
 printf '%s %s %s\n' "$VN" "$BUILD_NUMBER" "$ARCH" > "$ROOT/VERSION"
 
 TARBALL="$STAGE/${NAME}.tar.gz"
@@ -143,7 +170,7 @@ if [[ "$VPS_SSH" == "local" || -d "$HOME/$VPS_DIR" ]]; then
   echo "→ Copiando directamente a $HOME/$REMOTE_DIR/ …"
   mkdir -p "$HOME/$REMOTE_DIR"
   cp "$TARBALL" "$HOME/$REMOTE_DIR/$FN"
-  install -m 0755 "$MOBILE_DIR/tools/install-linux.sh" "$HOME/$VPS_DIR/linux/install-linux.sh"
+  install -m 0755 "$ROOT/bin/install-linux.sh" "$HOME/$VPS_DIR/linux/install-linux.sh"
   # install -m 0644, not cp: the manifest is written to a mktemp file whose
   # 0600 mode cp faithfully preserves, and nginx runs as another user — the
   # tarball served fine while the manifest 403'd, which reads like a routing

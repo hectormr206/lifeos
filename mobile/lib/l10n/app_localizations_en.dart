@@ -899,4 +899,21 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get appLockUnavailableToast =>
       'Set up a fingerprint, face or PIN on your device to turn the lock on.';
+
+  @override
+  String get trayTooltip => 'LifeOS is running';
+
+  @override
+  String get trayMenuShowWindow => 'Open LifeOS';
+
+  @override
+  String get trayMenuQuit => 'Quit LifeOS';
+
+  @override
+  String get trayUnavailableTitle => 'No system tray icon';
+
+  @override
+  String trayUnavailableMessage(String details) {
+    return 'LifeOS could not put its icon in the system tray. The app keeps working and the window closes as usual. Details: $details';
+  }
 }

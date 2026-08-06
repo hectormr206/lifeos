@@ -373,5 +373,15 @@
   "appLockUnavailableBody": "This device can no longer verify your identity (no fingerprint, face or PIN set up). Turn the lock off to get in.",
   "appLockDisableButton": "Turn off lock",
   "appLockEnableFailed": "Could not verify. The lock stays off.",
-  "appLockUnavailableToast": "Set up a fingerprint, face or PIN on your device to turn the lock on."
+  "appLockUnavailableToast": "Set up a fingerprint, face or PIN on your device to turn the lock on.",
+  "trayTooltip": "LifeOS is running",
+  "trayMenuShowWindow": "Open LifeOS",
+  "trayMenuQuit": "Quit LifeOS",
+  "trayUnavailableTitle": "No system tray icon",
+  "trayUnavailableMessage": "LifeOS could not put its icon in the system tray. The app keeps working and the window closes as usual. Details: {details}",
+  "@trayUnavailableMessage": {
+    "placeholders": {
+      "details": { "type": "String" }
+    }
+  }
 }

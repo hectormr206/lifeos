@@ -239,6 +239,36 @@ dependencies:
   # manifest work needed for one-off tasks on 0.9.x.
   workmanager: ^0.9.0+3
 
+  # DESKTOP SYSTEM TRAY (desktop-shell slice). An icon in the top bar that says
+  # "LifeOS is alive", with a menu to bring the window back and to really quit.
+  #
+  #   * tray_manager   — the icon + its context menu.
+  #   * window_manager — show/focus/hide the window, and `setPreventClose`, which
+  #                      is what turns the window's close button into "hide to
+  #                      tray" instead of "kill the app".
+  #
+  # BOTH declare exactly `linux macos windows` in their own
+  # `flutter.plugin.platforms`. There is NO android/ios implementation to
+  # register: no Gradle subproject, no manifest merge, no entry in the Android
+  # GeneratedPluginRegistrant. That is asserted for real — against the plugin
+  # map the Flutter tool itself generates — in
+  # test/core/tray/tray_plugin_isolation_test.dart, so a future upstream
+  # version that DID ship an Android implementation turns that test red before
+  # it can reach the phone.
+  #
+  # Windows/macOS runners do not exist in this repo yet; the tray code is
+  # written against the OS name (core/tray/tray_platform.dart) so adding one is
+  # `flutter create --platforms=windows` and not a rewrite.
+  #
+  # Linux runtime requirement: the icon is drawn by the desktop environment's
+  # StatusNotifier/AppIndicator host, which needs libayatana-appindicator3 —
+  # probed by tools/install-linux.sh alongside gtk3/gstreamer/libsecret. A
+  # session with no tray host at all (some Wayland compositors) cannot be fixed
+  # by a package, so the app SAYS the tray is unavailable rather than pretending
+  # it worked (core/tray/tray_service.dart).
+  tray_manager: ^0.5.3
+  window_manager: ^0.5.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

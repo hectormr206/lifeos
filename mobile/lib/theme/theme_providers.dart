@@ -9,7 +9,7 @@ final themeModePreferencesProvider =
 
 /// The active [ThemeMode] for `MaterialApp.router`.
 ///
-/// Exposes a synchronous [ThemeMode] (default [ThemeMode.light]) so the root
+/// Exposes a synchronous [ThemeMode] (default [ThemeMode.system]) so the root
 /// widget can read it without awaiting; the persisted value is hydrated
 /// asynchronously in [ThemeModeNotifier.build] and flips the state once known.
 /// Same async-load-vs-write race guard as `LocalModelEnabledNotifier`.
@@ -30,7 +30,7 @@ class ThemeModeNotifier extends Notifier<ThemeMode> {
   ThemeMode build() {
     // Default LIGHT; hydrate from persistence without blocking first read.
     _hydration = _hydrate();
-    return ThemeMode.light;
+    return ThemeMode.system;
   }
 
   Future<void> _hydrate() async {

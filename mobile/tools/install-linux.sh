@@ -22,6 +22,11 @@
 # half-installed tree and exits 0.
 set -eu
 
+# Stamped by publish-linux-to-vps.sh at publish time with the URL this script
+# is served from. Empty in the repo copy on purpose: a checkout must not carry
+# somebody else's server baked in.
+LIFEOS_BASE_URL="${LIFEOS_BASE_URL:-}"
+
 VERSION="1.0.0"
 PREFIX="/opt/lifeos"
 RELEASES_DIR="$PREFIX/releases"
@@ -239,6 +244,13 @@ pkg_for() { # $1 = soname/binary token -> package name for the detected PM
     apk:libgstapp-1.0.so.0)          echo gst-plugins-base ;;
     xbps-install:libgstapp-1.0.so.0) echo gst-plugins-base1 ;;
 
+    pacman:libayatana-appindicator3.so.1)       echo libayatana-appindicator ;;
+    apt-get:libayatana-appindicator3.so.1)      echo libayatana-appindicator3-1 ;;
+    dnf:libayatana-appindicator3.so.1)          echo libayatana-appindicator-gtk3 ;;
+    zypper:libayatana-appindicator3.so.1)       echo libayatana-appindicator3-1 ;;
+    apk:libayatana-appindicator3.so.1)          echo libayatana-appindicator ;;
+    xbps-install:libayatana-appindicator3.so.1) echo libayatana-appindicator ;;
+
     pacman:libsecret-1.so.0)         echo libsecret ;;
     apt-get:libsecret-1.so.0)        echo libsecret-1-0 ;;
     dnf:libsecret-1.so.0)            echo libsecret ;;
@@ -267,7 +279,15 @@ check_deps() {
   #   libgstreamer    audioplayers_linux (spoken replies, notification sounds)
   #   libgstapp       gst-plugins-base, same
   #   libsecret       flutter_secure_storage_linux (the pairing token lives here)
-  for lib in libgtk-3.so.0 libgstreamer-1.0.so.0 libgstapp-1.0.so.0 libsecret-1.so.0; do
+  #   libayatana-…    tray_manager (the system-tray icon). REQUIRED, not
+  #                   optional: tray_manager's linux/CMakeLists.txt sets
+  #                   `tray_manager_bundled_libraries ""`, so the .so is NOT
+  #                   shipped inside the release — the plugin is linked against
+  #                   it and the dynamic loader fails the WHOLE process at
+  #                   startup if it is absent. A missing tray icon would be a
+  #                   warning; an app that will not launch is an error.
+  for lib in libgtk-3.so.0 libgstreamer-1.0.so.0 libgstapp-1.0.so.0 libsecret-1.so.0 \
+             libayatana-appindicator3.so.1; do
     have_lib "$lib" || missing_required="$missing_required $(pkg_for "$lib")"
   done
 
@@ -307,6 +327,23 @@ check_deps() {
       warn "  libsecret is installed but needs a running daemon to store anything;"
       warn "  without one, LifeOS cannot persist its pairing token between launches."
     fi
+  fi
+
+  # Same class of problem for the tray icon: libayatana-appindicator is a
+  # library and IS probed above, but something on the session bus has to
+  # actually HOST a StatusNotifierItem, and that is a running desktop component
+  # we cannot detect from a root install. GNOME ships without one by default —
+  # it needs the AppIndicator extension — so say so there rather than let the
+  # user wonder why the icon never appeared.
+  #
+  # Not fatal, and not the only line of defence: if no host answers, the app
+  # itself reports "Sin icono en la barra del sistema" at runtime instead of
+  # pretending the tray worked (see mobile/lib/core/tray/).
+  if command -v gnome-shell >/dev/null 2>&1; then
+    warn "GNOME detected: the system-tray icon needs the AppIndicator extension."
+    warn "  GNOME Shell hosts no StatusNotifierItem by default, so without it"
+    warn "  LifeOS runs normally but shows no icon in the top bar."
+    warn "  Install 'gnome-shell-extension-appindicator' and enable it."
   fi
 }
 
@@ -408,6 +445,15 @@ do_uninstall() {
 # ─────────────────────────────────────────────────────────────────────────────
 do_install() {
   load_config
+  # This script is SERVED BY the update server, so on a fresh install it
+  # already knows where it came from — asking the user to retype that is
+  # friction for no safety. LIFEOS_BASE_URL is stamped in at publish time;
+  # an explicit --base-url still wins, and a hand-copied script with neither
+  # still gets the clear error below rather than a wrong default.
+  if [ -z "$BASE_URL" ] && [ -n "${LIFEOS_BASE_URL:-}" ]; then
+    BASE_URL="$LIFEOS_BASE_URL"
+    say "Using the server this installer came from: $BASE_URL"
+  fi
   [ -n "$BASE_URL" ] || die "No update server configured." \
       "Pass --base-url https://your-server/lifeos (and --key <KEY>) on first install." \
       "Later runs reuse the values saved in $CONF_FILE."

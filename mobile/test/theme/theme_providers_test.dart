@@ -8,13 +8,17 @@ import 'package:lifeos/theme/theme_providers.dart';
 import '../support/fake_theme_mode_preferences.dart';
 
 void main() {
-  test('defaults to ThemeMode.light before hydration', () {
+  // The app should look like the rest of the machine from the very first
+  // frame. Defaulting to light meant a user on a dark desktop — or a dark
+  // phone — got a white flash and a mismatched app until they went hunting
+  // through settings for a preference they never should have had to set.
+  test('defaults to ThemeMode.system before hydration', () {
     final container = ProviderContainer(overrides: [
       themeModePreferencesProvider.overrideWithValue(FakeThemeModePreferences()),
     ]);
     addTearDown(container.dispose);
 
-    expect(container.read(themeModeProvider), ThemeMode.light);
+    expect(container.read(themeModeProvider), ThemeMode.system);
   });
 
   test('hydrates the persisted mode on build', () async {
@@ -25,7 +29,7 @@ void main() {
     addTearDown(container.dispose);
 
     // First synchronous read is still the default...
-    expect(container.read(themeModeProvider), ThemeMode.light);
+    expect(container.read(themeModeProvider), ThemeMode.system);
     await container.read(themeModeProvider.notifier).ready;
     // ...then it flips to the persisted value.
     expect(container.read(themeModeProvider), ThemeMode.dark);

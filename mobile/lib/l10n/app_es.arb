@@ -334,5 +334,15 @@
   "appLockUnavailableBody": "Este dispositivo ya no puede verificar tu identidad (sin huella, rostro ni PIN configurados). Desactiva el bloqueo para entrar.",
   "appLockDisableButton": "Desactivar bloqueo",
   "appLockEnableFailed": "No se pudo verificar. El bloqueo sigue desactivado.",
-  "appLockUnavailableToast": "Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo."
+  "appLockUnavailableToast": "Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo.",
+  "trayTooltip": "LifeOS está funcionando",
+  "trayMenuShowWindow": "Abrir LifeOS",
+  "trayMenuQuit": "Salir de LifeOS",
+  "trayUnavailableTitle": "Sin icono en la barra del sistema",
+  "trayUnavailableMessage": "No se pudo poner el icono de LifeOS en la barra del sistema. La app sigue funcionando y la ventana se cierra como siempre. Detalle: {details}",
+  "@trayUnavailableMessage": {
+    "placeholders": {
+      "details": { "type": "String" }
+    }
+  }
 }

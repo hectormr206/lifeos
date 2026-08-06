@@ -5,6 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/outbox/sync_service.dart';
+import 'core/tray/tray_localization.dart';
+import 'core/tray/tray_notice.dart';
+import 'core/tray/tray_platform.dart';
+import 'core/tray/tray_providers.dart';
+import 'core/tray/tray_service.dart';
 import 'l10n/app_localizations.dart';
 import 'l10n/locale_providers.dart';
 import 'features/app_update/presentation/app_update_notifier.dart';
@@ -279,6 +284,11 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
   Timer? _foregroundUpdateTimer;
   static const Duration _foregroundCheckInterval = Duration(minutes: 5);
 
+  /// Held so [dispose] can remove the tray icon WITHOUT reading a provider on
+  /// a disposed `ref`. Null on Android/iOS/web and under `flutter test` — see
+  /// [_wireSystemTray].
+  TrayService? _trayService;
+
   @override
   void initState() {
     super.initState();
@@ -309,11 +319,19 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoBackup());
     // Device Assistant (ACTION_ASSIST): wire assistant launches (cold + warm).
     WidgetsBinding.instance.addPostFrameCallback((_) => _wireAssistantLaunch());
+    // DESKTOP system tray. Post-frame because the labels come from
+    // AppLocalizations, which needs a built context. No-op everywhere else.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _wireSystemTray());
     _startForegroundUpdatePolling();
   }
 
   @override
   void dispose() {
+    // Remove the tray icon before the app goes away, so the desktop is not
+    // left painting a ghost icon that opens nothing. Null unless the tray was
+    // actually started (desktop, outside `flutter test`).
+    final tray = _trayService;
+    if (tray != null) unawaited(tray.stop());
     _stopForegroundUpdatePolling();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -411,6 +429,30 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     if (!mounted) return;
     ref.read(chatAssistantArmMicProvider.notifier).arm();
     ref.read(goRouterProvider).go('/chat');
+  }
+
+  /// DESKTOP SYSTEM TRAY: put an icon in the top bar that says LifeOS is
+  /// alive, with a menu to bring the window back and to really quit.
+  ///
+  /// [trayShouldAutoStart] is the platform guard, and it is the whole reason
+  /// Android is untouched: on a phone this returns false and nothing below
+  /// runs — no plugin is constructed, no channel is opened. (Neither
+  /// `tray_manager` nor `window_manager` registers on Android at all; see
+  /// `test/core/tray/tray_plugin_isolation_test.dart`.) It is also false under
+  /// `flutter test`, so the widget-test suite never pokes the host's real
+  /// desktop session.
+  ///
+  /// Deliberately NOT wrapped in a `try/catch` like the best-effort
+  /// notification wiring above it: `TrayStatusNotifier.start` never throws,
+  /// and it turns a failure into visible [TrayNotice] state instead of
+  /// swallowing it. A tray that cannot start must SAY so.
+  Future<void> _wireSystemTray() async {
+    if (!trayShouldAutoStart()) return;
+    if (!mounted) return;
+    _trayService = ref.read(trayServiceProvider);
+    await ref
+        .read(trayStatusProvider.notifier)
+        .start(trayMenuLabelsFrom(AppLocalizations.of(context)));
   }
 
   void _openRemindersScreen() {
@@ -532,6 +574,10 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // Self-hosted OTA update: fires a launch-time update check as soon as the
     // device is (or becomes) paired, honoring the auto-check preference.
     ref.watch(appUpdateLaunchCheckProvider);
+    // Desktop tray: follow the language selector. `TrayService.start` re-labels
+    // an already-installed icon rather than adding a second one, so this is
+    // safe to fire on every change and is a no-op wherever there is no tray.
+    ref.listen(localeProvider, (_, _) => unawaited(_wireSystemTray()));
     return MaterialApp.router(
       title: 'LifeOS',
       theme: lifeosLightTheme,
@@ -550,7 +596,13 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
       // Optional biometric app lock: wrap EVERY route so the gate covers the
       // whole app (cold start + resume). Default OFF, so this is a transparent
       // pass-through for users who never opt in.
-      builder: (context, child) => AppLockGate(child: child ?? const SizedBox.shrink()),
+      // The lock gate is OUTERMOST: a locked app must show the lock screen and
+      // nothing else, including the tray notice. Inside it, TrayNotice wraps
+      // every route so a "the tray could not start" warning is visible from
+      // wherever the user happens to be, not only from one screen.
+      builder: (context, child) => AppLockGate(
+        child: TrayNotice(child: child ?? const SizedBox.shrink()),
+      ),
     );
   }
 }
