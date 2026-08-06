@@ -1,10 +1,20 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:workmanager/workmanager.dart';
 
+import '../../features/backup/data/backup_host_config_store.dart';
+import '../../features/backup/data/backup_service.dart';
+import '../../features/backups/data/automatic_backup_passphrase_store.dart';
+import '../../features/backups/data/automatic_backup_settings_store.dart';
+import '../../features/backups/data/automatic_backup_status_store.dart';
+import '../../features/backups/data/workmanager_automatic_backup_work.dart';
+import '../../features/backups/domain/automatic_backup_runner.dart';
+import '../../features/data_control/data/graph_backup_service.dart';
+import '../../features/data_control/domain/backup_info.dart';
 import '../../features/local_model/data/flutter_gemma_llm_engine.dart';
 import '../../features/local_model/domain/brain_model_manifest.dart';
 import '../../features/local_model/domain/local_llm_engine.dart';
@@ -19,6 +29,10 @@ import '../../features/morning_briefing/domain/briefing_notifications.dart';
 import '../../features/morning_briefing/domain/morning_briefing_preferences.dart';
 import '../../l10n/language_preference.dart';
 import '../../l10n/locale_providers.dart';
+import '../connectivity/reachability_vpn_probe.dart';
+import '../connectivity/vpn_gate.dart';
+import '../graph/local_graph_database.dart';
+import '../notifications/app_notifications.dart';
 import '../timezone/device_timezone.dart';
 import '../timezone/effective_timezone.dart';
 import '../timezone/timezone_preference.dart';
@@ -37,6 +51,8 @@ void backgroundTaskDispatcher() {
     switch (taskName) {
       case morningBriefingTaskName:
         return executeMorningBriefingBackgroundTask();
+      case automaticBackupTaskName:
+        return executeAutomaticBackupTask();
       default:
         // Unknown/legacy task id after an app update: succeed so WorkManager
         // drops it instead of retry-looping a task nobody handles any more.
@@ -68,6 +84,74 @@ Future<bool> executeMorningBriefingBackgroundTask() async {
   );
   return runMorningBriefingBackgroundTask(deps);
 }
+
+/// Production composition root for the headless VPN-gated automatic backup
+/// (design.md slice 2, tasks.md 3.9). Builds the MINIMAL service graph (no
+/// Riverpod — this isolate has no widget tree, same constraint as the
+/// briefing composition above) and hands it to the testable runner body.
+Future<bool> executeAutomaticBackupTask() async {
+  final localDb = LocalGraphDatabase();
+  final graphBackups = GraphBackupService(
+    database: localDb.open,
+    databasePath: localDb.databasePath,
+    backupsRoot: () async {
+      final dir = await getApplicationSupportDirectory();
+      return Directory('${dir.path}/backups');
+    },
+    // This task only ever CREATES a backup, never restores — nothing here
+    // holds a live handle that would need suspending/resuming.
+    suspendDatabase: () async {},
+    resumeDatabase: () {},
+  );
+  final deps = AutomaticBackupDeps(
+    isEnabled: AutomaticBackupSettingsStore().isEnabled,
+    checkVpn: VpnGate(
+      probe: ReachabilityVpnProbe(dio: Dio()),
+      operatingSystem: Platform.operatingSystem,
+    ).check,
+    loadConfig: BackupHostConfigStore().load,
+    // Guaranteed by the `NetworkType.unmetered` constraint this task is
+    // REGISTERED under (`WorkmanagerAutomaticBackupWork.schedule`) whenever
+    // `kHeavyDownloadsRequireWiFi` is true: WorkManager will not even fire
+    // this task off Wi-Fi in that case, so by the time this closure runs the
+    // condition already holds. Kept as an explicit dependency (rather than
+    // hardcoded into the runner) purely so `scheduler_test.dart` can drive
+    // both branches without a real OS constraint.
+    isOnUnmeteredNetwork: () async => true,
+    loadPassphrase: AutomaticBackupPassphraseStore().load,
+    runBackup: (config, passphrase) async {
+      final service = BackupService(
+        uploader: HostUploader(),
+        // A FRESH consistent copy, not whatever happens to be on disk —
+        // same VACUUM INTO contract the manual flow uses.
+        readArchive: () async {
+          final local = await graphBackups.createBackup(kind: BackupKind.auto);
+          return File(local.path).readAsBytes();
+        },
+      );
+      await service.backUp(config, passphrase: passphrase);
+    },
+    recordStatus: AutomaticBackupStatusStore().record,
+    notifyUndetermined: _notifyVpnUndetermined,
+    now: DateTime.now,
+  );
+  return runAutomaticBackupTask(deps);
+}
+
+/// LOUD surfacing for the VPN-state-undetermined outcome — its own
+/// channel/payload, separate from the briefing and app-update notifiers, so
+/// a tap is never confused with either of those.
+Future<void> _notifyVpnUndetermined() => AppNotifications.instance.show(
+      id: 5320,
+      channelId: 'lifeos_automatic_backup',
+      channelName: 'Respaldo automático',
+      channelDescription: 'Avisos cuando no se pudo determinar el estado de '
+          'la VPN para el respaldo automático.',
+      title: 'No se pudo comprobar la VPN',
+      body: 'El respaldo automático no se hizo porque no se pudo confirmar '
+          'la conexión a tu VPN. Revisá «Respaldos» en Ajustes.',
+      payload: 'automatic_backup_vpn_undetermined',
+    );
 
 /// Probes whether the ~2.6GB brain-model weights ALREADY exist on this device
 /// — a pure presence check, so the background task can decide to translate

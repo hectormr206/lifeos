@@ -316,3 +316,225 @@ before GREEN. 1954/1954 mobile tests passing, `flutter analyze` clean, 389
 changed lines (under the 400 budget). Task 2.7 (spike) and 2.8 (on-device
 measurement) intentionally left for their designated non-blocking/gated
 timing. Ready for verify. Phase 3 (backup scheduler) NOT started.
+
+## Phase 3 (PR3 — backup scheduler): 8/9 tasks complete (3.1-3.8); one item
+(3.9) BLOCKED and newly added — see below. Built on the PR1/PR2 tree, no new
+branch/commit created, per instruction.
+
+### TDD evidence
+`scheduler_test.dart` (6 tests, RED first): stashed the not-yet-written
+implementation files out of `lib/`, ran the test file — 12 compile errors
+(`Undefined name 'AutomaticBackupOutcome'`, `Method not found:
+'runAutomaticBackupTask'`, etc.), confirming genuine RED. Restored the
+implementation -> all 6 green. Same RED-then-restore procedure used for
+`automatic_backup_persistence_test.dart` (4 tests) and
+`workmanager_automatic_backup_work_test.dart` (2 tests) — both files
+referenced not-yet-created `lib/features/backups/data/*` files, confirmed
+RED via missing-file compile errors, then implemented to GREEN.
+`backup_settings_screen_test.dart`'s 3 new tests (toggle default/persist,
+undetermined-shown-loudly, failed-shown) were RED via
+`No named parameter with the name 'automaticSettingsStore'` before the
+widget was extended.
+
+### What was built
+- `mobile/lib/features/backups/domain/{automatic_backup_outcome,
+  automatic_backup_status,automatic_backup_runner}.dart` — the pure,
+  injectable scheduler contract (`AutomaticBackupDeps` + `
+  runAutomaticBackupTask`), closures not concrete classes (mirrors
+  `BriefingBackgroundDeps`/`runMorningBriefingBackgroundTask`) so it is
+  fully unit-testable with fakes, no plugin channel, no real VPN.
+- `mobile/lib/features/backups/data/{automatic_backup_settings_store,
+  automatic_backup_status_store,workmanager_automatic_backup_work}.dart` —
+  SharedPreferences persistence for the opt-out (defaults ON) and the last
+  recorded outcome, plus the WorkManager periodic-task registration.
+- `kAutomaticBackupPollInterval = Duration(hours: 6)` — task 2.8's on-device
+  latency measurement was NOT done (no Pixel available). The constant's doc
+  comment states plainly it is an ESTIMATE, not a measurement, names what
+  it is waiting on (task 2.8), and a pinning test forces any change to be
+  deliberate.
+- `NetworkType.unmetered` constraint composed from the EXISTING
+  `kHeavyDownloadsRequireWiFi` constant (`heavy_download_policy.dart`) —
+  not restated/duplicated, per instruction.
+- Decision ordering inside the runner mirrors the spec exactly: user
+  opt-out checked FIRST (before any VPN check, per the "regardless of VPN
+  state" requirement) -> VPN gate (`unknown` NEVER treated as `onVpn`,
+  including when the gate itself throws) -> Wi-Fi/unmetered policy ->
+  upload. A mid-upload VPN loss is NOT specially polled for — it is caught
+  through the SAME exception path an ordinary upload failure already takes
+  (`BackupHostClient.upload`'s `DioException` -> `BackupHostException`),
+  which the spec scenario's language ("abort... recorded and surfaced...
+  never presented as success") maps onto directly without new machinery.
+- `backup_settings_screen.dart`: added a "Respaldo automático" section
+  (`SwitchListTile`, default ON, persists via `AutomaticBackupSettingsStore`)
+  and a one-line status message keyed off the last `AutomaticBackupStatus`
+  — `skippedVpnUnknown` gets distinct, loud copy ("No se pudo determinar
+  si estabas en la VPN...") separate from an ordinary skip, and `failed`
+  surfaces the same as an existing manual-backup failure (spec requirement).
+
+### Debugging note (non-blocking, resolved)
+Three new widget tests initially failed with `Found 0 widgets with type
+"SwitchListTile"` even though `debugDumpApp()` showed the widget present.
+Root cause: `find.byType`/`find.textContaining` default `skipOffstage:
+true`, and the new section sits below the fold of this screen's
+`ListView(children: ...)` (built eagerly, just not painted in the test
+viewport) — NOT a production bug. Fixed by using `skipOffstage: false` /
+`tester.ensureVisible` in the three affected tests.
+
+### BLOCKED — task 3.9 (new, found during 3.7/3.8 implementation)
+The scheduler contract (`runAutomaticBackupTask`) is complete and tested
+with an INJECTED `runBackup` callback. What is NOT done: wiring a REAL
+`runBackup` into `core/background/background_tasks.dart`'s live dispatcher
+and actually registering `WorkmanagerAutomaticBackupWork.schedule()` so the
+feature runs in production.
+
+Reason: the real backup upload seals the archive with the user's
+passphrase (`PassphraseBackupSealer`/`BackupService.backUp`), and this app
+deliberately NEVER persists that passphrase anywhere — the existing UI
+copy states losing it is unrecoverable ("Ni el servidor ni nosotros
+podemos abrirlos... Si olvidás esa frase, los respaldos se pierden para
+siempre"). A headless WorkManager task has no UI to prompt for it. Neither
+spec.md, design.md, nor tasks.md 3.1-3.8 addresses how automatic mode is
+meant to obtain a passphrase — this is a genuine, undecided product/
+security question (e.g., an explicit opt-in encrypted-at-rest passphrase
+for automation only, scoped narrower than the manual flow's guarantee),
+not a coding task. Per the "STOP and report rather than implementing
+something adjacent" instruction, this was NOT invented unilaterally.
+Added as tasks.md 3.9, left unchecked, with the blocker documented inline.
+
+### Metrics
+Before: 1954 passing, `flutter analyze` clean. After: full suite green
+(1970 tests total, +16 net), `flutter analyze` 0 issues (one
+`unused_element_parameter` warning caught and fixed before final run).
+Diff size, production vs test (new files not in `git diff --stat`, counted
+explicitly):
+- Production: 6 new files (341 lines) + `backup_settings_screen.dart`
+  modified (+75/-0) = **416 lines**.
+- Tests: 3 new files (223 lines) + `backup_settings_screen_test.dart`
+  modified (+63/-3) = **283 lines**.
+
+### Status (Phase 3, first pass)
+8/9 tasks complete (3.1-3.8), RED-then-GREEN proven for every new test
+file. Task 3.9 (production dispatcher wiring) BLOCKED on an undecided
+passphrase-for-automation design question — reported, not worked around.
+
+## Phase 3.9 (owner decision received, same session): COMPLETE
+
+Coordinator relayed the owner's decision: **the sealing passphrase is
+cached in the platform keystore** (`flutter_secure_storage`, same mechanism
+`SecureFileKeyStore` already trusts for the graph DB's own key — one
+storage mechanism, not two). Reasoning (now embedded in code comments per
+instruction, so it is not re-litigated blind later): anyone who already has
+the DEVICE already has the plaintext data being backed up, so caching the
+passphrase there gives a device-holding attacker nothing new; what the
+passphrase protects is the SEALED ARCHIVE on the VPS, from someone who has
+the VPS but not the device, and on-device caching does not weaken that.
+
+### What was built
+- `mobile/lib/features/backups/data/automatic_backup_passphrase_store.dart`
+  (new) — thin wrapper over `flutter_secure_storage`. `save()` deliberately
+  does NOT swallow exceptions (every other best-effort scheduler in this
+  app does) — a Linux box with no gnome-keyring/kwallet running throws a
+  `PlatformException` here, and that MUST propagate so the caller can fail
+  loudly instead of silently leaving the toggle "on" with nothing stored.
+- `AutomaticBackupOutcome.passphraseUnavailable` (new, 7th value) — distinct
+  from `failed` (upload attempted, didn't land), `skippedVpnDown`/
+  `skippedVpnUnknown` (about the VPN, not the secret).
+- `automatic_backup_runner.dart`: `AutomaticBackupDeps` gained
+  `loadPassphrase: Future<String?> Function()`; `runBackup`'s signature
+  changed to `(BackupHostConfig, String passphrase)`. Both a null return
+  and a thrown exception from `loadPassphrase` are treated identically
+  (recorded as `passphraseUnavailable`, backup never attempted) — same
+  "storage unavailable reads as storage empty" contract the store itself
+  documents.
+- `AutomaticBackupSettingsStore.isEnabled()` default flipped `true → false`
+  (documented reasoning in the class doc): enabling now REQUIRES capturing
+  a secret through the explicit toggle-ON flow, so a `true` default on a
+  fresh install would have silently reproduced the exact "switch says on,
+  nothing backed up" failure mode this whole task exists to eliminate.
+- `backup_settings_screen.dart`: `_setAutomaticEnabled` is no longer
+  optimistic on the ON path — it shows `PassphraseDialog` (confirm:true,
+  reusing the exact manual-backup dialog), saves to
+  `AutomaticBackupPassphraseStore`, and ONLY on success persists
+  `enabled=true`, registers the periodic task
+  (`WorkmanagerAutomaticBackupWork().schedule()`), and flips the switch.
+  On a `save()` failure: a specific SnackBar naming "un gestor de llaves
+  como gnome-keyring o kwallet", the switch stays visually OFF (setState
+  is simply never called), and nothing is persisted. Turning OFF stays
+  optimistic (only ever makes things safer) and deletes the stored secret
+  (best-effort — the setting flip alone, checked first by the runner,
+  already halts future runs even if the delete itself fails) and cancels
+  the periodic task.
+- `mobile/lib/core/background/background_tasks.dart`: added the
+  `automaticBackupTaskName` dispatcher case and
+  `executeAutomaticBackupTask()`, the production composition root — real
+  `VpnGate`+`ReachabilityVpnProbe`, `BackupHostConfigStore`,
+  `AutomaticBackupPassphraseStore`, a `GraphBackupService` built directly
+  from `LocalGraphDatabase` (no Riverpod — this isolate has no widget
+  tree, same constraint the briefing composition root already documents),
+  `BackupService`+`HostUploader` for the real seal+upload, and a
+  dedicated `lifeos_automatic_backup` notification channel (separate
+  payload from briefing/app-update) for the undetermined-VPN case.
+  `isOnUnmeteredNetwork` is hardcoded `true` in production with a comment
+  explaining why: the periodic task is REGISTERED under
+  `NetworkType.unmetered` (composed from `kHeavyDownloadsRequireWiFi`), so
+  by the time this closure runs WorkManager has already guaranteed it —
+  the dependency exists purely so `scheduler_test.dart` can drive both
+  branches without a real OS constraint.
+
+### Never logs/surfaces the passphrase (instruction #4)
+Verified explicitly in
+`no Secret Service / keyring on this device → turning ON fails LOUDLY...`
+(`backup_settings_screen_test.dart`): asserts the typed passphrase text
+does NOT appear anywhere in the widget tree after the failure. The error
+path only names the missing PIECE (gestor de llaves / gnome-keyring /
+kwallet), never the secret.
+
+### TDD evidence (RED-then-GREEN, same procedure as the first pass)
+- `automatic_backup_passphrase_store_test.dart`: RED via missing-file
+  compile errors (file did not exist), implemented, GREEN — including a
+  `_NoKeyringStorage extends FlutterSecureStorage` test double overriding
+  `write()` to throw `PlatformException`, proving `save()` propagates
+  rather than swallows.
+- `scheduler_test.dart`: extended with 2 new tests (no passphrase → distinct
+  outcome; storage throws → same distinct outcome, task never crashes) plus
+  a signature change to ALL existing `runBackup` closures (2-arg now) —
+  RED via `No named parameter 'loadPassphrase'` + `Member not found:
+  'passphraseUnavailable'`, then implemented, GREEN (8/8).
+- `automatic_backup_persistence_test.dart`: the "defaults to enabled" test
+  rewritten to assert `false` — RED (`Expected: false / Actual: <true>`)
+  against the old default, then the store's default flipped, GREEN.
+- `backup_settings_screen_test.dart`: extended with 5 new/rewritten tests
+  covering the full toggle-ON dialog flow, backing out, the keystore
+  failure (this instruction's highest-value case), turning OFF deleting
+  the secret, and the new status line — RED via `No named parameter
+  'automaticPassphraseStore'` + a non-exhaustive `switch` compile error
+  (missing the new enum case), then implemented, GREEN (12/12 in that
+  file, full backup+backups directories 61/61).
+
+### Debugging note
+None new — reused the `skipOffstage:false` / `tester.ensureVisible`
+pattern from the first pass for the (still below-the-fold) toggle, and
+`find.descendant(of: find.byType(PassphraseDialog), matching:
+find.byType(TextField))` to disambiguate the dialog's fields from the
+screen's own address/key fields underneath it.
+
+### Metrics (this 3.9 turn only — deltas)
+- Production: `automatic_backup_passphrase_store.dart` new (50) +
+  `background_tasks.dart` new composition root (+84, tracked diff) +
+  `backup_settings_screen.dart` delta (+58 over the first pass's +75) +
+  `automatic_backup_runner.dart` delta (+34) +
+  `automatic_backup_outcome.dart` delta (+12) +
+  `automatic_backup_settings_store.dart` delta (+9) = **~247 lines**.
+- Tests: `automatic_backup_passphrase_store_test.dart` new (78) +
+  `scheduler_test.dart` delta (+43) +
+  `automatic_backup_persistence_test.dart` delta (+3) +
+  `backup_settings_screen_test.dart` delta (+159/-1 over the first pass's
+  +63/-3) = **~283 lines**.
+- Full suite: 1970 → **1980** passing (+10 net this turn — some tests were
+  rewritten/merged, not purely additive), `flutter analyze` 0 issues (one
+  unused-import + two `unnecessary_underscores` infos caught and fixed
+  before the final run).
+
+### Status (Phase 3, final)
+9/9 tasks complete (3.1-3.9). No branches/commits created, per
+instruction. Do NOT start Phase 4.

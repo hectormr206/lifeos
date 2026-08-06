@@ -59,14 +59,15 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: PR3 — backup scheduler
 
-- [ ] 3.1 RED: `mobile/test/features/backups/scheduler_test.dart` — `VpnGate.onVpn` + Wi-Fi/unmetered → automatic backup runs
-- [ ] 3.2 RED: same file — `offVpn` → backup skipped, visible status row (not just log)
-- [ ] 3.3 RED: same file — `unknown` → skipped + loud notification + status surfaced in `/settings/backups/server`
-- [ ] 3.4 RED: same file — VPN goes `offVpn` mid-backup → abort, recorded failed, surfaced (not presented as success)
-- [ ] 3.5 RED: same file — `onVpn` but off Wi-Fi with heavy payload → waits per `heavy_download_policy.dart`
-- [ ] 3.6 RED: same file — user disables automatic backups → no run regardless of VPN state; setting persists across restart
-- [ ] 3.7 GREEN: implement scheduler in `mobile/lib/features/backups/` using workmanager (`BriefingBackgroundWork` pattern), `NetworkType.unmetered` constraint, using the interval decided from task 2.8's measurement
-- [ ] 3.8 GREEN: implement status surface (skip/undetermined/failed visibility) and settings toggle with persistence
+- [x] 3.1 RED: `mobile/test/features/backups/scheduler_test.dart` — `VpnGate.onVpn` + Wi-Fi/unmetered → automatic backup runs
+- [x] 3.2 RED: same file — `offVpn` → backup skipped, visible status row (not just log)
+- [x] 3.3 RED: same file — `unknown` → skipped + loud notification + status surfaced in `/settings/backups/server`
+- [x] 3.4 RED: same file — VPN goes `offVpn` mid-backup → abort, recorded failed, surfaced (not presented as success)
+- [x] 3.5 RED: same file — `onVpn` but off Wi-Fi with heavy payload → waits per `heavy_download_policy.dart`
+- [x] 3.6 RED: same file — user disables automatic backups → no run regardless of VPN state; setting persists across restart
+- [x] 3.7 GREEN: implement scheduler in `mobile/lib/features/backups/` (`automatic_backup_runner.dart`, `workmanager_automatic_backup_work.dart`) using workmanager, `NetworkType.unmetered` constraint composed from `kHeavyDownloadsRequireWiFi`, interval `kAutomaticBackupPollInterval` (a documented, PINNED, NOT-MEASURED placeholder — task 2.8 still open)
+- [x] 3.8 GREEN: implement status surface (`AutomaticBackupStatusStore` + `backup_settings_screen.dart`) and settings toggle (`AutomaticBackupSettingsStore`) with persistence
+- [x] 3.9 (owner decision received) wire `runAutomaticBackupTask` into `core/background/background_tasks.dart`'s live dispatcher with a REAL `runBackup` callback. **Owner decision**: the sealing passphrase is cached in the platform keystore (`AutomaticBackupPassphraseStore`, reusing `flutter_secure_storage` exactly like `SecureFileKeyStore` — see that class's doc for the full reasoning: a device-holding attacker already has the plaintext, so on-device caching does not weaken what the passphrase actually protects, the sealed archive on the VPS). Captured only when the user turns automatic backups ON (`PassphraseDialog`, confirm:true) and deleted when turned OFF. `AutomaticBackupSettingsStore`'s default flipped `true → false` (enabling now requires capturing a secret, so a fresh install can no longer read "on" with nothing backed up). New `AutomaticBackupOutcome.passphraseUnavailable`, distinct from `failed`/`skippedVpnDown`/`skippedVpnUnknown`, surfaced in the status line. Linux-no-keyring failure (the concrete case that drove this) is fail-loud: `AutomaticBackupPassphraseStore.save` does NOT swallow the `PlatformException`; `backup_settings_screen.dart` catches it, shows an error naming the missing keyring, and does not flip the switch. Periodic task registered/cancelled from the same toggle handler.
 
 ## Phase 4: PR4 — schema slice 3a (additive DDL)
 

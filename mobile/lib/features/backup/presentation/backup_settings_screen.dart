@@ -3,6 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../backups/data/automatic_backup_passphrase_store.dart';
+import '../../backups/data/automatic_backup_settings_store.dart';
+import '../../backups/data/automatic_backup_status_store.dart';
+import '../../backups/data/workmanager_automatic_backup_work.dart';
+import '../../backups/domain/automatic_backup_outcome.dart';
+import '../../backups/domain/automatic_backup_status.dart';
 import '../../data_control/domain/backup_info.dart';
 import '../../data_control/presentation/data_control_providers.dart';
 import '../data/backup_host_client.dart';
@@ -26,10 +32,16 @@ class BackupSettingsScreen extends ConsumerStatefulWidget {
     // (Dart exposes the public name), while the fields stay private.
     this._store,
     this._client,
+    this._automaticSettingsStore,
+    this._automaticStatusStore,
+    this._automaticPassphraseStore,
   });
 
   final BackupHostConfigStore? _store;
   final BackupHostClient? _client;
+  final AutomaticBackupSettingsStore? _automaticSettingsStore;
+  final AutomaticBackupStatusStore? _automaticStatusStore;
+  final AutomaticBackupPassphraseStore? _automaticPassphraseStore;
 
   @override
   ConsumerState<BackupSettingsScreen> createState() =>
@@ -40,6 +52,12 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
   late final BackupHostConfigStore _store =
       widget._store ?? BackupHostConfigStore();
   late final BackupHostClient _client = widget._client ?? BackupHostClient();
+  late final AutomaticBackupSettingsStore _automaticSettingsStore =
+      widget._automaticSettingsStore ?? AutomaticBackupSettingsStore();
+  late final AutomaticBackupStatusStore _automaticStatusStore =
+      widget._automaticStatusStore ?? AutomaticBackupStatusStore();
+  late final AutomaticBackupPassphraseStore _automaticPassphraseStore =
+      widget._automaticPassphraseStore ?? AutomaticBackupPassphraseStore();
 
   final _addressController = TextEditingController();
   final _keyController = TextEditingController();
@@ -50,6 +68,9 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
 
   /// Serializes upload/restore: one operation against the store at a time.
   bool _busy = false;
+
+  bool _automaticEnabled = false;
+  AutomaticBackupStatus? _automaticStatus;
 
   @override
   void initState() {
@@ -66,12 +87,100 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
 
   Future<void> _load() async {
     final config = await _store.load();
+    final automaticEnabled = await _automaticSettingsStore.isEnabled();
+    final automaticStatus = await _automaticStatusStore.load();
     if (!mounted) return;
     setState(() {
       _addressController.text = config.baseUrl;
       _keyController.text = config.accessKey;
+      _automaticEnabled = automaticEnabled;
+      _automaticStatus = automaticStatus;
       _loading = false;
     });
+  }
+
+  /// Turning ON is NOT optimistic, unlike turning OFF: it requires capturing
+  /// the sealing passphrase into secure storage FIRST (owner decision, 3.9),
+  /// and the switch must not visually move until that has actually
+  /// succeeded — a switch that reads "on" while nothing was stored to back
+  /// up with is the worst outcome this feature can produce.
+  Future<void> _setAutomaticEnabled(bool enabled) async {
+    if (!enabled) {
+      // Optimistic here is fine: disabling only ever makes the feature MORE
+      // safe, and the setting alone (checked first by the scheduler) is
+      // already sufficient to stop future runs even before the delete below
+      // completes.
+      setState(() => _automaticEnabled = false);
+      await _automaticSettingsStore.setEnabled(false);
+      // The opt-out must actually remove the secret, not just stop the
+      // scheduler — a switch labelled "off" that leaves the passphrase
+      // sitting in the keystore would be lying about what "off" means.
+      try {
+        await _automaticPassphraseStore.delete();
+      } catch (_) {
+        // Best-effort: the setting flip above already halts future runs
+        // regardless (checked before the passphrase is ever read), so a
+        // delete failure here does not reopen the safety hole — it only
+        // means secret hygiene, not correctness, is imperfect this time.
+      }
+      await WorkmanagerAutomaticBackupWork().cancel();
+      return;
+    }
+
+    final passphrase = await PassphraseDialog.show(
+      context,
+      title: 'Frase de recuperación',
+      actionLabel: 'Activar',
+      confirm: true,
+    );
+    if (passphrase == null || !mounted) return; // backed out — stays off
+
+    try {
+      await _automaticPassphraseStore.save(passphrase);
+    } catch (_) {
+      // On Linux this is the concrete case: no gnome-keyring/kwallet
+      // running (see tools/install-linux.sh's warning). Whatever the cause,
+      // fail LOUDLY and name the missing piece — never flip the switch on a
+      // secret that was not actually stored, and never log/show the
+      // passphrase itself in this or any other error path.
+      _say('No se pudo activar el respaldo automático: no hay un gestor de '
+          'llaves disponible en este dispositivo (falta un gestor de '
+          'llaves como gnome-keyring o kwallet) para guardar la frase de '
+          'forma segura. Seguí usando "Respaldar ahora" mientras tanto.');
+      return;
+    }
+
+    await _automaticSettingsStore.setEnabled(true);
+    await WorkmanagerAutomaticBackupWork().schedule();
+    if (!mounted) return;
+    setState(() => _automaticEnabled = true);
+  }
+
+  /// A single line describing the last automatic run, or null before the
+  /// first one ever fires. [AutomaticBackupOutcome.skippedVpnUnknown] gets
+  /// its own loud framing — a plain skip and "I could not tell" are
+  /// different claims (see `vpn_gate.dart`'s doc), and the user needs to
+  /// know which one happened.
+  String? _automaticStatusMessage() {
+    final status = _automaticStatus;
+    if (status == null) return null;
+    return switch (status.outcome) {
+      AutomaticBackupOutcome.succeeded => 'Último respaldo automático: '
+          '${status.at.toLocal()}',
+      AutomaticBackupOutcome.skippedVpnDown =>
+        'Respaldo automático pendiente: no estabas conectado a la VPN.',
+      AutomaticBackupOutcome.skippedVpnUnknown => 'No se pudo determinar si '
+          'estabas en la VPN — no se hizo el respaldo automático.',
+      AutomaticBackupOutcome.skippedDisabled =>
+        'El respaldo automático está desactivado.',
+      AutomaticBackupOutcome.waitingForWifi => 'Respaldo automático en '
+          'espera de Wi-Fi (el archivo pesa demasiado para datos móviles).',
+      AutomaticBackupOutcome.failed =>
+        'Falló el último respaldo automático: ${status.message ?? "error desconocido"}',
+      AutomaticBackupOutcome.passphraseUnavailable => 'Respaldo automático '
+          'pendiente: no se pudo leer la frase de forma segura en este '
+          'dispositivo.',
+    };
   }
 
   BackupHostConfig get _current => BackupHostConfig(
@@ -255,6 +364,30 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
               onPressed: _busy ? null : _restoreFromServer,
               icon: const Icon(Icons.settings_backup_restore),
               label: const Text('Restaurar desde el servidor'),
+            ),
+          ],
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 8),
+          Text('Respaldo automático', style: Theme.of(context).textTheme.titleMedium),
+          // The ONE deliberate exception to "the user activates things
+          // himself" — so unlike every other automatic feature in this app,
+          // it needs an explicit off switch that persists (spec).
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _automaticEnabled,
+            onChanged: _setAutomaticEnabled,
+            title: const Text('Respaldar automáticamente por la VPN'),
+            subtitle: const Text(
+              'Solo cuando este dispositivo puede probar que está conectado '
+              'a tu VPN, y con Wi-Fi si el respaldo es pesado.',
+            ),
+          ),
+          if (_automaticStatusMessage() != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              _automaticStatusMessage()!,
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
         ],
