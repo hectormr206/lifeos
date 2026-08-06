@@ -310,6 +310,52 @@ def test_extract_skips_incomplete_relations(monkeypatch):
     assert c.execute("SELECT 1 FROM nodes WHERE label='agua'").fetchone() is None
 
 
+def test_register_alias_merge_dual_writes_edge_endpoint_uuids():
+    """Task 5.8 RED: the alias-merge endpoint rewrite
+    (identity.py:354-355, `UPDATE edges SET from_id=...`/`to_id=...`) updates
+    src_uuid/dst_uuid to the CANONICAL node's uuid in the SAME transaction as
+    the from_id/to_id rewrite — not a follow-up step, so a crash between the
+    two can never leave from_id/src_uuid disagreeing (the exact
+    dual-representation drift design-schema.md flags)."""
+    from axi import store
+
+    canonical_id = identity.ensure_entity("Ana Ríos", "person")
+    assert canonical_id is not None
+
+    # A separate node, labelled with the alias, that will be MERGED away.
+    alias_id = store.add_node("person", "Ani")
+    other_id = store.add_node("fact", "some other node")
+    # add_node does not assign a uuid at insert time (PR4's documented,
+    # deliberate gap — a node gets its uuid on the next init_db() backfill
+    # convergence). Run that backfill here so every node involved has a
+    # real uuid before exercising the endpoint-rewrite dual-write.
+    store.migrate_nodes_edges_sync_columns()
+    canonical_uuid = store._connect().execute(
+        "SELECT uuid FROM nodes WHERE id=?", (canonical_id,)
+    ).fetchone()[0]
+    # Edges on BOTH sides of the alias node, so both rewrite statements
+    # (from_id and to_id) are exercised.
+    e_out = store.add_edge(alias_id, other_id, "mentioned_in")
+    e_in = store.add_edge(other_id, alias_id, "caused_by")
+
+    identity.register_alias("Ana Ríos", "Ani", "person")
+
+    c = store._connect()
+    # The alias node itself is gone (merged).
+    assert c.execute("SELECT 1 FROM nodes WHERE id=?", (alias_id,)).fetchone() is None
+
+    row_out = c.execute("SELECT from_id, src_uuid FROM edges WHERE id=?", (e_out,)).fetchone()
+    row_in = c.execute("SELECT to_id, dst_uuid FROM edges WHERE id=?", (e_in,)).fetchone()
+
+    assert row_out["from_id"] == canonical_id
+    assert row_out["src_uuid"] == canonical_uuid
+    assert row_in["to_id"] == canonical_id
+    assert row_in["dst_uuid"] == canonical_uuid
+
+    # No lingering drift anywhere in the graph after the merge.
+    store.verify_edge_endpoint_convergence()
+
+
 def test_extract_structured_domain_facts_still_skipped(monkeypatch):
     """health/finance vitals are NOT duplicated as chat facts, but relations run."""
     from axi import extractor, config, store

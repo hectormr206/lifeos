@@ -1,6 +1,12 @@
 # Tasks: sync-over-vpn
 
-## Review Workload Forecast
+## Review Workload Forecast (Phases 1-4, SHIPPED — historical)
+
+> The authoritative forecast for the REMAINING work is the second
+> `## Review Workload Forecast` further down, covering the reworked Phases 5-8.
+> This one describes the original six-PR split, whose schema half was superseded
+> once the mobile schema was found to be the target contract.
+
 
 | Field | Value |
 |-------|-------|
@@ -75,7 +81,138 @@ Chain strategy: stacked-to-main
 - [x] 4.2 RED: same file — full pre-existing test suite still green (no observable behavior change) after 3a alone
 - [x] 4.3 GREEN: implement additive DDL in `store.py:198-222`
 
-## Phase 5: PR5 — schema slice 3b (tombstones, irreversible)
+## SCHEMA Phases (5-8, reworked — supersedes the previous Phase 5/6 below this note)
+
+Phases 1-4 above are DONE and shipped (PR1-PR4). The previous Phase 5/6 plan
+(kept below for history, DO NOT execute) undercounted the reader-rewrite and
+missed FTS/vec delete sites, the tombstone-before-rebuild ordering gate, and
+the in-transaction verified-backup gate. This section is authoritative for
+the remaining schema work per `design-schema.md`. Numbering continues PR5-PR8
+(design-schema.md's PR5/PR6/PR7/PR8 map 1:1 to Phase 5/6/7/8 below).
+
+### Phase 5: PR5 — Expand (reversible: new columns + dual-write + drift check)
+
+- [x] 5.1 RED: `test_store_migration.py` — `migrate_edge_endpoint_uuids` (new) adds `edges.src_uuid TEXT`, `edges.dst_uuid TEXT`, `edges.updated_at REAL`, `nodes.occurred_at REAL`, backfills `src_uuid`/`dst_uuid` from `nodes.uuid` via `from_id`/`to_id`, backfills `updated_at = created_at`; existing rows' observable behavior unchanged
+- [x] 5.2 RED: same file — `edges.relation` exists as `GENERATED ALWAYS AS (kind) VIRTUAL` and always equals `kind` for every existing and newly-inserted row (single storage — proves it cannot drift by construction)
+- [x] 5.3 RED: same file — re-running the migration on an already-migrated DB is a no-op (idempotent backfill: only touches rows where `src_uuid IS NULL`, per PR4's pattern)
+- [x] 5.4 GREEN: implement `migrate_edge_endpoint_uuids` in `store.py`, following `migrate_nodes_edges_sync_columns`'s existing per-row convergent pattern
+- [x] 5.5 RED: `test_store.py` — `add_edge` (`store.py:1281`) dual-writes `src_uuid`/`dst_uuid` alongside `from_id`/`to_id` on insert
+- [x] 5.6 RED: same file — the similar-to edge insert (`store.py:2978`) dual-writes `src_uuid`/`dst_uuid`
+- [x] 5.7 RED: `test_linkers.py` — `linkers._safe_insert_edge` (`linkers.py:63`) dual-writes `src_uuid`/`dst_uuid`
+- [x] 5.8 RED: `test_identity.py` — the alias-merge endpoint rewrite (`identity.py:354-355`, `UPDATE edges SET from_id=...`/`to_id=...`) updates `src_uuid`/`dst_uuid` to the canonical node's uuid in the SAME transaction, not a follow-up step
+- [x] 5.9 GREEN: implement 5.5-5.8 dual-writes
+- [x] 5.10 RED: `test_store_migration.py` — `verify_edge_endpoint_convergence()` (new) asserts `src_uuid = (SELECT uuid FROM nodes WHERE id = from_id)` and `dst_uuid = (SELECT uuid FROM nodes WHERE id = to_id)` for every live edge; a deliberately-desynced row makes it RAISE
+- [x] 5.11 RED: same file — `verify_edge_endpoint_convergence()` RAISES (does not silently pass) if it cannot execute at all (e.g. table missing mid-migration) — per the LifeOS silent-failure rule, a check that cannot run also raises
+- [x] 5.12 GREEN: implement `verify_edge_endpoint_convergence()`, called at the end of `migrate_edge_endpoint_uuids` and available standalone for CI/regression use
+- [x] 5.13 RED: full pre-existing axi test suite green after PR5 alone (zero observable behavior change — old columns/reads still authoritative)
+- [x] 5.14 RED+GREEN (added during apply, not in the original slice): `add_node` assigns `nodes.uuid` at insert time. PR4 added the column and a startup backfill but no insert-time assignment, so every node created between two restarts had `uuid IS NULL` and every edge against it dual-wrote `src_uuid IS NULL` — which `verify_edge_endpoint_convergence()` reports as CONVERGED, since NULL equals NULL. Harmless while nothing reads the column; a silently missing link in the user's memory the moment PR6 resolves edges through `src_uuid`. Closed here rather than in PR6 because PR6 is where it stops being detectable as a schema bug and starts looking like lost data. Two tests: uuid present on insert, and an edge between two freshly-created nodes with NO staged backfill call
+
+### Phase 6: PR6(a/b) — Reader rewrite to `src_uuid`/`dst_uuid`/`relation` (High risk — pre-split)
+
+Design-schema.md flags ~40 SQL sites as High risk and recommends pre-splitting.
+Confirmed here: split by file group so each PR stays well under the 400-line
+production budget without splitting a single file's join logic across two PRs
+(splitting mid-file raises reviewability risk higher than the line count does).
+
+- [ ] 6a.1 RED: `test_store.py` — every `store.py` read site that joins/selects via `from_id`/`to_id`/`e.kind` (store.py ~1281, 1321, 1382-1416, 2973-2978, plus any sites 5.1-5.12 did not already touch) is rewritten to `src_uuid`/`dst_uuid`/`e.relation` and returns identical results to the pre-rewrite version on a seeded fixture DB
+- [ ] 6a.2 RED: `test_forget.py` — `forget.py:211-212` read sites rewritten to `src_uuid`/`dst_uuid`/`relation`, identical results on the seeded fixture
+- [ ] 6a.3 RED: `test_recall.py` — `recall.py:271-273` read sites rewritten, identical results
+- [ ] 6a.4 RED: `test_linkers.py` — `linkers.py:44-64` read sites rewritten, identical results
+- [ ] 6a.5 RED: `test_identity.py` — `identity.py:392,453,501,555-557,596,628,690` read sites rewritten (endpoint-rewrite site 354-355 already dual-writes since PR5; this task is the READ side), identical results
+- [ ] 6a.6 GREEN: implement 6a.1-6a.5 (PR6a — `store.py`, `forget.py`, `recall.py`, `linkers.py`, `identity.py`)
+- [ ] 6a.7 RED: full pre-existing axi test suite green after PR6a (old `from_id`/`to_id`/`kind` columns still exist and are maintained by PR5's dual-write, so this PR reverts cleanly)
+- [ ] 6b.1 RED: `test_dashboard.py` — `dashboard.py:2252-2263,2526-2538,2719-2733,2951-2980` read sites rewritten to `src_uuid`/`dst_uuid`/`relation`, identical results on the seeded fixture
+- [ ] 6b.2 GREEN: implement 6b.1 (PR6b — `dashboard.py` only, isolated because it alone was estimated to push PR6 over 400 lines)
+- [ ] 6b.3 RED: full pre-existing axi test suite green after PR6b
+- [ ] 6b.4 RED: `test_meeting.py` — confirm `meeting.py`'s store-helper-only usage (no direct SQL against `from_id`/`to_id`/`kind`) needed zero rewrite; assert this by grepping/asserting no raw SQL touching those columns remains in `meeting.py`
+
+### Phase 7: PR7 — Tombstones (all delete paths; FTS invariant) — MUST merge before Phase 8
+
+Design-schema.md is explicit: the still-present `ON DELETE CASCADE` FK on
+`from_id`/`to_id` silently destroys edges on any hard node delete until every
+delete path below becomes a tombstone. This phase is a hard precondition for
+Phase 8, not a suggestion — see gate task 7.12.
+
+- [ ] 7.1 RED: `test_store.py` — `store.py:1321` (`DELETE FROM edges WHERE from_id = ? OR to_id = ?`) becomes `UPDATE edges SET deleted_at=?, updated_at=? WHERE (src_uuid=? OR dst_uuid=?) AND deleted_at IS NULL`, same transaction as the node delete
+- [ ] 7.2 RED: same file — `store.py:1322` (`DELETE FROM nodes_fts WHERE rowid = ?`) stays a HARD delete (FTS is local derived state, never synced) — this task exists specifically to pin that this is a deliberate keep, not an oversight
+- [ ] 7.3 RED: same file — `store.py:1325` (`DELETE FROM vec_nodes WHERE node_id = ?`, best-effort) stays a HARD delete, unchanged from today
+- [ ] 7.4 RED: same file — `store.py:1328` (`DELETE FROM nodes WHERE id = ?`) becomes `UPDATE nodes SET deleted_at=? WHERE id=? AND deleted_at IS NULL`
+- [ ] 7.5 RED: same file — `store.py:1350` (`delete_edge`, `DELETE FROM edges WHERE id = ?`) becomes a tombstone update
+- [ ] 7.6 RED: `test_meeting.py` — `meeting.py:881` (race-loser orphan node delete) becomes a tombstone `UPDATE`; `meeting.py:882` (`DELETE FROM nodes_fts WHERE rowid=?`) stays a HARD delete; orphan tombstones are accepted noise per design, assert no crash/log-spam regression
+- [ ] 7.7 RED: `test_identity.py` — `identity.py:356` (alias-merge loser node delete) becomes a tombstone `UPDATE`; `identity.py:357` (`DELETE FROM nodes_fts`) and `identity.py:359` (`DELETE FROM vec_nodes`) both stay HARD deletes
+- [ ] 7.8 GREEN: implement 7.1-7.7 tombstone rewrites in `store.py`, `meeting.py`, `identity.py`
+- [ ] 7.9 RED: `test_store.py` — every existing read path adds `deleted_at IS NULL` to its WHERE clause (nodes and edges); a tombstoned row is invisible to `get_node`, recall, search, and edge traversal
+- [ ] 7.10 GREEN: implement `idx_nodes_deleted`/`idx_edges_deleted` indexes (mobile parity) and wire `deleted_at IS NULL` into the read sites touched in Phase 6
+- [ ] 7.11 RED: `test_store.py` — **FTS invariant, RED first**: soft-deleting a node (tombstone path) removes its `nodes_fts` row in the SAME transaction so search cannot return a deleted memory; assert directly by tombstoning a node then querying `nodes_fts` for its rowid and asserting zero results — this is the named worst-case (search returning deleted memories) and was missing from the prior plan
+- [ ] 7.12 GATE: PR7 (this phase) MUST be merged, its full test suite green, and 7.11's FTS invariant proven BEFORE Phase 8 (PR8, the table rebuild) opens. Rationale, stated explicitly so it cannot be skimmed past: until every hard node delete above is a tombstone, the `ON DELETE CASCADE` FK that Phase 8 removes is still live, and any hard delete that slips through silently destroys edges. This is the same shape as the old plan's 5.5 gate, now sequenced correctly (tombstones-before-rebuild, not additive-DDL-before-tombstones)
+- [ ] 7.13 RED: `test_identity.py` — convergence check covering `identity.py:354-355`'s endpoint rewrite during alias merges: after a merge, assert every edge's `src_uuid`/`dst_uuid` matches the surviving canonical node's uuid AND no edge still points at the tombstoned loser's uuid (dual-representation drift risk named explicitly in design-schema.md)
+- [ ] 7.14 RED: `test_store.py` — a dangling edge (endpoint uuid with no live node, legal per mobile's design where an edge may sync before its node) is detected by a loud REPORT-ONLY check, not silently ignored and not a hard failure
+- [ ] 7.15 RED: full pre-existing axi test suite green after PR7; note in the test that a code-level revert of PR7 would RESURRECT soft-deleted rows (semantically one-way once any real delete has happened, even though the code diff itself reverts cleanly)
+
+### Phase 8: PR8 — THE POINT OF NO RETURN (verified backup + single-transaction table rebuild)
+
+Smallest PR by design — the irreversible step ships with nothing else in the
+diff. Depends on Phase 7's gate (7.12).
+
+- [ ] 8.0 GATE (restates 7.12 at the point of use): before any task below runs against a real branch, confirm PR7 is merged into the chain and its suite is green. Do not open PR8 otherwise.
+- [ ] 8.1 RED: `test_migration_backup.py` — `VACUUM INTO` snapshot opens successfully WITH the SQLCipher key and all rows are present (asserts the already-measured "restorable" half in CI so a future SQLCipher upgrade that changes this fails loudly, per design-schema.md's VERIFIED section — do NOT re-spike this, only pin it as a regression test)
+- [ ] 8.2 RED: same file — the same snapshot opened WITHOUT the key raises (asserts the "stays encrypted" half — a safety backup must not become an unencrypted dump of the whole graph)
+- [ ] 8.3 RED: same file — snapshot re-opened with the key and `PRAGMA integrity_check` returns anything other than `ok` aborts the migration before it touches `nodes`/`edges`
+- [ ] 8.4 RED: same file — row-count parity check (`nodes`, `edges`, `nodes_fts` snapshot count == live count) plus a sampled `(id, uuid)` spot-check; a deliberately mismatched snapshot aborts the migration
+- [ ] 8.5 RED: same file — the backup step is an injected callable on the migration entry point; fake success, fake failure, and a fake corrupt-snapshot (`integrity_check` failure) are all exercisable without a real device or key ceremony
+- [ ] 8.6 GREEN: implement the 4-step backup gate (8.1-8.5) as an injected pre-migration callable, ahead of `BEGIN IMMEDIATE`
+- [ ] 8.7 RED: `test_store_migration.py` — the rebuild runs `PRAGMA foreign_keys=OFF` → `BEGIN IMMEDIATE` → creates `nodes_new`/`edges_new` to mobile's exact DDL → `INSERT INTO ... SELECT` with explicit `id` copy (never AUTOINCREMENT reassignment) → verifies IN-TRANSACTION while old and new tables coexist → `DROP`/`RENAME` → sets `user_version` → `COMMIT` → `PRAGMA foreign_key_check` → `PRAGMA foreign_keys=ON`
+- [ ] 8.8 RED: same file — **in-transaction verification, RED first, as its own explicit step (not an implied part of 8.7)**: row counts equal between old and new tables; `SUM`-based checksums over `uuid`, endpoints, `relation` match; zero NULL `uuid`s in `nodes_new`/`edges_new`; id→uuid mapping intact — all checked BEFORE `DROP`/`RENAME`/`COMMIT`, never after
+- [ ] 8.9 RED: same file — a deliberately dropped row during the rebuild makes 8.8's verification RAISE, which rolls back the transaction, leaving the OLD schema fully intact (row-loss detectability, proven by seeding a scenario where a row would be lost and asserting rollback, not just asserting the check function's return value in isolation)
+- [ ] 8.10 GREEN: implement 8.7-8.9's rebuild + in-transaction verification
+- [ ] 8.11 RED: `test_store_migration.py` — `conversations.node_id`/`meetings.node_id` FKs still resolve correctly post-rebuild (explicit `id` copy preserved them)
+- [ ] 8.12 RED: same file — post-rebuild, `nodes.uuid`/`edges.uuid` are `NOT NULL UNIQUE` and `lamport` is `NOT NULL DEFAULT 0` (constraints tightened to mobile's exact DDL, not just column presence)
+- [ ] 8.13 RED: same file — post-rebuild, any SQL still referencing `from_id`, `to_id`, or `e.kind` fails with `no such column` at first execution (the silent-mis-assignment failure mode is now a hard error by construction — assert this directly rather than assume it)
+- [ ] 8.14 RED: same file — process killed mid-rebuild (simulated raise between `BEGIN IMMEDIATE` and `COMMIT`) leaves the OLD schema intact and unmigrated; restarting is a safe no-op or clean retry gated by `PRAGMA user_version`
+- [ ] 8.15 GREEN: implement 8.11-8.14 fixes if any gaps found
+- [ ] 8.16 RED: full pre-existing axi test suite green after PR8; explicitly assert recovery from this point forward is restore-from-verified-backup only (no code-level revert path), and that this is documented in the PR description, not just in design-schema.md
+
+## Review Workload Forecast
+
+Covers ONLY the new schema phases (5-8). Production and test lines are
+estimated separately because new test files do not show up in `git diff
+--stat` against the base and have repeatedly thrown off aggregate-only
+estimates in this chain.
+
+| PR | Production lines (est.) | Test lines (est.) | Reversible? | Budget risk |
+|---|---|---|---|---|
+| PR5 (Expand) | ~180-230 (2 new columns + 1 generated column + backfill fn + 4 dual-write call sites + drift-check fn) | ~220-280 (migration tests, dual-write tests per call site, drift-check pass/raise/cannot-run tests) | Yes — revert PR, extra columns lie fallow | Low |
+| PR6a (Reader rewrite: store/forget/recall/linkers/identity) | ~260-340 (mechanical join/name rewrites across ~30 of the ~40 sites) | ~150-200 (fixture-equivalence tests per file, reusing seeded DBs) | Yes | **High** — largest single PR in the chain; mechanical but wide-surface, easy to miss a site |
+| PR6b (Reader rewrite: dashboard.py) | ~140-190 (the remaining ~10 sites, isolated because they alone were estimated to push PR6 over 400) | ~80-120 | Yes | Medium — isolated by design specifically to keep 6a under budget |
+| PR7 (Tombstones + FTS invariant) | ~150-200 (delete-path rewrites in store.py/meeting.py/identity.py, `deleted_at IS NULL` filter additions, 2 new indexes) | ~200-260 (one RED per delete site, the FTS-invariant test, the identity dual-representation convergence check, the dangling-edge report-only check) | Code reverts cleanly, but reverting RESURRECTS soft-deleted rows — semantically one-way once any real delete has occurred | Medium |
+| PR8 (Rebuild — point of no return) | ~90-140 (backup-gate callable + rebuild transaction + in-transaction verification, deliberately kept small and isolated) | ~180-240 (VACUUM INTO both-halves regression, integrity_check failure, row-count mismatch, kill-mid-rebuild, FK/constraint assertions) | No — old columns/constraints gone; recovery is restore-from-verified-backup only | Low — small diff, but the highest-consequence PR in the chain despite the low line count |
+
+**Chained-PR recommendation**: Yes, feature-branch-chain, exactly as design-schema.md Decision 4 lays out: PR5 → PR6a → PR6b → PR7 → PR8, each opened only after its predecessor merges and its suite is green.
+
+**Budget risk**: PR6a is the one PR at real risk of exceeding 400 production lines depending on how much boilerplate each of the ~30 sites needs; if it does, split further by file (e.g. `store.py` alone, then `forget.py`+`recall.py`+`linkers.py`+`identity.py`) rather than loosen the budget.
+
+**Decision needed before apply**: No — the split above already resolves design-schema.md's "pre-split recommended" flag for PR6. No open decision blocks starting PR5.
+
+**Point of no return**: **PR8** is the single PR that is not reversible by a code revert. Everything through PR7 (including the tombstone rewrite) reverts as a code change, even though PR7's revert has the caveat that it resurrects rows that were actually soft-deleted in production between merge and revert. PR8 removes `from_id`/`to_id`/the CASCADE FK and the old column shape entirely in one transaction; from that commit onward, recovery is restore-from-verified-backup only, which is exactly why design-schema.md keeps it the smallest, most isolated PR in the chain.
+
+## Key Learnings
+
+1. The design deliberately drops Android `TRANSPORT_VPN` from the critical path because it cannot distinguish a WireGuard tunnel from any commercial VPN.
+2. The tombstone PR (Phase 7) must merge and prove its FTS invariant before the table-rebuild PR (Phase 8) opens, because the still-present `ON DELETE CASCADE` FK silently destroys edges until every hard delete becomes a tombstone.
+3. `VACUUM INTO` on SQLCipher was measured directly rather than assumed: the snapshot opens with the same key and stays encrypted without it, so PR8 only needs a regression test, not a spike.
+4. A soft-deleted node whose `nodes_fts` row survives lets search return deleted memories, which the reworked plan treats as its own explicit RED task rather than an implied side effect of the tombstone rewrite.
+5. `lifeos/src/lifeos/edges.py` operates on a separate database from axi's `memory.db` graph, so it stays out of scope and its own sync status is recorded only as an open question.
+
+---
+
+## Superseded: previous Phase 5/6 plan (kept for history only — DO NOT execute)
+
+The following two phases were the pre-rework plan. They undercounted the
+reader-rewrite blast radius, missed the FTS/vec hard-delete sites, and placed
+the irreversible rebuild-adjacent work before an explicit tombstone-ordering
+gate. Superseded in full by Phases 5-8 above.
+
+### Phase 5 (superseded): PR5 — schema slice 3b (tombstones, irreversible)
 
 - [ ] 5.1 RED: `test_store_migration.py` — deleting a node sets `deleted_at` (no hard DELETE) and tombstones its edges in the same transaction
 - [ ] 5.2 RED: same file — reads filter `deleted_at IS NULL`
@@ -83,17 +220,9 @@ Chain strategy: stacked-to-main
 - [ ] 5.4 GREEN: implement delete-path rewrite + read filters + cascade-on-delete application logic in `store.py`
 - [ ] 5.5 GATE: confirm PR4 merged and its post-verification passed before opening PR5 (3b is irreversible)
 
-## Phase 6: PR6 — schema slice 3c (guard rails)
+### Phase 6 (superseded): PR6 — schema slice 3c (guard rails)
 
 - [ ] 6.1 RED: `test_store_migration.py` — migration without a prior verified backup aborts without touching `nodes`/`edges`
 - [ ] 6.2 RED: same file — process killed mid-migration; restart resumes safely or restores from pre-migration backup; no undetectable partial state
 - [ ] 6.3 RED: same file — restarting is idempotent (no duplicate `uuid` assignment, no duplicate tombstone writes) via `PRAGMA user_version` gate
 - [ ] 6.4 GREEN: implement mandatory pre-migration file copy, `PRAGMA user_version` idempotency gate, single-transaction DDL, post-migration verification step
-
-## Key Learnings
-
-1. The design deliberately drops Android `TRANSPORT_VPN` from the critical path because it cannot distinguish a WireGuard tunnel from any commercial VPN.
-2. Slice 3b is irreversible and must gate on slice 3a's merge and verification before opening its own PR.
-3. Probe latency must be measured on a real Pixel device before the scheduler interval is fixed in code.
-4. Hostile-LAN spoofing of the VPN-only address is bounded because payloads seal client-side and the TLS layer verifies server identity.
-5. Revocation checks reuse the existing `devices.revoked_at` state and only add a fail-closed callback, not a new revocation mechanism.

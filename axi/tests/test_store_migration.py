@@ -242,6 +242,242 @@ def test_migrate_interrupted_after_nodes_before_edges_resumes_safely(monkeypatch
     assert c.execute("SELECT uuid FROM nodes WHERE id = ?", (n2,)).fetchone()[0] == n2_uuid
 
 
+
+# ─────────── PR5 "Expand" (design-schema.md) — edge endpoint uuids ───────────
+#
+# Adds edges.src_uuid/dst_uuid/updated_at + edges.relation (GENERATED ALWAYS
+# AS (kind) VIRTUAL, single storage so it cannot drift) + nodes.occurred_at.
+# Backfills src_uuid/dst_uuid from nodes.uuid via the existing from_id/to_id
+# FKs. Purely additive/reversible: from_id/to_id/kind remain authoritative
+# and nothing reads the new columns yet (that is PR6, the reader rewrite).
+#
+# NOTE: fresh_db's autouse fixture already runs the full init_db() migration
+# chain (including migrate_edge_endpoint_uuids), so `edges` already has PR5's
+# columns by the time a test body starts. To genuinely exercise the ALTER
+# TABLE / backfill branch (not the already-migrated no-op), these tests
+# rebuild `edges` back to its real post-3a/pre-PR5 shape first — mirroring
+# `_rebuild_pre_change_nodes`/`_rebuild_pre_change_edges` above for 3a.
+
+
+def test_fresh_db_edges_table_has_pr5_columns_via_create_table_alone():
+    """A fresh DB must get src_uuid/dst_uuid/updated_at/relation from
+    `_SCHEMA`'s `CREATE TABLE IF NOT EXISTS edges` alone (PR4 pattern), NOT
+    only from `migrate_edge_endpoint_uuids()` — otherwise a future change
+    that skips/conditions that call (trusting a stale "no-op on a fresh DB"
+    comment) silently loses these columns on every fresh install. Proven by
+    rebuilding `edges` straight from `_SCHEMA` and checking the columns
+    exist WITHOUT calling the migration function at all."""
+    c = store._connect()
+    c.execute("DROP TABLE edges")
+    # Re-run only the schema DDL (no migration functions) to isolate what
+    # CREATE TABLE alone provides.
+    c.executescript(store._SCHEMA)
+
+    xinfo = {r[1] for r in c.execute("PRAGMA table_xinfo(edges)").fetchall()}
+    for col in ("src_uuid", "dst_uuid", "updated_at", "relation"):
+        assert col in xinfo, f"{col} missing from a fresh edges table — CREATE TABLE alone must provide it"
+
+    ddl = c.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='edges'"
+    ).fetchone()[0]
+    assert "GENERATED ALWAYS AS (kind) VIRTUAL" in ddl
+
+
+def _rebuild_post_3a_pre_pr5_edges(c) -> None:
+    """Recreate `edges` exactly as it looks after schema slice 3a (PR4) but
+    before PR5: has uuid/lamport/origin_node/deleted_at, NOT src_uuid/
+    dst_uuid/updated_at/relation."""
+    c.execute("DROP TABLE edges")
+    c.execute(
+        """
+        CREATE TABLE edges (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          from_id     INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+          to_id       INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+          kind        TEXT NOT NULL,
+          data        TEXT,
+          created_at  REAL NOT NULL,
+          uuid        TEXT,
+          lamport     INTEGER,
+          origin_node TEXT,
+          deleted_at  REAL
+        )
+        """
+    )
+
+
+def _insert_post_3a_edge(c, from_id: int, to_id: int, kind: str,
+                          created_at: float = 1000.0) -> int:
+    c.execute(
+        "INSERT INTO edges(from_id, to_id, kind, data, created_at, uuid) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (from_id, to_id, kind, None, created_at, str(uuid_lib.uuid4())),
+    )
+    return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def test_migrate_edge_endpoint_uuids_adds_and_backfills_columns():
+    """Task 5.1 RED: new columns exist and are correctly backfilled from the
+    pre-existing from_id/to_id -> nodes.uuid relationship."""
+    n1 = store.add_node("fact", "Node A")
+    n2 = store.add_node("fact", "Node B")
+    c = store._connect()
+    _rebuild_post_3a_pre_pr5_edges(c)
+    eid = _insert_post_3a_edge(c, n1, n2, "mentioned_in")
+
+    # Sanity: this test genuinely targets a DB where PR5's columns are absent.
+    edge_cols_before = {r[1] for r in c.execute("PRAGMA table_info(edges)").fetchall()}
+    assert "src_uuid" not in edge_cols_before
+
+    store.migrate_edge_endpoint_uuids()
+
+    edge_cols = {r[1] for r in c.execute("PRAGMA table_info(edges)").fetchall()}
+    for col in ("src_uuid", "dst_uuid", "updated_at"):
+        assert col in edge_cols
+    # relation is a GENERATED/hidden column: table_info hides it in this
+    # SQLite build, table_xinfo does not (proven by the earlier standalone
+    # repro; matches what migrate_edge_endpoint_uuids itself checks).
+    edge_cols_xinfo = {r[1] for r in c.execute("PRAGMA table_xinfo(edges)").fetchall()}
+    assert "relation" in edge_cols_xinfo
+    node_cols = {r[1] for r in c.execute("PRAGMA table_info(nodes)").fetchall()}
+    assert "occurred_at" in node_cols
+
+    n1_uuid = c.execute("SELECT uuid FROM nodes WHERE id=?", (n1,)).fetchone()[0]
+    n2_uuid = c.execute("SELECT uuid FROM nodes WHERE id=?", (n2,)).fetchone()[0]
+    row = c.execute(
+        "SELECT src_uuid, dst_uuid, updated_at, created_at FROM edges WHERE id=?", (eid,)
+    ).fetchone()
+    assert row["src_uuid"] == n1_uuid
+    assert row["dst_uuid"] == n2_uuid
+    assert row["updated_at"] == row["created_at"]
+
+    # Old columns remain untouched/authoritative — zero observable change.
+    old_row = c.execute("SELECT from_id, to_id, kind FROM edges WHERE id=?", (eid,)).fetchone()
+    assert old_row["from_id"] == n1
+    assert old_row["to_id"] == n2
+    assert old_row["kind"] == "mentioned_in"
+
+
+def test_migrate_edge_endpoint_uuids_relation_is_generated_from_kind():
+    """Task 5.2 RED: `relation` is a GENERATED ALWAYS AS (kind) VIRTUAL column
+    — single storage, so it cannot drift from `kind` by construction. Proven
+    for a pre-existing row AND a row inserted after the migration ran."""
+    n1 = store.add_node("fact", "Node A")
+    n2 = store.add_node("fact", "Node B")
+    c = store._connect()
+    _rebuild_post_3a_pre_pr5_edges(c)
+    e_before = _insert_post_3a_edge(c, n1, n2, "mentioned_in")
+
+    store.migrate_edge_endpoint_uuids()
+
+    # Generated-column mechanics, not just app-level consistency: assert the
+    # DDL itself uses GENERATED ALWAYS ... VIRTUAL, so `relation` cannot be
+    # written to directly (would raise) and always mirrors `kind`.
+    ddl = c.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='edges'"
+    ).fetchone()[0]
+    assert "GENERATED ALWAYS AS (kind) VIRTUAL" in ddl
+
+    relation_before = c.execute("SELECT relation FROM edges WHERE id=?", (e_before,)).fetchone()[0]
+    assert relation_before == "mentioned_in"
+
+    # A row inserted directly AFTER the migration also derives relation from kind.
+    c.execute(
+        "INSERT INTO edges(from_id, to_id, kind, data, created_at, updated_at, uuid) "
+        "VALUES (?, ?, 'caused_by', '{}', 2000.0, 2000.0, ?)",
+        (n1, n2, str(uuid_lib.uuid4())),
+    )
+    relation_after = c.execute(
+        "SELECT relation FROM edges WHERE from_id=? AND to_id=? AND kind='caused_by'", (n1, n2)
+    ).fetchone()[0]
+    assert relation_after == "caused_by"
+
+    with pytest.raises(Exception):
+        c.execute("UPDATE edges SET relation='tampered' WHERE id=?", (e_before,))
+
+
+def test_migrate_edge_endpoint_uuids_is_idempotent():
+    """Task 5.3 RED: re-running the migration on an already-migrated DB is a
+    no-op — only rows with src_uuid IS NULL are touched, per PR4's pattern."""
+    n1 = store.add_node("fact", "Node A")
+    n2 = store.add_node("fact", "Node B")
+    c = store._connect()
+    _rebuild_post_3a_pre_pr5_edges(c)
+    eid = _insert_post_3a_edge(c, n1, n2, "mentioned_in")
+
+    store.migrate_edge_endpoint_uuids()
+    before = c.execute(
+        "SELECT src_uuid, dst_uuid, updated_at FROM edges WHERE id=?", (eid,)
+    ).fetchone()
+
+    store.migrate_edge_endpoint_uuids()  # second call: must not raise
+    after = c.execute(
+        "SELECT src_uuid, dst_uuid, updated_at FROM edges WHERE id=?", (eid,)
+    ).fetchone()
+
+    assert tuple(before) == tuple(after)
+
+
+def test_verify_edge_endpoint_convergence_raises_on_drift():
+    """Task 5.10 RED: verify_edge_endpoint_convergence() RAISES when a live
+    edge's src_uuid/dst_uuid has drifted from from_id/to_id -> nodes.uuid."""
+    n1 = store.add_node("fact", "Node A")
+    n2 = store.add_node("fact", "Node B")
+    c = store._connect()
+    _rebuild_post_3a_pre_pr5_edges(c)
+    eid = _insert_post_3a_edge(c, n1, n2, "mentioned_in")
+    store.migrate_edge_endpoint_uuids()
+
+    # Converged state passes cleanly.
+    store.verify_edge_endpoint_convergence()
+
+    # Deliberately desync one row.
+    c.execute("UPDATE edges SET src_uuid='deliberately-wrong-uuid' WHERE id=?", (eid,))
+
+    with pytest.raises(Exception):
+        store.verify_edge_endpoint_convergence()
+
+
+def test_verify_edge_endpoint_convergence_raises_if_it_cannot_execute():
+    """Task 5.11 RED: verify_edge_endpoint_convergence() RAISES (does not
+    silently pass) if it cannot execute at all — e.g. its table is missing
+    mid-migration. Per the LifeOS silent-failure rule, a check that cannot
+    run must also fail loudly, not just a check that finds real drift."""
+    n1 = store.add_node("fact", "Node A")
+    n2 = store.add_node("fact", "Node B")
+    c = store._connect()
+    _rebuild_post_3a_pre_pr5_edges(c)
+    _insert_post_3a_edge(c, n1, n2, "mentioned_in")
+    store.migrate_edge_endpoint_uuids()
+
+    c.execute("ALTER TABLE edges RENAME TO edges_mid_migration_gone")
+
+    with pytest.raises(Exception):
+        store.verify_edge_endpoint_convergence()
+
+    # restore for any subsequent statements in this connection/process
+    c.execute("ALTER TABLE edges_mid_migration_gone RENAME TO edges")
+
+
+def test_full_suite_behavior_unaffected_by_pr5_edge_endpoint_migration():
+    """Task 5.13 pin (the real proof is the dual-tree-state suite run recorded
+    in apply-progress, mirroring PR4's technique): an ordinary node/edge round
+    trip through the public API is unchanged whether or not the PR5 migration
+    has run — old columns/reads stay authoritative, new ones are additive."""
+    n1 = store.add_node("fact", "Node A")
+    n2 = store.add_node("fact", "Node B")
+    eid = store.add_edge(n1, n2, "mentioned_in")
+    store.migrate_edge_endpoint_uuids()
+
+    node = store.get_node(n1)
+    assert node is not None
+    assert node["label"] == "Node A"
+    neighbors = store.neighbors(n1, edge_kind="mentioned_in")
+    assert len(neighbors) == 1
+    assert neighbors[0]["id"] == n2
+    assert eid > 0
+
+
 def test_full_suite_behavior_unaffected_by_slice_3a_migration():
     """Slice 3a's whole claim is zero observable behavior change: a normal
     node/edge round trip through the public API works identically whether

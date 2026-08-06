@@ -40,6 +40,115 @@ def test_add_edge_and_neighbors():
     assert found[0]["id"] == dst
 
 
+def test_add_node_assigns_a_uuid_at_insert_time():
+    """A node must carry its sync identity from the moment it exists.
+
+    PR4 added `nodes.uuid` and a startup backfill; nothing ever assigned one on
+    insert. So every node created between two restarts had `uuid IS NULL`, and
+    every edge touching it dual-wrote `src_uuid IS NULL` — which
+    `verify_edge_endpoint_convergence` reports as CONVERGED, because NULL does
+    equal NULL. The guard is blind to exactly the window it exists to watch.
+
+    That is fine while nothing reads the column. PR6 makes readers resolve
+    edges through `src_uuid`, at which point a NULL means the edge is invisible
+    — the user's memory silently missing a link. Assigning at insert closes the
+    window instead of relying on the next boot to notice.
+    """
+    nid = store.add_node("person", "Héctor")
+
+    row = store._connect().execute(
+        "SELECT uuid FROM nodes WHERE id=?", (nid,)
+    ).fetchone()
+    assert row["uuid"] is not None, "a freshly inserted node has no sync identity"
+    assert len(row["uuid"]) == 36  # canonical uuid4, not a placeholder
+
+
+def test_edges_of_freshly_created_nodes_never_dual_write_null():
+    """The end-to-end version of the above: no backfill call, no staging.
+
+    If this needs `migrate_nodes_edges_sync_columns()` to pass, the dual-write
+    is only working in tests that stage it — not in the running daemon.
+    """
+    src = store.add_node("person", "Héctor")
+    dst = store.add_node("fact", "usa CachyOS")
+    eid = store.add_edge(src, dst, "owns")
+
+    row = store._connect().execute(
+        "SELECT src_uuid, dst_uuid FROM edges WHERE id=?", (eid,)
+    ).fetchone()
+    assert row["src_uuid"] is not None
+    assert row["dst_uuid"] is not None
+
+
+def test_add_edge_dual_writes_src_dst_uuid():
+    """Task 5.5 RED: `add_edge` (store.py:1281) dual-writes src_uuid/dst_uuid
+    alongside from_id/to_id (PR5 "Expand" — old columns stay authoritative,
+    new ones just have to agree with them from the moment they're written).
+
+    The backfill call below is kept deliberately: `add_node` now assigns a uuid
+    at insert time, so it is a no-op here, and running it anyway proves the
+    dual-write agrees with the backfill's result rather than racing it. See
+    `test_edges_of_freshly_created_nodes_never_dual_write_null` for the same
+    property with no staging at all.
+    """
+    src = store.add_node("person", "Héctor")
+    dst = store.add_node("fact", "tiene laptop CachyOS")
+    store.migrate_nodes_edges_sync_columns()  # no-op now; pins that it stays one
+    eid = store.add_edge(src, dst, "owns")
+
+    c = store._connect()
+    src_uuid = c.execute("SELECT uuid FROM nodes WHERE id=?", (src,)).fetchone()[0]
+    dst_uuid = c.execute("SELECT uuid FROM nodes WHERE id=?", (dst,)).fetchone()[0]
+    row = c.execute(
+        "SELECT src_uuid, dst_uuid FROM edges WHERE id=?", (eid,)
+    ).fetchone()
+    assert row["src_uuid"] == src_uuid
+    assert row["dst_uuid"] == dst_uuid
+    assert src_uuid is not None and dst_uuid is not None
+
+    # No drift, proven the same way PR5's own convergence check proves it.
+    store.verify_edge_endpoint_convergence()
+
+
+def test_similar_to_edge_insert_dual_writes_src_dst_uuid():
+    """Task 5.6 RED: the similar-to edge insert (store.py:2978) dual-writes
+    src_uuid/dst_uuid alongside from_id/to_id, same as add_edge."""
+    dim = 512
+    now = time.time()
+    vec_a = [1.0] + [0.0] * (dim - 1)
+    vec_b = [1.0] + [0.0] * (dim - 1)  # identical vector -> cosine 1.0
+
+    c = store._connect()
+    for nid, label, vec in ((101, "node A", vec_a), (102, "node B", vec_b)):
+        blob = struct.pack(f"{dim}f", *vec)
+        c.execute(
+            "INSERT INTO nodes(id, kind, label, data, domain, created_at, "
+            "updated_at, embedding, embedding_model, embedding_dim) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (nid, "fact", label, "{}", "test", now, now, blob, "test-model", dim),
+        )
+        c.execute("UPDATE nodes SET uuid=? WHERE id=?", (f"uuid-{nid}", nid))
+        c.execute(
+            "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+            (nid, blob),
+        )
+    c.commit()
+
+    def mock_knn_with_distance(conn, *, vector, k=10):
+        return [(102, 0.0)]  # cosine similarity 1.0
+
+    with patch("axi.store.knn_nodes_with_distance", side_effect=mock_knn_with_distance):
+        store.check_and_create_similar_to_edges(101, c, threshold=0.85)
+
+    row = c.execute(
+        "SELECT src_uuid, dst_uuid FROM edges WHERE from_id=101 AND to_id=102 "
+        "AND kind='similar-to'"
+    ).fetchone()
+    assert row is not None
+    assert row["src_uuid"] == "uuid-101"
+    assert row["dst_uuid"] == "uuid-102"
+
+
 def test_add_conversation_and_recent():
     cid1 = store.add_conversation("hola", "qué tal")
     time.sleep(0.01)

@@ -233,7 +233,18 @@ CREATE TABLE IF NOT EXISTS edges (
   uuid        TEXT,
   lamport     INTEGER,
   origin_node TEXT,
-  deleted_at  REAL
+  deleted_at  REAL,
+  -- ── sync-over-vpn PR5 "Expand" (design-schema.md Decision 2 step 1) ──
+  -- src_uuid/dst_uuid are the sync-stable endpoint references (mobile's
+  -- target shape); backfilled/dual-written by migrate_edge_endpoint_uuids
+  -- and every edge-insert path. `relation` shares ONE storage cell with
+  -- `kind` (GENERATED ALWAYS ... VIRTUAL), so it cannot drift from it by
+  -- construction. from_id/to_id/kind remain fully authoritative — nothing
+  -- reads these new columns yet (that is PR6, the reader rewrite).
+  src_uuid    TEXT,
+  dst_uuid    TEXT,
+  updated_at  REAL,
+  relation    TEXT GENERATED ALWAYS AS (kind) VIRTUAL
 );
 CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to   ON edges(to_id);
@@ -1114,6 +1125,19 @@ def init_db() -> None:
         # columns on nodes/edges for pre-existing DBs (no-op on a fresh DB —
         # CREATE TABLE above already has them). Additive only, unread so far.
         migrate_nodes_edges_sync_columns()
+        # Sync-over-vpn schema slice PR5 "Expand": edges.src_uuid/dst_uuid/
+        # updated_at/relation for pre-existing DBs. UNLIKE the two migrations
+        # above, this one is NOT a no-op on a fresh DB either: _SCHEMA's
+        # `edges` CREATE TABLE now carries these four columns (matching the
+        # PR4 pattern), so on a fresh DB this call's ALTER-TABLE branches are
+        # skipped (columns already exist) but its BACKFILL loop still runs —
+        # a fresh DB starts with zero rows, so that backfill is a genuine
+        # no-op there too, just for a different reason (nothing to backfill,
+        # not "column already right"). `nodes.occurred_at` is handled by the
+        # separate, pre-existing migrate_nodes_occurred_at() below.
+        # Dual-written by every edge-insert path from here on; from_id/
+        # to_id/kind stay fully authoritative until PR6 (the reader rewrite).
+        migrate_edge_endpoint_uuids()
         # Event-date column: stores the real event timestamp (vs. insertion time).
         migrate_nodes_occurred_at()
         # Conversation source ('chat' | 'voice') so the chat view can hide voice.
@@ -1248,9 +1272,16 @@ def add_node(
     tz = _current_tz()
     with _tx() as c:
         cur = c.execute(
-            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, created_tz, occurred_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (kind, label, payload, domain, now, now, tz, occurred_at),
+            # `uuid` is assigned HERE, not left to the startup backfill in
+            # migrate_nodes_edges_sync_columns(). A node inserted without one
+            # stays NULL until the next restart, and every edge created against
+            # it in the meantime dual-writes a NULL src_uuid — which
+            # verify_edge_endpoint_convergence() reports as converged, because
+            # NULL does equal NULL. Once PR6 resolves edges through src_uuid,
+            # that NULL is a link missing from the user's own memory.
+            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, created_tz, occurred_at, uuid) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, label, payload, domain, now, now, tz, occurred_at, str(uuid.uuid4())),
         )
         node_id = cur.lastrowid
         c.execute(
@@ -1276,11 +1307,24 @@ def add_edge(
     if routed:
         return _res
     payload = json.dumps(data or {}, ensure_ascii=False)
+    now = time.time()
     with _tx() as c:
+        # Dual-write src_uuid/dst_uuid alongside from_id/to_id (PR5 "Expand"
+        # — design-schema.md Decision 2 step 1). Looked up in the SAME
+        # transaction as the insert so a crash mid-write can never leave
+        # from_id/src_uuid disagreeing. from_id/to_id stay fully
+        # authoritative; nothing reads src_uuid/dst_uuid yet.
+        src_row = c.execute("SELECT uuid FROM nodes WHERE id = ?", (from_id,)).fetchone()
+        dst_row = c.execute("SELECT uuid FROM nodes WHERE id = ?", (to_id,)).fetchone()
         cur = c.execute(
-            "INSERT INTO edges(from_id, to_id, kind, data, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (from_id, to_id, kind, payload, time.time()),
+            "INSERT INTO edges(from_id, to_id, kind, data, created_at, "
+            "src_uuid, dst_uuid, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                from_id, to_id, kind, payload, now,
+                src_row[0] if src_row else None,
+                dst_row[0] if dst_row else None,
+                now,
+            ),
         )
         return cur.lastrowid
 
@@ -2719,6 +2763,122 @@ def migrate_nodes_edges_sync_columns() -> None:
         )
 
 
+def migrate_edge_endpoint_uuids() -> None:
+    """Idempotent, additive migration (PR5 "Expand" — design-schema.md
+    Decision 2 step 1): add `edges.src_uuid`, `edges.dst_uuid`,
+    `edges.updated_at`, `edges.relation`, and `nodes.occurred_at`; backfill
+    `src_uuid`/`dst_uuid` from `nodes.uuid` via the existing `from_id`/
+    `to_id` FKs, and `updated_at = created_at`.
+
+    `relation` is added as `GENERATED ALWAYS AS (kind) VIRTUAL` — a single
+    storage cell shared with `kind` (not a copy), so `relation` and `kind`
+    CANNOT drift apart by construction. This is the fix for the
+    kind/relation silent-mis-mapping failure design-schema.md names; a
+    plain copy would reintroduce exactly that drift risk.
+
+    A fresh DB gets all four `edges` columns natively via `_SCHEMA`'s
+    `CREATE TABLE IF NOT EXISTS` (matching the PR4 pattern) — so on a fresh
+    DB, this function's ALTER-TABLE branches are skipped (columns already
+    exist) but it still RUNS, unconditionally, on every `init_db()` call
+    (mirrors `migrate_nodes_edges_sync_columns`); its backfill loop is then
+    a genuine no-op there for the ordinary reason (zero rows yet), not
+    because the call itself was skipped. PURELY ADDITIVE and reversible:
+    `from_id`/`to_id`/`kind` remain fully authoritative and nothing reads
+    the new columns yet — that is PR6, the reader rewrite.
+
+    `nodes.occurred_at` already exists in production via the pre-existing
+    `migrate_nodes_occurred_at()` migration (added independently, before
+    this design was written) — the guard below is a no-op there, kept for
+    documentation/defence-in-depth so this migration is self-contained if
+    ever run standalone against a DB that somehow lacks it.
+
+    Requires `nodes.uuid` to already exist (schema slice 3a /
+    `migrate_nodes_edges_sync_columns`, which `init_db()` runs first).
+
+    Only touches edge rows where `src_uuid IS NULL` — never re-touches an
+    already-backfilled row, matching `migrate_nodes_edges_sync_columns`'s
+    resumable/idempotent pattern. Ends by calling
+    `verify_edge_endpoint_convergence()` so a migration that silently
+    mis-backfilled a row is caught immediately, not discovered later.
+    """
+    c = _connect()
+    # table_xinfo, not table_info: table_info hides GENERATED/hidden columns
+    # in this SQLite build, so a plain table_info check would never see
+    # `relation` as already-present and would re-run the ALTER on every call,
+    # raising "duplicate column name" on the second `init_db()`.
+    existing_edges = {r[1] for r in c.execute("PRAGMA table_xinfo(edges)").fetchall()}
+    if "src_uuid" not in existing_edges:
+        c.execute("ALTER TABLE edges ADD COLUMN src_uuid TEXT")
+    if "dst_uuid" not in existing_edges:
+        c.execute("ALTER TABLE edges ADD COLUMN dst_uuid TEXT")
+    if "updated_at" not in existing_edges:
+        c.execute("ALTER TABLE edges ADD COLUMN updated_at REAL")
+    if "relation" not in existing_edges:
+        c.execute(
+            "ALTER TABLE edges ADD COLUMN relation TEXT "
+            "GENERATED ALWAYS AS (kind) VIRTUAL"
+        )
+
+    existing_nodes = {r[1] for r in c.execute("PRAGMA table_info(nodes)").fetchall()}
+    if "occurred_at" not in existing_nodes:
+        c.execute("ALTER TABLE nodes ADD COLUMN occurred_at REAL")
+
+    # Backfill only edges still missing src_uuid — resumable/idempotent.
+    rows = c.execute(
+        "SELECT e.id, n1.uuid, n2.uuid, e.created_at "
+        "FROM edges e "
+        "JOIN nodes n1 ON n1.id = e.from_id "
+        "JOIN nodes n2 ON n2.id = e.to_id "
+        "WHERE e.src_uuid IS NULL"
+    ).fetchall()
+    for edge_id, src_uuid, dst_uuid, created_at in rows:
+        c.execute(
+            "UPDATE edges SET src_uuid = ?, dst_uuid = ?, updated_at = ? WHERE id = ?",
+            (src_uuid, dst_uuid, created_at, edge_id),
+        )
+
+    verify_edge_endpoint_convergence()
+
+
+def verify_edge_endpoint_convergence() -> None:
+    """Assert `edges.src_uuid`/`dst_uuid` still agree with `from_id`/`to_id`
+    (via `nodes.uuid`) for every live edge.
+
+    RAISES on the first mismatch — dual-write drift between the new sync
+    columns and the old authoritative ones must never pass silently.
+
+    RAISES ALSO if the check itself cannot execute (e.g. a table/column is
+    missing mid-migration) — per the LifeOS silent-failure rule, a check
+    that cannot run must fail loudly too, not merely a check that finds
+    real drift. A check that quietly no-ops because its table vanished
+    would be indistinguishable from "everything converged".
+
+    Available standalone (not just from `migrate_edge_endpoint_uuids`) for
+    CI/regression use.
+    """
+    c = _connect()
+    try:
+        mismatches = c.execute(
+            "SELECT e.id, e.src_uuid, n1.uuid, e.dst_uuid, n2.uuid "
+            "FROM edges e "
+            "JOIN nodes n1 ON n1.id = e.from_id "
+            "JOIN nodes n2 ON n2.id = e.to_id "
+            "WHERE e.src_uuid IS NOT n1.uuid OR e.dst_uuid IS NOT n2.uuid"
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — deliberately broad: ANY failure
+        # to execute the check must raise, not be swallowed.
+        raise RuntimeError(
+            f"verify_edge_endpoint_convergence: could not execute the "
+            f"convergence check (table/column missing mid-migration?): {exc}"
+        ) from exc
+    if mismatches:
+        raise RuntimeError(
+            f"verify_edge_endpoint_convergence: {len(mismatches)} edge(s) "
+            f"have drifted src_uuid/dst_uuid from from_id/to_id: "
+            f"{mismatches[:5]}"
+        )
+
+
 def hash_device_token(token: str) -> str:
     """SHA-256 hex digest of a raw device bearer token.
 
@@ -2974,10 +3134,26 @@ def check_and_create_similar_to_edges(
                     (node_id, neighbor_id),
                 ).fetchone()
                 if exists is None:
+                    # Dual-write src_uuid/dst_uuid alongside from_id/to_id
+                    # (PR5 "Expand"), looked up in the SAME transaction as
+                    # the insert — see add_edge's identical rationale.
+                    now = time.time()
+                    src_row = c.execute(
+                        "SELECT uuid FROM nodes WHERE id = ?", (node_id,)
+                    ).fetchone()
+                    dst_row = c.execute(
+                        "SELECT uuid FROM nodes WHERE id = ?", (neighbor_id,)
+                    ).fetchone()
                     c.execute(
-                        "INSERT INTO edges(from_id, to_id, kind, data, created_at) "
-                        "VALUES (?, ?, 'similar-to', '{}', ?)",
-                        (node_id, neighbor_id, time.time()),
+                        "INSERT INTO edges(from_id, to_id, kind, data, created_at, "
+                        "src_uuid, dst_uuid, updated_at) "
+                        "VALUES (?, ?, 'similar-to', '{}', ?, ?, ?, ?)",
+                        (
+                            node_id, neighbor_id, now,
+                            src_row[0] if src_row else None,
+                            dst_row[0] if dst_row else None,
+                            now,
+                        ),
                     )
                     created += 1
         except Exception as exc:  # noqa: BLE001

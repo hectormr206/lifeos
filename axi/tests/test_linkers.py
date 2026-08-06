@@ -609,3 +609,35 @@ def test_safe_insert_edge_no_explicit_commit():
         "_safe_insert_edge still calls conn.commit() — must be removed for "
         "correctness in autocommit mode and nested _tx() safety (FIX 7a)"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PR5 "Expand" (design-schema.md, tasks.md 5.7): _safe_insert_edge dual-write
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_safe_insert_edge_dual_writes_src_dst_uuid():
+    """Task 5.7 RED: linkers._safe_insert_edge (linkers.py:63) dual-writes
+    src_uuid/dst_uuid alongside from_id/to_id, same as store.add_edge."""
+    import axi.store as store
+    from axi.linkers import _safe_insert_edge
+
+    conn = store._connect()
+    n1 = _insert_node(conn, kind="fact", label="Fact A")
+    n2 = _insert_node(conn, kind="event", label="Event B")
+    # _insert_node bypasses add_node's uuid-backfill path (PR4's documented,
+    # deliberate gap — uuid is assigned on the next init_db() convergence).
+    # Run that backfill here to mirror real sequencing before dual-writing.
+    store.migrate_nodes_edges_sync_columns()
+
+    created = _safe_insert_edge(conn, n1, n2, "happened-at")
+    assert created is True
+
+    src_uuid = conn.execute("SELECT uuid FROM nodes WHERE id=?", (n1,)).fetchone()[0]
+    dst_uuid = conn.execute("SELECT uuid FROM nodes WHERE id=?", (n2,)).fetchone()[0]
+    row = conn.execute(
+        "SELECT src_uuid, dst_uuid FROM edges WHERE from_id=? AND to_id=? AND kind='happened-at'",
+        (n1, n2),
+    ).fetchone()
+    assert row["src_uuid"] == src_uuid
+    assert row["dst_uuid"] == dst_uuid
+    assert src_uuid is not None and dst_uuid is not None

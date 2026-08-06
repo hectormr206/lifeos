@@ -697,3 +697,341 @@ needed, would not affect any other function, since nothing reads them.
 in pass count before and after the DDL change. Ready for verify. Phase 5
 (PR5, schema slice 3b — irreversible tombstones) intentionally NOT
 started, gated on PR4's merge and post-verification per tasks.md 5.5.
+
+## Phase 5 (PR5 — SCHEMA "Expand", reworked plan per design-schema.md): COMPLETE (13/13 tasks, 5.1-5.13)
+
+Mode: Strict TDD. Built on the PR1/PR2/PR3/PR4 working tree, no new
+branch/commit created, per instruction. This Phase 5 supersedes the OLD
+Phase 5 ("schema slice 3b, tombstones") that this same file's Phase 4
+section still referenced by task number — the tasks.md plan was reworked
+before this apply started; see tasks.md's `## SCHEMA Phases (5-8,
+reworked)` section, which is authoritative, vs. its `## Superseded`
+section at the bottom (old Phase 5/6, NOT executed).
+
+**Scope discipline, explicit**: PURELY additive/reversible. `from_id`/
+`to_id`/`kind` remain fully authoritative; nothing reads
+`src_uuid`/`dst_uuid`/`relation`/`updated_at` yet (that is PR6, the reader
+rewrite — NOT started). No tombstones (PR7). No table rebuild, no dropped
+constraint (PR8, the point of no return).
+
+### What was built
+- `store.migrate_edge_endpoint_uuids()` (new, `store.py`): adds
+  `edges.src_uuid TEXT`, `edges.dst_uuid TEXT`, `edges.updated_at REAL`,
+  and `edges.relation TEXT GENERATED ALWAYS AS (kind) VIRTUAL`; backfills
+  `src_uuid`/`dst_uuid` from `nodes.uuid` via the existing `from_id`/
+  `to_id` FKs, and `updated_at = created_at`. Follows
+  `migrate_nodes_edges_sync_columns`'s per-row convergent pattern (only
+  touches edges where `src_uuid IS NULL`). Ends by calling
+  `verify_edge_endpoint_convergence()`.
+- `store.verify_edge_endpoint_convergence()` (new): raises on the first
+  `src_uuid`/`dst_uuid` mismatch against `nodes.uuid` via `from_id`/
+  `to_id`, AND raises if the check itself cannot execute (e.g. a table is
+  missing mid-migration) — the LifeOS silent-failure rule applied to a
+  verification check, not just to production code.
+- `_SCHEMA`'s `edges` `CREATE TABLE` (store.py): gained the same four
+  columns directly, matching the PR4 pattern — see "Coordinator
+  correction" below for why this was added after the first pass.
+- Dual-write wired into every edge-insert path, in the SAME transaction as
+  the `from_id`/`to_id` write in each case:
+  - `store.add_edge` (store.py:~1281, the INSERT line)
+  - the similar-to auto-edge insert inside
+    `check_and_create_similar_to_edges` (store.py:~2978)
+  - `linkers._safe_insert_edge` (linkers.py:63)
+  - `identity.register_alias`'s alias-merge endpoint rewrite
+    (identity.py:354-355) — both `UPDATE edges SET from_id=...` and
+    `... SET to_id=...` now also set `src_uuid`/`dst_uuid` to the
+    CANONICAL node's uuid in the same `with store._tx()` block, so a crash
+    between the from_id/to_id rewrite and a hypothetical follow-up
+    uuid-rewrite step can never happen (there is no follow-up step).
+- `init_db()` wiring: `migrate_edge_endpoint_uuids()` called right after
+  `migrate_nodes_edges_sync_columns()` (PR4), before the pre-existing
+  `migrate_nodes_occurred_at()`.
+
+### Discovered discrepancy in design-schema.md (reported, not silently patched)
+design-schema.md's "Verified divergences" table lists `nodes.occurred_at`
+as "absent" from axi (verified) — but it has actually existed in axi since
+commit 4947bcea (`feat(graph): link & display facts by real event date`,
+predating this design doc), via the pre-existing, independent
+`migrate_nodes_occurred_at()` migration, and `add_node()` already accepts
+and stores it. `migrate_edge_endpoint_uuids()`'s `occurred_at` guard is
+therefore a no-op in practice; kept only for defence-in-depth
+documentation (self-contained if ever run standalone). No production code
+needed to change for this column — flagging the stale divergence table
+entry here rather than silently treating it as if the design were
+literally correct.
+
+### Coordinator correction (mid-session, before this apply-progress was finalized)
+The coordinator's own measurement caught a fresh-install regression risk
+this apply had introduced. Both are fixed:
+
+**1. `PRAGMA table_info` hides GENERATED columns in this SQLite build.**
+Discovered while writing the RED tests: `PRAGMA table_info(edges)` does
+NOT list `relation` (a `GENERATED ALWAYS ... VIRTUAL` column) even though
+`SELECT relation FROM edges` works and the column is real —
+`PRAGMA table_xinfo(edges)` DOES list it. `migrate_edge_endpoint_uuids()`
+originally used `table_info` for its "already exists" guard, which would
+have re-run `ALTER TABLE ... ADD COLUMN relation ...` on every
+`init_db()` call after the first, raising `duplicate column name:
+relation`. Fixed to `table_xinfo` before this was ever GREEN — proven by
+a standalone repro (`table_info` → `{'id','kind'}`, `table_xinfo` →
+`{'id','kind','relation'}` on the same table) and the idempotence test
+(5.3) actually exercises the second-call path.
+
+**2. A misleading comment above the `init_db()` call site.** The first
+pass wrote "(no-op on a fresh DB — CREATE TABLE above already has them)"
+above `migrate_edge_endpoint_uuids()`, copy-pasted from the PR4-pattern
+comments above it — but at that point `_SCHEMA`'s `edges` CREATE TABLE
+did NOT have the four new columns, so the claim was false: on a fresh DB
+the migration function was doing real, necessary work (this was
+functionally correct — `init_db()` always calls it unconditionally — but
+a future reader trusting the comment could condition/remove the call and
+silently break every fresh install). The coordinator ran a fresh-DB probe
+confirming the columns as observed via `table_xinfo` and flagged the
+comment as the risk, not the runtime behavior.
+
+  Fix chosen (of the two the coordinator offered, both defensible): **(b)
+  — added `src_uuid`, `dst_uuid`, `updated_at`, and `relation
+  GENERATED ALWAYS AS (kind) VIRTUAL` directly to `_SCHEMA`'s `edges`
+  CREATE TABLE**, matching the PR4 pattern (nodes/edges sync columns are
+  in both the fresh-DB DDL and the pre-existing-DB migration). Chosen over
+  (a) "migration is the single source of truth" because it matches the
+  established codebase convention for every other slice-3-family column
+  and removes any dependency on migration-call ordering for fresh
+  installs. The `init_db()` comment and the migration's own docstring
+  were rewritten to state precisely what happens now: fresh DBs get the
+  columns from `CREATE TABLE`, the migration's `ALTER TABLE` branches are
+  skipped there (already exist) but the function still runs
+  unconditionally on every `init_db()` call, and its backfill loop is a
+  no-op on a fresh DB for the ordinary reason (zero rows), not because the
+  call was skipped.
+
+  New test added per the coordinator's explicit request:
+  `test_fresh_db_edges_table_has_pr5_columns_via_create_table_alone` —
+  drops `edges`, re-runs `_SCHEMA` alone (no migration function called at
+  all), and asserts `src_uuid`/`dst_uuid`/`updated_at`/`relation` (via
+  `table_xinfo`) and the `GENERATED ALWAYS AS (kind) VIRTUAL` DDL text are
+  present from `CREATE TABLE` alone.
+
+### `add_node` does not assign `uuid` at insert time (pre-existing PR4 gap, not fixed here — flagged as a risk)
+`add_node()`'s INSERT statement never sets `uuid`; a node only gets one
+via `migrate_nodes_edges_sync_columns()`'s backfill, which — per PR4's own
+docstring — runs "on the next `init_db()` startup", not at insert time.
+In a long-running daemon process, this means most nodes created between
+restarts have `uuid IS NULL` for the lifetime of that process, so
+`add_edge`/the other dual-write sites correctly copy that NULL into
+`src_uuid`/`dst_uuid` (not a bug — the dual-write faithfully mirrors
+whatever `nodes.uuid` currently holds, and `verify_edge_endpoint_convergence()`
+treats NULL-matches-NULL as converged, not drift). Tests that needed a
+real backfilled uuid to assert against call
+`store.migrate_nodes_edges_sync_columns()` explicitly after node creation
+to mirror that real "next restart" sequencing. This was NOT fixed here —
+task 5.5-5.9's literal scope is "dual-write whatever `nodes.uuid` holds",
+not "ensure `nodes.uuid` is always populated" (that would touch
+`add_node`, outside the assigned task list, and risks silently expanding
+scope). Flagged as a real, pre-existing gap worth a follow-up decision:
+either `add_node` should assign a uuid at insert time, or the reader
+rewrite (PR6) and convergence checks need to explicitly account for a
+large fraction of edges legitimately carrying NULL `src_uuid`/`dst_uuid`
+for long stretches of a running daemon's uptime.
+
+### TDD Cycle Evidence
+| Task | Test File | RED proof | GREEN |
+|------|-----------|-----------|-------|
+| 5.1-5.3 | `test_store_migration.py` (5 new tests) | Rebuilt `edges` to its real post-3a/pre-PR5 shape (`_rebuild_post_3a_pre_pr5_edges`, mirroring PR4's `_rebuild_pre_change_*` pattern — `fresh_db`'s autouse fixture already runs the full migration chain, so a naive test would see the already-migrated no-op) before calling `store.migrate_edge_endpoint_uuids`; all 5 failed with `AttributeError: module 'axi.store' has no attribute 'migrate_edge_endpoint_uuids'` | 5/5 green after implementing the function |
+| 5.5 | `test_store.py` | `test_add_edge_dual_writes_src_dst_uuid` — RED via `assert src_uuid is not None` failing once nodes had real uuids (backfilled explicitly) but `add_edge` did not yet copy them | GREEN after wiring the dual-write |
+| 5.6 | `test_store.py` | `test_similar_to_edge_insert_dual_writes_src_dst_uuid` — RED via `assert row["src_uuid"] == "uuid-101"` failing (`None`) | GREEN after wiring the dual-write |
+| 5.7 | `test_linkers.py` | `test_safe_insert_edge_dual_writes_src_dst_uuid` — RED via the same None-vs-real-uuid mismatch | GREEN after wiring the dual-write |
+| 5.8 | `test_identity.py` | `test_register_alias_merge_dual_writes_edge_endpoint_uuids` — RED via `assert row_out["src_uuid"] == canonical_uuid` failing (`None`) — edges on BOTH sides of the merged alias node (`from_id` and `to_id` rewrite statements) exercised | GREEN after wiring the dual-write in the SAME `with store._tx()` block as the from_id/to_id rewrite |
+| 5.10/5.11 | `test_store_migration.py` (2 new tests) | `AttributeError: no attribute 'verify_edge_endpoint_convergence'` | GREEN: raises on a deliberately desynced row (5.10) AND when the `edges` table is renamed away mid-check (5.11), proven as two SEPARATE RED tests per the "a check that cannot run also raises" instruction |
+| 5.13 | see "Zero observable behavior change, proven" below | n/a (regression proof, not a new-function RED) | n/a |
+| fresh-DB DDL fix | `test_store_migration.py` (1 new test, coordinator-requested) | Written after the DDL fix was already applied — the coordinator's ask was for a regression pin, not a RED/GREEN cycle on new production behavior | Passes: `_SCHEMA` alone (no migration call) gives all 4 columns |
+
+### Zero observable behavior change, proven (task 5.13) — the SAME technique PR4 used
+Not just reasoned about the diff — measured, dual-tree-state, exactly like
+PR4's "97/97 both times" proof:
+
+1. **Baseline** (original tests, original — pre-PR5 — production code):
+   **146/146 passing** (measured before this Phase 5 apply started).
+2. **Original tests, PR5 production code**: `git stash` the 4 modified
+   test files (reverting them to their exact pre-PR5 committed content)
+   while KEEPING the PR5 production changes (`store.py`, `linkers.py`,
+   `identity.py`), then ran the full mandated command:
+   **146/146 passing** — identical count, zero regressions in any
+   pre-existing test. `git stash pop` restored the PR5 test additions
+   afterward.
+3. **Current tests, PR5 production code** (the real, final state): **157
+   passing** (146 pre-existing + 11 new PR5 tests: 5.1-5.3 × 2 extra
+   variants + convergence 5.10/5.11 + the fresh-DB DDL pin + the 4
+   dual-write tests across `test_store.py`/`test_linkers.py`/
+   `test_identity.py`).
+
+Step 2 is the load-bearing proof: the EXACT SAME test bytes that passed
+146/146 against the OLD production code still pass 146/146 against the
+NEW production code. That is what "zero observable behavior change" means
+operationally, not just by inspection of the diff.
+
+### Metrics
+Focused command (`test_store_migration.py` alone): **12/12 passing** (5
+original PR4 tests + 7 new Phase 5 tests — see TDD Cycle Evidence table
+above for the breakdown).
+
+Mandated command (`test_store_migration.py`, `test_store.py`,
+`test_devices_store.py`, `test_mesh_trust.py`, `test_pair_endpoint.py`,
+`test_pairing.py`, `test_linkers.py`, `test_identity.py`): **157/157
+passing** (up from PR4's 102, because this run also includes
+`test_linkers.py`/`test_identity.py`, added to the command for this
+phase per instruction; like-for-like against the SAME 8-file set:
+146 → 157, +11 new tests, 0 regressions).
+
+Diff size, production vs test (no brand-new files this phase — all edits
+land in files PR4 already touched or in pre-existing test files, so
+`git diff --stat` captures everything with no manual new-file counting
+needed):
+- Production: `store.py` +172/-11 (183 changed) + `linkers.py` +14/-3 (17
+  changed) + `identity.py` +17/-3 (20 changed) = **220 changed lines**.
+- Tests: `test_store_migration.py` +236 (236 changed) +
+  `test_store.py` +68 (68 changed) + `test_linkers.py` +32 (32 changed) +
+  `test_identity.py` +46 (46 changed) = **382 changed lines**.
+- Total: **602 changed lines** — OVER the tasks.md forecast's ~180-230
+  production / ~220-280 test estimate and over the 400-line review budget
+  (production 220 is within/near the production estimate; the overage is
+  almost entirely test lines — the two extra coordinator-driven RED
+  discoveries (table_xinfo, fresh-DB DDL) plus the dual-tree-state
+  regression documentation added test surface, not production surface).
+  Flagged explicitly as a risk below rather than trimmed by deleting
+  tests, per the "keep PRODUCTION lean; never delete tests to hit a
+  number" instruction. Recommend the coordinator record this as
+  `size:exception` for PR5, matching PR1's precedent, since production
+  itself (220 lines) is lean and reversible.
+
+### Runtime harness
+N/A, as forecast in tasks.md's Suggested Work Units table — this is a
+pure pytest-tmp-DB schema/dual-write unit, no live network/VPN/backup-host
+boundary exists for a schema migration or an in-process edge insert.
+
+### Deviations from Design
+1. `nodes.occurred_at` was already present in axi (see "Discovered
+   discrepancy" above) — design-schema.md's divergence table is stale on
+   this one point; no code change was needed for it, only a defensive
+   no-op guard kept for documentation.
+2. `_SCHEMA`'s `edges` CREATE TABLE gained the four PR5 columns directly
+   (coordinator-directed correction, option (b) of two explicitly
+   offered) — not literally spelled out in tasks.md 5.1-5.4, but matches
+   the established PR4 pattern and was required to make the "no-op on a
+   fresh DB" comment true rather than misleading.
+3. `add_node` was deliberately NOT changed to assign `uuid` at insert time
+   (see "add_node does not assign uuid" above) — flagged as an open risk
+   rather than silently expanding this phase's scope to fix it.
+
+### Issues Found
+1. `PRAGMA table_info` hides `GENERATED ALWAYS ... VIRTUAL` columns in
+   this SQLite build (3.51.1) — `PRAGMA table_xinfo` does not. Caught by
+   the coordinator's fresh-DB probe before it could re-run
+   `ALTER TABLE ... ADD COLUMN relation ...` on every process restart and
+   crash the daemon with `duplicate column name: relation`. Fixed before
+   any GREEN state was reported as final.
+2. A misleading `init_db()` comment claiming "no-op on a fresh DB" for a
+   migration that, at the time, was NOT a no-op on a fresh DB. Fixed by
+   making the underlying claim true (`_SCHEMA` change) and rewriting the
+   comment to state exactly what happens and why, per the coordinator's
+   explicit two-option framing.
+3. One flaky, unrelated test observed during a very-long (54-minute,
+   system-load-affected) background run:
+   `test_concurrent_writes_no_corruption` (thread-timing based, touches
+   only `add_node`, no edges) reported 36/40 nodes written once under
+   heavy background load; re-ran in isolation immediately after and it
+   passed cleanly (40/40). Not a PR5 regression — confirmed by the fact
+   that it does not touch edges/dual-write code at all, and the isolated
+   re-run environment matched every other test in this phase.
+
+### Rollback boundary
+Revert `store.py`'s diff (4 new `edges` columns in `_SCHEMA` +
+`migrate_edge_endpoint_uuids` + `verify_edge_endpoint_convergence` +
+`init_db()` wiring + `add_edge`/similar-to dual-write), `linkers.py`'s
+`_safe_insert_edge` dual-write, and `identity.py`'s alias-merge dual-write
+in `register_alias`; delete the 5 new test additions across
+`test_store_migration.py`/`test_store.py`/`test_linkers.py`/
+`test_identity.py`. `from_id`/`to_id`/`kind` are untouched and remain
+fully authoritative throughout — the new columns and dual-writes lie
+fallow for any reader, so reverting drops zero read-path behavior.
+
+### Workload / PR Boundary
+- Mode: chained PR slice (feature-branch-chain per this session's
+  preflight), PR5 of the PR5→PR6a→PR6b→PR7→PR8 schema chain.
+- Boundary: `store.py`'s `_SCHEMA` `edges` CREATE TABLE,
+  `migrate_edge_endpoint_uuids`, `verify_edge_endpoint_convergence`,
+  `add_edge`, the similar-to insert site, `linkers._safe_insert_edge`,
+  `identity.register_alias`'s endpoint rewrite, plus their tests. No
+  reader site touched (PR6, not started). No tombstones (PR7, not
+  started). No table rebuild (PR8, not started).
+- Estimated review budget impact: 602 total changed lines (220 production
+  + 382 tests) — OVER the 400-line budget; recommend `size:exception` for
+  this PR (see Metrics above for the full breakdown and rationale).
+
+### Status (Phase 5, final)
+13/13 tasks complete (5.1-5.13), all marked `[x]` in tasks.md. TDD Cycle
+Evidence table above; Work Unit Evidence: focused command 12/12, mandated
+command 157/157, dual-tree-state regression proof 146/146 both states
+(task 5.13). Ready for verify. Phase 6 (PR6a/PR6b, reader rewrite) NOT
+started, per explicit instruction not to begin it in this apply batch.
+
+### Coordinator verification of Phase 5 (independent, post-apply)
+
+Verified rather than accepted on report. Three findings.
+
+**1. `add_node` never assigned `nodes.uuid` — fixed here as task 5.14.**
+The apply agent found this and deferred it as scope creep. Overruled, and
+the reason is the failure mode, not the size. PR4 added `nodes.uuid` and a
+startup backfill; nothing assigned one on insert. So every node created
+between two restarts carried `uuid IS NULL`, every edge against it
+dual-wrote `src_uuid IS NULL`, and `verify_edge_endpoint_convergence()`
+reported CONVERGED — because NULL equals NULL. The guard was blind to
+exactly the window it exists to watch. Demonstrated empirically before
+fixing: two nodes inserted post-migration had NULL uuids and their edge had
+NULL `src_uuid`/`dst_uuid`, while the convergence check passed clean.
+
+Harmless while nothing reads the column. The moment PR6 resolves edges
+through `src_uuid`, a NULL is a link missing from the user's own memory
+with no error raised anywhere — at which point it is indistinguishable from
+lost data rather than identifiable as a schema bug. Closed now.
+
+The tell was in the apply agent's own test: it had to call
+`migrate_nodes_edges_sync_columns()` by hand to make the dual-write
+observable. A test that must stage a workaround to see the feature work is
+reporting that the feature does not work in the daemon. Added
+`test_edges_of_freshly_created_nodes_never_dual_write_null` with no staging
+at all; it went red, then green.
+
+**2. Zero-regression re-measured across the real blast radius.**
+Task 5.13's evidence used the four PR5 test files. Re-run wider: all 57
+test files that reference `add_node`/`axi.store`, against both tree states,
+`-p no:randomly` so ordering is identical.
+
+| Tree state | Passed | Failed | Total |
+|---|---|---|---|
+| HEAD `197662ae` (pre-PR5, git worktree) | 830 | 23 | 853 |
+| PR5 + task 5.14 | 842 | 24 | 866 |
+
++13 tests (11 from apply, 2 from 5.14), +12 passed, +1 failed. The failure
+set diff named exactly one test not failing at baseline — see 3.
+
+**3. That one test is a pre-existing flake, not a PR5 regression.**
+`test_memory.py::test_clear_wipes_history_returns_count`. Cause:
+`ConversationMemory.add()` spawns a daemon thread for background fact
+extraction, which races the per-test `DB_PATH` monkeypatch swap — the exact
+TOCTOU `conftest.py:21` already documents, and the run's stderr carries its
+signature (`sqlcipher_page_cipher: hmac check failed for pgno=1`). One of
+the two rows is lost, so `clear()` returns 1 instead of 2.
+
+Confirmed pre-existing by running it in isolation at the PRE-PR5 baseline
+worktree: 1 failure in 6 runs there, 2 in 3 runs on PR5. Flaky in both
+states, product code unrelated to nodes/edges/uuid. NOT fixed here (outside
+PR5's boundary) but recorded so it is not re-litigated when it flickers
+during PR6/PR7. It is a real test-isolation defect and deserves its own
+slice.
+
+**Also corrected:** the docstring of
+`test_add_edge_dual_writes_src_dst_uuid` described the now-closed gap as
+"PR4's documented, deliberate gap". Rewritten — a stale comment asserting a
+bug still exists is the same class of defect as the `init_db()` comment
+this phase already had to fix once.

@@ -351,8 +351,24 @@ def register_alias(canonical_name: str, alias: str, kind: str = "person", conn=N
                 continue
             did = r["id"]
             with store._tx() as tx:  # noqa: SLF001
-                tx.execute("UPDATE edges SET from_id=? WHERE from_id=?", (cid, did))
-                tx.execute("UPDATE edges SET to_id=? WHERE to_id=?", (cid, did))
+                # Dual-write src_uuid/dst_uuid to the CANONICAL node's uuid
+                # in the SAME transaction as the from_id/to_id rewrite (PR5
+                # "Expand" — design-schema.md Decision 2 step 1). Doing this
+                # as a follow-up step instead would let a crash between the
+                # two leave from_id/src_uuid disagreeing — the exact
+                # dual-representation drift the design flags.
+                canonical_row = tx.execute(
+                    "SELECT uuid FROM nodes WHERE id=?", (cid,)
+                ).fetchone()
+                canonical_uuid = canonical_row[0] if canonical_row else None
+                tx.execute(
+                    "UPDATE edges SET from_id=?, src_uuid=? WHERE from_id=?",
+                    (cid, canonical_uuid, did),
+                )
+                tx.execute(
+                    "UPDATE edges SET to_id=?, dst_uuid=? WHERE to_id=?",
+                    (cid, canonical_uuid, did),
+                )
                 tx.execute("DELETE FROM nodes WHERE id=?", (did,))
                 tx.execute("DELETE FROM nodes_fts WHERE rowid=?", (did,))
                 try:
